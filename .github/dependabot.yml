@@ -1,0 +1,107 @@
+version: 2
+
+# Updates are grouped so a weekly run opens a handful of pull requests instead of
+# dozens. Each ungrouped PR costs a full CI matrix (image build + backend suite +
+# frontend suite + secret scan), and sixteen of them at once starved the queue of
+# the pushes they were meant to validate.
+#
+# Minor and patch bumps travel together per ecosystem; majors stay on their own
+# so a breaking change is never buried inside a batch.
+updates:
+  - package-ecosystem: bundler
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    target-branch: "develop"
+    ignore:
+      # json 3 takes the options of `JSON.parse` as keywords only, and
+      # temporalio's payload converter still passes them positionally — under
+      # json 3 every workflow task fails and the worker retries it forever, so
+      # the suite hangs rather than failing. The Gemfile holds json below 3;
+      # this keeps the weekly run from proposing the pin straight back up.
+      # Drop both once the Temporal SDK switches to keywords.
+      - dependency-name: "json"
+        update-types: ["version-update:semver-major"]
+    groups:
+      bundler-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    target-branch: "develop"
+    ignore:
+      # ESLint 10 is blocked by the plugin ecosystem, not by us: the newest
+      # eslint-plugin-react (7.37.5) declares a peer range up to ^9.7 and the
+      # newest eslint-plugin-import (2.32.0) up to ^9, and both still call the
+      # context.getFilename() that ESLint 10 removed. @eslint/js ships the
+      # config half of the same release train, so it has to stay on 9 as well;
+      # a v10 config object loaded by a v9 runtime is a silent mismatch.
+      # Drop both entries once the plugins ship ESLint 10 support.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7, the native compiler, is outside typescript-eslint's peer
+      # range (<6.1.0 as of 8.71.0) and has no lib/_tsc.js for Yarn's built-in
+      # TypeScript patch, so the weekly npm job fails on it outright. 6.x stays
+      # open. Drop once typescript-eslint accepts 7.
+      - dependency-name: "typescript"
+        versions: [">= 7"]
+    groups:
+      # Mantine pins its packages to exact peer versions, so a partial bump
+      # breaks the build. Keep the whole family in one PR, majors included.
+      mantine:
+        patterns: ["@mantine/*"]
+      npm-minor-patch:
+        patterns: ["*"]
+        exclude-patterns: ["@mantine/*"]
+        update-types: ["minor", "patch"]
+
+  # The agent images, their shared base and the OTLP ingest carry their own
+  # Dockerfiles; watching only the root one left every agent base image unpatched.
+  - package-ecosystem: docker
+    directories:
+      - "/"
+      - "/docker/base"
+      - "/docker/antigravity-cli"
+      - "/docker/claude-code"
+      - "/docker/codex"
+      - "/docker/cursor-cli"
+      - "/docker/gemini-cli"
+      - "/docker/grok"
+      - "/docker/kiro-cli"
+      - "/docker/otlp-ingest"
+      - "/docker/remote"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    target-branch: "develop"
+    groups:
+      docker-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: gomod
+    directory: "/docker/otlp-ingest"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    target-branch: "develop"
+    groups:
+      gomod:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    target-branch: "develop"
+    groups:
+      github-actions:
+        patterns: ["*"]

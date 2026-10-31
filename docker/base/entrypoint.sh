@@ -1,0 +1,186 @@
+#!/bin/bash
+set -e
+
+# =============================================================================
+# Shared Agent Container Entrypoint
+#
+# Starts:
+#   - MITM proxy for API request logging
+#   - File watcher service (WebSocket + HTTP)
+#   - OpenVSCode Server (IDE)
+#   - ttyd web terminal with tmux session persistence
+#
+# Configuration (env vars set by each agent Dockerfile):
+#   AGENT_NAME      - Display name (default: "Agent")
+#   API_KEY_VAR     - Name of API key env var to validate (optional)
+#   TTYD_CMD        - CLI command, set at runtime by strategy (default: "bash")
+# =============================================================================
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Configuration
+TTYD_PORT="${TTYD_PORT:-7681}"
+WATCHER_PORT="${WATCHER_PORT:-4040}"
+WORKSPACE="${WORKSPACE:-/workspace}"
+AGENT_NAME="${AGENT_NAME:-Agent}"
+
+# Ensure HOME config directories exist (may be tmpfs mounted)
+mkdir -p "$HOME/.config" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Setup workspace
+# -----------------------------------------------------------------------------
+mkdir -p "$WORKSPACE/repo" "$WORKSPACE/outputs"
+
+# Clone repo if URL provided
+if [ -n "$REPO_URL" ]; then
+    echo -e "${CYAN}📦 Cloning repository...${NC}"
+    if [ -n "$REPO_BRANCH" ]; then
+        git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" "$WORKSPACE/repo" 2>/dev/null || {
+            echo -e "${YELLOW}⚠️  Failed to clone repo${NC}"
+        }
+    else
+        git clone --depth 1 "$REPO_URL" "$WORKSPACE/repo" 2>/dev/null || {
+            echo -e "${YELLOW}⚠️  Failed to clone repo${NC}"
+        }
+    fi
+fi
+
+# Copy step-specific prompt file if available (e.g. CLAUDE.md for pipeline steps)
+if [ -n "$STEP_NAME" ] && [ -f "/prompts/${STEP_NAME}.md" ]; then
+    cp "/prompts/${STEP_NAME}.md" "$WORKSPACE/CLAUDE.md"
+    echo -e "${GREEN}✅ Loaded prompt: ${STEP_NAME}${NC}"
+fi
+
+# -----------------------------------------------------------------------------
+# Start MITM proxy
+# -----------------------------------------------------------------------------
+source /opt/mitm/start-mitm.sh
+
+# -----------------------------------------------------------------------------
+# Start File Watcher Service
+# -----------------------------------------------------------------------------
+cd /opt/watcher
+WATCH_DIR="$WORKSPACE" WATCHER_PORT="$WATCHER_PORT" node index.js > /dev/null 2>&1 &
+WATCHER_PID=$!
+cd "$WORKSPACE"
+
+sleep 1
+if kill -0 $WATCHER_PID 2>/dev/null; then
+    echo -e "${GREEN}✅ File watcher ready${NC}"
+else
+    echo -e "${YELLOW}⚠️  File watcher failed${NC}"
+fi
+
+# -----------------------------------------------------------------------------
+# Start OpenVSCode Server
+# -----------------------------------------------------------------------------
+VSCODE_PORT="${VSCODE_PORT:-8443}"
+SERVER_BASE_PATH="/t/${ROUTE_TOKEN}/ide"
+
+VSCODE_DATA_DIR="$HOME/.openvscode-server/data"
+mkdir -p "$VSCODE_DATA_DIR/Machine" "$VSCODE_DATA_DIR/User"
+# Remote-machine settings outrank the browser's user settings, where the session
+# page sets the theme (watcher /preload), so the theme must not be pinned here.
+jq 'del(."workbench.colorTheme")' /opt/openvscode-server/default-settings.json > "$VSCODE_DATA_DIR/Machine/settings.json"
+cp /opt/openvscode-server/default-settings.json "$VSCODE_DATA_DIR/User/settings.json"
+
+/opt/openvscode-server/bin/openvscode-server \
+    --port "$VSCODE_PORT" \
+    --host 0.0.0.0 \
+    --server-base-path "$SERVER_BASE_PATH" \
+    --connection-token "$VSCODE_TOKEN" \
+    --default-folder /workspace \
+    --disable-workspace-trust \
+    > /dev/null 2>&1 &
+VSCODE_PID=$!
+
+sleep 1
+if kill -0 $VSCODE_PID 2>/dev/null; then
+    echo -e "${GREEN}✅ OpenVSCode Server ready on port ${VSCODE_PORT}${NC}"
+else
+    echo -e "${YELLOW}⚠️  OpenVSCode Server failed to start${NC}"
+fi
+
+# -----------------------------------------------------------------------------
+# Start tmux session + ttyd Web Terminal
+#
+# TTYD_CMD is set by the container strategy at creation time.
+# Start tmux with bash first, then send the command so the shell owns the TTY.
+#
+# TMUX_TMPDIR ensures tmux socket lives on a tmpfs/ramfs, which is required
+# on some K8s overlay filesystems that don't support Unix domain sockets.
+# -----------------------------------------------------------------------------
+export TMUX_TMPDIR="/dev/shm/tmux"
+mkdir -p "$TMUX_TMPDIR" && chmod 777 "$TMUX_TMPDIR"
+tmux -u new -d -s agent bash
+# Single pipe on the agent pane: stream raw PTY output to the container log
+# (/proc/1/fd/1) AND capture it (ANSI preserved) to a file the session-cleanup
+# collector uploads as the replayable terminal_output.log. tmux allows only one
+# pipe per pane, so both sinks must share this one `tee`.
+#
+# The filter in front of the tee removes the session's own secrets before either
+# sink sees them. /proc/1/fd/1 is the container's stdout and therefore the cluster's
+# log stack, which nothing scrubbed until now — the collector-side pass could only
+# ever clean the copy it pulled out.
+#
+# It degrades to the bare tee rather than risking the pane: a pipeline whose first
+# stage cannot start captures nothing, and a session with no terminal output is one
+# the no-output watchdog reaps half an hour later.
+PANE_SINK="tee -a /tmp/terminal_output.log > /proc/1/fd/1"
+if command -v python3 >/dev/null 2>&1 && python3 -c "import sys; sys.path.insert(0, '/opt/mitm'); import aixle_redact" 2>/dev/null; then
+    PANE_SINK="python3 -u /opt/mitm/redact-stream.py | ${PANE_SINK}"
+else
+    echo -e "${YELLOW}⚠️  Secret redaction filter unavailable — pane output is captured unfiltered${NC}"
+fi
+tmux pipe-pane -t agent "$PANE_SINK"
+if [ -n "$TTYD_CMD" ] && [ "$TTYD_CMD" != "bash" ]; then
+    tmux send-keys -t agent "$TTYD_CMD" Enter
+fi
+echo -e "${GREEN}✅ tmux session ready${NC}"
+
+ttyd -W -p "$TTYD_PORT" tmux -u attach -t agent &
+TTYD_PID=$!
+
+# The terminal everyone but the session's owner is routed to: ttyd refuses
+# input (-R) and the tmux client is read-only (-r), so watching a shell can
+# never become typing into it — the container holds its owner's credentials.
+VIEW_PORT="${VIEW_PORT:-7682}"
+ttyd -R -p "$VIEW_PORT" tmux -u attach -r -t agent &
+VIEW_PID=$!
+
+sleep 1
+if kill -0 $TTYD_PID 2>/dev/null; then
+    echo -e "${GREEN}✅ Web terminal ready${NC}"
+else
+    echo -e "${YELLOW}⚠️  Web terminal failed to start${NC}"
+fi
+
+echo -e "${GREEN}Container ready.${NC}"
+
+# -----------------------------------------------------------------------------
+# Handle shutdown
+# -----------------------------------------------------------------------------
+cleanup() {
+    echo -e "${YELLOW}Shutting down...${NC}"
+    kill $MITM_PID 2>/dev/null || true
+    kill $WATCHER_PID 2>/dev/null || true
+    kill $TTYD_PID 2>/dev/null || true
+    kill $VIEW_PID 2>/dev/null || true
+    kill $VSCODE_PID 2>/dev/null || true
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT
+
+# Keep container running or execute provided command
+if [ $# -gt 0 ]; then
+    exec "$@"
+else
+    wait -n $WATCHER_PID $TTYD_PID $VSCODE_PID 2>/dev/null || true
+    cleanup
+fi

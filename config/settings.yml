@@ -1,0 +1,772 @@
+project_name: Aixle
+
+# Inputs several blocks below are built from. Bound once as ERB locals so two
+# keys derived from the same value can never drift apart.
+# The two ports the app itself listens on. config/puma.rb and config/puma_mcp.rb
+# read PORT and MCP_PORT straight from the environment (they boot before this
+# file loads), and the defaults below have to follow them, or overriding a port
+# leaves the derived hosts pointing at the old one — which is what running two
+# stacks side by side on one machine does.
+<% app_port      = (ENV["PORT"] || 4000).to_i %>
+<% mcp_port      = (ENV["MCP_PORT"] || 4002).to_i %>
+<% app_domain    = ENV["DOMAIN"] || "localhost:#{app_port}" %>
+<% app_version   = (ENV["APP_VERSION"].to_s.strip.empty? ? "unknown" : ENV["APP_VERSION"].strip) %>
+<% max_threads   = (ENV["RAILS_MAX_THREADS"] || 10).to_i %>
+<% internal_base = ENV["INTERNAL_BASE_URL"] || "http://web:#{mcp_port}" %>
+<% otel_base     = ENV["OTEL_EXPORTER_OTLP_ENDPOINT"] || "http://otlp-ingest:4318" %>
+<% traefik_http  = ENV["TRAEFIK_HTTP_BASE"] || "http://localhost" %>
+
+domain: <%= app_domain %>
+# Blank unless a deployment serves assets from somewhere else: an empty value
+# means Rails serves them itself. The old default (`localhost:<port>`) was never
+# read by anything in development, and the image bakes ASSET_HOST as an empty
+# ENV, so `|| default` never fired there anyway — an empty string is truthy.
+asset_host: <%= ENV['ASSET_HOST'].to_s.strip %>
+container_asset_host: <%= ENV['CONTAINER_ASSET_HOST'] || "web:#{app_port}" %>
+protocol: <%= ENV['PROTOCOL'] || "https" %>
+
+google_oauth:
+  client_id: <%= ENV['GOOGLE_CLIENT_ID'] %>
+  client_secret: <%= ENV['GOOGLE_CLIENT_SECRET'] %>
+
+# Microsoft work/school accounts (Entra ID). A MULTI-TENANT app registration:
+# tenant_id stays `common` so any customer's directory can sign in, which is what
+# "log in with Microsoft" means in practice. Each customer's Global Administrator
+# still has to grant tenant-wide admin consent once.
+#
+# The app authenticates with its certificate (private_key + thumbprint) when a
+# key is set, and with the client secret otherwise. The PEM goes through
+# `to_json` for the reason given under azure_devops below.
+microsoft_oauth:
+  client_id: <%= ENV['MICROSOFT_CLIENT_ID'] %>
+  client_secret: <%= ENV['MICROSOFT_CLIENT_SECRET'] %>
+  private_key: <%= ENV['MICROSOFT_PRIVATE_KEY'].to_json %>
+  certificate_thumbprint: "<%= ENV['MICROSOFT_CERT_THUMBPRINT'] %>"
+  tenant_id: <%= ENV['MICROSOFT_TENANT_ID'] || 'common' %>
+
+rails:
+  # No `port:` here — the web server reads PORT directly (config/puma.rb), and
+  # RAILS_PORT was a second name for it that nothing ever read.
+  secret_key_base: <%= ENV['RAILS_SECRET_KEY_BASE'] %>
+
+app:
+  # Set as a build arg by the Dockerfile and by compose. The fallback used to
+  # shell out to `git rev-parse HEAD` on every settings load — including in an
+  # image that ships without a .git directory, where it silently produced "".
+  # Empty counts as unset: the Dockerfile declares APP_VERSION as an ENV, so an
+  # image built without the build arg carries it as "" rather than not at all.
+  version: <%= app_version %>
+  # Host header allowlist for deployed environments, comma-separated. Empty leaves
+  # host authorization off: the app answers on more names than DOMAIN (a webhook
+  # host, the in-cluster service names agent containers and Traefik's ForwardAuth
+  # dial), and only the deployment knows them all.
+  allowed_hosts: <%= ENV['ALLOWED_HOSTS'].to_s.split(',').map(&:strip).reject(&:empty?).to_json %>
+
+sentry:
+  rails_dsn: <%= ENV['SENTRY_RAILS_DSN'] %>
+  frontend_dsn: <%= ENV['SENTRY_FRONTEND_DSN'] %>
+  temporal_dsn: <%= ENV['SENTRY_TEMPORAL_DSN'] %>
+  # Share of requests traced (the OTLP ingest route is never traced). 1.0 keeps
+  # the long-standing behaviour; lower it to cut volume.
+  traces_sample_rate: <%= ENV['SENTRY_TRACES_SAMPLE_RATE'] || 1.0 %>
+
+# Which authentication methods this INSTALLATION offers at all (AD-4). This is
+# the ceiling every company's own policy sits under: a company can only disable
+# what is listed here, never enable something the deployment cannot complete.
+#
+# Empty (the default) means "every kind that has an adapter AND is configured" —
+# availability is derived from credentials by
+# Auth::DeploymentProviders.configured_kinds, so an installation with no
+# Microsoft credentials never offers Microsoft however this is set. Set it
+# explicitly only to offer LESS than what is configured.
+auth:
+  enabled_kinds: <%= ENV['AUTH_ENABLED_KINDS'] %>
+
+database:
+  name: <%= ENV['DB_NAME'] %>
+  host: <%= ENV['DB_HOST'] || "127.0.0.1" %>
+  port: <%= ENV['DB_PORT'] || 5432 %>
+  # One request thread checks out one connection, so the pool must cover the
+  # whole Puma thread budget (RAILS_MAX_THREADS, see config/puma.rb and
+  # config/puma_mcp.rb) plus headroom for checkouts that are not request-bound
+  # — an equal pool leaves none, and the overflow waits out the 5s checkout
+  # timeout and raises ConnectionTimeoutError. DB_POOL overrides outright.
+  #
+  # The fallback has to match config/puma.rb's own RAILS_MAX_THREADS default.
+  # It did not: 5 here against Puma's 10, so a deployment that never set the
+  # variable ran 10 request threads against an 8-connection pool.
+  # test/config/thread_budget_test.rb keeps the two in step.
+  pool: <%= ENV['DB_POOL'] || max_threads + 3 %>
+  username: <%= ENV['DB_USERNAME'] || "postgres" %>
+  password: <%= ENV['DB_PASSWORD'] || "" %>
+
+mailer:
+  address: <%= ENV["MAILER_ADDRESS"] %>
+  port: <%= ENV["MAILER_PORT"] %>
+  domain: <%= app_domain %>
+  user_name: <%= ENV['MAILER_USERNAME'] %>
+  password: <%= ENV['MAILER_PASSWORD'] %>
+  authentication: <%= ENV["MAILER_AUTHENTICATION"] || 'plain' %>
+
+redis:
+  url: <%= ENV['REDIS_URL'] || 'redis://redis:6379/1'%>
+
+# /api-docs Basic auth outside development; with either unset, nobody gets in.
+docs:
+  login: <%= ENV['DOCS_LOGIN'] %>
+  password: <%= ENV['DOCS_PASSWORD'] %>
+
+admin:
+  password: <%= ENV['ADMIN_PASSWORD'] %>
+  # Seeded super admin (development and test only). A reserved .example
+  # address: the old default was a real mailbox, and Google sign-in binds an
+  # account by email — whoever owned it would have signed in as super admin.
+  # Not example.com: that is the seeded company's domain, and an operator on a
+  # claimed domain hides what /login does to one on a domain nobody claims.
+  email: <%= ENV['SUPER_ADMIN_EMAIL'] || "admin@operator.example" %>
+
+aws:
+  access_key_id:     <%= ENV['AWS_ACCESS_KEY_ID']%>
+  secret_access_key: <%= ENV['AWS_SECRET_ACCESS_KEY']%>
+  bucket:            <%= ENV['AWS_S3_BUCKET'] || 'fake' %>
+  region:            <%= ENV['AWS_DEFAULT_REGION'] || 'fake' %>
+
+mcp:
+  # The URL agent containers reach over the docker network / cluster DNS.
+  # Derived from `internal_base` (INTERNAL_BASE_URL) so this and
+  # cloud.credentials_url below move together; MCP_SERVER_URL still overrides.
+  server_url: <%= ENV['MCP_SERVER_URL'] || "#{internal_base}/action_mcp" %>
+  # Override for the URL users configure their own MCP clients with (personal
+  # token) — a public host, unlike server_url which agent containers reach over
+  # the docker network. Blank by default: the fallback is built from the app's
+  # own protocol + domain in Tools::PersonalMCP.public_url, because the
+  # per-environment `protocol` (https outside development/test) is not readable
+  # from this file — hardcoding `http://` here handed deployed users a URL
+  # their MCP client refuses.
+  public_server_url: <%= ENV['MCP_PUBLIC_SERVER_URL'] %>
+
+cloud:
+  # Where the in-container credential_process helper asks for short-lived cloud
+  # credentials. Reached over the docker network, like mcp.server_url — never a public
+  # host, since the request carries a per-session vending key.
+  credentials_url: <%= ENV['CLOUD_CREDENTIALS_URL'] || "#{internal_base}/cloud/aws/credentials" %>
+
+# One base endpoint, handed to agent containers that append their own signal
+# paths. The per-signal endpoints are gone: nothing read `logs_endpoint`, and
+# the one reader of `metrics_endpoint` stripped the `/v1/<signal>` suffix back
+# off to recover exactly this value. No OpenTelemetry SDK runs in this app.
+otel:
+  endpoint: <%= otel_base %>
+
+temporal:
+  enabled: <%= ENV['TEMPORAL_ENABLED'] %>
+  host: <%= ENV['TEMPORAL_HOST'] || 'temporal' %>
+  port: <%= ENV['TEMPORAL_PORT'] || 7233 %>
+  namespace: <%= ENV['TEMPORAL_NAMESPACE'] || 'default' %>
+  task_queue: <%= ENV['TEMPORAL_TASK_QUEUE'] || 'aixle_ruby' %>
+  worker_graceful_shutdown_period: <%= ENV['TEMPORAL_WORKER_GRACEFUL_SHUTDOWN_PERIOD'] || 900 %>
+  # The worker process' thread budget: TemporalService derives activity slots
+  # from it (80%, so in-flight activities stay under the DB pool) and
+  # bin/temporal_worker sizes the worker's own DB pool from it.
+  #
+  # Its fallback is deliberately NOT the web default (10) that `max_threads`
+  # carries: a worker pod is sized on its own, and doubling activity
+  # concurrency on a deployment that sets neither variable is a capacity
+  # decision, not part of fixing the pool arithmetic. RAILS_MAX_THREADS still
+  # feeds it where a deployment sets one value for the whole image.
+  worker_max_threads: <%= (ENV['TEMPORAL_WORKER_MAX_THREADS'] || ENV['RAILS_MAX_THREADS'] || 5).to_i %>
+
+# Signed-in browser sessions (UserSession): ended after this many hours unused,
+# and after this many in all, whatever the use.
+auth:
+  session_idle_timeout_hours: <%= ENV.fetch('SESSION_IDLE_TIMEOUT_HOURS', 336).to_i %>
+  session_max_age_hours: <%= ENV.fetch('SESSION_MAX_AGE_HOURS', 720).to_i %>
+
+# The Content-Security-Policy (config/initializers/content_security_policy.rb) is
+# only reported until this is true; base-uri, object-src and frame-ancestors are
+# enforced either way.
+security:
+  csp_enforce: <%= ENV['CSP_ENFORCE'] == 'true' %>
+
+# At-rest encryption keys. Bare ENV in the base file (no fallbacks): production
+# MUST set these — see config/initializers/required_env.rb, which fails the boot
+# if any is blank. Dev/test fallbacks live in config/settings/{development,test}.yml.
+# The concern derives the real key via HKDF-SHA256 (app/models/concerns/encryptable.rb).
+encryption:
+  credentials_key: <%= ENV['CREDENTIALS_SECRET_KEY'] %>
+  config_items_key: <%= ENV['CONFIG_ITEMS_SECRET_KEY'] %>
+  integrations_key: <%= ENV['INTEGRATIONS_SECRET_KEY'] %>
+  oauth_key: <%= ENV['OAUTH_SECRET_KEY'] %>
+  # Retired keys, comma-separated, still accepted for reading while
+  # `bin/rails encryption:reencrypt` moves every stored secret onto the new one.
+  credentials_key_previous: <%= ENV['CREDENTIALS_SECRET_KEY_PREVIOUS'] %>
+  config_items_key_previous: <%= ENV['CONFIG_ITEMS_SECRET_KEY_PREVIOUS'] %>
+  integrations_key_previous: <%= ENV['INTEGRATIONS_SECRET_KEY_PREVIOUS'] %>
+  oauth_key_previous: <%= ENV['OAUTH_SECRET_KEY_PREVIOUS'] %>
+  # Bind new ciphertexts to their model and column. Off until no pod of the
+  # previous release can run (it reads a bound value as empty); after turning it
+  # on, `bin/rails encryption:reencrypt` binds what is already stored.
+  bind_purpose: <%= ENV['ENCRYPTION_BIND_PURPOSE'] == 'true' %>
+
+# Unified OAuth provider client credentials (operator-set once per deployment,
+# multi-tenant via per-owner OauthCredential). Distinct from the `sentry:` DSN
+# block above — these are OAuth app client_id/secret, not error-tracking DSNs.
+# Quoted so YAML keeps client_id values as strings (see the slack comment below).
+sentry_oauth:
+  client_id: "<%= ENV['SENTRY_OAUTH_CLIENT_ID'] %>"
+  client_secret: "<%= ENV['SENTRY_OAUTH_CLIENT_SECRET'] %>"
+
+railway_oauth:
+  client_id: "<%= ENV['RAILWAY_OAUTH_CLIENT_ID'] %>"
+  client_secret: "<%= ENV['RAILWAY_OAUTH_CLIENT_SECRET'] %>"
+
+# Official MCP Registry, source of the connector catalog. Overridable so a
+# self-hosted deployment can point at a private subregistry (it implements the
+# same OpenAPI spec) instead of the public one.
+mcp_registry:
+  base_url: <%= ENV['MCP_REGISTRY_BASE_URL'] %>
+
+github:
+  app_id: <%= ENV['GITHUB_APP_ID'] %>
+  app_slug: <%= ENV['GITHUB_APP_SLUG'] %>
+  private_key: "<%= ENV['GITHUB_APP_PRIVATE_KEY'] %>"
+  webhook_secret: <%= ENV['GITHUB_WEBHOOK_SECRET'] %>
+  # The App's OAuth client. Optional; when both are set, connecting a NEW
+  # installation also requires the installing user to be able to see it
+  # (Github::InstallationOwnership) — enable "Request user authorization (OAuth)
+  # during installation" on the App for GitHub to send the code.
+  client_id: "<%= ENV['GITHUB_APP_CLIENT_ID'] %>"
+  client_secret: "<%= ENV['GITHUB_APP_CLIENT_SECRET'] %>"
+  # Alternative to GITHUB_APP_PRIVATE_KEY for a deployment that mounts the PEM
+  # as a file. Read only when the inline key is blank (Github::TokenService) —
+  # which until now could never resolve to anything, because the service asked
+  # for a setting no settings file defined.
+  private_key_path: <%= ENV['GITHUB_APP_PRIVATE_KEY_PATH'] %>
+  # OPTIONAL, and unrelated to the GitHub App above. A read-only token for the two
+  # paths that read PUBLIC repositories nobody installed the app on:
+  # listing repository trees while describing the skills catalog
+  # (Skills::GithubSkillTree), and resolving BMAD external-module tags during an
+  # agent-container install (BmadMethodInjector). Unauthenticated api.github.com
+  # allows 60 requests/hour PER SOURCE IP — one budget for the whole deployment,
+  # since agent containers NAT through a single address. That caps the catalog
+  # backfill at a couple of dozen publishers per run and makes BMAD installs fail
+  # once a busy project drains it; any token raises the limit to 5,000/hour. Needs
+  # no scopes — public_repo read is enough, and a tenant's installation token must
+  # NOT be used here.
+  read_token: <%= ENV['GITHUB_PUBLIC_READ_TOKEN'] %>
+
+gitlab:
+  endpoint: <%= ENV['GITLAB_ENDPOINT'] || 'https://gitlab.com/api/v4' %>
+  # Where GitLab posts pipeline events, when DOMAIN is not reachable from GitLab
+  # (a tunnel in development). A host GitLab cannot reach registers no hooks.
+  webhook_base_url: "<%= ENV['GITLAB_WEBHOOK_BASE_URL'] %>"
+  # The deployment's GitLab OAuth app (docs/design/gitlab-tracker.md). Optional —
+  # with it, a group Owner connects once and Flow makes a service account; without
+  # it, GitLab connects with a pasted token only.
+  oauth_client_id: "<%= ENV['GITLAB_OAUTH_CLIENT_ID'] %>"
+  oauth_client_secret: "<%= ENV['GITLAB_OAUTH_CLIENT_SECRET'] %>"
+
+# Bitbucket Cloud (docs/design/bitbucket-integration.md). App mode is offered
+# exactly when the three forge values are set; token mode needs nothing here.
+bitbucket:
+  forge:
+    app_id: "<%= ENV['BITBUCKET_FORGE_APP_ID'] %>"
+    environment_id: "<%= ENV['BITBUCKET_FORGE_ENVIRONMENT_ID'] %>"
+    install_url: "<%= ENV['BITBUCKET_FORGE_INSTALL_URL'] %>"
+    jwks_url: <%= ENV['BITBUCKET_FORGE_JWKS_URL'] || 'https://forge.cdn.prod.atlassian-dev.net/.well-known/jwks.json' %>
+  token_min_remaining: <%= (ENV['BITBUCKET_TOKEN_MIN_REMAINING'] || 300).to_i %>
+  merge_poll_interval: <%= (ENV['BITBUCKET_MERGE_POLL_INTERVAL'] || 1.0).to_f %>
+  open_timeout: <%= (ENV['BITBUCKET_OPEN_TIMEOUT'] || 5).to_i %>
+  read_timeout: <%= (ENV['BITBUCKET_READ_TIMEOUT'] || 30).to_i %>
+
+# Credential vending for the in-container git helper (GitHub and GitLab
+# repositories). Reached over the internal network, like cloud.credentials_url.
+git:
+  credentials_url: <%= ENV['GIT_CREDENTIALS_URL'] || "#{internal_base}/agents/git/credentials" %>
+
+# Azure DevOps (docs/design/azure-devops-integration.md). One operator-owned
+# multi-tenant Entra app registration per deployment: its client id is public,
+# its credential is server-held and never reaches a customer browser, an
+# integration row, a session container, a tool argument or a Temporal payload.
+#
+# Customers do NOT register their own app. Their Entra administrator provisions
+# a tenant-local service principal for THIS client id, and an Azure DevOps
+# administrator adds that principal to the organization — see §5.2 of the design.
+azure_devops:
+  # There is no `enabled` flag: the feature is offered exactly when `apps.default`
+  # below carries a client id and a credential (or PAT mode is on). A separate
+  # boolean could only ever disagree with the configuration it sits next to.
+  #
+  # Permits the fallback identity mode. PAT mode acts as the token's owner and
+  # carries that person's full upstream permissions, so it is opt-in per
+  # deployment rather than an automatic fallback for a failed app setup.
+  pat_mode_enabled: <%= ENV['AZURE_DEVOPS_PAT_MODE_ENABLED'] == 'true' %>
+  # The Azure DevOps OAuth resource. This looks like a legacy ADAL resource and
+  # is not: it is exactly what Microsoft's service-principal documentation shows
+  # for the client-credentials flow. `499b84ac-1321-427f-aa17-267ca6975798/.default`
+  # is the equivalent spelling. Do not "fix" it into a third form.
+  resource: <%= ENV['AZURE_DEVOPS_RESOURCE'] || 'https://app.vssps.visualstudio.com/.default' %>
+  # Token endpoint host. Sovereign clouds use a different one; the tenant GUID is
+  # always appended by AppTokenService and is never caller-supplied.
+  login_host: <%= ENV['AZURE_DEVOPS_LOGIN_HOST'] || 'https://login.microsoftonline.com' %>
+  api_host: <%= ENV['AZURE_DEVOPS_API_HOST'] || 'https://dev.azure.com' %>
+  # Where Azure posts Service Hook deliveries. The ONLY part of this integration
+  # that needs a publicly reachable host — everything else is outbound.
+  #
+  # Blank on purpose: AppConfig falls back to the deployment's own domain
+  # (`protocol://domain`), the same source every other webhook in the app uses.
+  # Set it ONLY when that domain is not reachable from Azure — a tunnel in
+  # development. A deployment whose effective host is loopback or private
+  # provisions no subscriptions at all, because one pointing at an unreachable
+  # host is accepted by Azure and then fails every delivery in silence.
+  webhook_base_url: <%= ENV['AZURE_DEVOPS_WEBHOOK_BASE_URL'] %>
+  # Where the in-container git credential helper asks for a short-lived token.
+  # Reached over the docker network like cloud.credentials_url — never a public
+  # host, since the request carries a per-session vending key.
+  git_credentials_url: <%= ENV['AZURE_DEVOPS_GIT_CREDENTIALS_URL'] || "#{internal_base}/azure/git/credentials" %>
+  # Seconds before the recorded expiry at which a cached token is treated as
+  # spent. Entra tokens for this resource live about an hour, so renewal is a
+  # hot path on any long session, not a rare event.
+  token_refresh_skew: <%= (ENV['AZURE_DEVOPS_TOKEN_REFRESH_SKEW'] || 300).to_i %>
+  # Seconds between re-reads while confirming a pull-request completion: Azure
+  # accepts the request and merges asynchronously, so a response is not a merge.
+  completion_poll_interval: <%= (ENV['AZURE_DEVOPS_COMPLETION_POLL_INTERVAL'] || 1.0).to_f %>
+  open_timeout: <%= (ENV['AZURE_DEVOPS_OPEN_TIMEOUT'] || 5).to_i %>
+  read_timeout: <%= (ENV['AZURE_DEVOPS_READ_TIMEOUT'] || 30).to_i %>
+  # Named app configurations. An installation stores the KEY, never a secret and
+  # never a path — a project administrator cannot point a binding at arbitrary
+  # credential material by submitting a string.
+  apps:
+    default:
+      client_id: "<%= ENV['AZURE_DEVOPS_CLIENT_ID'] %>"
+      # Exactly one of these. The certificate is the production credential; the
+      # secret is a setup/pilot alternative. Both stay on the server.
+      client_secret: "<%= ENV['AZURE_DEVOPS_CLIENT_SECRET'] %>"
+      # `to_json` rather than bare interpolation: a PEM is multi-line, and YAML
+      # FOLDS line breaks inside a double-quoted scalar into spaces. The key
+      # arrived intact in the environment and reached OpenSSL as one long line
+      # with spaces where its newlines had been — "Neither PUB key nor PRIV key",
+      # from a file that was perfectly correct. JSON quotes it with the breaks
+      # escaped, which YAML then reads back as real newlines.
+      private_key: <%= ENV['AZURE_DEVOPS_PRIVATE_KEY'].to_json %>
+      certificate_thumbprint: "<%= ENV['AZURE_DEVOPS_CERT_THUMBPRINT'] %>"
+      # Bumped by the operator on every rotation. Cached tokens minted under an
+      # older generation stop being served the moment this changes.
+      credential_generation: "<%= ENV['AZURE_DEVOPS_CREDENTIAL_GENERATION'] || 'v1' %>"
+
+# CI gates (board task preconditions resolved by a CI webhook). These bound how
+# long a gate may wait on a webhook that may never arrive — see GateReconciler.
+gates:
+  # How long a pending CI gate may live before the reconciliation sweep gives up
+  # on it and marks it stale (never "passed"). Long enough for a slow pipeline,
+  # short enough that a lost webhook does not park a card for a working day.
+  ttl_hours:                <%= (ENV['GATES_TTL_HOURS'] || 12).to_f %>
+  # Grace before the first provider probe, and the minimum gap between probes.
+  # The webhook is the fast path; probing a fresh gate would just race it.
+  reconcile_after_minutes:  <%= (ENV['GATES_RECONCILE_AFTER_MINUTES'] || 10).to_f %>
+  # Gates probed per sweep, so one cron tick makes a bounded number of provider
+  # requests. A backlog drains over successive ticks.
+  reconcile_batch_size:     <%= (ENV['GATES_RECONCILE_BATCH_SIZE'] || 100).to_i %>
+
+# Microsoft Teams bot (docs/design/teams-integration.md). The bot is an Entra app
+# with an Azure Bot attached; one deployment normally runs it on the same
+# registration as Microsoft sign-in, so unset credentials fall back to
+# microsoft_oauth (Teams::Config). Teams is offered once the bot's home tenant is
+# set, which is what registering the Azure Bot decides.
+teams:
+  app_id: <%= ENV['TEAMS_APP_ID'] %>
+  private_key: <%= ENV['TEAMS_PRIVATE_KEY'].to_json %>
+  certificate_thumbprint: "<%= ENV['TEAMS_CERT_THUMBPRINT'] %>"
+  # Development only; production runs on the certificate.
+  client_secret: <%= ENV['TEAMS_CLIENT_SECRET'] %>
+  home_tenant_id: <%= ENV['TEAMS_HOME_TENANT_ID'] %>
+  cloud: <%= ENV['TEAMS_CLOUD'] || 'public' %>
+  # Optional, comma-separated: the only Microsoft 365 organizations this
+  # installation will connect. A self-hoster sets their own.
+  allowed_tenant_ids: <%= ENV['TEAMS_ALLOWED_TENANT_IDS'] %>
+
+slack:
+  # One Slack app per Aixle deployment (multi-workspace via OAuth). Companies
+  # connect their workspace with one click; these app-level credentials are
+  # operator-set once, never per-tenant. Same convention as github/google above.
+  # Quoted so YAML keeps these as strings — a Slack client_id like
+  # "316958682017.11461756007041" otherwise parses as a Float and loses precision.
+  client_id: "<%= ENV['SLACK_CLIENT_ID'] %>"
+  client_secret: "<%= ENV['SLACK_CLIENT_SECRET'] %>"
+  signing_secret: "<%= ENV['SLACK_SIGNING_SECRET'] %>"
+  # Bot scopes requested at install time, comma-separated as Slack's OAuth v2
+  # authorize URL expects (Slack::Oauth also accepts spaces here).
+  # `commands` carries the Run workflow shortcut and the slash command;
+  # `channels:read` and `groups:read` give a connected channel its name;
+  # `users:read` gives the bot's display name, the only one Slack completes a
+  # mention from, and the name of whoever connected a channel.
+  scopes: <%= ENV['SLACK_SCOPES'] || 'app_mentions:read,channels:history,groups:history,channels:read,groups:read,users:read,files:read,files:write,chat:write,commands' %>
+
+# Where the Send feedback dialog in the user menu delivers. Each destination
+# turns on when its variables are set, and they can be used together; with
+# none set the dialog is not offered.
+feedback:
+  # A Slack bot token (xoxb-, with chat:write and files:write) and the channel
+  # id it posts to. The bot has to be a member of the channel.
+  slack_bot_token: "<%= ENV['FEEDBACK_SLACK_BOT_TOKEN'] %>"
+  slack_channel_id: "<%= ENV['FEEDBACK_SLACK_CHANNEL_ID'] %>"
+  # A card per submission in this column of this project's board.
+  board_project_id: <%= ENV['FEEDBACK_BOARD_PROJECT_ID'] %>
+  board_column_id: <%= ENV['FEEDBACK_BOARD_COLUMN_ID'] %>
+
+jira:
+  # One Atlassian OAuth 2.0 (3LO) app per deployment, shared by every customer
+  # site: Atlassian's terms do not allow an app per customer. Optional — without
+  # it Jira connects with a customer's service account only.
+  client_id: "<%= ENV['JIRA_OAUTH_CLIENT_ID'] %>"
+  client_secret: "<%= ENV['JIRA_OAUTH_CLIENT_SECRET'] %>"
+  # Where Jira posts webhooks, when DOMAIN is not reachable from Atlassian (a
+  # tunnel in development). A loopback or private host registers no webhooks.
+  webhook_base_url: "<%= ENV['JIRA_WEBHOOK_BASE_URL'] %>"
+
+linear:
+  # One Linear OAuth app per deployment, installed with actor=app. Optional —
+  # without it Linear connects with a personal API key only.
+  client_id: "<%= ENV['LINEAR_OAUTH_CLIENT_ID'] %>"
+  client_secret: "<%= ENV['LINEAR_OAUTH_CLIENT_SECRET'] %>"
+  # The signing secret of the app's own webhook (Linear generates it when the
+  # webhook is enabled in the app's settings).
+  webhook_secret: "<%= ENV['LINEAR_WEBHOOK_SECRET'] %>"
+  # Where Linear posts webhooks, when DOMAIN is not reachable from Linear (a
+  # tunnel in development). A loopback or private host registers no webhooks.
+  webhook_base_url: "<%= ENV['LINEAR_WEBHOOK_BASE_URL'] %>"
+
+youtrack:
+  # The base of the event addresses handed to the Aixle Flow app, when DOMAIN
+  # is not reachable from the YouTrack instance (a private zone, a tunnel).
+  webhook_base_url: "<%= ENV['YOUTRACK_WEBHOOK_BASE_URL'] %>"
+  # Self-hosted YouTrack hosts this deployment may reach although they resolve
+  # to a private address, comma-separated. Every other host must be public.
+  trusted_hosts: "<%= ENV['YOUTRACK_TRUSTED_HOSTS'] %>"
+
+# Every tracker (docs/design/tracker-attachments.md §7.5): how long a step of a run
+# that copies its issue's files waits for the copy before it starts, and how often
+# it looks.
+trackers:
+  copy_wait_seconds: 60
+  copy_poll_seconds: 2
+
+coder:
+  # Operator-configurable knobs for the Coder MCP services (workspace
+  # allocation, health gating, ssh runner).
+  #
+  # Template and machine prefix are deliberately NOT here: both are columns on
+  # the integration row and are read straight off it (Coder::Allocator,
+  # Coder::DeadWorkspaceReaper), with no fallback to a setting — so the
+  # deployment-wide defaults that used to sit here were read by nobody.
+  #
+  # Single total-response budget for `coder_ssh_exec` (DD-15). Picked below
+  # the MCP transport inline limit (OQ-7). Full output is still available via
+  # the existing ToolResult / read_tool_result path.
+  ssh_exec_inline_bytes:     <%= (ENV['CODER_SSH_EXEC_INLINE_BYTES'] || 262144).to_i %>
+  # `await_build` polling budget in seconds (DD-14 / OQ-6).
+  await_build_timeout:       <%= (ENV['CODER_AWAIT_BUILD_TIMEOUT'] || 240).to_i %>
+  # Health gating (D-1/D-2). The active SSH probe runs after the lock is taken
+  # and only ever rejects on positive evidence that the workspace is sick — a
+  # probe that cannot run (no coder CLI, auth failure) leaves the candidate in
+  # the pool. Set `health_probe_enabled: false` to fall back to passive
+  # (agent-reported) filtering alone.
+  health_probe_enabled:      <%= ENV.fetch('CODER_HEALTH_PROBE_ENABLED', 'true') == 'true' %>
+  health_probe_timeout:      <%= (ENV['CODER_HEALTH_PROBE_TIMEOUT'] || 15).to_i %>
+  # Reject when 1-minute load average exceeds `cores * this`.
+  health_load_factor:        <%= (ENV['CODER_HEALTH_LOAD_FACTOR'] || 2.0).to_f %>
+  # How long a workspace stays out of the pool after failing a probe. Bounded
+  # and self-healing: the allocator still falls back to a quarantined box when
+  # nothing better exists.
+  unhealthy_cooldown_minutes: <%= (ENV['CODER_UNHEALTHY_COOLDOWN_MINUTES'] || 30).to_i %>
+  # Wall-clock ceiling a single `coder_ssh_exec` call can actually reach before
+  # the MCP transport gives up on it, regardless of `timeout_seconds`. Work
+  # that outlives this must run detached (`detach: true`) and be polled with
+  # `coder_job_status`.
+  ssh_exec_ceiling_seconds:  <%= (ENV['CODER_SSH_EXEC_CEILING_SECONDS'] || 120).to_i %>
+  # Log tail returned by `coder_job_status` when the caller does not ask for a
+  # specific size.
+  job_status_tail_lines:     <%= (ENV['CODER_JOB_STATUS_TAIL_LINES'] || 40).to_i %>
+  # Dead-workspace reaper (`Coder::DeadWorkspaceReaper`). Deletes a workspace
+  # only on positive evidence that its agent is gone AND an SSH probe that fails
+  # to reach it, seen twice `reap_confirmation_minutes` apart, with no live lock
+  # on it. Deletion is irreversible, so `reap_max_deletions_per_run` caps how
+  # much one sweep can remove even if the whole pool looks dead. Reaping a dead
+  # agent also requires `health_probe_enabled` — without the active probe there
+  # is no way to tell a dead box from an unresponsive one — but a workspace
+  # whose last start or stop failed is reaped without a probe. The feature flag
+  # `coder_reap` (config/feature_flags.yml) is the only switch that stops all
+  # deletion: it defaults to on, an admin can pause it at runtime from
+  # /admin/feature_flags, and CODER_REAP_ENABLED (or FEATURE_CODER_REAP) locks it.
+  reap_confirmation_minutes: <%= (ENV['CODER_REAP_CONFIRMATION_MINUTES'] || 10).to_i %>
+  reap_max_deletions_per_run: <%= (ENV['CODER_REAP_MAX_DELETIONS_PER_RUN'] || 3).to_i %>
+
+url_safety:
+  # Public hostnames that may resolve to a private IP via split-horizon DNS
+  # (e.g. our own staging/QA hosts served from inside the cluster). The DNS
+  # resolution check is skipped for an exact match against this allowlist.
+  # Only the Coder integration reads it; every other URL check ignores it.
+  trusted_hosts: <%= (ENV['URL_SAFETY_TRUSTED_HOSTS'] || '').split(',').map(&:strip).reject(&:empty?) %>
+
+traefik:
+  http_base: <%= traefik_http %>
+  # The same origin over websockets: http -> ws, https -> wss. TRAEFIK_WS_BASE
+  # still overrides, but the pair no longer has to be kept in step by hand.
+  ws_base: <%= ENV['TRAEFIK_WS_BASE'] || traefik_http.sub(/\Ahttp/, 'ws') %>
+  internal_url: <%= ENV['TRAEFIK_INTERNAL_URL'] || 'http://traefik' %>
+
+container_runtime: <%= ENV['CONTAINER_RUNTIME'] || 'docker' %>
+
+agents:
+  # Built-in runtime images are DERIVED, not enumerated: the image for runtime
+  # `a_b` is "<image_prefix>a-b[:image_tag]". A new runtime needs no entry
+  # here, and an environment that publishes the whole set to one registry sets
+  # one variable instead of seven (see config/settings/production.yml).
+  image_prefix: <%= ENV['AGENT_IMAGE_PREFIX'] || 'aixle/' %>
+  # Blank tag means the registry default (`:latest` implicitly), which is what
+  # the deployed environments want; locally the tag is explicit.
+  image_tag: "<%= ENV['AGENT_IMAGE_TAG'] || 'latest' %>"
+  # Per-runtime escape hatch — pinning one runtime to a digest, or pointing it
+  # at a different registry. A blank entry falls back to the derived name.
+  images:
+    claude_code: <%= ENV['AGENT_IMAGE_CLAUDE_CODE'] %>
+    cursor_cli: <%= ENV['AGENT_IMAGE_CURSOR_CLI'] %>
+    codex: <%= ENV['AGENT_IMAGE_CODEX'] %>
+    gemini_cli: <%= ENV['AGENT_IMAGE_GEMINI_CLI'] %>
+    antigravity_cli: <%= ENV['AGENT_IMAGE_ANTIGRAVITY_CLI'] %>
+    grok: <%= ENV['AGENT_IMAGE_GROK'] %>
+    kiro_cli: <%= ENV['AGENT_IMAGE_KIRO_CLI'] %>
+  mcp:
+    startup_timeout_ms: <%= ENV['AGENT_MCP_STARTUP_TIMEOUT_MS'] || 90000 %>
+  # The Google OAuth client `agy` logs a consumer ("Google OAuth") account in with,
+  # read out of the binary. Kept out of the repo: GitHub secret scanning reports a
+  # committed GOCSPX- secret to Google, which revokes it — for every agy user, not
+  # just us. Unset, Antigravity tokens are renewed only by the CLI in the container.
+  antigravity:
+    oauth_client_id: <%= ENV['ANTIGRAVITY_OAUTH_CLIENT_ID'] %>
+    oauth_client_secret: <%= ENV['ANTIGRAVITY_OAUTH_CLIENT_SECRET'] %>
+  # Where the in-container watcher reports a token the CLI rotated. Derived from
+  # `internal_base` like mcp.server_url and cloud.credentials_url, so all three move
+  # together when a deployment's internal host does — a hardcoded default here would
+  # send the report to whatever answers on `web` instead. Never a public host: the
+  # request carries a per-session write-back key.
+  credential_sync_url: <%= ENV['AGENT_CREDENTIAL_SYNC_URL'] || "#{internal_base}/agents/credentials" %>
+  # Where the in-container proxy hands a CLI's OAuth refresh (Agents::RefreshBroker). Same
+  # host and key as the write-back above.
+  credential_refresh_url: <%= ENV['AGENT_CREDENTIAL_REFRESH_URL'] || "#{internal_base}/agents/credentials/refresh" %>
+  # How long a session whose agent lost its login waits for it to be renewed before it is
+  # failed (Sessions::AuthPause). Bounded by the container's own 24 hours.
+  auth_pause_limit_minutes: <%= ENV['AGENT_AUTH_PAUSE_LIMIT_MINUTES'] || 720 %>
+
+docker:
+  network: <%= ENV['DOCKER_NETWORK'] || 'app_default' %>
+  # The network agent containers join: a separate one that reaches the app and
+  # not its data stores (docker-compose.yml). A deployment that sets only
+  # DOCKER_NETWORK keeps its agents where they were.
+  agent_network: <%= ENV['DOCKER_AGENT_NETWORK'] || ENV['DOCKER_NETWORK'] || 'app_agents' %>
+
+kubernetes:
+  namespace: <%= ENV['K8S_NAMESPACE'] || 'aixle' %>
+  service_host: <%= ENV['KUBERNETES_SERVICE_HOST'] || 'kubernetes.default.svc' %>
+  service_port: <%= ENV['KUBERNETES_SERVICE_PORT'] || '443' %>
+  traefik_entrypoint: <%= ENV['TRAEFIK_ENTRYPOINT'] || 'websecure' %>
+  traefik_auth_middleware: <%= ENV['TRAEFIK_AUTH_MIDDLEWARE'] || 'terminal-auth' %>
+  # The route-readiness probe goes to traefik.http_base, which a deployment sets
+  # to its public name (a real certificate). Set false only when it points at a
+  # listener with a self-signed one, such as the traefik.<namespace>.svc fallback;
+  # a probe that cannot verify waits out ready_timeout before the session starts.
+  traefik_verify_tls: <%= ENV['K8S_TRAEFIK_VERIFY_TLS'] != 'false' %>
+  service_ports: <%= (ENV['K8S_SERVICE_PORTS'] || '7681,4040').split(',').map(&:to_i) %>
+  workspace_dir: <%= ENV['K8S_WORKSPACE_DIR'] || '/workspace' %>
+  image_pull_policy: <%= ENV['K8S_IMAGE_PULL_POLICY'] || 'IfNotPresent' %>
+  eks_vpc_cidr: <%= ENV['K8S_EKS_VPC_CIDR'] || '10.10.0.0/16' %>
+  runtime_blocked_ipv4_cidrs: <%= (ENV['K8S_RUNTIME_BLOCKED_IPV4_CIDRS'] || '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16').split(',').map(&:strip).reject(&:empty?) %>
+  runtime_blocked_ipv6_cidrs: <%= (ENV['K8S_RUNTIME_BLOCKED_IPV6_CIDRS'] || 'fc00::/7,fe80::/10').split(',').map(&:strip).reject(&:empty?) %>
+  runtime_requests_cpu: <%= ENV['K8S_RUNTIME_REQUESTS_CPU'] || '100m' %>
+  runtime_requests_memory: <%= ENV['K8S_RUNTIME_REQUESTS_MEMORY'] || '512Mi' %>
+  runtime_limits_cpu: <%= ENV['K8S_RUNTIME_LIMITS_CPU'] || '1000m' %>
+  runtime_limits_memory: <%= ENV['K8S_RUNTIME_LIMITS_MEMORY'] || '1Gi' %>
+  # The Pod Security "restricted" profile for agent pods (non-root, every
+  # capability dropped, RuntimeDefault seccomp). Needs agent images that run as a
+  # non-root user; without it pods still get no privilege escalation and no
+  # raw sockets.
+  restricted_agent_pods: <%= ENV['K8S_RESTRICTED_AGENT_PODS'] || 'false' %>
+  agents_image_pull_secrets: <%= (ENV['K8S_AGENTS_IMAGE_PULL_SECRETS'] || '').split(',').map(&:strip).reject(&:empty?) %>
+  # Dedicated node group for agent session pods (the `terminal-*` pods) — a
+  # runaway agent then only starves other agents, never a platform pod.
+  #
+  # FORMAT: comma-separated `key=value[:Effect]` entries. `Effect` is optional
+  # and defaults to NoSchedule (NoSchedule | PreferNoSchedule | NoExecute).
+  # Example ConfigMap value — this is the exact pair the prod agent node group
+  # (`palad-agents-on-demand`) labels and taints its nodes with:
+  #   K8S_AGENTS_NODE_POOL: "aixle.com/workload=agents:NoSchedule"
+  # Each entry becomes BOTH one `nodeSelector` label AND one matching
+  # toleration (operator Equal), so the node group's *label* and its *taint*
+  # must use the same key=value pair. Multiple entries = all labels required
+  # and all taints tolerated.
+  #
+  # EMPTY (the default) emits neither `nodeSelector` nor `tolerations` — not
+  # even empty ones. Any environment without such a node group (dev, staging,
+  # a cluster where the group has not been created yet) must leave it unset,
+  # otherwise every agent pod stays Pending forever.
+  agents_node_pool: <%= (ENV['K8S_AGENTS_NODE_POOL'] || '').split(',').map(&:strip).reject(&:empty?) %>
+  kubeconfig_path: <%= ENV['KUBECONFIG'] || File.join(ENV.fetch('HOME', '/root'), '.kube', 'config') %>
+  service_account_token_path: <%= ENV['K8S_SA_TOKEN_PATH'] || '/var/run/secrets/kubernetes.io/serviceaccount/token' %>
+  service_account_ca_path: <%= ENV['K8S_SA_CA_PATH'] || '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt' %>
+  ready_timeout: <%= ENV['K8S_READY_TIMEOUT'] || 60 %>
+  ready_interval: <%= ENV['K8S_READY_INTERVAL'] || 1 %>
+
+# Container Execution Framework (Epic 8)
+# The resource ceiling for one tool container, read by
+# ContainerStrategies::BaseStrategy#load_container_limits.
+#
+# The `timeouts:` table that used to sit here (ten keys) and `max_timeout`
+# below it were read by nothing: Temporal owns activity timeouts
+# (app/services/container_service.rb), and a tool's own timeout comes from its
+# definition. Removed rather than left to rot as a plausible-looking knob.
+container_execution:
+  limits:
+    tool_execution:
+      memory_mb: 1024      # Max memory per tool container (1GB)
+      cpu_percent: 50      # Max CPU (50% of 1 core) - prevents mining
+      pids_limit: 100      # Max processes
+    # Agent session containers on the Docker runtime (Kubernetes pods take
+    # kubernetes.runtime_* instead). Sized for builds and a browser.
+    agent_session:
+      memory_mb: 4096
+      cpu_percent: 200     # two cores
+      pids_limit: 4096
+
+# Which product this installation is: `self_hosted`, `saas` or `aws_marketplace`.
+# It decides who may move a company's session limit and who is billed for it.
+# Unset reads as `saas`, which is the safe direction — see app/services/deployment.rb.
+deployment:
+  mode: <%= ENV['DEPLOYMENT_MODE'] %>
+
+# Session admission's deployment inputs.
+#
+# Capacity itself is NOT configured here. A project limit is a reservation drawn
+# from the limit of the company that owns it, and a company's limit lives in the
+# database (a SessionConcurrencyLimit row, edited on the company's own admin
+# page) because it is the number the installation sells. SESSION_CONCURRENCY_LIMIT
+# used to be a deployment-wide ceiling every reservation came out of; it could not
+# express an installation running several organisations and nothing reads it.
+#
+# `project_default` IS read live, i.e. re-read at every boot, so a ConfigMap edit
+# takes effect on the next pod with nothing to run afterwards. A value that is
+# not a positive integer is logged and ignored in favour of the built-in fallback
+# of 4 rather than raised — a typo must not wedge every queue in the
+# installation; the queue-health line reports it, which is where an operator
+# sees it.
+#
+# There is no per-user default: sessions launched outside a project are not
+# queued at all.
+session_admission:
+  project_default: <%= ENV['SESSION_PROJECT_CONCURRENCY_DEFAULT'] %>
+  # A reservation pinned by an unprovable create/start keeps its slot so a late
+  # Pod can never land on someone else's (AD-5). By the time the pin is honoured
+  # the workload is already PROVEN GONE — cleanup returns earlier otherwise — so
+  # the pin is not waiting for the workload to disappear. It is waiting for that
+  # absence to look settled rather than momentary.
+  #
+  # The reconciler re-proves absence every pass, and after this many minutes of
+  # UNINTERRUPTED proof it abandons the operation and releases the slot. Five
+  # minutes because a session that is genuinely starting has never taken that
+  # long to appear; a pass that sees the workload again resets the clock.
+  #
+  # This is the half of the problem replay cannot reach: an operation whose
+  # workflow is still alive is resolved by redoing it (SessionRuntimeOperation
+  # #replayable?), but once the workflow is closed nothing exists to redo it,
+  # and before this the slot stayed pinned until a human opened a console.
+  pinned_release_enabled: <%= ENV.fetch('SESSION_PINNED_RELEASE_ENABLED', 'true') == 'true' %>
+  pinned_release_confirmation_minutes: <%= (ENV['SESSION_PINNED_RELEASE_CONFIRMATION_MINUTES'] || 5).to_i %>
+
+# Feature flags (config/feature_flags.yml). `env` carries every FEATURE_*
+# variable, and every variable a flag declares as its own `env:`, as a JSON
+# object — JSON is valid YAML — so FeatureFlags::EnvSource can parse and
+# validate the ENV lock layer without app code reading ENV. The registry is
+# parsed with the options FeatureFlags::Registry.load uses (aliases: false).
+<% flag_registry  = YAML.load_file(Rails.root.join("config/feature_flags.yml"), permitted_classes: [ Date ], aliases: false).to_h %>
+<% flag_env_names = flag_registry.values.filter_map { |flag| flag["env"] if flag.is_a?(Hash) } %>
+<% feature_env    = ENV.to_h.select { |name, _| name.start_with?("FEATURE_") || flag_env_names.include?(name) } %>
+feature_flags:
+  env: <%= feature_env.to_json %>
+
+# How long a tool result's stored payload is kept (ToolResultCleanupJob).
+tool_results:
+  retention_days: <%= ENV['TOOL_RESULTS_RETENTION_DAYS'] || 30 %>
+
+# Prompt-context budget in tokens (ContextRenderer).
+context:
+  token_budget: <%= ENV['CONTEXT_TOKEN_BUDGET'] || 6000 %>
+
+
+# The public list price of one queue-hour, shown on /how-it-works. Nothing bills
+# from it: metering reports quantities and the invoice is priced by Stripe or AWS
+# Marketplace. It is here so an installation that sells at a different price does
+# not have to be rebuilt to say so.
+pricing:
+  queue_hourly_rate: <%= (ENV['PRICING_QUEUE_HOURLY_RATE'] || 5).to_f %>
+
+# Whether strangers may sign their own company up (the public /workspace/new and
+# the /how-it-works page that leads to it). Hosted deployments only; off until
+# an operator turns it on, so the screens can ship before the product is ready
+# to take them.
+registration:
+  enabled: <%= ENV.fetch('REGISTRATION_ENABLED', 'false') == 'true' %>
+
+# How long the free trial of a company that signs itself up lasts, in days, on
+# one worker. Hosted deployments only. A company keeps the length of the trial it
+# started; an operator moves its last day from the company's admin page.
+trial:
+  days: <%= (ENV['TRIAL_DAYS'] || 30).to_i %>
+
+# Stripe, for the hosted product's metered capacity. Absent everywhere else, and
+# absent here until an operator sets it — nothing calls Stripe without all three,
+# and the metering ledger keeps recording either way.
+# The product an installation bought through AWS Marketplace meters against.
+# Empty everywhere else, and empty is what stops Billing::MarketplaceMeteringClient
+# from calling out at all. The installation puts it here from the code the
+# buyer's subscription issued.
+aws_marketplace:
+  product_code: <%= ENV['AWS_MARKETPLACE_PRODUCT_CODE'] %>
+  # The SaaS listing, which we sell and host, as against the container product
+  # above which a buyer runs in their own account. Both empty everywhere but the
+  # one installation that sells each, and empty is what stops the adapter
+  # dialling out at all.
+  #
+  # The role lives in the seller account and is assumed from here, because a SaaS
+  # metering call must be signed by the account that owns the listing while this
+  # application runs in another. Neither value is a secret — an account id and a
+  # product code — so both belong in configuration rather than in a secret.
+  saas:
+    product_code: <%= ENV['AWS_MARKETPLACE_SAAS_PRODUCT_CODE'] %>
+    # The same listing's catalogue id. Needed beside the code because the two
+    # halves of the event stream name the product differently: agreement events
+    # carry only the id, licence events carry both. Without it every other
+    # product this seller account sells arrives and is kept forever.
+    product_id: <%= ENV['AWS_MARKETPLACE_SAAS_PRODUCT_ID'] %>
+    seller_role_arn: <%= ENV['AWS_MARKETPLACE_SELLER_ROLE_ARN'] %>
+    # The listing's region, not the cluster's.
+    region: <%= ENV['AWS_MARKETPLACE_SAAS_REGION'] %>
+    # Subscription events, delivered here by a rule in the seller account. This
+    # queue is in THIS account, so it is read with the pod's own identity and
+    # not with the role above — the one call in this feature that is not signed
+    # as the seller. Empty leaves the reader idle and metering unaffected.
+    events_queue_url: <%= ENV['AWS_MARKETPLACE_EVENTS_QUEUE_URL'] %>
+    # The listing's public page, where a buyer whose subscription has ended
+    # subscribes again. Not derivable from the product id: the page is keyed on
+    # a `prodview-` id the catalogue API does not answer. Empty falls back to
+    # the buyer's subscription library, which lists the ended subscription and
+    # offers no way to a new one.
+    listing_url: <%= ENV['AWS_MARKETPLACE_SAAS_LISTING_URL'] %>
+
+stripe:
+  secret_key: <%= ENV['STRIPE_SECRET_KEY'] %>
+  # The metered price capacity is billed against. Its unit is a queue-MINUTE, so
+  # it is PRICING_QUEUE_HOURLY_RATE / 60 — the two are copies of one number.
+  price_id: <%= ENV['STRIPE_PRICE_ID'] %>
+  # Shown once when the webhook endpoint is created. Without it every delivery is
+  # refused, which is the right default: an unverified webhook is an open door to
+  # anyone who can guess the URL.
+  webhook_secret: <%= ENV['STRIPE_WEBHOOK_SECRET'] %>

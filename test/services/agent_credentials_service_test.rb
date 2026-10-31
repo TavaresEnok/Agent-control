@@ -1,0 +1,319 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class AgentCredentialsServiceTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @user = create(:user, company: @company)
+
+    Rails.logger.stubs(:info)
+    Rails.logger.stubs(:warn)
+    Rails.logger.stubs(:error)
+  end
+
+  # == Initialization Tests ==
+
+  test "initializes with claude_code adapter" do
+    service = AgentCredentialsService.new("claude_code")
+
+    assert_equal "claude_code", service.agent_type
+    assert_instance_of Agents::ClaudeCodeAdapter, service.adapter
+  end
+
+  test "initializes with cursor_cli adapter" do
+    service = AgentCredentialsService.new("cursor_cli")
+
+    assert_equal "cursor_cli", service.agent_type
+    assert_instance_of Agents::CursorCliAdapter, service.adapter
+  end
+
+  test "initializes with gemini_cli adapter" do
+    service = AgentCredentialsService.new("gemini_cli")
+
+    assert_equal "gemini_cli", service.agent_type
+    assert_instance_of Agents::GeminiCliAdapter, service.adapter
+  end
+
+  test "initializes with antigravity_cli adapter" do
+    service = AgentCredentialsService.new("antigravity_cli")
+
+    assert_instance_of Agents::AntigravityCliAdapter, service.adapter
+  end
+
+  test "initializes with grok adapter" do
+    service = AgentCredentialsService.new("grok")
+
+    assert_equal "grok", service.agent_type
+    assert_instance_of Agents::GrokAdapter, service.adapter
+  end
+
+  test "initializes with kiro_cli adapter" do
+    service = AgentCredentialsService.new("kiro_cli")
+
+    assert_equal "kiro_cli", service.agent_type
+    assert_instance_of Agents::KiroCliAdapter, service.adapter
+  end
+
+  test "raises error for unknown agent type" do
+    assert_raises(ArgumentError) do
+      AgentCredentialsService.new("unknown_agent")
+    end
+  end
+
+  # == Class Methods ==
+
+  test "for creates service instance" do
+    service = AgentCredentialsService.for("claude_code")
+
+    assert_instance_of AgentCredentialsService, service
+    assert_equal "claude_code", service.agent_type
+  end
+
+  test "supported_agents returns all adapter keys" do
+    agents = AgentCredentialsService.supported_agents
+
+    assert_includes agents, "claude_code"
+    assert_includes agents, "cursor_cli"
+    assert_includes agents, "gemini_cli"
+    assert_includes agents, "antigravity_cli"
+    assert_includes agents, "codex"
+    assert_includes agents, "grok"
+    assert_includes agents, "kiro_cli"
+  end
+
+  test "supported? returns true for known agent" do
+    assert AgentCredentialsService.supported?("claude_code")
+    assert AgentCredentialsService.supported?("cursor_cli")
+  end
+
+  test "supported? returns false for unknown agent" do
+    refute AgentCredentialsService.supported?("unknown")
+  end
+
+  # == Delegate Methods ==
+
+  test "delegates config_path to adapter" do
+    service = AgentCredentialsService.new("claude_code")
+
+    assert_kind_of String, service.config_path
+    assert_includes service.config_path, ".claude"
+  end
+
+  test "delegates home_dir to adapter" do
+    service = AgentCredentialsService.new("claude_code")
+
+    assert_kind_of String, service.home_dir
+  end
+
+  # == Extract from Container Tests ==
+
+  test "extract_from_container returns credentials from container" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    config_content = JSON.generate({
+      "primaryApiKey" => "sk-ant-123",
+      "lastAccountId" => "user_123"
+    })
+    runtime_mock.expects(:exec).with("container123", [ "cat", service.config_path ])
+      .returns([ [ config_content ], [], 0 ])
+
+    credentials = service.extract_from_container("container123")
+
+    assert_kind_of Hash, credentials
+    assert credentials[:api_key].present? || credentials["primaryApiKey"].present?
+  end
+
+  test "extract_from_container returns empty hash when file not found" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    runtime_mock.expects(:exec).returns([ [], [ "No such file" ], 1 ])
+
+    credentials = service.extract_from_container("container123")
+
+    assert_equal({}, credentials)
+  end
+
+  test "extract_from_container returns empty hash when container not found" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    runtime_mock.expects(:exec).raises(StandardError.new("container not found"))
+
+    credentials = service.extract_from_container("missing123")
+
+    assert_equal({}, credentials)
+  end
+
+  # == Auth Complete in Container Tests ==
+
+  test "auth_complete_in_container? returns true when credentials present" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    config_content = JSON.generate({
+      "primaryApiKey" => "sk-ant-123",
+      "lastAccountId" => "user_123"
+    })
+    runtime_mock.expects(:exec).returns([ [ config_content ], [], 0 ])
+
+    assert service.auth_complete_in_container?("container123")
+  end
+
+  test "auth_complete_in_container? returns false when file not found" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    runtime_mock.expects(:exec).returns([ [], [], 1 ])
+
+    refute service.auth_complete_in_container?("container123")
+  end
+
+  # == Write to Container Tests ==
+
+  test "write_to_container writes config files" do
+    service = AgentCredentialsService.new("claude_code")
+    runtime = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code")
+    service.instance_variable_set(:@runtime, runtime)
+
+    credentials = { api_key: "test-key", account_id: "user-123" }
+
+    service.write_to_container("container123", credentials)
+
+    assert runtime.fs.key?(service.config_path)
+  end
+
+  # Claude Code refuses a Claude Platform credentials file others can read, and the file
+  # must stay the agent's own so the CLI can rewrite it on refresh.
+  test "write_to_container writes a Claude Platform profile owner-only, as the agent" do
+    service = AgentCredentialsService.new("claude_code")
+    runtime = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code")
+    service.instance_variable_set(:@runtime, runtime)
+    adapter = service.adapter
+
+    service.write_to_container("container123", {
+      "platformOauth" => { "accessToken" => "sk-ant-oat01-x", "refreshToken" => "sk-ant-ort01-x", "expiresAt" => 1_790_679_907_000 }
+    })
+
+    [ adapter.platform_credentials_path, adapter.platform_config_path ].each do |path|
+      assert_equal({ mode: 0o600, uid: 1001, gid: 1001 }, runtime.file_attributes(path), path)
+    end
+    assert_equal 0o644, runtime.file_attributes(service.config_path)[:mode]
+  end
+
+  test "write_to_container raises on runtime error" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    runtime_mock.expects(:write_file).raises(StandardError.new("Write failed"))
+
+    assert_raises(StandardError) do
+      service.write_to_container("container123", { api_key: "test" })
+    end
+  end
+
+  # == Save Credentials from Container Tests ==
+
+  test "save_credentials_from_container creates agent credential" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    config_content = JSON.generate({
+      "primaryApiKey" => "sk-ant-123",
+      "lastAccountId" => "user_123"
+    })
+    runtime_mock.expects(:exec).returns([ [ config_content ], [], 0 ])
+
+    credential = service.save_credentials_from_container(@user, @user.company_memberships.first&.company, "container123")
+
+    assert_instance_of AgentCredential, credential
+    assert_equal "claude_code", credential.agent_type
+    assert_equal @user.id, credential.user_id
+  end
+
+  test "save_credentials_from_container raises when no credentials" do
+    service = AgentCredentialsService.new("claude_code")
+
+    runtime_mock = mock("runtime")
+    service.instance_variable_set(:@runtime, runtime_mock)
+
+    runtime_mock.expects(:exec).returns([ [], [], 1 ])
+
+    assert_raises(RuntimeError, "No credentials found in container") do
+      service.save_credentials_from_container(@user, @user.company_memberships.first&.company, "container123")
+    end
+  end
+
+  # == Load Credentials to Container Tests ==
+
+  test "load_credentials_to_container writes existing credentials" do
+    service = AgentCredentialsService.new("claude_code")
+    runtime = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {})
+    service.instance_variable_set(:@runtime, runtime)
+
+    credential = create(:agent_credential,
+      user: @user,
+      company: @company,
+      agent_type: "claude_code",
+      config_data: { api_key: "existing-key", account_id: "user-123" }
+    )
+
+    service.load_credentials_to_container(@user, @company, "container123")
+
+    credential.reload
+    assert credential.last_used_at.present?
+  end
+
+  test "write verification failure does not update last_used_at" do
+    service = AgentCredentialsService.new("claude_code")
+    runtime = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {})
+    runtime.stubs(:write_file).returns(true)
+    service.instance_variable_set(:@runtime, runtime)
+    ContainerRuntime.stubs(:build).returns(runtime)
+    credential = create(:agent_credential, user: @user, company: @company, agent_type: "claude_code", last_used_at: nil)
+
+    error = assert_raises(AgentCredentialsService::CredentialWriteError) do
+      credential.write_to_container("container123")
+    end
+
+    refute error.details[:exists]
+    assert_nil credential.reload.last_used_at
+  end
+
+  test "load_credentials_to_container raises when no credentials exist" do
+    service = AgentCredentialsService.new("claude_code")
+
+    assert_raises(RuntimeError, "No credentials found for claude_code") do
+      service.load_credentials_to_container(@user, @company, "container123")
+    end
+  end
+
+  # Credentials are per (user, company): writing another company's tokens into a
+  # container would run the session on — and bill — the wrong tenant.
+  test "load_credentials_to_container refuses a credential from another company" do
+    service = AgentCredentialsService.new("claude_code")
+    other_company = create(:company)
+    create(:company_membership, user: @user, company: other_company)
+    create(:agent_credential, user: @user, company: other_company, agent_type: "claude_code")
+
+    assert_raises(RuntimeError, "No credentials found for claude_code") do
+      service.load_credentials_to_container(@user, @company, "container123")
+    end
+  end
+end

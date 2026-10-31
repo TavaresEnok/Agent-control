@@ -1,0 +1,349 @@
+import { router, usePage } from '@inertiajs/react';
+import { Alert, Button, Loader, SegmentedControl, Select, Stack, Text, TextInput, Textarea } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { IconAlertCircle } from '@tabler/icons-react';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { z } from 'zod';
+
+import type { Integration } from '@/types/generated';
+
+import { useConfirmClose } from 'shared/lib/hooks/useConfirmClose';
+import { ResourceDrawer } from 'shared/ui/ResourceDrawer';
+
+const schema = z
+  .object({
+    mode: z.enum(['integration', 'public']),
+    integrationId: z.string(),
+    fullName: z.string(),
+    // Azure repositories are addressed by GUID: `fullName` is a display value
+    // there, and a same-named repository in another project would otherwise
+    // resolve just as well.
+    externalId: z.string(),
+    sourceBranch: z.string(),
+    publicUrl: z.string(),
+    purpose: z.string().optional(),
+  })
+  .superRefine((values, ctx) => {
+    if (values.mode === 'integration') {
+      if (!values.integrationId) {
+        ctx.addIssue({ code: 'custom', path: ['integrationId'], message: 'Integration is required' });
+      }
+      if (!values.fullName) {
+        ctx.addIssue({ code: 'custom', path: ['fullName'], message: 'Repository is required' });
+      }
+      if (!values.sourceBranch) {
+        ctx.addIssue({ code: 'custom', path: ['sourceBranch'], message: 'Branch is required' });
+      }
+      return;
+    }
+
+    if (!values.publicUrl.trim()) {
+      ctx.addIssue({ code: 'custom', path: ['publicUrl'], message: 'Repository URL is required' });
+    }
+  });
+
+type FormData = z.infer<typeof schema>;
+
+const EMPTY_VALUES: FormData = {
+  mode: 'integration',
+  integrationId: '',
+  fullName: '',
+  externalId: '',
+  sourceBranch: '',
+  publicUrl: '',
+  purpose: '',
+};
+
+const PROVIDER_LABELS: Record<string, string> = {
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  azure_devops: 'Azure DevOps',
+  bitbucket: 'Bitbucket',
+};
+
+interface Props {
+  opened: boolean;
+  onClose: () => void;
+  basePath: string;
+  existingRepoNames: Set<string>;
+}
+
+interface AvailableRepo {
+  fullName: string;
+  defaultBranch: string;
+  externalId?: string;
+}
+
+interface PageProps {
+  integrations?: Integration[];
+  availableRepos?: AvailableRepo[];
+  availableBranches?: string[];
+  [key: string]: unknown;
+}
+
+export const AddRepositoryModal: FC<Props> = ({ opened, onClose, basePath, existingRepoNames }) => {
+  const { integrations = [], availableRepos, availableBranches } = usePage<PageProps>().props;
+  const [loading, setLoading] = useState(false);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+
+  const form = useForm<FormData>({
+    validate: zodResolver(schema),
+    initialValues: EMPTY_VALUES,
+  });
+
+  const isPublicMode = form.values.mode === 'public';
+
+  const integrationOptions = useMemo(
+    () =>
+      integrations.map((i) => ({
+        value: String(i.id),
+        label: `${i.name} (${PROVIDER_LABELS[i.provider] ?? i.provider})`,
+      })),
+    [integrations],
+  );
+
+  const selectedIntegration = useMemo(
+    () => integrations.find((i) => String(i.id) === form.values.integrationId) ?? null,
+    [integrations, form.values.integrationId],
+  );
+  const isAzure = selectedIntegration?.provider === 'azure_devops';
+
+  const repoOptions = useMemo(
+    () =>
+      (availableRepos ?? [])
+        .filter((r) => !existingRepoNames.has(r.fullName))
+        .map((r) => ({ value: r.fullName, label: r.fullName })),
+    [availableRepos, existingRepoNames],
+  );
+  const noRepoReason =
+    !form.values.integrationId || loadingRepos || availableRepos === undefined || repoOptions.length > 0
+      ? null
+      : availableRepos.length > 0
+        ? 'Every repository this integration reaches is already in this project'
+        : 'This integration reaches no repositories';
+
+  const loadRepos = (integrationId: string) => {
+    setLoadingRepos(true);
+    router.reload({
+      data: { integration_id: integrationId },
+      only: ['available_repos'],
+      preserveUrl: true,
+      onFinish: () => setLoadingRepos(false),
+    });
+  };
+
+  // `external_id` travels alongside `repo` because Azure's branch lookup is by
+  // repository GUID — a name would reach a same-named repository elsewhere.
+  const loadBranches = (integrationId: string, repoName: string, externalId?: string) => {
+    setLoadingBranches(true);
+    router.reload({
+      // `external_id` is added only when the provider supplies one, so the
+      // GitHub and GitLab requests keep exactly the shape they had.
+      data: {
+        integration_id: integrationId,
+        repo: repoName,
+        ...(externalId ? { external_id: externalId } : {}),
+      },
+      only: ['available_branches'],
+      preserveUrl: true,
+      onFinish: () => setLoadingBranches(false),
+    });
+  };
+
+  const handleIntegrationChange = (value: string | null) => {
+    form.setFieldValue('integrationId', value ?? '');
+    form.setFieldValue('fullName', '');
+    form.setFieldValue('externalId', '');
+    form.setFieldValue('sourceBranch', '');
+    if (value) {
+      loadRepos(value);
+    }
+  };
+
+  const handleRepoChange = (value: string | null) => {
+    form.setFieldValue('fullName', value ?? '');
+    form.setFieldValue('sourceBranch', '');
+    if (value && form.values.integrationId) {
+      const repo = (availableRepos ?? []).find((r) => r.fullName === value);
+      form.setFieldValue('externalId', repo?.externalId ?? '');
+      if (repo?.defaultBranch) {
+        form.setFieldValue('sourceBranch', repo.defaultBranch);
+      }
+      loadBranches(form.values.integrationId, value, repo?.externalId);
+    }
+  };
+
+  const handleModeChange = (value: string) => {
+    form.setFieldValue('mode', value === 'public' ? 'public' : 'integration');
+    form.setFieldValue('sourceBranch', '');
+    form.clearErrors();
+  };
+
+  useEffect(() => {
+    if (opened && !isPublicMode && integrationOptions.length === 1 && !form.values.integrationId) {
+      const onlyIntegrationId = integrationOptions[0].value;
+      form.setFieldValue('integrationId', onlyIntegrationId);
+      form.resetDirty({ ...form.getInitialValues(), integrationId: onlyIntegrationId });
+      loadRepos(onlyIntegrationId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened, isPublicMode, integrationOptions]);
+
+  // reset() returns to the last snapshot, which holds the auto-selected integration. The next open
+  // must start with none chosen, or it skips the selection and the repository reload.
+  const handleClose = () => {
+    form.setInitialValues(EMPTY_VALUES);
+    form.reset();
+    onClose();
+  };
+  const requestClose = useConfirmClose(form.isDirty(), handleClose);
+
+  const pageErrors = usePage().props.errors as Record<string, string> | undefined;
+  const serverErrors = useMemo(() => {
+    if (!pageErrors || Object.keys(pageErrors).length === 0) return null;
+    return Object.values(pageErrors).flat().join(', ');
+  }, [pageErrors]);
+
+  const handleSubmit = (values: FormData) => {
+    setLoading(true);
+    const payload =
+      values.mode === 'public'
+        ? { publicUrl: values.publicUrl.trim(), sourceBranch: values.sourceBranch, purpose: values.purpose }
+        : {
+            integrationId: Number(values.integrationId),
+            fullName: values.fullName,
+            sourceBranch: values.sourceBranch,
+            purpose: values.purpose,
+            // Only Azure carries one, and only when a repository has been
+            // picked. The server looks the repository up by this id and takes
+            // names, clone url and privacy from the provider's answer rather
+            // than from this form; the other providers must keep their existing
+            // payload untouched.
+            ...(values.externalId ? { externalId: values.externalId } : {}),
+          };
+
+    router.post(
+      basePath,
+      { repository: payload },
+      {
+        preserveScroll: true,
+        onFinish: () => setLoading(false),
+        onSuccess: () => handleClose(),
+      },
+    );
+  };
+
+  return (
+    <ResourceDrawer
+      opened={opened}
+      onClose={requestClose}
+      title="Add Repository"
+      footer={
+        <Button type="submit" form="add-repository-form" fullWidth loading={loading}>
+          Add Repository
+        </Button>
+      }
+    >
+      <form id="add-repository-form" onSubmit={form.onSubmit(handleSubmit)}>
+        <Stack gap="md">
+          {serverErrors && (
+            <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
+              {serverErrors}
+            </Alert>
+          )}
+
+          <SegmentedControl
+            fullWidth
+            value={form.values.mode}
+            onChange={handleModeChange}
+            data={[
+              { value: 'integration', label: 'From integration' },
+              { value: 'public', label: 'Public repository' },
+            ]}
+          />
+
+          {isPublicMode ? (
+            <>
+              <TextInput
+                label="Repository URL"
+                placeholder="https://github.com/owner/repo"
+                description="Any public github.com, gitlab.com or bitbucket.org repository. Cloned without credentials — agents can read it, but cannot push."
+                withAsterisk
+                {...form.getInputProps('publicUrl')}
+              />
+              <TextInput
+                label="Branch"
+                placeholder="Leave empty for the default branch"
+                {...form.getInputProps('sourceBranch')}
+              />
+              <Text size="xs" c="dimmed">
+                No CI events or pull-request tools are available for public repositories. Connect an integration if the
+                agent needs to write.
+              </Text>
+            </>
+          ) : (
+            <>
+              <Select
+                label="Integration"
+                data={integrationOptions}
+                value={form.values.integrationId}
+                onChange={handleIntegrationChange}
+                allowDeselect={false}
+                error={form.errors.integrationId}
+                required
+                placeholder={
+                  integrationOptions.length === 0
+                    ? 'No integrations available — connect one first'
+                    : 'Select integration...'
+                }
+                disabled={integrationOptions.length === 0}
+              />
+              <Select
+                label="Repository"
+                data={repoOptions}
+                searchable
+                value={form.values.fullName}
+                onChange={handleRepoChange}
+                allowDeselect={false}
+                error={form.errors.fullName}
+                rightSection={loadingRepos ? <Loader size={16} /> : undefined}
+                required
+                placeholder={noRepoReason ?? (loadingRepos ? 'Loading repositories...' : 'Select repository...')}
+                disabled={!form.values.integrationId || loadingRepos || noRepoReason !== null}
+              />
+              {isAzure && (
+                <Text size="xs" c="dimmed">
+                  Agents clone, fetch and push with a short-lived credential issued per operation — nothing is stored in
+                  the checkout. Pull requests are reached with the Azure DevOps tools, Boards work items with the task
+                  tracker tools.
+                </Text>
+              )}
+              <Select
+                label="Source branch"
+                data={availableBranches ?? []}
+                searchable
+                {...form.getInputProps('sourceBranch')}
+                allowDeselect={false}
+                rightSection={loadingBranches ? <Loader size={16} /> : undefined}
+                required
+                placeholder={loadingBranches ? 'Loading branches...' : 'Select branch...'}
+                disabled={!form.values.fullName || loadingBranches}
+              />
+            </>
+          )}
+
+          <Textarea
+            label="Purpose"
+            placeholder='e.g. "Our main Rails app" or "React template for new projects"'
+            description="Helps AI agents understand what this repository is used for"
+            {...form.getInputProps('purpose')}
+            minRows={2}
+            autosize
+          />
+        </Stack>
+      </form>
+    </ResourceDrawer>
+  );
+};

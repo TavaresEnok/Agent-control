@@ -1,0 +1,64 @@
+# frozen_string_literal: true
+
+class CompanySessionCostTokenUsageService
+  TimeSeriesPoint = Struct.new(:date, :cost_cents, :total_tokens, keyword_init: true)
+  Totals = Struct.new(:total_cost_cents, :total_tokens, :avg_cost_cents_per_session, keyword_init: true)
+  Result = Struct.new(:time_series, :totals, keyword_init: true)
+
+  def initialize(company:, user:, scope:, period:)
+    @company = company
+    @user    = user
+    @scope   = scope.to_s
+    @period  = AnalyticsPeriod.window(period)
+    @range   = @period.range
+  end
+
+  def call
+    sessions = base_sessions
+
+    trunc_sql = AnalyticsPeriod.date_trunc(period, TerminalSession.arel_table[:created_at])
+
+    points = sessions
+      .joins("LEFT JOIN usage_statistics ON usage_statistics.terminal_session_id = terminal_sessions.id")
+      .group(trunc_sql)
+      .order(trunc_sql)
+      .pluck(
+        trunc_sql,
+        Arel.sql("COALESCE(SUM(usage_statistics.cost_cents), 0)"),
+        Arel.sql(UsageStatistic::TOTAL_TOKENS_SUM_SQL)
+      )
+      .map do |(date, cost, tokens)|
+        TimeSeriesPoint.new(
+          date: date.to_date.iso8601,
+          cost_cents: cost.to_i,
+          total_tokens: tokens.to_i
+        )
+      end
+
+    total_cost = points.sum(&:cost_cents)
+    total_tokens = points.sum(&:total_tokens)
+    total_count = sessions.count
+    avg_cost = total_count.positive? ? (total_cost.to_f / total_count).round : 0
+
+    totals = Totals.new(
+      total_cost_cents: total_cost,
+      total_tokens:,
+      avg_cost_cents_per_session: avg_cost
+    )
+
+    Result.new(time_series: points, totals:)
+  end
+
+  private
+
+  attr_reader :company, :user, :scope, :range, :period
+
+  def base_sessions
+    scope_sessions.where(created_at: range, session_type: AnalyticsPeriod::USAGE_SESSION_TYPES)
+  end
+
+  def scope_sessions
+    base = TerminalSession.joins(:project).where(projects: { company_id: company.id })
+    scope == "user" ? base.where(user:) : base
+  end
+end

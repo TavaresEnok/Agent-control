@@ -1,0 +1,300 @@
+name: CI
+
+# Replaces the deployment pipeline that used to carry these checks. Deployment
+# lives outside this repository: images are published to GHCR by images.yml and
+# rolled out from a separate operations repository.
+
+on:
+  push:
+    branches:
+      - develop
+      # The staging environment deploys merge commits on this branch, and that
+      # deployment refuses a commit without a successful CI run of its own.
+      - staging
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The coverage job polls this run's job list (code-check.yml, wait-for-jobs).
+  actions: read
+
+env:
+  # Buildx layer cache for the test image. Its own package rather than a tag on
+  # the runtime image's, so the other images published by images.yml can add
+  # their own tags beside `:web` later.
+  BUILD_CACHE: ghcr.io/aixlehq/flow-buildcache:web
+
+concurrency:
+  # Superseding a pull request's run is free — only the tip of a branch under
+  # review is worth a verdict. Superseding a develop push is not: that run is
+  # the record of whether an integrated commit was green. Three merges inside
+  # fifteen minutes cancelled all three runs and left the README claiming a
+  # failing build with no badges behind it. Queueing pushes on one group does
+  # not fix that — a group holds one pending run, and a third push cancels the
+  # second — so every push gets a group of its own.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  build-cache:
+    name: Refresh Layer Cache
+    # Maintains the layer cache that the check jobs read, and nothing declares
+    # `needs:` on it. That is the point: the check jobs read whatever the last
+    # develop push published and rebuild only the layers below `COPY . /app`,
+    # which is seconds of work. Gating both of them on a fresh build instead
+    # cost 2m36s of pure wall clock on every run (31254450213), to save a
+    # rebuild that was never expensive.
+    #
+    # Only pushes to develop write; the `if:` below checks the ref, not just
+    # the event. Other pushed branches (staging) carry unmerged features, and
+    # develop's check jobs would read their layers. A pull request's own layers
+    # are read by nothing else, and two check jobs writing one cache in
+    # parallel is what made the cache useless in the first place.
+    #
+    # The cache lives in GHCR, not the Actions cache. The Actions cache is
+    # capped at 10 GB per repository and this image alone filled it — measured
+    # 10.6 GB across 255 entries on 2026-08-08 — and past the ceiling GitHub
+    # evicts by least-recent use, which reaches entries a running job still
+    # depends on. GHCR is unmetered for public repositories, and a public
+    # package is readable anonymously, so a fork's pull request reads the same
+    # cache we do without holding any token.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Publish the layer cache
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          # cacheonly: this job exists for its cache write, so skip materialising
+          # a local image that nothing here will run.
+          outputs: type=cacheonly
+          build-args: |
+            APP_VERSION=ci
+          cache-from: type=registry,ref=${{ env.BUILD_CACHE }}
+          # image-manifest + oci-mediatypes: GHCR rejects the default cache
+          # manifest shape and only accepts one written as an OCI image manifest.
+          cache-to: type=registry,ref=${{ env.BUILD_CACHE }},mode=max,image-manifest=true,oci-mediatypes=true
+
+  # The checks are split across parallel jobs, so a run lasts as long as its slowest job
+  # rather than the sum of its suites. Each job pays about two minutes for the image (and the
+  # database, where it needs one) before its own work starts, which is why the fast checks
+  # share one job instead of each getting their own, and why a suite gets a shard only when
+  # its share of the work outweighs that overhead. The org's free plan runs 20 hosted jobs at
+  # once across all runs; a run here is about a dozen.
+  lint:
+    name: Lint
+    uses: ./.github/workflows/code-check.yml
+    with:
+      # rubocop, brakeman, eslint, tsc, steiger and the watcher's node tests, all at once.
+      command: lint_check_all
+      run-coverage: '0'
+      timeout: 20
+
+  system:
+    name: System Tests
+    uses: ./.github/workflows/code-check.yml
+    with:
+      # The worker boot smoke, the eager-load check and the browser suite.
+      command: system_check_all
+      needs-db: true
+      run-coverage: '0'
+      timeout: 30
+
+  rails:
+    name: Rails Tests (${{ matrix.shard }}/${{ strategy.job-total }})
+    strategy:
+      # The default cancels the other shards when one fails, and a cancelled shard
+      # reports nothing about the tests it did not get to.
+      fail-fast: false
+      matrix:
+        shard: [ 1, 2, 3 ]
+    uses: ./.github/workflows/code-check.yml
+    with:
+      command: rails_check_all SHARD=${{ matrix.shard }} TOTAL_SHARDS=${{ strategy.job-total }}
+      needs-db: true
+      run-coverage: '1'
+      shard-artifact: coverage-shard-rails-${{ matrix.shard }}
+      timeout: 30
+
+  vitest:
+    name: Vitest (${{ matrix.shard }}/${{ strategy.job-total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 1, 2, 3 ]
+    uses: ./.github/workflows/code-check.yml
+    with:
+      command: vitest_check_all FE_SHARD=${{ matrix.shard }} FE_TOTAL_SHARDS=${{ strategy.job-total }}
+      run-coverage: '1'
+      shard-artifact: coverage-shard-vitest-${{ matrix.shard }}
+      timeout: 30
+
+  coverage:
+    name: Coverage
+    # Coverage floors gate the pull request, not the merge: measured only on develop
+    # pushes, a drop was found after it had landed. A failed shard still uploads what it
+    # measured, so the floors are checked here whether or not every test passed.
+    #
+    # No `needs:` on the shards: this job builds its image while they run and waits for
+    # them itself (wait-for-jobs), which takes its ~70s of setup off the critical path.
+    uses: ./.github/workflows/code-check.yml
+    with:
+      command: coverage_merge
+      run-coverage: '1'
+      wait-for-jobs: Rails Vitest
+      merge-coverage: true
+      coverage-summary: both
+      coverage-report: coverage-report
+      timeout: 15
+
+  # One status for branch protection to require. It tests every result itself: a bare
+  # `needs:` lets a skipped or cancelled job through.
+  checks:
+    name: Checks
+    if: ${{ !cancelled() }}
+    needs: [ lint, system, rails, vitest, coverage, secret-scan ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a check job did not succeed ($RESULTS)"
+              exit 1
+            fi
+          done
+
+  coverage-badges:
+    name: Coverage Badges
+    needs: [ coverage ]
+    # Every run measures coverage; develop is the branch the README advertises.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+    # Pushes run side by side, so their writes to the `badges` branch take turns.
+    concurrency:
+      group: coverage-badges
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Writes the rendered endpoints to the orphan `badges` branch.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish shields.io endpoints
+        env:
+          BACKEND: ${{ needs.coverage.outputs.backend-line-coverage }}
+          FRONTEND: ${{ needs.coverage.outputs.frontend-line-coverage }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$BACKEND" ] && [ -z "$FRONTEND" ]; then
+            echo "::warning::no coverage numbers were produced, nothing to publish"
+            exit 0
+          fi
+
+          # Runs finish in any order; an older commit's numbers must not replace
+          # a newer one's.
+          tip=$(git ls-remote origin refs/heads/develop | cut -f1)
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "develop has moved on to ${tip:0:7}; its run publishes the badges"
+            exit 0
+          fi
+
+          # The badges live on an orphan branch: the README's badge URLs then
+          # point at a ref that CI rewrites on every develop push, without a
+          # bot commit landing in develop's history on each run. A worktree
+          # keeps that branch out of the checked-out tree entirely.
+          if git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
+            # Fetched in full, unlike the shallow checkout above: the branch is
+            # two JSON files deep, and a complete history keeps the push simple.
+            git fetch origin badges:badges
+            git worktree add ../badges badges
+          else
+            git worktree add --detach ../badges
+            git -C ../badges switch --orphan badges
+          fi
+
+          render() {
+            percent="$1"
+            label="$2"
+            file="$3"
+
+            [ -n "$percent" ] || return 0
+
+            color=$(awk -v p="$percent" 'BEGIN {
+              if      (p >= 90) print "brightgreen"
+              else if (p >= 80) print "green"
+              else if (p >= 70) print "yellowgreen"
+              else if (p >= 60) print "yellow"
+              else if (p >= 50) print "orange"
+              else              print "red"
+            }')
+
+            jq -n \
+              --arg label "$label" \
+              --arg message "${percent}%" \
+              --arg color "$color" \
+              '{schemaVersion: 1, label: $label, message: $message, color: $color}' \
+              > "../badges/$file"
+          }
+
+          render "$BACKEND"  "backend coverage"  backend-coverage.json
+          render "$FRONTEND" "frontend coverage" frontend-coverage.json
+
+          cd ../badges
+          git add --all
+          if git diff --cached --quiet; then
+            echo "Coverage unchanged, nothing to commit"
+            exit 0
+          fi
+
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore(ci): coverage badges for ${GITHUB_SHA:0:7}"
+          git push origin badges
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gitleaks scans commit history, which needs more than the default
+          # single-commit checkout.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        # The gitleaks CLI, not gitleaks-action: the action requires a paid
+        # licence key for organisation-owned repositories, while the scanner
+        # itself is free. Pinned by tag so a new release cannot change the
+        # verdict without a commit here.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --config /repo/.gitleaks.toml --redact --no-banner --verbose

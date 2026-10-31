@@ -1,0 +1,1684 @@
+import { router, usePage } from '@inertiajs/react';
+import {
+  ActionIcon,
+  Anchor,
+  Badge,
+  Box,
+  Button,
+  CopyButton,
+  Group,
+  Menu,
+  Modal,
+  NumberInput,
+  PasswordInput,
+  SegmentedControl,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Tooltip,
+  UnstyledButton,
+} from '@mantine/core';
+import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
+import {
+  IconCheck,
+  IconChevronDown,
+  IconChevronRight,
+  IconCopy,
+  IconDownload,
+  IconExternalLink,
+  IconHash,
+  IconKey,
+  IconLayoutKanban,
+  IconLink,
+  IconPencil,
+  IconPlus,
+  IconRefresh,
+  IconSearch,
+  IconSettings,
+  IconTrash,
+  IconUsersGroup,
+  IconWebhook,
+} from '@tabler/icons-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import type { Integration } from '@/types/generated';
+
+import { formatDateMedium } from 'shared/lib/formatDate';
+import { useConfirmClose } from 'shared/lib/hooks/useConfirmClose';
+import { useProjectPermissions } from 'shared/lib/hooks/useProjectPermissions';
+import { isValidHttpUrl } from 'shared/lib/urlValidation';
+import { ChatChannelsModal } from 'shared/resources/chat-channels/ChatChannelsModal';
+import { EmptyState } from 'shared/ui/EmptyState';
+import { IntegrationLogo } from 'shared/ui/IntegrationLogo';
+import { PageHeader } from 'shared/ui/PageHeader';
+import { ResourceCount, ResourceTableShell, ResourceTh } from 'shared/ui/ResourceTable';
+import { StatusBadge } from 'shared/ui/StatusBadge';
+
+import { AtlassianConnectModal, type AtlassianConnectionState } from './AtlassianConnectModal';
+import { AzureDevopsConnectModal, type AzureDevopsProps, type AzureSignIn } from './AzureDevopsConnectModal';
+import { BitbucketConnectModal, type BitbucketProps } from './BitbucketConnectModal';
+import { GithubConnectModal, type GithubProps } from './GithubConnectModal';
+import { GithubProjectsModal } from './GithubProjectsModal';
+import { GitlabGroupModal } from './GitlabGroupModal';
+import { GitlabTrackersModal } from './GitlabTrackersModal';
+import { JiraConnectModal, JiraProjectsModal, type JiraProps, JiraWebhookModal } from './JiraConnectModal';
+import { LinearConnectModal, type LinearProps, LinearTeamsModal } from './LinearConnectModal';
+import { TeamsApprovalModal } from './TeamsApprovalModal';
+import { YoutrackConnectModal, type YoutrackProps } from './YoutrackConnectModal';
+
+export type { AzureDevopsProps } from './AzureDevopsConnectModal';
+export type { BitbucketProps } from './BitbucketConnectModal';
+export type { GithubProps } from './GithubConnectModal';
+export type { JiraProps } from './JiraConnectModal';
+export type { LinearProps } from './LinearConnectModal';
+export type { YoutrackProps } from './YoutrackConnectModal';
+
+export interface SlackProps {
+  /** False on a deployment with no Slack app (SLACK_CLIENT_ID / SLACK_CLIENT_SECRET unset). */
+  enabled: boolean;
+}
+
+export interface TeamsProps {
+  /** False on a deployment with no Teams bot (no bot app, credential or home tenant configured). */
+  enabled: boolean;
+}
+
+interface IntegrationsContentProps {
+  integrations: Integration[];
+  basePath: string;
+  title: string;
+  // Absent on the company page.
+  projectId?: number;
+  // Absent on the company page and whenever the deployment has Azure DevOps
+  // switched off, which is what hides the connect entry entirely.
+  azureDevops?: AzureDevopsProps;
+  // Absent on the company page. `appConfigured: false` is a deployment with no
+  // GitHub App — the connect dialog then opens on the token path.
+  github?: GithubProps;
+  // Absent on the company page: Bitbucket connects to a project.
+  bitbucket?: BitbucketProps;
+  // Absent on the company page: Jira connects to a project.
+  jira?: JiraProps;
+  // Absent on the company page. `oauthEnabled`: the deployment has a GitLab OAuth app.
+  gitlab?: { oauthEnabled: boolean };
+  // Absent on the company page: Linear connects to a project.
+  linear?: LinearProps;
+  // Absent on the company page: YouTrack connects to a project.
+  youtrack?: YoutrackProps;
+  // Absent on the company page.
+  slack?: SlackProps;
+  // Absent on the company page.
+  teams?: TeamsProps;
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  bitbucket: 'Bitbucket',
+  coder: 'Coder',
+  slack: 'Slack',
+  teams: 'Microsoft Teams',
+  azure_devops: 'Azure DevOps',
+  jira: 'Jira',
+  linear: 'Linear',
+  youtrack: 'YouTrack',
+};
+
+const CHAT_PROVIDERS = ['slack', 'teams'];
+
+const SCOPE_COLORS: Record<string, string> = {
+  company: 'gray',
+  project: 'green',
+};
+
+// Mirrors the server-side fallback in Coder::LockService#ttl_minutes.
+const DEFAULT_CODER_LOCK_TTL = 120;
+
+const TOKEN_PROVIDERS = new Set(['gitlab', 'coder']);
+
+// A Bitbucket app connection has no token of its own, but it can still be re-checked.
+const holdsToken = (integration: Integration) =>
+  (TOKEN_PROVIDERS.has(integration.provider) && !integration.gitlabAuthMode?.startsWith('service_account')) ||
+  (integration.provider === 'bitbucket' && integration.bitbucketAuthMode === 'token');
+const testable = (integration: Integration) => holdsToken(integration) || integration.provider === 'bitbucket';
+
+// Forge delivers the app's token every five minutes; a quarter hour without one
+// is worth saying before a clone fails on it.
+const APP_SILENCE_MINUTES = 15;
+const minutesSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+
+const youtrackPendingNotice = (keys: string[]) =>
+  `No event yet from ${keys.join(', ')} — check that the Aixle Flow app is attached to those projects in YouTrack`;
+
+const youtrackManageUrl = (baseUrl: string) => `${baseUrl.replace(/\/+$/, '')}/admin/app/aixle-flow/connect`;
+
+const errorMessage = (errors: unknown, fallback: string) =>
+  (typeof errors === 'object' && errors ? Object.values(errors).join(' ') : '') || fallback;
+
+const atlassianConnectionState = (integrations: Integration[], provider: string): AtlassianConnectionState => {
+  const own = integrations.filter((integration) => integration.provider === provider);
+  if (own.length === 0) return 'none';
+  return own.some((integration) => integration.status === 'active') ? 'connected' : 'attention';
+};
+
+export const IntegrationsContent = ({
+  integrations,
+  basePath,
+  title,
+  projectId,
+  azureDevops,
+  github,
+  bitbucket,
+  jira,
+  gitlab,
+  linear,
+  youtrack,
+  slack,
+  teams,
+}: IntegrationsContentProps) => {
+  const { canExecute, canManageCompany } = useProjectPermissions();
+  const isProjectContext = basePath.includes('projects');
+  const [search, setSearch] = useState('');
+  const [scopeFilter, setScopeFilter] = useState('all');
+  const [connectMenuOpened, setConnectMenuOpened] = useState(false);
+
+  const [azureOpen, setAzureOpen] = useState(false);
+  const [azureSignIn, setAzureSignIn] = useState<AzureSignIn | null>(null);
+  const azureAvailable = !!azureDevops?.enabled;
+
+  // Back from "Sign in with Microsoft": the server holds the sign-in, and the
+  // dialog picks up where it left off.
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const handle = query.get('azure_setup');
+    const organization = query.get('azure_organization');
+    if (!handle || !organization) return;
+    setAzureSignIn({ handle, organization });
+    setAzureOpen(true);
+    query.delete('azure_setup');
+    query.delete('azure_organization');
+    const rest = query.toString();
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
+  }, []);
+
+  const [githubOpen, setGithubOpen] = useState(false);
+  const [githubProjectsTarget, setGithubProjectsTarget] = useState<Integration | null>(null);
+
+  const [jiraOpen, setJiraOpen] = useState(false);
+  const [jiraProjectsTarget, setJiraProjectsTarget] = useState<Integration | null>(null);
+  const [jiraWebhookTarget, setJiraWebhookTarget] = useState<Integration | null>(null);
+  const jiraAvailable = isProjectContext && !!jira;
+  const slackAvailable = isProjectContext && !!slack?.enabled;
+  const teamsAvailable = isProjectContext && !!teams?.enabled;
+
+  const [bitbucketOpen, setBitbucketOpen] = useState(false);
+  const bitbucketAvailable = isProjectContext && !!bitbucket;
+
+  // Jira and Bitbucket share one Connect entry. A product's flow replaces the
+  // chooser and hands back to it when it closes, so both fit in one sitting.
+  const [atlassianOpen, setAtlassianOpen] = useState(false);
+  const [returnToAtlassian, setReturnToAtlassian] = useState(false);
+  const atlassianAvailable = jiraAvailable || bitbucketAvailable;
+  const chooseAtlassianProduct = useCallback((open: (value: boolean) => void) => {
+    setAtlassianOpen(false);
+    setReturnToAtlassian(true);
+    open(true);
+  }, []);
+  const closeAtlassianProduct = useCallback(
+    (close: (value: boolean) => void) => {
+      close(false);
+      if (returnToAtlassian) {
+        setReturnToAtlassian(false);
+        setAtlassianOpen(true);
+      }
+    },
+    [returnToAtlassian],
+  );
+
+  const [linearOpen, setLinearOpen] = useState(false);
+  const [linearTeamsTarget, setLinearTeamsTarget] = useState<Integration | null>(null);
+  const [channelsProvider, setChannelsProvider] = useState<string | null>(null);
+  const linearAvailable = isProjectContext && !!linear;
+
+  const [youtrackOpen, setYoutrackOpen] = useState(false);
+  const youtrackAvailable = isProjectContext && !!youtrack?.enabled;
+
+  // The Atlassian and Linear apps' callbacks land here with the connection still to finish.
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const pending = (param: string, provider: string) => {
+      const id = Number(query.get(param));
+      return id ? integrations.find((i) => i.id === id && i.provider === provider) : undefined;
+    };
+    const jiraPending = pending('jira_setup', 'jira');
+    if (jiraPending) setJiraProjectsTarget(jiraPending);
+    const linearPending = pending('linear_setup', 'linear');
+    if (linearPending) setLinearTeamsTarget(linearPending);
+    const gitlabPending = pending('gitlab_setup', 'gitlab');
+    if (gitlabPending) setGitlabGroupTarget(gitlabPending);
+  }, [integrations]);
+
+  const [gitlabGroupTarget, setGitlabGroupTarget] = useState<Integration | null>(null);
+  const [gitlabTrackersTarget, setGitlabTrackersTarget] = useState<Integration | null>(null);
+
+  const [gitlabOpen, setGitlabOpen] = useState(false);
+  const [gitlabPat, setGitlabPat] = useState('');
+  const [gitlabLoading, setGitlabLoading] = useState(false);
+  const [gitlabError, setGitlabError] = useState<string | null>(null);
+
+  const closeGitlabModal = useCallback(() => {
+    setGitlabOpen(false);
+    setGitlabPat('');
+    setGitlabError(null);
+  }, []);
+  const requestCloseGitlab = useConfirmClose(gitlabPat !== '', closeGitlabModal);
+
+  const [tokenTarget, setTokenTarget] = useState<Integration | null>(null);
+  const [replacementToken, setReplacementToken] = useState('');
+  const [tokenLoading, setTokenLoading] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+
+  const closeTokenModal = useCallback(() => {
+    setTokenTarget(null);
+    setReplacementToken('');
+    setTokenError(null);
+  }, []);
+  const requestCloseToken = useConfirmClose(replacementToken !== '', closeTokenModal);
+
+  const [coderOpen, setCoderOpen] = useState(false);
+  const [coderUrl, setCoderUrl] = useState('');
+  const [coderToken, setCoderToken] = useState('');
+  const [coderDefaultTemplate, setCoderDefaultTemplate] = useState('');
+  const [coderMachinePrefix, setCoderMachinePrefix] = useState('');
+  const [coderLockTtlMinutes, setCoderLockTtlMinutes] = useState<number | string>(DEFAULT_CODER_LOCK_TTL);
+  const [coderAdvancedOpen, setCoderAdvancedOpen] = useState(false);
+  const [coderLoading, setCoderLoading] = useState(false);
+  const [coderError, setCoderError] = useState<string | null>(null);
+
+  const [coderEditTarget, setCoderEditTarget] = useState<Integration | null>(null);
+  const [coderEditTemplate, setCoderEditTemplate] = useState('');
+  const [coderEditPrefix, setCoderEditPrefix] = useState('');
+  const [coderEditTtl, setCoderEditTtl] = useState<number | string>(DEFAULT_CODER_LOCK_TTL);
+  const [coderEditLoading, setCoderEditLoading] = useState(false);
+
+  const resetCoderForm = useCallback(() => {
+    setCoderUrl('');
+    setCoderToken('');
+    setCoderDefaultTemplate('');
+    setCoderMachinePrefix('');
+    setCoderLockTtlMinutes(DEFAULT_CODER_LOCK_TTL);
+    setCoderAdvancedOpen(false);
+    setCoderError(null);
+  }, []);
+
+  const closeCoderModal = useCallback(() => {
+    setCoderOpen(false);
+    resetCoderForm();
+  }, [resetCoderForm]);
+  const requestCloseCoder = useConfirmClose(
+    coderUrl !== '' ||
+      coderToken !== '' ||
+      coderDefaultTemplate !== '' ||
+      coderMachinePrefix !== '' ||
+      coderLockTtlMinutes !== DEFAULT_CODER_LOCK_TTL,
+    closeCoderModal,
+  );
+
+  const closeCoderSettings = useCallback(() => setCoderEditTarget(null), []);
+  const requestCloseCoderSettings = useConfirmClose(
+    !!coderEditTarget &&
+      (coderEditTemplate !== (coderEditTarget.coderDefaultTemplate ?? '') ||
+        coderEditPrefix !== (coderEditTarget.coderMachinePrefix ?? '') ||
+        coderEditTtl !== (coderEditTarget.coderLockTtlMinutes ?? DEFAULT_CODER_LOCK_TTL)),
+    closeCoderSettings,
+  );
+
+  const filtered = useMemo(() => {
+    let result = integrations;
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      result = result.filter((i) => i.name.toLowerCase().includes(q));
+    }
+
+    if (scopeFilter !== 'all') {
+      result = result.filter((i) => i.scopeIndicator === scopeFilter);
+    }
+
+    return result;
+  }, [integrations, search, scopeFilter]);
+
+  const hasFilters = !!search || scopeFilter !== 'all';
+
+  // Channels belong to the company, not to one install, so each messenger offers them once.
+  const channelOwners = useMemo(() => {
+    const ids = new Set<number>();
+    if (!isProjectContext) return ids;
+    for (const provider of CHAT_PROVIDERS) {
+      const first = filtered.find((i) => i.provider === provider && i.status === 'active');
+      if (first) ids.add(first.id);
+    }
+    return ids;
+  }, [filtered, isProjectContext]);
+
+  const handleDelete = useCallback(
+    (integration: Integration) => {
+      modals.openConfirmModal({
+        title: 'Remove Integration',
+        children: (
+          <Stack gap="xs">
+            <Text size="sm">
+              Are you sure you want to remove <b>{integration.name}</b>? This will also disconnect all repositories
+              linked through this integration.
+            </Text>
+            {integration.githubAuthMode === 'app' && (
+              <Text size="sm">
+                The GitHub App stays installed on GitHub, where other projects may still use it.{' '}
+                {integration.githubUrl ? (
+                  <Anchor href={integration.githubUrl} target="_blank" size="sm">
+                    Uninstall it on GitHub
+                  </Anchor>
+                ) : (
+                  'Uninstall it on GitHub'
+                )}{' '}
+                if nothing else needs it.
+              </Text>
+            )}
+          </Stack>
+        ),
+        labels: { confirm: 'Remove', cancel: 'Cancel' },
+        confirmProps: { color: 'red' },
+        onConfirm: () => {
+          router.delete(`${basePath}/${integration.id}`, {
+            preserveScroll: true,
+            onSuccess: () => notifications.show({ message: 'Integration removed', color: 'green' }),
+            onError: () => notifications.show({ message: 'Failed to remove integration', color: 'red' }),
+          });
+        },
+      });
+    },
+    [basePath],
+  );
+
+  // Both GitHub paths live in the dialog: the App install (which redirects to
+  // GitHub) and a pasted personal access token. Opening it used to go straight
+  // to the install, which dead-ended anyone who cannot install an app.
+  const handleConnectGithub = useCallback(() => setGithubOpen(true), []);
+
+  const handleConnectGitlab = useCallback(() => {
+    if (!gitlabPat.trim()) return;
+    setGitlabError(null);
+    setGitlabLoading(true);
+
+    router.post(
+      basePath,
+      {
+        provider: 'gitlab',
+        personalAccessToken: gitlabPat.trim(),
+      },
+      {
+        preserveScroll: true,
+        onSuccess: closeGitlabModal,
+        onError: (errors) => setGitlabError(errorMessage(errors, 'Failed to connect GitLab')),
+        onFinish: () => setGitlabLoading(false),
+      },
+    );
+  }, [basePath, closeGitlabModal, gitlabPat]);
+
+  const handleReplaceToken = useCallback(() => {
+    const token = replacementToken.trim();
+    if (!tokenTarget || !token) return;
+    setTokenError(null);
+    setTokenLoading(true);
+
+    router.patch(
+      `${basePath}/${tokenTarget.id}`,
+      tokenTarget.provider === 'coder'
+        ? { sessionToken: token }
+        : tokenTarget.provider === 'bitbucket'
+          ? { token }
+          : { personalAccessToken: token },
+      {
+        preserveScroll: true,
+        onSuccess: closeTokenModal,
+        onError: (errors) => setTokenError(errorMessage(errors, 'Failed to replace the token')),
+        onFinish: () => setTokenLoading(false),
+      },
+    );
+  }, [basePath, closeTokenModal, replacementToken, tokenTarget]);
+
+  const handleConnectCoder = useCallback(() => {
+    const trimmedUrl = coderUrl.trim();
+    const trimmedToken = coderToken.trim();
+    if (!trimmedUrl || !trimmedToken) return;
+    if (!isValidHttpUrl(trimmedUrl)) {
+      setCoderError('Coder URL must be a valid http or https URL');
+      return;
+    }
+
+    setCoderError(null);
+    setCoderLoading(true);
+
+    const ttl = typeof coderLockTtlMinutes === 'number' ? coderLockTtlMinutes : Number(coderLockTtlMinutes);
+    const payload: Record<string, string | number> = {
+      provider: 'coder',
+      coderUrl: trimmedUrl,
+      sessionToken: trimmedToken,
+    };
+    if (coderDefaultTemplate.trim()) payload.defaultTemplate = coderDefaultTemplate.trim();
+    if (coderMachinePrefix.trim()) payload.machinePrefix = coderMachinePrefix.trim();
+    if (!Number.isNaN(ttl) && ttl > 0) payload.lockTtlMinutes = ttl;
+
+    router.post(basePath, payload, {
+      preserveScroll: true,
+      onSuccess: () => {
+        closeCoderModal();
+      },
+      onError: (errors) => setCoderError(errorMessage(errors, 'Failed to connect Coder')),
+      onFinish: () => setCoderLoading(false),
+    });
+  }, [basePath, closeCoderModal, coderDefaultTemplate, coderLockTtlMinutes, coderMachinePrefix, coderToken, coderUrl]);
+
+  const openCoderSettings = useCallback((integration: Integration) => {
+    setCoderEditTarget(integration);
+    setCoderEditTemplate(integration.coderDefaultTemplate ?? '');
+    setCoderEditPrefix(integration.coderMachinePrefix ?? '');
+    setCoderEditTtl(integration.coderLockTtlMinutes ?? DEFAULT_CODER_LOCK_TTL);
+  }, []);
+
+  const handleSaveCoderSettings = useCallback(() => {
+    if (!coderEditTarget) return;
+    const ttl = typeof coderEditTtl === 'number' ? coderEditTtl : Number(coderEditTtl);
+    if (Number.isNaN(ttl) || ttl <= 0) return;
+
+    setCoderEditLoading(true);
+    // Template and prefix go out even when empty — a blank value clears the
+    // setting, which is how you stop the allocator from creating machines.
+    router.patch(
+      `${basePath}/${coderEditTarget.id}`,
+      { defaultTemplate: coderEditTemplate.trim(), machinePrefix: coderEditPrefix.trim(), lockTtlMinutes: ttl },
+      {
+        preserveScroll: true,
+        onSuccess: () => setCoderEditTarget(null),
+        onError: () => notifications.show({ message: 'Failed to save Coder settings', color: 'red' }),
+        onFinish: () => setCoderEditLoading(false),
+      },
+    );
+  }, [basePath, coderEditPrefix, coderEditTarget, coderEditTemplate, coderEditTtl]);
+
+  // Re-verify an Azure or Jira connection. "Test" and "repair" are the same
+  // operation: the integration id and what hangs off it are kept either way, and
+  // a failed check never replaces a working credential.
+  const handleTestConnection = useCallback(
+    (integration: Integration) => {
+      router.post(
+        `${basePath}/${integration.id}/test_connection`,
+        {},
+        {
+          preserveScroll: true,
+          onError: () => notifications.show({ message: 'Connection test failed', color: 'red' }),
+        },
+      );
+    },
+    [basePath],
+  );
+
+  // Slack connects via OAuth: redirect to the project-scoped start action, which
+  // bounces to Slack's consent screen. The install binds to this project.
+  const handleConnectSlack = useCallback(() => {
+    window.location.href = `${basePath}/slack_oauth_start`;
+  }, [basePath]);
+
+  // Teams is approved by a Microsoft 365 administrator, who may not have an
+  // Aixle account: the server creates a pending connection and hands back, once,
+  // the link that person opens.
+  const handleConnectTeams = useCallback(() => {
+    router.post(`${basePath}/teams_connect`, {}, { preserveScroll: true });
+  }, [basePath]);
+  const { flash } = usePage<{ flash?: Record<string, unknown> }>().props;
+  const teamsApprovalUrl = typeof flash?.teamsApprovalUrl === 'string' ? flash.teamsApprovalUrl : null;
+  const [dismissedApprovalUrl, setDismissedApprovalUrl] = useState<string | null>(null);
+
+  return (
+    <Box>
+      <PageHeader
+        title={title}
+        subtitle={
+          isProjectContext
+            ? 'Connect GitHub, GitLab, Bitbucket, Coder, Slack or Microsoft Teams for this project, or use company-wide integrations'
+            : 'Connect external services to your company'
+        }
+        actions={
+          canExecute && (
+            <Menu position="bottom-end" withArrow opened={connectMenuOpened} onChange={setConnectMenuOpened}>
+              <Menu.Target>
+                <Button
+                  leftSection={<IconPlus size={16} />}
+                  rightSection={
+                    <IconChevronDown
+                      size={14}
+                      style={{
+                        transition: 'transform 150ms ease',
+                        transform: connectMenuOpened ? 'rotate(180deg)' : 'none',
+                      }}
+                    />
+                  }
+                >
+                  Connect
+                </Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item leftSection={<IntegrationLogo provider="github" />} onClick={handleConnectGithub}>
+                  GitHub
+                </Menu.Item>
+                <Menu.Item leftSection={<IntegrationLogo provider="gitlab" />} onClick={() => setGitlabOpen(true)}>
+                  GitLab
+                </Menu.Item>
+                <Menu.Item leftSection={<IntegrationLogo provider="coder" />} onClick={() => setCoderOpen(true)}>
+                  Coder
+                </Menu.Item>
+                {isProjectContext && azureAvailable && (
+                  <Menu.Item
+                    leftSection={<IntegrationLogo provider="azure_devops" />}
+                    onClick={() => setAzureOpen(true)}
+                  >
+                    Azure DevOps
+                  </Menu.Item>
+                )}
+                {atlassianAvailable && (
+                  <Menu.Item
+                    leftSection={<IntegrationLogo provider="atlassian" />}
+                    onClick={() => setAtlassianOpen(true)}
+                  >
+                    Atlassian
+                  </Menu.Item>
+                )}
+                {linearAvailable && (
+                  <Menu.Item leftSection={<IntegrationLogo provider="linear" />} onClick={() => setLinearOpen(true)}>
+                    Linear
+                  </Menu.Item>
+                )}
+                {youtrackAvailable && (
+                  <Menu.Item
+                    leftSection={<IntegrationLogo provider="youtrack" />}
+                    onClick={() => setYoutrackOpen(true)}
+                  >
+                    YouTrack
+                  </Menu.Item>
+                )}
+                {slackAvailable && (
+                  <Menu.Item leftSection={<IntegrationLogo provider="slack" />} onClick={handleConnectSlack}>
+                    Slack
+                  </Menu.Item>
+                )}
+                {teamsAvailable && (
+                  <Menu.Item leftSection={<IntegrationLogo provider="teams" />} onClick={handleConnectTeams}>
+                    Microsoft Teams
+                  </Menu.Item>
+                )}
+              </Menu.Dropdown>
+            </Menu>
+          )
+        }
+      />
+
+      <Group gap="md" mb="lg">
+        <TextInput
+          placeholder="Search by name..."
+          leftSection={<IconSearch size={16} />}
+          value={search}
+          onChange={(e) => setSearch(e.currentTarget.value)}
+          maw={300}
+        />
+        {isProjectContext && (
+          <SegmentedControl
+            value={scopeFilter}
+            onChange={setScopeFilter}
+            data={[
+              { label: 'All', value: 'all' },
+              { label: 'Project', value: 'project' },
+              { label: 'Company', value: 'company' },
+            ]}
+            size="sm"
+          />
+        )}
+        <ResourceCount>
+          {filtered.length} {filtered.length === 1 ? 'integration' : 'integrations'}
+        </ResourceCount>
+      </Group>
+
+      {filtered.length === 0 ? (
+        <Box
+          style={{
+            border: '1px solid var(--app-border-default)',
+            borderRadius: 'var(--mantine-radius-md)',
+            backgroundColor: 'var(--app-bg-paper)',
+          }}
+        >
+          {hasFilters ? (
+            <EmptyState
+              icon={<IconLink size={22} />}
+              title={
+                scopeFilter !== 'all' && !search
+                  ? 'No integrations in this scope.'
+                  : 'No integrations match your search'
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={<IconLink size={22} />}
+              title="No integrations connected"
+              description="Connect GitHub, GitLab or Bitbucket for repositories, Coder for workspaces, or Slack or Microsoft Teams to trigger workflows from messages."
+              action={
+                canExecute && (
+                  <Group gap="sm" justify="center" wrap="wrap">
+                    <Button
+                      variant="outline"
+                      leftSection={<IntegrationLogo provider="github" />}
+                      onClick={handleConnectGithub}
+                    >
+                      GitHub
+                    </Button>
+                    <Button
+                      variant="outline"
+                      leftSection={<IntegrationLogo provider="gitlab" />}
+                      onClick={() => setGitlabOpen(true)}
+                    >
+                      GitLab
+                    </Button>
+                    <Button
+                      variant="outline"
+                      leftSection={<IntegrationLogo provider="coder" />}
+                      onClick={() => setCoderOpen(true)}
+                    >
+                      Coder
+                    </Button>
+                    {isProjectContext && azureAvailable && (
+                      <Button
+                        variant="outline"
+                        leftSection={<IntegrationLogo provider="azure_devops" />}
+                        onClick={() => setAzureOpen(true)}
+                      >
+                        Azure DevOps
+                      </Button>
+                    )}
+                    {atlassianAvailable && (
+                      <Button
+                        variant="outline"
+                        leftSection={<IntegrationLogo provider="atlassian" />}
+                        onClick={() => setAtlassianOpen(true)}
+                      >
+                        Atlassian
+                      </Button>
+                    )}
+                    {linearAvailable && (
+                      <Button
+                        variant="outline"
+                        leftSection={<IntegrationLogo provider="linear" />}
+                        onClick={() => setLinearOpen(true)}
+                      >
+                        Linear
+                      </Button>
+                    )}
+                    {youtrackAvailable && (
+                      <Button
+                        variant="outline"
+                        leftSection={<IntegrationLogo provider="youtrack" />}
+                        onClick={() => setYoutrackOpen(true)}
+                      >
+                        YouTrack
+                      </Button>
+                    )}
+                    {slackAvailable && (
+                      <Button
+                        variant="outline"
+                        leftSection={<IntegrationLogo provider="slack" />}
+                        onClick={handleConnectSlack}
+                      >
+                        Slack
+                      </Button>
+                    )}
+                    {teamsAvailable && (
+                      <Button
+                        variant="outline"
+                        leftSection={<IntegrationLogo provider="teams" />}
+                        onClick={handleConnectTeams}
+                      >
+                        Microsoft Teams
+                      </Button>
+                    )}
+                  </Group>
+                )
+              }
+            />
+          )}
+        </Box>
+      ) : (
+        <ResourceTableShell>
+          <Table highlightOnHover>
+            <Table.Thead style={{ backgroundColor: 'var(--app-bg-deep)' }}>
+              <Table.Tr>
+                <ResourceTh>Name</ResourceTh>
+                <ResourceTh>Provider</ResourceTh>
+                {isProjectContext && <ResourceTh>Scope</ResourceTh>}
+                <ResourceTh>Status</ResourceTh>
+                <ResourceTh>Connected by</ResourceTh>
+                <ResourceTh align="right" w={150}>
+                  Actions
+                </ResourceTh>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {filtered.map((integration) => {
+                const readOnly = isProjectContext && integration.scopeIndicator === 'company';
+
+                const row = (
+                  <Table.Tr key={integration.id}>
+                    <Table.Td>
+                      <Group gap="sm" wrap="nowrap">
+                        <Box
+                          w={30}
+                          h={30}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'var(--app-bg-deep)',
+                            borderRadius: 'var(--mantine-radius-sm)',
+                            color: 'var(--app-text-secondary)',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <IntegrationLogo
+                            provider={integration.provider}
+                            size={18}
+                            fallback={<IconLink size={18} />}
+                          />
+                        </Box>
+                        <Box style={{ minWidth: 0 }}>
+                          <Text fz={14} fw={500} c="var(--app-text-primary)" truncate>
+                            {integration.name}
+                          </Text>
+                          {integration.provider === 'slack' && integration.slackRequestUrl && (
+                            <Group gap={4} wrap="nowrap">
+                              <Text fz={11} c="dimmed" ff="JetBrains Mono, monospace" truncate maw={180}>
+                                {integration.slackRequestUrl}
+                              </Text>
+                              <CopyButton value={integration.slackRequestUrl}>
+                                {({ copied, copy }) => (
+                                  <Tooltip label={copied ? 'Copied' : 'Copy request URL'}>
+                                    <ActionIcon
+                                      aria-label="Request URL"
+                                      variant="subtle"
+                                      size="xs"
+                                      color="gray"
+                                      onClick={copy}
+                                    >
+                                      {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                                    </ActionIcon>
+                                  </Tooltip>
+                                )}
+                              </CopyButton>
+                            </Group>
+                          )}
+                          {integration.provider === 'teams' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.status === 'active'
+                                ? `${integration.teamsOrganization ?? '—'} · approved by ${
+                                    integration.teamsApprovedBy ?? 'an administrator'
+                                  } · files ${integration.teamsFileAccess ? 'on' : 'off'}`
+                                : 'Waiting for a Microsoft 365 administrator to approve'}
+                            </Text>
+                          )}
+                          {/* Which Azure project this connection is pinned to, and
+                              WHOSE identity it acts as — a PAT connection acts as
+                              the token's owner, not as the application. */}
+                          {integration.provider === 'azure_devops' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.azureOrganization ?? '—'}
+                              {integration.azureProjectDisplayNames?.length
+                                ? ` / ${integration.azureProjectDisplayNames.join(', ')}`
+                                : integration.azureProjectName
+                                  ? ` / ${integration.azureProjectName}`
+                                  : ''}
+                              {' · '}
+                              {integration.azureAuthMode === 'pat'
+                                ? `as ${integration.connectedBy.name} (token)`
+                                : `as ${integration.azureIdentity ?? 'the Aixle application'}`}
+                            </Text>
+                          )}
+                          {/* A token connection acts as the person who pasted it,
+                              and receives no GitHub webhooks — both are worth
+                              seeing on the row rather than only in the dialog. */}
+                          {integration.provider === 'github' && integration.githubAuthMode === 'pat' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {`token · as ${integration.connectedBy.name}`}
+                              {integration.githubTokenScopes?.length
+                                ? ` · ${integration.githubTokenScopes.join(', ')}`
+                                : ''}
+                            </Text>
+                          )}
+                          {integration.githubError && (
+                            <Tooltip label={integration.githubError} multiline maw={360}>
+                              <Text fz={11} c="red.6" truncate maw={260}>
+                                {integration.githubError}
+                              </Text>
+                            </Tooltip>
+                          )}
+                          {/* Whose identity it acts as matters most on a 3LO
+                              connection, which acts as the person who signed in. */}
+                          {integration.provider === 'jira' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.status === 'inactive'
+                                ? 'Choose the Jira projects to finish connecting'
+                                : `${integration.jiraProjects.map((p) => p.key).join(', ') || 'no projects'} · as ${
+                                    integration.jiraIdentity ?? integration.connectedBy.name
+                                  } (${integration.jiraAuthMode === 'oauth' ? 'Atlassian account' : 'service account'})`}
+                            </Text>
+                          )}
+                          {integration.provider === 'gitlab' &&
+                            integration.gitlabAuthMode === 'service_account_pending' && (
+                              <Text fz={11} c="dimmed" truncate maw={260}>
+                                Pick the GitLab group to finish connecting
+                              </Text>
+                            )}
+                          {integration.provider === 'gitlab' && integration.gitlabAuthMode === 'service_account' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {`as ${String(integration.settings?.gitlab_username ?? 'the service account')} in ${
+                                integration.gitlabGroup ?? 'its group'
+                              }${integration.gitlabTokenExpiresAt ? ` · token renews before ${integration.gitlabTokenExpiresAt}` : ''}`}
+                            </Text>
+                          )}
+                          {integration.gitlabTrackers.length > 0 && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {`issue boards: ${integration.gitlabTrackers.map((t) => t.path).join(', ')}`}
+                            </Text>
+                          )}
+                          {integration.gitlabWebhookError && (
+                            <Text fz={11} c="var(--app-danger-fg)" truncate maw={260}>
+                              {integration.gitlabWebhookError}
+                            </Text>
+                          )}
+                          {integration.githubProjects.length > 0 && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {`projects: ${integration.githubProjects.map((p) => p.title).join(', ')}`}
+                            </Text>
+                          )}
+                          {integration.provider === 'linear' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.status === 'inactive'
+                                ? 'Choose the Linear teams to finish connecting'
+                                : `${integration.linearTeams.map((t) => t.key).join(', ') || 'no teams'} · as ${
+                                    integration.linearIdentity ?? integration.connectedBy.name
+                                  } (${integration.linearAuthMode === 'oauth' ? 'Linear app' : 'API key'})`}
+                            </Text>
+                          )}
+                          {integration.provider === 'youtrack' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.youtrackProjects.map((p) => p.key).join(', ') || 'no projects'}
+                              {integration.youtrackIdentity && ` · as @${integration.youtrackIdentity}`}
+                            </Text>
+                          )}
+                          {integration.youtrackWebhooksPending.length > 0 && (
+                            <Tooltip
+                              label={youtrackPendingNotice(integration.youtrackWebhooksPending)}
+                              multiline
+                              maw={360}
+                            >
+                              <Text fz={11} c="yellow.7" truncate maw={260}>
+                                {youtrackPendingNotice(integration.youtrackWebhooksPending)}
+                              </Text>
+                            </Tooltip>
+                          )}
+                          {integration.linearWebhookError && (
+                            <Tooltip label={integration.linearWebhookError} multiline maw={360}>
+                              <Text fz={11} c="red.6" truncate maw={260}>
+                                {integration.linearWebhookError}
+                              </Text>
+                            </Tooltip>
+                          )}
+                          {integration.provider === 'bitbucket' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.bitbucketAuthMode === 'app'
+                                ? `${integration.bitbucketWorkspace ?? 'workspace'} · Aixle Flow app`
+                                : `${integration.bitbucketWorkspace ?? 'workspace'} · ${
+                                    integration.bitbucketTokenKind === 'api_token' ? 'API token' : 'access token'
+                                  }`}
+                            </Text>
+                          )}
+                          {integration.bitbucketAuthMode === 'app' &&
+                            (integration.bitbucketInstallationStatus === 'uninstalled' ? (
+                              <Text fz={11} c="var(--app-danger-fg)" truncate maw={260}>
+                                The Aixle Flow app was removed from this workspace
+                              </Text>
+                            ) : (
+                              integration.bitbucketLastHeardAt &&
+                              minutesSince(integration.bitbucketLastHeardAt) >= APP_SILENCE_MINUTES && (
+                                <Text fz={11} c="yellow.7" truncate maw={260}>
+                                  {`Aixle Flow app silent for ${minutesSince(integration.bitbucketLastHeardAt)} min`}
+                                </Text>
+                              )
+                            ))}
+                          {holdsToken(integration) &&
+                            integration.status === 'error' &&
+                            typeof integration.settings.error === 'string' && (
+                              <Text fz={11} c="var(--app-danger-fg)" truncate maw={260}>
+                                {integration.settings.error}
+                              </Text>
+                            )}
+                          {integration.provider === 'coder' && integration.coderUrl && (
+                            <Text fz={11} c="dimmed" truncate maw={200}>
+                              {integration.coderUrl}
+                            </Text>
+                          )}
+                          {/* The allocator reads these three, and a missing template is
+                              why it can never create a machine — so show them here
+                              instead of only inside the connect form. */}
+                          {integration.provider === 'coder' && (
+                            <Text fz={11} c="dimmed" truncate maw={260}>
+                              {integration.coderDefaultTemplate
+                                ? `template ${integration.coderDefaultTemplate}`
+                                : 'no default template'}
+                              {' · '}
+                              {integration.coderMachinePrefix
+                                ? `prefix ${integration.coderMachinePrefix}`
+                                : 'no prefix'}
+                              {` · lock ${integration.coderLockTtlMinutes ?? DEFAULT_CODER_LOCK_TTL}m`}
+                            </Text>
+                          )}
+                        </Box>
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text fz={13} c="dimmed">
+                        {PROVIDER_LABELS[integration.provider] ?? integration.provider}
+                      </Text>
+                    </Table.Td>
+                    {isProjectContext && (
+                      <Table.Td>
+                        <Badge color={SCOPE_COLORS[integration.scopeIndicator] ?? 'gray'} size="sm" variant="light">
+                          {integration.scopeIndicator}
+                        </Badge>
+                      </Table.Td>
+                    )}
+                    <Table.Td>
+                      <StatusBadge state={integration.status} size="sm" />
+                    </Table.Td>
+                    <Table.Td>
+                      <Text fz={13} c="dimmed">
+                        {integration.connectedBy.name} · {formatDateMedium(integration.createdAt)}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={4} justify="flex-end">
+                        {channelOwners.has(integration.id) && (
+                          <Button
+                            aria-label={`Channels for ${integration.name}`}
+                            size="compact-xs"
+                            variant="light"
+                            leftSection={<IconHash size={12} />}
+                            onClick={() => setChannelsProvider(integration.provider)}
+                          >
+                            Channels
+                          </Button>
+                        )}
+                        {integration.provider === 'github' && canExecute && !readOnly && (
+                          <Tooltip label="Test connection">
+                            <ActionIcon
+                              aria-label={`Test connection for ${integration.name}`}
+                              variant="subtle"
+                              size="sm"
+                              onClick={() => handleTestConnection(integration)}
+                            >
+                              <IconRefresh size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'gitlab' &&
+                          integration.gitlabAuthMode === 'service_account_pending' &&
+                          canExecute &&
+                          !readOnly && (
+                            <Tooltip label="Pick the group">
+                              <ActionIcon
+                                aria-label={`Pick the GitLab group for ${integration.name}`}
+                                variant="subtle"
+                                size="sm"
+                                onClick={() => setGitlabGroupTarget(integration)}
+                              >
+                                <IconUsersGroup size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        {integration.provider === 'gitlab' &&
+                          integration.status === 'active' &&
+                          canExecute &&
+                          !readOnly && (
+                            <Tooltip label="Issue boards">
+                              <ActionIcon
+                                aria-label={`GitLab issue boards for ${integration.name}`}
+                                variant="subtle"
+                                size="sm"
+                                onClick={() => setGitlabTrackersTarget(integration)}
+                              >
+                                <IconLayoutKanban size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        {integration.githubProjectsSupported && canExecute && !readOnly && (
+                          <Tooltip label="GitHub Projects">
+                            <ActionIcon
+                              aria-label={`GitHub Projects for ${integration.name}`}
+                              variant="subtle"
+                              size="sm"
+                              onClick={() => setGithubProjectsTarget(integration)}
+                            >
+                              <IconLayoutKanban size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.githubUrl && !readOnly && (
+                          <Tooltip label="Settings">
+                            <ActionIcon
+                              aria-label="Settings"
+                              variant="subtle"
+                              size="sm"
+                              component="a"
+                              href={integration.githubUrl}
+                              target="_blank"
+                            >
+                              <IconSettings size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'teams' && canExecute && integration.status === 'active' && (
+                          <Tooltip label="Download the Teams app">
+                            <ActionIcon
+                              aria-label={`Download the Teams app for ${integration.name}`}
+                              variant="subtle"
+                              size="sm"
+                              component="a"
+                              href={`${basePath}/${integration.id}/teams_package`}
+                            >
+                              <IconDownload size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'teams' && canExecute && (
+                          <Tooltip label="New approval link">
+                            <ActionIcon
+                              aria-label={`New approval link for ${integration.name}`}
+                              variant="subtle"
+                              size="sm"
+                              onClick={() =>
+                                router.post(`${basePath}/${integration.id}/teams_link`, {}, { preserveScroll: true })
+                              }
+                            >
+                              <IconLink size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'azure_devops' && canExecute && !readOnly && (
+                          <Tooltip label="Test connection">
+                            <ActionIcon
+                              aria-label={`Test connection for ${integration.name}`}
+                              variant="subtle"
+                              size="sm"
+                              onClick={() => handleTestConnection(integration)}
+                            >
+                              <IconRefresh size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'azure_devops' && integration.azureUrl && !readOnly && (
+                          <Tooltip label="Open in Azure DevOps">
+                            <ActionIcon
+                              aria-label={`Open ${integration.name} in Azure DevOps`}
+                              variant="subtle"
+                              size="sm"
+                              component="a"
+                              href={integration.azureUrl}
+                              target="_blank"
+                            >
+                              <IconSettings size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'jira' && canExecute && !readOnly && (
+                          <>
+                            {integration.status !== 'inactive' && (
+                              <Tooltip label="Test connection">
+                                <ActionIcon
+                                  aria-label={`Test connection for ${integration.name}`}
+                                  variant="subtle"
+                                  size="sm"
+                                  onClick={() => handleTestConnection(integration)}
+                                >
+                                  <IconRefresh size={16} />
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                            <Tooltip label="Jira projects">
+                              <ActionIcon
+                                aria-label={`Jira projects for ${integration.name}`}
+                                variant="subtle"
+                                size="sm"
+                                onClick={() => setJiraProjectsTarget(integration)}
+                              >
+                                <IconPencil size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            {integration.jiraAuthMode === 'service_account' && (
+                              <Tooltip label="Webhook setup">
+                                <ActionIcon
+                                  aria-label={`Webhook setup for ${integration.name}`}
+                                  variant="subtle"
+                                  size="sm"
+                                  onClick={() => setJiraWebhookTarget(integration)}
+                                >
+                                  <IconWebhook size={16} />
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </>
+                        )}
+                        {integration.provider === 'jira' && integration.jiraSiteUrl && !readOnly && (
+                          <Tooltip label="Open in Jira">
+                            <ActionIcon
+                              aria-label={`Open ${integration.name} in Jira`}
+                              variant="subtle"
+                              size="sm"
+                              component="a"
+                              href={integration.jiraSiteUrl}
+                              target="_blank"
+                            >
+                              <IconSettings size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'linear' && canExecute && !readOnly && (
+                          <>
+                            {integration.status !== 'inactive' && (
+                              <Tooltip label="Test connection">
+                                <ActionIcon
+                                  aria-label={`Test connection for ${integration.name}`}
+                                  variant="subtle"
+                                  size="sm"
+                                  onClick={() => handleTestConnection(integration)}
+                                >
+                                  <IconRefresh size={16} />
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                            <Tooltip label="Linear teams">
+                              <ActionIcon
+                                aria-label={`Linear teams for ${integration.name}`}
+                                variant="subtle"
+                                size="sm"
+                                onClick={() => setLinearTeamsTarget(integration)}
+                              >
+                                <IconPencil size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </>
+                        )}
+                        {integration.provider === 'linear' && integration.linearWorkspaceUrl && !readOnly && (
+                          <Tooltip label="Open in Linear">
+                            <ActionIcon
+                              aria-label={`Open ${integration.name} in Linear`}
+                              variant="subtle"
+                              size="sm"
+                              component="a"
+                              href={integration.linearWorkspaceUrl}
+                              target="_blank"
+                            >
+                              <IconSettings size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {integration.provider === 'youtrack' &&
+                          canExecute &&
+                          !readOnly &&
+                          integration.status !== 'inactive' && (
+                            <Tooltip label="Test connection">
+                              <ActionIcon
+                                aria-label={`Test connection for ${integration.name}`}
+                                variant="subtle"
+                                size="sm"
+                                onClick={() => handleTestConnection(integration)}
+                              >
+                                <IconRefresh size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        {integration.provider === 'youtrack' && integration.youtrackBaseUrl && !readOnly && (
+                          <>
+                            <Tooltip label="Open in YouTrack">
+                              <ActionIcon
+                                aria-label={`Open ${integration.name} in YouTrack`}
+                                variant="subtle"
+                                size="sm"
+                                component="a"
+                                href={integration.youtrackBaseUrl}
+                                target="_blank"
+                              >
+                                <IconExternalLink size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            <Tooltip label="Manage in YouTrack">
+                              <ActionIcon
+                                aria-label={`Manage ${integration.name} in YouTrack`}
+                                variant="subtle"
+                                size="sm"
+                                component="a"
+                                href={youtrackManageUrl(integration.youtrackBaseUrl)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <IconSettings size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </>
+                        )}
+                        {testable(integration) && canExecute && !readOnly && (
+                          <>
+                            <Tooltip label="Test connection">
+                              <ActionIcon
+                                aria-label={`Test connection for ${integration.name}`}
+                                variant="subtle"
+                                size="sm"
+                                onClick={() => handleTestConnection(integration)}
+                              >
+                                <IconRefresh size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            {holdsToken(integration) && (
+                              <Tooltip label="Replace token">
+                                <ActionIcon
+                                  aria-label={`Replace token for ${integration.name}`}
+                                  variant="subtle"
+                                  size="sm"
+                                  onClick={() => setTokenTarget(integration)}
+                                >
+                                  <IconKey size={16} />
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </>
+                        )}
+                        {integration.provider === 'coder' && canExecute && !readOnly && (
+                          <Tooltip label="Edit settings">
+                            <ActionIcon
+                              aria-label={`Edit settings for ${integration.name}`}
+                              variant="subtle"
+                              size="sm"
+                              onClick={() => openCoderSettings(integration)}
+                            >
+                              <IconPencil size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                        {canExecute && (!readOnly || canManageCompany) && (
+                          <Tooltip label="Remove">
+                            <ActionIcon
+                              aria-label="Remove"
+                              variant="subtle"
+                              size="sm"
+                              color="red"
+                              onClick={() => handleDelete(integration)}
+                            >
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        )}
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+                return row;
+              })}
+            </Table.Tbody>
+          </Table>
+        </ResourceTableShell>
+      )}
+
+      {atlassianAvailable && (
+        <AtlassianConnectModal
+          opened={atlassianOpen}
+          onClose={() => setAtlassianOpen(false)}
+          jira={{
+            available: jiraAvailable,
+            state: atlassianConnectionState(integrations, 'jira'),
+            onChoose: () => chooseAtlassianProduct(setJiraOpen),
+          }}
+          bitbucket={{
+            available: bitbucketAvailable,
+            state: atlassianConnectionState(integrations, 'bitbucket'),
+            onChoose: () => chooseAtlassianProduct(setBitbucketOpen),
+          }}
+        />
+      )}
+
+      {bitbucketAvailable && (
+        <BitbucketConnectModal
+          opened={bitbucketOpen}
+          onClose={() => closeAtlassianProduct(setBitbucketOpen)}
+          basePath={basePath}
+          bitbucket={bitbucket}
+        />
+      )}
+
+      {jira && (
+        <>
+          <JiraConnectModal
+            opened={jiraOpen}
+            onClose={() => closeAtlassianProduct(setJiraOpen)}
+            basePath={basePath}
+            jira={jira}
+          />
+          <JiraProjectsModal
+            integration={jiraProjectsTarget}
+            onClose={() => setJiraProjectsTarget(null)}
+            basePath={basePath}
+          />
+          <JiraWebhookModal
+            integration={jiraWebhookTarget}
+            onClose={() => setJiraWebhookTarget(null)}
+            basePath={basePath}
+          />
+        </>
+      )}
+
+      {linear && (
+        <>
+          <LinearConnectModal
+            opened={linearOpen}
+            onClose={() => setLinearOpen(false)}
+            basePath={basePath}
+            linear={linear}
+          />
+          <LinearTeamsModal
+            integration={linearTeamsTarget}
+            onClose={() => setLinearTeamsTarget(null)}
+            basePath={basePath}
+          />
+        </>
+      )}
+
+      {youtrack && (
+        <YoutrackConnectModal
+          opened={youtrackOpen}
+          onClose={() => setYoutrackOpen(false)}
+          basePath={basePath}
+          youtrack={youtrack}
+        />
+      )}
+
+      <GithubProjectsModal
+        integration={githubProjectsTarget}
+        onClose={() => setGithubProjectsTarget(null)}
+        basePath={basePath}
+      />
+
+      <GitlabGroupModal
+        integration={gitlabGroupTarget}
+        onClose={() => setGitlabGroupTarget(null)}
+        onCreated={(integration) => {
+          setGitlabGroupTarget(null);
+          setGitlabTrackersTarget(integration);
+        }}
+        basePath={basePath}
+      />
+
+      <GitlabTrackersModal
+        integration={gitlabTrackersTarget}
+        onClose={() => setGitlabTrackersTarget(null)}
+        basePath={basePath}
+      />
+
+      {projectId !== undefined && (
+        <ChatChannelsModal
+          projectId={projectId}
+          provider={channelsProvider ?? 'slack'}
+          opened={channelsProvider !== null}
+          onClose={() => setChannelsProvider(null)}
+          canEdit={canExecute}
+        />
+      )}
+
+      {azureDevops && (
+        <AzureDevopsConnectModal
+          opened={azureOpen}
+          onClose={() => {
+            setAzureOpen(false);
+            setAzureSignIn(null);
+          }}
+          signIn={azureSignIn}
+          basePath={basePath}
+          azureDevops={azureDevops}
+        />
+      )}
+
+      <GithubConnectModal
+        opened={githubOpen}
+        onClose={() => setGithubOpen(false)}
+        basePath={basePath}
+        github={github}
+      />
+
+      <Modal opened={gitlabOpen} onClose={requestCloseGitlab} title="Connect GitLab" centered size="sm">
+        <Stack gap="md">
+          {gitlab?.oauthEnabled && (
+            <>
+              <Text size="sm" c="dimmed">
+                Recommended: sign in as an Owner of a GitLab group. Flow then creates its own service account in that
+                group and keeps only that account&apos;s token.
+              </Text>
+              <Button component="a" href={`${basePath}/gitlab_oauth_start`}>
+                Sign in with GitLab
+              </Button>
+              <Text size="xs" c="dimmed" ta="center">
+                or connect with a token
+              </Text>
+            </>
+          )}
+          <Text size="sm" c="dimmed">
+            Enter a GitLab Personal Access Token with <b>api</b> scope to connect your GitLab account.
+          </Text>
+          <PasswordInput
+            label="Personal Access Token"
+            placeholder="glpat-..."
+            value={gitlabPat}
+            onChange={(e) => setGitlabPat(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleConnectGitlab();
+            }}
+            autoFocus
+          />
+          {gitlabError && (
+            <Text size="sm" c="var(--app-danger-fg)">
+              {gitlabError}
+            </Text>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={requestCloseGitlab}>
+              Cancel
+            </Button>
+            <Button onClick={handleConnectGitlab} loading={gitlabLoading} disabled={!gitlabPat.trim()}>
+              Connect
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={coderOpen} onClose={requestCloseCoder} title="Connect Coder" centered size="sm">
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Enter your Coder instance URL and a session token with full workspace permissions.
+          </Text>
+          <TextInput
+            label="Coder URL"
+            placeholder="https://coder.example.com"
+            value={coderUrl}
+            onChange={(e) => setCoderUrl(e.currentTarget.value)}
+            error={coderUrl.trim() && !isValidHttpUrl(coderUrl) ? 'Must be a valid http or https URL' : undefined}
+            autoFocus
+          />
+          <PasswordInput
+            label="Session Token"
+            placeholder="vFVrbTLdls-..."
+            value={coderToken}
+            onChange={(e) => setCoderToken(e.currentTarget.value)}
+          />
+
+          <UnstyledButton onClick={() => setCoderAdvancedOpen((open) => !open)}>
+            <Group gap={4}>
+              {coderAdvancedOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+              <Text size="sm" c="dimmed">
+                Advanced
+              </Text>
+            </Group>
+          </UnstyledButton>
+
+          {coderAdvancedOpen && (
+            <Stack gap="sm">
+              <TextInput
+                label="Default template"
+                placeholder="aws-ec2-spot-v1"
+                value={coderDefaultTemplate}
+                onChange={(e) => setCoderDefaultTemplate(e.currentTarget.value)}
+              />
+              <TextInput
+                label="Machine name prefix"
+                placeholder="aixle-prod"
+                value={coderMachinePrefix}
+                onChange={(e) => setCoderMachinePrefix(e.currentTarget.value)}
+              />
+              <NumberInput
+                label="Lock TTL (minutes)"
+                min={1}
+                max={1440}
+                value={coderLockTtlMinutes}
+                onChange={(value) => setCoderLockTtlMinutes(value)}
+                error={typeof coderLockTtlMinutes === 'number' && coderLockTtlMinutes > 0 ? undefined : 'Required'}
+              />
+            </Stack>
+          )}
+
+          {coderError && (
+            <Text size="sm" c="var(--app-danger-fg)">
+              {coderError}
+            </Text>
+          )}
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={requestCloseCoder}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleConnectCoder}
+              loading={coderLoading}
+              disabled={
+                !coderUrl.trim() ||
+                !coderToken.trim() ||
+                !isValidHttpUrl(coderUrl) ||
+                !(typeof coderLockTtlMinutes === 'number' && coderLockTtlMinutes > 0)
+              }
+            >
+              Connect
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={!!tokenTarget} onClose={requestCloseToken} title="Replace token" centered size="sm">
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            {tokenTarget?.provider === 'coder'
+              ? 'Paste a new Coder session token. It is checked against Coder before it replaces the current one.'
+              : tokenTarget?.provider === 'bitbucket'
+                ? `Paste a new Bitbucket access token or API token for ${tokenTarget.bitbucketWorkspace ?? 'this workspace'}. It is checked against Bitbucket before it replaces the current one.`
+                : 'Paste a new GitLab personal access token with the api scope. It is checked against GitLab before it replaces the current one.'}{' '}
+            Repositories and settings stay as they are.
+          </Text>
+          <PasswordInput
+            label={
+              tokenTarget?.provider === 'coder'
+                ? 'Session Token'
+                : tokenTarget?.provider === 'bitbucket'
+                  ? 'Token'
+                  : 'Personal Access Token'
+            }
+            value={replacementToken}
+            onChange={(e) => setReplacementToken(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleReplaceToken();
+            }}
+            autoFocus
+          />
+          {tokenError && (
+            <Text size="sm" c="var(--app-danger-fg)">
+              {tokenError}
+            </Text>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={requestCloseToken}>
+              Cancel
+            </Button>
+            <Button onClick={handleReplaceToken} loading={tokenLoading} disabled={!replacementToken.trim()}>
+              Replace
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={!!coderEditTarget} onClose={requestCloseCoderSettings} title="Coder settings" centered size="sm">
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Without a default template the allocator can only hand out workspaces that already exist — it never creates
+            one. Leave it blank to cap the pool at its current size.
+          </Text>
+          <TextInput
+            label="Default template"
+            placeholder="aws-ec2-spot-v1"
+            value={coderEditTemplate}
+            onChange={(e) => setCoderEditTemplate(e.currentTarget.value)}
+            autoFocus
+          />
+          <TextInput
+            label="Machine name prefix"
+            placeholder="aixle-prod"
+            value={coderEditPrefix}
+            onChange={(e) => setCoderEditPrefix(e.currentTarget.value)}
+          />
+          <NumberInput
+            label="Lock TTL (minutes)"
+            min={1}
+            max={1440}
+            value={coderEditTtl}
+            onChange={(value) => setCoderEditTtl(value)}
+            error={typeof coderEditTtl === 'number' && coderEditTtl > 0 ? undefined : 'Required'}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={requestCloseCoderSettings}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveCoderSettings}
+              loading={coderEditLoading}
+              disabled={!(typeof coderEditTtl === 'number' && coderEditTtl > 0)}
+            >
+              Save
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <TeamsApprovalModal
+        url={teamsApprovalUrl !== dismissedApprovalUrl ? teamsApprovalUrl : null}
+        onClose={() => setDismissedApprovalUrl(teamsApprovalUrl)}
+      />
+    </Box>
+  );
+};

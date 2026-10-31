@@ -1,0 +1,89 @@
+.fieldLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Two-column band layout: main column (wide, primary actions) beside a side
+   column (companies, defaults) — each row pairs one domain across both
+   columns. Collapses to a single column on narrow viewports. */
+.grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.colMain,
+.colSide {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.companyTile {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--app-bg-elevated);
+  border: 1px solid var(--app-border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--app-font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--app-text-secondary);
+}
+
+/* The row holds a growing number of actions (re-authenticate, design, remove) beside a text
+   column. Without wrapping, each new action steals width from the text until it breaks one
+   word per line — so the row wraps as a whole and the text keeps a floor. */
+.agentCardContent {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  padding: 4px 0;
+}
+
+.colorBar {
+  width: 4px;
+  align-self: stretch;
+  min-height: 40px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+/* min-width is the floor that stops the text from collapsing; the actions move to their own
+   line before it is breached. */
+.agentCardBody {
+  flex: 1 1 260px;
+  min-width: 240px;
+}
+
+.agentActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 540px) {
+  .agentActions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}

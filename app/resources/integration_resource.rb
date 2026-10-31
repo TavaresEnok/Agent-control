@@ -1,0 +1,397 @@
+# frozen_string_literal: true
+
+class IntegrationResource < ApplicationResource
+  attributes :id, :name, :provider, :status, :project_id, :created_at, :updated_at
+
+  # settings is a free-form jsonb blob; column inference can only see `unknown`.
+  # Expose it as an explicit attribute so the keyless `typelize` annotation applies
+  # (the keyed form is gated by Typelizer.enabled? at load time and is unreliable).
+  #
+  # `settings` reaches the browser whole, so nothing secret may be written into
+  # it — tokens, app secrets, authorization headers and raw provider errors all
+  # belong elsewhere. The Azure writers keep to identity and status; the two
+  # keys below are surfaced explicitly rather than left for the frontend to dig
+  # out of the blob.
+  typelize "Record<string, unknown>"
+  attribute :settings do |integration|
+    integration.settings
+  end
+
+  # ----- Azure DevOps -----
+  #
+  # Read through the model's accessors, which prefer the authoritative
+  # installation row over the settings copy: a stale or edited settings blob
+  # must never widen what the UI reports as connected.
+
+  typelize "string | null"
+  attribute :azure_auth_mode do |integration|
+    integration.azure_devops? ? integration.azure_auth_mode : nil
+  end
+
+  typelize "string | null"
+  attribute :azure_organization do |integration|
+    integration.azure_devops? ? integration.azure_organization_slug : nil
+  end
+
+  # A connection covers one or more Azure projects. The list is what the UI
+  # shows; `azure_project_name` stays for the single-project case so a card that
+  # names one project keeps reading naturally.
+  typelize "string | null"
+  attribute :azure_project_name do |integration|
+    integration.azure_devops? ? integration.azure_project_name : nil
+  end
+
+  typelize "string[]"
+  attribute :azure_project_ids do |integration|
+    integration.azure_devops? ? integration.azure_project_ids : []
+  end
+
+  typelize "string[]"
+  attribute :azure_project_display_names do |integration|
+    next [] unless integration.azure_devops?
+
+    names = integration.azure_project_names
+    integration.azure_project_ids.map { |id| names[id].presence || id }
+  end
+
+  typelize "string | null"
+  attribute :azure_identity do |integration|
+    integration.azure_devops? ? integration.settings&.dig("identity_display_name") : nil
+  end
+
+  typelize "string[]"
+  attribute :azure_capabilities do |integration|
+    integration.azure_devops? ? integration.azure_enabled_capabilities : []
+  end
+
+  typelize "string | null"
+  attribute :azure_url do |integration|
+    next nil unless integration.azure_devops?
+
+    slug = integration.azure_organization_slug
+    slug.present? ? "#{AzureDevops::AppConfig.api_host}/#{slug}" : nil
+  end
+
+  typelize %w[company project]
+  attribute :scope_indicator do |integration|
+    integration.project_id.present? ? "project" : "company"
+  end
+
+  # ----- GitHub -----
+
+  # "app" or "pat" — which credential this connection runs on. Null for every
+  # other provider, so the card can key off it without first checking provider.
+  typelize "string | null"
+  attribute :github_auth_mode do |integration|
+    integration.github_auth_mode
+  end
+
+  # Classic-token scopes as GitHub reported them at connect time. Not secret,
+  # and the answer to "why can it not see my private repository". Empty for an
+  # App installation and for a fine-grained token, whose permissions GitHub
+  # does not report on the endpoint we verify against.
+  typelize "string[]"
+  attribute :github_token_scopes do |integration|
+    integration.github? ? Array(integration.settings&.dig("token_scopes")) : []
+  end
+
+  typelize "string | null"
+  attribute :github_error do |integration|
+    integration.github? && !integration.active? ? integration.settings&.dig("error").presence : nil
+  end
+
+  # Where "Manage on GitHub" goes. An App installation has a settings page;
+  # a PAT has none, so the link goes to the account the token acts as — which
+  # is the thing someone opening it wants to check.
+  typelize "string | null"
+  attribute :github_url do |integration|
+    next nil unless integration.github?
+
+    if integration.github_pat?
+      login = integration.github_account_login
+      next login.present? ? "https://github.com/#{login}" : nil
+    end
+
+    iid = integration.github_installation_id.presence || integration.credentials_data_for_display["installation_id"]
+    next nil if iid.blank?
+
+    app_slug = Settings.github.app_slug
+    if app_slug.present?
+      "https://github.com/apps/#{app_slug}/installations/#{iid}"
+    else
+      "https://github.com/settings/installations/#{iid}"
+    end
+  end
+
+  # ----- Bitbucket -----
+
+  # "app" (the Forge installation) or "token". Null for every other provider.
+  typelize "string | null"
+  attribute :bitbucket_auth_mode do |integration|
+    integration.bitbucket_auth_mode
+  end
+
+  typelize "string | null"
+  attribute :bitbucket_workspace do |integration|
+    integration.bitbucket? ? integration.bitbucket_workspace_slug : nil
+  end
+
+  # "access_token" or "api_token" in token mode.
+  typelize "string | null"
+  attribute :bitbucket_token_kind do |integration|
+    integration.bitbucket_token? ? integration.bitbucket_token_kind : nil
+  end
+
+  # App mode only: what the installation is doing and when the app last
+  # reported, so a card can say the app has gone silent before a clone fails.
+  typelize "string | null"
+  attribute :bitbucket_installation_status do |integration|
+    integration.bitbucket_app? ? integration.bitbucket_installation&.status.to_s.presence : nil
+  end
+
+  typelize "string | null"
+  attribute :bitbucket_last_heard_at do |integration|
+    integration.bitbucket_app? ? integration.bitbucket_installation&.last_invocation_at&.iso8601 : nil
+  end
+
+  typelize "string | null"
+  attribute :bitbucket_url do |integration|
+    slug = integration.bitbucket? ? integration.bitbucket_workspace_slug : nil
+    slug.present? ? "#{Bitbucket::AppConfig::WEB_HOST}/#{slug}" : nil
+  end
+
+  typelize "{ id: number | null; name: string }"
+  attribute :connected_by do |integration|
+    user = integration.connected_by
+    { id: user&.id, name: user&.name || User::DELETED_DISPLAY_NAME }
+  end
+
+  typelize "string | null"
+  attribute :coder_url do |integration|
+    integration.coder? ? integration.credentials_data_for_display["coder_url"] : nil
+  end
+
+  typelize "string | null"
+  attribute :coder_default_template do |integration|
+    integration.coder? ? integration.coder_default_template : nil
+  end
+
+  typelize "string | null"
+  attribute :coder_machine_prefix do |integration|
+    integration.coder? ? integration.coder_machine_prefix : nil
+  end
+
+  typelize "number | null"
+  attribute :coder_lock_ttl_minutes do |integration|
+    integration.coder? ? integration.coder_lock_ttl_minutes : nil
+  end
+
+  # The deployment's one Slack events endpoint, the same for every workspace.
+  typelize "string | null"
+  attribute :slack_request_url do |integration|
+    next nil unless integration.slack?
+
+    "#{Settings.protocol}://#{Settings.domain}#{Rails.application.routes.url_helpers.slack_events_webhook_path}"
+  end
+
+  # ----- Microsoft Teams -----
+
+  # The organization the connection is bound to, by its domain when the
+  # approving administrator's account gave one.
+  typelize "string | null"
+  attribute :teams_organization do |integration|
+    next nil unless integration.teams?
+
+    integration.settings.to_h["tenant_domain"].presence || integration.settings.to_h["tenant_id"].presence
+  end
+
+  typelize "string | null"
+  attribute :teams_approved_by do |integration|
+    integration.teams? ? integration.settings.to_h.dig("approved_by", "name") : nil
+  end
+
+  # Whether the organization granted the tenant-wide file permission; null until
+  # anyone asked.
+  typelize "boolean | null"
+  attribute :teams_file_access do |integration|
+    integration.teams? ? integration.settings.to_h["file_access"] : nil
+  end
+
+  # ----- Jira -----
+
+  # "oauth" (Aixle's Atlassian app) or "service_account".
+  typelize "string | null"
+  attribute :jira_auth_mode do |integration|
+    integration.jira? ? integration.settings&.dig("auth_mode") : nil
+  end
+
+  typelize "string | null"
+  attribute :jira_site_url do |integration|
+    integration.jira? ? integration.settings&.dig("site_url") : nil
+  end
+
+  typelize "Array<{ id: string; key: string; name: string }>"
+  attribute :jira_projects do |integration|
+    next [] unless integration.jira?
+
+    Array(integration.settings&.dig("jira_projects")).map { |p| p.to_h.slice("id", "key", "name") }
+  end
+
+  # The sites a 3LO grant covers, to pick from while the connection is pending.
+  typelize "Array<{ id: string; name: string; url: string }>"
+  attribute :jira_sites do |integration|
+    next [] unless integration.jira?
+
+    Array(integration.settings&.dig("sites")).map { |s| s.to_h.slice("id", "name", "url") }
+  end
+
+  typelize "string | null"
+  attribute :jira_identity do |integration|
+    integration.jira? ? integration.settings&.dig("identity_display_name") : nil
+  end
+
+  typelize "boolean"
+  attribute :jira_dedicated_identity do |integration|
+    integration.jira? && integration.settings&.dig("dedicated_identity") == true
+  end
+
+  # ----- GitHub Projects -----
+
+  # Whether this connection can carry GitHub Projects trackers at all: GitHub
+  # lets an App reach only organization-owned projects.
+  typelize "boolean"
+  attribute :github_projects_supported do |integration|
+    integration.github? && integration.github_app? && integration.settings&.dig("account_type") == "Organization"
+  end
+
+  # What the installation was granted, when GitHub last said. False means an
+  # organization owner has yet to approve the Projects and Issues permissions;
+  # null that the grant was never recorded (connected before it was).
+  typelize "boolean | null"
+  attribute :github_projects_permitted do |integration|
+    permissions = integration.github? ? integration.settings&.dig("app_permissions") : nil
+    next nil unless permissions.is_a?(Hash)
+
+    Github::IntegrationService::PROJECT_PERMISSIONS.all? { |name, levels| levels.include?(permissions[name].to_s) }
+  end
+
+  typelize "Array<{ id: string; number: number; title: string; url: string }>"
+  attribute :github_projects do |integration|
+    next [] unless integration.github?
+
+    Array(integration.settings&.dig("github_projects")).map { |p| p.to_h.slice("id", "number", "title", "url") }
+  end
+
+  # ----- Linear -----
+
+  # "oauth" (Aixle's Linear app) or "api_key".
+  typelize "string | null"
+  attribute :linear_auth_mode do |integration|
+    integration.linear? ? integration.settings&.dig("auth_mode") : nil
+  end
+
+  typelize "string | null"
+  attribute :linear_workspace_url do |integration|
+    key = integration.linear? ? integration.settings&.dig("url_key") : nil
+    key.present? ? "https://linear.app/#{key}" : nil
+  end
+
+  typelize "Array<{ id: string; key: string; name: string }>"
+  attribute :linear_teams do |integration|
+    next [] unless integration.linear?
+
+    Array(integration.settings&.dig("linear_teams")).map { |t| t.to_h.slice("id", "key", "name") }
+  end
+
+  typelize "string | null"
+  attribute :linear_identity do |integration|
+    integration.linear? ? integration.settings&.dig("identity_display_name") : nil
+  end
+
+  typelize "boolean"
+  attribute :linear_dedicated_identity do |integration|
+    integration.linear? && integration.settings&.dig("dedicated_identity") == true
+  end
+
+  # Why events do not reach Aixle, when a webhook could not be registered.
+  typelize "string | null"
+  attribute :linear_webhook_error do |integration|
+    next nil unless integration.linear?
+
+    integration.tracker_subscriptions.find { |s| s.status == "failing" }&.last_error
+  end
+
+  # ----- GitLab (docs/design/gitlab-tracker.md) -----
+
+  # `token` (pasted), `service_account` or `service_account_pending` (signed in,
+  # group not picked yet); nil for a row made before the mode was recorded.
+  typelize "string | null"
+  attribute :gitlab_auth_mode do |integration|
+    next nil unless integration.gitlab?
+
+    integration.settings&.dig("auth_mode").presence || "token"
+  end
+
+  typelize "Array<{ id: string; fullPath: string; name: string }>"
+  attribute :gitlab_groups do |integration|
+    next [] unless integration.gitlab? && integration.settings&.dig("auth_mode") == "service_account_pending"
+
+    Array(integration.settings&.dig("gitlab_groups")).map { |g| g.to_h.slice("id", "full_path", "name") }
+  end
+
+  typelize "string | null"
+  attribute :gitlab_group do |integration|
+    integration.gitlab? ? integration.settings&.dig("gitlab_group", "full_path") : nil
+  end
+
+  typelize "string | null"
+  attribute :gitlab_token_expires_at do |integration|
+    integration.gitlab? ? integration.settings&.dig("token_expires_at") : nil
+  end
+
+  typelize "Array<{ id: string; path: string; name: string; boardId: string | null; boardName: string | null }>"
+  attribute :gitlab_trackers do |integration|
+    next [] unless integration.gitlab?
+
+    Array(integration.settings&.dig("gitlab_trackers")).map do |t|
+      { "id" => t["id"], "path" => t["path"], "name" => t["name"], "board_id" => t["board_id"], "board_name" => t["board_name"] }
+    end
+  end
+
+  # Why issue events do not reach Aixle, when a project hook could not be registered.
+  typelize "string | null"
+  attribute :gitlab_webhook_error do |integration|
+    next nil unless integration.gitlab?
+
+    integration.tracker_subscriptions.find { |s| s.status == "failing" }&.last_error
+  end
+
+  # ----- YouTrack -----
+
+  typelize "string | null"
+  attribute :youtrack_base_url do |integration|
+    integration.youtrack? ? integration.settings&.dig("base_url") : nil
+  end
+
+  typelize "Array<{ id: string; key: string; name: string }>"
+  attribute :youtrack_projects do |integration|
+    next [] unless integration.youtrack?
+
+    Array(integration.settings&.dig("youtrack_projects")).map { |p| p.to_h.slice("id", "key", "name") }
+  end
+
+  typelize "string | null"
+  attribute :youtrack_identity do |integration|
+    integration.youtrack? ? integration.settings&.dig("identity_login") : nil
+  end
+
+  # Projects the Aixle Flow app has delivered no event from yet, by key.
+  typelize "string[]"
+  attribute :youtrack_webhooks_pending do |integration|
+    next [] unless integration.youtrack?
+
+    keys = Array(integration.settings&.dig("youtrack_projects")).to_h { |p| [ p["id"].to_s, p["key"] ] }
+    integration.tracker_subscriptions.select { |s| s.status == "pending" && keys.key?(s.external_scope_id.to_s) }
+               .map { |s| keys[s.external_scope_id.to_s] }.compact.sort
+  end
+end

@@ -1,0 +1,202 @@
+# frozen_string_literal: true
+
+class Web::Company::Projects::RepositoriesController < Web::Company::Projects::ApplicationController
+  def index
+    repositories = Repository.visible_for_project(current_project)
+                             .includes(:integration)
+                             .order(:full_name)
+
+    integrations = Integration.visible_for_project(current_project)
+                              .active
+                              .where(provider: Repository::CODE_HOST_PROVIDERS)
+                              .includes(:connected_by)
+
+    props = {
+      project: project_props,
+      repositories: repositories.map { |r| RepositoryResource.new(r).to_h },
+      integrations: integrations.map { |i| IntegrationResource.new(i).to_h }
+    }
+
+    if params[:integration_id].present?
+      integration = integrations.find { |i| i.id == params[:integration_id].to_i }
+      if integration
+        # Azure and Bitbucket repositories are addressed by GUID/UUID, not by
+        # name: a name lookup would reach a same-named repository in another
+        # project, and a rename would break every stored reference. So the
+        # picker carries an `externalId` for those and the attach path resolves
+        # on it.
+        props[:available_repos] = RepositoryService.for(integration).list_available.map do |r|
+          { fullName: r[:full_name], defaultBranch: r[:default_branch], externalId: r[:external_id] }.compact
+        end
+
+        if params[:repo].present?
+          lookup = if integration.azure_devops? then params[:external_id].presence
+          elsif integration.bitbucket? then params[:external_id].presence || params[:repo]
+          else params[:repo]
+          end
+          props[:available_branches] = lookup.present? ? RepositoryService.for(integration).list_branches(lookup) : []
+        end
+      end
+    end
+
+    # The edit dialog's branch picker asks for these with `only: [editBranches]`;
+    # nothing ever answered it, so the picker stayed empty.
+    if params[:edit_repo_id].present?
+      repo = repositories.find { |r| r.id == params[:edit_repo_id].to_i }
+      props[:edit_branches] = repo ? branches_of(repo) : []
+    end
+
+    render inertia: "Projects/Repositories/RepositoriesPage", props: props
+  end
+
+  def create
+    repo =
+      if public_params[:public_url].present?
+        build_public_repository
+      elsif azure_integration
+        build_azure_repository(azure_integration)
+      elsif bitbucket_integration
+        build_bitbucket_repository(bitbucket_integration)
+      else
+        build_code_host_repository
+      end
+
+    if repo.save
+      Repositories::CiWebhook.register(repo)
+      redirect_to company_project_repositories_path(current_project), notice: "Repository added"
+    else
+      redirect_to company_project_repositories_path(current_project), inertia: { errors: repo.errors }
+    end
+  rescue PublicRepositoryService::Error => e
+    redirect_to company_project_repositories_path(current_project), inertia: { errors: { public_url: e.message } }
+  rescue AzureDevops::Error => e
+    redirect_to company_project_repositories_path(current_project), inertia: { errors: { external_id: e.message } }
+  rescue Bitbucket::Error => e
+    redirect_to company_project_repositories_path(current_project), inertia: { errors: { full_name: e.message } }
+  end
+
+  def update
+    repo = Repository.visible_for_project(current_project).find(params[:id])
+
+    if repo.update(update_params)
+      redirect_to company_project_repositories_path(current_project), notice: "Repository updated"
+    else
+      redirect_to company_project_repositories_path(current_project), inertia: { errors: repo.errors }
+    end
+  end
+
+  def destroy
+    repo = Repository.visible_for_project(current_project).find(params[:id])
+    Repositories::CiWebhook.unregister(repo)
+    repo.destroy
+    redirect_to company_project_repositories_path(current_project), notice: "Repository removed"
+  end
+
+  private
+
+  # A public repository has no connection to ask; its branch stays a free-text field.
+  def branches_of(repo)
+    integration = repo.integration
+    return [] unless integration&.active?
+
+    service = RepositoryService.for(integration)
+    if integration.azure_devops?
+      service.list_branches(repo.external_id, project_id: repo.external_project_id)
+    elsif integration.bitbucket?
+      service.list_branches(repo)
+    else
+      service.list_branches(repo.full_name)
+    end
+  end
+
+  # A public repository is verified against the host's public API before it is
+  # attached: it must exist and be public, or an anonymous clone would fail
+  # inside the session with nothing to explain it. The clone url comes from the
+  # resolver, never from the request.
+  def build_public_repository
+    resolved = PublicRepositoryService.resolve(public_params[:public_url])
+    attributes = resolved.to_repository_attributes
+    attributes[:source_branch] = public_params[:source_branch] if public_params[:source_branch].present?
+
+    Repository.new(attributes.merge(scope: current_project, purpose: public_params[:purpose]))
+  end
+
+  # clone_url is derived (from the integration's provider, or from the resolver)
+  # and never accepted from the client: it reaches a `git clone` command line in
+  # the session container.
+  def create_params
+    params.require(:repository).permit(:full_name, :source_branch, :integration_id, :description, :purpose,
+                                       :is_private, :external_id)
+  end
+
+  # The picker sends a name, not a visibility, so a private repository was
+  # listed as public. The code host is asked — only through a connection this
+  # project can see; any other id is left to the model's validation to refuse.
+  def build_code_host_repository
+    repo = Repository.new(create_params.merge(scope: current_project))
+    integration = Integration.visible_for_project(current_project)
+                             .where(provider: Repository::CODE_HOST_PROVIDERS)
+                             .find_by(id: repo.integration_id)
+    found = integration && code_host_repository(integration, repo.full_name)
+    repo.is_private = found[:is_private] if found
+    repo
+  end
+
+  # Only a label: a lookup that cannot run (no GitHub App configured, the host
+  # unreachable) must not stop the repository from being added.
+  def code_host_repository(integration, full_name)
+    RepositoryService.for(integration).find_repo(full_name)
+  rescue StandardError => e
+    Rails.logger.warn("[Repositories] visibility of #{full_name} unknown: #{e.class}")
+    nil
+  end
+
+  # The integration named in the request, only when it is an Azure connection
+  # belonging to THIS project. A company-wide or foreign integration id resolves
+  # to nil and falls through to the ordinary path, which rejects it.
+  def azure_integration
+    id = create_params[:integration_id]
+    return nil if id.blank?
+
+    Integration.where(project_id: current_project.id, provider: "azure_devops").find_by(id: id)
+  end
+
+  # Everything on the row comes from Azure's verified answer — ids, names, clone
+  # url, privacy. The request supplies only WHICH repository to look up and an
+  # optional branch, and the branch is validated against the repository's refs.
+  def build_azure_repository(integration)
+    AzureDevops::RepositoryService.new(integration).build_repository(
+      external_id: create_params[:external_id].to_s,
+      scope: current_project,
+      source_branch: create_params[:source_branch].presence,
+      purpose: create_params[:purpose]
+    )
+  end
+
+  def bitbucket_integration
+    id = create_params[:integration_id]
+    return nil if id.blank?
+
+    Integration.where(project_id: current_project.id, provider: "bitbucket").find_by(id: id)
+  end
+
+  # Identity, name, privacy and default branch come from Bitbucket's answer;
+  # the request only says which repository (by UUID from the picker, or by
+  # name) and optionally the branch.
+  def build_bitbucket_repository(integration)
+    found = Bitbucket::RepositoryService.new(integration)
+                                        .find_repo!(create_params[:external_id].presence || create_params[:full_name])
+    Repository.new(found.except(:default_branch, :clone_url).merge(
+      integration: integration, scope: current_project, purpose: create_params[:purpose],
+      source_branch: create_params[:source_branch].presence || found[:default_branch]
+    ))
+  end
+
+  def public_params
+    params.require(:repository).permit(:public_url, :source_branch, :purpose)
+  end
+
+  def update_params
+    params.require(:repository).permit(:source_branch, :purpose, :description)
+  end
+end

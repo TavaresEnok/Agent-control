@@ -1,0 +1,632 @@
+import '@testing-library/jest-dom/vitest';
+import { notifications } from '@mantine/notifications';
+import type { ComponentProps } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildChatTrigger } from 'test/factories/trigger';
+import { renderPage, screen, userEvent, waitFor } from 'test/renderPage';
+
+import { type Trigger, TriggersTab } from './TriggersTab';
+
+type TabProps = ComponentProps<typeof TriggersTab>;
+
+// TriggersTab takes plain props (no usePage read) and talks to the backend through apiFetch(), a thin
+// wrapper over the global fetch() the test setup stubs. Each test that asserts a request (or needs
+// seeded triggers) spies on fetch() and dispatches by HTTP method.
+
+// TriggerColumnOption / Trigger are local interfaces (no Typelizer type, so no factory exists); these
+// literals match those interfaces exactly.
+const columns: TabProps['columns'] = [
+  { id: 1, name: 'Backlog' },
+  { id: 2, name: 'In Progress', boundWorkflowName: 'Other Flow' },
+];
+
+const baseProps = (overrides: Partial<TabProps> = {}): TabProps => ({
+  projectId: 7,
+  workflowId: 3,
+  columns,
+  readOnly: false,
+  ...overrides,
+});
+
+const columnTrigger = (o: Record<string, unknown> = {}) => ({
+  id: 1,
+  kind: 'column',
+  event_type: 'task.entered_column',
+  column_name: 'Backlog',
+  trigger_mode: 'auto',
+  cooldown_seconds: 5,
+  board_column_id: 1,
+  enabled: true,
+  ...o,
+});
+
+const slackTrigger = (o: Partial<Trigger> = {}) =>
+  buildChatTrigger({ filter_predicate: { provider: 'slack', text: { op: 'contains', value: 'ship' } }, ...o });
+
+const scheduleTrigger = (o: Record<string, unknown> = {}) => ({
+  id: 3,
+  kind: 'schedule',
+  event_type: 'schedule.tick',
+  schedule_config: { cron: '* * * * *', timezone: 'UTC' },
+  enabled: true,
+  ...o,
+});
+
+const webhookTrigger = (o: Record<string, unknown> = {}) => ({
+  id: 4,
+  kind: 'webhook',
+  event_type: 'webhook.received',
+  filter_predicate: {},
+  enabled: true,
+  ...o,
+});
+
+const json = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+// Install a fetch spy returning `triggers` for the GET (load) and controllable responses per verb.
+function installFetch(opts: { triggers?: unknown[]; deleteOk?: boolean; patchOk?: boolean; postBody?: unknown } = {}) {
+  const { triggers = [], deleteOk = true, patchOk = true, postBody = {} } = opts;
+  return vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
+    const method = init?.method;
+    if (method === 'DELETE') return Promise.resolve(json({}, deleteOk ? 200 : 500));
+    if (method === 'PATCH') return Promise.resolve(json({}, patchOk ? 200 : 500));
+    if (method === 'POST') return Promise.resolve(json(postBody));
+    return Promise.resolve(json({ triggers }));
+  });
+}
+
+const callBody = (spy: ReturnType<typeof installFetch>, method: string) => {
+  const call = spy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === method);
+  if (!call) throw new Error(`no ${method} call recorded`);
+  return JSON.parse((call[1] as RequestInit).body as string);
+};
+
+const getCallCount = (spy: ReturnType<typeof installFetch>) =>
+  spy.mock.calls.filter((c) => !(c[1] as RequestInit | undefined)?.method).length;
+
+// Row action buttons (edit/delete) are icon-only with no accessible name; the only labelled button in
+// the card grid is the "Add a trigger" tile. With a single trigger rendered (not read-only) the button
+// order is deterministic: [edit, delete, add-tile].
+const rowButtons = () => screen.getAllByRole('button');
+
+let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  // The toasts live in Mantine's global store and would outlast the test that raised them.
+  notifications.clean();
+});
+
+describe('Projects/Workflows/TriggersTab', () => {
+  it('shows a loading state (no list/empty-state) while the initial fetch is pending', async () => {
+    let resolveGet: (r: Response) => void = () => {};
+    const getPromise = new Promise<Response>((r) => {
+      resolveGet = r;
+    });
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) =>
+      init?.method ? Promise.resolve(json({})) : getPromise,
+    );
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    // Heading always renders; while loading, neither the empty state nor a card grid is shown.
+    expect(screen.getByText(/how this workflow launches/)).toBeInTheDocument();
+    expect(screen.queryByText('Add your first trigger')).not.toBeInTheDocument();
+
+    resolveGet(json({ triggers: [] }));
+
+    expect(await screen.findByText('Add your first trigger')).toBeInTheDocument();
+  });
+
+  it('shows the empty state with all four trigger-kind choices when not read-only', async () => {
+    installFetch({ triggers: [] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Add your first trigger')).toBeInTheDocument();
+    expect(screen.getByText('Task enters column')).toBeInTheDocument();
+    expect(screen.getByText('On schedule')).toBeInTheDocument();
+    expect(screen.getByText('Chat message')).toBeInTheDocument();
+    expect(screen.getByText('Incoming webhook')).toBeInTheDocument();
+  });
+
+  it('hides the trigger-kind choices in the empty state when read-only', async () => {
+    installFetch({ triggers: [] });
+
+    renderPage(<TriggersTab {...baseProps({ readOnly: true })} />);
+
+    expect(await screen.findByText('Add your first trigger')).toBeInTheDocument();
+    // The choice cards live inside a `!readOnly` block.
+    expect(screen.queryByText('On schedule')).not.toBeInTheDocument();
+    expect(screen.queryByText('Chat message')).not.toBeInTheDocument();
+  });
+
+  it('renders a column trigger card with title, meta, and event badge', async () => {
+    installFetch({ triggers: [columnTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Task enters "Backlog"')).toBeInTheDocument();
+    expect(screen.getByText('auto · cooldown 5s')).toBeInTheDocument();
+    expect(screen.getByText('BOARD.COLUMN_CHANGED')).toBeInTheDocument();
+  });
+
+  it('falls back to defaults for a column trigger missing name/mode/cooldown', async () => {
+    installFetch({
+      triggers: [columnTrigger({ column_name: undefined, trigger_mode: undefined, cooldown_seconds: undefined })],
+    });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Task enters "column"')).toBeInTheDocument();
+    expect(screen.getByText('auto · cooldown 0s')).toBeInTheDocument();
+  });
+
+  it('names the user an off-board trigger runs as, and only who created a column one', async () => {
+    installFetch({
+      triggers: [
+        columnTrigger({ created_by: { id: 5, name: 'Mara Osei' } }),
+        scheduleTrigger({ created_by: { id: 6, name: 'Ida Ferris' } }),
+      ],
+    });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    // The schedule fires unattended under its creator's identity; the column trigger's run belongs to
+    // whoever the card is on, so its creator is provenance only.
+    expect(await screen.findByText('Runs as Ida Ferris')).toBeInTheDocument();
+    expect(screen.getByText('Created by Mara Osei')).toBeInTheDocument();
+  });
+
+  it('flags an off-board trigger with no creator as unable to start a run', async () => {
+    installFetch({ triggers: [scheduleTrigger({ created_by: null }), columnTrigger({ created_by: null })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('No creator — this trigger cannot start a run')).toBeInTheDocument();
+    expect(screen.getByText('Created by Unknown')).toBeInTheDocument();
+  });
+
+  it('renders a schedule trigger with a human cron description and meta', async () => {
+    installFetch({ triggers: [scheduleTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    // describeCronShort('* * * * *') => 'Every minute' (cronstrue, stable across versions).
+    expect(await screen.findByText('Every minute')).toBeInTheDocument();
+    expect(screen.getByText('* * * * * · UTC')).toBeInTheDocument();
+    expect(screen.getByText('SCHEDULE.CRON')).toBeInTheDocument();
+  });
+
+  it('renders a schedule trigger with an invalid cron using the raw fallback', async () => {
+    installFetch({ triggers: [scheduleTrigger({ schedule_config: { cron: 'zzz', timezone: 'UTC' } })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    // cronstrue throws -> title falls back to `Cron zzz`; meta echoes the raw cron.
+    expect(await screen.findByText('Cron zzz')).toBeInTheDocument();
+    expect(screen.getByText('zzz · UTC')).toBeInTheDocument();
+  });
+
+  it('renders a schedule trigger with no config using — and UTC defaults', async () => {
+    installFetch({ triggers: [scheduleTrigger({ schedule_config: undefined })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('— · UTC')).toBeInTheDocument();
+  });
+
+  it('renders a matching slack trigger with quoted text and the channel it listens to', async () => {
+    installFetch({ triggers: [slackTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Slack message contains "ship"')).toBeInTheDocument();
+    expect(screen.getByText('Slack · #deploys')).toBeInTheDocument();
+    expect(screen.getByText('SLACK.MESSAGE')).toBeInTheDocument();
+    expect(screen.queryByText('Needs a channel')).not.toBeInTheDocument();
+  });
+
+  it('renders a slack trigger with a custom op', async () => {
+    installFetch({ triggers: [slackTrigger({ filter_predicate: { text: { op: 'eq', value: 'deploy' } } })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Slack message eq "deploy"')).toBeInTheDocument();
+  });
+
+  it('marks a chat trigger with no channel, and will not switch it on', async () => {
+    const fetchSpy = installFetch({ triggers: [slackTrigger({ chat_channel: null, enabled: false })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Needs a channel')).toBeInTheDocument();
+    expect(screen.getByText('Slack · no channel')).toBeInTheDocument();
+    const toggle = screen.getByRole('switch', { name: 'Enable Slack message contains "ship"' });
+    expect(toggle).toBeDisabled();
+    await userEvent.hover(toggle);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Choose a channel for this trigger first');
+    await userEvent.click(toggle);
+    expect(fetchSpy).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'PATCH' }));
+  });
+
+  it('ignores a stored name and shows the derived slack title', async () => {
+    installFetch({ triggers: [slackTrigger({ name: 'Ship command' })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Slack message contains "ship"')).toBeInTheDocument();
+    expect(screen.queryByText('Ship command')).not.toBeInTheDocument();
+  });
+
+  it('defaults the slack op to "contains" when the predicate omits it', async () => {
+    installFetch({ triggers: [slackTrigger({ filter_predicate: { text: { value: 'ping' } } })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Slack message contains "ping"')).toBeInTheDocument();
+  });
+
+  it('renders "Any Slack message" when the text filter has no value', async () => {
+    installFetch({ triggers: [slackTrigger({ filter_predicate: { text: { op: 'contains' } } })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Any Slack message')).toBeInTheDocument();
+  });
+
+  it('renders "Any Slack message" in its channel when there is no filter', async () => {
+    installFetch({ triggers: [slackTrigger({ filter_predicate: {} })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Any Slack message')).toBeInTheDocument();
+    expect(screen.getByText('Slack · #deploys')).toBeInTheDocument();
+  });
+
+  it('renders a webhook trigger with verification strategy and object condition meta', async () => {
+    installFetch({
+      triggers: [
+        webhookTrigger({
+          verification_strategy: 'hmac_sha256',
+          filter_predicate: { ref: { op: 'eq', value: 'refs/heads/main' } },
+        }),
+      ],
+    });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Incoming webhook')).toBeInTheDocument();
+    expect(screen.getByText('verification: hmac_sha256 · when ref eq refs/heads/main')).toBeInTheDocument();
+    expect(screen.getByText('WEBHOOK.RECEIVED')).toBeInTheDocument();
+  });
+
+  it('defaults the webhook condition op to eq for an object value without op', async () => {
+    installFetch({ triggers: [webhookTrigger({ filter_predicate: { ref: { value: 'main' } } })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('verification: none · when ref eq main')).toBeInTheDocument();
+  });
+
+  it('renders a webhook trigger with a scalar condition value', async () => {
+    installFetch({ triggers: [webhookTrigger({ filter_predicate: { branch: 'main' } })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('verification: none · when branch eq main')).toBeInTheDocument();
+  });
+
+  it('renders a webhook trigger with no conditions as just the verification base', async () => {
+    installFetch({ triggers: [webhookTrigger({ filter_predicate: {} })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('verification: none')).toBeInTheDocument();
+  });
+
+  it('describes a tracker trigger by the column it waits for and the tracker it listens to', async () => {
+    installFetch({
+      triggers: [
+        {
+          id: 12,
+          kind: 'tracker',
+          event_type: 'tracker.issue.status_changed',
+          project_tracker_id: 5,
+          aixle_changes: 'ignore',
+          filter_predicate: { 'change.to.name': { op: 'in', value: ['Ready for AI'] } },
+        },
+        {
+          id: 13,
+          kind: 'tracker',
+          event_type: 'tracker.comment.created',
+          project_tracker_id: null,
+          aixle_changes: 'other_workflows',
+          filter_predicate: { 'comment.mentions_me': true },
+        },
+      ],
+    });
+
+    renderPage(
+      <TriggersTab
+        {...baseProps({ trackers: [{ id: 5, handle: 'boards', name: 'Customer Platform', provider: 'azure_devops' }] })}
+      />,
+    );
+
+    expect(await screen.findByText('Issue moves to Ready for AI')).toBeInTheDocument();
+    expect(screen.getByText('boards · ignores Aixle changes')).toBeInTheDocument();
+    expect(screen.getByText('Aixle is mentioned in a comment')).toBeInTheDocument();
+    expect(screen.getByText('any tracker · chains from other workflows')).toBeInTheDocument();
+  });
+
+  it('marks a tracker trigger whose tracker is detached as not firing', async () => {
+    installFetch({
+      triggers: [
+        {
+          id: 14,
+          kind: 'tracker',
+          event_type: 'tracker.issue.created',
+          project_tracker_id: 6,
+          aixle_changes: 'ignore',
+          filter_predicate: {},
+        },
+      ],
+    });
+
+    renderPage(
+      <TriggersTab
+        {...baseProps({
+          trackers: [{ id: 6, handle: 'legacy', name: 'Legacy', provider: 'jira', status: 'detached' }],
+        })}
+      />,
+    );
+
+    expect(await screen.findByText('legacy (detached, not firing) · ignores Aixle changes')).toBeInTheDocument();
+  });
+
+  it('renders an unknown trigger kind with the raw event type badge and webhook-style title', async () => {
+    installFetch({ triggers: [{ id: 9, kind: 'custom', event_type: 'CUSTOM.EVENT', filter_predicate: {} }] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    // Unknown kind: no TG_EVENTS entry -> raw event_type; triggerTitle falls through to webhook copy.
+    expect(await screen.findByText('CUSTOM.EVENT')).toBeInTheDocument();
+    expect(screen.getByText('Incoming webhook')).toBeInTheDocument();
+  });
+
+  it('renders a mixed list of trigger kinds plus the Add-a-trigger tile', async () => {
+    installFetch({ triggers: [columnTrigger(), scheduleTrigger(), slackTrigger(), webhookTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+
+    expect(await screen.findByText('Task enters "Backlog"')).toBeInTheDocument();
+    expect(screen.getByText('Every minute')).toBeInTheDocument();
+    expect(screen.getByText('Slack message contains "ship"')).toBeInTheDocument();
+    expect(screen.getByText('Incoming webhook')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add a trigger/ })).toBeInTheDocument();
+  });
+
+  it('hides row actions and the Add-a-trigger tile when read-only', async () => {
+    installFetch({ triggers: [columnTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps({ readOnly: true })} />);
+
+    expect(await screen.findByText('Task enters "Backlog"')).toBeInTheDocument();
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add a trigger/ })).not.toBeInTheDocument();
+  });
+
+  it('deletes a column trigger and issues DELETE carrying the column kind param', async () => {
+    const fetchSpy = installFetch({ triggers: [columnTrigger({ id: 1 })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Task enters "Backlog"');
+
+    // [edit, delete, add-tile] -> delete is index 1.
+    const buttons = rowButtons();
+    expect(buttons).toHaveLength(3);
+    await userEvent.click(buttons[1]);
+
+    await waitFor(() => expect(screen.queryByText('Task enters "Backlog"')).not.toBeInTheDocument());
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/projects/7/workflows/3/triggers/1?kind=column',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('keeps the row and logs an error when a delete request fails', async () => {
+    const fetchSpy = installFetch({ triggers: [slackTrigger({ id: 2 })], deleteOk: false });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    await userEvent.click(rowButtons()[1]);
+
+    await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+    // Row survives a failed delete; a non-column trigger DELETEs without the kind query param.
+    expect(screen.getByText('Slack message contains "ship"')).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/projects/7/workflows/3/triggers/2',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('keeps the row and logs an error when a delete request throws', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) =>
+      init?.method === 'DELETE'
+        ? Promise.reject(new Error('network'))
+        : Promise.resolve(json({ triggers: [slackTrigger({ id: 2 })] })),
+    );
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    await userEvent.click(rowButtons()[1]);
+
+    await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+    expect(screen.getByText('Slack message contains "ship"')).toBeInTheDocument();
+  });
+
+  it('toggles a trigger off and PATCHes enabled:false (no kind param for non-column)', async () => {
+    const fetchSpy = installFetch({ triggers: [slackTrigger({ id: 2, enabled: true })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    const toggle = screen.getByRole('switch');
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers/2',
+        expect.objectContaining({ method: 'PATCH' }),
+      ),
+    );
+    expect(callBody(fetchSpy, 'PATCH')).toEqual({ trigger: { enabled: false } });
+    await waitFor(() => expect(screen.getByRole('switch')).not.toBeChecked());
+  });
+
+  // A board-column binding has no enabled flag; a switch on it would flip back on reload.
+  it('offers no on/off switch for a column trigger', async () => {
+    installFetch({ triggers: [columnTrigger({ id: 1, enabled: true })] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Task enters "Backlog"');
+
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit Task enters "Backlog"' })).toBeInTheDocument();
+  });
+
+  it('says why the server refused a switch, and leaves the switch as it was', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((_input, init) =>
+        Promise.resolve(
+          init?.method === 'PATCH'
+            ? json({ errors: ['Chat channel is not connected to this company'] }, 422)
+            : json({ triggers: [slackTrigger({ id: 2, enabled: false })] }),
+        ),
+      );
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    await userEvent.click(screen.getByRole('switch'));
+
+    expect(await screen.findByText('Chat channel is not connected to this company')).toBeInTheDocument();
+    expect(callBody(fetchSpy, 'PATCH')).toEqual({ trigger: { enabled: true } });
+    expect(screen.getByRole('switch')).not.toBeChecked();
+  });
+
+  it('falls back to a generic message when the refused switch has no reason', async () => {
+    installFetch({ triggers: [slackTrigger({ id: 2, enabled: true })], patchOk: false });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    await userEvent.click(screen.getByRole('switch'));
+
+    expect(await screen.findByText('Failed to update the trigger')).toBeInTheDocument();
+    expect(screen.getByRole('switch')).toBeChecked();
+  });
+
+  it('reverts the switch and logs an error when a toggle request throws', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) =>
+      init?.method === 'PATCH'
+        ? Promise.reject(new Error('network'))
+        : Promise.resolve(json({ triggers: [slackTrigger({ id: 2, enabled: true })] })),
+    );
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    await userEvent.click(screen.getByRole('switch'));
+
+    await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+    expect(screen.getByRole('switch')).toBeChecked();
+  });
+
+  it('opens the add panel with column defaults from the Add-a-trigger tile', async () => {
+    installFetch({ triggers: [columnTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Task enters "Backlog"');
+
+    await userEvent.click(screen.getByRole('button', { name: /Add a trigger/ }));
+
+    // The TriggerFormPanel (create mode, default kind "column") mounts.
+    expect(await screen.findByText('Trigger type')).toBeInTheDocument();
+    expect(screen.getByText('Mode')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add trigger' })).toBeInTheDocument();
+  });
+
+  it('opens the add panel with the chosen kind from an empty-state choice', async () => {
+    installFetch({ triggers: [] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Add your first trigger');
+
+    await userEvent.click(screen.getByText('On schedule'));
+
+    // openAdd('schedule') -> the schedule form fields render.
+    expect(await screen.findByText('Cron')).toBeInTheDocument();
+    expect(screen.getByText(/Runs:/)).toBeInTheDocument();
+  });
+
+  it('opens the edit panel locked to the trigger kind', async () => {
+    installFetch({ triggers: [slackTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Slack message contains "ship"');
+
+    // [edit, delete, add-tile] -> edit is index 0.
+    await userEvent.click(rowButtons()[0]);
+
+    expect(await screen.findByText('Edit trigger')).toBeInTheDocument();
+    expect(screen.getByText('Type is locked when editing')).toBeInTheDocument();
+    expect(screen.getByText('Chat message')).toBeInTheDocument();
+  });
+
+  it('closes the panel via Cancel', async () => {
+    installFetch({ triggers: [columnTrigger()] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Task enters "Backlog"');
+
+    await userEvent.click(screen.getByRole('button', { name: /Add a trigger/ }));
+    expect(await screen.findByText('Trigger type')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByText('Trigger type')).not.toBeInTheDocument());
+  });
+
+  it('reloads the trigger list after the panel reports a successful save', async () => {
+    const fetchSpy = installFetch({ triggers: [] });
+
+    renderPage(<TriggersTab {...baseProps()} />);
+    await screen.findByText('Add your first trigger');
+    const getsBefore = getCallCount(fetchSpy);
+
+    // Open the create panel from an empty-state choice, then submit.
+    await userEvent.click(screen.getByText('Task enters column'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    // onSaved() closes the panel and re-loads the list (a second GET).
+    await waitFor(() => expect(screen.queryByText('Trigger type')).not.toBeInTheDocument());
+    await waitFor(() => expect(getCallCount(fetchSpy)).toBeGreaterThan(getsBefore));
+  });
+});

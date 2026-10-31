@@ -1,0 +1,259 @@
+# Connecting Azure DevOps
+
+Azure DevOps connects per Flow project: one connection names one Azure
+organization and one or more Azure projects inside it. Agents then clone, push,
+open and review pull requests, and read and write Azure Boards work items — in
+those projects and nowhere else.
+
+There are two deployments, and they differ in exactly one thing: **who owns the
+Microsoft Entra application** Flow authenticates as.
+
+| | Aixle SaaS | Self-hosted |
+| --- | --- | --- |
+| The Entra application | Already registered. Aixle owns it and holds its key | You register your own, once |
+| Its credential | Aixle's, never shared | Yours: a certificate you generate |
+| One step in **your** Entra directory | Approving Aixle when you sign in (or `az ad sp create` on the token path) | The same |
+| Connecting inside Flow | Identical | Identical |
+
+Everything below the application is the same on both. If you are on SaaS, skip
+to [Connecting](#connecting-sign-in-with-microsoft).
+
+---
+
+## Self-hosted only: register the application first
+
+Your operator does this once for the whole deployment, not per customer or per
+project. The full runbook is
+[operations/azure-devops-app-registration.md](../operations/azure-devops-app-registration.md);
+the short version:
+
+1. Register a **multi-tenant** application in Entra (Azure portal → App
+   registrations → New registration → *Accounts in any organizational
+   directory*). Single-tenant is a dead end — other directories cannot
+   instantiate it at all.
+2. Give it a **certificate**, not a client secret. Upload the `.crt`; keep the
+   `.key`.
+3. Configure Flow:
+
+   ```bash
+   AZURE_DEVOPS_CLIENT_ID=<application (client) id>
+   AZURE_DEVOPS_PRIVATE_KEY="<the whole PEM, real newlines>"
+   AZURE_DEVOPS_CERT_THUMBPRINT=<SHA-1 from the portal>
+   AZURE_DEVOPS_CREDENTIAL_GENERATION=v1
+   ```
+
+4. For **Sign in with Microsoft**: under **Authentication**, add the web
+   redirect URI `https://<your domain>/integrations/azure_devops/oauth/callback`,
+   and under **API permissions** add **Azure DevOps → user_impersonation**
+   (delegated).
+5. Publish the client id to whoever will connect organizations with a token. It
+   is not a secret; it is how they name the application in `az ad sp create`.
+
+Why a certificate: the application is multi-tenant, so one leaked client secret
+is every connected organization at once. With a certificate the private key
+never leaves your deployment — Entra holds only the public half — and rotation
+means adding a new certificate beside the old one rather than a cutover with a
+window where nothing works.
+
+The **Connect → Azure DevOps** entry does not appear until this is configured.
+There is no separate feature flag: availability is derived from the credential.
+
+---
+
+## Connecting: sign in with Microsoft
+
+**Project → Integrations → Connect → Azure DevOps**, and keep **I administer the
+organization and can sign in with Microsoft**.
+
+1. Type the organization name — the one in `https://dev.azure.com/<organization>`.
+   Flow does not list organizations: what is not listed cannot be browsed by a
+   project member, and a list would reveal which organizations the deployment
+   can already reach.
+2. Press **Sign in with Microsoft** and sign in with an account that
+   administers the organization (a member of **Project Collection
+   Administrators**). Microsoft signs you in to that organization's own
+   directory, and the first time asks you to approve Aixle — that approval is
+   what adds Aixle's application to your directory.
+3. Back in Flow, pick one or more Azure projects.
+4. Review **What agents may do** — see below — and press **Connect**.
+
+In that one request Flow proves the organization is yours, adds its identity to
+it with a **Basic** access level and Contributor rights on the projects you
+picked, grants itself permission to manage its own Service Hooks, and confirms
+it can actually read every project you selected before recording anything. Your
+sign-in is held for a few minutes between the redirect and **Connect**, never
+stored, and not what the connection runs on afterwards.
+
+If your directory lets only administrators approve applications, Microsoft says
+so: ask a Cloud Application Administrator to sign in, or use the token path.
+
+Colleagues connecting further Flow projects against the same organization do
+not sign in — they choose from the Azure projects this connection approved
+(**Already connected for your company? Continue without signing in**).
+
+## Or: an administrator personal access token
+
+For a directory where you cannot approve applications yourself. Choose **I'll
+prove it with an administrator personal access token** in the dialog.
+
+### Let the application exist in your directory
+
+Once per Entra directory, unless someone has already signed in with Microsoft
+for it. A directory administrator runs:
+
+```bash
+az ad sp create --id <client id>
+```
+
+The connect dialog shows the exact command, with this deployment's own client
+id already filled in — copy it from there. It is not printed in this guide on
+purpose: the id differs between the hosted deployment and every self-hosted one,
+and a literal here would send half its readers to create a service principal for
+somebody else's application.
+
+This grants nothing and consents to nothing. It makes the application
+*nameable* in your directory — without it, connecting fails with
+`The client application {appId} is missing a service principal in the tenant`.
+
+### Create the token
+
+Used once, in one request. It is never stored, never logged, and is not what the
+connection runs on afterwards.
+
+In Azure DevOps: **User settings → Personal access tokens → New Token**, scoped
+to the organization you are connecting. Then **Show all scopes** — the three you
+need are not in the short list:
+
+| Scope | What it is spent on |
+| --- | --- |
+| **Member Entitlement Management** (read & write) | Proving you administer the organization, and adding Flow's identity to it |
+| **Project and team** (read) | Listing the Azure projects to choose from |
+| **Security** (manage) | One permission grant, so Flow can manage its own Service Hooks |
+
+The person creating it must be an organization administrator — scopes are a
+ceiling, not a grant. A token with all three from someone outside **Project
+Collection Administrators** is still refused, and says so. Paste it, press
+**Verify organization**, then pick projects and connect as above.
+
+### Why prove anything at all
+
+An application token proves that *the application* can reach an organization.
+With one multi-tenant application serving many customers, that is legitimately
+true for every one of them — so it proves nothing about whether **your** company
+may bind **this** organization. Organization names are short and often public,
+so knowing one proves nothing either.
+
+A Microsoft sign-in or a token closes that gap: both can call an endpoint only an
+organization administrator can call, and a sign-in also has to come from the
+organization's own directory. What survives is the binding it justified, not the
+credential.
+
+## Capabilities
+
+The checkboxes are Flow's own operation profile, not Azure's permissions.
+Unticking one stops the request being sent at all; Azure independently decides
+whether the identity may perform the ones that are sent.
+
+All of them are on by default, including **Complete pull requests**. Merging is
+part of the delivery cycle an agent is here to run, and Azure's branch policies
+are what actually decide whether a merge may happen — Flow never asks to bypass
+one, and refuses to complete a pull request whose source branch moved after the
+agent read it.
+
+Pushing has no checkbox of its own. Git pushes with the same token it clones
+with, so **Clone and push repositories** covers both, and what the identity may
+push is decided by its Azure permissions — **Contribute** and **Create branch**,
+which the project's Contributors group holds.
+
+## Azure Boards
+
+Each Azure project a connection covers becomes a **tracker** on the project's
+**Trackers** page as soon as the connection is made; the first one is the
+project's primary tracker. Agents read and write work items through the task
+tracker tools — the same tools every tracker uses — once those tools are
+attached to a workflow or a step, and only in the Azure projects the connection
+covers. A tracker can be made read-only, or detached, without touching the
+connection.
+
+A workflow can also start from Boards itself: a work item is created, moves to
+a column, is assigned, or gets a comment. **Connect a board column** on the
+Trackers page sets up the common case — add one column such as "Ready for AI"
+to the board, and moving a work item there starts the workflow on a board task
+linked to it. The `workitem.*` Service Hooks this needs are created the first
+time such a trigger is enabled, through the same permission CI gates use, and
+**Test connection** checks and repairs them like the CI ones.
+
+## Adding Azure projects later
+
+The approved set of Azure projects belongs to the **organization binding**,
+which is the company's boundary, not a per-connection preference. Reaching a
+project outside it needs a token again, for the same reason the first one was
+needed: widening the boundary is the same act as establishing it.
+
+Paste a token on the connect screen and the full list of projects you can
+administer is offered, already-approved ones included.
+
+The set selected for a given connection is fixed for that connection's life.
+Adding to it later would silently widen what every attached agent can already
+reach, and removing from it would strand repositories pointing into a project
+the connection no longer covers. Connect again instead.
+
+## What the connection runs as
+
+Operations act as the **application's identity**, not as the person who
+connected it. Pull requests and comments are authored by it, and an employee
+leaving does not revoke it.
+
+Repositories authenticate through a credential helper that fetches a short-lived
+token per git operation, so nothing is written into the checkout or the remote
+URL. Ordinary `git fetch` and `git push` work with no extra step.
+
+## Service Hooks
+
+Flow subscribes to build and pull-request events so a CI gate on a board card
+closes the moment a build finishes rather than on the next reconciliation sweep,
+and, once a Boards trigger waits for them, to the `workitem.*` events that start
+it.
+
+They are provisioned automatically, using the permission granted in step 3, and
+owned by the application — not by the administrator who connected, so their
+leaving does not stop the events. If they cannot be created, the connection
+still works; gates just resolve on the five-minute recovery sweep instead, and
+Boards triggers do not fire.
+
+**Test connection** on the connection's row is the check and the repair. It
+asks Azure for the state of every hook, recreates the ones that are missing,
+were refused or were deleted in Azure, and says how it went: green when every
+hook is in place, red with each hook that is still not delivering and why —
+`permission_denied`, for example, or `probation` when Azure has throttled one
+after failed deliveries.
+
+Azure posts these inbound, so it needs a host it can reach. Flow uses the
+deployment's own domain. Set `AZURE_DEVOPS_WEBHOOK_BASE_URL` only when that
+domain is not reachable from Azure — a tunnel in development. A loopback or
+private host provisions nothing at all, deliberately: Azure would accept such a
+subscription, report it healthy, and fail every delivery in silence.
+
+## Limits
+
+- **Azure DevOps Services on `dev.azure.com`, Git repositories only.** Azure
+  DevOps Server (on-premises), TFVC, Artifacts, Test Plans and Wiki management
+  are out of scope.
+- An organization backed by a **personal Microsoft account**, with no Entra
+  directory behind it, cannot use a service principal at all. Those need the
+  optional personal-access-token mode, which acts as the token's owner and
+  carries that person's permissions.
+- Submodules and Git LFS are untested.
+
+## When something goes wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `missing a service principal in the tenant` | Token path without the directory step, or it ran in the wrong directory | Sign in with Microsoft instead, or `az ad sp create --id <client id>` in *that* directory |
+| *"not valid for organization"* | Wrong, expired, or foreign token. Azure answers a bad token with a redirect to a sign-in page rather than a 401 | A fresh token in that organization |
+| *"cannot administer"* | A real token from someone who is not an organization administrator | A token from someone who can add users to it |
+| *"cannot list its projects"* | The token has no project scope | Add **Project and team (read)** — it is behind *Show all scopes* |
+| *"The Git repository … does not exist or you do not have permissions"* | Almost always a **Stakeholder** license, not a missing repository | Raise the identity to Basic |
+| *"cannot read the chosen projects yet"* | Entitlement is not always instant | Try again shortly; nothing is recorded until the application can actually read them |
+| CI gates always close about ten minutes late | Service Hooks were never provisioned | **Test connection**, which is the retry path |
+| A Boards trigger never fires | Its `workitem.*` Service Hooks are missing, refused or on probation | **Test connection** recreates them, or names the ones Azure still refuses |

@@ -1,0 +1,514 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class WorkflowServiceTest < ActiveSupport::TestCase
+  setup do
+    @user = create(:user, :with_company)
+    @company = @user.companies.first
+    @project = create(:project, owner: @user, company: @company)
+    @workflow = create(:workflow, scope: @project)
+    @step1 = create(:step, workflow: @workflow, position: 1, name: "Step 1")
+    @step2 = create(:step, workflow: @workflow, position: 2, name: "Step 2")
+    @credential = create(:agent_credential, user: @user, company: @company)
+  end
+
+  # == start ==
+
+  test "start refuses a run whose owner has no agent credential in this company" do
+    @credential.destroy!
+    create(:agent_credential, user: @user, company: create(:company_membership, user: @user).company)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).never
+
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+
+    assert_not run.persisted?
+    assert_equal [ "No agent credentials. Connect an agent in Profile settings to run workflows." ],
+                 run.errors.full_messages
+    assert_equal 0, WorkflowRun.count
+  end
+
+  test "start creates workflow run with step runs and starts temporal" do
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true)
+
+    run = WorkflowService.start(
+      workflow: @workflow,
+      project: @project,
+      user: @user, source: :web
+    )
+
+    assert run.persisted?
+    assert_equal @workflow.id, run.workflow_id
+    assert_equal @project.id, run.project_id
+    assert_equal @user.id, run.user_id
+    assert_equal "web", run.source
+    assert_equal 2, run.step_runs.count
+  end
+
+  test "start persists agent_runtime when provided" do
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true)
+
+    run = WorkflowService.start(
+      workflow: @workflow,
+      project: @project,
+      user: @user, source: :web,
+      agent_runtime: "claude_code"
+    )
+
+    assert run.persisted?
+    assert_equal "claude_code", run.agent_runtime
+  end
+
+  test "start with task associates board_task" do
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true)
+
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    task = create(:board_task, board: board, board_column: column)
+
+    run = WorkflowService.start(
+      workflow: @workflow,
+      project: @project,
+      user: @user, source: :web,
+      task: task
+    )
+
+    assert run.persisted?
+    assert_equal task.id, run.board_task_id
+  end
+
+  test "start validates non_interactive mode against step compatibility" do
+    @step1.update!(allow_non_interactive: false)
+
+    run = WorkflowService.start(
+      workflow: @workflow,
+      project: @project,
+      user: @user, source: :web,
+      mode: :non_interactive
+    )
+
+    assert run.errors[:mode].any?
+    assert_not run.persisted?
+  end
+
+  test "start refuses an override that runs a step requiring input automatically, in any mode" do
+    @step2.update!(allow_non_interactive: true)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).never
+
+    runs = %i[mixed non_interactive].map do |mode|
+      WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web, mode: mode,
+                            overrides: { @step1.id.to_s => { "auto_run" => true } })
+    end
+
+    runs.each do |run|
+      assert_not run.persisted?
+      assert_equal [ "Cannot run automatically: steps Step 1 require user interaction" ], run.errors.full_messages
+    end
+  end
+
+  test "start lets an override hold a step that may run automatically for input" do
+    @step1.update!(allow_non_interactive: true)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true)
+
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web, mode: :mixed,
+                                overrides: { @step1.id.to_s => { "auto_run" => false }, @step2.id.to_s => { "auto_run" => false } })
+
+    assert run.persisted?
+  end
+
+  test "start refuses a run that would fail on a reference, and names it" do
+    asset = create(:asset, scope: @project, created_by: @user, name: "brief.md")
+    @step2.update!(instructions: "Read {{asset:#{asset.id}}}.")
+
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+
+    assert_not run.persisted?
+    assert_match(/This workflow would fail: "Step 2" references brief\.md, which is not attached to it\./,
+                 run.errors.full_messages.to_sentence)
+  end
+
+  test "start counts the files picked for the run when a first step needs one" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    @step1.update!(input_asset_specs: [ { "name" => "brief.md" } ])
+    brief = create(:asset, scope: @project, created_by: @user, name: "brief.md")
+
+    refused = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    started = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web, input_asset_ids: [ brief.id ])
+
+    assert_not refused.persisted?
+    assert_includes refused.errors.full_messages.to_sentence, "requires brief.md"
+    assert started.persisted?
+  end
+
+  test "a data-flow check that crashes does not stop a run" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    DataFlow::Check.stubs(:for_workflow).raises(StandardError, "boom")
+
+    assert WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web).persisted?
+  end
+
+  # == cancel ==
+
+  test "cancel sends signal and cancels active step runs" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    run.start! if run.may_start?
+
+    TemporalService.expects(:send_signal).with("workflow-execution-#{run.id}", "workflow_cancelled", nil).once
+
+    WorkflowService.cancel(run: run)
+
+    run.reload
+    assert_equal "cancelled", run.state
+  end
+
+  # The cancellation itself is not the news — the reason is. A session killed by a
+  # spend limit or a lost node has one, and the step is where a user sees it.
+  test "cancel carries the session's diagnosed reason onto the step run" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    TemporalService.stubs(:send_signal)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    run.start! if run.may_start?
+    step_run = run.step_runs.first
+    session = create(:terminal_session, user: @user, project: @project,
+                                        error_message: "You've hit your individual spend limit")
+    step_run.update!(terminal_session: session, state: "running")
+    SessionService.stubs(:cancel)
+
+    WorkflowService.cancel(run: run)
+
+    assert_equal "You've hit your individual spend limit", step_run.reload.error_message
+  end
+
+  test "cancel leaves the step run unexplained when the generic reason is all there is" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    TemporalService.stubs(:send_signal)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    run.start! if run.may_start?
+    step_run = run.step_runs.first
+    session = create(:terminal_session, user: @user, project: @project, error_message: "Workflow cancelled")
+    step_run.update!(terminal_session: session, state: "running")
+    SessionService.stubs(:cancel)
+
+    WorkflowService.cancel(run: run)
+
+    assert_predicate step_run.reload.error_message.to_s, :empty?
+  end
+
+  test "cancel records a workflow_cancelled activity on the task's board" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    TemporalService.stubs(:send_signal)
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    task = create(:board_task, board: board, board_column: column)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web, task: task)
+
+    assert_difference("BoardActivity.count", 1) do
+      WorkflowService.cancel(run: run)
+    end
+
+    activity = BoardActivity.by_event_type(:workflow_cancelled).sole
+    assert_equal task.id, activity.board_task_id
+    assert_equal run.id, activity.metadata["workflow_run_id"]
+  end
+
+  # A run fails when its Temporal execution crashes before the in-flight step
+  # could mark itself. Without the fan-out the step stays "running" behind a
+  # failed run, which get_workflow_run then shows as a live step on a dead run.
+  test "fail marks the run's still-active step runs failed" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    run.start! if run.may_start?
+    step_run = run.step_runs.first
+    step_run.update!(state: "running")
+
+    WorkflowService.fail(run: run)
+
+    assert_equal "failed", run.reload.state
+    assert_equal "failed", step_run.reload.state
+    assert_equal "Run failed while this step was in flight", step_run.error_message
+  end
+
+  test "fail carries the session's diagnosed reason onto the orphaned step run" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    run.start! if run.may_start?
+    step_run = run.step_runs.first
+    session = create(:terminal_session, :failed, user: @user, project: @project,
+                                        error_message: "Session terminated: no output for 30 minutes.")
+    step_run.update!(terminal_session: session, state: "running")
+
+    WorkflowService.fail(run: run)
+
+    assert_equal "failed", step_run.reload.state
+    assert_equal "Session terminated: no output for 30 minutes.", step_run.error_message
+  end
+
+  test "fail leaves an already-completed step run untouched" do
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+    run.start! if run.may_start?
+    step_run = run.step_runs.first
+    step_run.mark_completed!
+
+    WorkflowService.fail(run: run)
+
+    assert_equal "completed", step_run.reload.state
+  end
+
+  # == dispatch (transactional outbox) ==
+
+  test "start marks the run dispatched once Temporal confirms the execution" do
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true)
+
+    run = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+
+    assert_equal "dispatched", run.reload.relay_state
+    assert_equal 1, run.relay_attempts
+    assert_nil run.relay_error
+  end
+
+  # The failure this whole mechanism exists for: TemporalService.start_workflow
+  # answers a failed RPC with { ok: false }, not an exception, so the old code
+  # discarded it and reported a run that would never execute as started.
+  # The run is committed and the relay WILL start it, so the caller is not told
+  # it failed; the outage is reported instead of raised at them.
+  test "start reports a refused start and leaves the run enrolled in the outbox" do
+    TemporalService.stubs(:enabled?).returns(true)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution)
+      .once.returns(ok: false, error: "storage is (re)initializing")
+    Sentry.expects(:capture_exception).with { |e| e.is_a?(WorkflowService::DispatchFailed) && e.message.include?("storage is") }
+
+    returned = WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+
+    run = WorkflowRun.sole
+    assert_equal run, returned
+    assert_equal "pending", run.relay_state
+    assert_equal "pending", run.state
+    assert_equal 1, run.relay_attempts
+    assert_match(/storage is/, run.relay_error)
+  end
+
+  # A run that was never handed to Temporal is worth nothing without its steps
+  # being re-drivable too, so the row has to survive the failed start.
+  test "a run stranded by a failed dispatch keeps its step runs and becomes relay work" do
+    TemporalService.stubs(:enabled?).returns(true)
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: false, error: "unavailable")
+    Sentry.stubs(:capture_exception)
+
+    WorkflowService.start(workflow: @workflow, project: @project, user: @user, source: :web)
+
+    run = WorkflowRun.sole
+    assert_equal 2, run.step_runs.count
+    assert_empty WorkflowRun.stuck_for_relay
+    travel_to(WorkflowRun::RELAY_GRACE.from_now + 1.second) do
+      assert_equal [ run.id ], WorkflowRun.stuck_for_relay.pluck(:id)
+    end
+  end
+
+  # Development and test run with Temporal switched off. Nothing is stranded there
+  # — there is no executor to strand it from, and no relay either, since the relay
+  # is itself a Temporal schedule.
+  test "dispatch! does not raise when the deployment has Temporal switched off" do
+    TemporalService.stubs(:enabled?).returns(false)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: false, error: "Temporal is disabled")
+
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, relay_state: "pending")
+
+    assert_nothing_raised { WorkflowService.dispatch!(run) }
+    assert_equal "pending", run.reload.relay_state
+  end
+
+  test "dispatch! is safe to repeat and settles a run Temporal already had" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, relay_state: "pending")
+    # A rejected duplicate is reported as success: the execution this run needs exists.
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true, workflow_id: "workflow-execution-#{run.id}")
+
+    WorkflowService.dispatch!(run)
+
+    assert_equal "dispatched", run.reload.relay_state
+  end
+
+  # == approve_step ==
+
+  test "approve_step marks completed and sends signal" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "running")
+
+    TemporalService.expects(:send_signal).with("workflow-execution-#{run.id}", "step_completed", step_run.id).once
+
+    WorkflowService.approve_step(step_run: step_run)
+
+    step_run.reload
+    assert_equal "completed", step_run.state
+  end
+
+  # == retry_step ==
+
+  test "retry_step creates new step_run and sends signal when the workflow execution is still open" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "failed", error_message: "Some error")
+
+    TemporalService.stubs(:workflow_open?).with("workflow-execution-#{run.id}").returns(true)
+    TemporalService.expects(:send_signal).with(
+      "workflow-execution-#{run.id}", "step_retried",
+      has_entries("old_step_run_id" => step_run.id, "new_step_run_id" => anything)
+    ).once.returns(ok: true)
+
+    result = nil
+    assert_difference("StepRun.count", 1) do
+      result = WorkflowService.retry_step(step_run: step_run)
+    end
+    assert result[:ok]
+
+    new_step_run = run.step_runs.where(step: @step1).order(:created_at).last
+    assert_equal "pending", new_step_run.state
+    assert_not_equal step_run.id, new_step_run.id
+  end
+
+  test "retry_step starts a brand-new run reusing the original run's params when the workflow execution has already closed" do
+    asset = create(:asset, scope: @project)
+    repository = create(:repository, scope: @project, integration: create(:integration, company: @company))
+    run = create(:workflow_run, :failed, workflow: @workflow, project: @project, user: @user,
+      mode: "interactive", step_overrides: { @step1.id.to_s => { "auto_run" => false } },
+      input_asset_ids: [ asset.id ], repository_ids: [ repository.id ], agent_runtime: "claude_code",
+      shared_context: { "requested_model" => "opus" })
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "failed", error_message: "Some error")
+
+    TemporalService.stubs(:workflow_open?).with("workflow-execution-#{run.id}").returns(false)
+    TemporalService.expects(:send_signal).never
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).once.returns(ok: true)
+
+    result = nil
+    assert_difference("WorkflowRun.count", 1) do
+      result = WorkflowService.retry_step(step_run: step_run)
+    end
+    assert result[:ok]
+
+    new_run = result[:run]
+    assert new_run.persisted?
+    assert_not_equal run.id, new_run.id
+    assert_equal @workflow.id, new_run.workflow_id
+    assert_equal "interactive", new_run.mode
+    assert_equal({ @step1.id.to_s => { "auto_run" => false } }, new_run.step_overrides)
+    assert_equal [ asset.id ], new_run.input_asset_ids
+    assert_equal [ repository.id ], new_run.repository_ids
+    assert_equal "claude_code", new_run.agent_runtime
+    assert_equal "opus", new_run.shared_context["requested_model"]
+    assert_equal "retry", new_run.source
+    assert_equal run, new_run.retried_from_run
+
+    # The old failed run is left exactly as it was.
+    run.reload
+    assert_equal "failed", run.state
+    assert_equal "failed", step_run.reload.state
+  end
+
+  test "retry_step reuses the original run's board_task on the new run" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    task = create(:board_task, board: board, board_column: column)
+    run = create(:workflow_run, :failed, workflow: @workflow, project: @project, user: @user, board_task: task)
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "failed")
+
+    TemporalService.stubs(:workflow_open?).returns(false)
+    TemporalWorkflowRegistry.stubs(:start_workflow_execution).returns(ok: true)
+
+    result = WorkflowService.retry_step(step_run: step_run)
+
+    assert_equal task.id, result[:run].board_task_id
+  end
+
+  test "retry_step returns an error and creates no run when the new run fails validation" do
+    # @step2 doesn't allow_non_interactive and has no override — replaying the
+    # original run's non_interactive mode on a fresh start fails WorkflowService
+    # .start's validate_mode! before anything is persisted or sent to Temporal.
+    run = create(:workflow_run, :failed, workflow: @workflow, project: @project, user: @user, mode: "non_interactive")
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "failed")
+
+    TemporalService.stubs(:workflow_open?).returns(false)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).never
+
+    result = nil
+    assert_no_difference("WorkflowRun.count") do
+      result = WorkflowService.retry_step(step_run: step_run)
+    end
+    refute(result[:ok])
+  end
+
+  test "retry_step refuses to retry a closed run that isn't failed" do
+    run = create(:workflow_run, :cancelled, workflow: @workflow, project: @project, user: @user)
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "failed")
+
+    TemporalService.stubs(:workflow_open?).with("workflow-execution-#{run.id}").returns(false)
+    TemporalWorkflowRegistry.expects(:start_workflow_execution).never
+
+    result = nil
+    assert_no_difference("WorkflowRun.count") do
+      result = WorkflowService.retry_step(step_run: step_run)
+    end
+    refute(result[:ok])
+  end
+
+  test "retry_step discards the new step_run when the signal fails to send" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "failed", error_message: "Some error")
+
+    TemporalService.stubs(:workflow_open?).with("workflow-execution-#{run.id}").returns(true)
+    TemporalService.stubs(:send_signal).returns(ok: false, error: "boom")
+
+    result = nil
+    assert_no_difference("StepRun.count") do
+      result = WorkflowService.retry_step(step_run: step_run)
+    end
+    refute(result[:ok])
+    assert_match(/boom/, result[:error])
+  end
+
+  # == skip_step ==
+
+  test "skip_step marks skipped and sends signal" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1, state: "running")
+
+    TemporalService.expects(:send_signal).with("workflow-execution-#{run.id}", "step_skipped", step_run.id).once
+
+    WorkflowService.skip_step(step_run: step_run, reason: "Not needed")
+
+    step_run.reload
+    assert_equal "skipped", step_run.state
+    assert_equal "Not needed", step_run.skip_reason
+  end
+
+  # == notify_container_finished ==
+
+  test "notify_container_finished sends signal to workflow execution" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1)
+
+    TemporalService.expects(:send_signal).with("workflow-execution-#{run.id}", :container_finished, step_run.id)
+                   .once.returns(ok: true)
+
+    WorkflowService.notify_container_finished(step_run: step_run)
+  end
+
+  test "a container_finished signal an open run never got is reported" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1)
+    TemporalService.stubs(:send_signal).returns(ok: false, error: "unavailable")
+    TemporalService.stubs(:execution_state).with("workflow-execution-#{run.id}").returns(:running)
+    Sentry.expects(:capture_exception).with { |e| e.is_a?(WorkflowService::SignalLost) && e.message.include?("step_run ##{step_run.id}") }
+
+    WorkflowService.notify_container_finished(step_run: step_run)
+  end
+
+  test "a container_finished signal to a run that has already ended is not reported" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @user, state: "running")
+    step_run = create(:step_run, workflow_run: run, step: @step1)
+    TemporalService.stubs(:send_signal).returns(ok: false, error: "workflow execution already completed")
+    TemporalService.stubs(:execution_state).returns(:closed)
+    Sentry.expects(:capture_exception).never
+
+    WorkflowService.notify_container_finished(step_run: step_run)
+  end
+end

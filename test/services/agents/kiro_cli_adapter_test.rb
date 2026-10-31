@@ -1,0 +1,989 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+module Agents
+  class KiroCliAdapterTest < ActiveSupport::TestCase
+    setup do
+      @adapter = KiroCliAdapter.new
+    end
+
+    # Kiro keeps its login in a SQLite database, not a JSON document, and the database
+    # exists from the CLI's first run. These build the three shapes measured on a real
+    # container: a database the CLI merely created, one written while the device code
+    # was on screen but not yet approved, and one from a finished login.
+    def sqlite_blob(payload = "auth_kv page bytes")
+      +"#{KiroCliAdapter::SQLITE_MAGIC}\x10\x00\x01\x01\x00\x40#{payload}"
+        .force_encoding(Encoding::BINARY)
+    end
+
+    # Mid-flow: the device registration is stored as soon as the code is displayed, and
+    # carries no token. Closing the terminal here must NOT persist a credential.
+    def pending_sqlite_blob
+      sqlite_blob("kirocli:odic:device{\"clientId\":\"x\",\"clientSecret\":\"y\"}")
+    end
+
+    # Finished: the token row's OAuth field names and the selected profile's state key
+    # appear verbatim in the file's bytes.
+    def authenticated_sqlite_blob(key: "kirocli:odic:token")
+      sqlite_blob("#{token_row(key)}#{KiroCliAdapter::PROFILE_STATE_KEY}{\"arn\":\"arn:aws:codewhisperer:us-east-1:1:profile/A\"}")
+    end
+
+    # An organisation login stopped at the profile prompt: the token is written, the
+    # profile is not yet.
+    def tokens_without_profile_sqlite_blob
+      sqlite_blob(token_row("kirocli:odic:token"))
+    end
+
+    def token_row(key)
+      "#{key}{\"access_token\":\"aoa...\",\"refresh_token\":\"aor...\"}"
+    end
+
+    # A real SQLite database in the CLI's own layout, for the paths that actually read
+    # it (the bearer, the profile ARN, and the API calls both feed). The byte fixtures
+    # above are enough for the format checks; this is not.
+    def real_state_credentials(profile: true)
+      Tempfile.create([ "kiro-fixture", ".sqlite3" ]) do |file|
+        db = SQLite3::Database.new(file.path)
+        db.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO auth_kv VALUES (?, ?)", [ "kirocli:odic:device-registration",
+                                                          { "client_id" => "cid" }.to_json ])
+        db.execute("INSERT INTO auth_kv VALUES (?, ?)", [ "kirocli:odic:token",
+                                                          { "access_token" => "tok-abc",
+                                                            "refresh_token" => "ref-abc" }.to_json ])
+        if profile
+          db.execute("INSERT INTO state VALUES (?, ?)", [ Agents::KiroCliAdapter::PROFILE_STATE_KEY,
+                                                          { "arn" => "arn:aws:codewhisperer:us-east-1:1234:profile/ABCD",
+                                                            "profile_name" => "KiroProfile-us-east-1" }.to_json ])
+        end
+        db.close
+
+        { "state_b64" => Base64.strict_encode64(File.binread(file.path)) }
+      end
+    end
+
+    # A GetUsageLimits body in the shape a live account returned, trimmed to the fields
+    # that are read. The `…WithPrecision` pair is the point: the plain fields round to
+    # whole credits and read 0 for anything under one.
+    def stub_usage_limits(current_usage:, usage_limit: 10_000.0, overage_status: "DISABLED",
+                          current_overages: 0.0, overage_cap: 10_000.0)
+      body = {
+        "nextDateReset" => 1_790_812_800.0,
+        "overageConfiguration" => { "overageStatus" => overage_status },
+        "subscriptionInfo" => { "subscriptionTitle" => "KIRO POWER" },
+        "usageBreakdownList" => [ {
+          "resourceType" => "CREDIT",
+          "currentUsageWithPrecision" => current_usage,
+          "usageLimitWithPrecision" => usage_limit,
+          "currentOveragesWithPrecision" => current_overages,
+          "overageCapWithPrecision" => overage_cap,
+          "overageRate" => 0.04
+        } ]
+      }
+
+      stub_request(:post, "https://management.us-east-1.kiro.dev/")
+        .with(headers: { "X-Amz-Target" => Agents::KiroCliAdapter::USAGE_LIMITS_TARGET })
+        .to_return(status: 200, body: body.to_json, headers: { "Content-Type" => "application/json" })
+    end
+
+    # A credential whose metadata already carries a credit baseline, so
+    # #collect_credential_metadata does not try to seed one (which would reach the
+    # vendor). Seeding is covered by its own test.
+    def credential_without_metadata
+      AgentCredential.new(metadata: { Agents::KiroCliAdapter::LAST_CREDITS_KEY => 1.0 })
+    end
+
+    def identity_json(sub: "kiro-user-1")
+      { "sub" => sub, "email" => "dev@example.com", "license" => "pro" }.to_json
+    end
+
+    # == Paths ==
+
+    test "home_dir and state paths follow the CLI's own layout" do
+      assert_equal "/home/kiro", @adapter.home_dir
+      assert_equal "/home/kiro/.local/share/kiro-cli/data.sqlite3", @adapter.state_path
+    end
+
+    test "the state database is the whole capture" do
+      assert_equal [ "/home/kiro/.local/share/kiro-cli/data.sqlite3" ], @adapter.auth_file_paths
+    end
+
+    # Neither older watcher mode works here. `__present__` means "the file exists and
+    # is non-empty", and the CLI creates its database on first run — before the user
+    # has entered a device code — so the auth terminal would close mid-login; the
+    # JSON-key mode cannot parse a binary file at all. The byte marker is what the
+    # watcher watches instead, and it must be the token payload's field names rather
+    # than the row key, which is named after the login method the user picked — plus
+    # the selected profile, which an organisation login writes after the token.
+    test "auth completion is detected by the token and profile markers in the database bytes" do
+      assert_equal %w[__contains__:access_token __contains__:refresh_token __contains__:api.codewhisperer.profile],
+                   @adapter.auth_required_keys
+    end
+
+    test "context lands in the steering directory so /workspace stays clean" do
+      assert_equal "/home/kiro/.kiro/steering/aixle-session-context.md", @adapter.context_file_path
+    end
+
+    test "skills install where the skills CLI puts them for the kiro-cli agent" do
+      assert_equal "kiro-cli", @adapter.skills_agent_name
+      assert_equal "/home/kiro/.kiro/skills", @adapter.skills_install_path
+    end
+
+    # The pane only says `[tool] status: Failed: Read File`; why it failed is in the
+    # agent server's transcript and its own log, so both are collected with the session.
+    test "session_log_paths collects the transcripts and the agent server's logs" do
+      assert_equal [ "/var/log/context.log", "/var/log/mitm/http.log",
+                     "/home/kiro/.kiro/sessions/*/sess_*/messages.jsonl",
+                     "/home/kiro/.kiro/sessions/*/sess_*/sub-executions/*.jsonl",
+                     "/home/kiro/.kiro/logs/*/*.log" ], @adapter.session_log_paths
+    end
+
+    # Kiro writes them itself, so the container's write-time filters never scrub them.
+    test "unfiltered_log_paths are the logs Kiro writes itself" do
+      assert_equal [ "/home/kiro/.kiro/sessions/*/sess_*/messages.jsonl",
+                     "/home/kiro/.kiro/sessions/*/sess_*/sub-executions/*.jsonl",
+                     "/home/kiro/.kiro/logs/*/*.log" ], @adapter.unfiltered_log_paths
+    end
+
+    # Every Kiro file has the same basename; the session id and start time sit in the
+    # directory, so they go into the stored name.
+    test "session_log_name folds Kiro's session id and log timestamp into the name" do
+      assert_equal "sess_3fdd2276.messages.jsonl",
+                   @adapter.session_log_name("/home/kiro/.kiro/sessions/c52ddf65/sess_3fdd2276/messages.jsonl")
+      assert_equal "sess_3fdd2276.sub-0b7e5c1a-9f2d.jsonl",
+                   @adapter.session_log_name(
+                     "/home/kiro/.kiro/sessions/c52ddf65/sess_3fdd2276/sub-executions/0b7e5c1a-9f2d.jsonl"
+                   )
+      assert_equal "20261028T135607984-kiro.log",
+                   @adapter.session_log_name("/home/kiro/.kiro/logs/20261028T135607984/kiro.log")
+      assert_equal "20261028T135607984-mcp.log",
+                   @adapter.session_log_name("/home/kiro/.kiro/logs/20261028T135607984/mcp.log")
+    end
+
+    # artifacts["logs/http.log"] is how usage is parsed, so the other logs keep their basename.
+    test "session_log_name keeps the basename for the logs the container writes" do
+      assert_equal "http.log", @adapter.session_log_name("/var/log/mitm/http.log")
+      assert_equal "context.log", @adapter.session_log_name("/var/log/context.log")
+    end
+
+    # == Auth completion ==
+
+    # The database IS the credential, but only once it holds a token. Persisting one
+    # without would leave the runtime looking configured while every session starts
+    # signed out — the bug this gate exists to prevent.
+    test "auth_complete? is true only for a database carrying a token" do
+      assert @adapter.auth_complete?(authenticated_sqlite_blob)
+
+      refute @adapter.auth_complete?(sqlite_blob)
+      refute @adapter.auth_complete?(pending_sqlite_blob)
+      refute @adapter.auth_complete?(identity_json)
+      refute @adapter.auth_complete?("")
+      refute @adapter.auth_complete?("   ")
+      refute @adapter.auth_complete?("not json at all")
+      refute @adapter.auth_complete?("{}")
+    end
+
+    # Saved at this point, every later session fails with "No profile selected", so
+    # the login is not complete until the profile is stored.
+    test "auth_complete? is false for a login stopped at the profile prompt" do
+      refute @adapter.auth_complete?(tokens_without_profile_sqlite_blob)
+    end
+
+    # The row key is named after the login method, so nothing may depend on it.
+    test "auth_complete? does not depend on the credential row's key name" do
+      assert @adapter.auth_complete?(authenticated_sqlite_blob(key: "kirocli:odic:token"))
+      assert @adapter.auth_complete?(authenticated_sqlite_blob(key: "kirocli:social:token"))
+      assert @adapter.auth_complete?(authenticated_sqlite_blob(key: "kirocli:whatever:comes:next"))
+    end
+
+    # == Credential extraction ==
+
+    test "extract_credentials stores the database as a base64 blob that round-trips" do
+      blob = sqlite_blob
+      credentials = @adapter.extract_credentials(blob)
+
+      assert_equal blob, Base64.strict_decode64(credentials["state_b64"])
+    end
+
+    # Only the database is a credential. Anything else the capture hands over — a
+    # stray JSON file, a leftover marker — is not turned into one.
+    test "extract_credentials ignores content that is not the state database" do
+      assert_equal({}, @adapter.extract_credentials(identity_json))
+    end
+
+    test "extract_credentials returns an empty hash when nothing was captured" do
+      assert_equal({}, @adapter.extract_credentials(""))
+      assert_equal({}, @adapter.extract_credentials("{}"))
+      assert_equal({}, @adapter.extract_credentials({ "account" => nil }.to_json))
+    end
+
+    # == Config files ==
+
+    # Straight to the path the CLI reads: every process in an agent container runs as
+    # root, so there is nothing to hand over and no shell prefix on the launch command.
+    test "config_files seeds the login database in place plus an MCP stub to merge into" do
+      files = @adapter.config_files(@adapter.extract_credentials(sqlite_blob))
+
+      assert_equal sqlite_blob, files["/home/kiro/.local/share/kiro-cli/data.sqlite3"]
+      assert_equal({ "mcpServers" => {} }, JSON.parse(files["/home/kiro/.kiro/settings/mcp.json"]))
+    end
+
+    # `chat --trust-all-tools` opens with a blocking confirmation. Interactively that
+    # is one keypress; in a non_interactive workflow step nobody can answer it and the
+    # session sits at `ready` forever. The key and the file are the CLI's own — read
+    # off `kiro-cli settings list --all`, and confirmed by watching cli.json change
+    # after answering the prompt by hand.
+    test "config_files pre-answers the trust-all confirmation the CLI opens with" do
+      settings = JSON.parse(@adapter.config_files({})["/home/kiro/.kiro/settings/cli.json"])
+
+      assert settings["chat.disableTrustAllConfirmation"]
+      assert settings["app.disableAutoupdates"]
+    end
+
+    # Turning the CLI's telemetry off would take the cost figures with it: measured, a
+    # container with the setting false exported nothing but a daily heartbeat, losing
+    # `kiro_cli_credits_consumed`. The export is redirected, not silenced.
+    test "config_files leaves the CLI's telemetry switch alone" do
+      settings = JSON.parse(@adapter.config_files({})["/home/kiro/.kiro/settings/cli.json"])
+
+      refute_includes settings.keys, "telemetry.enabled"
+    end
+
+    test "config_files omits the state file when the credential holds no login" do
+      refute_includes @adapter.config_files({}).keys, "/home/kiro/.local/share/kiro-cli/data.sqlite3"
+    end
+
+    test "config_files survives a credential whose stored blob is not valid base64" do
+      files = @adapter.config_files({ "state_b64" => "!!not base64!!" })
+
+      refute_includes files.keys, "/home/kiro/.local/share/kiro-cli/data.sqlite3"
+      assert_includes files.keys, "/home/kiro/.kiro/settings/mcp.json"
+    end
+
+    # == Credential delivery ==
+
+    STATE_PATH = "/home/kiro/.local/share/kiro-cli/data.sqlite3"
+    HANDOFF_PATH = "/home/kiro/.local/share/kiro-cli/.aixle-token-handoff.json"
+
+    # A state database as a running container holds it: the login row plus a row the CLI
+    # wrote after launch, which a delivery must not take away.
+    def state_db(access_token:, expires_at:, key: "kirocli:social:token")
+      Tempfile.create([ "kiro-state", ".sqlite3" ]) do |file|
+        db = SQLite3::Database.new(file.path)
+        db.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO auth_kv VALUES (?, ?)", [ key, { "access_token" => access_token,
+                                                                 "refresh_token" => "rt-#{access_token}",
+                                                                 "expires_at" => expires_at }.to_json ])
+        db.execute("INSERT INTO state VALUES ('chat.lastConversation', 'since-launch')")
+        db.close
+        File.binread(file.path)
+      end
+    end
+
+    def credentials_from(blob) = { "state_b64" => Base64.strict_encode64(blob) }
+
+    def row_in(blob, sql)
+      Tempfile.create([ "kiro-read", ".sqlite3" ]) do |file|
+        File.binwrite(file.path, blob)
+        db = SQLite3::Database.new(file.path)
+        db.get_first_value(sql).tap { db.close }
+      end
+    end
+
+    def held_token(runtime)
+      JSON.parse(row_in(runtime.fs[STATE_PATH], "SELECT value FROM auth_kv"))
+    end
+
+    def kiro_runtime(container_token: "at-old", container_expiry: "2026-09-25T05:48:24.123456Z", key: "kirocli:social:token")
+      ContainerRuntime::FakeRuntime.new(agent_type: "kiro_cli").tap do |runtime|
+        runtime.fs[STATE_PATH] = state_db(access_token: container_token, expires_at: container_expiry, key: key)
+      end
+    end
+
+    # The file a delivery would write is the database the CLI holds open.
+    test "credential_files never hands over the state database" do
+      assert_empty @adapter.credential_files(real_state_credentials)
+    end
+
+    test "deliver_credential swaps the refreshed token into the container's database and keeps the rest" do
+      runtime = kiro_runtime
+      credentials = credentials_from(state_db(access_token: "at-new", expires_at: "2026-09-25T06:01:02Z"))
+
+      assert @adapter.deliver_credential(runtime, "ctr-1", credentials)
+
+      assert_equal "at-new", held_token(runtime)["access_token"]
+      assert_equal "rt-at-new", held_token(runtime)["refresh_token"]
+      assert_equal "since-launch", row_in(runtime.fs[STATE_PATH], "SELECT value FROM state")
+      refute runtime.fs.key?(HANDOFF_PATH), "the handoff file carries the token and must not outlive the swap"
+      assert_equal 0o600, runtime.file_attributes(HANDOFF_PATH)[:mode]
+    end
+
+    # The CLI renews on its own inside the container; ours is then the older token.
+    test "deliver_credential keeps a token the container has already renewed further" do
+      runtime = kiro_runtime(container_token: "at-container", container_expiry: "2026-09-25T07:00:00Z")
+      credentials = credentials_from(state_db(access_token: "at-new", expires_at: "2026-09-25T06:01:02Z"))
+
+      assert @adapter.deliver_credential(runtime, "ctr-1", credentials)
+      assert_equal "at-container", held_token(runtime)["access_token"]
+    end
+
+    test "deliver_credential fails rather than adding a login row the container does not have" do
+      runtime = kiro_runtime(key: "kirocli:odic:token")
+      credentials = credentials_from(state_db(access_token: "at-new", expires_at: "2026-09-25T06:01:02Z"))
+
+      assert_equal false, @adapter.deliver_credential(runtime, "ctr-1", credentials) # rubocop:disable Minitest/RefuteFalse
+      assert_equal "at-old", held_token(runtime)["access_token"]
+      refute runtime.fs.key?(HANDOFF_PATH)
+    end
+
+    test "a credential without a login has nothing to deliver" do
+      assert_equal false, @adapter.credential_deliverable?({}) # rubocop:disable Minitest/RefuteFalse
+      assert @adapter.credential_deliverable?(real_state_credentials)
+    end
+
+    test "auth_setup_files seeds the shared Kiro settings before the login runs" do
+      assert_includes @adapter.auth_setup_files.keys, "/home/kiro/.kiro/settings/mcp.json"
+    end
+
+    # V3 asks before anything not explicitly allowed, and nobody can answer that in a
+    # non_interactive workflow step. The policy is the engine's own way of saying "the
+    # container is the sandbox", rather than leaning on --trust-all-tools surviving the
+    # V2→V3 transition.
+    test "both containers get a permissions policy that allows every capability" do
+      [ @adapter.config_files({}), @adapter.auth_setup_files ].each do |files|
+        policy = YAML.safe_load(files["/home/kiro/.kiro/settings/permissions.yaml"])
+
+        assert_equal [ { "capability" => "all", "effect" => "allow" } ], policy["rules"]
+      end
+    end
+
+    # The login terminal gets the same pre-answers, so it cannot self-update mid-flow.
+    test "auth_setup_files carries the CLI settings into the login terminal" do
+      settings = JSON.parse(@adapter.auth_setup_files["/home/kiro/.kiro/settings/cli.json"])
+
+      assert settings["app.disableAutoupdates"]
+    end
+
+    # == Session command ==
+
+    # No shell prefix: the login database is seeded at its real path, so the command is
+    # the CLI and nothing else. --v3 selects Kiro's current engine, which is still
+    # opt-in as of CLI 2.21.0 and has to come before the subcommand.
+    test "session_command launches the V3 engine with no shell plumbing around it" do
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace", @adapter.session_command(mode: "interactive")
+    end
+
+    test "session_command shell-escapes the requested model" do
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace --model claude-sonnet-5",
+                   @adapter.session_command(mode: "interactive", model: "claude-sonnet-5")
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace --model a\\ b\\;rm",
+                   @adapter.session_command(mode: "interactive", model: "a b;rm")
+    end
+
+    test "session_command passes the reasoning effort as --effort" do
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace --model claude-opus-5.5 --effort high",
+                   @adapter.session_command(mode: "interactive", model: "claude-opus-5.5", effort: "high")
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace --effort max",
+                   @adapter.session_command(mode: "non_interactive", effort: "max")
+    end
+
+    test "session_command adds no effort flag when none is set" do
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace",
+                   @adapter.session_command(mode: "interactive", effort: nil)
+    end
+
+    # The command travels inside a single-quoted `tmux send-keys` argument
+    # (AgentBaseStrategy#send_tmux_sequence), where one quote would end it early and
+    # leave the CLI unlaunched.
+    test "session_command contains no single quotes" do
+      refute_includes @adapter.session_command(mode: "interactive"), "'"
+      refute_includes @adapter.session_command(mode: "non_interactive"), "'"
+    end
+
+    # The V3 TUI takes the prompt AgentSessionStrategy appends as its first message, so
+    # an automatic session keeps a terminal worth watching instead of going headless.
+    test "session_command runs the TUI for an automatic session too" do
+      assert_equal "kiro-cli --v3 chat --trust-all-tools --trust-workspace",
+                   @adapter.session_command(mode: "non_interactive")
+    end
+
+    # == MCP ==
+
+    test "mcp_config writes stdio and remote servers into the user-scope mcp.json" do
+      stdio = OpenStruct.new(name: "Local Tools", transport: "stdio", command: "npx",
+                             args: [ "-y", "server" ], env_vars: { "TOKEN" => "t" }, url: nil, headers: nil)
+      remote = OpenStruct.new(name: "Aixle Tools", transport: "http", command: nil, args: nil,
+                              url: "https://example.test/mcp", headers: { "Authorization" => "Bearer x" })
+
+      files = @adapter.mcp_config([ stdio, remote ])
+      servers = JSON.parse(files["/home/kiro/.kiro/settings/mcp.json"])["mcpServers"]
+
+      local = servers[MCPServer.config_key_for("Local Tools")]
+      assert_equal "npx", local["command"]
+      assert_equal [ "-y", "server" ], local["args"]
+      refute local["disabled"]
+
+      hosted = servers[MCPServer.config_key_for("Aixle Tools")]
+      assert_equal "https://example.test/mcp", hosted["url"]
+      assert_equal({ "Authorization" => "Bearer x" }, hosted["headers"])
+      # Kiro infers the transport from which of url/command is present — a type field
+      # would be a field the CLI does not read.
+      refute hosted.key?("type")
+    end
+
+    # Kiro's V3 agent refuses a plain-HTTP MCP server whose host is not loopback, and
+    # refuses it SILENTLY — the server just never appears among the agent's tools, which
+    # is how a session ends up unable to call finish_session. Measured against 2.21.3:
+    # `http://web:4002` yielded "Power 'aixle-tools' is not installed", the same server
+    # on `http://localhost:4002` yielded mcp_aixle_tools_finish_session. The CLI's own
+    # message is "host must be 127.0.0.1 or localhost, got `web`".
+    test "mcp_config points an internal HTTP server at the container's loopback forward" do
+      internal = OpenStruct.new(name: "Aixle Tools", transport: "http", command: nil, args: nil,
+                                url: "http://web:4002/action_mcp", headers: { "X-Session-Key" => "k" })
+
+      servers = JSON.parse(@adapter.mcp_config([ internal ])["/home/kiro/.kiro/settings/mcp.json"])["mcpServers"]
+      entry = servers[MCPServer.config_key_for("Aixle Tools")]
+
+      assert_equal "http://localhost:4002/action_mcp", entry["url"]
+      # The path and headers are the session's credential — only the host may move.
+      assert_equal({ "X-Session-Key" => "k" }, entry["headers"])
+    end
+
+    # An HTTPS server needs no forwarding, and a URL that is already loopback must not be
+    # rewritten onto a different port.
+    test "mcp_config leaves servers Kiro already accepts alone" do
+      [ "https://mcp.example.test/action_mcp", "http://localhost:9999/action_mcp" ].each do |url|
+        server = OpenStruct.new(name: "Remote", transport: "http", command: nil, args: nil, url: url, headers: nil)
+        servers = JSON.parse(@adapter.mcp_config([ server ])["/home/kiro/.kiro/settings/mcp.json"])["mcpServers"]
+
+        assert_equal url, servers[MCPServer.config_key_for("Remote")]["url"]
+      end
+    end
+
+    # The forward is what makes the loopback URL resolve, so the container is told where
+    # to send it. Every deployment of this platform serves MCP over internal HTTP.
+    test "default_env_vars asks the container to forward the platform's MCP service" do
+      session = build(:terminal_session, agent_type: "kiro_cli", route_token: "tok-1")
+
+      env = @adapter.default_env_vars(session)
+
+      assert_equal "4002", env["MCP_FORWARD_PORT"]
+      assert_equal URI.parse(Settings.mcp.server_url).then { |u| "#{u.host}:#{u.port}" }, env["MCP_FORWARD_TARGET"]
+    end
+
+    test "mcp config merges into the shared IDE/CLI document rather than replacing it" do
+      assert_equal :merge_json, @adapter.mcp_merge_strategy
+      assert_equal "/home/kiro/.kiro/settings/mcp.json", @adapter.mcp_config_path
+    end
+
+    # == Environment ==
+
+    # A KIRO_API_KEY left in the environment is a credential for a different account,
+    # and this runtime never holds one — every login here is the device-code flow.
+    test "conflicting_env_keys always drops a stray API key" do
+      assert_equal %w[KIRO_API_KEY], @adapter.conflicting_env_keys({})
+      assert_equal %w[KIRO_API_KEY], @adapter.conflicting_env_keys({ "state_b64" => "x" })
+    end
+
+    # The sweep reads the expiry off every credential it considers, including ones the
+    # capture never filled in — a blob that is not a readable database has to answer
+    # "no expiry" rather than raise inside the sweep.
+    test "an unreadable state blob carries no expiry" do
+      assert_nil @adapter.token_expires_at(@adapter.extract_credentials(sqlite_blob))
+    end
+
+    test "kiro_cli is in the refreshable set — the sweep has to select it" do
+      assert_includes AgentCredential.refreshable_agent_types, "kiro_cli"
+      assert_equal :server, @adapter.credential_lifecycle[:refresh]
+    end
+
+    # == Telemetry (the primary cost source) ==
+
+    # The CLI's OTLP export goes wherever it is pointed, so it is pointed here — and
+    # `OTEL_RESOURCE_ATTRIBUTES` is what lets UsageStatisticsService route a batch back
+    # to the session that produced it (honoured by the CLI's SDK, verified on 2.21.3).
+    test "default_env_vars redirects the CLI's telemetry at the platform collector" do
+      session = build(:terminal_session, agent_type: "kiro_cli", route_token: "tok-123")
+
+      env = @adapter.default_env_vars(session)
+
+      assert_equal "1", env["KIRO_TELEMETRY_OTEL"]
+      assert_equal Settings.otel.endpoint, env["KIRO_TELEMETRY_OTLP_ENDPOINT"]
+      assert_equal "terminal_session_token=tok-123,terminal_session_key=#{UsageStatistics::SessionKey.generate('tok-123')}",
+                   env["OTEL_RESOURCE_ATTRIBUTES"]
+      # Measured: this one stops the export altogether, cost figures included.
+      refute_includes env.keys, "KIRO_DISABLE_TELEMETRY"
+    end
+
+    # One OTLP batch in the exact shape the platform's collector forwards, taken from a
+    # live session: a DELTA sum, credits in `asDouble`, `terminal_session_token` on the
+    # resource and `model`/`session_id` on the data point.
+    def otlp_credits_payload(token:, credits: 0.045368, model: "claude-opus-5",
+                             temporality: "AGGREGATION_TEMPORALITY_DELTA")
+      {
+        "resourceMetrics" => [ {
+          "resource" => { "attributes" => [
+            { "key" => "service.name", "value" => { "stringValue" => "kiro-cli" } },
+            { "key" => "terminal_session_token", "value" => { "stringValue" => token } }
+          ] },
+          "scopeMetrics" => [ { "metrics" => [ {
+            "name" => Agents::KiroCliAdapter::CREDITS_METRIC,
+            "sum" => {
+              "aggregationTemporality" => temporality,
+              "isMonotonic" => true,
+              "dataPoints" => [ {
+                "attributes" => [
+                  { "key" => "model", "value" => { "stringValue" => model } },
+                  { "key" => "session_id", "value" => { "stringValue" => "sess_abc" } },
+                  { "key" => "request_id", "value" => { "stringValue" => "req_1" } }
+                ],
+                "timeUnixNano" => "1789155921186145148",
+                "asDouble" => credits
+              } ]
+            }
+          } ] } ]
+        } ]
+      }
+    end
+
+    def kiro_session_with_credential(rate: 0.04, token: "tok-otel")
+      company = create(:company)
+      user = create(:user, company: company)
+      create(:agent_credential, user: user, company: company, agent_type: "kiro_cli",
+                                metadata: { Agents::KiroCliAdapter::CREDIT_RATE_KEY => rate })
+      create(:terminal_session, user: user, agent_type: "kiro_cli", route_token: token)
+    end
+
+    test "ingest_usage prices a telemetry batch and attributes it to the session" do
+      session = kiro_session_with_credential
+
+      assert_equal :ok, @adapter.ingest_usage(otlp_credits_payload(token: "tok-otel"), session)
+
+      stat = session.reload.usage_statistic
+      assert_equal [ "claude-opus-5" ], stat.models
+      assert_in_delta 0.1814, stat.total_cents_precise.to_f, 0.001
+      assert_equal 0, stat.input_tokens
+      event = stat.events_data.sole
+      assert_in_delta 0.045368, event["creditsUsed"]
+      assert_equal "otlp_credits_consumed", event["source"]
+    end
+
+    # DELTA batches are new spend, so two of them add up rather than replacing.
+    test "ingest_usage accumulates successive telemetry batches" do
+      session = kiro_session_with_credential
+
+      @adapter.ingest_usage(otlp_credits_payload(token: "tok-otel", credits: 0.1), session)
+      @adapter.ingest_usage(otlp_credits_payload(token: "tok-otel", credits: 0.2), session)
+
+      assert_in_delta 1.2, session.reload.usage_statistic.total_cents_precise.to_f, 0.001
+    end
+
+    # A cumulative sum restates the total each time. Adding those up would multiply the
+    # bill, so an unfamiliar temporality is ignored rather than guessed at.
+    test "ingest_usage ignores a sum that is not delta temporality" do
+      session = kiro_session_with_credential
+      payload = otlp_credits_payload(token: "tok-otel", temporality: "AGGREGATION_TEMPORALITY_CUMULATIVE")
+
+      assert_equal :accepted, @adapter.ingest_usage(payload, session)
+      assert_nil session.reload.usage_statistic
+    end
+
+    # Batches are routed by resource attribute; another session's must not land here.
+    test "ingest_usage ignores a batch belonging to another session" do
+      session = kiro_session_with_credential
+
+      assert_equal :accepted, @adapter.ingest_usage(otlp_credits_payload(token: "someone-else"), session)
+      assert_nil session.reload.usage_statistic
+    end
+
+    # "unknown" is what the CLI sends when the turn ran on the account default, and it
+    # is not a model name anyone should see in the UI.
+    test "ingest_usage drops the placeholder model the CLI sends for a default run" do
+      session = kiro_session_with_credential
+
+      @adapter.ingest_usage(otlp_credits_payload(token: "tok-otel", model: "unknown"), session)
+
+      assert_empty session.reload.usage_statistic.models
+    end
+
+    # == Model catalogue ==
+
+    # Asking the CLI is the only reliable route: which service serves the catalogue
+    # depends on the engine the account is on, and on a v3 account CodeWhisperer's
+    # ListAvailableModels answers 403 while the CLI returns a fuller list.
+    test "collect_credential_metadata asks the CLI for the catalogue" do
+      runtime = ContainerRuntime::FakeRuntime.new(agent_type: "kiro_cli")
+      container = runtime.resolve_container("abc123")
+
+      extras = @adapter.collect_credential_metadata(runtime, container, credential_without_metadata, :session)
+
+      assert_equal %w[kiro_models], extras.keys
+      assert_equal %w[auto claude-opus-5 qwen3-coder-next], extras["kiro_models"].map { |m| m["model_id"] }
+      assert_includes runtime.execs.map { |cmd| Array(cmd).join(" ") }, "kiro-cli --v3 chat --list-models --format json"
+    end
+
+    test "collect_credential_metadata writes nothing when the CLI cannot answer" do
+      runtime = ContainerRuntime::FakeRuntime.new(agent_type: "kiro_cli")
+      runtime.fail_exec("--list-models", stderr: "not logged in", exit_code: 1)
+
+      assert_empty @adapter.collect_credential_metadata(runtime, runtime.resolve_container("abc123"), credential_without_metadata, :session)
+    end
+
+    # The picker reads what the CLI reported, in the CLI's own snake_case.
+    test "fetch_available_models prefers the captured catalogue" do
+      credential = AgentCredential.new(metadata: { "kiro_models" => [
+        { "model_id" => "claude-opus-5", "model_name" => "claude-opus-5", "description" => "Claude Opus 5",
+          "context_window_tokens" => 1_000_000, "rate_multiplier" => 2.2, "rate_unit" => "Credit" }
+      ] })
+
+      models = @adapter.fetch_available_models({}, credential: credential)
+
+      assert_equal 1, models.size
+      assert_equal "claude-opus-5", models.first[:model_id]
+      assert_equal "2.2x credits · 1000000 input tokens · Claude Opus 5", models.first[:description]
+    end
+
+    # Fallback for a credential captured before the CLI was ever asked. The API answers
+    # camelCase and nests the context window, so the same entry arrives in a different
+    # shape than the CLI's.
+    test "fetch_available_models falls back to the API, reading its camelCase shape" do
+      stub_request(:post, "https://management.us-east-1.kiro.dev/")
+        .with(headers: { "X-Amz-Target" => Agents::KiroCliAdapter::LIST_MODELS_TARGET })
+        .to_return(status: 200, body: { "models" => [
+          { "modelId" => "claude-sonnet-4.5", "modelName" => "claude-sonnet-4.5", "description" => "Sonnet 4.5",
+            "rateMultiplier" => 1.3, "rateUnit" => "Credit", "tokenLimits" => { "maxInputTokens" => 200_000 } }
+        ] }.to_json, headers: { "Content-Type" => "application/json" })
+
+      models = @adapter.fetch_available_models(real_state_credentials, credential: nil)
+
+      assert_equal 1, models.size
+      assert_equal "claude-sonnet-4.5", models.first[:model_id]
+      assert_equal "1.3x credits · 200000 input tokens · Sonnet 4.5", models.first[:description]
+    end
+
+    # Cost is a delta, so without a baseline the very first session reports nothing.
+    # The baseline is seeded once, at login, from the auth container.
+    test "collect_credential_metadata seeds the credit baseline for a new credential" do
+      stub_usage_limits(current_usage: 12.5)
+      runtime = ContainerRuntime::FakeRuntime.new(agent_type: "kiro_cli")
+      credential = AgentCredential.new(config_data: real_state_credentials, metadata: {})
+
+      extras = @adapter.collect_credential_metadata(runtime, runtime.resolve_container("abc123"), credential, :auth)
+
+      assert_in_delta 12.5, extras[Agents::KiroCliAdapter::LAST_CREDITS_KEY]
+    end
+
+    # #collect_usage owns the key after login, and this hook runs BEFORE it during
+    # session cleanup — seeding there would make that very session measure zero.
+    test "collect_credential_metadata seeds no baseline at the end of a session" do
+      runtime = ContainerRuntime::FakeRuntime.new(agent_type: "kiro_cli")
+      credential = AgentCredential.new(config_data: real_state_credentials, metadata: {})
+
+      extras = @adapter.collect_credential_metadata(runtime, runtime.resolve_container("abc123"), credential, :session)
+
+      assert_equal %w[kiro_models], extras.keys
+    end
+
+    test "collect_credential_metadata never overwrites an existing credit baseline" do
+      runtime = ContainerRuntime::FakeRuntime.new(agent_type: "kiro_cli")
+      credential = AgentCredential.new(config_data: real_state_credentials,
+                                       metadata: { Agents::KiroCliAdapter::LAST_CREDITS_KEY => 3.0 })
+
+      extras = @adapter.collect_credential_metadata(runtime, runtime.resolve_container("abc123"), credential, :auth)
+
+      refute extras.key?(Agents::KiroCliAdapter::LAST_CREDITS_KEY)
+    end
+
+    # == Subscription usage (the profile card) ==
+
+    # Kiro has no rolling windows like Claude's five-hour bucket — one credit allowance
+    # per billing period — and a plan measured in credits is only useful with the counts
+    # alongside the percentage.
+    test "fetch_subscription_usage reports the credit allowance with its raw counts" do
+      stub_usage_limits(current_usage: 2500.0, usage_limit: 10_000.0)
+
+      usage = @adapter.fetch_subscription_usage(real_state_credentials)
+
+      assert_equal "ok", usage[:status]
+      window = usage[:windows].sole
+      assert_equal "kiro_credits", window[:key]
+      assert_in_delta 25.0, window[:utilization]
+      assert_in_delta 2500.0, window[:used]
+      assert_in_delta 10_000.0, window[:limit]
+      assert_equal "credits", window[:unit]
+      assert_equal "KIRO POWER", window[:plan]
+    end
+
+    # An account with pay-as-you-go switched off still reports a cap. Showing it would
+    # read as headroom the user does not have.
+    test "fetch_subscription_usage omits overage while it is disabled" do
+      stub_usage_limits(current_usage: 1.0, overage_status: "DISABLED")
+
+      assert_nil @adapter.fetch_subscription_usage(real_state_credentials)[:extra_usage]
+    end
+
+    test "fetch_subscription_usage reports overage once the account enables it" do
+      stub_usage_limits(current_usage: 1.0, overage_status: "ENABLED", current_overages: 40.0, overage_cap: 200.0)
+
+      extra = @adapter.fetch_subscription_usage(real_state_credentials)[:extra_usage]
+
+      assert extra[:enabled]
+      assert_in_delta 20.0, extra[:utilization]
+      assert_in_delta 40.0, extra[:used_credits]
+      assert_in_delta 200.0, extra[:monthly_limit]
+    end
+
+    # The two halves of the credential live in two tables: the token in `auth_kv`, the
+    # profile ARN — which every call must carry, and which names the region they go to —
+    # in `state`. Reading only the token yields a record the API rejects.
+    test "the bearer and the profile ARN are read from their separate tables" do
+      record = @adapter.send(:auth_record, Base64.strict_decode64(real_state_credentials["state_b64"]))
+
+      assert_equal "tok-abc", record["access_token"]
+      assert_equal "arn:aws:codewhisperer:us-east-1:1234:profile/ABCD", record["profile_arn"]
+    end
+
+    def stub_available_profiles(*arns)
+      stub_request(:post, "https://management.us-east-1.kiro.dev/")
+        .with(headers: { "X-Amz-Target" => Agents::KiroCliAdapter::LIST_PROFILES_TARGET })
+        .to_return(status: 200, headers: { "Content-Type" => "application/json" },
+                   body: { "profiles" => arns.map { |arn| { "arn" => arn, "profileName" => "KiroProfile" } } }.to_json)
+    end
+
+    test "a login that stored no profile reads usage with the one its account has" do
+      stub_available_profiles("arn:aws:codewhisperer:us-east-1:5678:profile/IDC")
+      stub_usage_limits(current_usage: 3503.2)
+
+      result = @adapter.fetch_subscription_usage(real_state_credentials(profile: false))
+
+      assert_equal "ok", result[:status]
+      assert_requested(:post, "https://management.us-east-1.kiro.dev/",
+                       headers: { "X-Amz-Target" => Agents::KiroCliAdapter::USAGE_LIMITS_TARGET }) do |request|
+        JSON.parse(request.body)["profileArn"] == "arn:aws:codewhisperer:us-east-1:5678:profile/IDC"
+      end
+    end
+
+    test "a login that stored no profile does not guess between several" do
+      stub_available_profiles("arn:aws:codewhisperer:us-east-1:1:profile/A", "arn:aws:codewhisperer:us-east-1:2:profile/B")
+      usage = stub_usage_limits(current_usage: 1.0)
+
+      assert_equal({ status: "unavailable" }, @adapter.fetch_subscription_usage(real_state_credentials(profile: false)))
+      assert_not_requested usage
+    end
+
+    # == Completing a login captured before the CLI stored its profile ==
+
+    def stored_profile_row(credential)
+      Tempfile.create([ "kiro-read", ".sqlite3" ]) do |file|
+        file.binmode
+        file.write(Base64.strict_decode64(credential.reload.config_data["state_b64"]))
+        file.flush
+        db = SQLite3::Database.new(file.path)
+        value = db.get_first_value("SELECT value FROM state WHERE key = ?", [ Agents::KiroCliAdapter::PROFILE_STATE_KEY ])
+        db.close
+        value && JSON.parse(value)
+      end
+    end
+
+    test "a login that stored no profile gets the one its account has, in the CLI's own shape" do
+      stub_available_profiles("arn:aws:codewhisperer:us-east-1:5678:profile/IDC")
+      credential = credential_for(real_state_credentials(profile: false))
+
+      assert @adapter.repair_credential!(credential)
+
+      assert_equal({ "arn" => "arn:aws:codewhisperer:us-east-1:5678:profile/IDC", "profile_name" => "KiroProfile" },
+                   stored_profile_row(credential))
+      assert_equal "tok-abc", stored_token(credential)["access_token"]
+    end
+
+    test "a login that stored its profile is left alone" do
+      profiles = stub_available_profiles("arn:aws:codewhisperer:us-east-1:5678:profile/IDC")
+      credential = credential_for(real_state_credentials)
+
+      assert_not @adapter.repair_credential!(credential)
+
+      assert_equal "arn:aws:codewhisperer:us-east-1:1234:profile/ABCD", stored_profile_row(credential)["arn"]
+      assert_not_requested profiles
+    end
+
+    test "a login is not completed with a guess between several profiles" do
+      stub_available_profiles("arn:aws:codewhisperer:us-east-1:1:profile/A", "arn:aws:codewhisperer:us-east-1:2:profile/B")
+      credential = credential_for(real_state_credentials(profile: false))
+
+      assert_not @adapter.repair_credential!(credential)
+
+      assert_nil stored_profile_row(credential)
+    end
+
+    test "a login stays as it is when the control plane does not answer" do
+      stub_request(:post, "https://management.us-east-1.kiro.dev/").to_return(status: 500, body: "{}")
+      credential = credential_for(real_state_credentials(profile: false))
+
+      assert_not @adapter.repair_credential!(credential)
+
+      assert_nil stored_profile_row(credential)
+    end
+
+    # == Token refresh ==
+
+    # A credential in the CLI's own layout for the refresh paths: a token that is about
+    # to expire, and the client registration an IdC refresh has to be signed with. The
+    # row KEY decides which endpoint is used, so it is a parameter here.
+    def refreshable_credentials(key: "kirocli:odic:token", expires_at: 2.minutes.from_now.utc.iso8601,
+                                registration: { "client_id" => "cid", "client_secret" => "sec", "region" => "us-west-2" })
+      Tempfile.create([ "kiro-refresh", ".sqlite3" ]) do |file|
+        db = SQLite3::Database.new(file.path)
+        db.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO auth_kv VALUES (?, ?)",
+                   [ "kirocli:odic:device-registration", registration.to_json ]) if registration.present?
+        db.execute("INSERT INTO auth_kv VALUES (?, ?)", [ key, {
+          "access_token" => "old-access", "refresh_token" => "old-refresh",
+          "expires_at" => expires_at, "profile_arn" => "arn:aws:codewhisperer:us-east-1:1234:profile/ABCD"
+        }.to_json ])
+        db.close
+
+        { "state_b64" => Base64.strict_encode64(File.binread(file.path)) }
+      end
+    end
+
+    def credential_for(config_data)
+      create(:agent_credential, :kiro_cli, config_data: config_data)
+    end
+
+    # The stored row the CLI will read next time, after a refresh.
+    def stored_token(credential)
+      blob = Base64.strict_decode64(credential.reload.config_data["state_b64"])
+      @adapter.send(:auth_record, blob)
+    end
+
+    # The expiry has to be visible for the sweep to select this credential at all —
+    # `refresh_due` skips rows whose expires_at is NULL.
+    test "token_expires_at reads the row's ISO8601 expiry" do
+      expiry = 45.minutes.from_now.utc.iso8601
+      ms = @adapter.token_expires_at(refreshable_credentials(expires_at: expiry))
+
+      assert_in_delta Time.zone.parse(expiry).to_f * 1000, ms, 1000
+    end
+
+    # The database comes back from the container, so it is not opened on trust.
+    test "a stored state that is not a SQLite database is not opened" do
+      assert_nil @adapter.token_expires_at({ "state_b64" => Base64.strict_encode64("not a database") })
+    end
+
+    test "a corrupt state database is refused rather than read" do
+      blob = Base64.strict_decode64(refreshable_credentials["state_b64"])
+      corrupt = blob.byteslice(0, 100) + ("\xFF".b * (blob.bytesize - 100))
+
+      assert_nil @adapter.token_expires_at({ "state_b64" => Base64.strict_encode64(corrupt) })
+    end
+
+    test "a refresh will not write into a database whose token table carries triggers" do
+      blob = Base64.strict_decode64(refreshable_credentials(key: "kirocli:social:token")["state_b64"])
+      rigged = Tempfile.create([ "kiro-rigged", ".sqlite3" ]) do |file|
+        File.binwrite(file.path, blob)
+        db = SQLite3::Database.new(file.path)
+        db.execute("CREATE TABLE loot (value TEXT)")
+        db.execute("CREATE TRIGGER copy AFTER UPDATE ON auth_kv BEGIN INSERT INTO loot VALUES (new.value); END")
+        db.close
+        File.binread(file.path)
+      end
+      credential = credential_for({ "state_b64" => Base64.strict_encode64(rigged) })
+      stub_request(:post, Agents::KiroCliAdapter::SOCIAL_REFRESH_URL)
+        .to_return(status: 200, body: { accessToken: "new-access", refreshToken: "new-refresh", expiresIn: 3600 }.to_json)
+
+      result = @adapter.refresh!(credential)
+
+      assert_equal :error, result[:status]
+      assert_equal Base64.strict_encode64(rigged), credential.reload.config_data["state_b64"]
+    end
+
+    test "token_expires_at is nil when there is no login to expire" do
+      assert_nil @adapter.token_expires_at({})
+    end
+
+    # Social logins renew against Kiro's own endpoint, where the refresh token is the
+    # whole request. The response is camelCase; the row the CLI reads is snake_case, so
+    # a refresh that did not translate would leave the CLI unable to find its token.
+    test "a social login refreshes against Kiro and is written back in the CLI's own shape" do
+      credential = credential_for(refreshable_credentials(key: "kirocli:social:token"))
+      request = stub_request(:post, Agents::KiroCliAdapter::SOCIAL_REFRESH_URL)
+        .with(body: { refreshToken: "old-refresh" })
+        .to_return(status: 200, body: { accessToken: "new-access", refreshToken: "new-refresh",
+                                        expiresIn: 3600, profileArn: "arn:new" }.to_json)
+
+      result = @adapter.refresh!(credential)
+
+      assert_equal :refreshed, result[:status]
+      assert_requested request
+      token = stored_token(credential)
+      assert_equal "new-access", token["access_token"]
+      assert_equal "new-refresh", token["refresh_token"]
+      assert_equal "arn:new", token["profile_arn"]
+      assert_operator Time.zone.parse(token["expires_at"]), :>, 50.minutes.from_now
+    end
+
+    # Builder ID / IdC is ordinary AWS SSO OIDC, signed with the registration stored
+    # beside the token — and sent to the registration's own region, which need not be
+    # the profile's.
+    test "an IdC login refreshes through SSO OIDC with its stored client registration" do
+      credential = credential_for(refreshable_credentials)
+      request = stub_request(:post, "https://oidc.us-west-2.amazonaws.com/token")
+        .with(body: { clientId: "cid", clientSecret: "sec",
+                      grantType: "refresh_token", refreshToken: "old-refresh" })
+        .to_return(status: 200, body: { accessToken: "new-access", expiresIn: 900 }.to_json)
+
+      assert_equal :refreshed, @adapter.refresh!(credential)[:status]
+      assert_requested request
+      assert_equal "new-access", stored_token(credential)["access_token"]
+    end
+
+    # Fields the response did not mention must survive: an IdC refresh that returns no
+    # new refresh token must not blank the one that still works.
+    test "a refresh keeps every field the response did not mention" do
+      credential = credential_for(refreshable_credentials)
+      stub_request(:post, "https://oidc.us-west-2.amazonaws.com/token")
+        .to_return(status: 200, body: { accessToken: "new-access", expiresIn: 900 }.to_json)
+
+      @adapter.refresh!(credential)
+
+      assert_equal "old-refresh", stored_token(credential)["refresh_token"]
+    end
+
+    # Without the registration there is nothing to sign CreateToken with, and no sweep
+    # will ever fix that — the user has to log in again, so the failure is permanent.
+    test "an IdC login with no stored registration fails permanently" do
+      result = @adapter.refresh!(credential_for(refreshable_credentials(registration: nil)))
+
+      assert_equal :error, result[:status]
+      assert result[:permanent]
+    end
+
+    # A refused refresh token is permanent; a server having a bad minute is not.
+    test "a rejected refresh token is permanent and a server error is not" do
+      credential = credential_for(refreshable_credentials(key: "kirocli:social:token"))
+
+      stub_request(:post, Agents::KiroCliAdapter::SOCIAL_REFRESH_URL)
+        .to_return(status: 400, body: { __type: "InvalidGrantException" }.to_json)
+      assert @adapter.refresh!(credential)[:permanent]
+
+      stub_request(:post, Agents::KiroCliAdapter::SOCIAL_REFRESH_URL)
+        .to_return(status: 503, body: "upstream unavailable")
+      refute @adapter.refresh!(credential)[:permanent]
+    end
+
+    # The sweep passes a margin so it only spends a round trip on tokens that are
+    # actually close to dying.
+    test "a token still far from expiry is left alone" do
+      credential = credential_for(refreshable_credentials(expires_at: 4.hours.from_now.utc.iso8601))
+
+      assert_equal :not_needed, @adapter.refresh!(credential, margin_ms: 15 * 60 * 1000)[:status]
+    end
+
+    test "a credential with no stored login is not an error" do
+      assert_equal :not_needed, @adapter.refresh!(credential_for({}))[:status]
+    end
+  end
+end

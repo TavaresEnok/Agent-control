@@ -1,0 +1,34 @@
+#!/bin/sh
+set -e
+
+# Drop from root to the unprivileged app user (L-22). When bundle_cache/app_home
+# are Docker volumes they are root-owned on first mount — fix that before switching.
+#
+# The chown is UNCONDITIONAL on purpose. A "chown only if the top-level dir is
+# already root-owned" guard was tried and reverted: once /home/app itself is
+# app-owned the guard skips forever, so any subdirectory a root process creates
+# later stays root-owned permanently (root-owned /home/app/.config left Chromium
+# unable to start).
+#
+# -h (chown the symlink, never its target) is load-bearing: this runs as root
+# over caches that package managers write, so a symlink planted there must not
+# hand its target to the app user.
+#
+# The dev stack never reaches this block: docker-compose.yml runs its services
+# as the host user.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p /bundle_cache /home/app
+  chown -Rh app:app /bundle_cache /home/app 2>/dev/null || true
+  # Worker bind-mounts the host Docker socket for container lifecycle
+  # management (docker-api gem); it's root:root 660 on the host side, so the
+  # unprivileged app user (L-22) can't connect to it unless we grant its
+  # group access. No-op when the socket isn't mounted (e.g. the web image).
+  if [ -S /var/run/docker.sock ]; then
+    chgrp app /var/run/docker.sock 2>/dev/null || true
+    chmod g+rw /var/run/docker.sock 2>/dev/null || true
+  fi
+  corepack install 2>/dev/null || true
+  exec su-exec app "$@"
+fi
+
+exec "$@"

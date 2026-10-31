@@ -1,0 +1,246 @@
+# frozen_string_literal: true
+
+class Web::SessionsController < Web::ApplicationController
+  include CredentialsStepConcern
+
+  layout "inertia"
+
+  skip_before_action :enforce_onboarding
+  skip_before_action :enforce_company_auth_policy
+  skip_before_action :redirect_super_admin_to_admin_panel, only: %i[omniauth failure destroy]
+
+  # NO membership at all, which is a signup — not "no ACTIVE membership", which
+  # is an invitation awaiting an admin and must keep waiting for one. Only where
+  # we host: elsewhere a workspace is made in the admin, so a person with nothing
+  # to join is a refusal.
+  def may_sign_up_a_workspace?(user)
+    return false unless Deployment.self_serve_signup?
+    return false if user.nil? || user.super_admin? || user.deleted?
+
+    user.company_memberships.none?
+  end
+
+  def new
+    if signed_in?
+      # A session outlives its memberships: revocation, a membership pushed back
+      # to `invited`, a deleted company, or a User row that never had one. The
+      # sign-in gates below only run at sign-in, so without this the session
+      # survives with nothing to sign in TO — and #new sends it to onboarding
+      # while Onboarding#require_membership sends it straight back here, which
+      # the browser reports as ERR_TOO_MANY_REDIRECTS rather than as a refusal.
+      return redirect_to(new_workspace_path) if may_sign_up_a_workspace?(current_user)
+
+      if no_active_membership?(current_user)
+        sign_out
+        redirect_to login_path(error: "no_workspace")
+        return
+      end
+
+      target = onboarding_done?(current_user) ? company_projects_path : onboarding_path
+      redirect_to target
+      return
+    end
+
+    # A link abandoned at the provider must not turn the next sign-in started
+    # from this page into a refused link (see #omniauth).
+    Auth::LinkIntent.discard(session)
+
+    render inertia: "Auth/LoginPage", props: {
+      error: params[:error],
+      # Pre-fill support for the invitation flow (/login?email=...). Echoed
+      # back only when it actually looks like an email address.
+      email: safe_email_param,
+      # Only the redirect providers this INSTALLATION can actually complete
+      # (AD-4). A self-hoster without Microsoft credentials never sees a
+      # Microsoft button that would dead-end on a broken consent screen.
+      oauth_providers: Auth::PolicyResolver.deployment_allowlist_kinds & %w[google microsoft],
+      # Passwordless methods this installation offers. Passkey and magic link
+      # need no credentials, so they are on unless an operator narrows the
+      # allowlist.
+      passwordless_methods: Auth::PolicyResolver.deployment_allowlist_kinds & %w[passkey magic_link],
+      claimed_domain: flash[:claimed_domain]
+    }
+  end
+
+  def create
+    user_form = UserSignInForm.new(session_params)
+    return refuse_credentials(user_form.errors) unless user_form.valid?
+
+    user = user_form.user
+    # A parked invitation (login-continuation) is accepted before the gate below
+    # so the invited membership is already active, and the inviting company is
+    # already the current one.
+    accept_pending_invitation(user)
+
+    # Same gate as #omniauth, and it must run BEFORE sign_in: a user with no
+    # active membership would otherwise be walked all the way through
+    # onboarding (enforce_onboarding runs before require_active_membership!)
+    # and only then signed out at the first company-scoped page.
+    if may_sign_up_a_workspace?(user)
+      sign_in(user)
+      return redirect_to(new_workspace_path)
+    end
+
+    return redirect_to login_path(error: "pending_approval") if no_active_membership?(user)
+
+    # The password credential gets its identity row here, not only in the
+    # backfill migration — otherwise a password set after the migration leaves
+    # the user with no identities at all (see Auth::LocalCredential).
+    provider = Auth::LocalCredential.link!(user)
+    sign_in(user, provider: provider)
+    target = onboarding_done?(user) ? (take_pending_sign_in_path || company_projects_path) : onboarding_path
+    redirect_to target
+  end
+
+  # clear_history drops the key the browser's encrypted history entries were
+  # sealed with, so Back after signing out cannot show the pages of the session.
+  # An operator goes back to their own door: /login offers nothing to an address
+  # no workspace claims.
+  def destroy
+    target = true_user&.super_admin? ? admin_login_path : login_path
+    sign_out
+    redirect_to target, inertia: { clear_history: true }
+  end
+
+  def omniauth
+    # One port, one adapter per kind (AD-2): the callback resolves a provider row
+    # and asks the registry, instead of naming a service class.
+    provider = Auth::Registry.provider_for_omniauth(params[:provider].presence || "google")
+
+    if (intent = Auth::LinkIntent.take(session))
+      return complete_link(provider) if intent.honoured_for?(current_user_session, provider)
+      # The session that asked for the link has ended. Carrying on as a sign-in
+      # could create an account, or sign this browser into one, that nobody
+      # asked for.
+      return redirect_to(login_path(error: "link_expired")) unless signed_in?
+    end
+
+    assertion = Auth::Registry.for(provider).complete(auth_hash: request.env["omniauth.auth"])
+    user = Auth::IdentityResolver.new(assertion).resolve
+
+    # An invitation being accepted always wins over the pending gate below:
+    # accepting turns the invited membership active BEFORE we check for active
+    # memberships. (Auto-join already skips users with any membership, so an
+    # invited user is never domain-auto-joined either.)
+    accept_pending_invitation(user)
+
+    # Pending = platform-level pending account state OR no active membership
+    # yet (fresh OAuth user with no domain match, or auto-joined into a company
+    # that requires admin approval). Super admins have no memberships.
+    # A soft-deleted account must not get a session: find_or_initialize_by finds
+    # it by email, but AuthConcern#current_user filters it out, so signing it in
+    # produces a redirect loop instead of a refusal.
+    return redirect_to login_path(error: "account_deleted") if user.deleted?
+
+    # Ahead of the signup below, which cannot succeed for a domain that already
+    # has a workspace, and of pending_approval, which is untrue: nothing awaits
+    # approval. Carried in the flash rather than the URL so a link cannot make
+    # the page name a workspace.
+    if (claimed = Auth::ClaimedDomain.for(user, tried: provider))
+      return redirect_to(login_path(error: "domain_has_workspace"), flash: { claimed_domain: claimed.to_h })
+    end
+
+    if may_sign_up_a_workspace?(user)
+      sign_in(user)
+      redirect_to new_workspace_path
+      return
+    end
+
+    if user.pending? || no_active_membership?(user)
+      redirect_to login_path(error: "pending_approval")
+      return
+    end
+
+    # Step-up through a redirect provider lands here too; the proof appends to a
+    # live session rather than replacing it (AD-6).
+    sign_in_or_prove(user, provider: provider)
+
+    target = user.super_admin? ? admin_root_path : onboarding_path
+    redirect_to target
+  rescue Auth::IdentityResolver::NoWorkspaceError
+    redirect_to login_path(error: "no_workspace")
+  rescue Auth::IdentityResolver::LinkRequiredError
+    redirect_to login_path(error: "link_required")
+  rescue Auth::IdentityResolver::SuperAdminProviderError
+    # AD-19: the platform operator account authenticates by password only.
+    redirect_to login_path(error: "super_admin_password_only")
+  rescue StandardError
+    redirect_to login_path(error: "oauth_failed")
+  end
+
+  def failure
+    if Auth::LinkIntent.take(session) && signed_in?
+      return redirect_to(security_profile_path, alert: "Linking did not finish. Nothing was added to your account.")
+    end
+
+    error_type = params[:message] || "oauth_failed"
+    redirect_to login_path(error: error_type)
+  end
+
+  private
+
+  # Attached to the person already signed in, never resolved by address — which
+  # is why Microsoft can be added here although a Microsoft sign-in never adopts
+  # an existing account (AD-25). No domain auto-join: nobody is arriving.
+  def complete_link(provider)
+    assertion = Auth::Registry.for(provider).complete(auth_hash: request.env["omniauth.auth"])
+    Auth::IdentityResolver.new(assertion, auto_join: false).link_to(current_user)
+    prove_additional_method(provider)
+    redirect_to security_profile_path, notice: "#{provider.display_name} is linked. You can sign in with it from now on."
+  rescue Auth::IdentityResolver::IdentityTakenError
+    redirect_to security_profile_path,
+                alert: "That #{provider.display_name} account already belongs to a different account here, " \
+                       "so it was not added to yours."
+  rescue StandardError
+    redirect_to security_profile_path, alert: "Linking #{provider.display_name} failed. Nothing was added to your account."
+  end
+
+  # Onboarding lives on the membership the user will land in — the switcher's
+  # remembered company, else the oldest. Resolved here rather than read off the
+  # user, which no longer carries onboarding at all.
+  def onboarding_done?(user)
+    return true if user.super_admin?
+
+    landing_membership(user)&.onboarding_completed? || false
+  end
+
+  def landing_membership(user)
+    memberships = user.company_memberships.active.to_a
+    memberships.find { |m| m.company_id == user.last_company_id } ||
+      memberships.min_by { |m| [ m.accepted_at ? 1 : 0, m.accepted_at || Time.at(0), m.id ] }
+  end
+
+  # Super admins legitimately have none (they live in /admin). For everyone
+  # else, no active membership means there is nothing to sign in to: a fresh
+  # OAuth user whose domain matched nothing, a company that requires admin
+  # approval (membership still `invited`), or a fully revoked member.
+  # Deliberately a live query — the invitation just accepted above may have
+  # flipped a membership active.
+  def no_active_membership?(user)
+    !user.super_admin? && user.company_memberships.active.none?
+  end
+
+  def session_params
+    if params.key?(:user)
+      params.require(:user).permit(:email, :password)
+    else
+      params.permit(:email, :password)
+    end
+  end
+
+  # Back to the step the password was typed on, not to the address step: a
+  # refusal that redirected to /login would make the person retype an address
+  # they had already given.
+  def refuse_credentials(errors)
+    email = session_params[:email].to_s.strip
+    options = email.present? ? Auth::SignInOptions.for(email) : nil
+    return redirect_to(login_path, inertia: { errors: errors }) if options.nil?
+
+    render_credentials_step(email, options, errors: errors)
+  end
+
+  def safe_email_param
+    email = params[:email].to_s.strip
+    email if email.match?(URI::MailTo::EMAIL_REGEXP)
+  end
+end

@@ -1,0 +1,198 @@
+# frozen_string_literal: true
+
+class WorkflowDuplicator
+  SOURCE_OWNERS = { Asset => :assets, MCPServer => :mcp_servers, Tool => :tools, Skill => :skills,
+                    ConfigItem => :config_items }.freeze
+
+  # #duplicate! returns the new Workflow (backwards-compatible). A summary of the
+  # resources that were NOT copied / need manual setup is exposed afterwards via
+  # #summary so the controller can surface a "needs setup" notice (see #302).
+  def initialize(source_workflow, target_scope:, name: nil, actor: Versions::Actor.system)
+    @source = source_workflow
+    @target_scope = target_scope
+    @name = name
+    @actor = actor
+  end
+
+  attr_reader :summary
+
+  def duplicate!
+    @summary = nil
+
+    workflow = ActiveRecord::Base.transaction do
+      @dep_copier = DependencyCopier.new(source: @source, target_project: target_project, actor: @actor)
+
+      new_workflow = @target_scope.workflows.new(
+        name: available_name,
+        description: @source.description,
+        config: remapped_config(@source.config.deep_dup)
+      )
+
+      Versions.save!(new_workflow, actor: @actor, metadata: { "duplicated_from" => @source.id }) do
+        new_workflow.save!
+        copy_steps(new_workflow)
+      end
+
+      new_workflow
+    end
+
+    @summary = @dep_copier.summary if @dep_copier && target_project
+    workflow
+  end
+
+  private
+
+  def copy_steps(new_workflow)
+    step_id_map = {}
+    step_pairs = []
+
+    @source.steps.not_deleted.order(:position).each do |step|
+      new_step = duplicate_step(step, new_workflow)
+      step_id_map[step.id] = new_step.id
+      step_pairs << [ step, new_step ]
+    end
+
+    step_pairs.each do |source_step, new_step|
+      attrs = {}
+      if source_step.depends_on_step_ids.present?
+        attrs[:depends_on_step_ids] = source_step.depends_on_step_ids.filter_map { |old_id| step_id_map[old_id] }
+      end
+      attrs[:instructions] = carried_instructions(source_step.instructions, step_id_map) if source_step.instructions
+      new_step.update!(attrs) if attrs.any?
+    end
+  end
+
+  # References follow the copy the way the id columns do: steps through the new
+  # ids, servers, tools, skills and config items through DependencyCopier (config
+  # items by name), assets by the carry rule. One that cannot follow becomes its
+  # name in plain text — never an id that still points into the source project.
+  def carried_instructions(text, step_id_map)
+    InstructionReferences.rewrite(text) do |ref|
+      next nil unless ref.valid?
+
+      case ref.type
+      when "step"
+        (id = step_id_map[ref.id.to_i]) ? "{{step:#{id}}}" : source_name(Step, ref.id)
+      when "output"
+        (id = step_id_map[ref.id.to_i]) ? "{{output:#{id}:#{ref.name}}}" : ref.name
+      when "mcp"
+        (id = @dep_copier.map_mcp_server_ids([ ref.id ]).first) ? "{{mcp:#{id}}}" : source_name(MCPServer, ref.id)
+      when "asset"
+        carried_asset_ids([ ref.id ]).any? ? nil : source_name(Asset, ref.id)
+      when "tool"
+        (id = @dep_copier.map_tool_ids([ ref.id ]).first) ? "{{tool:#{id}}}" : source_name(Tool, ref.id)
+      when "skill"
+        (id = @dep_copier.map_skill_ids([ ref.id ]).first) ? "{{skill:#{id}}}" : source_name(Skill, ref.id)
+      when "config_item"
+        (id = @dep_copier.map_config_item_ids([ ref.id ]).first) ? "{{config_item:#{id}}}" : source_name(ConfigItem, ref.id)
+      end
+    end
+  end
+
+  def source_name(model, id)
+    scope = if model == Step
+              @source.steps
+    elsif @source.scope_type == "Project"
+              ProjectOwnedReferences::OWNERS.fetch(SOURCE_OWNERS.fetch(model)).call(@source.scope)
+    end
+    scope&.find_by(id: id)&.name || model.model_name.human.downcase
+  end
+
+  # nil unless we're copying into a Project (in-company duplicate / catalog copy).
+  # When nil (e.g. duplicating to a Company scope for publish/seed), every map_*
+  # is an identity function, preserving the pre-#302 behavior exactly.
+  def target_project
+    @target_scope if @target_scope.is_a?(Project)
+  end
+
+  def remapped_config(config)
+    return config unless target_project
+
+    config["base_tool_ids"]       = @dep_copier.map_tool_ids(config["base_tool_ids"])             if config["base_tool_ids"]
+    config["base_skill_ids"]      = @dep_copier.map_skill_ids(config["base_skill_ids"])           if config["base_skill_ids"]
+    config["base_mcp_server_ids"] = @dep_copier.map_mcp_server_ids(config["base_mcp_server_ids"]) if config["base_mcp_server_ids"]
+    config["base_repository_ids"] = carried_repository_ids(config["base_repository_ids"])         if config["base_repository_ids"]
+    if config["base_config_item_ids"]
+      config["base_config_item_ids"] = @dep_copier.map_config_item_ids(config["base_config_item_ids"])
+    end
+    config["base_asset_ids"]      = carried_asset_ids(config["base_asset_ids"])                   if config["base_asset_ids"]
+    config
+  end
+
+  # Repositories are project-scoped and there is nothing to remap them onto: the
+  # target project has its own repositories, or none. Carrying the ids across would
+  # point the copy at another project's code, so anything but a same-project
+  # duplicate starts with an empty selection.
+  def carried_repository_ids(ids)
+    return [] if ids.blank?
+
+    duplicating_within_source_project? ? ids : []
+  end
+
+  # Assets are not copied (D5). Company assets are shared, so they carry over;
+  # another project's assets cannot be reached from the copy and are dropped.
+  def carried_asset_ids(ids)
+    return ids if ids.blank? || target_project.nil?
+
+    foreign = ProjectOwnedReferences.foreign_ids(target_project, :assets, ids)
+    ids.reject { |id| foreign.include?(id.to_i) }
+  end
+
+  def duplicating_within_source_project?
+    target_project.present? && @source.scope_type == "Project" && @source.scope_id == target_project.id
+  end
+
+  def available_name
+    base = @name.presence || @source.name
+    # sanitize_sql_like escapes %, _ and \ in the user-controlled name so a
+    # workflow named e.g. "a%" can't turn the prefix probe into a wildcard match.
+    existing = @target_scope.workflows.active.where("workflows.name LIKE ?", "#{Workflow.sanitize_sql_like(base)}%").pluck(:name)
+    return base unless existing.include?(base)
+
+    counter = 1
+    counter += 1 while existing.include?("#{base} (#{counter})")
+    "#{base} (#{counter})"
+  end
+
+  def duplicate_step(step, workflow)
+    new_step = workflow.steps.create!(
+      name: step.name,
+      # Written once every step has its new id (#copy_steps): a reference may name
+      # a step later in the list, and an id from the source project would not pass
+      # the copy's ownership check.
+      instructions: nil,
+      position: step.position,
+      agent_id: @dep_copier.map_agent_id(step.agent_id),
+      allow_non_interactive: step.allow_non_interactive,
+      skip_policy: step.skip_policy,
+      on_failure: step.on_failure,
+      max_retries: step.max_retries,
+      preferred_model: step.preferred_model,
+      reasoning_effort: step.reasoning_effort,
+      bmad_enabled: step.bmad_enabled,
+      required_agent_runtime: step.required_agent_runtime,
+      input_asset_specs: step.input_asset_specs,
+      output_asset_specs: step.output_asset_specs,
+      tool_ids: @dep_copier.map_tool_ids(step.tool_ids),
+      mcp_server_ids: @dep_copier.map_mcp_server_ids(step.mcp_server_ids),
+      skill_ids: @dep_copier.map_skill_ids(step.skill_ids),
+      asset_ids: carried_asset_ids(step.asset_ids),
+      repository_ids: carried_repository_ids(step.repository_ids),
+      # Resolved by name in the target project; ids are never carried across a
+      # secrets boundary. Anything missing is reported by DependencyCopier#summary.
+      config_item_ids: @dep_copier.map_config_item_ids(step.config_item_ids),
+      depends_on_step_ids: []
+    )
+
+    step.sub_steps.active.each do |ss|
+      new_step.sub_steps.create!(
+        name: ss.name,
+        instructions: ss.instructions,
+        position: ss.position,
+        required: ss.required
+      )
+    end
+
+    new_step
+  end
+end

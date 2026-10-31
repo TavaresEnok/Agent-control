@@ -1,0 +1,30 @@
+import type StepRun from '@/types/generated/StepRun';
+
+// The `: StepRun` return annotation is the compile-time drift contract: if Typelizer
+// regenerates StepRun with a changed/added required field, this factory stops compiling.
+export const buildStepRun = (overrides: Partial<StepRun> = {}): StepRun => ({
+  id: 101,
+  stepId: 1,
+  state: 'pending',
+  stepNote: null,
+  errorMessage: null,
+  errorCategory: null,
+  skipReason: null,
+  terminalSessionId: null,
+  startedAt: null,
+  executionStartedAt: null,
+  completedAt: null,
+  workflowVersionNumber: null,
+  allowNonInteractive: false,
+  dependsOnStepIds: [],
+  dependsOnNames: [],
+  subStepRuns: [],
+  totalTokens: 0,
+  costCents: 0,
+  liveViewPrivate: false,
+  // optional (?) computed attributes — realistic values, no compile-time guarantee.
+  // terminalSessionState/websocketUrl/ideUrl are `string | undefined` (not nullable): omit for "absent".
+  stepName: 'Compile Specs',
+  stepPosition: 1,
+  ...overrides,
+});

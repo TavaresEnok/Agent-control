@@ -1,0 +1,43 @@
+!!!
+%html
+  %head
+    %meta{content: "text/html; charset=UTF-8", "http-equiv" => "Content-Type"}/
+    %title Aixle
+    %meta{content: "width=device-width,initial-scale=1", name: "viewport"}/
+    = csrf_meta_tags
+    = csp_meta_tag
+    = action_cable_meta_tag
+
+    / Apply the persisted Mantine color scheme before first paint to avoid a flash.
+    / Key + default must match localStorageColorSchemeManager in application.tsx.
+    = javascript_tag nonce: true do
+      :plain
+        (function () {
+          try {
+            var scheme = localStorage.getItem('mantine-color-scheme-value') || 'dark';
+            if (scheme === 'auto') {
+              scheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-mantine-color-scheme', scheme);
+          } catch (e) {
+            document.documentElement.setAttribute('data-mantine-color-scheme', 'dark');
+          }
+        })();
+
+    %link{rel: "preconnect", href: "https://fonts.googleapis.com"}/
+    %link{rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: true}/
+    %link{href: "https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Figtree:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Spline+Sans+Mono:wght@400;500&display=swap", rel: "stylesheet"}/
+
+    %link{rel: "icon", href: "/favicon.ico", sizes: "any"}
+    %link{rel: "icon", type: "image/svg+xml", href: "/icon.svg"}
+    %link{rel: "icon", type: "image/png", sizes: "32x32", href: "/favicon-32.png"}
+    %link{rel: "icon", type: "image/png", sizes: "16x16", href: "/favicon-16.png"}
+    %link{rel: "apple-touch-icon", href: "/apple-touch-icon.png"}
+    %link{rel: "manifest", href: "/site.webmanifest"}
+
+    = vite_react_refresh_tag
+    = vite_client_tag
+    = vite_javascript_tag "application.tsx"
+
+  %body
+    = yield

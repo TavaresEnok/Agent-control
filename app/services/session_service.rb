@@ -1,0 +1,480 @@
+# frozen_string_literal: true
+
+class SessionService
+  # Raised at session-start when a selected custom MCP server's URL fails a
+  # safety re-check (F34): the URL is validated at create/update, but DNS or the
+  # stored value may have changed since, so we re-check before dialing.
+  class UnsafeMcpUrlError < StandardError; end
+
+  class << self
+    # `company:` is required for PROJECT-LESS sessions (auth_setup): those create
+    # an agent credential, and the credential is billed to a company, so it can
+    # never be guessed. Project-bound sessions take the project's company.
+    def create_and_start(user:, project: nil, company: nil, session_type:, agent_type: nil, configured_agent: nil, params: {})
+      # Session-start preflight (oauth-unification §4.6): block the launch with a
+      # "Connect …" CTA when a selected OAuth MCP server has no usable credential for
+      # this user, instead of starting a session that fails silently at provisioning.
+      preflight_oauth!(user, params[:mcp_server_ids])
+      preflight_cloud!(user, company || project&.company)
+      preflight_agent_credential!(user, company || project&.company, agent_type, session_type: session_type)
+      preflight_url_safety!(params[:mcp_server_ids])
+      preflight_company_active!(company || project&.company)
+
+      # auth_kind ("design") is carried in metadata so AgentAuthStrategy can run the
+      # /design-login variant (inject the base credential, watch designOauth.accessToken).
+      metadata = (params[:metadata] || {}).to_h
+      metadata["auth_kind"] = params[:auth_kind] if params[:auth_kind].present?
+
+      session = user.terminal_sessions.build(
+        project: project,
+        company_id: company&.id || project&.company_id,
+        session_type: session_type,
+        agent_type: agent_type,
+        configured_agent: configured_agent,
+        metadata: metadata.presence,
+        **params.slice(:mode, :initial_prompt, :requested_model, :reasoning_effort, :session_config,
+                       :tool_ids, :skill_ids, :mcp_server_ids, :input_asset_ids, :repository_ids,
+                       :config_item_ids, :runner_id)
+      )
+
+      return session if refuse_runner_pick(session, params)
+      return session unless session.save
+      return session if fail_on_runner_refusal(session)
+
+      Versions::LaunchRecord.record!(session)
+      # The writer lock is taken around the queue write only — never around the
+      # save, which touches half a dozen join tables.
+      SessionAdmissionService.enqueue!(session)
+      launch_session(session)
+
+      session
+    end
+
+    def finish(session:)
+      if session.queued?
+        if session.step_run
+          WorkflowService.cancel(run: session.step_run.workflow_run)
+          return session.reload
+        end
+        return cancel(session: session)
+      end
+      unless session.may_start_finishing? || session.finishing?
+        raise TerminalSession::InvalidStateError, "Cannot finish session in state: #{session.state}"
+      end
+
+      return unless session.may_start_finishing?
+
+      stop_admission_operations(session)
+      session.start_finishing!
+
+      if session.temporal_workflow_id.present?
+        signal_container_finished(session)
+      else
+        session.finish! if session.may_finish?
+      end
+    end
+
+    # `refresh_tokens:` is set on the one call that precedes an actual launch.
+    # The per-phase calls only re-check authorization; refreshing on every phase
+    # would put a token round-trip in front of each container step.
+    def revalidate_admission!(session, refresh_tokens: false)
+      SessionAdmissionService.ensure_run_active!(session)
+      raise SessionAdmissionService::Stopped, "User account unavailable" unless session.user&.authenticatable?
+      if session.project && !session.project.accessible_by?(session.user)
+        raise SessionAdmissionService::Stopped, "Project access revoked"
+      end
+      if session.company_id && !CompanyMembership.active.exists?(company_id: session.company_id, user_id: session.user_id)
+        raise SessionAdmissionService::Stopped, "Company membership revoked"
+      end
+      preflight_company_active!(SessionCompany.company_for(session))
+      if session.session_type != "auth_setup" && session.session_credential.nil?
+        raise SessionAdmissionService::Stopped, "Agent credential unavailable"
+      end
+      preflight_oauth!(session.user, session.mcp_server_ids)
+      preflight_cloud!(session.user, SessionCompany.company_for(session))
+      # Checked again here and not only at create: the refresh sweep can mark a
+      # credential errored while the session is still waiting in the queue. The
+      # session_type carries the auth_setup exemption — a login session exists to
+      # replace the broken credential, so gating it on that credential would trap
+      # the user behind the queue with no way out.
+      preflight_agent_credential!(session.user, SessionCompany.company_for(session), session.agent_type,
+        session_type: session.session_type, excluding_session_id: session.id)
+      preflight_url_safety!(session.mcp_server_ids)
+      refresh_oauth_tokens_for_session(session) if refresh_tokens
+    end
+
+    def cancel(session:)
+      SessionAdmissionService.cancel!(session)
+      TemporalService.cancel_workflow(session.workflow_id) unless session.session_admission&.reload&.released_at
+      session
+    end
+
+    # The way out of a login that went wrong — a dead pane, a code pasted into the
+    # shell — short of waiting out the container's 23-hour signal timeout. The
+    # session is cancelled, so its container is torn down and nothing it captured is
+    # saved (AgentAuthStrategy#before_cleanup); a session that already ended, or is
+    # already being finished, is left as it is.
+    def reset_auth(session:)
+      return session unless session.active?
+
+      cancel(session: session)
+    end
+
+    # Fail a session AND wake its container workflow, so the container's cleanup
+    # phase actually runs. THE blessed way to fail a session from outside the
+    # container workflow (watchdogs, scanners) — do not hand-roll
+    # `update!(error_message:) + fail!`.
+    #
+    # Why the signal is not optional: `TerminalSession#on_failed` only notifies the
+    # PARENT workflow run ("workflow-execution-<id>", via WorkflowService), which
+    # completes the step. The session's own container workflow is a different
+    # execution ("agent-session-<id>") and it is parked in its `exec` phase
+    # awaiting `container_finished` with a 23-hour signal timeout (see
+    # WorkflowStepStrategy#phase_config). Failing the row without signalling that
+    # execution leaves it spinning until the timeout, and its cleanup phase — the
+    # only thing that deletes the pod, Service, IngressRoute and Middlewares —
+    # never runs. Every such failure leaked its Kubernetes objects for a day.
+    #
+    # Ordering mirrors `finish`: transition first, signal second. The cleanup phase
+    # decides the step's outcome from `session.state` (CompleteStepActivity), so it
+    # must already read `failed`. Clearing `container_id` in `on_failed` is safe —
+    # the cleanup phase takes its container reference from the workflow's own
+    # accumulated state, not from the row.
+    def fail_session(session:, error_message: nil)
+      session.update!(error_message: error_message) if error_message.present?
+      return fail_admitted_session(session) if unreleased_admission?(session)
+
+      stop_admission_operations(session)
+      session.fail! if session.may_fail?
+      signal_container_finished(session) if session.temporal_workflow_id.present?
+      session
+    end
+
+    # Built first and admitted second, in separate transactions. Building renders
+    # the instructions and attaches every resolved resource, and doing that under
+    # the installation-wide writer lock stalled every other admission decision for
+    # up to 20 s (PALAD-AI-RAILS-2Z). The step_run row lock is what keeps a retried
+    # launch from building twice; the run is re-checked under the writer lock,
+    # which is where a cancel writes its stop marker.
+    def create_for_workflow_step(step_run:)
+      session = ActiveRecord::Base.transaction do
+        step_run.lock!
+        step_run.terminal_session || begin
+          run = step_run.workflow_run
+          raise SessionAdmissionService::Stopped, "Workflow cancelled" if run.stop_requested_at || run.state == "cancelled"
+          preflight_company_active!(run.project&.company)
+          # Before the build, like the credential preflight: a refused runner
+          # leaves no session behind (LaunchStepSessionActivity fails the step).
+          Runners::Resolver.resolve!(run)
+          build_for_workflow_step(step_run: step_run)
+        end
+      end
+      return session if session.session_admission
+
+      admit_step_session!(step_run, session)
+      launch_session(session)
+      session
+    end
+
+    def build_for_workflow_step(step_run:)
+      workflow_run = step_run.workflow_run
+      step = step_run.step
+
+      instructions = InstructionReferences::Renderer.new(step: step, project: workflow_run.project).render(step.instructions)
+      prompt = instructions.presence || "Execute step: #{step.name}"
+      runtime = step.required_agent_runtime.presence ||
+                workflow_run.agent_runtime.presence ||
+                run_membership(workflow_run)&.default_agent_runtime.presence ||
+                run_credentials(workflow_run).order(created_at: :desc).first&.agent_type ||
+                "claude_code"
+
+      preflight_agent_credential!(workflow_run.user, workflow_run.project&.company, runtime)
+
+      run_model = workflow_run.shared_context&.dig("requested_model")
+
+      session = TerminalSession.create!(
+        user: workflow_run.user,
+        project: workflow_run.project,
+        company_id: workflow_run.project&.company_id,
+        session_type: "workflow_step",
+        agent_type: runtime,
+        configured_agent: step.agent,
+        mode: "interactive",
+        initial_prompt: prompt,
+        requested_model: step.preferred_model.presence || run_model,
+        reasoning_effort: step.reasoning_effort,
+        runner_id: workflow_run.runner_id,
+        metadata: {
+          "workflow_run_id" => workflow_run.id,
+          "step_run_id" => step_run.id,
+          "step_name" => step.name
+        }
+      )
+
+      step_run.update!(terminal_session: session)
+
+      config = SessionConfigResolver.resolve(session)
+      session.update!(agent_type: config[:agent_runtime], mode: config[:mode])
+      attach_resolved_resources(session, config)
+      Versions::LaunchRecord.record!(session, step_run: step_run)
+      session
+    end
+
+    private
+
+    # A runner picked on the new-session form or in the API (DESIGN.md §3.3);
+    # without one the session is hosted.
+    def refuse_runner_pick(session, params)
+      return false unless params.key?(:runner_id)
+      return false if params[:runner_id].blank? && session.project.nil?
+
+      error = if session.project.nil?
+        "Runner can only be picked for a project's session."
+      else
+        Runners::Selection.error(params[:runner_id], project: session.project,
+                                                     interactive: session.mode != "non_interactive")
+      end
+      session.errors.add(:base, error) if error
+      error.present?
+    end
+
+    # Saved, then failed before admission: the session page shows the message.
+    def fail_on_runner_refusal(session)
+      Runners::Resolver.resolve!(session, pick_from: "for the session")
+      false
+    rescue Runners::Resolver::Refused => e
+      session.update!(error_message: e.message)
+      session.fail!
+      true
+    end
+
+    # A run stopped between the build and this point leaves a session nobody
+    # will launch; the cancel fan-out skips it, since it has no admission to close.
+    def admit_step_session!(step_run, session)
+      SessionAdmissionService.transaction do
+        step_run.workflow_run.lock!
+        SessionAdmissionService.enqueue!(session)
+      end
+    rescue SessionAdmissionService::Stopped
+      session.reload
+      session.cancel! if session.may_cancel?
+      raise
+    end
+
+    def stop_admission_operations(session)
+      return unless session.session_admission
+      SessionAdmissionService.transaction do
+        admission = session.session_admission.reload
+        admission.update!(stop_requested_at: admission.stop_requested_at || Time.current) unless admission.released_at
+      end
+    end
+
+    def unreleased_admission?(session)
+      admission = session.session_admission
+      admission.present? && admission.released_at.nil?
+    end
+
+    # Marking the row failed frees nothing: the reservation is only released once
+    # the runtime is confirmed gone (AD-6), and cancelling the session's container
+    # workflow is what starts that. The verdict is `failed`, not `cancelled`: a
+    # cancelled step session cancels its whole run (WorkflowExecutionWorkflowV2),
+    # which would skip on_failure, quota classification and the Slack failure notice.
+    def fail_admitted_session(session)
+      SessionAdmissionService.cancel!(session, outcome: "failed")
+      TemporalService.cancel_workflow(session.workflow_id) unless session.session_admission.reload.released_at
+      # #cancel! fails the session under the writer lock, and #fail! wakes the parent
+      # run only after that commits. This covers a session that had already ended,
+      # which #cancel! leaves alone; the signal just sets a decision flag, so a
+      # second one changes nothing.
+      WorkflowService.notify_container_finished(step_run: session.step_run) if session.step_run
+      session
+    end
+
+    # Granting is cheap and must happen now so the caller sees a real queue
+    # position. Dispatching is not: it costs a preflight and a Temporal RPC per
+    # session, so this hands off only THIS session and leaves the rest of the
+    # newly granted batch to the relay running in the reconciler.
+    def launch_session(session)
+      SessionAdmissionService.drain!
+      admission = session.session_admission.reload
+      SessionLaunchRelay.dispatch(admission) if admission.admitted_at && admission.launch_state == "pending"
+    end
+
+    # Workflow runs are project-bound, so the run's project names the company
+    # whose credential (and whose bill) this step must use.
+    def run_membership(workflow_run)
+      CompanyMembership.find_by(user_id: workflow_run.user_id,
+                                company_id: workflow_run.project&.company_id)
+    end
+
+    def run_credentials(workflow_run)
+      company_id = workflow_run.project&.company_id
+      return AgentCredential.none if company_id.blank?
+
+      AgentCredential.where(user_id: workflow_run.user_id, company_id: company_id)
+    end
+
+    # Raises Oauth::PreflightError (rescued by the API controller) when any selected
+    # OAuth MCP server lacks a usable credential for `user`. Interactive launches
+    # only — workflow-step sessions (create_for_workflow_step) are automated and have
+    # no interactive user to show a Connect CTA to.
+    def preflight_oauth!(user, mcp_server_ids)
+      return if mcp_server_ids.blank?
+
+      servers = MCPServer.where(id: mcp_server_ids, enabled: true)
+      missing = Oauth::Preflight.missing_connections(servers, user: user)
+      raise Oauth::PreflightError, missing if missing.any?
+
+      # Proactively refresh tokens expiring within 1 hour so inject_oauth_token!
+      # (one-shot at provisioning) gets a token valid for the session's lifetime.
+      servers.each do |server|
+        next unless server.auth_type_oauth?
+
+        owner = server.credential_scope_per_user? ? user : server.scope
+        next if owner.nil?
+
+        cred = OauthCredential.current_for(server: server, owner: owner)
+        next if cred.nil?
+
+        Oauth::TokenService.refresh_if_expiring_soon(cred)
+        cred.reload
+        if cred.error?
+          raise Oauth::PreflightError, [ { mcp_server_id: server.id, name: server.name, reason: :credential_error,
+                                           connect_url: "/oauth/mcp/#{server.id}/connect", connect_method: "post" } ]
+        end
+      end
+    end
+
+    # Raises CloudAuth::PreflightError when the cloud connection this session would use
+    # is present but rotten. A credential source inside the container cannot talk to the
+    # user, and Claude Code hides Bedrock errors — so without this the session would
+    # launch and then simply not answer. No cloud connection at all is unaffected.
+    #
+    # `company` is the one the session will be billed to — the same resolution the
+    # session itself gets from SessionCompany, done before the record exists.
+    def preflight_cloud!(user, company)
+      broken = CloudAuth::Preflight.broken_connections(user: user, company: company)
+      raise CloudAuth::PreflightError, broken if broken.any?
+    end
+
+    # Block a launch whose agent credential is missing, or that the refresh sweep
+    # has marked broken, so the user gets "connect an agent" / "sign in again"
+    # instead of a session revalidate_admission! cancels or a container that fails
+    # on an expired token.
+    #
+    # An auth_setup session is exempt: it exists to REPLACE the broken credential,
+    # so gating it on that credential locks the user out of the only flow that can
+    # clear the error.
+    # `excluding_session_id:` is the session being launched. It is itself an active row,
+    # so without it the "is another container holding these tokens?" test would find this
+    # session and refuse every launch it was asked to check.
+    def preflight_agent_credential!(user, company, agent_type, session_type: nil, excluding_session_id: nil)
+      return if session_type == "auth_setup"
+      return unless agent_type.present? && company.present?
+
+      credentials = AgentCredential.where(user_id: user.id, company_id: company.id)
+      credential = credentials.find_by(agent_type: agent_type)
+      if credential.nil?
+        raise AgentCredential::PreflightError.new(agent_type: (agent_type if credentials.exists?))
+      end
+
+      raise AgentCredential::PreflightError, credential unless credential.active?
+      # An `active` row is not the same as a usable login: a credential whose token died
+      # while a live session pinned it out of the refresh sweep never records an error,
+      # because no refresh was ever attempted. Launching on it produces a container that
+      # prints "Login expired" and nothing else.
+      raise AgentCredential::PreflightError, credential if credential.unrecoverably_expired?(excluding_session_id: excluding_session_id)
+    end
+
+    # Re-validate selected custom MCP server URLs right before launch (F34). The
+    # model validates at create/update, but DNS (rebinding) or the stored value
+    # may have changed since — a host that now resolves to a private/internal IP
+    # must not be dialed. Cheap: url_safety uses local resolvers only.
+    # A suspended or archived company runs nothing. Checked at creation and again
+    # on every phase, because a company suspended while a session is queued or
+    # running has to stop that session too — the same shape as a revoked
+    # membership, and the relay turns it into a cancellation the owner can read.
+    #
+    # Metering leans on this: Billing::CapacityWindow bills only active
+    # companies, which is only honest while they are also the only ones that can
+    # occupy a slot.
+    def preflight_company_active!(company)
+      return if company.nil? || company.active?
+
+      raise SessionAdmissionService::Stopped, "Company #{company.name} is #{company.state} and cannot run sessions"
+    end
+
+    def preflight_url_safety!(mcp_server_ids)
+      return if mcp_server_ids.blank?
+
+      unsafe = MCPServer.where(id: mcp_server_ids, enabled: true).custom_servers.filter_map do |server|
+        next if server.url.blank?
+
+        errors = UrlSafetyValidator.errors_for(server.url, require_https: server.auth_type_oauth?)
+        "#{server.name} (#{errors.to_sentence})" if errors.any?
+      end
+
+      raise UnsafeMcpUrlError, "MCP server URL failed a safety check at launch: #{unsafe.join('; ')}" if unsafe.any?
+    end
+
+    def signal_container_finished(session)
+      result = TemporalService.send_signal(session.workflow_id, :container_finished, session.step_run&.id)
+
+      # A workflow that is already gone leaves the reservation to the reconciler,
+      # which confirms the runtime is absent before releasing it.
+      if result.is_a?(Hash) && !result[:ok]
+        Rails.logger.warn("[SessionService] Signal failed for session #{session.id}: #{result[:error]}")
+      end
+    rescue StandardError => e
+      Rails.logger.error("[SessionService] Failed to signal container_finished for session #{session.id}: #{e.message}")
+    end
+
+    def refresh_oauth_tokens_for_session(session)
+      session.mcp_servers.each do |server|
+        next unless server.auth_type_oauth?
+
+        owner = server.credential_scope_per_user? ? session.user : server.scope
+        next if owner.nil?
+
+        cred = OauthCredential.current_for(server: server, owner: owner)
+        next if cred.nil?
+
+        if cred.error?
+          raise Oauth::PreflightError, [ { mcp_server_id: server.id, name: server.name, reason: :credential_error,
+                                           connect_url: "/oauth/mcp/#{server.id}/connect", connect_method: "post" } ]
+        end
+
+        Oauth::TokenService.refresh_if_expiring_soon(cred)
+        cred.reload
+        if cred.error?
+          raise Oauth::PreflightError, [ { mcp_server_id: server.id, name: server.name, reason: :credential_error,
+                                           connect_url: "/oauth/mcp/#{server.id}/connect", connect_method: "post" } ]
+        end
+      end
+    end
+
+    def attach_resolved_resources(session, config)
+      session.tools = scoped_resources(Tool, config[:tool_ids], session) if config[:tool_ids].present?
+      session.skills = scoped_resources(Skill, config[:skill_ids], session) if config[:skill_ids].present?
+      session.mcp_servers = scoped_resources(MCPServer, config[:mcp_server_ids], session) if config[:mcp_server_ids].present?
+      session.repositories = scoped_resources(Repository, config[:repository_ids], session) if config[:repository_ids].present?
+      session.input_assets = scoped_resources(Asset, config[:input_asset_ids], session) if config[:input_asset_ids].present?
+    end
+
+    # Resources resolve against the session's PROJECT company; project-less
+    # sessions fall back to the user's first active membership's company.
+    def scoped_resources(klass, ids, session)
+      base = if session.project
+               klass.visible_for_project(session.project)
+      elsif klass.respond_to?(:visible_for_company)
+               company = SessionCompany.company_for(session)
+               company ? klass.visible_for_company(company) : klass.none
+      else
+               # Project-only resources (Skill, MCPServer) have nothing to attach
+               # to a projectless session; internal MCP still arrives separately.
+               klass.none
+      end
+      base.where(id: ids)
+    end
+  end
+end

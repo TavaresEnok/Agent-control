@@ -1,0 +1,116 @@
+# Omakase Ruby styling for Rails
+inherit_gem: { rubocop-rails-omakase: rubocop.yml }
+inherit_from: .rubocop_todo.yml
+
+plugins:
+  - rubocop-minitest
+  - rubocop-factory_bot
+
+# House testing-doctrine cops (see docs/testing.md)
+require:
+  - ./.rubocop/cops/testing/no_any_instance.rb
+  - ./.rubocop/cops/testing/no_vendor_stubbing.rb
+  - ./.rubocop/cops/configuration/no_env_in_app.rb
+  - ./.rubocop/cops/tenant/scoped_tool_lookup.rb
+  - ./.rubocop/cops/database/board_task_number_bypass.rb
+
+AllCops:
+  NewCops: enable
+
+# Omakase switches off every core department. These two report bugs and unsafe
+# calls rather than style, so they run; what they found before they ran is
+# listed in .rubocop_todo.yml, which only ever shrinks.
+Lint:
+  Enabled: true
+Security:
+  Enabled: true
+
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+
+# `assert_equal expected, rows.map { ... }` is how the suite asserts; the brace
+# block binds to `map`, never to the assertion.
+Lint/AmbiguousBlockAssociation:
+  Exclude:
+    - "test/**/*"
+
+# Adapters, strategies and fakes implement one signature; a keyword argument one
+# implementation ignores is still part of it.
+Lint/UnusedMethodArgument:
+  AllowUnusedKeywordArguments: true
+Lint/UnusedBlockArgument:
+  AllowUnusedKeywordArguments: true
+
+# Case tables that map several inputs to one value stay tables.
+Lint/DuplicateBranch:
+  IgnoreLiteralBranches: true
+  IgnoreConstantBranches: true
+
+# Deployment configuration has one reader: config/settings.yml, reached as
+# `Settings.*` (see docs/reference/configuration.md). App code that reads ENV
+# directly puts a knob outside that surface — undocumented, and invisible to the
+# reference test. Boot files, bin/, rake tasks, seeds and tests are exempt
+# because they run before Settings exists or take task arguments, not config.
+Configuration/NoEnvInApp:
+  Include:
+    - "app/**/*"
+
+# Ids reaching the agent- and person-facing tools were typed by the caller, so
+# tenant-owned records are resolved through the caller's tenant, never globally.
+Tenant/ScopedToolLookup:
+  Include:
+    - "app/services/internal_tools/**/*"
+    - "app/services/personal_tools/**/*"
+
+# Board task numbers come from the board's counter; bulk and raw writes skip it and
+# break the next ordinary create. Migrations are exempt: a backfill writes numbers itself.
+Database/BoardTaskNumberBypass:
+  Include:
+    - "app/**/*"
+    - "lib/**/*"
+
+# Doctrine R6: no `any_instance` in new tests. The Exclude list below is the
+# pre-doctrine offender set, frozen on 2026-07-02 — it only ever shrinks.
+Testing/NoAnyInstance:
+  Include:
+    - "test/**/*"
+  Exclude:
+    - "test/controllers/admin/session_logs_controller_test.rb"
+    - "test/controllers/api/v1/authorization_enforcement_test.rb"
+    - "test/controllers/api/v1/projects/workflow_run_assets_controller_test.rb"
+    - "test/controllers/webhooks/slack_controller_test.rb"
+    - "test/services/asset_export_service_test.rb"
+    - "test/services/bmad_e2e_all_runtimes_test.rb"
+    - "test/services/bmad_method_injector_test.rb"
+    - "test/services/internal_tools/coder_tools_test.rb"
+    - "test/temporal/activities/cleanup_stale_sessions_activity_test.rb"
+    - "test/support/stub_support.rb" # legacy container fake — replaced by a real FakeRuntime in Phase 3
+
+# Doctrine R2: don't mock what you don't own. Frozen offender set, 2026-07-02.
+Testing/NoVendorStubbing:
+  Include:
+    - "test/**/*"
+  Exclude:
+    - "test/services/container_runtime/docker_runtime_test.rb"
+    - "test/services/temporal_service_test.rb"
+
+Minitest/AssertPredicate:
+  # Parked: 289-site restyle of existing assertions; `assert { }` via
+  # minitest-power_assert already gives rich failure output. Revisit in a
+  # quiet window together with EmptyLineBeforeAssertionMethods.
+  Enabled: false
+Minitest/AssertWithExpectedArgument:
+  # All local hits are the intentional failure-message idiom
+  # (`assert record.valid?, record.errors.full_messages.to_sentence`), which
+  # this heuristic cop misreads as a forgotten assert_equal.
+  Enabled: false
+Minitest/EmptyLineBeforeAssertionMethods:
+  # Parked: enabling costs a 1189-site autocorrect across 200+ test files —
+  # pointless merge pain while test-touching branches are in flight. Candidate
+  # for a quiet-window enable + one-shot `rubocop -a`.
+  Enabled: false
+Minitest/MultipleAssertions:
+  # Doctrine prefers fewer, longer behavioral tests — an assertion-count cap
+  # fights that (see docs/testing.md, assertion style).
+  Enabled: false

@@ -1,0 +1,485 @@
+# frozen_string_literal: true
+
+class Company < ApplicationRecord
+  # State machine
+  include CompanyStateMachine
+
+  # Shrine attachment
+  include LogoUploader::Attachment(:logo)
+
+  # Associations
+  has_many :company_memberships, dependent: :destroy
+  # Only ACTIVE members: revoked/invited/suspended users must not leak into
+  # consumers (member pickers, session scopes). Screens that need non-active
+  # rows (e.g. the members index) go through :company_memberships directly.
+  has_many :users, -> { merge(CompanyMembership.active).not_deleted }, through: :company_memberships
+  has_many :projects, dependent: :destroy
+  has_many :config_items, as: :scope, dependent: :destroy
+  has_many :agents, as: :scope, dependent: :destroy
+  has_many :tools, as: :scope, dependent: :destroy
+  has_many :mcp_servers, as: :scope, dependent: :destroy, class_name: "MCPServer"
+  has_many :skills, as: :scope, dependent: :destroy
+  has_many :assets, as: :scope, dependent: :destroy
+  has_many :folders, as: :scope, dependent: :destroy
+  # Before :integrations — a Coder runner's integration refuses to go while the runner uses it.
+  has_many :runners, dependent: :destroy
+  has_many :integrations, dependent: :destroy
+  has_many :oauth_credentials, as: :owner, dependent: :destroy
+  # After :integrations — an installation refuses to go while integrations use it.
+  has_many :azure_devops_installations, dependent: :destroy
+  # Auth policy rows and this company's own IdP connections die with it.
+  has_many :company_auth_policies, dependent: :destroy
+  has_many :identity_providers, dependent: :destroy
+  has_many :repositories, as: :scope, dependent: :destroy
+  # Workflows are owned by projects (company-level workflows were removed).
+  # A company's workflows are the aggregate of its projects' workflows.
+  # Cascade on destroy is handled by projects' own `dependent: :destroy`.
+  has_many :workflows, through: :projects
+  # Every session records the company it acts for (project-less logins
+  # included). After :projects, whose destroy detaches their sessions.
+  has_many :terminal_sessions, dependent: :destroy
+  has_many :agent_credentials, dependent: :destroy
+  has_many :trigger_events, dependent: :destroy
+  has_many :billing_cancellations, dependent: :delete_all
+  has_many :feedback_submissions, dependent: :destroy
+  # Nullified rather than destroyed: deleting a workspace does not cancel an AWS
+  # subscription, and a licence that outlives its company is exactly the state
+  # somebody has to see — AWS is still billing and nobody can reach the product.
+  has_many :marketplace_licenses, dependent: :nullify
+  # The one that bills it now. A workspace keeps every licence it has had --
+  # which subscription paid for which month is a billing record -- so "the
+  # licence" has to mean the live one, or a workspace whose subscription ended
+  # reads as still subscribed -- and a customer who subscribes again is refused
+  # for already having what they have just lost.
+  has_one :marketplace_license, -> { live }, class_name: "MarketplaceLicense", inverse_of: :company
+  has_many :feature_flag_overrides, dependent: :delete_all
+  # Read-only preload for the admin index; writes go through #session_concurrency_limit=.
+  # No `dependent:` — the row's before_destroy would abort destroying a metered company.
+  has_one :session_concurrency_limit_row, as: :scope, class_name: "SessionConcurrencyLimit",
+                                          inverse_of: false
+
+  # A session whose runtime is still being torn down holds a reservation, and
+  # destroying it would free a slot that is not free (TerminalSession refuses).
+  # Refused up front, with a reason, instead of failing halfway on a foreign key.
+  before_destroy :refuse_while_runtimes_remain, prepend: true
+
+  # Virtual attributes of the admin panel's company form: a new company's first
+  # admin, and the people invited with a save (Admin::CompaniesController).
+  attr_accessor :initial_admin_email, :invite_emails, :invite_role
+
+  # Also the admin's: puts the company on a trial that ends with this day, or
+  # moves the end of the one it is on. Blank leaves the trial as it is.
+  attribute :trial_last_day, :date
+
+  # Where we host, a company that signs itself up runs on a free trial before
+  # anyone has paid for anything (Billing::Trial).
+  #
+  #   trialing  on the trial: one worker, invoiced for nothing
+  #   active    someone is paying; the company's own limit is the only bound
+  #   blocked   runs nothing, for the reason in `billing_block_reason`
+  #
+  # Meaningless outside the hosted product: a self-hosted operator pays nobody
+  # and a Marketplace customer already bought their capacity from AWS. Every
+  # company that existed before this shipped is `active`.
+  BILLING_STATES = %w[trialing active blocked].freeze
+
+  # Each one is undone differently, which is why it is kept: a spent allowance and
+  # an ended subscription both need a new card through Checkout, while a failed
+  # payment needs its open invoice paid — a second subscription would bill the
+  # same metered minutes twice.
+  # `awaiting_subscription` is not a problem to be fixed: a Marketplace workspace
+  # exists from the moment its buyer registers, and AWS confirms the agreement
+  # separately. Metering records sent before that confirmation are discarded, so
+  # the workspace waits rather than runs.
+  BILLING_BLOCK_REASONS = %w[allowance canceled payment_failed awaiting_subscription].freeze
+
+  # Who sends this company its invoice. One installation can hold more than one
+  # answer, which is why this is a column rather than a deployment mode: the
+  # hosted product bills some companies through Stripe and carries others, and
+  # AWS will bill a third kind.
+  #
+  # `none` is both a company we carry and one nobody has ever charged. The two
+  # are told apart by `managed_by_aixle`, which answers a different question —
+  # whether we forgive the bill, not who sends it.
+  BILLING_PROVIDER_NONE = "none"
+  BILLING_PROVIDER_STRIPE = "stripe"
+  BILLING_PROVIDER_AWS_MARKETPLACE = "aws_marketplace"
+
+  BILLING_PROVIDERS = [
+    BILLING_PROVIDER_NONE, BILLING_PROVIDER_STRIPE, BILLING_PROVIDER_AWS_MARKETPLACE
+  ].freeze
+
+  # What a company we carry (`managed_by_aixle`) is given when it is made. Its
+  # admins cannot change it; we can, from the admin.
+  MANAGED_SESSION_LIMIT = 2
+
+  # No limit means nothing is metered, so a paying company without one runs for
+  # free.
+  UNBOUNDED_PAYING_COMPANY = "is required for a company that pays — tick Managed by Aixle for one that does not"
+
+  # Until a card is added the company runs one worker (Billing::Trial), and
+  # nobody chooses another — we included. A company that needs more is one we
+  # carry.
+  TRIAL_RUNS_ONE_WORKER = "is one until a card is added — tick Managed by Aixle to set another"
+
+  # Constants
+  RESERVED_DOMAINS = %w[
+    admin.com api.com www.com app.com mail.com ftp.com
+    assets.com cdn.com secure.com docs.com help.com
+    support.com blog.com status.com localhost.com
+  ].freeze
+
+  # Validations
+  validates :name, presence: true, uniqueness: true
+  validates :slug, presence: true, uniqueness: true,
+                   format: { with: /\A[a-z0-9-]+\z/, message: "only allows lowercase letters, numbers, and hyphens" }
+  validates :billing_state, inclusion: { in: BILLING_STATES }
+  validates :billing_block_reason, inclusion: { in: BILLING_BLOCK_REASONS }, allow_nil: true
+  validates :billing_provider, inclusion: { in: BILLING_PROVIDERS }
+  validates :email_domain, presence: true, uniqueness: { case_sensitive: false },
+                           format: { with: /\A[a-z0-9-]+(\.[a-z0-9-]+)+\z/, message: "must be a valid domain (e.g., acme.com, aixle.com)" }
+  validate :email_domain_not_reserved
+  validate :session_concurrency_limit_is_a_positive_integer
+  validate :company_we_stop_carrying_is_bounded, if: :leaving_management?
+  validate :trial_last_day_allowed, if: :setting_trial_last_day?
+  validate :trial_keeps_one_worker, if: -> { @session_concurrency_limit_assigned && Billing::Trial.workers_fixed?(self) }
+  validate :initial_admin_invitable, on: :create, if: -> { initial_admin_email.present? }
+
+  # Callbacks
+  before_validation :generate_slug, on: :create
+  # An absent policy row means denied (AD-4), so every company gets an explicit,
+  # enabled row per deployment provider the moment it exists.
+  after_create :seed_auth_policies
+  before_validation :downcase_email_domain
+  # Before forget_billing_block, so a blocked company that becomes ours loses
+  # its block reason with its block.
+  before_validation :keep_managed_company_running, if: :managed_by_aixle?
+  before_validation :start_billing_company_we_stop_carrying, if: :leaving_management?
+  before_validation :put_on_trial_until_last_day, if: -> { setting_trial_last_day? && trial_last_day_refusal.nil? }
+  before_validation :give_new_trial_the_default_length, if: :starting_trial_of_default_length?
+  before_validation :start_trial_on_one_worker, if: :entering_one_worker?
+  before_validation :forget_billing_block, unless: :billing_blocked?
+  # Three paths write a Stripe customer — Checkout, the webhook, the admin — and
+  # the column has to be true for all of them or the admin shows `none` beside a
+  # company that is paying.
+  before_validation :record_stripe_as_the_payer, if: :acquiring_a_stripe_customer?
+  # Here rather than in the three paths that switch the payer, so a fourth
+  # cannot forget it. Billing::CapacityWindow reads it.
+  before_save :stamp_the_payer_change, if: -> { persisted? && will_save_change_to_billing_provider? }
+  # After commit, like the capacity log beside it: an entry for a state that
+  # was rolled back would bill against something that never happened.
+  #
+  # Creation is logged whatever the state, because one that came from the
+  # column default reports no change -- and a company the log does not know is
+  # read from its live row, the snapshot the log exists to stop trusting. Not
+  # on destroy, where `belongs_to` refuses the entry. One callback for both: a
+  # second `after_commit` naming the same method replaces the first.
+  after_commit :record_billing_state_change, on: %i[create update],
+                                             if: -> { previously_new_record? || saved_change_to_billing_state? }
+  after_save :apply_session_concurrency_limit
+
+  scope :billing_billable, -> { where(billing_state: "active", managed_by_aixle: false) }
+
+  def billing_trialing? = billing_state == "trialing"
+  def billing_active? = billing_state == "active"
+  def billing_blocked? = billing_state == "blocked"
+
+  def billing_cancellation_scheduled? = billing_active? && billing_cancels_at.present?
+
+  def billing_payer = Billing::Payer.for(self)
+
+  # The one word the billing screen and the banner are written against.
+  def billing_status
+    case billing_state
+    when "trialing" then "trialing"
+    when "active" then billing_cancellation_scheduled? ? "cancelling" : "active"
+    else billing_block_reason.presence || "allowance"
+    end
+  end
+
+  def billing_admins
+    users.where(company_memberships: { role: "admin" })
+  end
+
+  scope :domain_verified, -> { where.not(domain_verified_at: nil) }
+
+  # A claimed domain and a proved one are different things. Claiming happens at
+  # signup and proves a mailbox; proving happens in DNS, and it is what auto-join
+  # rests on.
+  def domain_verified? = domain_verified_at.present?
+
+  def regenerate_domain_verification_token!
+    update_column(:domain_verification_token, SecureRandom.hex(16))
+    domain_verification_token
+  end
+
+  # Backed by a SessionConcurrencyLimit row, not a column, so the drain reads
+  # both tiers from one table. Nil means unbounded and unbilled.
+  def session_concurrency_limit
+    return @session_concurrency_limit if defined?(@session_concurrency_limit)
+    return session_concurrency_limit_row&.max_sessions if association(:session_concurrency_limit_row).loaded?
+
+    SessionConcurrencyLimit.for_company(id)
+  end
+
+  def session_concurrency_limit=(value)
+    @session_concurrency_limit = value.to_s.strip.presence
+    @session_concurrency_limit_assigned = true
+  end
+
+  def refuse_while_runtimes_remain
+    return unless SessionAdmission.unreleased.joins(:terminal_session).where(terminal_sessions: { company_id: id }).exists?
+
+    errors.add(:base, "This company still has sessions whose runtime is being cleaned up; stop them and try again")
+    throw :abort
+  end
+
+  # White label / branding helpers
+  def branded_name
+    display_name.presence || name
+  end
+
+  def logo_url
+    logo&.url
+  end
+
+  def branding
+    {
+      name: branded_name,
+      email_domain: email_domain,
+      logo_url: logo_url,
+      primary_color: primary_color || "#4785FF",
+      secondary_color: secondary_color || "#bb9af7"
+    }
+  end
+
+  def self.find_by_email_domain(email)
+    domain = email.split("@").last # e.g., "acme.com", "aixle.com"
+    active.find_by(email_domain: domain)
+  end
+
+
+  # A viewer is read-only and must never own a project, so only employees and
+  # admins qualify.
+  def ownership_candidates
+    users.where(company_memberships: { role: %w[employee admin] })
+  end
+
+  private
+
+  # Nobody pays for a company we carry, so it has no allowance to spend and no
+  # subscription to lapse: neither trialing nor blocked means anything for it.
+  def keep_managed_company_running
+    self.billing_state = "active"
+  end
+
+  def leaving_management? = Deployment.saas? && managed_by_aixle_changed?(from: true, to: false)
+
+  # Left `active`, a company we stop carrying shows a subscription it never had:
+  # Cancel that refuses, no way to add a card, minutes the meter drops for want
+  # of a Stripe customer. It starts a fresh trial instead — what it ran while we
+  # carried it is not held against it — of the default length unless a last day
+  # comes with the same save. A subscription from before we took it on keeps
+  # billing it — unless it has ended, which keep_managed_company_running hid by
+  # leaving the end date on an active row.
+  def start_billing_company_we_stop_carrying
+    if stripe_subscription_id.present?
+      return unless billing_cancels_at&.past?
+
+      self.billing_state = "blocked"
+      self.billing_block_reason = "canceled"
+    else
+      self.billing_state = "trialing"
+      self.trial_started_at = Time.current
+    end
+  end
+
+  def company_we_stop_carrying_is_bounded
+    errors.add(:session_concurrency_limit, UNBOUNDED_PAYING_COMPANY) if session_concurrency_limit.blank?
+  end
+
+  def setting_trial_last_day? = trial_last_day.present? && trial_last_day_changed?
+
+  def trial_last_day_allowed
+    refusal = trial_last_day_refusal
+    errors.add(:trial_last_day, refusal) if refusal
+  end
+
+  def trial_last_day_refusal
+    if !Deployment.saas?
+      "is only for the hosted product, where companies pay"
+    elsif managed_by_aixle?
+      "is for a company that pays — untick Managed by Aixle to put this one on a trial"
+    elsif subscription_running?
+      "cannot be set while a subscription bills this company — it would be billed and on a trial at once"
+    elsif trial_last_day < Date.current
+      "cannot be in the past"
+    end
+  end
+
+  # Stored state, not the form's: an operator changing the billing state in the
+  # same save does not end a subscription. The id outlives an ended subscription,
+  # so the state says whether it still bills: paying, or stopped with an invoice
+  # Stripe is still collecting.
+  def subscription_running?
+    stripe_subscription_id.present? &&
+      (billing_state_in_database == "active" || billing_block_reason_in_database == "payment_failed")
+  end
+
+  # A company already on a trial keeps its start, and what it has spent counts
+  # towards the new length; any other starts one now.
+  def put_on_trial_until_last_day
+    if billing_state_in_database == "trialing"
+      spent = Billing::Trial.used_seconds(self)
+      from = Billing::Trial.measured_until(self)
+    else
+      self.trial_started_at = from = Time.current
+      spent = 0
+    end
+    self.billing_state = "trialing"
+    self.trial_hours = Billing::Trial.hours_ending_on(trial_last_day, spent_seconds: spent, from: from)
+  end
+
+  # Onto the trial, or stopped at its end — a company we stop carrying lands on
+  # either. Whatever the form still holds, or what it paid for before, it runs
+  # one until a card is added.
+  def entering_one_worker? = Deployment.saas? && billing_state_changed? && Billing::Trial.workers_fixed?(self)
+
+  def start_trial_on_one_worker
+    self.session_concurrency_limit = Billing::Trial::WORKERS
+  end
+
+  # Only a change is refused: a company that was given more before this rule
+  # keeps it, and runs one anyway (Billing::EffectiveCapacity).
+  def trial_keeps_one_worker
+    requested = @session_concurrency_limit.to_s
+    return if requested == Billing::Trial::WORKERS.to_s
+    return if persisted? && requested == SessionConcurrencyLimit.for_company(id).to_s
+
+    errors.add(:session_concurrency_limit, TRIAL_RUNS_ONE_WORKER)
+  end
+
+  def starting_trial_of_default_length?
+    billing_trialing? && billing_state_changed? && !trial_hours_changed?
+  end
+
+  def give_new_trial_the_default_length
+    self.trial_hours = Billing::Trial.new_trial_hours
+  end
+
+  # A company that is running again has no reason to be stopped, and an unpaid
+  # invoice it was pointed at belongs to the stop that has just been undone.
+  def acquiring_a_stripe_customer?
+    return false unless stripe_customer_id.present? && will_save_change_to_stripe_customer_id?
+    return true if billing_provider == BILLING_PROVIDER_NONE
+
+    # A workspace AWS billed until its subscription ended: nothing re-points the
+    # column on a cancellation. Never while the licence is live, and never on
+    # create, where no licence exists yet to say.
+    billing_provider == BILLING_PROVIDER_AWS_MARKETPLACE && persisted? && marketplace_license.nil?
+  end
+
+  def record_stripe_as_the_payer
+    self.billing_provider = BILLING_PROVIDER_STRIPE
+  end
+
+  # When the payer that bills this company now took over, which is what splits
+  # the hour a switch happened in between the old payer and the new. Not on
+  # create: nothing before a company exists is billed anyway
+  # (Billing::CapacityWindow#opening_limits).
+  def stamp_the_payer_change
+    self.billing_provider_since = Time.current
+  end
+
+  # What Billing::CapacityWindow reads to tell an hour a workspace was stopped
+  # for from one it was running.
+  def record_billing_state_change
+    CompanyBillingStateChange.record!(company_id: id, billing_state: billing_state)
+  end
+
+  def forget_billing_block
+    self.billing_block_reason = nil
+    self.billing_unpaid_invoice_url = nil
+  end
+
+  # Only when the form submitted the field, so saving a logo cannot silently
+  # exempt a customer from billing.
+  def apply_session_concurrency_limit
+    return unless @session_concurrency_limit_assigned
+
+    @session_concurrency_limit_assigned = false
+    row = SessionConcurrencyLimit.find_by(scope_type: "Company", scope_id: id)
+
+    if @session_concurrency_limit.blank?
+      row&.destroy
+    else
+      record = row || SessionConcurrencyLimit.new(scope_type: "Company", scope_id: id)
+      record.update!(max_sessions: @session_concurrency_limit)
+    end
+  end
+
+  # Here rather than on the row, so the admin form reports it instead of the
+  # after_save callback raising.
+  def session_concurrency_limit_is_a_positive_integer
+    return unless @session_concurrency_limit_assigned
+
+    if @session_concurrency_limit.blank?
+      if Deployment.requires_bounded_companies?
+        errors.add(:session_concurrency_limit,
+                   "is required: this installation meters its capacity to AWS Marketplace, " \
+                   "where unlimited cannot be expressed")
+      # Where we host, unlimited is free, and free is only for a company we carry.
+      elsif billing_payer.bills? && !leaving_management?
+        errors.add(:session_concurrency_limit, UNBOUNDED_PAYING_COMPANY)
+      end
+      return
+    end
+
+    unless @session_concurrency_limit.match?(/\A[1-9]\d*\z/)
+      return errors.add(:session_concurrency_limit, "must be a positive whole number, or blank for no limit")
+    end
+
+    requested = @session_concurrency_limit.to_i
+    return if requested >= billing_payer.minimum_workers || requested == SessionConcurrencyLimit.for_company(id)
+
+    errors.add(:session_concurrency_limit, SessionConcurrencyLimit.below_minimum_workers)
+  end
+
+  def seed_auth_policies
+    Auth::CompanyPolicySeeder.seed!(self)
+  end
+
+  def generate_slug
+    return if slug.present?
+
+    base_slug = name.to_s.parameterize
+    self.slug = base_slug
+
+    # Ensure uniqueness
+    counter = 1
+    while Company.exists?(slug: slug)
+      self.slug = "#{base_slug}-#{counter}"
+      counter += 1
+    end
+  end
+
+  def downcase_email_domain
+    email_domain&.downcase!
+  end
+
+  def email_domain_not_reserved
+    errors.add(:email_domain, "is reserved") if email_domain.present? && RESERVED_DOMAINS.include?(email_domain)
+  end
+
+  # The first admin is invited once the company saves (Admin::CompaniesController),
+  # so an address that could not be invited stops the save instead of leaving a
+  # company nobody can get into.
+  def initial_admin_invitable
+    email = initial_admin_email.strip.downcase
+    if !email.match?(URI::MailTo::EMAIL_REGEXP)
+      errors.add(:initial_admin_email, :invalid)
+    elsif User.exists?(email: email, super_admin: true)
+      errors.add(:initial_admin_email, "belongs to a platform administrator, who cannot be a member of a company")
+    end
+  end
+end

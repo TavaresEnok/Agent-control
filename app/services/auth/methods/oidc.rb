@@ -1,0 +1,178 @@
+# frozen_string_literal: true
+
+module Auth
+  module Methods
+    # A customer's own OpenID Connect provider, configured per company.
+    #
+    # Deliberately NOT an OmniAuth strategy: OmniAuth strategies are boot-time
+    # initializer constants, and a customer's issuer and client credentials are a
+    # database row (AD-4). The flow is built on the `openid_connect` gem, with
+    # PKCE and a nonce held server-side by Auth::State.
+    class Oidc < Auth::Method
+      DISCOVERY_TTL = 12.hours
+      DEFAULT_SCOPES = %w[openid email profile].freeze
+      TIMEOUT = 10
+
+      class DiscoveryError < Auth::Method::Failure; end
+
+      def authorize_url(redirect_uri:, state:, code_challenge:, nonce:)
+        params = {
+          client_id: provider.client_id,
+          response_type: "code",
+          scope: scopes.join(" "),
+          redirect_uri: redirect_uri,
+          state: state,
+          nonce: nonce,
+          code_challenge: code_challenge,
+          code_challenge_method: "S256"
+        }
+        uri = URI.parse(endpoint("authorization_endpoint"))
+        uri.query = params.to_query
+        uri.to_s
+      end
+
+      def complete(code:, redirect_uri:, code_verifier:, nonce:)
+        tokens = exchange_code(code: code, redirect_uri: redirect_uri, code_verifier: code_verifier)
+        claims = verify_id_token!(tokens["id_token"], nonce: nonce)
+        email = claims["email"].presence
+
+        Auth::Assertion.new(
+          provider: provider,
+          # `sub` is the binding claim for OIDC and is never substituted (AD-3).
+          subject: claims["sub"].to_s,
+          email: email || fallback_email(claims),
+          # Absent is not true: an issuer that does not say so has not verified it.
+          # The claim speaks for `email` only, never for a fallback address.
+          email_verified: email.present? &&
+            (claims["email_verified"] == true || claims["email_verified"].to_s == "true"),
+          name: claims["name"] || claims["preferred_username"]
+        )
+      end
+
+      # The issuer's published metadata, cached: a login must not pay for a
+      # discovery round trip, and an issuer must not be hammered once per sign-in.
+      def discovery
+        @discovery ||= Rails.cache.fetch(discovery_cache_key, expires_in: DISCOVERY_TTL) do
+          fetch_json(discovery_url)
+        end
+      end
+
+      private
+
+      def scopes
+        Array(provider.config["scopes"]).presence || DEFAULT_SCOPES
+      end
+
+      # Entra leaves `email` out of the id_token for an account with no mailbox
+      # (an empty `mail` attribute) and names the person by `preferred_username`
+      # — the UPN, for a work account — or the optional `upn` claim. Without
+      # this such a sign-in carried no address and was refused as no_workspace.
+      def fallback_email(claims)
+        claims.values_at("upn", "preferred_username").find { |value| value.to_s.match?(URI::MailTo::EMAIL_REGEXP) }
+      end
+
+      def discovery_url
+        uri = URI.parse(provider.issuer.to_s)
+        uri.path = "#{uri.path.chomp('/')}/.well-known/openid-configuration"
+        uri.query = nil
+        uri.fragment = nil
+        uri.to_s
+      rescue URI::InvalidURIError
+        raise DiscoveryError, "issuer is not a valid URL"
+      end
+
+      def endpoint(key)
+        url = discovery.is_a?(Hash) ? discovery[key] : nil
+        raise DiscoveryError, "discovery document has no #{key}" unless url.is_a?(String) && url.present?
+
+        url
+      end
+
+      def discovery_cache_key
+        "auth_oidc_discovery:#{provider.id}:#{Digest::SHA256.hexdigest(provider.issuer.to_s)}"
+      end
+
+      def exchange_code(code:, redirect_uri:, code_verifier:)
+        response = connection(endpoint("token_endpoint")).post do |req|
+          req.headers["Content-Type"] = "application/x-www-form-urlencoded"
+          req.body = {
+            grant_type: "authorization_code",
+            code: code,
+            redirect_uri: redirect_uri,
+            client_id: provider.client_id,
+            client_secret: provider.client_secret,
+            code_verifier: code_verifier
+          }.to_query
+        end
+        raise Auth::Method::Failure, "token endpoint returned #{response.status}" unless response.success?
+
+        JSON.parse(response.body)
+      rescue JSON::ParserError
+        raise Auth::Method::Failure, "token endpoint returned a non-JSON body"
+      rescue Faraday::Error => e
+        raise Auth::Method::Failure, "token endpoint unreachable (#{e.class})"
+      end
+
+      # AD-13: the assertion is bound to the row that claims it. `iss` and `aud`
+      # are checked against this connection, and the nonce against the one this
+      # very request minted — so an id_token issued for another tenant, another
+      # client, or another login attempt is refused with no email fallback.
+      def verify_id_token!(id_token, nonce:)
+        raise Auth::Method::Failure, "no id_token in the token response" if id_token.blank?
+
+        decoded = OpenIDConnect::ResponseObject::IdToken.decode(id_token, jwks)
+        decoded.verify!(issuer: provider.issuer, client_id: provider.client_id, nonce: nonce)
+
+        claims = decoded.raw_attributes.merge("sub" => decoded.sub)
+        verify_tenant!(claims)
+        claims
+      rescue JSON::JWT::VerificationFailed, JSON::JWK::Set::KidNotFound => e
+        raise Auth::Method::Failure, "id_token signature could not be verified (#{e.class})"
+      rescue OpenIDConnect::ResponseObject::IdToken::InvalidToken => e
+        raise Auth::Method::Failure, "id_token rejected: #{e.message}"
+      end
+
+      # An issuer that multiplexes tenants (Entra behind a generic connection)
+      # must still land on the tenant this row names.
+      def verify_tenant!(claims)
+        expected = provider.tenant_id.to_s
+        return if expected.blank?
+        return if claims["tid"].to_s == expected
+
+        raise Auth::Method::Failure,
+              "id_token tenant #{claims['tid'].inspect} does not match this connection"
+      end
+
+      def jwks
+        JSON::JWK::Set.new(fetch_json(endpoint("jwks_uri")))
+      end
+
+      def fetch_json(url)
+        response = connection(url).get
+        raise DiscoveryError, "#{url} returned #{response.status}" unless response.success?
+
+        JSON.parse(response.body)
+      rescue JSON::ParserError
+        raise DiscoveryError, "#{url} returned a non-JSON body"
+      rescue Faraday::Error => e
+        raise DiscoveryError, "#{url} unreachable (#{e.class})"
+      end
+
+      # The issuer and every URL its discovery document names are chosen by a
+      # tenant, so each is dialed only at the address SafeHttp vetted, and
+      # redirects are not followed.
+      def connection(url)
+        uri = URI.parse(url)
+        raise DiscoveryError, "#{url} must use https" unless uri.scheme == "https"
+
+        Faraday.new(url: uri.to_s, request: { open_timeout: TIMEOUT, timeout: TIMEOUT }) do |faraday|
+          SafeHttp.pin_faraday!(faraday, uri)
+        end
+      rescue URI::InvalidURIError
+        raise DiscoveryError, "#{url} is not a valid URL"
+      rescue SafeHttp::UnsafeUrl => e
+        raise DiscoveryError, "#{url} #{e.message}"
+      end
+    end
+  end
+end

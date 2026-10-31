@@ -1,0 +1,480 @@
+# frozen_string_literal: true
+
+class TerminalSession < ApplicationRecord
+  class InvalidStateError < StandardError; end
+
+  include TerminalSessionStateMachine
+  include JsonbDocument
+  include CreatedWithinDates
+  include RunnerReference
+
+  WORKFLOW_TIMEOUT = 86_400 # 24 hours
+
+  # What the cancellation path reports for every reason a session can be cancelled
+  # for — including the ones something already diagnosed precisely: a spend limit read
+  # off the terminal by ScanQuotaErrorsActivity, a node that took the pod with it,
+  # caught by ScanDeadContainersActivity.
+  #
+  # Both write the real reason here first and both were then overwritten by this
+  # string, because cleanup runs last. That is not only a cosmetic loss: the quota
+  # detector in CompleteStepActivity reads `error_message`, so a clobbered session
+  # never got `error_category: :quota_exceeded` either, and the run surfaced as a bare
+  # "cancelled" with nothing to act on. (2026-09-05: eleven runs, all of them a spend
+  # limit nobody could see.)
+  # "Session admission is closed" is the queue refusing a permit, which is what
+  # a `finish` landing mid-launch looks like from inside an activity. It says
+  # nothing about why the work ended, and it used to be both the session's error
+  # message and the reason it was marked failed — so a person who pressed Finish
+  # four seconds into an authentication session was told their session had
+  # failed, in the queue's vocabulary.
+  # A launch that was cleaned up before it ever reached a container. It is the
+  # queue's own vocabulary, so a real reason already on the session — an expired
+  # connection, a revoked credential — outranks it.
+  LAUNCH_ABANDONED_ERROR = "Launch abandoned before the container started"
+
+  GENERIC_ERROR_MESSAGES = [ "Workflow cancelled", "Session admission is closed", LAUNCH_ABANDONED_ERROR ].freeze
+
+  TERMINAL_STATES = %w[finished failed cancelled].freeze
+
+  # A specific reason always outranks a generic one, whichever arrives last.
+  def self.preferred_error_message(existing, incoming)
+    return existing if incoming.blank?
+    return existing if existing.present? && GENERIC_ERROR_MESSAGES.include?(incoming)
+
+    incoming
+  end
+
+  # `bmm` ships inside the npm package; every other module is cloned from GitHub
+  # at install time, and each one costs an api.github.com tag lookup against a
+  # per-IP hourly budget shared by the whole cluster (see BmadMethodInjector).
+  # `bmb` (builder) and `cis` (creative intelligence suite) are authoring
+  # toolkits that pipeline sessions never invoke, so they are no longer installed
+  # by default — a session that wants them still names them in
+  # `session_config.bmad_modules`.
+  BMAD_DEFAULT_MODULES = %w[bmm wds].freeze
+
+  # Associations
+  # Optional only for history: a permanently deleted user's sessions stay as the
+  # company's record of work, owned by nobody. Every new session has an owner.
+  belongs_to :user, optional: true
+  validates :user, presence: true, on: :create
+  belongs_to :project, optional: true
+  # Explicit tenant, needed because auth_setup sessions are project-less and
+  # create a per-company (billed) agent credential — see SessionCompany.
+  belongs_to :company, optional: true
+  belongs_to :configured_agent, class_name: "Agent", optional: true
+  has_one :usage_statistic, dependent: :destroy
+  has_many :session_logs, dependent: :destroy
+  has_many :output_assets, class_name: "Asset", foreign_key: :terminal_session_id
+  has_one :step_run, dependent: :nullify
+  before_destroy :retain_unreleased_admission, prepend: true
+  has_one :session_admission, dependent: :destroy
+
+  def retain_unreleased_admission
+    if session_admission && !session_admission.released_at
+      errors.add(:base, "Session runtime cleanup is still pending")
+      throw :abort
+    end
+  end
+
+  has_and_belongs_to_many :tools, join_table: :session_tools
+  has_and_belongs_to_many :skills, join_table: :session_skills
+  has_and_belongs_to_many :mcp_servers, join_table: :session_mcp_servers, class_name: "MCPServer"
+  has_and_belongs_to_many :input_assets, class_name: "Asset", join_table: :session_input_assets
+  has_and_belongs_to_many :repositories, join_table: :session_repositories
+  # Attaching a config item is what authorizes this session to decrypt its value
+  # through `get_config_item` — the tool resolves against this set, never against
+  # the project's items. See docs/implementation-artifacts/spec-session-config-item-access.md.
+  has_and_belongs_to_many :config_items, join_table: :session_config_items
+
+  # Callbacks
+  before_create :generate_route_token
+  after_create :store_mcp_key_for_older_pods
+
+  broadcasts_to ->(s) { s }, on: :update
+  broadcasts_to ->(s) { s.step_run.workflow_run }, on: :update, if: :step_run
+  after_commit :broadcast_session_list_update, on: :update
+
+  # Validations
+  validates :session_type, presence: true, inclusion: {
+    in: %w[auth_setup agent_session tool_setup workflow_step],
+    message: "%{value} is not a valid session type"
+  }
+  validates :agent_type, presence: true, if: -> { session_type.in?(%w[auth_setup agent_session]) }
+  validates :agent_type, inclusion: {
+    in: CompanyMembership::AVAILABLE_AGENTS,
+    message: "%{value} is not a valid agent type"
+  }, allow_nil: true
+  validates :state, presence: true
+  validates :route_token, uniqueness: true, allow_nil: true
+  validates :mode, inclusion: { in: %w[interactive non_interactive] }, allow_nil: true
+  validates :initial_prompt, presence: true, if: -> { mode == "non_interactive" }
+  validates :requested_model, format: { with: /\A[a-z0-9][a-z0-9._:-]*\z/, message: "invalid model ID format" }, allow_nil: true
+  normalizes :reasoning_effort, with: ->(value) { value.to_s.strip.presence }
+  # A level needs the session's runtime and an explicitly chosen model, and must be one
+  # that runtime takes for that model. A workflow step's session copies its step's
+  # runtime, model and level, so it passes the same check.
+  validates :reasoning_effort, reasoning_effort: { runtime: :agent_type, model: :requested_model }, on: :create
+  # Whatever the container is handed — a repository cloned with its
+  # integration's token, an MCP server with its headers, an asset's bytes, a
+  # config item's decrypted value — must be this tenant's. Checked on create,
+  # where the ids arrive; the readers in SessionContextService scope again.
+  { tools: Tool, skills: Skill, mcp_servers: MCPServer, repositories: Repository, input_assets: Asset,
+    config_items: ConfigItem }.each do |association, model|
+    validates association, tenant_ids: { model: model, company: :company }, on: :create
+  end
+  before_validation :inherit_project_company
+  before_save :inherit_project_company
+  validates :company_id, presence: true
+  validate :company_is_project_company, if: -> { project && company_id }
+
+  # Ransack
+  def self.ransackable_attributes(_auth_object = nil)
+    %w[agent_type project_id session_type state created_at user_id cost_cents total_tokens duration_seconds]
+  end
+
+  def self.ransackable_associations(_auth_object = nil)
+    %w[user project session_logs]
+  end
+
+  def self.ransackable_scopes(_auth_object = nil)
+    %w[created_from created_until]
+  end
+
+  # Start to finish. A live session counts up to now, as its list row does; one
+  # that never started, or stopped without a finish time, has none.
+  DURATION_SECONDS_SQL = <<~SQL.squish
+    EXTRACT(EPOCH FROM (COALESCE(terminal_sessions.finished_at,
+      CASE WHEN terminal_sessions.state IN ('not_started', 'running', 'ready') THEN NOW() END)
+      - terminal_sessions.started_at))
+  SQL
+
+  ransacker :duration_seconds, type: :integer do
+    Arel.sql(DURATION_SECONDS_SQL)
+  end
+
+  # Scopes
+  scope :auth_sessions, -> { where(session_type: "auth_setup") }
+  scope :agent_sessions, -> { where(session_type: "agent_session") }
+  scope :active, -> { where(state: %w[not_started queued running ready]) }
+  scope :finishing, -> { where(state: "finishing") }
+  # Waiting for its agent's login to be renewed (Sessions::AuthPause).
+  scope :auth_paused, -> { where("terminal_sessions.metadata->>'auth_paused_at' IS NOT NULL") }
+  scope :completed, -> { where(state: %w[finished]) }
+  scope :for_user, ->(user_id) { where(user_id: user_id) }
+  # Sessions `user` may be shown at all: their own, plus every session in a
+  # project they can reach. This is only the REACHABILITY half of the rule —
+  # `visible_to?` still has to be applied per row, because whether a session is
+  # shared depends on its type and lifecycle phase rather than on anything SQL
+  # can select. Callers that skip the second half leak other people's shells.
+  scope :readable_by, ->(user) {
+    # "Their own" still means their own in a company they belong to: a member
+    # removed from a company loses its sessions with it.
+    member_company_ids = user.company_memberships.active.select(:company_id)
+    where(user_id: user.id, company_id: member_company_ids)
+      .or(where(project_id: Project.for_user(user).select(:id)))
+  }
+  scope :with_cached_resource_counts, -> {
+    select(
+      "terminal_sessions.*",
+      "(SELECT COUNT(*) FROM session_logs WHERE session_logs.terminal_session_id = terminal_sessions.id) AS cached_session_logs_count",
+      "(SELECT COUNT(*) FROM assets WHERE assets.terminal_session_id = terminal_sessions.id AND assets.status = 'pending_review') AS cached_pending_review_assets_count"
+    )
+  }
+
+  def active?
+    state.in?(%w[not_started queued running ready])
+  end
+
+  # The key the session's container holds for the aixle-tools MCP server. A
+  # session launched before keys were derived keeps the random one it was given.
+  def mcp_key
+    self[:mcp_key].presence || (MCP::SessionKey.generate(self) if persisted?)
+  end
+
+  def finishing?
+    state == "finishing"
+  end
+
+  # May `viewer` open this session — its live terminal/editor while it runs, or
+  # its replayed log once it is over?
+  #
+  # This is a SECOND gate, on top of the project/company scoping every session
+  # screen already applies: reaching the record is not the same as being allowed
+  # to watch the person work. The owner always passes; for everyone else the
+  # owner's profile preferences decide, per lifecycle phase, and no role
+  # overrides them — a company admin reads the same two booleans, because the
+  # setting exists precisely to keep other people out of a live shell.
+  #
+  # Two session types are not personal work and are exempt:
+  #   - workflow_step — team automation, watched from the workflow run screen;
+  #     gating it would hide a shared pipeline behind whoever happened to
+  #     trigger it.
+  #   - auth_setup — the owner's credential login, never anyone else's business,
+  #     so it is owner-only regardless of preferences.
+  def visible_to?(viewer)
+    return false if viewer.nil?
+    return true if user_id == viewer.id
+    return false if session_type == "auth_setup"
+    return false if user.nil?
+
+    active? || finishing? ? user.share_active_sessions? : user.share_completed_sessions?
+  end
+
+  # May `viewer` reach the CONTAINER's routes (ttyd, the IDE, the file server)?
+  #
+  # Asked by the Traefik ForwardAuth endpoint (Api::V1::Internal::WsAuth), which
+  # sees only a route token and a session cookie — it has no scoped query behind
+  # it, so the reachability half that a web screen gets for free from
+  # `current_project.terminal_sessions` has to be stated here. Both halves must
+  # hold: the viewer can reach the session's project, AND the owner shares this
+  # phase of it.
+  #
+  # NOTE: ttyd runs writable (`-W`) and the IDE is a full VS Code, so passing
+  # this grants the viewer an interactive shell in the container, not a
+  # read-only window.
+  def container_accessible_by?(viewer)
+    return false if queued? || cancelled?
+    return false unless visible_to?(viewer)
+    return owner_entitled? if user_id == viewer.id
+
+    project.present? && project.accessible_by?(viewer)
+  end
+
+  # Whether the session's owner may still act through it: an authenticatable
+  # account with an active membership in the session's company. Checked by every
+  # gate a running container reaches — the terminal proxy, the MCP key, the
+  # credential vending endpoints — so offboarding a member or suspending an
+  # account takes effect on sessions already running.
+  def owner_entitled?
+    return false unless user && User.authenticatable.exists?(id: user_id)
+
+    company_id = SessionCompany.company_id_for(self)
+    company_id.present? && CompanyMembership.active.exists?(company_id: company_id, user_id: user_id)
+  end
+
+  # Idempotently runs the `start_finishing! → finish!` chain that fires at the
+  # tail of every finalization path. Safe to call multiple times: each AASM
+  # transition is guarded by its `may_*?` predicate.
+  def complete_finish!
+    start_finishing! if may_start_finishing?
+    finish! if may_finish?
+  end
+
+  def config_files
+    session_config["config_files"] || {}
+  end
+
+  def bmad_enabled?
+    session_config&.dig("bmad_enabled") == true
+  end
+
+  def bmad_modules
+    session_config&.dig("bmad_modules") || BMAD_DEFAULT_MODULES
+  end
+
+  def workflow_id
+    "agent-session-#{id}"
+  end
+
+  # == Strategy ==
+
+  def strategy
+    case session_type
+    when "auth_setup"
+      ContainerStrategies::AgentAuthStrategy.new(**strategy_params)
+    when "agent_session"
+      ContainerStrategies::AgentSessionStrategy.new(**strategy_params.merge(credential: session_credential))
+    when "workflow_step"
+      ContainerStrategies::WorkflowStepStrategy.new(**strategy_params.merge(credential: session_credential))
+    else
+      raise ArgumentError, "Cannot build strategy for session_type=#{session_type}"
+    end
+  end
+
+  # The credential this session's container may use: the acting user's, in THIS
+  # session's company. Never `user.agent_credentials` — a person holds one credential
+  # per company, so an unscoped read hands a container another tenant's tokens (and
+  # bills that tenant for the tokens it spends).
+  def session_credential
+    SessionCompany.agent_credentials_for(self).find_by(agent_type: agent_type)
+  end
+
+  # The session's entitled tool set: explicitly attached tools, the project
+  # custom-tool fallback, plus code-defined platform tools whose injection
+  # rules match this session (Tools::InjectionRules). Availability
+  # (integration gating) is deliberately NOT applied here: serving surfaces
+  # filter with Tool#available?(ctx) so tools/call can distinguish
+  # entitled-but-disconnected from not-entitled.
+  def aixle_builder?
+    metadata&.dig("aixle_builder") == true
+  end
+
+  def available_tools(ctx: nil)
+    ctx ||= Tools::Context.for_session(self)
+
+    base = tools.not_deleted.enabled.where(id: TenantScope.owned(Tool, project: project, company: company || project&.company).select(:id)).to_a
+    if base.none?(&:db_source?) && project.present?
+      base += Tool.for_project(project).enabled.to_a
+    end
+
+    ctx.candidate_tools = base
+    injected = Tools::Registry.injectable.select { |d| d.inject?(ctx) }.map(&:name)
+    base += Tool.shadow_rows_for_names(injected).select(&:enabled?)
+
+    base.uniq
+  end
+
+  private
+
+  def runner_project = project
+
+  # RunnerReference: the session's own tenant columns. A session without a
+  # project owns no runner, like #runner_project.
+  def runner_tenant_ids = project_id ? [ company_id, project_id ] : [ nil, nil ]
+
+  def inherit_project_company
+    self.company_id ||= project&.company_id
+  end
+
+  def company_is_project_company
+    errors.add(:company_id, "must be the project's company") if company_id != project.company_id
+  end
+
+  # == State machine callbacks ==
+  #
+  # A transition's `after:` runs before AASM writes the new state, so these only
+  # assign: the attributes land in the same save as the state. Anything that
+  # leaves the process waits for the commit — a signal sent from inside the
+  # transaction can reach the workflow before the state does, or announce a
+  # transition that then rolls back.
+
+  def on_started
+    self.started_at = Time.current
+    start_workflow_run_execution
+  end
+
+  def on_ready
+    self.ready_at = Time.current
+  end
+
+  def on_queued
+    self.queued_at = Time.current
+  end
+
+  def on_finishing
+    self.finishing_at = Time.current
+  end
+
+  def on_finished
+    assign_usage_totals
+    self.finished_at = Time.current
+    self.container_id = nil
+    ActiveRecord.after_all_transactions_commit { notify_workflow_execution_if_step_session }
+  end
+
+  def on_failed
+    assign_usage_totals
+    self.finished_at = Time.current
+    self.container_id = nil
+    ActiveRecord.after_all_transactions_commit { notify_workflow_execution_if_step_session }
+  end
+
+  # The container is still being torn down (by its own workflow), so it keeps
+  # its id; the usage it ran up so far is recorded like any other ending.
+  def on_cancelled
+    assign_usage_totals
+    self.finished_at = Time.current
+    ActiveRecord.after_all_transactions_commit { notify_workflow_execution_if_step_session }
+  end
+
+  # A run starts the moment it is dispatched, while its first step may still sit
+  # in the admission queue for minutes; its duration counts from here instead.
+  # Written in the transition's transaction, so it rolls back with the state.
+  def start_workflow_run_execution
+    return unless session_type == "workflow_step"
+
+    run_id = step_run&.workflow_run_id
+    return unless run_id
+
+    WorkflowRun.where(id: run_id, execution_started_at: nil).update_all(execution_started_at: started_at)
+  end
+
+  def notify_workflow_execution_if_step_session
+    return unless session_type == "workflow_step"
+
+    sr = step_run
+    return unless sr&.workflow_run_id
+    # A run being stopped was already told so (workflow_cancelled); its steps end with it.
+    return if sr.workflow_run.stop_requested_at.present?
+
+    WorkflowService.notify_container_finished(step_run: sr)
+  rescue StandardError => e
+    Rails.logger.error("[TerminalSession] notify_workflow_execution_if_step_session failed: #{e.message}")
+  end
+
+  def sync_usage
+    assign_usage_totals
+    save! if changed?
+  rescue StandardError => e
+    Rails.logger.error("[TerminalSession] Failed to sync usage for #{id}: #{e.message}")
+  end
+
+  def assign_usage_totals
+    stat = usage_statistic&.reload
+    return if stat.nil?
+
+    assign_attributes(
+      total_tokens: stat.total_tokens,
+      input_tokens: stat.input_tokens,
+      output_tokens: stat.output_tokens,
+      cache_read_tokens: stat.cache_read_tokens,
+      cache_write_tokens: stat.cache_write_tokens,
+      cost_cents: stat.cost_cents,
+      models: stat.models
+    )
+  rescue StandardError => e
+    Rails.logger.error("[TerminalSession] Failed to read usage for #{id}: #{e.message}")
+  end
+
+  def strategy_params
+    {
+      user_id: user_id,
+      agent_type: agent_type,
+      session_id: id,
+      route_token: route_token
+    }
+  end
+
+  def generate_route_token
+    self.route_token ||= SecureRandom.hex(16)
+  end
+
+  # Written only so pods still running the previous release, which read the key
+  # from this column, can launch and serve a session created by this one. Drop
+  # with the column once that release is gone.
+  def store_mcp_key_for_older_pods
+    update_column(:mcp_key, MCP::SessionKey.generate(self)) if self[:mcp_key].blank?
+  end
+
+  # The lists that show this session hear that it changed, and nothing else: one
+  # message reaches every subscriber and cannot be redacted per viewer, so each
+  # page fetches the row back through its own authorized endpoint. The streams
+  # are signed, and only a page that already authorized its viewer hands one out
+  # (see #session_list_streams). A dropped update costs a stale row, never the
+  # write that caused it.
+  def broadcast_session_list_update
+    return if company_id.blank? || SessionsRunsFeed::LISTABLE_SESSION_TYPES.exclude?(session_type)
+
+    session_list_streams.each do |stream|
+      InertiaCable.broadcast(stream, { type: "session_update", id: id })
+    end
+  rescue StandardError => e
+    Rails.logger.warn("[TerminalSession] Session-list update for #{id} not sent: #{e.class}: #{e.message}")
+  end
+
+  # The company feed, the owner's member page, and the project's Sessions & Runs.
+  def session_list_streams
+    [ [ company, :sessions ], ([ company, user, :sessions ] if user), ([ project, :sessions_runs ] if project) ].compact
+  end
+end

@@ -1,0 +1,359 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class StepTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @project = create(:project, company: @company, owner: create(:user, company: @company))
+    @workflow = create(:workflow, scope: @project)
+  end
+
+  test "valid with required attributes" do
+    step = build(:step, workflow: @workflow, position: 1)
+    assert step.valid?
+  end
+
+  test "invalid without name" do
+    step = build(:step, workflow: @workflow, name: nil)
+    assert_not step.valid?
+  end
+
+  test "a new step without a position is appended rather than rejected" do
+    create(:step, workflow: @workflow, position: 4)
+
+    step = create(:step, workflow: @workflow, position: nil)
+
+    assert_equal 5, step.position
+  end
+
+  # Soft-deleted steps keep their position and the unique (workflow, position)
+  # index still covers them, so the next free number cannot be read off the
+  # visible list — which is how the builder kept colliding with a step the user
+  # had already deleted.
+  test "the appended position clears soft-deleted steps too" do
+    create(:step, workflow: @workflow, position: 1)
+    deleted = create(:step, workflow: @workflow, position: 2)
+    deleted.soft_delete!
+
+    step = create(:step, workflow: @workflow, position: nil)
+
+    assert_equal 3, step.position, "position 2 is still taken by the deleted step's row"
+    # The client cannot see the row it has to skip — which is the whole point.
+    assert_equal [ 1, 3 ], @workflow.steps.not_deleted.pluck(:position)
+  end
+
+  test "position cannot be cleared once the step exists" do
+    step = create(:step, workflow: @workflow, position: 1)
+
+    assert_not step.update(position: nil)
+  end
+
+  test "unique position per workflow" do
+    create(:step, workflow: @workflow, position: 1)
+    duplicate = build(:step, workflow: @workflow, position: 1)
+    assert_not duplicate.valid?
+  end
+
+  test "same position in different workflows" do
+    other = create(:workflow, scope: @project)
+    create(:step, workflow: @workflow, position: 1)
+    step = build(:step, workflow: other, position: 1)
+    assert step.valid?
+  end
+
+  test "ordered by position by default" do
+    create(:step, workflow: @workflow, position: 3, name: "Third")
+    create(:step, workflow: @workflow, position: 1, name: "First")
+    create(:step, workflow: @workflow, position: 2, name: "Second")
+    names = @workflow.steps.pluck(:name)
+    assert_equal %w[First Second Third], names
+  end
+
+  test "enumerize skip_policy" do
+    step = build(:step, workflow: @workflow, skip_policy: :manual)
+    assert_equal "manual", step.skip_policy
+  end
+
+  test "enumerize on_failure" do
+    step = build(:step, workflow: @workflow, on_failure: :retry)
+    assert_equal "retry", step.on_failure
+  end
+
+  test "agent is optional" do
+    step = build(:step, workflow: @workflow, agent: nil)
+    assert step.valid?
+  end
+
+  test "a step can be pinned to every runtime a user can connect" do
+    CompanyMembership::AVAILABLE_AGENTS.each do |runtime|
+      step = build(:step, workflow: @workflow, position: 1, required_agent_runtime: runtime)
+
+      assert step.valid?, "#{runtime}: #{step.errors.full_messages.to_sentence}"
+    end
+  end
+
+  test "an unknown runtime is rejected" do
+    step = build(:step, workflow: @workflow, position: 1, required_agent_runtime: "vim")
+
+    assert_not step.valid?
+    assert step.errors.added?(:required_agent_runtime, :inclusion, value: "vim")
+  end
+
+  # --- reasoning_effort ---
+
+  test "a reasoning effort is unset by default and a blank one is stored as unset" do
+    assert_nil create(:step, workflow: @workflow).reasoning_effort
+    assert_nil create(:step, workflow: @workflow, reasoning_effort: "").reasoning_effort
+  end
+
+  test "a reasoning effort the step's runtime takes for its model is valid" do
+    step = build(:step, workflow: @workflow, required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                        reasoning_effort: "high")
+
+    assert step.valid?, step.errors.full_messages.to_sentence
+  end
+
+  test "a word that is no reasoning-effort level is rejected with one message" do
+    step = build(:step, workflow: @workflow, required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                        reasoning_effort: "turbo")
+
+    assert_not step.valid?
+    assert_equal [ "turbo is not available for kiro_cli with model claude-opus-5.5 (choose one of: low, medium, high, xhigh, max)" ],
+                 step.errors[:reasoning_effort]
+  end
+
+  test "a level the step's runtime does not take is rejected, naming the ones it does" do
+    step = build(:step, workflow: @workflow, required_agent_runtime: "gemini_cli", preferred_model: "gemini-3-pro",
+                        reasoning_effort: "medium")
+
+    assert_not step.valid?
+    assert_includes step.errors[:reasoning_effort],
+                    "medium is not available for gemini_cli with model gemini-3-pro (choose one of: low, high)"
+  end
+
+  # A level and its model are kept consistent: on the default model there is nothing to
+  # check a level against, so it is refused.
+  test "a level on a step left on the default model is refused" do
+    step = build(:step, workflow: @workflow, required_agent_runtime: "cursor_cli", reasoning_effort: "high")
+
+    assert_not step.valid?
+    assert_includes step.errors[:reasoning_effort], "needs an explicitly chosen model"
+  end
+
+  test "a Cursor step takes a level once it names a model" do
+    step = build(:step, workflow: @workflow, required_agent_runtime: "cursor_cli", preferred_model: "claude-opus-4-8",
+                        reasoning_effort: "high")
+
+    assert step.valid?, step.errors.full_messages.to_sentence
+  end
+
+  test "the level is checked against the step's preferred model where the runtime's levels depend on it" do
+    assert build(:step, workflow: @workflow, required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                        reasoning_effort: "xhigh").valid?
+
+    step = build(:step, workflow: @workflow, required_agent_runtime: "kiro_cli", preferred_model: "claude-sonnet-4.6",
+                        reasoning_effort: "xhigh")
+    assert_not step.valid?
+    assert_includes step.errors[:reasoning_effort].first, "choose one of: low, medium, high, max"
+  end
+
+  test "a runtime and model with no level at all refuse any" do
+    step = build(:step, workflow: @workflow, required_agent_runtime: "gemini_cli", preferred_model: "gemini-2.5-pro",
+                        reasoning_effort: "low")
+
+    assert_not step.valid?
+    assert_includes step.errors[:reasoning_effort], "is not available for gemini_cli with model gemini-2.5-pro"
+  end
+
+  test "a level on a step that leaves its runtime to resolution is refused" do
+    step = build(:step, workflow: @workflow, preferred_model: "gpt-6-sol", reasoning_effort: "ultra")
+
+    assert_not step.valid?
+    assert_includes step.errors[:reasoning_effort], "needs an explicitly chosen runtime"
+  end
+
+  test "clearing the model or the runtime under a saved level is refused, and clearing all of them is not" do
+    step = create(:step, workflow: @workflow, required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                         reasoning_effort: "high")
+
+    assert_not step.update(preferred_model: nil)
+    assert_includes step.errors[:reasoning_effort], "needs an explicitly chosen model"
+    assert_not step.update(preferred_model: "claude-opus-5.5", required_agent_runtime: nil)
+    assert_includes step.errors[:reasoning_effort], "needs an explicitly chosen runtime"
+
+    assert step.update(required_agent_runtime: nil, preferred_model: nil, reasoning_effort: nil),
+           step.errors.full_messages.to_sentence
+  end
+
+  test "changing the runtime or the model under a saved level the new pair does not take is refused" do
+    step = create(:step, workflow: @workflow, required_agent_runtime: "claude_code", preferred_model: "claude-opus-5.5",
+                         reasoning_effort: "xhigh")
+
+    assert_not step.update(required_agent_runtime: "gemini_cli")
+    assert_equal "claude_code", step.reload.required_agent_runtime
+
+    assert step.update(required_agent_runtime: "kiro_cli"), step.errors.full_messages.to_sentence
+    assert_not step.update(preferred_model: "claude-sonnet-4.6")
+    assert_equal "xhigh", step.reload.reasoning_effort
+  end
+
+  test "the level is checked on every save, not only when its inputs change" do
+    step = create(:step, workflow: @workflow, required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                         reasoning_effort: "high")
+    step.update_column(:reasoning_effort, "ultra")
+
+    assert_not step.update(name: "Renamed")
+    assert_includes step.errors[:reasoning_effort].first, "ultra is not available for kiro_cli"
+  end
+
+  test "nested sub_steps via accepts_nested_attributes" do
+    step = create(:step, workflow: @workflow, position: 1, sub_steps_attributes: [
+      { name: "Sub 1", position: 1 },
+      { name: "Sub 2", position: 2 }
+    ])
+    assert_equal 2, step.sub_steps.count
+  end
+
+  test "destroy soft-deletes a step that never ran, keeping its id and sub-steps" do
+    step = create(:step, workflow: @workflow, position: 1)
+    sub = create(:sub_step, step: step, position: 1)
+
+    assert_no_difference [ "Step.count", "SubStep.count" ] do
+      step.destroy
+    end
+    assert step.reload.deleted?
+    assert_equal step, sub.reload.step
+  end
+
+  test "steps that would wait on each other are rejected, naming the cycle" do
+    build_step = create(:step, workflow: @workflow, name: "Build", position: 1)
+    test_step = create(:step, workflow: @workflow, name: "Test", position: 2, depends_on_step_ids: [ build_step.id ])
+
+    assert_not build_step.update(depends_on_step_ids: [ test_step.id ])
+    assert_includes build_step.errors[:depends_on_step_ids], "would create a cycle: Build → Test → Build"
+  end
+
+  test "a longer cycle is rejected too" do
+    first = create(:step, workflow: @workflow, name: "First", position: 1)
+    second = create(:step, workflow: @workflow, name: "Second", position: 2, depends_on_step_ids: [ first.id ])
+    third = create(:step, workflow: @workflow, name: "Third", position: 3, depends_on_step_ids: [ second.id ])
+
+    assert_not first.update(depends_on_step_ids: [ third.id ])
+    assert_includes first.errors[:depends_on_step_ids], "would create a cycle: First → Third → Second → First"
+  end
+
+  test "a diamond is not a cycle" do
+    root = create(:step, workflow: @workflow, name: "Root", position: 1)
+    left = create(:step, workflow: @workflow, name: "Left", position: 2, depends_on_step_ids: [ root.id ])
+    right = create(:step, workflow: @workflow, name: "Right", position: 3, depends_on_step_ids: [ root.id ])
+
+    assert create(:step, workflow: @workflow, name: "Join", position: 4, depends_on_step_ids: [ left.id, right.id ]).valid?
+    assert right.update(depends_on_step_ids: [ root.id, left.id ])
+  end
+
+  test "destroy returns false when another active step depends on it" do
+    step_a = create(:step, workflow: @workflow, position: 1)
+    create(:step, workflow: @workflow, position: 2, depends_on_step_ids: [ step_a.id ])
+
+    result = step_a.destroy
+    refute result
+    assert step_a.errors[:base].any?
+    assert Step.exists?(step_a.id)
+  end
+
+  test "destroy succeeds when dependent step is already soft-deleted" do
+    step_a = create(:step, workflow: @workflow, position: 1)
+    step_b = create(:step, workflow: @workflow, position: 2, depends_on_step_ids: [ step_a.id ])
+    step_b.soft_delete!
+
+    step_a.destroy
+    assert step_a.reload.deleted?
+  end
+
+  test "rejects agents, tools, MCP servers and repositories of another project" do
+    other = create(:project, :standalone)
+    step = build(:step, workflow: @workflow,
+                        agent: create(:agent, scope: other),
+                        tool_ids: [ create(:tool, scope: other).id ],
+                        mcp_server_ids: [ create(:mcp_server, scope: other).id ],
+                        repository_ids: [ create(:repository, scope: other).id ])
+
+    assert_not step.valid?
+    assert_equal %i[agent_id mcp_server_ids repository_ids tool_ids], step.errors.attribute_names.sort
+  end
+
+  test "accepts own resources and platform tools" do
+    platform_tool = create(:tool, :system)
+    step = build(:step, workflow: @workflow,
+                        agent: create(:agent, scope: @project),
+                        tool_ids: [ create(:tool, scope: @project).id, platform_tool.id ],
+                        asset_ids: [ create(:asset, scope: @company).id ])
+
+    assert step.valid?, step.errors.full_messages.to_sentence
+  end
+
+  test "a stale foreign id already on the step does not block unrelated edits" do
+    step = create(:step, workflow: @workflow)
+    step.update_column(:mcp_server_ids, [ create(:mcp_server, scope: create(:project, :standalone)).id ])
+
+    assert step.reload.update(name: "Renamed"), step.errors.full_messages.to_sentence
+  end
+
+  test "upstream_step_ids is every live step it runs after, nearest first" do
+    collect = create(:step, workflow: @workflow, name: "Collect")
+    gone = create(:step, workflow: @workflow, name: "Gone")
+    analyze = create(:step, workflow: @workflow, name: "Analyze", depends_on_step_ids: [ collect.id, gone.id ])
+    report = create(:step, workflow: @workflow, name: "Report", depends_on_step_ids: [ analyze.id ])
+    gone.update_column(:deleted_at, Time.current)
+
+    assert_equal [ analyze.id, collect.id ], report.upstream_step_ids
+    assert_empty collect.upstream_step_ids
+  end
+
+  test "asset specs are stored as arrays with the container prefix dropped, legacy strings included" do
+    step = create(:step, workflow: @workflow, input_asset_specs: [ { "name" => "/workspace/assets/brief.md", "required" => true } ])
+    step.update_column(:output_asset_specs, '[{"name":"/workspace/outputs/plan/prd.md","description":"x"}]')
+
+    step.reload.update!(name: "Renamed")
+
+    assert_equal [ { "name" => "brief.md", "required" => true } ], step.reload.input_asset_specs
+    assert_equal [ { "name" => "plan/prd.md", "description" => "x" } ], step.output_asset_specs
+  end
+
+  test "an asset or MCP reference the instructions add must belong to the project" do
+    other = create(:project, :standalone)
+    foreign_asset = create(:asset, scope: other, created_by: create(:user))
+    foreign_server = create(:mcp_server, scope: other)
+    own_asset = create(:asset, scope: @project, created_by: create(:user))
+    step = create(:step, workflow: @workflow)
+
+    step.instructions = "Read {{asset:#{foreign_asset.id}}} and {{mcp:#{foreign_server.id}}}, then {{asset:#{own_asset.id}}}."
+
+    assert_not step.valid?
+    assert_includes step.errors[:instructions], "reference assets outside this project: #{foreign_asset.id}"
+    assert_includes step.errors[:instructions], "reference mcp servers outside this project: #{foreign_server.id}"
+  end
+
+  test "tool, skill and config item references the instructions add must belong to the project too" do
+    other = create(:project, :standalone)
+    tool = create(:tool, scope: other)
+    skill = create(:skill, scope: other)
+    item = create(:config_item, scope: other)
+    step = create(:step, workflow: @workflow)
+
+    step.instructions = "{{tool:#{tool.id}}} {{skill:#{skill.id}}} {{config_item:#{item.id}}}"
+
+    assert_not step.valid?
+    assert_equal [ "reference tools outside this project: #{tool.id}", "reference skills outside this project: #{skill.id}",
+                   "reference config items outside this project: #{item.id}" ], step.errors[:instructions]
+  end
+
+  test "a reference already saved does not block an unrelated edit" do
+    foreign_asset = create(:asset, scope: create(:project, :standalone), created_by: create(:user))
+    step = create(:step, workflow: @workflow)
+    step.update_column(:instructions, "Read {{asset:#{foreign_asset.id}}}.")
+
+    assert step.reload.update(instructions: "#{step.instructions} Then summarise."), step.errors.full_messages.to_sentence
+  end
+end

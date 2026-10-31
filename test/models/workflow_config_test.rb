@@ -1,0 +1,68 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class WorkflowConfigTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @workflow = create(:workflow, :with_project_scope, config: {})
+  end
+
+  test "base_tool_ids returns empty array by default" do
+    assert_equal [], @workflow.base_tool_ids
+  end
+
+  test "base_skill_ids returns empty array by default" do
+    assert_equal [], @workflow.base_skill_ids
+  end
+
+  test "base_mcp_server_ids returns empty array by default" do
+    assert_equal [], @workflow.base_mcp_server_ids
+  end
+
+  test "base_asset_ids returns empty array by default" do
+    assert_equal [], @workflow.base_asset_ids
+  end
+
+  test "inherit_all_project_resources returns false by default" do
+    # The documented contract is exactly `false`, not merely falsy (nil).
+    assert_equal false, @workflow.inherit_all_project_resources # rubocop:disable Minitest/RefuteFalse
+  end
+
+  test "config round-trip preserves base_tool_ids" do
+    tool_ids = create_list(:tool, 2, scope: @workflow.scope).map(&:id)
+    @workflow.update!(config: { "base_tool_ids" => tool_ids })
+    @workflow.reload
+
+    assert_equal tool_ids, @workflow.base_tool_ids
+  end
+
+  test "merge_config! merges without overwriting other keys" do
+    tool_ids = create_list(:tool, 3, scope: @workflow.scope).map(&:id)
+    skill = create(:skill, scope: @workflow.scope)
+    @workflow.update!(config: { "base_tool_ids" => tool_ids.first(1), "base_skill_ids" => [ skill.id ] })
+    @workflow.merge_config!("base_tool_ids" => tool_ids)
+    @workflow.reload
+
+    assert_equal tool_ids, @workflow.base_tool_ids
+    assert_equal [ skill.id ], @workflow.base_skill_ids
+  end
+
+  test "merge_config! sets inherit_all_project_resources" do
+    @workflow.merge_config!("inherit_all_project_resources" => true)
+    @workflow.reload
+
+    assert @workflow.inherit_all_project_resources
+  end
+
+  test "empty config returns safe defaults" do
+    @workflow.update!(config: {})
+    @workflow.reload
+
+    assert_equal [], @workflow.base_tool_ids
+    assert_equal [], @workflow.base_skill_ids
+    assert_equal [], @workflow.base_mcp_server_ids
+    assert_equal [], @workflow.base_asset_ids
+    assert_equal false, @workflow.inherit_all_project_resources # rubocop:disable Minitest/RefuteFalse
+  end
+end

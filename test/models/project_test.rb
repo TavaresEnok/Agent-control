@@ -1,0 +1,208 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class ProjectTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @project_owner = create(:user, :employee, :onboarding_completed, company: @company)
+    @project = create(:project, company: @company, owner: @project_owner)
+  end
+
+  test "accessible_by? is true for owner" do
+    assert @project.accessible_by?(@project_owner)
+  end
+
+  test "accessible_by? is true for collaborator" do
+    collaborator = create(:user, :employee, :onboarding_completed, company: @company)
+    @project.add_collaborator(collaborator)
+    assert @project.accessible_by?(collaborator)
+  end
+
+  test "accessible_by? is true for company admin who is not owner or collaborator" do
+    admin = create(:user, :admin, :onboarding_completed, company: @company)
+    assert_not_equal @project.owner_id, admin.id
+    assert @project.accessible_by?(admin)
+  end
+
+  test "accessible_by? is false for employee who is not owner or collaborator" do
+    stranger = create(:user, :employee, :onboarding_completed, company: @company)
+    assert_not @project.accessible_by?(stranger)
+  end
+
+  test "accessible_by? is false for admin of another company" do
+    other_company = create(:company)
+    foreign_admin = create(:user, :admin, :onboarding_completed, company: other_company)
+    assert_not @project.accessible_by?(foreign_admin)
+  end
+
+  test "assignable_users is the members accessible_by? admits, owner first, in constant queries" do
+    collaborators = create_list(:user, 3, :employee, :onboarding_completed, company: @company)
+    collaborators.each { |user| @project.add_collaborator(user) }
+    revoked = collaborators.last
+    revoked.company_memberships.find_by(company: @company).revoke!
+    create(:user, :admin, :onboarding_completed, company: @company)
+
+    expected = @project.member_users.select { |user| @project.accessible_by?(user) }
+
+    @project.reload
+    assignable = assert_queries_count(2) { @project.assignable_users.to_a }
+    assert_equal @project_owner, assignable.first
+    assert_equal [ @project_owner, *collaborators.first(2) ].to_set, assignable.to_set
+    assert_equal expected.to_set, assignable.to_set
+  end
+
+  test "admin? is true for the owner" do
+    assert @project.admin?(@project_owner)
+  end
+
+  test "admin? is false for a collaborator" do
+    collaborator = create(:user, :employee, :onboarding_completed, company: @company)
+    @project.add_collaborator(collaborator)
+    assert_not @project.admin?(collaborator)
+  end
+
+  test "admin? is false for a company admin who is not the owner (owner-only)" do
+    admin = create(:user, :admin, :onboarding_completed, company: @company)
+    assert_not_equal @project.owner_id, admin.id
+    assert_not @project.admin?(admin)
+  end
+
+  # favorites_first_for is an ORDER BY prefix: `.order(:name)` still decides the
+  # order inside each group, so a favorited "Zeta" leads an alphabetical list.
+  test "favorites_first_for puts the user's favorites ahead of the chained ordering" do
+    trio = create_named_projects("Alpha", "Middle", "Zeta")
+    create(:project_favorite, user: @project_owner, project: trio.fetch("Zeta"))
+
+    assert_equal %w[Zeta Alpha Middle], named_projects.favorites_first_for(@project_owner).order(:name).pluck(:name)
+  end
+
+  test "favorites_first_for is per user: one user's star does not reorder another list" do
+    trio = create_named_projects("Alpha", "Middle", "Zeta")
+    other = create(:user, :employee, :onboarding_completed, company: @company)
+    create(:project_favorite, user: @project_owner, project: trio.fetch("Zeta"))
+
+    assert_equal %w[Zeta Alpha Middle], named_projects.favorites_first_for(@project_owner).order(:name).pluck(:name)
+    assert_equal %w[Alpha Middle Zeta], named_projects.favorites_first_for(other).order(:name).pluck(:name)
+  end
+
+  test "favorites_first_for keeps the chained ordering when nothing is favorited" do
+    create_named_projects("Alpha", "Middle", "Zeta")
+
+    assert_equal named_projects.order(:name).pluck(:name),
+                 named_projects.favorites_first_for(@project_owner).order(:name).pluck(:name)
+  end
+
+  # Regression for PALAD-AI-RAILS-2T: project-scoped integrations must be
+  # destroyed with the project, otherwise the FK on integrations.project_id blocks deletion.
+  test "destroy! succeeds when the project has integrations" do
+    create(:integration, company: @company, project: @project, connected_by: @project_owner)
+
+    assert_difference -> { Project.count } => -1,
+                      -> { Integration.count } => -1 do
+      assert_nothing_raised { @project.destroy! }
+    end
+  end
+
+  # Regression for PALAD-AI-RAILS-2M: board must be destroyed before workflows so
+  # ColumnWorkflowBindings (and column_transitions) are cleared first.
+  test "destroy! succeeds when a workflow is bound to a board column" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    workflow = create(:workflow, scope: @project)
+    binding = ColumnWorkflowBinding.create!(board_column: column, workflow: workflow, trigger_mode: :manual)
+    task = create(:board_task, board: board, board_column: column)
+    run = create(:workflow_run, workflow: workflow, project: @project, user: @project_owner, board_task: task)
+    ColumnTransition.create!(
+      board_task: task, from_column: nil, to_column: column,
+      actor: @project_owner, actor_type: :human, workflow_run: run
+    )
+
+    assert_difference -> { Project.count } => -1,
+                      -> { Board.count } => -1,
+                      -> { ColumnWorkflowBinding.count } => -1,
+                      -> { Workflow.unscoped.where(id: workflow.id).count } => -1,
+                      -> { WorkflowRun.where(id: run.id).count } => -1 do
+      assert_nothing_raised { @project.destroy! }
+    end
+
+    assert_nil ColumnWorkflowBinding.find_by(id: binding.id)
+    assert_nil Workflow.unscoped.find_by(id: workflow.id)
+  end
+
+  # == ownership transfer ==
+
+  test "transfer to a collaborator swaps the two: new owner loses the collaborator row, old owner gains one" do
+    collaborator = create(:user, :employee, company: @company)
+    @project.add_collaborator(collaborator)
+
+    assert @project.transfer_ownership_to(collaborator), @project.errors.full_messages.to_sentence
+
+    @project.reload
+    assert_equal collaborator, @project.owner
+    assert_equal [ @project_owner ], @project.collaborators.to_a
+    assert @project.accessible_by?(@project_owner)
+    assert_not @project.admin?(@project_owner)
+  end
+
+  test "transfer to a company member not on the project needs no collaborator step" do
+    newcomer = create(:user, :employee, company: @company)
+
+    assert @project.transfer_ownership_to(newcomer)
+
+    @project.reload
+    assert_equal newcomer, @project.owner
+    assert_equal [ @project_owner ], @project.collaborators.to_a
+  end
+
+  test "transfer to a company admin is allowed" do
+    admin = create(:user, :admin, company: @company)
+
+    assert @project.transfer_ownership_to(admin)
+    assert_equal admin, @project.reload.owner
+  end
+
+  test "transfer refuses a viewer, another company's user, a revoked member and the current owner" do
+    viewer = create(:user, :viewer, company: @company, email: "client-#{SecureRandom.hex(3)}@external.com")
+    @project.add_collaborator(viewer)
+    refused = {
+      viewer: viewer,
+      foreign: create(:user, :admin, company: create(:company)),
+      revoked: create(:user, :employee, company: @company, membership_state: "revoked"),
+      owner: @project_owner,
+      nobody: nil
+    }
+
+    refused.each do |label, user|
+      assert_equal false, @project.transfer_ownership_to(user), "#{label} must be refused" # rubocop:disable Minitest/RefuteFalse
+      assert_includes @project.errors.attribute_names, :owner, label.to_s
+      @project.errors.clear
+    end
+
+    @project.reload
+    assert_equal @project_owner, @project.owner
+    assert_equal [ viewer ], @project.collaborators.to_a
+  end
+
+  test "ownership_candidates are active non-viewer members other than the owner" do
+    employee = create(:user, :employee, company: @company)
+    admin = create(:user, :admin, company: @company)
+    create(:user, :viewer, company: @company, email: "client-#{SecureRandom.hex(3)}@external.com")
+    create(:user, :employee, company: @company, membership_state: "revoked")
+    create(:user, :employee, company: create(:company))
+
+    assert_equal [ admin, employee ].sort_by(&:id), @project.ownership_candidates.order(:id).to_a
+  end
+
+  private
+
+  def create_named_projects(*names)
+    names.index_with { |name| create(:project, name: name, company: @company, owner: @project_owner) }
+  end
+
+  # Only the projects a favorites test created, so the setup project's
+  # sequence-generated name cannot land between them alphabetically.
+  def named_projects
+    @company.projects.where(name: %w[Alpha Middle Zeta])
+  end
+end

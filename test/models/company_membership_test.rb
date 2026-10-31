@@ -1,0 +1,604 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class CompanyMembershipTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @user = create(:user)
+  end
+
+  # === state machine ===
+
+  test "starts invited and accept! moves to active setting accepted_at" do
+    membership = create(:company_membership, :invited, user: @user, company: @company)
+    assert membership.invited?
+    assert_nil membership.accepted_at
+
+    assert membership.accept!
+    assert membership.reload.active?
+    assert membership.accepted_at.present?
+  end
+
+  test "revoke! works from invited, active and suspended" do
+    %i[invited suspended].each do |state|
+      membership = create(:company_membership, state, user: create(:user), company: @company)
+      assert membership.revoke!
+      assert membership.reload.revoked?
+    end
+
+    active = create(:company_membership, user: create(:user), company: @company)
+    assert active.revoke!
+    assert active.reload.revoked?
+  end
+
+  test "suspend and reactivate cycle" do
+    membership = create(:company_membership, user: @user, company: @company)
+    assert membership.suspend!
+    assert membership.suspended?
+    assert membership.reactivate!
+    assert membership.active?
+  end
+
+  test "accept is not allowed from active" do
+    membership = create(:company_membership, user: @user, company: @company)
+    assert_not membership.may_accept?
+  end
+
+  # === role predicates ===
+
+  test "role predicates" do
+    assert create(:company_membership, user: @user, company: @company).employee?
+    assert create(:company_membership, :admin, user: create(:user), company: @company).admin?
+    assert create(:company_membership, :viewer, user: create(:user), company: @company).viewer?
+  end
+
+  # === uniqueness ===
+
+  test "user can have only one membership per company" do
+    create(:company_membership, user: @user, company: @company)
+    dup = build(:company_membership, user: @user, company: @company)
+    assert_not dup.valid?
+    assert dup.errors[:user_id].present?
+
+    other_company = create(:company)
+    assert build(:company_membership, user: @user, company: other_company).valid?
+  end
+
+  # === last-admin guard ===
+
+  test "demoting the sole active admin is invalid" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+    admin.role = "employee"
+    assert_not admin.valid?
+    assert_includes admin.errors[:base].to_sentence, "last admin"
+  end
+
+  # The controllers never use the bang transitions (aasm 6 raises
+  # RecordInvalid from those); they fire the event and then `save`, so the
+  # last-admin guard surfaces as a validation error. Assert that same path.
+  test "revoking the sole active admin is blocked" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+
+    admin.aasm(:state).fire(:revoke)
+    assert_not admin.save
+    assert_includes admin.errors[:base].to_sentence, "last admin"
+    assert admin.reload.active?
+  end
+
+  test "suspending the sole active admin is blocked" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+
+    admin.aasm(:state).fire(:suspend)
+    assert_not admin.save
+    assert_includes admin.errors[:base].to_sentence, "last admin"
+    assert admin.reload.active?
+  end
+
+  test "the sole active admin's membership cannot be deleted either, except with its company" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+
+    assert_not admin.destroy
+    assert_includes admin.errors[:base].to_sentence, "last admin"
+
+    @company.destroy!
+    assert_not CompanyMembership.exists?(admin.id)
+  end
+
+  # Two admins demoting each other at the same moment must not both succeed:
+  # the check holds the company row while it counts.
+  test "the last-admin check locks the company row before counting admins" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+    create(:company_membership, :admin, user: create(:user), company: @company)
+    admin.role = "employee"
+
+    assert_queries_match(/FROM "companies".*FOR UPDATE/m) { admin.save! }
+  end
+
+  test "demote is valid once a second active admin exists" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+    create(:company_membership, :admin, user: create(:user), company: @company)
+
+    admin.role = "employee"
+    assert admin.valid?
+    assert admin.save
+  end
+
+  test "an invited admin does not count as an active admin" do
+    admin = create(:company_membership, :admin, user: @user, company: @company)
+    create(:company_membership, :admin, :invited, user: create(:user), company: @company)
+
+    admin.role = "employee"
+    assert_not admin.valid?
+  end
+
+  test "reinvite moves revoked back to invited" do
+    membership = create(:company_membership, :revoked, user: @user, company: @company)
+
+    assert membership.may_reinvite?
+    assert membership.reinvite!
+    assert membership.reload.invited?
+  end
+
+  test "reinvite is not allowed from active" do
+    membership = create(:company_membership, user: @user, company: @company)
+    assert_not membership.may_reinvite?
+  end
+
+  # === default_order (fallback company resolution) ===
+
+  test "default_order sorts NULL accepted_at first, then oldest accepted, id as tiebreak" do
+    newest = create(:company_membership, user: @user, company: create(:company), accepted_at: 1.day.ago)
+    oldest = create(:company_membership, user: @user, company: create(:company), accepted_at: 3.days.ago)
+    legacy = create(:company_membership, user: @user, company: create(:company), accepted_at: nil)
+
+    assert_equal [ legacy, oldest, newest ], @user.company_memberships.default_order.to_a
+  end
+
+  # === configured_agents ordering ===
+
+  # The run/session forms preselect configured_agents.first when the member has
+  # no default credential, so an unordered scope made the choice a coin flip.
+  test "configured_agents lists this company's credentials newest first" do
+    membership = create(:company_membership, user: @user, company: @company)
+    travel_to 2.days.ago do
+      create(:agent_credential, user: @user, company: @company, agent_type: "cursor_cli")
+    end
+    create(:agent_credential, user: @user, company: @company, agent_type: "claude_code")
+
+    assert_equal %w[claude_code cursor_cli], membership.configured_agents
+  end
+
+  # An empty model list is not cached, so a credential the refresh sweep has
+  # already condemned used to 401, refresh, and report RefreshFailed on every
+  # builder load. Re-auth (status back to active) is what asks the vendor again.
+  test "agent_models_for_props does not refresh a credential already marked error" do
+    membership = create(:company_membership, user: @user, company: @company)
+    credential = create(:agent_credential, :cursor_cli, :errored, user: @user, company: @company,
+                        config_data: { "accessToken" => "stale", "refreshToken" => "r1" })
+
+    props = nil
+    assert_no_error_reported { props = membership.agent_models_for_props }
+
+    assert_equal [ { agent_type: "cursor_cli", models: [], default_model: nil } ], props
+    assert_equal 1, credential.reload.refresh_failure_count
+    assert_not_requested :post, Agents::CursorCliAdapter::CURSOR_MODELS_URL
+    assert_not_requested :post, Agents::CursorCliAdapter::CURSOR_AUTH_URL
+  end
+
+  # The New Session form names the model a session launches with when none is
+  # picked; that is AgentCredential#default_model, the one the launch resolves.
+  test "agent_models_for_props exposes each credential's default model" do
+    membership = create(:company_membership, user: @user, company: @company)
+    create(:agent_credential, :claude_code, user: @user, company: @company,
+           metadata: { "default_model" => "claude-opus-4-8" })
+
+    props = membership.agent_models_for_props
+
+    assert_equal 1, props.size
+    assert_equal "claude_code", props.first[:agent_type]
+    assert_equal "claude-opus-4-8", props.first[:default_model]
+  end
+
+  # The model pickers offer these levels as they are, so the per-model rule is
+  # applied once, here on the server.
+  test "agent_models_for_props gives each model the reasoning-effort levels its runtime takes for it" do
+    membership = create(:company_membership, user: @user, company: @company)
+    create(:agent_credential, :kiro_cli, user: @user, company: @company,
+           metadata: { "kiro_models" => [ { "model_id" => "claude-opus-5.5" }, { "model_id" => "claude-sonnet-4.6" },
+                                          { "model_id" => "auto" } ] })
+
+    models = membership.agent_models_for_props.first[:models]
+
+    assert_equal({ "claude-opus-5.5" => %w[low medium high xhigh max], "claude-sonnet-4.6" => %w[low medium high max],
+                   "auto" => [] },
+                 models.to_h { |m| [ m[:model_id], m[:reasoning_effort_levels] ] })
+  end
+
+  # AgentCredential validates agent_type against the registry, so a credential
+  # for an unknown runtime only exists after that runtime is removed from it.
+  test "agent_models_for_props gives no levels to the models of a runtime the registry no longer lists" do
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    membership = create(:company_membership, user: @user, company: @company)
+    cred = create(:agent_credential, :kiro_cli, user: @user, company: @company)
+    cred.update_column(:agent_type, "retired_cli")
+    Rails.cache.write(cred.reload.models_cache_key, [ { model_id: "old-model", display_name: "Old model" } ])
+
+    props = membership.agent_models_for_props
+
+    assert_equal "retired_cli", props.first[:agent_type]
+    assert_equal [ { model_id: "old-model", display_name: "Old model", description: nil, reasoning_effort_levels: [] } ],
+                 props.first[:models]
+  end
+
+  test "agent_models_for_props reports a nil default model when none is pinned" do
+    membership = create(:company_membership, user: @user, company: @company)
+    create(:agent_credential, :claude_code, user: @user, company: @company)
+
+    assert_nil membership.agent_models_for_props.first[:default_model]
+  end
+
+  # === cable disconnect on revoke ===
+
+  test "revoking a membership disconnects the user's cable connections" do
+    membership = create(:company_membership, user: @user, company: @company)
+
+    remote = mock("remote_connections")
+    remote.expects(:where).with(current_user: @user).returns(stub(disconnect: true))
+    ActionCable.server.stubs(:remote_connections).returns(remote)
+
+    assert membership.revoke!
+  end
+
+  # === invitation token ===
+
+  test "invitation token roundtrip" do
+    membership = create(:company_membership, :invited, user: @user, company: @company)
+    token = membership.generate_token_for(:invitation)
+
+    assert_equal membership, CompanyMembership.find_by_token_for(:invitation, token)
+  end
+
+  test "invitation token is invalidated by a state change" do
+    membership = create(:company_membership, :invited, user: @user, company: @company)
+    token = membership.generate_token_for(:invitation)
+
+    membership.accept!
+    assert_nil CompanyMembership.find_by_token_for(:invitation, token)
+  end
+
+  test "a revoked-then-reinvited membership does not revalidate the old link" do
+    membership = create(:company_membership, :invited, user: @user, company: @company, invited_at: 2.days.ago)
+    old_token = membership.generate_token_for(:invitation)
+
+    membership.revoke!
+    membership.assign_attributes(invited_at: Time.current)
+    membership.aasm(:state).fire(:reinvite)
+    membership.save!
+
+    assert_nil CompanyMembership.find_by_token_for(:invitation, old_token)
+    assert_equal membership, CompanyMembership.find_by_token_for(:invitation, membership.generate_token_for(:invitation))
+  end
+
+  test "touching invited_at (re-send) invalidates the previously issued token" do
+    membership = create(:company_membership, :invited, user: @user, company: @company, invited_at: 2.days.ago)
+    old_token = membership.generate_token_for(:invitation)
+
+    membership.update!(invited_at: Time.current)
+
+    assert_nil CompanyMembership.find_by_token_for(:invitation, old_token)
+  end
+
+  test "invitation token expires after 7 days" do
+    membership = create(:company_membership, :invited, user: @user, company: @company)
+    token = membership.generate_token_for(:invitation)
+
+    travel 8.days do
+      assert_nil CompanyMembership.find_by_token_for(:invitation, token)
+    end
+  end
+
+  test "a link generated late (the reminder's) still dies 7 days after the invitation was sent" do
+    freeze_time
+    membership = create(:company_membership, :invited, user: @user, company: @company, invited_at: 6.days.ago)
+    reminder_token = membership.generate_token_for(:invitation)
+
+    assert_equal membership, CompanyMembership.find_by_token_for(:invitation, reminder_token)
+
+    travel 1.day do
+      assert_nil CompanyMembership.find_by_token_for(:invitation, reminder_token)
+    end
+  end
+
+  test "an invitation is expired once its link lifetime has passed since it was last sent" do
+    freeze_time
+    fresh = create(:company_membership, :invited, user: @user, company: @company, invited_at: 6.days.ago)
+    stale = create(:company_membership, :invited, user: create(:user), company: @company, invited_at: 7.days.ago)
+    unsent = create(:company_membership, :invited, user: create(:user), company: @company, invited_at: nil)
+    accepted = create(:company_membership, user: create(:user), company: @company, invited_at: 30.days.ago)
+
+    assert_equal [ false, true, false, false ], [ fresh, stale, unsent, accepted ].map(&:invitation_expired?)
+
+    stale.update!(invited_at: Time.current)
+    assert_equal false, stale.invitation_expired? # rubocop:disable Minitest/RefuteFalse
+  end
+
+  # === owned-project transfer on revocation ===
+  # Project#owner_belongs_to_company requires an ACTIVE membership, so a revoked
+  # owner leaves the project failing validation on any later save. Revocation
+  # therefore either moves ownership or refuses.
+
+  test "revoking an owner transfers their projects to the company's oldest active admin" do
+    owner = create(:user, :employee, company: @company)
+    newer_admin = create(:user, :admin, company: @company)
+    newer_admin.company_memberships.sole.update!(accepted_at: 1.hour.ago)
+    oldest_admin = create(:user, :admin, company: @company)
+    oldest_admin.company_memberships.sole.update!(accepted_at: 3.days.ago)
+    project = create(:project, company: @company, owner: owner)
+
+    membership = owner.company_memberships.sole
+    membership.aasm(:state).fire(:revoke)
+    assert membership.save, membership.errors.full_messages.to_sentence
+
+    assert_equal oldest_admin.id, project.reload.owner_id
+    assert project.valid?
+  end
+
+  test "revoking an owner is refused when the company has no other active admin" do
+    owner = create(:user, :employee, company: @company)
+    create(:user, :employee, company: @company)
+    project = create(:project, company: @company, owner: owner)
+
+    membership = owner.company_memberships.sole
+    membership.aasm(:state).fire(:revoke)
+
+    assert_not membership.save
+    assert_includes membership.errors[:base].to_sentence, "no other admin"
+    assert_equal owner.id, project.reload.owner_id
+    assert membership.reload.active?
+  end
+
+  test "revoking a member who owns nothing needs no heir" do
+    member = create(:user, :employee, company: @company)
+
+    membership = member.company_memberships.sole
+    membership.aasm(:state).fire(:revoke)
+
+    assert membership.save, membership.errors.full_messages.to_sentence
+    assert membership.reload.revoked?
+  end
+
+  test "projects in OTHER companies are left alone when a membership is revoked" do
+    other_company = create(:company)
+    owner = create(:user, :employee, company: @company)
+    create(:company_membership, user: owner, company: other_company)
+    create(:user, :admin, company: @company)
+    elsewhere = create(:project, company: other_company, owner: owner)
+
+    membership = owner.company_memberships.find_by!(company: @company)
+    membership.aasm(:state).fire(:revoke)
+    assert membership.save, membership.errors.full_messages.to_sentence
+
+    assert_equal owner.id, elsewhere.reload.owner_id
+  end
+
+  # === handover before revocation ===
+
+  test "revoke_with_handover gives each project to its chosen member and the rest to the heir" do
+    admin = create(:user, :admin, company: @company)
+    owner = create(:user, :employee, company: @company)
+    chosen = create(:user, :employee, company: @company)
+    handed = create(:project, company: @company, owner: owner)
+    left_out = create(:project, company: @company, owner: owner)
+    handed.add_collaborator(chosen)
+
+    membership = owner.company_memberships.sole
+    assert membership.revoke_with_handover(handed.id => chosen.id), membership.errors.full_messages.to_sentence
+
+    assert membership.reload.revoked?
+    assert_equal chosen, handed.reload.owner
+    assert_empty handed.collaborators, "neither the new owner nor the member who left stays a collaborator"
+    assert_equal admin, left_out.reload.owner
+  end
+
+  test "revoke_with_handover changes nothing when a chosen member cannot own the project" do
+    create(:user, :admin, company: @company)
+    owner = create(:user, :employee, company: @company)
+    viewer = create(:user, :viewer, company: @company, email: "client-#{SecureRandom.hex(3)}@external.com")
+    first = create(:project, company: @company, owner: owner, name: "First")
+    second = create(:project, company: @company, owner: owner, name: "Second")
+    employee = create(:user, :employee, company: @company)
+
+    membership = owner.company_memberships.sole
+    assert_equal false, membership.revoke_with_handover(first.id => employee.id, second.id => viewer.id) # rubocop:disable Minitest/RefuteFalse
+
+    assert_match(/Second/, membership.errors[:base].to_sentence)
+    assert membership.active?
+    assert membership.reload.active?
+    assert_equal owner, first.reload.owner, "the earlier handover is rolled back with the rest"
+    assert_equal owner, second.reload.owner
+  end
+
+  test "revoke_with_handover refuses a project the member does not own" do
+    create(:user, :admin, company: @company)
+    member = create(:user, :employee, company: @company)
+    someone_elses = create(:project, company: @company, owner: create(:user, :employee, company: @company))
+
+    membership = member.company_memberships.sole
+    assert_equal false, membership.revoke_with_handover(someone_elses.id => member.id) # rubocop:disable Minitest/RefuteFalse
+    assert membership.reload.active?
+  end
+
+  test "handing every project over lets an owner go even with no other admin to inherit" do
+    owner = create(:user, :employee, company: @company)
+    colleague = create(:user, :employee, company: @company)
+    project = create(:project, company: @company, owner: owner)
+
+    membership = owner.company_memberships.sole
+    assert membership.revoke_with_handover(project.id => colleague.id), membership.errors.full_messages.to_sentence
+    assert_equal colleague, project.reload.owner
+  end
+
+  test "the heir who was already a collaborator does not end up both owner and collaborator" do
+    admin = create(:user, :admin, company: @company)
+    owner = create(:user, :employee, company: @company)
+    project = create(:project, company: @company, owner: owner)
+    project.add_collaborator(admin)
+
+    membership = owner.company_memberships.sole
+    membership.aasm(:state).fire(:revoke)
+    assert membership.save, membership.errors.full_messages.to_sentence
+
+    assert_equal admin, project.reload.owner
+    assert_empty project.collaborators
+  end
+
+  # === skipping the agent step (admins only) ===
+
+  def membership_at_agent_step(role)
+    create(:company_membership, role: role, user: create(:user), company: @company,
+                                onboarding_state: "step2", position: "cto", preferred_agent_language: "en")
+  end
+
+  test "an admin without an agent finishes onboarding by skipping, and the skip is recorded" do
+    membership = membership_at_agent_step("admin")
+    assert_not membership.can_complete_onboarding?
+
+    assert membership.update(onboarding_state_event: "skip_agent_setup"), membership.errors.full_messages.to_sentence
+
+    membership.reload
+    assert_equal "completed", membership.onboarding_state
+    assert membership.onboarding_completed_at.present?
+    assert_equal membership.onboarding_completed_at, membership.agent_setup_skipped_at
+    assert membership.needs_agent_setup?
+  end
+
+  test "only an admin may skip the agent step" do
+    %w[employee viewer].each do |role|
+      membership = membership_at_agent_step(role)
+
+      assert_not membership.aasm(:onboarding_state).may_fire_event?(:skip_agent_setup), "#{role} must not skip"
+      membership.update!(onboarding_state_event: "skip_agent_setup")
+      assert_equal "step2", membership.reload.onboarding_state
+      assert_nil membership.agent_setup_skipped_at
+    end
+  end
+
+  test "an admin who connected an agent finishes the normal way, not as a skip" do
+    membership = membership_at_agent_step("admin")
+    create(:agent_credential, user: membership.user, company: @company)
+
+    assert_not membership.aasm(:onboarding_state).may_fire_event?(:skip_agent_setup)
+    membership.update!(onboarding_state_event: "complete")
+
+    assert_equal "completed", membership.reload.onboarding_state
+    assert_nil membership.agent_setup_skipped_at
+  end
+
+  test "an admin cannot skip before answering the profile step" do
+    membership = membership_at_agent_step("admin")
+    membership.update!(position: nil)
+
+    assert_not membership.aasm(:onboarding_state).may_fire_event?(:skip_agent_setup)
+  end
+
+  test "reopening onboarding clears a recorded skip" do
+    membership = membership_at_agent_step("admin")
+    membership.update!(onboarding_state_event: "skip_agent_setup")
+
+    membership.aasm(:onboarding_state).fire(:reopen)
+    membership.save!
+
+    membership.reload
+    assert_equal "step2", membership.onboarding_state
+    assert_nil membership.onboarding_completed_at
+    assert_nil membership.agent_setup_skipped_at
+  end
+
+  # === viewer promotion (flow-dev #2025) ===
+
+  def onboarded_viewer(**attrs)
+    create(:company_membership, :viewer, user: create(:user), company: @company,
+                                         onboarding_state: "completed", onboarding_completed_at: 1.day.ago,
+                                         position: "dev", preferred_agent_language: "en", **attrs)
+  end
+
+  test "promoting an onboarded viewer to employee reopens onboarding at the agent step" do
+    membership = onboarded_viewer
+
+    assert membership.update(role: "employee"), membership.errors.full_messages.to_sentence
+
+    membership.reload
+    assert_equal "step2", membership.onboarding_state
+    assert_nil membership.onboarding_completed_at
+    assert_not membership.can_complete_onboarding?
+  end
+
+  test "promotion reopens onboarding even when the member already has a credential in this company" do
+    membership = onboarded_viewer
+    create(:agent_credential, user: membership.user, company: @company)
+
+    membership.update!(role: "employee")
+
+    assert_equal "step2", membership.reload.onboarding_state
+    assert membership.can_complete_onboarding?
+  end
+
+  test "a credential in another company does not let a promoted member complete onboarding" do
+    membership = onboarded_viewer
+    other = create(:company_membership, user: membership.user)
+    create(:agent_credential, user: membership.user, company: other.company)
+
+    membership.update!(role: "employee")
+
+    assert_not membership.reload.can_complete_onboarding?
+    assert_not membership.aasm(:onboarding_state).may_fire_event?(:complete)
+  end
+
+  test "a viewer promoted before finishing onboarding keeps their step" do
+    membership = create(:company_membership, :viewer, user: create(:user), company: @company, onboarding_state: "step1")
+
+    membership.update!(role: "employee")
+
+    assert_equal "step1", membership.reload.onboarding_state
+  end
+
+  test "switching between employee and admin leaves onboarding completed" do
+    create(:company_membership, :admin, user: create(:user), company: @company)
+    membership = create(:company_membership, user: create(:user), company: @company,
+                                             onboarding_state: "completed", onboarding_completed_at: 1.day.ago)
+
+    membership.update!(role: "admin")
+    membership.update!(role: "employee")
+
+    assert_equal "completed", membership.reload.onboarding_state
+    assert membership.onboarding_completed_at.present?
+  end
+
+  test "a viewer cannot become admin in one step" do
+    membership = onboarded_viewer
+
+    assert_not membership.update(role: "admin")
+    assert_includes membership.errors[:role], "of a viewer can only change to Employee"
+    assert_equal "viewer", membership.reload.role
+  end
+
+  test "only an active viewer can be promoted" do
+    %i[invited suspended].each do |state|
+      membership = create(:company_membership, :viewer, state, user: create(:user), company: @company)
+
+      assert_not membership.update(role: "employee"), "#{state} viewer must not be promotable"
+      assert_includes membership.errors[:base], "Only an active viewer can be promoted"
+    end
+  end
+
+  test "re-inviting a revoked viewer as employee is allowed and still reopens onboarding" do
+    membership = onboarded_viewer(state: "revoked")
+
+    membership.assign_attributes(role: "employee", invited_at: Time.current)
+    membership.aasm(:state).fire(:reinvite)
+
+    assert membership.save, membership.errors.full_messages.to_sentence
+    assert_equal "step2", membership.reload.onboarding_state
+  end
+end

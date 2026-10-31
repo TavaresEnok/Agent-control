@@ -1,0 +1,85 @@
+import { Head, usePage } from '@inertiajs/react';
+import { Box } from '@mantine/core';
+
+import type { Project, RunnerSummary } from '@/types/generated';
+
+import type { AssetPickerItem } from 'shared/components/AssetPicker';
+import { SessionNewForm } from 'shared/components/SessionNewForm';
+import type { ConfigItemOption, NamedItem, SessionCostHint } from 'shared/components/SessionNewForm';
+import type { ToolGroup } from 'shared/lib/toolPicker';
+import { PageHeader } from 'shared/ui/PageHeader';
+
+import { persistentProjectLayout, setPageLayout } from '../ProjectLayout';
+
+interface AgentModel {
+  modelId: string;
+  displayName: string;
+  reasoningEffortLevels: string[];
+}
+
+interface AgentModelsEntry {
+  agentType: string;
+  models: AgentModel[];
+  defaultModel?: string | null;
+}
+
+interface Props {
+  project: Project;
+  agentModels?: AgentModelsEntry[];
+  agents?: NamedItem[];
+  tools?: NamedItem[];
+  toolGroups?: ToolGroup[];
+  skills?: NamedItem[];
+  mcpServers?: NamedItem[];
+  repositories?: NamedItem[];
+  assets?: AssetPickerItem[];
+  configItems?: ConfigItemOption[];
+  costHint?: SessionCostHint;
+  runners?: RunnerSummary[];
+}
+
+const ProjectSessionNewPage = () => {
+  const {
+    project,
+    agentModels = [],
+    agents = [],
+    tools = [],
+    toolGroups = [],
+    skills = [],
+    mcpServers = [],
+    repositories = [],
+    assets = [],
+    configItems = [],
+    costHint,
+    runners,
+  } = usePage<{ props: Props }>().props as unknown as Props;
+
+  return (
+    <>
+      <Head title={`New Session — ${project.name}`} />
+      <Box maw={720} mx="auto">
+        <PageHeader title="New Session" subtitle="Pick a runtime and what the agent can reach, then start it." />
+        <SessionNewForm
+          projectId={project.id}
+          agentModels={agentModels}
+          agents={agents}
+          tools={tools}
+          toolGroups={toolGroups}
+          skills={skills}
+          mcpServers={mcpServers}
+          repositories={repositories}
+          costHint={costHint}
+          assets={assets}
+          configItems={configItems}
+          runners={runners}
+          onCreatedPath={(sessionId) => `/company/projects/${project.id}/sessions/${sessionId}`}
+          fallbackPath={`/company/projects/${project.id}/sessions`}
+        />
+      </Box>
+    </>
+  );
+};
+
+setPageLayout(ProjectSessionNewPage, persistentProjectLayout);
+
+export default ProjectSessionNewPage;

@@ -1,0 +1,485 @@
+# frozen_string_literal: true
+
+class Integration < ApplicationRecord
+  include Encryptable
+
+  encryption_key :integrations_key
+  encrypted_column :credentials
+  extend Enumerize
+
+  CONNECTABLE_PROVIDERS = %w[github gitlab bitbucket coder slack azure_devops jira linear youtrack].freeze
+
+  enumerize :provider, in: %i[github gitlab bitbucket linear coder slack teams azure_devops jira youtrack], predicates: true
+  enumerize :status, in: %i[active inactive error], default: :inactive, predicates: true, scope: true
+
+  belongs_to :company
+  belongs_to :project, optional: true
+  belongs_to :connected_by, class_name: "User", optional: true
+  # Service-principal mode only: the approved company→organization binding this
+  # project connection draws its credentials from. Null in PAT mode.
+  belongs_to :azure_devops_installation, optional: true
+  # App mode only: the Forge installation whose pushed token this connection uses.
+  belongs_to :bitbucket_installation, optional: true
+  # The keys from runners are restrictive until the Coder adapter decides what
+  # disconnecting does to its runners (DESIGN.md §15 task 17). Until then a
+  # removal is refused with a model error, not an InvalidForeignKey. Declared
+  # before the dependents below, so the refusal comes before they are destroyed.
+  has_many :runners, dependent: :restrict_with_error
+  has_many :repositories, dependent: :destroy
+  # Each GitLab repository has a hook in GitLab that would outlive it. Collected
+  # before the repositories go, removed once the removal has committed.
+  before_destroy :collect_ci_webhook_repositories, prepend: true, if: :gitlab?
+  after_destroy_commit :unregister_ci_webhooks, if: :gitlab?
+  # So does each tracked GitLab project's issue hook (Trackers::Gitlab::Subscriptions).
+  before_destroy :collect_gitlab_tracker_hooks, prepend: true, if: :gitlab?
+  after_destroy_commit :remove_gitlab_tracker_hooks, if: :gitlab?
+  # After the hook removals above, which still need the token.
+  after_destroy_commit :revoke_gitlab_service_account_token, if: :gitlab?
+  # An API-key connection registered its Linear webhooks itself; nothing else removes them.
+  before_destroy :collect_linear_webhooks, prepend: true, if: :linear?
+  after_destroy_commit :remove_linear_webhooks, if: :linear?
+  # Azure keeps posting to the Service Hooks a connection created until they are
+  # deleted there; removing the connection in Flow is the only signal it gets.
+  before_destroy :collect_azure_service_hooks, prepend: true, if: :azure_devops?
+  after_destroy_commit :remove_azure_service_hooks, if: :azure_devops?
+  has_many :integration_data, class_name: "IntegrationData", dependent: :delete_all
+  has_many :azure_devops_operations, dependent: :delete_all
+  has_many :pull_request_operations, dependent: :delete_all
+  has_many :azure_devops_subscriptions, dependent: :destroy
+  has_many :project_trackers, dependent: :destroy
+  has_many :tracker_subscriptions, dependent: :destroy
+  # The Slack workspace or Teams tenant this install links its company to,
+  # shared with every other company that connected it.
+  belongs_to :chat_workspace, optional: true
+  # Rows this install recorded first; they belong to the workspace, so they stay
+  # when it goes.
+  has_many :chat_conversations, dependent: nil
+  # The company's channels there go with it, so its triggers listening in them
+  # switch off first. The channels themselves stay with the workspace.
+  before_destroy :release_chat_triggers, prepend: true, if: -> { slack? || teams? }
+  before_save :attach_chat_workspace, if: -> { (slack? || teams?) && chat_workspace_id.nil? }
+  # A removed Slack install stops claiming its workspace, so another company
+  # (or this one, later) can connect it.
+  after_destroy :release_slack_workspace, if: :slack?
+  after_destroy :release_teams_tenant, if: :teams?
+
+  validates :name, presence: true
+  validates :provider, presence: true
+  validate :project_belongs_to_same_company, if: -> { project_id.present? }
+  validate :azure_devops_connection_is_scoped, if: :azure_devops?
+  validate :bitbucket_connection_is_scoped, if: :bitbucket?
+  before_validation :record_github_installation_id, if: :github?
+  validate :github_installation_held_by_this_company, if: -> { github_installation_id.present? && active? }
+
+  scope :for_company, ->(company) { where(company: company) }
+  scope :company_wide, -> { where(project_id: nil) }
+  scope :for_project, ->(project) { where(project_id: project.id) }
+  scope :active, -> { where(status: "active") }
+  scope :visible_for_project, ->(project) {
+    where(company_id: project.company_id, project_id: nil).or(where(project_id: project.id))
+  }
+
+  # A GitHub PAT connection has no installation to match on, so the project
+  # alone identifies it: one PAT connection per project. Reconnecting replaces
+  # the token on that row rather than stacking a second connection to the same
+  # account — a PAT expires and gets re-pasted often, and every re-paste would
+  # otherwise leave the previous, dead connection behind for someone to clean up.
+  def self.find_or_build_github_for_pat(company:, connected_by:, project:)
+    company.integrations.where(project_id: project.id, provider: :github).find(&:github_pat?) ||
+      company.integrations.build(provider: :github, connected_by: connected_by, project: project)
+  end
+
+  def self.find_or_build_github_for_installation(company:, connected_by:, project:, installation_id:)
+    company.integrations.where(project_id: project.id, provider: :github)
+           .find_by(github_installation_id: installation_id.to_i) ||
+      company.integrations.build(provider: :github, connected_by: connected_by, project: project)
+  end
+
+  def credentials_data=(hash)
+    self.credentials = encrypt_secret(hash.to_json, column: "credentials")
+  end
+
+  # Raises Encryptable::DecryptionError when the stored credentials cannot be
+  # read, rather than passing for an integration that holds none.
+  def credentials_data
+    return {} if credentials.blank?
+
+    JSON.parse(decrypt_secret(credentials, column: "credentials"))
+  rescue JSON::ParserError
+    raise Encryptable::DecryptionError.new("Integration#credentials (id=#{id.inspect}) is not a credential",
+                                           model: "Integration", record_id: id)
+  end
+
+  # For showing a connection, never for using one: what the stored credentials
+  # say, or nothing (with the failure logged) when no configured key can read
+  # them — a page listing integrations must not fail on one unreadable row.
+  def credentials_data_for_display
+    credentials_data
+  rescue Encryptable::DecryptionError => e
+    Rails.logger.error("[Integration] #{e.message}")
+    {}
+  end
+
+  def installation_id
+    credentials_data["installation_id"]
+  end
+
+  # ----- Azure DevOps accessors -----
+  #
+  # Identity lives in `settings` (non-secret, serialized to the browser) and the
+  # authoritative copy lives on the installation. These readers prefer the
+  # installation so a stale settings blob can never widen reach; `settings` is
+  # the display cache and the only source in PAT mode.
+
+  def azure_auth_mode
+    settings&.dig("auth_mode").presence || (azure_devops_installation_id ? "service_principal" : "pat")
+  end
+
+  def azure_service_principal?
+    azure_devops? && azure_auth_mode == "service_principal"
+  end
+
+  def azure_pat?
+    azure_devops? && azure_auth_mode == "pat"
+  end
+
+  def azure_organization_slug
+    azure_devops_installation&.organization_slug || settings&.dig("organization_slug")
+  end
+
+  # A connection reaches one or more Azure projects inside its organization.
+  #
+  # It used to reach exactly one, and `azure_project_id` was a scalar in
+  # settings. Connections made before the change still carry that key, so it is
+  # read as a one-element list rather than migrated: the scalar is the truth for
+  # those rows and rewriting settings in a migration would touch every customer
+  # connection to change nothing.
+  def azure_project_ids
+    stored = settings&.dig("azure_project_ids")
+    return Array(stored).map(&:to_s) if stored.present?
+
+    Array(settings&.dig("azure_project_id")).map(&:to_s)
+  end
+
+  # id => name, for display. Names are not authorization: everything that
+  # decides access uses the ids.
+  def azure_project_names
+    stored = settings&.dig("azure_project_names")
+    return stored.to_h { |k, v| [ k.to_s, v.to_s ] } if stored.is_a?(Hash) && stored.present?
+
+    legacy_id = settings&.dig("azure_project_id")
+    legacy_name = settings&.dig("azure_project_name")
+    legacy_id.present? && legacy_name.present? ? { legacy_id.to_s => legacy_name.to_s } : {}
+  end
+
+  def azure_project_name(project_id = nil)
+    return azure_project_names[project_id.to_s] if project_id.present?
+
+    azure_project_names.values.first
+  end
+
+  # The gate every Azure call passes: a project this connection was actually
+  # given. Knowing an id is not enough — the ids are visible to anyone who can
+  # read the organization.
+  def azure_project_selected?(project_id)
+    project_id.present? && azure_project_ids.include?(project_id.to_s)
+  end
+
+  # The single project, where there is exactly one. Callers that can accept a
+  # default use this; tools that act on a caller-named project must not.
+  #
+  # Deliberately nil when the connection covers several. Returning "the first"
+  # would make an unqualified call act on whichever project sorted first, which
+  # is the failure this whole change exists to prevent — better a loud refusal
+  # naming the ambiguity.
+  def azure_default_project_id
+    ids = azure_project_ids
+    ids.one? ? ids.first : nil
+  end
+
+  # Reads naturally where a connection has one project, and is the same value.
+  alias azure_project_id azure_default_project_id
+
+  def azure_personal_access_token
+    credentials_data["personal_access_token"]
+  end
+
+  def azure_enabled_capabilities
+    Array(settings&.dig("enabled_capabilities"))
+  end
+
+  def azure_capability_enabled?(capability)
+    azure_enabled_capabilities.include?(capability.to_s)
+  end
+
+  # ----- GitHub accessors -----
+
+  # How this connection authenticates: "app" (a GitHub App installation, the
+  # production path) or "pat" (a user's personal access token, for a developer
+  # trying Aixle where no App can be installed).
+  #
+  # Connections made before PAT mode existed carry no `auth_mode` key, and they
+  # are all App installations — hence the default, which is what lets them keep
+  # working with no migration.
+  def github_auth_mode
+    return nil unless github?
+
+    settings&.dig("auth_mode").presence == "pat" ? "pat" : "app"
+  end
+
+  def github_app?
+    github? && github_auth_mode == "app"
+  end
+
+  def github_pat?
+    github? && github_auth_mode == "pat"
+  end
+
+  # GitHub account (org or user) the App is installed on — or, in PAT mode, the
+  # user the token belongs to. Recorded at connect time by
+  # Github::IntegrationService; blank on integrations connected before that, and
+  # on installations that never verified.
+  def github_account_login
+    settings&.dig("account_login")
+  end
+
+  def github_personal_access_token
+    credentials_data["personal_access_token"]
+  end
+
+  # ----- Bitbucket accessors -----
+
+  # "app" (the Forge installation) or "token" (a pasted access or API token).
+  def bitbucket_auth_mode
+    return nil unless bitbucket?
+
+    settings&.dig("auth_mode").presence || (bitbucket_installation_id ? "app" : "token")
+  end
+
+  def bitbucket_app? = bitbucket? && bitbucket_auth_mode == "app"
+  def bitbucket_token? = bitbucket? && bitbucket_auth_mode == "token"
+
+  # "access_token" (workspace, project or repository — a bot) or "api_token" (a user's).
+  def bitbucket_token_kind = settings&.dig("token_kind")
+
+  def bitbucket_workspace_uuid
+    bitbucket_installation&.workspace_uuid || settings&.dig("workspace_uuid")
+  end
+
+  def bitbucket_workspace_slug
+    bitbucket_installation&.workspace_slug.presence || settings&.dig("workspace_slug")
+  end
+
+  # ----- Pull-request tools (GitLab, Bitbucket) -----
+
+  # Merging is on unless a connection turns it off — the same default Azure
+  # connections have (docs/design/bitbucket-integration.md §4.9).
+  def pull_request_merge_enabled?
+    settings.to_h["pull_request_merge"] != false
+  end
+
+  # ----- Coder accessors -----
+
+  def coder_url
+    credentials_data["coder_url"]
+  end
+
+  def coder_user_id
+    credentials_data["user_id"]
+  end
+
+  def coder_default_template
+    settings&.dig("default_template")
+  end
+
+  def coder_machine_prefix
+    settings&.dig("machine_prefix")
+  end
+
+  def coder_lock_ttl_minutes
+    settings&.dig("lock_ttl_minutes")&.to_i
+  end
+
+  def self.ransackable_attributes(_auth_object = nil)
+    %w[name provider status created_at updated_at]
+  end
+
+  def self.ransackable_associations(_auth_object = nil)
+    %w[company project connected_by]
+  end
+
+
+  # The installs of every company that connected the same workspace, this one
+  # included; just this one when it serves no workspace yet.
+  def chat_peers
+    return Integration.where(id: id) if chat_workspace_id.nil?
+
+    Integration.active.where(chat_workspace_id: chat_workspace_id, provider: provider).or(Integration.where(id: id))
+  end
+
+  private
+
+  # One installation belongs to one company unless the deployment proves who
+  # connects it. Every customer installs the same deployment-wide App, and the
+  # App's own JWT can read every installation, so "the installation exists"
+  # proves nothing about who installed it. With the App's user authorization
+  # (Github::InstallationOwnership) every new connection is made by someone
+  # GitHub lists as able to see the installation, so one GitHub organization
+  # may serve several companies.
+  def github_installation_held_by_this_company
+    return if Github::InstallationOwnership.enforced?
+    return unless new_record? || will_save_change_to_github_installation_id? || will_save_change_to_status?
+
+    # Only a verified (active) connection claims the installation, so a row left
+    # behind by a failed verification cannot squat on someone else's install.
+    taken = Integration.where(provider: :github, github_installation_id: github_installation_id, status: "active")
+                       .where.not(company_id: company_id)
+    errors.add(:base, "This GitHub installation is already connected to another workspace") if taken.exists?
+  end
+
+  def record_github_installation_id
+    self.github_installation_id = credentials_data["installation_id"].presence&.to_i
+  end
+
+  def project_belongs_to_same_company
+    return if project.blank? || company.blank?
+    return if project.company_id == company_id
+
+    errors.add(:project, "must belong to the same company")
+  end
+
+  # An Azure connection names exactly one Azure project, so it cannot be
+  # company-wide: a company-wide row would hand every project in the company the
+  # same selected Azure project and the same credentials. Service-principal mode
+  # additionally requires the approved binding, and that binding must belong to
+  # this company and still approve the selected project.
+  def azure_devops_connection_is_scoped
+    errors.add(:project, "is required for an Azure DevOps integration") if project_id.blank?
+
+    installation = azure_devops_installation
+    if azure_auth_mode == "service_principal"
+      return errors.add(:azure_devops_installation, "is required in service-principal mode") if installation.nil?
+      errors.add(:azure_devops_installation, "belongs to another company") if installation.company_id != company_id
+
+      selected = azure_project_ids
+      errors.add(:azure_project_ids, "must name at least one Azure project") if selected.empty?
+      outside = selected.reject { |id| installation.approved_project?(id) }
+      if outside.any?
+        errors.add(:azure_project_ids, "are not in the installation's approved scope: #{outside.join(', ')}")
+      end
+    elsif installation.present?
+      errors.add(:azure_devops_installation, "must be absent in PAT mode")
+    end
+  end
+
+  # A Bitbucket connection is a project's, like Azure's: a company-wide row would
+  # hand every project the same workspace credential. App mode draws on an
+  # installation this company has bound; token mode carries its own token.
+  def bitbucket_connection_is_scoped
+    errors.add(:project, "is required for a Bitbucket integration") if project_id.blank?
+
+    installation = bitbucket_installation
+    if bitbucket_auth_mode == "app"
+      return errors.add(:bitbucket_installation, "is required in app mode") if installation.nil?
+
+      errors.add(:bitbucket_installation, "is not connected to this company") if installation.company_id != company_id
+    elsif installation.present?
+      errors.add(:bitbucket_installation, "must be absent in token mode")
+    end
+  end
+
+  def collect_ci_webhook_repositories
+    @ci_webhook_repositories = repositories.select { |repository| repository.webhook_secret.present? }
+  end
+
+  def unregister_ci_webhooks
+    Array(@ci_webhook_repositories).each { |repository| Repositories::CiWebhook.unregister(repository) }
+  end
+
+  def collect_gitlab_tracker_hooks
+    @gitlab_token = credentials_data["personal_access_token"]
+    @gitlab_service_account = settings.to_h["auth_mode"] == Gitlab::IntegrationService::SERVICE_ACCOUNT_MODE
+    @gitlab_tracker_hooks = tracker_subscriptions.live.where(strategy: "api").where.not(provider_subscription_id: nil)
+                                                 .pluck(:external_scope_id, :provider_subscription_id)
+  end
+
+  def remove_gitlab_tracker_hooks
+    Trackers::Gitlab::Subscriptions.release(token: @gitlab_token, hooks: @gitlab_tracker_hooks)
+  end
+
+  def revoke_gitlab_service_account_token
+    Gitlab::ServiceAccountToken.revoke(@gitlab_token) if @gitlab_service_account
+  end
+
+  def collect_linear_webhooks
+    return unless settings.to_h["auth_mode"] == "api_key"
+
+    @linear_api_key = credentials_data["api_key"]
+    @linear_webhook_ids = tracker_subscriptions.live.where(strategy: "api").where.not(provider_subscription_id: nil)
+                                               .pluck(:provider_subscription_id)
+  end
+
+  def remove_linear_webhooks
+    Trackers::Linear::Subscriptions.release(api_key: @linear_api_key, webhook_ids: @linear_webhook_ids)
+  end
+
+  def collect_azure_service_hooks
+    @azure_service_hooks = azure_devops_subscriptions.where.not(azure_subscription_id: nil)
+                                                     .pluck(:azure_subscription_id, :azure_project_id)
+  end
+
+  def remove_azure_service_hooks
+    return if @azure_service_hooks.blank?
+
+    AzureDevops::SubscriptionService.new(self).release(@azure_service_hooks)
+  end
+
+  # Deleted rather than disabled: the endpoint is what ties the tenant to this
+  # company, and a disconnected organization may connect to another one.
+  def release_teams_tenant
+    endpoints = WebhookEndpoint.where(provider: "teams").where("config->>'integration_id' = ?", id.to_s)
+    heir = chat_heir
+    heir ? hand_endpoints_to(endpoints, heir) : endpoints.delete_all
+  end
+
+  def attach_chat_workspace
+    external_id = settings.to_h[slack? ? "team_id" : "tenant_id"]
+    return if external_id.blank?
+
+    self.chat_workspace = ChatWorkspace.for!(provider: provider, external_id: external_id,
+                                             name: settings.to_h["team_name"].presence || settings.to_h["tenant_domain"])
+  end
+
+  def release_chat_triggers
+    conversations = ChatConversation.in_workspace_of(id).select(:id)
+    TriggerBinding.release_chat_channels!(
+      TriggerBinding.where(chat_conversation_id: conversations, project_id: Project.where(company_id: company_id).select(:id))
+    )
+    ChatChannelConnection.where(company_id: company_id, chat_conversation_id: conversations).delete_all
+  end
+
+
+  def release_slack_workspace
+    team_id = settings.to_h["team_id"]
+    return if team_id.blank?
+
+    endpoints = WebhookEndpoint.where(slug: "slack-team-#{team_id}")
+    heir = chat_heir
+    heir ? hand_endpoints_to(endpoints, heir) : endpoints.update_all(enabled: false)
+  end
+
+  # Another company's install of the same workspace, which takes over the
+  # endpoint they share when this one goes.
+  def chat_heir
+    return nil if chat_workspace_id.nil?
+
+    Integration.active.where(chat_workspace_id: chat_workspace_id, provider: provider).where.not(id: id).order(:id).first
+  end
+
+  def hand_endpoints_to(endpoints, heir)
+    endpoints.find_each do |endpoint|
+      endpoint.update_columns(company_id: heir.company_id, config: endpoint.config.to_h.merge("integration_id" => heir.id),
+                              updated_at: Time.current)
+    end
+  end
+end

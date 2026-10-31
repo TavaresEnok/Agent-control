@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="dark">
+  <meta name="supported-color-schemes" content="dark">
+  <title><%= message.subject %></title>
+  <style>
+    /* Clients auto-link addresses, dates and domains in their own blue; keep the surrounding text colour. */
+    a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important; }
+    u + #body a { color: inherit; text-decoration: none; font-size: inherit; font-family: inherit; font-weight: inherit; line-height: inherit; }
+    @media only screen and (max-width: 480px) {
+      table[role="presentation"] { width: 100% !important; }
+      td { padding: 20px 16px !important; }
+      img { max-width: 100% !important; height: auto !important; }
+    }
+  </style>
+</head>
+<body id="body" style="margin:0; padding:0; background-color:#0a0908; -webkit-text-size-adjust:100%;">
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0a0908" style="background-color:#0a0908;">
+    <tr>
+      <td align="center" style="padding:56px 16px 64px;">
+
+        <table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="width:520px; max-width:100%;">
+
+          <!-- Logo -->
+          <tr>
+            <td align="left" style="padding:0 4px 28px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                <% if (logo = attachments["flow-logo.png"]) %>
+                <td style="vertical-align:middle; padding-right:7px;">
+                  <img src="<%= logo.url %>" alt="Aixle" width="46" height="18" style="display:block; width:46px; height:18px; border:0;">
+                </td>
+                <% end %>
+                <td style="vertical-align:middle;">
+                  <span style="display:inline-block; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:21px; font-weight:700; letter-spacing:-0.02em; line-height:1; color:#d1cfcd;">Flow</span>
+                </td>
+              </tr></table>
+            </td>
+          </tr>
+
+          <%= yield %>
+
+          <!-- Footer -->
+          <tr>
+            <td align="left" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:12px; line-height:18px; color:#5d5b5a; padding:28px 4px 0;">
+              <% footer_url = "#{Settings.protocol}://#{Settings.domain}" %>
+              Aixle Flow &nbsp;&middot;&nbsp; <a href="<%= footer_url %>" style="color:#5d5b5a; text-decoration:underline;"><%= Settings.domain %></a>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

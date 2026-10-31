@@ -1,0 +1,153 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class WorkflowTriggers::CreatorTest < ActiveSupport::TestCase
+  setup do
+    @user = create(:user, :with_company)
+    @project = create(:project, company: @user.companies.first, owner: @user)
+    @workflow = create(:workflow, scope: @project)
+  end
+
+  def create_trigger(kind, **attributes)
+    WorkflowTriggers::Creator.call(project: @project, workflow: @workflow, user: @user, kind: kind, attributes: attributes)
+  end
+
+  test "column trigger binds the column with the given mode and the defaults for the rest" do
+    column = create(:board_column, board: create(:board, project: @project))
+
+    result = create_trigger("column", board_column_id: column.id, trigger_mode: "manual")
+
+    assert_equal "column", result.kind
+    binding = result.trigger
+    assert_equal column, binding.board_column
+    assert_equal @workflow, binding.workflow
+    assert_equal @user, binding.created_by
+    assert_equal "manual", binding.trigger_mode
+    assert_equal 5, binding.cooldown_seconds
+  end
+
+  test "column trigger without a board raises BoardMissingError" do
+    assert_raises(WorkflowTriggers::Creator::BoardMissingError) { create_trigger("column", board_column_id: 1) }
+  end
+
+  test "column trigger only binds columns of the project's own board" do
+    create(:board, project: @project)
+    other_project = create(:project, company: @project.company, owner: @user)
+    foreign_column = create(:board_column, board: create(:board, project: other_project))
+
+    assert_raises(ActiveRecord::RecordNotFound) { create_trigger("column", board_column_id: foreign_column.id) }
+  end
+
+  test "chat and schedule triggers get their fixed event types" do
+    slack_install = create(:integration, provider: :slack, status: :active, company: @project.company, project: nil)
+    channel = connect_chat_channel(company: @project.company, integration: slack_install)
+    slack = create_trigger("chat", chat_provider: "slack", name: "standup", chat_channel_id: channel.id)
+    schedule = create_trigger("schedule", enabled: false, schedule_config: { "cron" => "0 9 * * 1-5", "timezone" => "UTC" })
+
+    assert_equal [ "chat", "chat.message", "slack" ], [ slack.kind, slack.trigger.event_type, slack.trigger.chat_provider ]
+    assert_equal "standup", slack.trigger.name
+    assert_equal "schedule.fired", schedule.trigger.event_type
+    assert_equal false, schedule.trigger.enabled # rubocop:disable Minitest/RefuteFalse
+    assert_equal @project, schedule.trigger.project
+  end
+
+  test "a chat trigger listens to the messenger it names, in its one channel, and follows its runs with a status card" do
+    teams = create(:integration, provider: :teams, status: :active, company: @project.company, project: nil)
+    channel = connect_chat_channel(company: @project.company, provider: "teams", integration: teams)
+
+    trigger = create_trigger("chat", chat_provider: "teams", chat_channel_id: channel.id,
+                                     filter_predicate: { "text" => "deploy" }).trigger
+
+    assert_equal channel, trigger.chat_conversation
+    assert_equal({ "text" => "deploy", "provider" => "teams", "channel" => channel.external_id }, trigger.filter_predicate)
+    assert_equal "lifecycle", trigger.status_reporting
+  end
+
+  test "a chat trigger asked to stay silent reports nothing" do
+    create(:integration, provider: :teams, status: :active, company: @project.company, project: nil)
+
+    assert_equal "none", create_trigger("chat", chat_provider: "teams", status_reporting: "none", enabled: false).trigger.status_reporting
+    assert_equal "failures", create_trigger("chat", chat_provider: "teams", status_reporting: "failures", enabled: false)
+                               .trigger.status_reporting
+  end
+
+  test "a chat trigger can't be switched on without a channel connected to its company, nor name one in its conditions" do
+    create(:integration, provider: :slack, status: :active, company: @project.company, project: nil)
+    foreign = connect_chat_channel(company: create(:company), external_id: "C0FOREIGN1")
+
+    missing = assert_raises(ActiveRecord::RecordInvalid) { create_trigger("chat", chat_provider: "slack") }
+    assert_match(/Chat channel is required/, missing.message)
+    stolen = assert_raises(ActiveRecord::RecordInvalid) do
+      create_trigger("chat", chat_provider: "slack", chat_channel_id: foreign.id, enabled: false)
+    end
+    assert_match(/Chat channel is not connected to this company/, stolen.message)
+    named = assert_raises(ActiveRecord::RecordInvalid) do
+      create_trigger("chat", chat_provider: "slack", enabled: false, filter_predicate: { "conversation.id" => "C0FOREIGN1" })
+    end
+    assert_match(/can't name where a message comes from \(conversation.id\)/, named.message)
+  end
+
+  test "a chat trigger needs a messenger, and that messenger connected" do
+    assert_raises(ActiveRecord::RecordInvalid) { create_trigger("chat", enabled: false) }
+    error = assert_raises(ActiveRecord::RecordInvalid) { create_trigger("chat", chat_provider: "teams") }
+    assert_includes error.record.errors.full_messages, TriggerBinding.chat_not_connected("Microsoft Teams")
+  end
+
+  test "a Slack trigger needs a connected workspace, unless it is created switched off" do
+    error = assert_raises(ActiveRecord::RecordInvalid) { create_trigger("chat", chat_provider: "slack") }
+    assert_includes error.record.errors.full_messages, TriggerBinding.chat_not_connected("Slack")
+
+    assert create_trigger("chat", chat_provider: "slack", enabled: false).trigger.persisted?
+  end
+
+  test "event trigger falls back to webhook.received without an event type" do
+    assert_equal "github.push", create_trigger("event", event_type: "github.push").trigger.event_type
+    assert_equal "webhook.received", create_trigger("event").trigger.event_type
+  end
+
+  test "webhook trigger provisions an endpoint whose event type the binding listens on" do
+    result = create_trigger("webhook", verification_strategy: "shared_token", secret: "s3cret")
+
+    endpoint = result.webhook_endpoint
+    assert_equal "shared_token", endpoint.verification_strategy
+    assert_equal "s3cret", endpoint.secret
+    assert_equal @project, endpoint.project
+    assert_equal endpoint.config["event_type"], result.trigger.event_type
+    assert_match(/\Awebhook\.\h{32}\z/, result.trigger.event_type)
+  end
+
+  test "a webhook trigger is authenticated by a generated shared token unless told otherwise" do
+    endpoint = create_trigger("webhook").webhook_endpoint
+
+    assert_equal "shared_token", endpoint.verification_strategy
+    assert_predicate endpoint.secret, :present?
+  end
+
+  test "a rejected webhook binding leaves no endpoint behind" do
+    assert_no_difference -> { WebhookEndpoint.count } do
+      assert_raises(ActiveRecord::RecordInvalid) { create_trigger("webhook", subject_policy: "bogus") }
+    end
+  end
+
+  test "an unknown kind raises UnsupportedKindError" do
+    assert_raises(WorkflowTriggers::Creator::UnsupportedKindError) { create_trigger("carrier_pigeon") }
+  end
+
+  test "a tracker trigger names its tracker event, and with a column defaults to reusing the issue's task" do
+    column = create(:board_column, board: create(:board, project: @project))
+
+    binding = create_trigger("tracker", event_type: "tracker.issue.status_changed", subject_column_id: column.id,
+                                        aixle_changes: "other_workflows").trigger
+
+    assert_equal [ "tracker.issue.status_changed", "find_or_create_task", "other_workflows" ],
+                 [ binding.event_type, binding.subject_policy, binding.aixle_changes ]
+  end
+
+  test "a tracker trigger without a known tracker event type is refused, never turned into a webhook" do
+    error = assert_raises(ActiveRecord::RecordInvalid) { create_trigger("tracker") }
+    assert_match(/Event type/, error.message)
+
+    assert_raises(ActiveRecord::RecordInvalid) { create_trigger("tracker", event_type: "tracker.issue.deleted") }
+  end
+end

@@ -1,0 +1,201 @@
+# Workflows
+
+A Workflow is a DAG of Steps that together accomplish a business
+process — a code review, a feature spec, a bug triage. Each Step is one
+agent session in one container.
+
+> **info** The workflow builder names these levels differently from the API: a
+> **Step** on this page is a **session** in the builder, and a **SubStep** is a
+> **step** in the builder. The API, the MCP tools (`create_workflow_step`,
+> `create_sub_step`) and the field names below keep `step` and `sub_step`.
+
+## Anatomy of a Workflow
+
+| Field                            | Description                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `name`                           | Unique within its scope (Company or Project).                                |
+| `description`                    | What the workflow accomplishes.                                              |
+| `config.base_tool_ids`           | Tools always available to every step in this workflow.                       |
+| `config.base_skill_ids`          | Skills always injected into agent context.                                   |
+| `config.base_mcp_server_ids`     | MCP servers always connected.                                                |
+| `config.base_asset_ids`          | Files always pre-loaded into `/workspace/assets/`.                           |
+| `config.inherit_all_project_resources` | If true, all project-level resources merge in additively.              |
+| `execution_mode`                 | `interactive`, `non_interactive`, or `mixed` (per-step).                     |
+
+## Anatomy of a Step
+
+One Step = one agent session = one container = one major deliverable.
+
+| Field                  | Description                                                              |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `name`                 | Step name.                                                               |
+| `position`             | Order in workflow.                                                       |
+| `instructions`         | **The most important field.** Markdown instructions for the agent.       |
+| `agent_id`             | Which agent persona runs this step.                                      |
+| `allow_non_interactive`| Can the step run with no user in the loop.                                |
+| `skip_policy`          | `never`, `if_outputs_exist`, or `manual`.                                |
+| `on_failure`           | `retry`, `skip`, or `fail` (default).                                    |
+| `max_retries`          | Auto-retry count.                                                        |
+| `tool_ids`             | Tools available in this step (merged with workflow base).                |
+| `skill_ids`            | Skills injected (merged with workflow base).                             |
+| `mcp_server_ids`       | MCP servers connected (merged with workflow base).                       |
+| `repository_ids`       | Repos cloned under `/workspace/repo/` (merged with workflow base).       |
+| `depends_on_step_ids`  | DAG dependencies — enables parallel execution.                           |
+| `preferred_model`      | LLM model override for this step.                                        |
+| `reasoning_effort`     | Reasoning effort the step's CLI runs at (`low`, `high`, …). Unset keeps the CLI's default. It needs an explicit `required_agent_runtime` and `preferred_model`: a level without either is refused, so clear the level with them. Only the levels that runtime takes for that model are accepted. The CLI may still lower or ignore a level the model doesn't support. |
+| `input_asset_specs`    | Expected inputs. A required one is checked before the step starts; a missing one fails the step ("Required input missing"). Needed only for files picked when a run starts: an `@` reference is checked without one. |
+| `output_asset_specs`   | Expected outputs. A required one is checked when the step ends; a missing one fails the step ("Output validation failed"). A name is the file's path under `/workspace/outputs/` (a `/workspace/…` prefix is dropped), or a glob such as `reports/*.md`; `dir/**` takes everything under `dir`. |
+
+## DAG and parallelism
+
+A Step with `depends_on_step_ids: []` can start as soon as the workflow
+run begins. Steps with dependencies wait until *all* listed
+prerequisites complete successfully. Sibling steps that share no
+dependency relationship run **in parallel**, each in its own container.
+
+Dependencies cannot form a cycle: saving a step that would end up waiting on
+itself is rejected with the cycle spelled out. If a run is left with steps that
+can never start, it fails with `failure_reason: unsatisfiable_dependencies`
+instead of reporting completion.
+
+```
+       ┌── Step B (lint)  ─┐
+Step A ┤                   ├── Step D (merge)
+       └── Step C (test)  ─┘
+```
+
+A step's starting context summarizes only the steps it depends on, directly or
+through others, each from its latest completed or skipped attempt. In the diagram,
+Step D gets A, B and C; Step B gets only A, never C, which runs beside it.
+
+Aixle Flow uses **Temporal** to orchestrate this — runs survive process
+restarts, retries are durable, and you can attach to a long-running
+workflow from a fresh page reload.
+
+## SubSteps
+
+SubSteps are what the builder shows as a session's steps. They are **not**
+separate sessions — they're a checklist inside one container session. They
+reach the agent as a numbered list under the Step's instructions, and the
+agent marks each one with the `mark_sub_step` tool. Use them when you want
+visible progress for a long step (e.g. "1/5: scanned codebase",
+"2/5: drafted plan"…). Neither their order nor their `required` flag is
+enforced at run time.
+
+## Execution flow
+
+```
+WorkflowRun  (pending → running → completed | failed)
+├── StepRun 1                      ← one container
+│   ├── TerminalSession
+│   ├── SubStepRun 1.1 → 1.2 → 1.3
+│   └── Produces: WorkflowRunAssets
+├── StepRun 2  (waits on StepRun 1 if depends_on_step_ids)
+└── StepRun 3
+```
+
+A `WorkflowRun` can be triggered by:
+
+- a column binding (auto or manual),
+- the **Trigger workflow** button on a task,
+- the workflow's "Run" button outside the board,
+- a schedule, a Slack message, or an inbound webhook,
+- the API (`POST /company/projects/:project_id/workflow_runs`).
+
+> **info** All of these flow through one event pipeline, and each off-board trigger carries a `subject_policy` deciding whether the run gets a board task. See [Triggers and Gates](/docs/triggers-and-gates) for the full model — including why a CI **gate** is not a trigger.
+
+## Approval gates and human-in-the-loop
+
+For a step that should pause for a human:
+
+1. Set `allow_non_interactive: false` on the step.
+2. The container starts but the agent waits for explicit approval.
+3. The UI shows an **Approve / Retry / Skip** control on the step run.
+
+The API endpoints behind those buttons:
+
+- `POST /company/projects/:id/workflow_runs/:run_id/approve_step`
+- `POST /company/projects/:id/workflow_runs/:run_id/retry_step`
+- `POST /company/projects/:id/workflow_runs/:run_id/skip_step`
+
+## Assets in and out
+
+Three sources of input assets, all merged additively:
+
+1. **Workflow base assets** (`workflow.config.base_asset_ids`) — always.
+2. **Run-time assets** (`workflow_run.input_asset_ids`) — chosen when
+   the run starts.
+3. **Outputs of every step it runs after** (`depends_on_step_ids`, followed through: a step after B, which runs after A, gets both), placed at `/workspace/assets/<name>`. When two of them wrote the same name, the nearest one's copy wins. The agent's context lists them.
+
+Files attached to a board card are **not** mounted; the agent fetches them with `board_get_task_assets`.
+
+Everything lands under `/workspace/assets/`. Agents write outputs to
+`/workspace/outputs/` — those files become `WorkflowRunAssets` you can
+download from the UI or via `GET /api/v1/projects/:id/workflow_runs/:run_id/workflow_run_assets`.
+
+## References and the data-flow check
+
+Typing `@` in a session's instructions inserts a reference to an asset, a declared
+output, another session, an MCP server, a tool, a skill or a config item. It is stored
+as a token with the row's id (`{{asset:12}}`, `{{output:45:summary.md}}`, `{{step:45}}`,
+`{{mcp:7}}`, `{{tool:9}}`, `{{skill:4}}`, `{{config_item:3}}`), shown as a chip, and
+replaced with the path or name when the session starts — a config item by its name
+only, never its value. Picking an item attaches it, or adds Run after, when the session
+would not otherwise get it. Duplicating a workflow or exporting it as a template carries the references.
+
+The builder checks the whole workflow as you edit — references that no longer resolve,
+outputs read from a session that does not run first, input and output names that cannot
+match, braces nothing replaces — and lists what it finds under each session. Saving is
+never blocked. A run that would fail for certain does not start, and `validate_workflow`
+reports the same list.
+
+## Saving, versions and the archive
+
+Edits in the workflow builder stay in your browser until you press **Save** —
+the header says *Unsaved changes* until you do, and leaving the page asks
+first. One Save stores the whole workflow (its fields, every step and
+sub-step) as one numbered **version**. Agents, skills, wrappers and MCP servers
+are versioned the same way, one version per Save of their form.
+
+- **History** (the clock icon on every workflow, agent, skill, wrapper and
+  connector) lists the versions newest first: who saved each one — a person or
+  the Aixle Builder acting for them — when, and what changed, compared with
+  the version before it or with the current one.
+- **Revert** puts an earlier version's content back and saves it as the newest
+  version; nothing in the history is overwritten. The confirmation spells out
+  what will change. MCP server secrets are never stored in a version, so a
+  revert keeps the current header and env values — and one that moves the
+  server to another address clears them, as an edit would.
+- **If someone saved first**, your Save is refused rather than silently
+  overwriting their change; reload to see it.
+- **Archive** replaces delete. An archived entity leaves pickers and new
+  sessions but keeps its history, and can be restored from the list screen's
+  *Archived* view. Archiving is refused while a workflow still uses the entity.
+  Restoring a workflow offers to switch back on the triggers archiving turned off.
+- **Which version ran**: runs read the saved workflow at the moment each
+  session launches, and the run page shows the version per session. A Save made
+  while a run is in progress affects the sessions that have not started yet —
+  the run page then says so.
+
+## Aixle Builder
+
+Building a workflow by hand is rare in practice. The **Aixle Builder**
+is an in-app conversational agent: describe your process in plain
+language, it generates the workflow, steps, instructions, and resource
+links for you. Open it from the project sidebar (Workflows → "Build with AI").
+
+## Gotchas
+
+- **A step gets code only if some level names a repository** — the step's
+  own `repository_ids`, the workflow's `base_repository_ids`, or the run's
+  one-off override. An explicit pick anywhere wins outright; the project's
+  full set is used only when nothing names one and the workflow has
+  `inherit_all_project_resources`. How the run started never matters.
+- **`if_outputs_exist`** skip policy compares asset filenames against
+  `output_asset_specs`. Rename a spec and previously-skipped steps will
+  re-run.
+- **Parallel steps share the workflow run** but not their containers —
+  they cannot read each other's `/workspace/` directly. Use
+  `output_asset_specs` to hand artifacts forward.
+
+Writing the instructions themselves: see the [Prompt guide](/docs/prompt-guide).

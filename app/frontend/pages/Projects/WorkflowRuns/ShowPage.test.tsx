@@ -1,0 +1,665 @@
+import '@testing-library/jest-dom/vitest';
+import { router } from '@inertiajs/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildRunnerBadge } from 'test/factories/runner';
+import { buildSharedPermissions } from 'test/factories/sharedProps';
+import { buildStepRun } from 'test/factories/stepRun';
+import { buildSubStepRun } from 'test/factories/subStepRun';
+import { buildWorkflowRun } from 'test/factories/workflowRun';
+import { buildWorkflowRunAsset } from 'test/factories/workflowRunAsset';
+import { FakeWebSocket, installFakeWebSocket } from 'test/fakeWebSocket';
+import { renderAuthedPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+import type WorkflowRun from 'types/generated/WorkflowRun';
+
+import ShowPage from './ShowPage';
+
+const project = { id: 7, name: 'Orbital Migration' };
+
+// Thin typed wrapper: buildWorkflowRun defaults to an empty stepRuns array, but every
+// seed()-based test relies on the two-step default the old untyped makeRun provided, so
+// re-seed it here (as typed StepRuns) and let callers override any WorkflowRun field.
+function makeRun(overrides: Partial<WorkflowRun> = {}) {
+  return buildWorkflowRun({
+    stepRuns: [
+      buildStepRun({ id: 101, stepId: 1, stepName: 'Compile Specs', stepPosition: 1, state: 'completed' }),
+      buildStepRun({ id: 102, stepId: 2, stepName: 'Render Output', stepPosition: 2, state: 'pending' }),
+    ],
+    ...overrides,
+  });
+}
+
+function seed(props: Record<string, unknown> = {}) {
+  return {
+    project,
+    run: makeRun(),
+    assets: [],
+    cableStream: 'signed-stream',
+    ...props,
+  };
+}
+
+describe('Projects/WorkflowRuns/ShowPage', () => {
+  beforeEach(() => {
+    installFakeWebSocket();
+  });
+
+  it('says where the run and each of its sessions runs, with the flag on', () => {
+    const run = makeRun({ runnerId: 4, runner: buildRunnerBadge({ id: 4, name: 'Prod VPC' }) });
+    renderAuthedPage(<ShowPage />, { props: { ...seed({ run }), features: { externalRunners: true } } });
+
+    expect(screen.getByText('Runs on')).toBeInTheDocument();
+    // The header and the two session cards.
+    expect(screen.getAllByRole('link', { name: 'Prod VPC · Manual' })).toHaveLength(3);
+  });
+
+  it('says Hosted for a run without a runner, and nothing without the flag', () => {
+    const { unmount } = renderAuthedPage(<ShowPage />, { props: { ...seed(), features: { externalRunners: true } } });
+    expect(screen.getAllByText('Hosted')).toHaveLength(3);
+    unmount();
+
+    renderAuthedPage(<ShowPage />, { props: seed() });
+    expect(screen.queryByText('Runs on')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hosted')).not.toBeInTheDocument();
+  });
+
+  it('names the workflow version each session ran, and warns when it changed mid-run', () => {
+    const run = makeRun({
+      workflowVersionNumbers: [7, 8],
+      stepRuns: [
+        buildStepRun({ id: 101, stepId: 1, stepName: 'Compile Specs', stepPosition: 1, workflowVersionNumber: 7 }),
+        buildStepRun({ id: 102, stepId: 2, stepName: 'Render Output', stepPosition: 2, workflowVersionNumber: 8 }),
+      ],
+    });
+
+    renderAuthedPage(<ShowPage />, { props: seed({ run }) });
+
+    expect(screen.getByText('The workflow was saved while this run was in progress')).toBeInTheDocument();
+    expect(screen.getByText('Session 1 · v7')).toBeInTheDocument();
+    expect(screen.getByText('Session 2 · v8')).toBeInTheDocument();
+    expect(screen.getByText('v7 → v8')).toBeInTheDocument();
+  });
+
+  it('says nothing about versions for a run that kept one', () => {
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ workflowVersionNumbers: [3] }) }) });
+
+    expect(screen.queryByText('The workflow was saved while this run was in progress')).not.toBeInTheDocument();
+    expect(screen.getByText('v3')).toBeInTheDocument();
+  });
+
+  it('renders the shared detail header: breadcrumb, name, status, id and stats', () => {
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ costCents: 1234 }) }) });
+
+    expect(screen.getByRole('heading', { name: 'Nebula Pipeline' })).toBeInTheDocument();
+    expect(screen.getByText('Run #42')).toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument();
+    // Sessions, not "steps" — the run's units are sessions now, in the tab and
+    // in the first stat card.
+    expect(screen.getByRole('tab', { name: /^Sessions/ })).toBeInTheDocument();
+    expect(screen.getByText('1/3')).toBeInTheDocument();
+    expect(screen.getByText('$12.34')).toBeInTheDocument();
+    // Runtime and user moved into the meta line the session detail also uses.
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+    expect(screen.getByText('Dana Operator')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sessions & Runs' })).toHaveAttribute(
+      'href',
+      '/company/projects/7/sessions',
+    );
+  });
+
+  it('times the run from its first step leaving the queue', () => {
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({
+          state: 'completed',
+          startedAt: '2026-06-23T10:00:00Z',
+          executionStartedAt: '2026-06-23T10:10:00Z',
+          completedAt: '2026-06-23T10:15:00Z',
+        }),
+      }),
+    });
+
+    expect(screen.getByText('5m 0s')).toBeInTheDocument();
+  });
+
+  it("times each session card from its session's start, not from when the step began waiting", () => {
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({
+          state: 'completed',
+          executionStartedAt: '2026-06-23T10:10:00Z',
+          completedAt: '2026-06-23T10:40:00Z',
+          stepRuns: [
+            buildStepRun({
+              id: 101,
+              stepName: 'Compile Specs',
+              state: 'completed',
+              startedAt: '2026-06-23T10:00:00Z',
+              executionStartedAt: '2026-06-23T10:10:00Z',
+              completedAt: '2026-06-23T10:17:00Z',
+            }),
+          ],
+        }),
+      }),
+    });
+
+    expect(screen.getByText('30m 0s')).toBeInTheDocument();
+    expect(screen.getByText('7m 0s')).toBeInTheDocument();
+    expect(screen.queryByText('17m 0s')).not.toBeInTheDocument();
+  });
+
+  it('says which chat a chat-started run came from, linking back to the message', () => {
+    const chatOrigin = {
+      provider: 'Microsoft Teams',
+      conversation: 'Sales / Onboarding',
+      sender: 'Olo Brockhouse',
+      url: 'https://teams.microsoft.com/l/message/19:abc/1',
+    };
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ chatOrigin }) }) });
+
+    expect(screen.getByRole('link', { name: 'Microsoft Teams · Sales / Onboarding · Olo Brockhouse' })).toHaveAttribute(
+      'href',
+      'https://teams.microsoft.com/l/message/19:abc/1',
+    );
+  });
+
+  it('renders one session card per step run', () => {
+    renderAuthedPage(<ShowPage />, { props: seed() });
+
+    expect(screen.getByText('Session 1')).toBeInTheDocument();
+    expect(screen.getByText('Session 2')).toBeInTheDocument();
+    expect(screen.getByText('Compile Specs')).toBeInTheDocument();
+    expect(screen.getByText('Render Output')).toBeInTheDocument();
+  });
+
+  it("links a session card to the step's terminal session", () => {
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({
+          stepRuns: [buildStepRun({ id: 401, stepName: 'Agent Step', stepPosition: 1, terminalSessionId: 88 })],
+        }),
+      }),
+    });
+
+    expect(screen.getByRole('link', { name: /open session/i })).toHaveAttribute(
+      'href',
+      '/company/projects/7/sessions/88',
+    );
+  });
+
+  it('expands a session card to its prompt, steps and result note', async () => {
+    const step = buildStepRun({
+      id: 501,
+      stepName: 'Generate',
+      stepPosition: 1,
+      state: 'completed',
+      stepNote: 'Heads up: this step is flaky',
+      initialPrompt: 'Generate the weekly deck',
+      subStepRuns: [
+        buildSubStepRun({ id: 1, state: 'completed', subStepName: 'Fetch data' }),
+        buildSubStepRun({ id: 2, state: 'in_progress', subStepName: 'Transform' }),
+      ],
+    });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [step] }) }) });
+
+    await userEvent.click(screen.getByRole('button', { name: /expand generate/i }));
+
+    expect(screen.getByText('Generate the weekly deck')).toBeInTheDocument();
+    // Inside a session the checklist items are Steps, and the counter is x/y.
+    expect(screen.getByText('1/2')).toBeInTheDocument();
+    expect(screen.getByText('Fetch data')).toBeInTheDocument();
+    expect(screen.getByText('Heads up: this step is flaky')).toBeInTheDocument();
+  });
+
+  it('folds sessions skipped before they started into one row that lists why', async () => {
+    const reason = 'All required outputs already exist from previous steps';
+    const run = makeRun({
+      state: 'completed',
+      stepsCompleted: 2,
+      stepsTotal: 4,
+      stepRuns: [
+        buildStepRun({ id: 1, stepName: 'Draft', stepPosition: 1, state: 'completed', terminalSessionId: 11 }),
+        buildStepRun({ id: 2, stepName: 'Research', stepPosition: 2, state: 'skipped', skipReason: reason }),
+        buildStepRun({ id: 3, stepName: 'Interview', stepPosition: 3, state: 'skipped', skipReason: reason }),
+        buildStepRun({ id: 4, stepName: 'Publish', stepPosition: 4, state: 'completed', terminalSessionId: 14 }),
+      ],
+    });
+    renderAuthedPage(<ShowPage />, { props: seed({ run }) });
+
+    expect(screen.getByText('2/4 · 2 skipped')).toBeInTheDocument();
+    expect(screen.getByText('Research, Interview')).toBeInTheDocument();
+    expect(screen.getByText('2 skipped')).toBeInTheDocument();
+    expect(screen.getByText('Session 4')).toBeInTheDocument();
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand skipped sessions 2–3' }));
+
+    expect(screen.getByText('Session 2')).toBeInTheDocument();
+    expect(screen.getByText('Session 3')).toBeInTheDocument();
+    expect(screen.getAllByText(reason)).toHaveLength(2);
+  });
+
+  it('keeps a session skipped after it ran as a full card that says why', () => {
+    const run = makeRun({
+      state: 'completed',
+      stepRuns: [
+        buildStepRun({
+          id: 1,
+          stepName: 'Lint',
+          stepPosition: 1,
+          state: 'skipped',
+          terminalSessionId: 21,
+          skipReason: 'Skipped after failure (on_failure: skip)',
+        }),
+      ],
+    });
+    renderAuthedPage(<ShowPage />, { props: seed({ run }) });
+
+    expect(screen.getByRole('link', { name: /open session/i })).toHaveAttribute(
+      'href',
+      '/company/projects/7/sessions/21',
+    );
+    expect(screen.getByText('Why it was skipped')).toBeInTheDocument();
+    expect(screen.getByText('Skipped after failure (on_failure: skip)')).toBeInTheDocument();
+  });
+
+  it('fires a cancel request when Cancel run is clicked on an active run', async () => {
+    renderAuthedPage(<ShowPage />, { props: seed() });
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel run/i }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs/42/cancel',
+      {},
+      expect.objectContaining({ preserveScroll: true }),
+    );
+  });
+
+  describe("someone else's run", () => {
+    const notMine = (overrides: Partial<WorkflowRun> = {}) =>
+      makeRun({ controllableByViewer: false, userName: 'Dana Operator', ...overrides });
+
+    it('replaces Cancel with a line naming who started it', () => {
+      renderAuthedPage(<ShowPage />, { props: seed({ run: notMine() }) });
+
+      expect(screen.queryByRole('button', { name: /cancel run/i })).not.toBeInTheDocument();
+      expect(screen.getAllByText(/Started by Dana Operator/).length).toBeGreaterThan(0);
+    });
+
+    it('drops the approve / skip / retry buttons on a waiting step', () => {
+      const waiting = buildStepRun({
+        id: 301,
+        stepId: 3,
+        stepName: 'Review Draft',
+        stepPosition: 1,
+        state: 'waiting_input',
+      });
+
+      renderAuthedPage(<ShowPage />, { props: seed({ run: notMine({ stepRuns: [waiting] }) }) });
+
+      expect(screen.getByText(/"Review Draft" is waiting for your approval\./)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /approve & continue/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^skip$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^retry$/i })).not.toBeInTheDocument();
+    });
+
+    it('drops Retry session on a failed step', () => {
+      const failed = buildStepRun({
+        id: 302,
+        stepId: 4,
+        stepName: 'Render Output',
+        stepPosition: 1,
+        state: 'failed',
+      });
+
+      renderAuthedPage(<ShowPage />, {
+        props: seed({ run: notMine({ state: 'failed', stepRuns: [failed] }) }),
+      });
+
+      expect(screen.queryByRole('button', { name: /retry session/i })).not.toBeInTheDocument();
+      expect(screen.getAllByText(/Started by Dana Operator/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('does not offer Cancel on a terminal run', () => {
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ state: 'completed' }) }) });
+
+    expect(screen.queryByRole('button', { name: /cancel run/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state when the run has no sessions yet', () => {
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [] }) }) });
+
+    expect(screen.getByText('This run has no sessions yet.')).toBeInTheDocument();
+  });
+
+  it('switches to the Assets tab and shows the empty message', async () => {
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ state: 'completed' }), assets: [] }) });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Assets/ }));
+
+    expect(screen.getByText(/No assets yet/)).toBeInTheDocument();
+  });
+
+  it('shows the quota banner and re-runs the workflow on a failed quota run', async () => {
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({ state: 'failed', failureReason: 'quota_exceeded', failedAccountName: 'Acme Cloud' }),
+      }),
+    });
+
+    const banner =
+      screen.getByText('Workflow stopped: account ran out of credits').closest('[role="alert"]') ?? document.body;
+    expect(within(banner as HTMLElement).getByText('Acme Cloud')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /re-run workflow/i }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs',
+      expect.objectContaining({
+        workflowRun: expect.objectContaining({ workflowId: 9, mode: 'interactive' }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('says a paused run is waiting for a login and links to signing in again', () => {
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({
+          state: 'paused',
+          authPause: { agentType: 'claude_code', since: '2026-10-08T10:00:00Z' },
+        }),
+      }),
+    });
+
+    expect(screen.getByRole('alert', { name: /Paused: the Claude Code login needs renewing/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute(
+      'href',
+      '/profile?authenticate=claude_code',
+    );
+  });
+
+  it('shows no login banner on a run that is not waiting for one', () => {
+    renderAuthedPage(<ShowPage />, { props: seed() });
+
+    expect(screen.queryByText(/login needs renewing/)).not.toBeInTheDocument();
+  });
+
+  it('names where a failed run stopped instead of when it started', () => {
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({
+          state: 'failed',
+          stepRuns: [buildStepRun({ id: 601, stepName: 'Post to Slack', stepPosition: 2, state: 'failed' })],
+        }),
+      }),
+    });
+
+    expect(screen.getByText('Failed at')).toBeInTheDocument();
+    expect(screen.getAllByText('Post to Slack').length).toBeGreaterThan(0);
+  });
+
+  it('approves a session waiting for input', async () => {
+    const waiting = buildStepRun({ id: 201, stepName: 'Review Plan', stepPosition: 1, state: 'waiting_input' });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [waiting] }) }) });
+
+    expect(screen.getByText(/is waiting for your approval/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /approve & continue/i }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs/42/approve_step',
+      { step_run_id: 201 },
+      expect.objectContaining({ preserveScroll: true }),
+    );
+  });
+
+  it('retries a session waiting for input', async () => {
+    const waiting = buildStepRun({ id: 202, stepName: 'Review Plan', stepPosition: 1, state: 'waiting_input' });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [waiting] }) }) });
+
+    await userEvent.click(screen.getByRole('button', { name: /^Retry$/ }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs/42/retry_step',
+      { step_run_id: 202 },
+      expect.objectContaining({ preserveScroll: true }),
+    );
+  });
+
+  it('opens the skip modal and posts skip_step with a typed reason', async () => {
+    const waiting = buildStepRun({ id: 203, stepName: 'Review Plan', stepPosition: 1, state: 'waiting_input' });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [waiting] }) }) });
+
+    await userEvent.click(screen.getByRole('button', { name: /^Skip$/ }));
+
+    const reason = await screen.findByLabelText('Reason (optional)');
+    await userEvent.type(reason, 'Not needed for this run');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip session' }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs/42/skip_step',
+      { reason: 'Not needed for this run', step_run_id: 203 },
+      expect.objectContaining({ preserveScroll: true }),
+    );
+
+    // Let the modal's open-transition lifecycle timer drain while still mounted,
+    // so it doesn't setState on the unmounted tree after RTL cleanup (Mantine
+    // Transition schedules a ~200ms timer even under env="test").
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  });
+
+  it('retries a failed session from the action bar and shows its error in the card', async () => {
+    const failed = buildStepRun({
+      id: 204,
+      stepName: 'Deploy',
+      stepPosition: 1,
+      state: 'failed',
+      errorMessage: 'Connection refused by registry',
+    });
+    renderAuthedPage(<ShowPage />, {
+      props: seed({ run: makeRun({ state: 'failed', stepRuns: [failed] }) }),
+    });
+
+    // A failed session card opens expanded, so the error is visible without a click.
+    expect(screen.getByText('Connection refused by registry')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /retry session/i }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs/42/retry_step',
+      { step_run_id: 204 },
+      expect.objectContaining({ preserveScroll: true }),
+    );
+  });
+
+  it('shows the live console beside the session list while a session is running', async () => {
+    const running = buildStepRun({
+      id: 701,
+      stepName: 'Collect data',
+      stepPosition: 1,
+      state: 'running',
+      websocketUrl: 'wss://host.test/t/abc/tty/ws',
+    });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [running] }) }) });
+
+    expect(screen.getByText('Live')).toBeInTheDocument();
+    expect(screen.getByText('Session 1 · Collect data')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Terminal' })).toBeInTheDocument();
+    await waitFor(() => expect(FakeWebSocket.latest()?.url).toBe('wss://host.test/t/abc/tty/ws'));
+  });
+
+  it('says the live view is private, instead of starting forever, when the owner does not share it', () => {
+    const running = buildStepRun({ id: 703, stepName: 'Collect data', state: 'running', liveViewPrivate: true });
+    renderAuthedPage(<ShowPage />, {
+      props: seed({ run: makeRun({ userName: 'gamma.flow@aixle.com', stepRuns: [running] }) }),
+    });
+
+    expect(screen.getByText('Live view is private')).toBeInTheDocument();
+    expect(screen.getByText(/gamma\.flow@aixle\.com doesn.t show running sessions/)).toBeInTheDocument();
+    expect(screen.queryByText('Session starting…')).not.toBeInTheDocument();
+    expect(FakeWebSocket.latest()).toBeUndefined();
+  });
+
+  it('says a step is starting while its terminal is not up yet', () => {
+    const running = buildStepRun({ id: 704, stepName: 'Collect data', state: 'running' });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [running] }) }) });
+
+    expect(screen.getByText('Session starting…')).toBeInTheDocument();
+    expect(screen.queryByText('Live view is private')).not.toBeInTheDocument();
+  });
+
+  it('shows a console and action bar for every concurrently active step in a parallel run', async () => {
+    const runningA = buildStepRun({
+      id: 711,
+      stepName: 'Collect data',
+      stepPosition: 1,
+      state: 'running',
+      websocketUrl: 'wss://host.test/t/a/tty/ws',
+      terminalSessionId: 91,
+      allowNonInteractive: false,
+    });
+    const waitingB = buildStepRun({
+      id: 712,
+      stepName: 'Review draft',
+      stepPosition: 2,
+      state: 'waiting_input',
+      websocketUrl: 'wss://host.test/t/b/tty/ws',
+    });
+    renderAuthedPage(<ShowPage />, {
+      props: seed({ run: makeRun({ mode: 'interactive', stepRuns: [runningA, waitingB] }) }),
+    });
+
+    // Both steps get their own console.
+    expect(screen.getAllByRole('group', { name: 'Terminal' })).toHaveLength(2);
+    await waitFor(() =>
+      expect(FakeWebSocket.instances.map((socket) => socket.url).sort()).toEqual([
+        'wss://host.test/t/a/tty/ws',
+        'wss://host.test/t/b/tty/ws',
+      ]),
+    );
+
+    // Both steps get their own action bar — the running one can be finished,
+    // the waiting one can be approved, and each targets its own step_run_id.
+    expect(screen.getByText(/"Collect data" is running interactively/)).toBeInTheDocument();
+    expect(screen.getByText(/"Review draft" is waiting for your approval/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /approve & continue/i }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/projects/7/workflow_runs/42/approve_step',
+      { step_run_id: 712 },
+      expect.objectContaining({ preserveScroll: true }),
+    );
+  });
+
+  it('hides the console on the Assets tab', async () => {
+    const running = buildStepRun({
+      id: 702,
+      stepName: 'Collect data',
+      stepPosition: 1,
+      state: 'running',
+      websocketUrl: 'wss://host.test/t/abc/tty/ws',
+    });
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ stepRuns: [running] }) }) });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Assets/ }));
+
+    expect(screen.queryByRole('group', { name: 'Terminal' })).not.toBeInTheDocument();
+  });
+
+  it('lists assets with download and promote controls', async () => {
+    const assets = [
+      buildWorkflowRunAsset({
+        id: 11,
+        name: 'report.pdf',
+        contentType: 'application/pdf',
+        fileSize: 2048,
+        stepName: 'Compile Specs',
+        downloadUrl: 'https://files.example.com/report.pdf',
+      }),
+    ];
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ state: 'completed' }), assets }) });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Assets/ }));
+
+    expect(screen.getByText('report.pdf')).toBeInTheDocument();
+    expect(screen.getByText('1 file')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Download/ })).toHaveAttribute(
+      'href',
+      'https://files.example.com/report.pdf',
+    );
+    expect(screen.getByRole('button', { name: /promote all to project/i })).toBeInTheDocument();
+  });
+
+  it('links a shared output to its public page and stops sharing it', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const assets = [buildWorkflowRunAsset({ id: 33, name: 'summary.md', shareUrl: 'https://flow.test/share/abc' })];
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ state: 'completed' }), assets }) });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Assets/ }));
+
+    expect(screen.getByRole('link', { name: /Public link/ })).toHaveAttribute('href', 'https://flow.test/share/abc');
+    await userEvent.click(screen.getByRole('button', { name: /Stop sharing/ }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflow_runs/42/workflow_run_assets/33/share',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+    fetchSpy.mockRestore();
+  });
+
+  it('shows a viewer the public link but not the control to stop sharing', async () => {
+    const assets = [buildWorkflowRunAsset({ id: 33, name: 'summary.md', shareUrl: 'https://flow.test/share/abc' })];
+    renderAuthedPage(<ShowPage />, {
+      props: seed({
+        run: makeRun({ state: 'completed' }),
+        assets,
+        permissions: buildSharedPermissions({ isAdmin: false, canWrite: false }),
+      }),
+    });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Assets/ }));
+
+    expect(screen.getByRole('link', { name: /Public link/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Stop sharing/ })).not.toBeInTheDocument();
+  });
+
+  it('promotes a single asset through the promote modal via apiFetch', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    const assets = [
+      buildWorkflowRunAsset({ id: 22, name: 'artifact.zip', contentType: 'application/zip', fileSize: null }),
+    ];
+    renderAuthedPage(<ShowPage />, { props: seed({ run: makeRun({ state: 'completed' }), assets }) });
+
+    await userEvent.click(screen.getByRole('tab', { name: /^Assets/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^Promote$/ }));
+
+    expect(await screen.findByText('Promote "artifact.zip"')).toBeInTheDocument();
+
+    const folder = screen.getByLabelText('Folder (optional)');
+    await userEvent.type(folder, 'reports');
+    // Two buttons read "Promote" once the modal is open — confirm inside it.
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Promote$/ }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflow_runs/42/workflow_run_assets/22/export',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ folder: 'reports' }) }),
+      );
+    });
+
+    fetchSpy.mockRestore();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  });
+});

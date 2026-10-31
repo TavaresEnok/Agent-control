@@ -1,0 +1,453 @@
+# frozen_string_literal: true
+
+class WorkflowService
+  # A run was saved but its Temporal execution could not be started. Raised by
+  # #dispatch!, not returned: an undispatched run is an outage, and logging a line
+  # while handing back a run that looks started lets a queue stall go unnoticed.
+  # #start reports it and leaves the run to WorkflowRunRelay, since the run is
+  # committed and WILL start: telling the person it failed, and then starting it,
+  # would be the worse answer.
+  DispatchFailed = Class.new(StandardError)
+  SignalLost = Class.new(StandardError)
+  # The default of #enqueue's `runner_id:`, telling "no pick" apart from a pick of nil.
+  RUNNER_NOT_PICKED = Object.new.freeze
+
+  class << self
+    # Raises Versions::StaleVersion when `base_version` is behind.
+    def update(workflow:, params:, actor:, base_version: nil)
+      attrs = params.to_h
+      incoming_config = attrs.delete("config")
+      Versions.save!(workflow, actor: actor, base_version: base_version) do
+        workflow.merge_config!(incoming_config) if incoming_config.present?
+        workflow.update!(attrs) if attrs.any?
+      end
+      true
+    rescue ActiveRecord::RecordInvalid
+      false
+    end
+
+    def start(**args)
+      run = enqueue(**args)
+      dispatch_or_leave_to_relay(run) if run.persisted?
+      run
+    end
+
+    # Creates the run and enrols it in the outbox, without dialling Temporal: the
+    # half a caller holding a database lock may do. Dispatch it after the commit
+    # (#dispatch_or_leave_to_relay), never inside the transaction — a rolled-back
+    # run whose execution already started, or a started run whose row a failed
+    # RPC rolled back, is what that ordering produced.
+    #
+    # `runner_id` is a pick made at launch (the run drawer, the API, a trigger_*
+    # tool): an id, or nil for hosted. Left out, the run takes the runner of the
+    # run it retries, otherwise its workflow's (DESIGN.md §3.3). Either way it is
+    # frozen on the run here; retries and later steps read it from the run.
+    def enqueue(workflow:, project:, user:, source:, task: nil, mode: :interactive, overrides: {}, input_asset_ids: [], repository_ids: [], agent_runtime: nil, requested_model: nil, shared_context: {},
+                retried_from: nil, idempotency_key: nil, runner_id: RUNNER_NOT_PICKED)
+      runner_picked = !runner_id.equal?(RUNNER_NOT_PICKED)
+      run = project.workflow_runs.new(
+        runner_id: runner_picked ? runner_id.presence : (retried_from ? retried_from.runner_id : workflow.runner_id),
+        workflow: workflow,
+        user: user,
+        source: source,
+        retried_from_run: retried_from,
+        idempotency_key: idempotency_key.presence,
+        board_task_id: task&.id,
+        mode: mode,
+        step_overrides: overrides,
+        input_asset_ids: input_asset_ids,
+        repository_ids: repository_ids,
+        agent_runtime: agent_runtime.presence,
+        shared_context: { "requested_model" => requested_model.presence }.compact.merge(shared_context.to_h.stringify_keys)
+      )
+
+      run.errors.add(:workflow, "has been deleted") if workflow.deleted?
+      return run if run.errors.any?
+
+      if runner_picked && (error = Runners::Selection.error(runner_id, project: project))
+        run.errors.add(:base, error)
+        return run
+      end
+
+      validate_agent_credentials!(run, project, user)
+      return run if run.errors.any?
+
+      validate_mode!(run, workflow, overrides)
+      return run if run.errors.any?
+
+      validate_data_flow!(run, workflow, project, input_asset_ids)
+      return run if run.errors.any?
+
+      # Enrol the run in the outbox in the very write that creates it. From here
+      # on a dispatch that never lands is a row the relay can find, instead of a
+      # run indistinguishable from one the worker simply has not reached yet.
+      run.relay_state = "pending"
+      return run unless run.save
+
+      workflow.steps.not_deleted.order(:position).each do |step|
+        run.step_runs.find_or_create_by!(step: step)
+      end
+
+      record_activity(run, :workflow_started)
+      broadcast_task_updated(run)
+
+      run
+    end
+
+    # Dispatches once every open transaction has committed. A failure is reported
+    # and left to WorkflowRunRelay, which re-drives the run within RELAY_GRACE.
+    def dispatch_or_leave_to_relay(run)
+      ActiveRecord.after_all_transactions_commit do
+        dispatch!(run)
+      rescue DispatchFailed => e
+        Rails.logger.error("[WorkflowService] #{e.message}; WorkflowRunRelay will retry")
+        Sentry.capture_exception(e) if defined?(Sentry)
+      end
+    end
+
+    # Turns a saved run into a Temporal execution, and is the only thing allowed
+    # to call that done.
+    #
+    # Loud on purpose. This used to be a bare call whose return value was
+    # discarded, under a `rescue StandardError` that logged one line and handed
+    # back a run that read as started. TemporalService.start_workflow does not
+    # raise on a failed RPC — it returns { ok: false, ... } — so a Temporal outage
+    # never even reached that rescue: it produced a committed run nobody would
+    # ever execute, and a success response. Now the caller gets an exception (and
+    # Sentry an event), while the run stays enrolled in the outbox so
+    # WorkflowRunRelay re-drives it within WorkflowRun::RELAY_GRACE.
+    #
+    # Safe to call again, which is what makes the relay safe: the execution id is
+    # per-run and duplicates are rejected, with a rejected duplicate reported as
+    # success — the execution this run needs already exists.
+    #
+    # A run on a runner is checked here, so every launch path and the relay pass
+    # through Runners::Resolver before anything executes (DESIGN.md §3.4).
+    def dispatch!(run)
+      return if fail_on_runner_refusal(run)
+
+      run.increment!(:relay_attempts)
+      result = TemporalWorkflowRegistry.start_workflow_execution(run)
+
+      if result.is_a?(Hash) && result[:ok]
+        # update_columns, not update!: relay bookkeeping is not a change anyone
+        # should be notified about, and update! would fire the run's broadcast on
+        # every single start.
+        run.update_columns(relay_state: "dispatched", relay_error: nil, updated_at: Time.current)
+        return result
+      end
+
+      error = result.is_a?(Hash) ? result[:error] : "start_workflow_execution returned #{result.inspect}"
+      run.update_columns(relay_error: error.to_s.first(255), updated_at: Time.current)
+
+      # A deployment that has switched Temporal off has no executor to dispatch to
+      # and no relay to recover with — the relay is itself a Temporal schedule.
+      # Nothing is stranded, because nothing was ever going to run. Development and
+      # test work this way; production does not, which is why the check is on the
+      # deployment's own switch and not on the shape of the error.
+      unless TemporalService.enabled?
+        Rails.logger.info("[WorkflowService] Temporal is disabled; run ##{run.id} was not dispatched")
+        return result
+      end
+
+      raise DispatchFailed, "WorkflowRun ##{run.id} was not dispatched to Temporal: #{error}"
+    end
+
+    def cancel(run:)
+      SessionAdmissionService.transaction do
+        run.lock!
+        run.update!(stop_requested_at: run.stop_requested_at || Time.current)
+      end
+      send_signal(run, "workflow_cancelled")
+      cancel_active_step_runs(run)
+      run.cancel! if run.may_cancel?
+      record_activity(run, :workflow_cancelled)
+      broadcast_task_updated(run)
+    end
+
+    # Cancellation fan-out that crashed halfway leaves a run carrying a stop
+    # marker over step runs that are still pending. Reconciliation replays just
+    # the fan-out — the activity entry was already written by #cancel.
+    def repair_cancellation(run)
+      cancel_active_step_runs(run)
+      broadcast_task_updated(run)
+    end
+
+    def complete(run:)
+      run.complete! if run.may_complete?
+      record_activity(run, :workflow_completed)
+      broadcast_task_updated(run)
+    end
+
+    def fail(run:)
+      run.fail! if run.may_fail?
+      # A run fails when its Temporal execution crashes (e.g. an activity errored
+      # before it could mark its own step). Without this, the step that was in
+      # flight keeps its `running`/`pending` state forever while the run reads
+      # `failed` — get_workflow_run then shows a completed-but-failed run with a
+      # step still "running". Fan out the failure the same way #cancel does.
+      fail_active_step_runs(run)
+      record_activity(run, :workflow_failed)
+      broadcast_task_updated(run)
+    end
+
+    # A step whose runner is refused when its session is about to be built
+    # (SessionService.create_for_workflow_step). The step carries the message;
+    # the run's execution then ends failed the way a credential preflight does.
+    # Several ready steps can be refused at once; the one that records the run's
+    # failure_reason, under the run's lock, is the one that comments on the task.
+    def fail_step_on_runner_refusal(step_run:, refusal:)
+      step_run.mark_failed!(refusal.message)
+      run = step_run.workflow_run
+      first = run.with_lock do
+        next false if run.failure_reason.present?
+
+        run.update!(failure_reason: refusal.reason)
+        true
+      end
+      post_runner_refusal_comment(run, refusal) if first
+    end
+
+    def approve_step(step_run:)
+      step_run.mark_completed!
+      send_signal(step_run.workflow_run, "step_completed", step_run.id)
+    end
+
+    # Retrying a step while its run's Temporal workflow execution is still open
+    # (e.g. the "Retry" action on a waiting_input step) signals the live
+    # execution. Once the execution has closed (the run itself is failed —
+    # the common case, since the "Retry session" action only appears then),
+    # signals go nowhere, so — same as the board card's "Retry" action
+    # (TaskService.trigger_workflow) — a brand-new WorkflowRun is started
+    # instead of trying to resume the closed one, reusing the original run's
+    # parameters. The old failed run is left as-is; the new run runs every
+    # step fresh.
+    def retry_step(step_run:)
+      run = step_run.workflow_run
+
+      if TemporalService.workflow_open?(workflow_execution_id(run))
+        retry_step_in_place(run, step_run)
+      else
+        retry_closed_run(run)
+      end
+    end
+
+    def skip_step(step_run:, reason: nil)
+      step_run.mark_skipped!(reason || "Skipped by user")
+      send_signal(step_run.workflow_run, "step_skipped", step_run.id)
+    end
+
+    # The V1 execution does not poll: it waits on this signal for up to 23 hours,
+    # so a wake-up that an open run never got is reported, not just logged.
+    # TemporalService.send_signal returns { ok: false } instead of raising.
+    def notify_container_finished(step_run:)
+      execution_id = workflow_execution_id(step_run.workflow_run)
+      result = TemporalService.send_signal(execution_id, :container_finished, step_run.id)
+      return result if result[:ok]
+
+      if %i[running unknown].include?(TemporalService.execution_state(execution_id))
+        lost = SignalLost.new("container_finished for step_run ##{step_run.id} did not reach #{execution_id}: #{result[:error]}")
+        Rails.logger.error("[WorkflowService] #{lost.message}")
+        Sentry.capture_exception(lost) if defined?(Sentry)
+      end
+      result
+    rescue StandardError => e
+      Rails.logger.error("[WorkflowService] Failed to signal container_finished for step_run ##{step_run.id}: #{e.message}")
+    end
+
+    private
+
+    def retry_step_in_place(run, step_run)
+      new_step_run = StepRun.next_attempt!(workflow_run: run, step: step_run.step)
+      result = send_signal(run, "step_retried",
+                  { "old_step_run_id" => step_run.id, "new_step_run_id" => new_step_run.id })
+
+      unless result[:ok]
+        new_step_run.destroy
+        return { ok: false, error: "Failed to retry: #{result[:error]}" }
+      end
+
+      { ok: true }
+    end
+
+    def retry_closed_run(run)
+      return { ok: false, error: "This run can't be retried right now." } unless run.failed?
+
+      new_run = start(
+        workflow: run.workflow,
+        project: run.project,
+        user: run.user,
+        task: run.board_task,
+        mode: run.mode,
+        overrides: run.step_overrides,
+        input_asset_ids: run.input_asset_ids,
+        repository_ids: run.repository_ids,
+        agent_runtime: run.agent_runtime,
+        shared_context: run.shared_context,
+        source: :retry,
+        retried_from: run
+      )
+
+      unless new_run.persisted?
+        return { ok: false, error: new_run.errors.full_messages.to_sentence.presence || "Could not start a new run." }
+      end
+
+      { ok: true, run: new_run }
+    end
+
+    def workflow_execution_id(run)
+      run.execution_workflow_id
+    end
+
+    def send_signal(run, signal_name, payload = nil)
+      TemporalService.send_signal(workflow_execution_id(run), signal_name, payload)
+    rescue StandardError => e
+      Rails.logger.error("[WorkflowService] Failed to send signal #{signal_name} for run ##{run.id}: #{e.message}")
+      { ok: false, error: e.message }
+    end
+
+    # Every step runs an agent, so a run whose owner has no login in this company
+    # would only be cancelled at admission. Which agent each step needs is
+    # resolved per step at launch (SessionService.preflight_agent_credential!).
+    def validate_agent_credentials!(run, project, user)
+      return if user.nil? || AgentCredential.exists?(user_id: user.id, company_id: project.company_id)
+
+      run.errors.add(:base, AgentCredential::PreflightError::NO_CREDENTIALS)
+    end
+
+    # A step's own "Auto-run available" is a ceiling: an override may hold an
+    # auto step for input, never run a step that requires input unattended.
+    def validate_mode!(run, workflow, overrides)
+      steps = workflow.steps.not_deleted.to_a
+
+      forced_auto = steps.select { |step| !step.allow_non_interactive && overrides.dig(step.id.to_s, "auto_run") }
+      if forced_auto.any?
+        run.errors.add(:base, "Cannot run automatically: steps #{forced_auto.map(&:name).join(', ')} require user interaction")
+        return
+      end
+
+      return unless run.non_interactive?
+
+      blocking_steps = steps.reject do |step|
+        override = overrides[step.id.to_s]
+        override ? override["auto_run"] : step.allow_non_interactive
+      end
+
+      return if blocking_steps.empty?
+
+      names = blocking_steps.map(&:name)
+      run.errors.add(:mode, "Cannot run fully automatic: steps #{names.join(', ')} require user interaction")
+    end
+
+    # What would fail a step for certain — a reference that cannot be honoured, a
+    # required input nothing can provide — refuses the run instead of spending a
+    # session on it. A check that raises does not stand between a user and a
+    # workflow that ran yesterday: it is reported, and the run goes ahead.
+    def validate_data_flow!(run, workflow, project, input_asset_ids)
+      errors = DataFlow::Check.for_workflow(workflow, project: project, run_input_asset_ids: input_asset_ids).errors
+      return if errors.empty?
+
+      run.errors.add(:base, "This workflow would fail: #{errors.map(&:message).first(3).join(' ')}")
+    rescue StandardError => e
+      Rails.logger.error("[WorkflowService] Data-flow check crashed: #{e.class}: #{e.message}")
+      Sentry.capture_exception(e) if defined?(Sentry)
+    end
+
+    def cancel_active_step_runs(run)
+      run.step_runs.where(state: %w[pending running waiting_input]).find_each do |sr|
+        session = sr.terminal_session
+        SessionService.cancel(session: session) if session
+        # Read after the cancel: the session is where a diagnosed reason lives, and
+        # cleanup may have just written one.
+        sr.mark_cancelled!(diagnosed_reason(session))
+      rescue StandardError => e
+        Rails.logger.warn("[WorkflowService] Failed to cancel step_run ##{sr.id}: #{e.message}")
+      end
+    end
+
+    # Fails a run that never started, before admission and without a Temporal
+    # execution. Each step carries the message, which is what the run page, the
+    # tracker comment and the chat card read; the board task gets it as a comment.
+    def fail_on_runner_refusal(run)
+      return false if run.runner_id.nil?
+
+      Runners::Resolver.resolve!(run)
+      false
+    rescue Runners::Resolver::Refused => e
+      failed = run.with_lock do
+        next false unless run.pending?
+
+        run.update!(failure_reason: e.reason)
+        run.step_runs.where(state: "pending").find_each { |step_run| step_run.mark_failed!(e.message) }
+        run.fail_before_start!
+        true
+      end
+      if failed
+        record_activity(run, :workflow_failed)
+        post_runner_refusal_comment(run, e)
+        broadcast_task_updated(run)
+      end
+      true
+    end
+
+    def post_runner_refusal_comment(run, refusal)
+      return unless run.board_task_id.present?
+
+      run.board_task.task_comments.create!(
+        author_type: :system,
+        body: "Run ##{run.id} of workflow \"#{run.workflow.name}\" failed: #{refusal.message}"
+      )
+    rescue StandardError => e
+      Rails.logger.warn("[WorkflowService] Failed to comment on the runner refusal of run ##{run.id}: #{e.message}")
+    end
+
+    # A crashed run's leftover steps are marked failed, not cancelled: the run
+    # failed, so an unfinished step failed with it. Its session is stopped first
+    # so the container is not left running behind a dead run.
+    def fail_active_step_runs(run)
+      run.step_runs.where(state: %w[pending running waiting_input]).find_each do |sr|
+        session = sr.terminal_session
+        SessionService.fail_session(session: session) if session && !session.state.in?(%w[failed cancelled finished])
+        sr.mark_failed!(diagnosed_reason(session) || "Run failed while this step was in flight")
+      rescue StandardError => e
+        Rails.logger.warn("[WorkflowService] Failed to fail step_run ##{sr.id}: #{e.message}")
+      end
+    end
+
+    # Only a reason worth showing: the generic cancellation text says nothing the
+    # step's own `cancelled` state does not already say.
+    def diagnosed_reason(session)
+      return nil unless session
+
+      message = session.reload.error_message
+      return nil if message.blank? || TerminalSession::GENERIC_ERROR_MESSAGES.include?(message)
+
+      message
+    rescue StandardError => e
+      Rails.logger.warn("[WorkflowService] Failed to read cancellation reason: #{e.message}")
+      nil
+    end
+
+    def broadcast_task_updated(run)
+      return unless run.board_task_id.present?
+
+      run.board_task.board.touch
+    rescue StandardError => e
+      Rails.logger.warn("[WorkflowService] Failed to broadcast task update for run ##{run.id}: #{e.message}")
+    end
+
+    def record_activity(run, event_type)
+      return unless run.board_task_id.present?
+
+      board = run.board_task.board
+      BoardActivity.create!(
+        board: board, board_task: run.board_task, event_type: event_type,
+        actor: run.user, actor_type: :system,
+        metadata: { workflow_name: run.workflow.name, workflow_run_id: run.id }
+      )
+      board.touch
+    rescue StandardError => e
+      Rails.logger.warn("[WorkflowService] Failed to record #{event_type} activity for run ##{run.id}: #{e.message}")
+    end
+  end
+end

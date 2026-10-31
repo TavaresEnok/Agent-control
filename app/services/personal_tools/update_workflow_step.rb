@@ -1,0 +1,85 @@
+# frozen_string_literal: true
+
+module PersonalTools
+  class UpdateWorkflowStep < Base
+    tool do
+      display_name "Update Workflow Step"
+      description "Update a workflow step's fields (name, instructions, agent, runtime, preferred model, " \
+                  "reasoning effort, tools, skills, deps, BMAD). " \
+                  "Read the step with get_workflow_step first — every id list here replaces the current one."
+      audience :user
+      tags :workflows
+      param :project_id, type: :integer, description: "Project id.", required: true
+      param :workflow_id, type: :integer, description: "Workflow id.", required: true
+      param :step_id, type: :integer, description: "Step id.", required: true
+      param :name, type: :string, description: "Updated name."
+      param :instructions, type: :string, description: "Updated instructions (markdown)."
+      param :agent_id, type: :integer, description: "Agent id to run this step."
+      runtime = param :required_agent_runtime, type: :string,
+                      description: "Runtime required for this step. Pass null to restore normal runtime resolution; " \
+                                   "a step with a reasoning effort refuses that, so pass reasoning_effort: null with it.",
+                      enum: Step::SUPPORTED_AGENT_RUNTIMES + [ nil ]
+      runtime["type"] = %w[string null]
+      model = param :preferred_model, type: :string,
+                    description: "Model the step's CLI runs on. Pass null for the credential's default model; " \
+                                 "a step with a reasoning effort refuses that, so pass reasoning_effort: null with " \
+                                 "it. Set it together with reasoning_effort to change both at once."
+      model["type"] = %w[string null]
+      model["pattern"] = Step::MODEL_ID_JSON_PATTERN
+      effort = param :reasoning_effort, type: :string,
+                     description: "Reasoning effort the step's CLI runs at. Pass null for the CLI's default. " \
+                                  "A level needs both required_agent_runtime and preferred_model set; without " \
+                                  "either it is refused. Only the levels that runtime takes for that model are " \
+                                  "accepted.",
+                     enum: AgentRuntime.reasoning_effort_levels + [ nil ]
+      effort["type"] = %w[string null]
+      param :tool_ids, type: :array,
+            description: "Tool ids available in this step. Replaces the whole list — read the current value " \
+                         "with get_workflow_step first.",
+            items: { type: "integer" }
+      param :skill_ids, type: :array,
+            description: "Skill ids injected into context. Replaces the whole list — read the current value " \
+                         "with get_workflow_step first.",
+            items: { type: "integer" }
+      param :mcp_server_ids, type: :array,
+            description: "MCP server ids. Replaces the whole list — read the current value with " \
+                         "get_workflow_step first.",
+            items: { type: "integer" }
+      param :config_item_ids, type: :array,
+            description: "Config item ids (secrets / environment variables) this step's agent may read with " \
+                         "get_config_item. Attach a credential here instead of writing it into the " \
+                         "instructions. Replaces the whole list — read the current value with " \
+                         "get_workflow_step first.",
+            items: { type: "integer" }
+      param :depends_on_step_ids, type: :array,
+            description: "Step ids this step depends on. " \
+                         "The /workspace/outputs files of these steps, and of every step they run after, are copied " \
+                         "into this step's /workspace/assets. " \
+                         "Replaces the whole list — read the current value with get_workflow_step first.",
+            items: { type: "integer" }
+      param :bmad_enabled, type: :boolean, description: "Run this step with the BMAD method enabled."
+      param :allow_non_interactive, type: :boolean, description: "Allow this step to run without a human in the loop."
+      param :base_version, type: :integer, description: "The workflow version you read (current_version_number). A newer one means someone else saved since, and the change is refused."
+    end
+
+    UPDATABLE = %i[
+      name instructions agent_id required_agent_runtime preferred_model reasoning_effort tool_ids skill_ids
+      mcp_server_ids config_item_ids depends_on_step_ids bmad_enabled allow_non_interactive
+    ].freeze
+
+    def execute
+      project = find_project!
+      authorize!(project, :update?, policy: Web::Company::Projects::WorkflowsPolicy, project: project)
+      workflow = find_workflow!(project)
+      step = find_step!(workflow)
+
+      attrs = UPDATABLE.each_with_object({}) { |k, h| h[k] = params[k] if params.key?(k) }
+      return error("No fields to update") if attrs.empty?
+
+      Versions.save!(workflow, actor: version_actor, base_version: base_version) { step.update!(attrs) }
+      success(id: step.id, name: step.name, updated_fields: attrs.keys.map(&:to_s))
+    rescue ActiveRecord::RecordInvalid => e
+      error("Failed to update step: #{e.message}")
+    end
+  end
+end

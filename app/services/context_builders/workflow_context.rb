@@ -1,0 +1,264 @@
+# frozen_string_literal: true
+
+module ContextBuilders
+  class WorkflowContext < Base
+    def applicable?
+      step_run.present?
+    end
+
+    def build
+      sections = []
+      sections << workflow_overview_section
+      sections << trigger_message_section if trigger_message.present?
+      sections << current_step_section
+      sections << earlier_files_section if earlier_files.any?
+      sections << sub_steps_section if sub_steps.any?
+      sections << previous_steps_section if completed_step_runs.any?
+      sections
+    end
+
+    private
+
+    def workflow_overview_section
+      section(
+        tag: "workflow-context",
+        priority: :important,
+        content: build_workflow_overview,
+        position_hint: :top
+      )
+    end
+
+    def current_step_section
+      section(
+        tag: "current-step",
+        priority: :critical,
+        content: build_current_step
+      )
+    end
+
+    # When the run was started by a chat trigger, surface the
+    # originating message so the agent acts on what the user actually asked for —
+    # otherwise it only sees the static step instructions.
+    def trigger_message_section
+      section(
+        tag: "trigger-message",
+        priority: :critical,
+        content: build_trigger_message,
+        position_hint: :top
+      )
+    end
+
+    def build_trigger_message
+      <<~MD.strip
+        ## Triggering message
+
+        This run was started by a #{chat_provider&.label || 'chat'} message#{trigger_user_suffix}. Treat it as the user's request and respond to it:
+
+        > #{trigger_message.to_s.gsub("\n", "\n> ")}
+
+        #{reply_hint}
+      MD
+    end
+
+    # What the tool descriptions cannot say: which rich format this thread takes.
+    def reply_hint
+      rich = chat_origin["provider"] == "teams" ? "`adaptive_card`" : "`slack_blocks`"
+      "Answer in that thread with `chat_post_message` (Markdown `text`; #{rich} for rich layout). " \
+        "`chat_read_thread` reads the rest of the conversation."
+    end
+
+    def trigger_user_suffix
+      mention = chat_provider&.mention(chat_origin["actor"])
+      mention.present? ? " from #{mention}" : ""
+    end
+
+    def trigger_message
+      chat_origin["text"]
+    end
+
+    def chat_origin
+      @chat_origin ||= Chat.origin(workflow_run).to_h
+    end
+
+    def chat_provider
+      Chat.provider(chat_origin["provider"])
+    end
+
+    def sub_steps_section
+      section(
+        tag: "sub-steps",
+        priority: :important,
+        content: build_sub_steps
+      )
+    end
+
+    def previous_steps_section
+      section(
+        tag: "previous-steps",
+        priority: :info,
+        content: build_previous_steps
+      )
+    end
+
+    def build_workflow_overview
+      <<~MD.strip
+        ## Workflow: #{workflow.name}
+
+        #{workflow.description}
+
+        **Mode:** #{workflow_run.mode} | **Run:** #{workflow_run.id}
+        **Step #{step.position} of #{workflow.steps.not_deleted.count}**
+      MD
+    end
+
+    def build_current_step
+      lines = []
+      lines << "## Step: #{step.name}"
+      lines << ""
+      lines << "### Instructions"
+      lines << ""
+      if instructions_are_the_prompt?
+        lines << "This step's instructions are the prompt this session started with."
+      elsif step.instructions.present?
+        lines << InstructionReferences::Renderer.new(step: step, project: workflow_run.project).render(step.instructions)
+      end
+      lines.join("\n")
+    end
+
+    # A non-interactive session is launched with these same rendered instructions as its
+    # prompt (AgentSessionStrategy#launch_agent_in_tmux); an interactive one gets none.
+    def instructions_are_the_prompt?
+      non_interactive? && session.initial_prompt.present? && step.instructions.present?
+    end
+
+    def earlier_files_section
+      section(
+        tag: "earlier-files",
+        priority: :important,
+        content: build_earlier_files
+      )
+    end
+
+    # What WorkflowStepStrategy#inject_prior_step_outputs copies in, so the agent
+    # is not left to discover it.
+    def build_earlier_files
+      lines = [ "## Files from earlier steps (in /workspace/assets/)", "" ]
+      earlier_files.each do |name, step_name|
+        lines << "- `#{Asset::CONTAINER_DIR}/#{name}` — written by #{step_name}"
+      end
+      lines.join("\n")
+    end
+
+    # Name => the nearest step that wrote it, matching which copy wins on disk.
+    def earlier_files
+      @earlier_files ||= begin
+        names = upstream_step_ids.each_with_index.to_h
+        rows = workflow_run.workflow_run_assets
+          .joins("JOIN step_runs ON step_runs.id = workflow_run_assets.produced_by_step_run_id")
+          .joins("JOIN steps ON steps.id = step_runs.step_id")
+          .where(step_runs: { step_id: upstream_step_ids })
+          .pluck("workflow_run_assets.name", "step_runs.step_id", "steps.name")
+        rows.sort_by { |_, step_id, _| -names.fetch(step_id) }
+            .to_h { |name, _, step_name| [ name, step_name ] }
+            .sort.to_h
+      end
+    end
+
+    def build_sub_steps
+      lines = [ "## Sub-Steps Checklist", "" ]
+
+      sub_step_run_map = step_run.sub_step_runs.includes(:sub_step).index_by(&:sub_step_id)
+
+      sub_steps.each do |ss|
+        ssr = sub_step_run_map[ss.id]
+        status = ssr ? ssr.state : "pending"
+        icon = status_icon(status)
+        id_ref = ssr ? " `id: #{ssr.id}`" : ""
+
+        lines << "#{ss.position}. #{icon} **#{ss.name}**#{id_ref} [#{status}]"
+
+        if ss.instructions.present?
+          lines << ""
+          ss.instructions.each_line { |l| lines << "   #{l.chomp}" }
+          lines << ""
+        end
+
+        if ssr&.note.present?
+          lines << "   → #{ssr.note.truncate(200)}"
+        end
+        if ssr&.data.present?
+          lines << "   → data: #{ssr.data.to_json.truncate(300)}"
+        end
+      end
+
+      lines << ""
+      lines << "Track progress: call `mark_sub_step` with the sub-step `id` shown above."
+      lines << "Mark `in_progress` when starting, `completed` when done."
+      lines << "Mark sub-steps yourself, never from a subagent: tell a subagent not to call `mark_sub_step`, " \
+               "and mark the sub-step once it reports back."
+      lines.join("\n")
+    end
+
+    def build_previous_steps
+      lines = [ "## Previous Steps", "" ]
+
+      completed_step_runs.each do |sr|
+        prev_step = sr.step
+        icon = sr.state == "skipped" ? "⏭️" : "✅"
+        lines << "### #{prev_step.position}. #{icon} #{prev_step.name} [#{sr.state}]"
+
+        if sr.step_note.present?
+          lines << ""
+          lines << sr.step_note.truncate(500)
+        end
+
+        completed_sub_runs = sr.sub_step_runs.select { |ssr| ssr.state.in?(%w[completed skipped]) }
+        if completed_sub_runs.any?
+          lines << ""
+          completed_sub_runs.each do |ssr|
+            sub_icon = ssr.state == "skipped" ? "⏭️" : "✅"
+            line = "- #{sub_icon} #{ssr.sub_step.name}"
+            line += " — #{ssr.note.truncate(150)}" if ssr.note.present?
+            lines << line
+            if ssr.data.present?
+              lines << "  → data: #{ssr.data.to_json.truncate(200)}"
+            end
+          end
+        end
+
+        lines << ""
+      end
+
+      lines.join("\n")
+    end
+
+    def sub_steps
+      @sub_steps ||= step&.sub_steps&.active || SubStep.none
+    end
+
+    def upstream_step_ids
+      @upstream_step_ids ||= step.upstream_step_ids
+    end
+
+    def completed_step_runs
+      @completed_step_runs ||= begin
+        completed = workflow_run.step_runs
+          .where(step_id: upstream_step_ids, state: %w[completed skipped])
+        latest_ids = completed.group(:step_id).select("MAX(step_runs.id)")
+
+        completed.where(id: latest_ids)
+          .joins(:step)
+          .order("steps.position ASC", "step_runs.id ASC")
+          .includes(step: :sub_steps, sub_step_runs: :sub_step)
+      end
+    end
+
+    def non_interactive?
+      session.mode == "non_interactive"
+    end
+
+    def status_icon(status)
+      { "completed" => "✅", "in_progress" => "🔄", "skipped" => "⏭️" }.fetch(status, "⬜")
+    end
+  end
+end

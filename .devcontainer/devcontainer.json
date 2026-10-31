@@ -1,0 +1,74 @@
+// For format details, see https://aka.ms/devcontainer.json.
+{
+	"name": "Aixle Devcontainer",
+
+	"build": {
+		"dockerfile": "../Dockerfile",
+		"context": ".."
+	},
+
+	"initializeCommand": "sh -lc 'docker compose up -d db redis'",
+
+	// The optional 'workspaceFolder' property is the path VS Code should open by default when
+	// connected.
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+	"workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
+
+	// Mount persisted developer tool state
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+		"source=aixle-app-home,target=/root,type=volume"
+		// "source=aixle-app-codex,target=/root/.codex,type=volume",
+		// "source=aixle-app-vscode-extensions,target=/root/.vscode-server/extensions,type=volume",
+		// "source=aixle-app-claude,target=/root/.claude,type=volume"
+	],
+
+	"containerEnv": {
+		"DB_HOST": "db",
+		"DB_PORT": "5432",
+		"DB_USERNAME": "postgres",
+		"DB_NAME": "aixle_development",
+		"REDIS_URL": "redis://redis:6379/1"
+	},
+
+	"remoteEnv": {
+		"RUBY_LSP": "1"
+	},
+
+	// Ensure Orbstack hostnames resolve inside the container
+	"runArgs": [
+		"--network=${localEnv:DOCKER_NETWORK:app_default}",
+		"--add-host=k8s.orb.local:host-gateway",
+		"--add-host=docker.orb.local:host-gateway",
+		"--add-host=orbstack:host-gateway"
+	],
+
+	// Install kubectl/helm/minikube on Alpine-based image
+	"postCreateCommand": "bash .devcontainer/setup.sh",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"Shopify.ruby-lsp",
+				"openai.chatgpt",
+				"Anthropic.claude-code"
+			]
+		}
+	}
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// "runServices": []
+
+	// Uncomment the next line if you want to keep your containers running after VS Code shuts down.
+	// "shutdownAction": "none",
+
+	// Uncomment the next line to run commands after the container is created.
+	// "postCreateCommand": "cat /etc/os-release",
+
+	// Configure tool-specific properties.
+	// "customizations": {},
+
+	// Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "devcontainer"
+}

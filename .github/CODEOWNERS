@@ -1,0 +1,34 @@
+# Code owners for Aixle Flow
+#
+# Each line maps a path pattern to the GitHub users/teams who are requested for
+# review when matching files change. Later matches take precedence.
+# Docs: https://docs.github.com/articles/about-code-owners
+#
+# @AixleHQ/maintainers is the org team; keep it in step with GOVERNANCE.md.
+
+# Default owners for everything in the repo
+*                               @AixleHQ/maintainers
+
+# Backend (Rails)
+/app/                           @AixleHQ/maintainers
+/app/policies/                  @AixleHQ/maintainers
+/app/state_machines/            @AixleHQ/maintainers
+/app/services/                  @AixleHQ/maintainers
+/config/                        @AixleHQ/maintainers
+/db/                            @AixleHQ/maintainers
+/test/                          @AixleHQ/maintainers
+
+# Frontend (React / Inertia / Mantine)
+/app/frontend/                  @AixleHQ/maintainers
+
+# Container runtimes & agent images
+/docker/                        @AixleHQ/maintainers
+
+# Docs, community health, and project meta
+/docs/                          @AixleHQ/maintainers
+/README.md                      @AixleHQ/maintainers
+/ROADMAP.md                     @AixleHQ/maintainers
+/ARCHITECTURE.md                @AixleHQ/maintainers
+/GOVERNANCE.md                  @AixleHQ/maintainers
+/SECURITY.md                    @AixleHQ/maintainers
+/.github/                       @AixleHQ/maintainers

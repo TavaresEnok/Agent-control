@@ -1,0 +1,365 @@
+import '@testing-library/jest-dom/vitest';
+import { router } from '@inertiajs/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { renderPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+
+import type { AzureDevopsProps } from './AzureDevopsConnectModal';
+import { AzureDevopsConnectModal } from './AzureDevopsConnectModal';
+
+const PROJECT_ID = '11111111-1111-1111-1111-111111111111';
+const SECOND_PROJECT_ID = '33333333-3333-3333-3333-333333333333';
+const BASE = '/company/projects/1/integrations';
+
+const renderModal = (props: Partial<AzureDevopsProps> = {}, onClose = () => {}) =>
+  renderPage(
+    <AzureDevopsConnectModal
+      opened
+      onClose={onClose}
+      basePath={BASE}
+      azureDevops={{ enabled: true, patModeEnabled: false, ...props }}
+    />,
+  );
+
+// The two onboarding endpoints answer JSON rather than an Inertia redirect, so
+// they go through `fetch` — which setup.ts already stubs inertly.
+const mockFetch = (handler: (url: string, body: Record<string, unknown>) => { ok?: boolean; payload: unknown }) =>
+  vi.mocked(globalThis.fetch).mockImplementation((async (url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    const { ok = true, payload } = handler(String(url), body);
+    return { ok, json: async () => payload } as Response;
+  }) as typeof globalThis.fetch);
+
+const inspectionPayload = (overrides: Record<string, unknown> = {}) => ({
+  organization: 'contoso',
+  tenantId: '22222222-2222-2222-2222-222222222222',
+  identity: 'ada@contoso.com',
+  alreadyBound: false,
+  projects: [
+    { id: PROJECT_ID, name: 'Customer Platform' },
+    { id: SECOND_PROJECT_ID, name: 'Payments' },
+  ],
+  ...overrides,
+});
+
+// The project picker is a Mantine MultiSelect: the input opens the dropdown and
+// each option is picked by its visible name.
+const pickProjects = async (user: ReturnType<typeof userEvent.setup>, names: string[]) => {
+  for (const name of names) {
+    await user.click(screen.getByRole('combobox', { name: /Azure projects/ }));
+    await user.click(await screen.findByRole('option', { name }));
+  }
+};
+
+// Signing in with Microsoft is the default; these tests walk the PAT alternative.
+const choosePat = (user: ReturnType<typeof userEvent.setup>) =>
+  user.click(screen.getByRole('radio', { name: /administrator personal access token/ }));
+
+describe('AzureDevopsConnectModal', () => {
+  beforeEach(() => {
+    vi.mocked(router.post).mockClear();
+  });
+
+  afterEach(() => {
+    vi.mocked(globalThis.fetch).mockReset();
+  });
+
+  it('asks for the organization by name and never lists which ones the company holds', () => {
+    renderModal();
+
+    expect(screen.getByLabelText(/Azure organization/)).toBeInTheDocument();
+    // No dropdown: what is not listed cannot be browsed by a project member.
+    expect(screen.queryByRole('combobox', { name: /Azure organization/i })).not.toBeInTheDocument();
+  });
+
+  it('verifies the organization with an administrator token and then offers its projects', async () => {
+    const user = userEvent.setup();
+    const calls: Record<string, unknown>[] = [];
+    mockFetch((url, body) => {
+      calls.push({ url, body });
+      return { payload: inspectionPayload() };
+    });
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.type(screen.getByLabelText(/Administrator personal access token/), 'pat-123');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+
+    expect(await screen.findByText('Organization verified')).toBeInTheDocument();
+    expect(screen.getByText(/Verified as ada@contoso.com/)).toBeInTheDocument();
+    expect(calls[0]).toMatchObject({
+      url: `${BASE}/azure_devops_inspect`,
+      body: { organization: 'contoso', personal_access_token: 'pat-123' },
+    });
+  });
+
+  it('says when no token was needed because the company already holds the organization', async () => {
+    const user = userEvent.setup();
+    mockFetch(() => ({ payload: inspectionPayload({ alreadyBound: true, identity: null }) }));
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+
+    expect(
+      await screen.findByText(/already connected this organization, so no sign-in was needed/),
+    ).toBeInTheDocument();
+  });
+
+  it('preselects nothing — a connection reaches what someone chose', async () => {
+    const user = userEvent.setup();
+    mockFetch(() => ({ payload: inspectionPayload() }));
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.type(screen.getByLabelText(/Administrator personal access token/), 'pat-123');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+    await screen.findByText('Organization verified');
+
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+  });
+
+  it('binds the organization and then creates the connection for the chosen projects', async () => {
+    const user = userEvent.setup();
+    mockFetch((url) =>
+      url.endsWith('azure_devops_inspect')
+        ? { payload: inspectionPayload() }
+        : { payload: { installationId: 7, organization: 'contoso' } },
+    );
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.type(screen.getByLabelText(/Administrator personal access token/), 'pat-123');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+    await screen.findByText('Organization verified');
+    await pickProjects(user, ['Customer Platform', 'Payments']);
+    await user.click(screen.getByRole('button', { name: 'Connect' }));
+
+    await waitFor(() => expect(router.post).toHaveBeenCalled());
+    const [path, payload] = vi.mocked(router.post).mock.calls[0];
+    expect(path).toBe(BASE);
+    expect(payload).toMatchObject({
+      provider: 'azure_devops',
+      authMode: 'service_principal',
+      azureDevopsInstallationId: '7',
+      azureProjectIds: [PROJECT_ID, SECOND_PROJECT_ID],
+    });
+    // Names travel for display only; the server intersects them with the ids
+    // it actually approved.
+    expect((payload as Record<string, Record<string, string>>).azureProjectNames).toEqual({
+      [PROJECT_ID]: 'Customer Platform',
+      [SECOND_PROJECT_ID]: 'Payments',
+    });
+  });
+
+  it('reports a verification failure without creating anything', async () => {
+    const user = userEvent.setup();
+    mockFetch(() => ({ ok: false, payload: { error: 'not_authorized', message: 'That token cannot administer it' } }));
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.type(screen.getByLabelText(/Administrator personal access token/), 'nope');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+
+    expect(await screen.findByText('That token cannot administer it')).toBeInTheDocument();
+    expect(router.post).not.toHaveBeenCalled();
+  });
+
+  // The one failure whose fix is in a different system entirely, so it gets its
+  // own explanation rather than a bare provider message.
+  it('explains the Entra step when the application is not in the directory yet', async () => {
+    const user = userEvent.setup();
+    mockFetch(() => ({
+      ok: false,
+      payload: {
+        error: 'not_authorized',
+        message: 'The client application is missing a service principal in the tenant',
+      },
+    }));
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.type(screen.getByLabelText(/Administrator personal access token/), 'pat-123');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+
+    expect(await screen.findByText(/az ad sp create/)).toBeInTheDocument();
+  });
+
+  it('unticking a capability removes it from the submitted profile', async () => {
+    const user = userEvent.setup();
+    mockFetch((url) =>
+      url.endsWith('azure_devops_inspect') ? { payload: inspectionPayload() } : { payload: { installationId: 7 } },
+    );
+    renderModal();
+    await choosePat(user);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.type(screen.getByLabelText(/Administrator personal access token/), 'pat-123');
+    await user.click(screen.getByRole('button', { name: 'Verify organization' }));
+    await screen.findByText('Organization verified');
+    await pickProjects(user, ['Customer Platform']);
+    await user.click(screen.getByRole('checkbox', { name: /Edit work items/ }));
+    await user.click(screen.getByRole('button', { name: 'Connect' }));
+
+    await waitFor(() => expect(router.post).toHaveBeenCalled());
+    const payload = vi.mocked(router.post).mock.calls[0][1] as Record<string, string[]>;
+    expect(payload.enabledCapabilities).not.toContain('work_items.write');
+    expect(payload.enabledCapabilities).toContain('work_items.read');
+  });
+
+  it('offers the whole operation profile ticked, merging included', () => {
+    renderModal();
+
+    expect(screen.getByRole('checkbox', { name: /Complete pull requests/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Clone and push repositories/ })).toBeChecked();
+  });
+
+  // The one step that happens outside Flow, in another portal, usually by
+  // another person. Learning about it from a failed verification means going
+  // away and coming back, so the command is on screen before anything is typed
+  // — with this deployment's own client id, which documentation cannot carry
+  // because it differs between the hosted deployment and every self-hosted one.
+  it('shows the directory step with this deployment’s client id, before verifying', async () => {
+    const user = userEvent.setup();
+    renderModal({ clientId: 'a734e297-bc89-4c1e-81c7-e8697e671206' });
+    await choosePat(user);
+
+    expect(screen.getByText(/One step in your Entra directory first/)).toBeInTheDocument();
+    expect(screen.getByText(/az ad sp create --id a734e297-bc89-4c1e-81c7-e8697e671206/)).toBeInTheDocument();
+  });
+
+  it('says nothing about a directory step when the deployment publishes no client id', () => {
+    renderModal();
+
+    expect(screen.queryByText(/One step in your Entra directory first/)).not.toBeInTheDocument();
+  });
+
+  it('offers no personal-access-token path while the deployment has it switched off', () => {
+    renderModal();
+
+    expect(screen.queryByRole('button', { name: /personal access token instead/i })).not.toBeInTheDocument();
+  });
+
+  it('says plainly that a personal access token acts as its owner', async () => {
+    const user = userEvent.setup();
+    renderModal({ patModeEnabled: true });
+
+    await user.click(screen.getByRole('button', { name: /Connect as yourself with a personal access token instead/ }));
+
+    expect(screen.getByText('This acts as you, not as Aixle')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Azure project ID/)).toBeInTheDocument();
+  });
+
+  it('signs in with Microsoft by default, sending the organization along', async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    expect(screen.getByRole('radio', { name: /sign in with Microsoft \(Recommended\)/ })).toBeChecked();
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+
+    expect(screen.getByRole('link', { name: 'Sign in with Microsoft' })).toHaveAttribute(
+      'href',
+      `${BASE}/azure_devops_sign_in?organization=contoso`,
+    );
+    expect(screen.queryByLabelText(/Administrator personal access token/)).not.toBeInTheDocument();
+  });
+
+  it('resumes after the sign-in: verifies with it and connects with it, never asking for a token', async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    mockFetch((url, body) => {
+      bodies.push(body);
+      return url.endsWith('azure_devops_connect')
+        ? { payload: { installationId: 9, organization: 'contoso', projects: [PROJECT_ID] } }
+        : { payload: inspectionPayload({ identity: 'grace@contoso.com' }) };
+    });
+    renderPage(
+      <AzureDevopsConnectModal
+        opened
+        onClose={() => {}}
+        basePath={BASE}
+        azureDevops={{ enabled: true, patModeEnabled: false }}
+        signIn={{ handle: 'held-1', organization: 'contoso' }}
+      />,
+    );
+
+    expect(await screen.findByText(/Verified as grace@contoso.com/)).toBeInTheDocument();
+    await pickProjects(user, ['Customer Platform']);
+    await user.click(screen.getByRole('button', { name: 'Connect' }));
+
+    await waitFor(() => expect(router.post).toHaveBeenCalled());
+    expect(bodies).toEqual([
+      { organization: 'contoso', sign_in: 'held-1' },
+      { organization: 'contoso', sign_in: 'held-1', project_ids: [PROJECT_ID] },
+    ]);
+  });
+
+  it('asks before closing over a typed organization, and starts over once discarded', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderModal({}, onClose);
+
+    await user.type(screen.getByLabelText(/Azure organization/), 'contoso');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    const discard = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Connect Azure DevOps' })).toBeInTheDocument();
+
+    await user.click(within(discard).getByRole('button', { name: 'Discard' }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/Azure organization/)).toHaveValue('');
+  });
+
+  it('treats an unticked capability as unsaved input', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderModal({}, onClose);
+
+    await user.click(screen.getByRole('checkbox', { name: /Complete pull requests/ }));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes without asking when nothing was entered, whichever proof is picked', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderModal({}, onClose);
+
+    await choosePat(user);
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+  });
+
+  it('asks before dropping a Microsoft sign-in the dialog resumed with', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    mockFetch(() => ({ payload: inspectionPayload({ identity: 'grace@contoso.com' }) }));
+    renderPage(
+      <AzureDevopsConnectModal
+        opened
+        onClose={onClose}
+        basePath={BASE}
+        azureDevops={{ enabled: true, patModeEnabled: false }}
+        signIn={{ handle: 'held-1', organization: 'contoso' }}
+      />,
+    );
+
+    await screen.findByText(/Verified as grace@contoso.com/);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

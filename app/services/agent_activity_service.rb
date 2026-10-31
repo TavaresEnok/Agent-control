@@ -1,0 +1,91 @@
+# frozen_string_literal: true
+
+class AgentActivityService
+  include TaskFilterable
+
+  AgentBreakdown = Struct.new(:agent_type, :sessions, :cost_cents, :tokens, keyword_init: true)
+  ActivityPoint = Struct.new(:date, :agent_type, :sessions, keyword_init: true)
+
+  Result = Struct.new(:agent_types, :sessions_by_agent, :activity_over_time, keyword_init: true)
+
+  def initialize(project:, user:, scope:, period:, tags: nil, task_type: nil, participant_id: nil)
+    @project = project
+    @user = user
+    @scope = scope.to_s
+    @period = AnalyticsPeriod.window(period)
+    @range = @period.range
+    @tags = Array(tags).presence
+    @task_type = task_type.presence
+    @participant_id = participant_id.presence
+  end
+
+  def call
+    sessions = base_sessions
+
+    # Usage statistics, not the session's own totals: the project total reads them,
+    # and usage can keep arriving after a session's totals were frozen.
+    sessions_by_agent = sessions
+      .where.not(agent_type: nil)
+      .joins("LEFT JOIN usage_statistics ON usage_statistics.terminal_session_id = terminal_sessions.id")
+      .group(:agent_type)
+      .pluck(
+        :agent_type,
+        Arel.sql("COUNT(*)"),
+        Arel.sql("COALESCE(SUM(usage_statistics.cost_cents), 0)"),
+        Arel.sql(UsageStatistic::TOTAL_TOKENS_SUM_SQL)
+      )
+      .map do |(agent_type, count, cost, tokens)|
+        AgentBreakdown.new(
+          agent_type: agent_type,
+          sessions: count,
+          cost_cents: cost.to_i,
+          tokens: tokens.to_i
+        )
+      end
+      .sort_by { |a| -a.sessions }
+
+    agent_types = sessions_by_agent.map(&:agent_type)
+
+    activity_over_time = sessions
+      .where.not(agent_type: nil)
+      .group(Arel.sql("date_trunc('day', terminal_sessions.created_at)"), :agent_type)
+      .order(Arel.sql("1 ASC"))
+      .pluck(
+        Arel.sql("date_trunc('day', terminal_sessions.created_at)"),
+        :agent_type,
+        Arel.sql("COUNT(*)")
+      )
+      .map do |(date, agent_type, count)|
+        ActivityPoint.new(
+          date: date.to_date.iso8601,
+          agent_type: agent_type,
+          sessions: count
+        )
+      end
+
+    Result.new(
+      agent_types: agent_types,
+      sessions_by_agent: sessions_by_agent,
+      activity_over_time: activity_over_time
+    )
+  end
+
+  private
+
+  attr_reader :project, :user, :scope, :range, :tags, :task_type, :participant_id
+
+  def base_sessions
+    s = scope_sessions.where(created_at: range, session_type: AnalyticsPeriod::USAGE_SESSION_TYPES)
+    s = s.where(user_id: participant_id) if participant_id
+    apply_task_filters(s)
+  end
+
+  def scope_sessions
+    case scope
+    when "user"
+      project.terminal_sessions.where(user: user)
+    else
+      project.terminal_sessions
+    end
+  end
+end

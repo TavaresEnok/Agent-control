@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Builds dist/aixle-flow-<version>.zip from the files the app is made of, and nothing else.
+set -euo pipefail
+
+app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$app_dir"
+
+version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' manifest.json | head -n 1)"
+if [ -z "$version" ]; then
+  echo "bin/package: no version in manifest.json" >&2
+  exit 1
+fi
+
+mkdir -p dist
+zip_path="dist/aixle-flow-${version}.zip"
+rm -f "$zip_path"
+
+zip -q -r -X -D "$zip_path" manifest.json settings.json icon.svg aixle-flow-events.js widgets -x '*.DS_Store'
+
+echo "$app_dir/$zip_path"

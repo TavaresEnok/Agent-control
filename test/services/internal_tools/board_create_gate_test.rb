@@ -1,0 +1,352 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class InternalTools::BoardCreateGateTest < ActiveSupport::TestCase
+  setup do
+    @company     = create(:company)
+    @user        = create(:user, company: @company)
+    @integration = create(:integration, :github, :active, company: @company, connected_by: @user)
+    @project     = create(:project, company: @company, owner: @user)
+    @board       = create(:board, project: @project)
+    @column      = create(:board_column, board: @board, name: "In Progress", position: 1)
+    @task        = create(:board_task, board: @board, board_column: @column, title: "My task")
+
+    # Repository linked to the project — required for repo validation in board_create_gate
+    @repo_name   = "org/app"
+    create(:repository, full_name: @repo_name, scope: @project, integration: @integration)
+
+    workflow      = create(:workflow, scope: @project)
+    step          = create(:step, workflow: workflow)
+    @workflow_run = create(:workflow_run, workflow: workflow, project: @project, user: @user, board_task: @task)
+    @step_run     = create(:step_run, workflow_run: @workflow_run, step: step)
+
+    @session = create(:terminal_session, :running, :agent_session,
+      user: @user, project: @project, mode: "non_interactive", initial_prompt: "do work")
+    @step_run.update!(terminal_session: @session)
+    @session.reload
+  end
+
+  # == github_checks_completed ==
+
+  test "creates a github_checks_completed gate with valid params" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_checks_completed",
+        repo_full_name: @repo_name,
+        pr_number:      42
+      },
+      session: @session
+    ).execute
+
+    assert_equal 0, result[:exit_code]
+    data = JSON.parse(result[:stdout])
+    assert_equal @task.id, data["task_id"]
+    assert_equal "github_checks_completed", data["gate_type"]
+    assert_equal "pending", data["status"]
+    assert_equal @repo_name, data["metadata"]["repo_full_name"]
+    assert_equal 42, data["metadata"]["pr_number"]
+  end
+
+  test "creates a persisted Gate record" do
+    assert_difference -> { Gate.count }, 1 do
+      InternalTools::BoardCreateGate.new(
+        params: {
+          task_id:        @task.id,
+          gate_type:      "github_checks_completed",
+          repo_full_name: @repo_name,
+          pr_number:      7
+        },
+        session: @session
+      ).execute
+    end
+  end
+
+  test "sets creator from workflow run user" do
+    InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_checks_completed",
+        repo_full_name: @repo_name,
+        pr_number:      42
+      },
+      session: @session
+    ).execute
+
+    gate = Gate.last
+    assert_equal @user, gate.creator
+  end
+
+  # == validation errors ==
+
+  test "returns error for unknown gate_type" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:       @task.id,
+        gate_type:     "unknown_type",
+        repo_full_name: "org/app",
+        pr_number:     1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "Unsupported gate_type"
+  end
+
+  test "returns error when task not found" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:       999_999,
+        gate_type:     "github_checks_completed",
+        repo_full_name: "org/app",
+        pr_number:     1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "Task not found"
+  end
+
+  test "returns error when repo_full_name is missing" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:   @task.id,
+        gate_type: "github_checks_completed",
+        pr_number: 1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "repo_full_name is required"
+  end
+
+  test "returns error when pr_number is missing" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_checks_completed",
+        repo_full_name: "org/app"
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "pr_number must be a positive integer"
+  end
+
+  test "returns error when pr_number is zero" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_checks_completed",
+        repo_full_name: @repo_name,
+        pr_number:      0
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "pr_number must be a positive integer"
+  end
+
+  test "returns error when repository is not linked to the project" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_checks_completed",
+        repo_full_name: "other/unlinked-repo",
+        pr_number:      1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "not linked to this task's project"
+  end
+
+  # == github_workflow_completed ==
+
+  test "creates a github_workflow_completed gate with valid params" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_workflow_completed",
+        repo_full_name: @repo_name,
+        run_id:         5000
+      },
+      session: @session
+    ).execute
+
+    assert_equal 0, result[:exit_code]
+    data = JSON.parse(result[:stdout])
+    assert_equal @task.id, data["task_id"]
+    assert_equal "github_workflow_completed", data["gate_type"]
+    assert_equal "pending", data["status"]
+    assert_equal @repo_name, data["metadata"]["repo_full_name"]
+    assert_equal 5000, data["metadata"]["run_id"]
+  end
+
+  test "creates a persisted Gate record for github_workflow_completed" do
+    assert_difference -> { Gate.count }, 1 do
+      InternalTools::BoardCreateGate.new(
+        params: {
+          task_id:        @task.id,
+          gate_type:      "github_workflow_completed",
+          repo_full_name: @repo_name,
+          run_id:         7
+        },
+        session: @session
+      ).execute
+    end
+  end
+
+  test "returns error when run_id is missing for github_workflow_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_workflow_completed",
+        repo_full_name: @repo_name
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "run_id must be a positive integer"
+  end
+
+  test "returns error when run_id is zero for github_workflow_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_workflow_completed",
+        repo_full_name: @repo_name,
+        run_id:         0
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "run_id must be a positive integer"
+  end
+
+  test "returns error when repo_full_name is missing for github_workflow_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:   @task.id,
+        gate_type: "github_workflow_completed",
+        run_id:    1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "repo_full_name is required"
+  end
+
+  test "returns error when repository is not linked to the project for github_workflow_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "github_workflow_completed",
+        repo_full_name: "other/unlinked-repo",
+        run_id:         1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "not linked to this task's project"
+  end
+
+  # == gitlab_pipeline_completed ==
+
+  test "advertises the fields a gitlab_pipeline_completed gate is created from" do
+    properties = InternalTools::BoardCreateGate.tool_definition.input_schema["properties"]
+
+    assert_equal "integer", properties.dig("pipeline_id", "type")
+    assert_includes properties.dig("pipeline_id", "description"), "gitlab_pipeline_completed"
+    assert_includes properties.dig("repo_full_name", "description"), "gitlab_pipeline_completed"
+  end
+
+  test "creates a gitlab_pipeline_completed gate with valid params" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "gitlab_pipeline_completed",
+        repo_full_name: @repo_name,
+        pipeline_id:    12345
+      },
+      session: @session
+    ).execute
+
+    assert_equal 0, result[:exit_code]
+    data = JSON.parse(result[:stdout])
+    assert_equal @task.id, data["task_id"]
+    assert_equal "gitlab_pipeline_completed", data["gate_type"]
+    assert_equal "pending", data["status"]
+    assert_equal @repo_name, data["metadata"]["repo_full_name"]
+    assert_equal 12345, data["metadata"]["pipeline_id"]
+  end
+
+  test "returns error when pipeline_id is missing for gitlab_pipeline_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "gitlab_pipeline_completed",
+        repo_full_name: @repo_name
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "pipeline_id must be a positive integer"
+  end
+
+  test "returns error when pipeline_id is zero for gitlab_pipeline_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "gitlab_pipeline_completed",
+        repo_full_name: @repo_name,
+        pipeline_id:    0
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "pipeline_id must be a positive integer"
+  end
+
+  test "returns error when repo_full_name is missing for gitlab_pipeline_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:     @task.id,
+        gate_type:   "gitlab_pipeline_completed",
+        pipeline_id: 1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "repo_full_name is required"
+  end
+
+  test "returns error when repository is not linked to the project for gitlab_pipeline_completed" do
+    result = InternalTools::BoardCreateGate.new(
+      params: {
+        task_id:        @task.id,
+        gate_type:      "gitlab_pipeline_completed",
+        repo_full_name: "other/unlinked-repo",
+        pipeline_id:    1
+      },
+      session: @session
+    ).execute
+
+    assert_equal 1, result[:exit_code]
+    assert_includes result[:stderr], "not linked to this task's project"
+  end
+end

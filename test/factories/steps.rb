@@ -1,0 +1,30 @@
+# frozen_string_literal: true
+
+FactoryBot.define do
+  factory :step do
+    workflow
+    sequence(:name) { |n| "Step #{n}" }
+    sequence(:position) { |n| n }
+    instructions { "Do the thing" }
+    allow_non_interactive { false }
+    skip_policy { :never }
+    on_failure { :fail }
+    max_retries { 0 }
+    input_asset_specs { [] }
+    output_asset_specs { [] }
+    tool_ids { [] }
+    skill_ids { [] }
+    mcp_server_ids { [] }
+    asset_ids { [] }
+    repository_ids { [] }
+    agent { nil }
+
+    trait :with_agent do
+      agent
+    end
+
+    trait :non_interactive do
+      allow_non_interactive { true }
+    end
+  end
+end

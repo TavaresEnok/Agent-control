@@ -1,0 +1,381 @@
+# frozen_string_literal: true
+
+module ContainerStrategies
+  # AgentBaseStrategy
+  # Shared base for agent container strategies (auth and session).
+  #
+  # Subclasses must implement:
+  #   - session_type  — "auth_setup" or "agent_session"
+  #   - ttyd_command  — command for the ttyd terminal
+  #
+  class AgentBaseStrategy < BaseStrategy
+    AUTH_COMMANDS = {
+      "claude_code" => "claude",
+      "cursor_cli" => "agent login",
+      # Device-code, not the default browser flow: the auth container cannot receive
+      # a localhost OAuth callback, so the user completes login on their own device.
+      "codex" => "codex login --device-auth",
+      "gemini_cli" => "gemini",
+      "antigravity_cli" => "agy",
+      # Device-code, not the default browser flow: nothing in the container can open a
+      # browser, so this is the only Grok login that completes here — it prints a URL
+      # and a code the user finishes on their own device.
+      "grok" => "grok login --device-auth",
+      # Device-code, like Grok: Kiro's default login opens a browser and fails in a
+      # container ("Failed to open browser for authentication"), and the CLI itself
+      # points at this flag.
+      # Deliberately just the login. An earlier version chained a `whoami` whose output
+      # file the container watcher waited on, because Kiro's credential is a SQLite
+      # database the CLI creates on its FIRST RUN — before the user has entered
+      # anything — so mere existence says nothing. The watcher now reads the database
+      # itself for the token payload's field names and the selected profile instead
+      # (Agents::KiroCliAdapter::AUTH_MARKERS), which appear only once the login has
+      # actually completed, so no marker file is needed.
+      "kiro_cli" => "kiro-cli login --use-device-flow"
+    }.freeze
+
+    SESSION_COMMANDS = {
+      "claude_code" => "claude",
+      "cursor_cli" => "agent",
+      "codex" => "codex --yolo",
+      "gemini_cli" => "gemini --yolo",
+      "antigravity_cli" => "agy --dangerously-skip-permissions",
+      "grok" => "grok --yolo",
+      # V3 is Kiro's current engine and still opt-in behind --v3 as of CLI 2.21.0.
+      # Overridden by Agents::KiroCliAdapter#session_command; this entry is the
+      # fallback the base strategy reads when no adapter command is resolved.
+      "kiro_cli" => "kiro-cli --v3 chat --trust-all-tools --trust-workspace"
+    }.freeze
+
+    # == before_create_container ==
+    # Returns container spec for agent containers.
+
+    def before_create_container(**)
+      validate_input!
+
+      {
+        container_name: "terminal-#{input[:route_token]}",
+        image: resolve_image,
+        env_vars: build_env_vars,
+        labels: build_labels,
+        host_config: build_host_config,
+        privilege_escalation: privilege_escalation?,
+        exposed_ports: build_exposed_ports,
+        cmd: build_cmd,
+        working_dir: build_working_dir
+      }
+    end
+
+    # == exec ==
+    # Marks session ready and returns URLs for frontend.
+
+    def exec(container_id:, **)
+      container_ref = resolve_container(container_id)
+      cid = runtime.container_identifier(container_ref)
+      raise "Container not ready for exec" if cid.blank?
+
+      route_token = input[:route_token]
+      mark_session_ready(cid)
+
+      {
+        container_id: cid,
+        container_name: "terminal-#{route_token}",
+        websocket_url: "#{traefik_ws_base}/t/#{route_token}/tty/ws",
+        watcher_url: "#{traefik_ws_base}/t/#{route_token}/fs",
+        ide_url: "#{traefik_ws_base}/t/#{route_token}/ide/"
+      }
+    end
+
+    # == Template methods ==
+
+    # A runtime's image is derived from the registry prefix and the image name
+    # config/agent_runtimes.json gives it (`agents.image_prefix` + `claude-code`
+    # + tag), the name CI publishes it under, so an environment that publishes
+    # the set to one registry overrides one value, not seven.
+    # `agents.images.<runtime>` remains a per-runtime escape hatch.
+    def resolve_image
+      agent_type = input[:agent_type].to_s
+      override = Settings.agents&.images.to_h.transform_keys(&:to_s)[agent_type]
+      return override.to_s if override.present?
+
+      name = "#{Settings.agents&.image_prefix}#{AgentRuntime.fetch(agent_type).image}"
+      tag = Settings.agents&.image_tag.to_s.strip
+      tag.present? ? "#{name}:#{tag}" : name
+    end
+
+    def session_type
+      raise NotImplementedError, "#{self.class.name} must implement #session_type"
+    end
+
+    def ttyd_command
+      raise NotImplementedError, "#{self.class.name} must implement #ttyd_command"
+    end
+
+    def build_env_vars
+      session = TerminalSession.find(input[:session_id])
+      agent_service = AgentCredentialsService.for(input[:agent_type])
+
+      vscode_token = SecureRandom.hex(32)
+      persist_vscode_token(session, vscode_token)
+
+      env_vars = {
+        "USER_ID" => input[:user_id].to_s,
+        "AGENT_TYPE" => input[:agent_type],
+        "SESSION_TYPE" => session_type,
+        "SESSION_ID" => input[:session_id].to_s,
+        "TTYD_PORT" => "7681",
+        "VIEW_PORT" => "7682",
+        "WATCHER_PORT" => "4040",
+        "ROUTE_TOKEN" => input[:route_token],
+        "VSCODE_TOKEN" => vscode_token,
+        "TTYD_CMD" => ttyd_command,
+        "HOME_DIR" => agent_service.home_dir,
+        "AUTH_WATCH_PATH" => agent_service.auth_watch_path,
+        "AUTH_REQUIRED_KEYS" => agent_service.adapter.auth_required_keys.join(","),
+        "TMUX_TMPDIR" => "/dev/shm/tmux"
+      }
+
+      env_vars.merge!(credential_sync_env(session, agent_service))
+
+      # Azure DevOps git credential vending. Here rather than in one agent's
+      # adapter because every agent clones, fetches and pushes; only a session
+      # that actually holds Azure repositories gets a key.
+      env_vars.merge!(AzureDevops::SessionGitSetup.container_env(session))
+      env_vars.merge!(GitCredentials::SessionGitSetup.container_env(session))
+      env_vars.merge!(GitCredentials::SessionGitSetup.identity_env)
+
+      env_vars.merge!(agent_service.adapter.default_env_vars(session))
+      env_vars.merge!(agent_service.adapter.env_vars_from_metadata(session.metadata)) if session.metadata.present?
+      super + env_vars.compact.map { |k, v| "#{k}=#{v}" }
+    end
+
+    # Tell the watcher where to report a token the CLI rotates, the proxy where to hand the
+    # CLI's refreshes (Agents::RefreshBroker), and the key both use.
+    #
+    # Only for sessions that RUN on a stored credential: an auth_setup session is a login
+    # in progress, and AgentAuthStrategy owns what it captures and how (the endpoint
+    # refuses those posts too — this just saves the round trip).
+    #
+    # Without this the rotation only reaches us at cleanup, so a container killed by an
+    # OOM, an eviction or a lost node takes it with it and leaves the stored refresh token
+    # one the vendor has already rotated out.
+    def credential_sync_env(session, agent_service)
+      # The strategy's own session type, not the row's: the strategy is what decides
+      # whether this container runs on a stored credential or is creating one.
+      return {} if session_type == "auth_setup"
+
+      paths = agent_service.adapter.writeback_file_paths
+      return {} if paths.empty?
+
+      env = {
+        "CREDENTIAL_SYNC_URL" => Settings.agents.credential_sync_url,
+        "CREDENTIAL_SYNC_KEY" => Agents::SessionKey.generate(session),
+        "CREDENTIAL_SYNC_PATHS" => paths.join(",")
+      }
+      endpoints = agent_service.adapter.refresh_broker_endpoints
+      return env if endpoints.empty?
+
+      env.merge("CREDENTIAL_REFRESH_URL" => Settings.agents.credential_refresh_url,
+                "CREDENTIAL_REFRESH_TARGETS" => endpoints.join(","))
+    end
+
+    # Send one command into the container's `agent` tmux session once its shell prompt
+    # is ready. Used to launch the CLI AFTER before_exec seeds credentials (so it starts
+    # authenticated), rather than at container start via the entrypoint's TTYD_CMD.
+    def send_tmux_command(container, cmd)
+      send_tmux_sequence(container, [ cmd ])
+    end
+
+    # Send a sequence of commands: wait for the shell prompt, send the first, then send
+    # each subsequent one after a short delay (e.g. launch the CLI, then drive a slash
+    # command once it is up). Which commands to send is the caller's concern.
+    def send_tmux_sequence(container, commands)
+      return if commands.blank?
+
+      first, *rest = commands
+      script = +"for i in $(seq 1 30); do tmux capture-pane -t agent -p 2>/dev/null | grep -q '\\$' && break; sleep 0.2; done; "
+      script << "tmux send-keys -t agent #{Shellwords.shellescape(first)} Enter; "
+      rest.each { |cmd| script << "sleep 5; tmux send-keys -t agent #{Shellwords.shellescape(cmd)} Enter; " }
+      runtime.exec(container, [ "sh", "-c", script ])
+    end
+
+    def build_labels
+      route_token = input[:route_token]
+      router_name = "terminal-#{route_token}"
+      base_labels.merge(traefik_labels(route_token, router_name))
+    end
+
+    # Bounded like tool containers are — memory, CPU and processes — on Docker as
+    # on Kubernetes.
+    # No raw sockets, and no setuid escalation unless the image's sudo needs it,
+    # as on Kubernetes.
+    def build_host_config
+      host_config = limits_host_config(load_container_limits(:agent_session)).merge("CapDrop" => [ "NET_RAW" ])
+      privilege_escalation? ? host_config : host_config.merge("SecurityOpt" => [ "no-new-privileges" ])
+    end
+
+    def privilege_escalation?
+      AgentCredentialsService.for(input[:agent_type]).adapter.privilege_escalation?
+    end
+
+    def build_exposed_ports
+      { "7681/tcp" => {}, "4040/tcp" => {}, "4041/tcp" => {}, "8443/tcp" => {}, "7682/tcp" => {} }
+    end
+
+    protected
+
+    def services_ports
+      [ 7681, 4040 ]
+    end
+
+    def traefik_ws_base
+      Settings.traefik.ws_base
+    end
+
+    def mark_session_ready(container_id)
+      session = TerminalSession.find(input[:session_id])
+      session.container_id = container_id
+      session.mark_ready! if session.may_mark_ready?
+    rescue StandardError => e
+      Rails.logger.warn("[#{strategy_name}] Failed to mark session ready: #{e.message}")
+    end
+
+    def upsert_env_var(env_vars, key, value)
+      return if value.blank?
+
+      env_vars.reject! { |entry| entry.start_with?("#{key}=") }
+      env_vars << "#{key}=#{value}"
+    end
+
+    private
+
+    def validate_input!
+      raise ArgumentError, "user_id is required" unless input[:user_id].present?
+      raise ArgumentError, "agent_type is required" unless input[:agent_type].present?
+      raise ArgumentError, "session_id is required" unless input[:session_id].present?
+      raise ArgumentError, "route_token is required" unless input[:route_token].present?
+
+      unless CompanyMembership::AVAILABLE_AGENTS.include?(input[:agent_type])
+        raise ArgumentError, "Invalid agent_type: #{input[:agent_type]}"
+      end
+    end
+
+    # The launch marker tells the usage ingest that this container was handed a
+    # usage key, so from here on a batch without one is refused for this session.
+    def persist_vscode_token(session, token)
+      session.merge_jsonb!(:metadata, "vscode_token" => token, UsageStatistics::SessionKey::LAUNCH_MARKER => 1)
+    end
+
+    def base_labels
+      {
+        "aixle.session_type" => session_type,
+        "aixle.agent_type" => input[:agent_type],
+        "aixle.user_id" => input[:user_id].to_s,
+        "aixle.session_id" => input[:session_id].to_s,
+        "aixle.ttyd_port" => "7681"
+      }
+    end
+
+    # =================================================================
+    # Credential extraction (shared by auth + session strategies)
+    # =================================================================
+
+    # Read the agent's auth file(s) from the container.
+    # @return [Hash<String, String>] path => content (only present files)
+    def extract_auth_files(container, agent_service)
+      paths = agent_service.adapter.auth_file_paths
+
+      paths.each_with_object({}) do |path, files|
+        content = read_file_from_container(container, path)
+        files[path] = content if content.present?
+      rescue StandardError => e
+        Rails.logger.warn("[#{strategy_name}] Failed to extract #{path}: #{e.message}")
+      end
+    end
+
+    # Ask the adapter for anything it can only learn from the CLI inside the container
+    # (see Agents::BaseAdapter#collect_credential_metadata) and merge it into the
+    # credential. Runs on the cleanup path of both agent strategies, after the
+    # credential itself exists. Never fatal: this is enrichment, and losing it costs a
+    # stale model list, not a session.
+    def persist_credential_metadata(container, credential, agent_service, phase)
+      return if credential.blank?
+
+      extras = agent_service.adapter.collect_credential_metadata(runtime, container, credential, phase)
+      return if extras.blank?
+
+      credential.with_lock do
+        merged = (credential.metadata || {}).merge(extras)
+        next if merged == credential.metadata
+
+        credential.update_column(:metadata, merged)
+        Rails.logger.info("[#{self.class.name.demodulize}] Stored #{extras.keys.join(', ')} on credential #{credential.id}")
+      end
+    rescue StandardError => e
+      Rails.logger.warn("[#{self.class.name.demodulize}] Failed to collect credential metadata: #{e.message}")
+    end
+
+    # True only when one of the auth files actually contains a real credential/token.
+    # Guards against persisting a credential when the file merely exists (e.g. Claude
+    # Code always writes ~/.claude.json on startup, even before login completes).
+    def auth_files_complete?(auth_files, agent_service)
+      auth_files.any? { |_path, content| content.present? && agent_service.auth_complete?(content) }
+    end
+
+    # Build the minimal credential hash to persist from collected auth files.
+    # Uses the adapter's #extract_credentials (a clean slice of the needed keys)
+    # rather than storing whole config blobs, so credentials stay tidy and a
+    # re-auth replaces them with no leftover fields from a previous login.
+    def build_credentials_from_files(auth_files, adapter)
+      Agents::CredentialCapture.from_files(
+        auth_files,
+        adapter: adapter,
+        hostname_resolver: -> { extract_container_hostname },
+        log_prefix: strategy_name
+      )
+    end
+
+    def extract_container_hostname
+      session = TerminalSession.find(input[:session_id])
+      container = resolve_container(session.container_id)
+      result = runtime.exec(container, [ "hostname" ])
+      result[0].join.strip
+    rescue StandardError
+      ""
+    end
+
+    def traefik_labels(route_token, router_name)
+      labels = {
+        "traefik.enable" => "true",
+        "traefik.http.routers.#{router_name}-tty.rule" => "PathPrefix(`/t/#{route_token}/tty`)",
+        "traefik.http.routers.#{router_name}-tty.middlewares" => "terminal-auth@file,#{router_name}-tty-strip",
+        "traefik.http.middlewares.#{router_name}-tty-strip.stripprefix.prefixes" => "/t/#{route_token}/tty",
+        "traefik.http.routers.#{router_name}-tty.service" => "#{router_name}-tty",
+        "traefik.http.services.#{router_name}-tty.loadbalancer.server.port" => "7681",
+        "traefik.http.routers.#{router_name}-fs.rule" => "PathPrefix(`/t/#{route_token}/fs`)",
+        "traefik.http.routers.#{router_name}-fs.middlewares" => "terminal-cors@file,terminal-auth@file,#{router_name}-fs-strip",
+        "traefik.http.middlewares.#{router_name}-fs-strip.stripprefix.prefixes" => "/t/#{route_token}/fs",
+        "traefik.http.routers.#{router_name}-fs.service" => "#{router_name}-fs",
+        "traefik.http.services.#{router_name}-fs.loadbalancer.server.port" => "4040",
+        "traefik.http.routers.#{router_name}-ide.rule" => "PathPrefix(`/t/#{route_token}/ide`)",
+        "traefik.http.routers.#{router_name}-ide.middlewares" => "terminal-auth@file",
+        "traefik.http.routers.#{router_name}-ide.service" => "#{router_name}-ide",
+        "traefik.http.services.#{router_name}-ide.loadbalancer.server.port" => "8443",
+        # The read-only terminal every viewer but the owner is routed to.
+        "traefik.http.routers.#{router_name}-view.rule" => "PathPrefix(`/t/#{route_token}/view`)",
+        "traefik.http.routers.#{router_name}-view.middlewares" => "terminal-auth@file,#{router_name}-view-strip",
+        "traefik.http.middlewares.#{router_name}-view-strip.stripprefix.prefixes" => "/t/#{route_token}/view",
+        "traefik.http.routers.#{router_name}-view.service" => "#{router_name}-view",
+        "traefik.http.services.#{router_name}-view.loadbalancer.server.port" => "7682",
+        # Images pasted into the owner's terminal; see docker/base/watcher.
+        "traefik.http.routers.#{router_name}-upload.rule" => "PathPrefix(`/t/#{route_token}/upload`)",
+        "traefik.http.routers.#{router_name}-upload.middlewares" => "terminal-cors@file,terminal-auth@file,#{router_name}-upload-strip",
+        "traefik.http.middlewares.#{router_name}-upload-strip.stripprefix.prefixes" => "/t/#{route_token}/upload",
+        "traefik.http.routers.#{router_name}-upload.service" => "#{router_name}-upload",
+        "traefik.http.services.#{router_name}-upload.loadbalancer.server.port" => "4041"
+      }
+
+      labels
+    end
+  end
+end

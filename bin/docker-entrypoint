@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -e
+
+if [ -z "${LD_PRELOAD+x}" ]; then
+    LD_PRELOAD=$(find /usr/lib -name libjemalloc.so.2 -print -quit)
+    export LD_PRELOAD
+fi
+
+bundle check || bundle install
+corepack install
+yarn install
+bundle exec rails db:prepare
+# Curated MCP connectors and skills, so the catalogs are browsable before the first
+# sweep ever runs. Idempotent, inserts only what is missing — see Catalog::FeaturedSeed.
+bundle exec rails catalog:featured:load
+
+exec "$@"

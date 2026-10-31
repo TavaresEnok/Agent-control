@@ -1,0 +1,479 @@
+# frozen_string_literal: true
+
+module ContainerStrategies
+  # AgentSessionStrategy
+  # Strategy for agent session containers with pre-loaded credentials.
+  #
+  # Session-specific:
+  #   - build_env_vars: credential/context env vars (the prompt goes in PROMPT_PATH)
+  #   - before_exec: loads credentials via SessionContextService
+  #   - exec: starts the agent in tmux and returns the terminal URLs (both modes)
+  #   - before_cleanup: collects logs, outputs, usage
+  #   - phase_config: non-interactive long timeout, interactive awaits signal
+  #
+  class AgentSessionStrategy < AgentBaseStrategy
+    # Where a non_interactive session's prompt waits for the CLI, readable by the
+    # agent's user only. An environment variable would be part of the pod spec, so
+    # anyone who can read the Kubernetes API would see the whole task, and every
+    # process in the container would inherit it — MCP servers, tools, whatever the
+    # agent runs.
+    PROMPT_PATH = "/tmp/.aixle-prompt"
+
+    # Raised by an adapter's #credential_preflight when the credential written
+    # to the container fails launch-time verification (see BaseAdapter).
+    class ProvisioningError < StandardError
+      attr_reader :code, :details
+
+      def initialize(code, details)
+        @code = code
+        @details = details
+        super("Credential preflight failed: #{code}")
+      end
+    end
+
+    # `exec` assembles the session before launching the agent — skills, repositories
+    # and the BMAD install, which alone may take BmadMethodInjector::INSTALL_TIMEOUT
+    # — so its budget has to cover all of them. An exec that outruns it cannot be
+    # retried (SessionRuntimeOperation#replayable?): the session fails.
+    def phase_config(phase)
+      case phase
+      when :pull_image  then { timeout: 600 }
+      when :exec        then { timeout: 600, await_signal: :container_finished, signal_timeout: 82_800 }
+      when :cleanup     then { timeout: 120, always: true, retry: { max_attempts: 2, interval: 5 } }
+      else                   { timeout: 300 }
+      end
+    end
+
+    def build_env_vars
+      env_vars_list = super
+
+      if input[:credential]&.metadata.present?
+        agent_service = AgentCredentialsService.for(input[:agent_type])
+        agent_service.adapter.env_vars_from_metadata(input[:credential].metadata)
+          .each { |k, v| upsert_env_var(env_vars_list, k, v) }
+      end
+
+      # No config-item env injection here, deliberately: a session reaches its
+      # attached config items through the `get_config_item` MCP tool and nowhere
+      # else, so there is exactly one channel to reason about (and exactly one
+      # that writes an audit row). See
+      # docs/implementation-artifacts/spec-session-config-item-access.md.
+      scrub_conflicting_auth_env(env_vars_list)
+    end
+
+    # Last step, after every other source has had its say: drop env the active provider
+    # config would silently lose to. A leftover ANTHROPIC_API_KEY shadows a Bedrock
+    # connection, and Claude Code hides Bedrock errors — so the symptom is an agent that
+    # simply does not answer. The corporate runbook works around exactly this by
+    # scrubbing stray keys before launch.
+    def scrub_conflicting_auth_env(env_vars_list)
+      credential = input[:credential]
+      return env_vars_list if credential.nil?
+
+      adapter = AgentCredentialsService.for(input[:agent_type]).adapter
+      conflicting = adapter.conflicting_env_keys(credential.config_data)
+      return env_vars_list if conflicting.empty?
+
+      env_vars_list.reject do |entry|
+        key = entry.to_s.split("=", 2).first
+        conflicting.include?(key).tap do |dropped|
+          Rails.logger.info("[AgentSession] dropped #{key}: conflicts with the active provider") if dropped
+        end
+      end
+    end
+
+    def build_labels
+      super.merge("aixle.session_type" => "agent_session")
+    end
+
+    # == before_exec(container_id:, **) → {} ==
+
+    def before_exec(container_id:, **)
+      container = resolve_container(container_id)
+      cid = runtime.container_identifier(container)
+      raise "Container not ready for before_exec" if cid.blank?
+
+      session = TerminalSession.find(input[:session_id])
+      adapter = AgentCredentialsService.for(input[:agent_type]).adapter
+      credential = input[:credential]
+
+      first_login = credential.nil? && session.mode == "interactive" && session.session_type == "agent_session"
+      if credential.nil? && AgentCredentialsService.supported?(input[:agent_type]) && !first_login
+        raise_unresolved_credential!(session)
+      end
+
+      # Read before anything reaches the container: an unreadable login stops here.
+      credential&.config_data
+      refresh_expiring_credential!(credential, session)
+      adapter.repair_credential!(credential) if credential
+      initial_write_error = nil
+      begin
+        SessionContextService.assemble_session_context(container, session, credential: credential)
+      rescue AgentCredentialsService::CredentialWriteError => e
+        initial_write_error = e
+      end
+      run_credential_preflight!(adapter, container, cid, initial_write_error: initial_write_error) if credential.present?
+      {}
+    rescue Encryptable::DecryptionError => e
+      # The agent's own login is unreadable: signing in again stores a readable one.
+      # Anything else unreadable (an MCP server's values, a config item) fails as is.
+      raise unless credential && e.model == "AgentCredential" && e.record_id == credential.id
+
+      Rails.logger.error("[AgentSession] #{e.message}")
+      raise AgentCredential::PreflightError.new(credential, reason: :unreadable)
+    end
+
+    # == exec(container_id:, **) → { websocket_url:, ... } ==
+
+    def exec(container_id:, **)
+      container = resolve_container(container_id)
+      launch_agent_in_tmux(container)
+
+      result = super(container_id: container_id)
+      result.delete(:watcher_url)
+      result
+    end
+
+    # == before_cleanup(container_id:, **) → { logs_count:, outputs_count: } ==
+
+    def before_cleanup(container_id: nil, **)
+      return {} if container_id.blank?
+
+      container = resolve_container(container_id)
+      session = TerminalSession.find(input[:session_id])
+      agent_service = AgentCredentialsService.for(input[:agent_type])
+
+      logs_count, log_contents = collect_logs(container, session, agent_service)
+      logs_count += collect_terminal_output(container, session)
+      outputs_count = collect_outputs(container, session)
+      # Refresh first: an agent that rotates its token during a session leaves the
+      # stored credential stale, and usage collection may need to call the vendor with
+      # it (Kiro reads its credit counter, Grok prices models from the catalogue).
+      # Collecting first would spend the run's last API call on an expired token.
+      persist_refreshed_credentials(container, session, agent_service)
+      persist_credential_metadata(container, SessionCompany.agent_credentials_for(session).find_by(agent_type: input[:agent_type]), agent_service, :session)
+      collect_usage(session, agent_service, log_contents)
+      IntegrationCleanupService.release_session_locks!(session)
+
+      Rails.logger.info("[AgentSession] Cleanup: #{logs_count} logs, #{outputs_count} outputs")
+      { logs_count: logs_count, outputs_count: outputs_count }
+    end
+
+    protected
+
+    def session_type = "agent_session"
+
+    def ttyd_command
+      "bash"
+    end
+
+    def services_ports
+      [ 7681, 8443 ]
+    end
+
+    def resolve_model(session)
+      return session.requested_model if session.requested_model.present?
+
+      # Fall back to the default model chosen on THIS session's company credential. The
+      # pin is per credential, and a credential is per company — a model pinned against
+      # another company's Bedrock account does not exist here.
+      credential = SessionCompany.agent_credentials_for(session).find_by(agent_type: session.agent_type)
+      credential&.default_model
+    end
+
+    private
+
+    def raise_unresolved_credential!(session)
+      step_run = session.step_run
+      details = {
+        session_id: session.id,
+        step_run_id: step_run&.id,
+        workflow_run_id: step_run&.workflow_run_id,
+        session_type: session.session_type,
+        mode: session.mode,
+        session_agent_type: session.agent_type,
+        input_agent_type: input[:agent_type],
+        user_id: session.user_id,
+        session_company_id: session.company_id,
+        project_id: session.project_id,
+        project_company_id: session.project&.company_id,
+        effective_company_id: SessionCompany.company_id_for(session),
+        credential_candidates: AgentCredential.where(user_id: session.user_id).pluck(:id, :company_id, :agent_type)
+      }
+
+      raise ProvisioningError.new("credential_not_resolved", details)
+    end
+
+    # Give the container a token that outlives the session it is about to run. The
+    # 5-minute sweep only refreshes a token in the last stretch of its life, so a
+    # session starting just before that window would otherwise carry a token with
+    # minutes left and die halfway through on an opaque 401.
+    #
+    # A refresh that fails without condemning the credential is not fatal here: the
+    # token in hand is still valid, and the session is better off starting with it
+    # than not starting at all. A rejected BASE login is fatal — nothing in the
+    # container can recover from it, so say so now with the message that names the fix.
+    def refresh_expiring_credential!(credential, session)
+      return if credential.nil?
+
+      result = AgentCredential.rotating_for_session(session.id) do
+        credential.refresh_if_expiring!(excluding_session_id: session.id)
+      end
+
+      # Deferring to the container that holds these tokens means this session starts
+      # on whatever is stored, which may be little. Say so: the alternative is finding
+      # out from a 401 halfway through a session and having nothing to correlate it to.
+      if result == :held
+        # Deferring is only tolerable while the token is alive. Once the base login has
+        # expired, the copy we would write into this container is dead and nothing inside
+        # it can renew: the container would print "Login expired" and sit there until the
+        # no-output watchdog reaped it half an hour later. Say it now, with the CTA.
+        raise AgentCredential::PreflightError, credential if credential.base_login_expired?
+
+        left = credential.expires_at ? ((credential.expires_at - Time.current) / 60).round : nil
+        Rails.logger.warn("[AgentSession] Starting session #{session.id} on credential #{credential.id} " \
+                          "with #{left || '?'}m of token life: another live session holds these tokens, " \
+                          "so refreshing now would invalidate the copy it is running on")
+        return
+      end
+
+      return unless result.is_a?(Hash) && result[:status] == :error
+
+      # AgentCredential#renew! has already recorded the failure, and reported it if it may be ours.
+      raise AgentCredential::PreflightError, credential if AgentCredential.permanent_failure?(result)
+
+      Rails.logger.warn("[AgentSession] Pre-launch token refresh failed for credential " \
+                        "#{credential.id}: #{result[:detail]} — starting on the token in hand")
+    end
+
+    # Adapter hook for launch-time credential verification (e.g. Codex's
+    # auth.json stat before tmux launch — see BaseAdapter#credential_preflight).
+    # Most agents have nothing to check here, so #credential_preflight returns
+    # nil and this is a no-op — the strategy never needs to know which agent
+    # type, if any, requires the check.
+    #
+    # Exactly one attempt: a masking retry would hide a real seed/entrypoint
+    # race instead of surfacing it (review decision on PR #252) — the
+    # diagnostic details on ProvisioningError are what make that race
+    # debuggable, not a retry loop.
+    def run_credential_preflight!(adapter, container, container_id, initial_write_error: nil)
+      if initial_write_error
+        details = initial_write_error.details.merge(attempt: 1, attempts: 1)
+        Rails.logger.warn("[AgentSession] Credential write failed: #{details.inspect}")
+        raise ProvisioningError.new("auth_file_write_failed", details)
+      end
+
+      result = adapter.credential_preflight(runtime, container, container_id)
+      return if result.nil? || result[:valid]
+
+      details = result.except(:valid, :error_code).merge(
+        write_outcome: "initial_write_verified", attempt: 1, attempts: 1
+      )
+      Rails.logger.warn("[AgentSession] Credential preflight failed: #{details.merge(error_code: result[:error_code]).inspect}")
+      raise ProvisioningError.new(result[:error_code], details)
+    end
+
+    def launch_agent_in_tmux(container)
+      session = TerminalSession.find(input[:session_id])
+      agent_service = AgentCredentialsService.for(input[:agent_type])
+      cmd = agent_service.adapter.session_command(mode: session.mode, model: resolve_model(session),
+                                                  effort: session.reasoning_effort)
+
+      tmux_cmd = if session.mode == "non_interactive" && session.initial_prompt.present?
+        write_prompt!(container, agent_prompt(session), agent_service.adapter.container_uid)
+        "#{cmd} \"$(cat #{PROMPT_PATH})\""
+      else
+        cmd
+      end
+
+      send_tmux_command(container, tmux_cmd)
+      Rails.logger.info("[AgentSession] Launched agent in tmux: #{cmd}")
+    end
+
+    def agent_prompt(session)
+      session.initial_prompt
+    end
+
+    def write_prompt!(container, prompt, uid)
+      return if runtime.write_file(container, PROMPT_PATH, prompt.to_s, mode: 0o600, uid: uid, gid: uid)
+
+      raise "Could not write the session's prompt into the container"
+    end
+
+    # Built once per cleanup: resolving the session's attached secrets decrypts
+    # rows, and both collectors run back to back over the same session.
+    def secret_redactor(session)
+      @secret_redactor ||= Sessions::SecretRedactor.for_session(session)
+    end
+
+    def collect_terminal_output(container, session)
+      # The file is populated live by the `agent` pane's tmux pipe-pane, set up in
+      # docker/base/entrypoint.sh at container start (`tee -a /tmp/terminal_output.log`),
+      # so it already holds the raw ANSI stream — no capture-pane snapshot needed.
+      content = read_file_from_container(container, "/tmp/terminal_output.log")
+      content = container_stdout(container) if content.nil?
+      return 0 if content.blank?
+
+      # Anything the agent echoed — a value it read through get_config_item, most
+      # of all — is in this stream verbatim. Scrub before it is persisted and
+      # replayed in the UI.
+      content = secret_redactor(session).call(content)
+
+      io = StringIO.new(content)
+      io.define_singleton_method(:original_filename) { "terminal_output.log" }
+
+      SessionLog.create!(
+        terminal_session: session,
+        name: "terminal_output.log",
+        file: io,
+        file_size: content.bytesize,
+        content_type: "text/plain; charset=utf-8"
+      )
+      1
+    rescue StandardError => e
+      Rails.logger.warn("[AgentSession] Failed to collect terminal output: #{e.message}")
+      0
+    end
+
+    # A container that was killed (out of memory, evicted) cannot be exec'd into, so
+    # its file is out of reach — but the same tee writes the pane to the container's
+    # stdout, which the runtime keeps until the pod or container is removed, and
+    # cleanup only removes it after this collection.
+    def container_stdout(container)
+      runtime.container_logs(container)[:stdout].presence
+    rescue StandardError => e
+      Rails.logger.warn("[AgentSession] Failed to read container stdout: #{e.message}")
+      nil
+    end
+
+    def collect_logs(container, session, agent_service)
+      return [ 0, {} ] unless agent_service.adapter.respond_to?(:session_log_paths)
+
+      result = Sessions::LogCollector.new(
+        session: session,
+        container: container,
+        adapter: agent_service.adapter,
+        runtime: runtime,
+        redactor: secret_redactor(session)
+      ).call
+
+      if result.failures.any?
+        Rails.logger.warn("[AgentSession] session=#{session.id} incomplete log collection: #{result.failures.join('; ')}")
+      end
+
+      [ result.count, result.contents ]
+    end
+
+    def collect_outputs(container, session)
+      output_dir = "/workspace/outputs"
+
+      # Recurse: agents organize outputs into subdirs (e.g. outputs/presentation/index.html).
+      # A -maxdepth 1 scan would silently miss all of them. The relative path (not the bare
+      # basename) becomes the asset name so nested files keep their structure and distinct
+      # files that share a basename across subdirs don't collide on the name uniqueness index.
+      result = runtime.exec(
+        container,
+        [ "/bin/sh", "-c", "find #{output_dir} -type f 2>/dev/null || true" ],
+        stdout: true, stderr: true
+      )
+      return 0 unless result[2].zero?
+
+      files = result[0].join.split("\n").reject(&:blank?)
+      return 0 if files.empty?
+
+      scope_type, scope_id = resolve_output_scope(session)
+      count = 0
+
+      files.each do |file_path|
+        relative = file_path.sub("#{output_dir}/", "")
+        filename = File.basename(relative)
+        content = read_file_from_container(container, file_path)
+        if content.blank?
+          # A dropped output used to leave no trace at all — the asset simply never
+          # appeared. Log it, so an unreadable file is distinguishable from an empty one.
+          Rails.logger.warn("[AgentSession] Skipped output #{file_path}: #{content.nil? ? 'unreadable' : 'empty'}")
+          next
+        end
+
+        tmpfile = Tempfile.new([ "output-", File.extname(filename) ])
+        tmpfile.binmode
+        tmpfile.write(content)
+        tmpfile.rewind
+        tmpfile.define_singleton_method(:original_filename) { filename }
+
+        asset = Asset.create!(
+          name: relative, folder: "session-#{session.id}",
+          scope_type: scope_type, scope_id: scope_id,
+          created_by: session.user, terminal_session: session,
+          status: "pending_review"
+        )
+        AssetVersion.create!(asset: asset, uploaded_by: session.user, source: :session, file: tmpfile)
+        count += 1
+      rescue StandardError => e
+        Rails.logger.warn("[AgentSession] Failed to collect output #{file_path}: #{e.message}")
+      ensure
+        tmpfile&.close!
+      end
+
+      count
+    rescue StandardError => e
+      Rails.logger.warn("[AgentSession] Failed to list outputs: #{e.message}")
+      0
+    end
+
+    # Output scope follows the session's project; project-less sessions fall
+    # back to the user's first active membership's company. A user with zero
+    # active memberships has no valid scope — raise (collect_outputs logs and
+    # skips) instead of creating assets with a nil scope_id.
+    def resolve_output_scope(session)
+      return [ "Project", session.project_id ] if session.project.present?
+
+      company_id = session.user.company_memberships.active.default_order.pick(:company_id)
+      if company_id.nil?
+        raise "cannot resolve output scope: user #{session.user_id} has no active membership (session #{session.id})"
+      end
+
+      [ "Company", company_id ]
+    end
+
+    def collect_usage(session, agent_service, log_contents = {})
+      return unless agent_service.adapter.respond_to?(:collect_usage)
+      agent_service.adapter.collect_usage(session, log_contents)
+    rescue StandardError => e
+      Rails.logger.error("[AgentSession] Failed to collect usage: #{e.message}")
+    end
+
+    # Agents (e.g. Claude Code) refresh their access/refresh tokens during a
+    # session. Those refreshed tokens live only in the container's config files;
+    # without this, the next session reloads the old (possibly expired) token.
+    def persist_refreshed_credentials(container, session, agent_service)
+      auth_files = extract_auth_files(container, agent_service)
+      return unless auth_files_complete?(auth_files, agent_service)
+
+      config_data = build_credentials_from_files(auth_files, agent_service.adapter)
+      return if config_data.blank?
+
+      # This session's company's credential — the same row the write below targets.
+      credential = SessionCompany.agent_credentials_for(session).find_by(agent_type: input[:agent_type])
+      return unless credential
+      return if credential.config_data == config_data # cheap pre-check, avoids locking on no-op
+
+      adapter = agent_service.adapter
+      # Lock the row so concurrent sessions can't race the read-merge-write. The adapter
+      # merges per token block and refuses to downgrade a newer stored token to an older
+      # one — refresh-token rotation means a late-cleaning session could otherwise persist
+      # an already-revoked token or wipe a token block (e.g. designOauth) it never touched.
+      credential.with_lock do
+        current = credential.config_data
+        # Read out of the container, so rotations only (BaseAdapter#merge_container_credentials).
+        merged = adapter.merge_container_credentials(current, credential.without_retired_grants(config_data))
+        next if merged == current
+
+        AgentCredential.from_artifacts(session.user_id, SessionCompany.company_id_for(session), input[:agent_type], merged)
+        Rails.logger.info("[AgentSession] Persisted refreshed #{input[:agent_type]} credentials for user #{session.user_id}")
+      end
+    rescue StandardError => e
+      Rails.logger.warn("[AgentSession] Failed to persist refreshed credentials: #{e.message}")
+    end
+  end
+end

@@ -1,0 +1,105 @@
+import { router } from '@inertiajs/react';
+import { Button, Select, Stack, TextInput, Textarea } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
+import { useEffect, useState, type FC } from 'react';
+import { z } from 'zod';
+
+import type { Repository } from '@/types/generated';
+
+import { useConfirmClose } from 'shared/lib/hooks/useConfirmClose';
+import { ResourceDrawer } from 'shared/ui/ResourceDrawer';
+
+const schema = z.object({
+  sourceBranch: z.string().min(1, 'Branch is required'),
+  purpose: z.string().optional(),
+  description: z.string().optional(),
+});
+
+type FormData = z.infer<typeof schema>;
+
+const EMPTY_VALUES: FormData = { sourceBranch: '', purpose: '', description: '' };
+
+interface Props {
+  repo: Pick<Repository, 'id' | 'fullName' | 'sourceBranch' | 'purpose' | 'description' | 'integration'> | null;
+  branches?: string[];
+  basePath: string;
+  onClose: () => void;
+}
+
+export const EditRepositoryModal: FC<Props> = ({ repo, branches = [], basePath, onClose }) => {
+  const [loading, setLoading] = useState(false);
+
+  const form = useForm<FormData>({
+    validate: zodResolver(schema),
+    initialValues: EMPTY_VALUES,
+  });
+
+  useEffect(() => {
+    form.setInitialValues(
+      repo
+        ? { sourceBranch: repo.sourceBranch, purpose: repo.purpose ?? '', description: repo.description ?? '' }
+        : EMPTY_VALUES,
+    );
+    form.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo]);
+
+  const handleSubmit = (values: FormData) => {
+    if (!repo) return;
+    setLoading(true);
+
+    router.patch(
+      `${basePath}/${repo.id}`,
+      { repository: values },
+      {
+        preserveScroll: true,
+        onFinish: () => setLoading(false),
+        onSuccess: () => onClose(),
+      },
+    );
+  };
+
+  const requestClose = useConfirmClose(form.isDirty(), onClose);
+
+  return (
+    <ResourceDrawer
+      opened={!!repo}
+      onClose={requestClose}
+      title={`Edit ${repo?.fullName ?? 'Repository'}`}
+      footer={
+        <Button type="submit" form="edit-repository-form" fullWidth loading={loading}>
+          Update
+        </Button>
+      }
+    >
+      <form id="edit-repository-form" onSubmit={form.onSubmit(handleSubmit)}>
+        <Stack gap="md">
+          {/* Branch lists come from the integration's API; public repositories
+              have none to list, so the branch stays free text there. */}
+          {branches.length > 0 ? (
+            <Select
+              label="Source branch"
+              data={branches}
+              searchable
+              allowDeselect={false}
+              {...form.getInputProps('sourceBranch')}
+              required
+            />
+          ) : (
+            <TextInput label="Source branch" placeholder="main" {...form.getInputProps('sourceBranch')} withAsterisk />
+          )}
+          <Textarea
+            label="Purpose"
+            placeholder='e.g. "Our main Rails app" or "React template for new projects"'
+            description="Helps AI agents understand what this repository is used for"
+            {...form.getInputProps('purpose')}
+            minRows={2}
+            autosize
+          />
+          <Textarea label="Description" placeholder="Optional description..." {...form.getInputProps('description')} />
+        </Stack>
+      </form>
+    </ResourceDrawer>
+  );
+};

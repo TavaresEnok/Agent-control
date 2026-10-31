@@ -1,0 +1,157 @@
+# frozen_string_literal: true
+
+# Registry for Temporal workflow and activity definitions loaded from workflows.yml
+class TemporalWorkflowRegistry
+  # A run whose steps queue can legitimately outlive a day; one that has been
+  # alive for a week is a fault, not a queue.
+  RUN_TIMEOUT = 7.days.to_i
+
+  # workflows.yml names this queue for everything the app runs itself. It is the
+  # configured TEMPORAL_TASK_QUEUE — the one the worker polls — so starting a
+  # workflow, dispatching its activities and polling can never disagree: with the
+  # name hardcoded, any other setting stopped all work, or let another deployment
+  # on the default queue pick it up.
+  DEFAULT_QUEUE = "aixle_ruby"
+
+  def self.resolve_queue(name)
+    name.to_s == DEFAULT_QUEUE ? Settings.temporal.task_queue.to_s : name
+  end
+
+  # Activity definition
+  class ActivityDef
+    attr_reader :name, :task_queue
+
+    def initialize(name:, task_queue:)
+      @name = name
+      @task_queue = task_queue
+    end
+  end
+
+  # Activities collection with method_missing for attribute access
+  class ActivitiesCollection
+    def initialize(activities_data)
+      @activities = {}
+      activities_data.each do |act|
+        act_name = act["name"]
+        @activities[act_name] = ActivityDef.new(
+          name: act_name,
+          task_queue: TemporalWorkflowRegistry.resolve_queue(act["task_queue"])
+        )
+      end
+    end
+
+    def method_missing(method_name, *args, &block)
+      activity = @activities[method_name.to_s]
+      return activity if activity
+
+      super
+    end
+
+    def respond_to_missing?(method_name, include_private = false)
+      @activities.key?(method_name.to_s) || super
+    end
+
+    def to_h
+      @activities
+    end
+  end
+
+  # Workflow definition
+  class WorkflowDef
+    attr_reader :name, :owner, :activities
+
+    def initialize(name:, owner:, activities:)
+      @name = name
+      @owner = owner
+      @activities = ActivitiesCollection.new(activities)
+    end
+  end
+
+  # Workflows collection with method_missing
+  class WorkflowsCollection
+    def initialize(workflows_data)
+      @workflows = {}
+      workflows_data.each do |wf|
+        wf_name = wf["name"]
+        @workflows[wf_name] = WorkflowDef.new(
+          name: wf_name,
+          owner: TemporalWorkflowRegistry.resolve_queue(wf["owner"]),
+          activities: wf["activities"] || []
+        )
+      end
+    end
+
+    def method_missing(method_name, *args, &block)
+      workflow = @workflows[method_name.to_s]
+      return workflow if workflow
+
+      super
+    end
+
+    def respond_to_missing?(method_name, include_private = false)
+      @workflows.key?(method_name.to_s) || super
+    end
+
+    def all
+      @workflows.values
+    end
+
+    def names
+      @workflows.keys
+    end
+
+    def [](name)
+      @workflows[name]
+    end
+  end
+
+  class << self
+    def workflows_data
+      @workflows_data ||= load_workflows_yaml
+    end
+
+    def workflows
+      @workflows ||= WorkflowsCollection.new(workflows_data["workflows"] || [])
+    end
+
+    # Shortcut access
+    def method_missing(method_name, *args, &block)
+      workflow = workflows.send(method_name)
+      return workflow if workflow
+
+      super
+    rescue NoMethodError
+      super
+    end
+
+    def respond_to_missing?(method_name, include_private = false)
+      workflows.respond_to_missing?(method_name, include_private) || super
+    end
+
+    def start_workflow_execution(workflow_run)
+      TemporalService.start_workflow(
+        workflow_execution_workflow_v2,
+        { workflow_run_id: workflow_run.id },
+        id: workflow_run.execution_workflow_id,
+        # What makes re-dispatch safe, and therefore the outbox relay possible
+        # (WorkflowRunRelay). The id is per-run, so a duplicate start can only
+        # mean this run's execution already exists — which is success, not a
+        # failure, and is how a re-drive of a run Temporal did receive settles.
+        # It also forbids reusing the id after the execution closed, so a
+        # finished run can never be silently re-run.
+        reject_duplicate: true,
+        # Queue time is not execution budget (AD-7), so a run gets far
+        # more than a day — but it still gets a ceiling. "No timeout at all"
+        # means a wedged run is invisible to every deadline we have.
+        execution_timeout: RUN_TIMEOUT
+      )
+    end
+
+    private
+
+    def load_workflows_yaml
+      yaml_path = Rails.root.join("app", "temporal", "workflows.yml")
+      YAML.load_file(yaml_path)
+    end
+  end
+end

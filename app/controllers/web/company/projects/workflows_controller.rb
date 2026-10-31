@@ -1,0 +1,175 @@
+# frozen_string_literal: true
+
+class Web::Company::Projects::WorkflowsController < Web::Company::Projects::ApplicationController
+  include RunnerOptions
+
+  def index
+    # `steps: :sub_steps` because StepResource serializes the sub-steps of every step;
+    # `visible_steps` filters in Ruby so the preload survives (see Workflow#visible_steps).
+    # Run counts come from attach_run_stats: includes(:runs) would load every historical run.
+    workflows = Workflow.attach_run_stats(
+      Workflow.visible_for_project(current_project).includes(steps: :sub_steps)
+    )
+    archived = Workflow.for_project(current_project).where.not(deleted_at: nil).order(deleted_at: :desc)
+
+    render inertia: "Projects/Workflows/WorkflowsPage", props: {
+      project: project_props,
+      workflows: workflows.map { |w|
+        WorkflowResource.new(w).to_h.merge(
+          steps: w.visible_steps.map { |s| StepResource.new(s).to_h }
+        )
+      },
+      archived_workflows: archived.map { |w| { id: w.id, name: w.name, archived_at: w.deleted_at } },
+      configured_agents: current_project_membership&.configured_agents || [],
+      default_agent_runtime: current_project_membership&.default_agent_runtime,
+      # Company-scoped assets are shared with every project in the company and are
+      # already offered by the assets page, the session form and the Aixle Builder.
+      # `current_project.assets` walks the has_many and sees project-owned rows only,
+      # so the workflow builder was the one picker that could not reach them.
+      assets: InertiaRails.defer(group: "resources") {
+        Asset.accessible_from_project(current_project).map { |r| AssetPickerResource.new(r).to_h }
+      },
+      repositories: InertiaRails.defer(group: "resources") {
+        Repository.visible_for_project(current_project).map { |r| PickerResource.new(r).to_h }
+      },
+      # Names and types only — a config item's value never reaches a prop.
+      config_items: InertiaRails.defer(group: "resources") {
+        ConfigItem.visible_for_project(current_project).map { |r| ConfigItemPickerResource.new(r).to_h }
+      },
+      agent_models: InertiaRails.defer(group: "resources") {
+        current_project_membership&.agent_models_for_props || []
+      },
+      runners: InertiaRails.defer(group: "resources") { runner_options }
+    }
+  end
+
+  def builder
+    workflow = Workflow.for_project(current_project)
+                      .includes(steps: :sub_steps)
+                      .find(params[:id])
+
+    render inertia: "Projects/Workflows/BuilderPage", props: {
+      project: project_props,
+      workflow: WorkflowResource.new(workflow).to_h,
+      steps: workflow.visible_steps.map { |s| StepResource.new(s).to_h },
+      read_only: workflow.archived? || workflow.scope_type == "Company" || !project_permissions_props[:canExecute],
+      issues: DataFlow::Check.for_workflow(workflow, project: current_project).issues.map(&:as_json),
+      board_columns: current_project.board&.board_columns&.includes(column_workflow_binding: :workflow)&.map { |c|
+        { id: c.id, name: c.name, bound_workflow_name: c.column_workflow_binding&.workflow&.name }
+      } || [],
+      # Detached ones too: a trigger keeps the tracker it names through a detach.
+      trackers: ProjectTracker.for_project(current_project).includes(:integration).order(:created_at).map { |t|
+        { id: t.id, handle: t.handle, name: t.name, provider: t.provider, status: t.status,
+          mentions_recognized: t.recognizes_mentions? }
+      },
+      chat_providers: Chat.trigger_options(current_project),
+      configured_agents: current_project_membership&.configured_agents || [],
+      default_agent_runtime: current_project_membership&.default_agent_runtime,
+      agents: InertiaRails.defer(group: "resources") {
+        Agent.visible_for_project(current_project).map { |r| PickerResource.new(r).to_h }
+      },
+      tools: InertiaRails.defer(group: "resources") {
+        Tool.visible_for_project(current_project).map { |r| ToolPickerResource.new(r).to_h }
+      },
+      # Tag groups the picker offers as collapsible sections (e.g. "Board
+      # management" attaches every board tool from its header, or one tool at a
+      # time from the rows under it), resolved to this project's tool ids.
+      tool_groups: InertiaRails.defer(group: "resources") {
+        Tools::PickerGroups.for_project(current_project)
+      },
+      skills: InertiaRails.defer(group: "resources") {
+        Skill.visible_for_project(current_project).map { |r| SkillPickerResource.new(r).to_h }
+      },
+      mcp_servers: InertiaRails.defer(group: "resources") {
+        MCPServer.visible_for_project(current_project).map { |r| MCPServerPickerResource.new(r).to_h }
+      },
+      # Company-scoped assets are shared with every project in the company and are
+      # already offered by the assets page, the session form and the Aixle Builder.
+      # `current_project.assets` walks the has_many and sees project-owned rows only,
+      # so the workflow builder was the one picker that could not reach them.
+      assets: InertiaRails.defer(group: "resources") {
+        Asset.accessible_from_project(current_project).map { |r| AssetPickerResource.new(r).to_h }
+      },
+      repositories: InertiaRails.defer(group: "resources") {
+        Repository.visible_for_project(current_project).map { |r| PickerResource.new(r).to_h }
+      },
+      # Names and types only — a config item's value never reaches a prop.
+      config_items: InertiaRails.defer(group: "resources") {
+        ConfigItem.visible_for_project(current_project).map { |r| ConfigItemPickerResource.new(r).to_h }
+      },
+      agent_models: InertiaRails.defer(group: "resources") {
+        current_project_membership&.agent_models_for_props || []
+      },
+      runners: InertiaRails.defer(group: "resources") { runner_options(including: workflow.owned_runner) }
+    }
+  end
+
+  def create
+    workflow = current_project.workflows.new(workflow_params)
+    if save_versioned(workflow) { workflow.save! }
+      redirect_to company_project_workflows_path(current_project), notice: "Workflow created"
+    else
+      redirect_to company_project_workflows_path(current_project), alert: workflow.errors.full_messages.join(", ")
+    end
+  end
+
+  # The Edit dialog on the workflows page. Goes through WorkflowService so a
+  # `config` edit merges into the existing hash instead of replacing it — the
+  # same write the builder's autosave performs through the API.
+  def update
+    workflow = current_project.workflows.active.find(params[:id])
+
+    if WorkflowService.update(workflow: workflow, params: workflow_params, actor: version_actor)
+      redirect_to company_project_workflows_path(current_project), notice: "Workflow updated"
+    else
+      redirect_to company_project_workflows_path(current_project), alert: workflow.errors.full_messages.join(", ")
+    end
+  end
+
+  def destroy
+    workflow = current_project.workflows.active.find(params[:id])
+    Versions.archive!(workflow, actor: version_actor)
+    redirect_to company_project_workflows_path(current_project), notice: "Workflow archived"
+  rescue ActiveRecord::RecordNotDestroyed => e
+    redirect_to company_project_workflows_path(current_project), alert: e.message
+  end
+
+  def publish
+    workflow = current_project.workflows.find(params[:id])
+    workflow.publish!(current_user)
+    redirect_to company_project_workflows_path(current_project), notice: "Workflow published to catalog"
+  end
+
+  def unpublish
+    workflow = current_project.workflows.find(params[:id])
+
+    unless current_project_membership&.admin? || workflow.published_by_id == current_user.id
+      redirect_to company_project_workflows_path(current_project), alert: "Only the publisher or an admin can unpublish"
+      return
+    end
+
+    workflow.unpublish!
+    redirect_to company_project_workflows_path(current_project), notice: "Workflow removed from catalog"
+  end
+
+  def duplicate
+    source = Workflow.visible_for_project(current_project).find(params[:id])
+    duplicator = WorkflowDuplicator.new(source, target_scope: current_project, actor: version_actor)
+    copy = duplicator.duplicate!
+    flash[:needs_setup] = duplicator.summary[:needs_setup] if duplicator.summary
+    redirect_to builder_company_project_workflow_path(current_project, copy)
+  end
+
+  private
+
+  def save_versioned(record, &)
+    Versions.save!(record, actor: version_actor, &)
+    true
+  rescue ActiveRecord::RecordInvalid
+    false
+  end
+
+  def workflow_params
+    params.require(:workflow).permit(:name, :description, config: {})
+  end
+end

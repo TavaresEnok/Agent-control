@@ -1,0 +1,162 @@
+# frozen_string_literal: true
+
+class WorkflowCostAnalyticsService
+  include TaskFilterable
+
+  DATE_TRUNC_GROUP_SQL = {
+    "day"   => Arel.sql("DATE_TRUNC('day', workflow_runs.created_at)"),
+    "week"  => Arel.sql("DATE_TRUNC('week', workflow_runs.created_at)"),
+    "month" => Arel.sql("DATE_TRUNC('month', workflow_runs.created_at)")
+  }.freeze
+
+  DATE_TRUNC_ORDER_SQL = {
+    "day"   => Arel.sql("DATE_TRUNC('day', workflow_runs.created_at) ASC"),
+    "week"  => Arel.sql("DATE_TRUNC('week', workflow_runs.created_at) ASC"),
+    "month" => Arel.sql("DATE_TRUNC('month', workflow_runs.created_at) ASC")
+  }.freeze
+
+  DATE_TRUNC_SELECT_SQL = {
+    "day"   => Arel.sql("DATE_TRUNC('day', workflow_runs.created_at) AS period_date"),
+    "week"  => Arel.sql("DATE_TRUNC('week', workflow_runs.created_at) AS period_date"),
+    "month" => Arel.sql("DATE_TRUNC('month', workflow_runs.created_at) AS period_date")
+  }.freeze
+
+  WorkflowRow = Struct.new(
+    :workflow_id, :workflow_name,
+    :total_cost_cents, :input_tokens, :output_tokens, :total_tokens,
+    :run_count, :total_duration_seconds, :avg_duration_seconds,
+    keyword_init: true
+  )
+
+  TimeSeriesPoint = Struct.new(:date, :cost_cents, :total_tokens, keyword_init: true)
+
+  Result = Struct.new(:workflows, :time_series, :totals, keyword_init: true)
+
+  def initialize(project:, user:, scope:, period:, tags: nil, task_type: nil, participant_id: nil)
+    @project = project
+    @user = user
+    @scope = scope.to_s
+    @period = AnalyticsPeriod.window(period)
+    @range = @period.range
+    @tags = Array.wrap(tags).reject(&:blank?)
+    @task_type = task_type.presence
+    @participant_id = participant_id.presence
+  end
+
+  def call
+    runs = base_workflow_runs
+
+    workflow_rows = build_workflow_breakdown(runs)
+    time_series = build_time_series(runs)
+    totals = aggregate_totals(workflow_rows)
+
+    Result.new(workflows: workflow_rows, time_series:, totals:)
+  end
+
+  private
+
+  attr_reader :project, :user, :scope, :range, :period, :tags, :task_type, :participant_id
+
+  def base_workflow_runs
+    runs = case scope
+    when "user"
+      WorkflowRun.for_user_in_project(project, user, range)
+    else
+      WorkflowRun.for_project_in_period(project, range)
+    end
+
+    runs = runs.where(user_id: participant_id) if participant_id
+
+    if tags.present? || task_type.present?
+      runs = runs.where(board_task_id: filtered_board_tasks.select(:id))
+    end
+
+    runs
+  end
+
+  def build_workflow_breakdown(runs)
+    rows = runs
+      .joins(:workflow)
+      .joins(
+        "LEFT JOIN step_runs ON step_runs.workflow_run_id = workflow_runs.id"
+      )
+      .joins(
+        "LEFT JOIN usage_statistics ON usage_statistics.terminal_session_id = step_runs.terminal_session_id"
+      )
+      .group("workflows.id, workflows.name")
+      .select(
+        "workflows.id AS workflow_id",
+        "workflows.name AS workflow_name",
+        "COUNT(DISTINCT workflow_runs.id) AS run_count",
+        "COALESCE(SUM(usage_statistics.cost_cents), 0) AS total_cost_cents",
+        "COALESCE(SUM(usage_statistics.input_tokens), 0) AS input_tokens",
+        "COALESCE(SUM(usage_statistics.output_tokens), 0) AS output_tokens",
+        "#{UsageStatistic::TOTAL_TOKENS_SUM_SQL} AS total_tokens"
+      )
+      .order("total_cost_cents DESC")
+
+    # From the runs alone: summed over the step-run join above, a run would count
+    # once per step.
+    durations = runs.timed.group(:workflow_id)
+                    .pluck(:workflow_id, Arel.sql("SUM(#{WorkflowRun::EXECUTION_SECONDS_SQL})"),
+                           Arel.sql("AVG(#{WorkflowRun::EXECUTION_SECONDS_SQL})"))
+                    .to_h { |workflow_id, total, avg| [ workflow_id, [ total.to_i, avg.to_i ] ] }
+
+    rows.map do |row|
+      total_duration, avg_duration = durations.fetch(row.workflow_id, [ 0, 0 ])
+      WorkflowRow.new(
+        workflow_id: row.workflow_id,
+        workflow_name: row.workflow_name,
+        total_cost_cents: row.total_cost_cents.to_i,
+        input_tokens: row.input_tokens.to_i,
+        output_tokens: row.output_tokens.to_i,
+        total_tokens: row.total_tokens.to_i,
+        run_count: row.run_count.to_i,
+        total_duration_seconds: total_duration,
+        avg_duration_seconds: avg_duration
+      )
+    end
+  end
+
+  def build_time_series(runs)
+    trunc_key = time_series_trunc
+
+    points = runs
+      .joins(
+        "LEFT JOIN step_runs ON step_runs.workflow_run_id = workflow_runs.id"
+      )
+      .joins(
+        "LEFT JOIN usage_statistics ON usage_statistics.terminal_session_id = step_runs.terminal_session_id"
+      )
+      .group(DATE_TRUNC_GROUP_SQL.fetch(trunc_key, DATE_TRUNC_GROUP_SQL["day"]))
+      .order(DATE_TRUNC_ORDER_SQL.fetch(trunc_key, DATE_TRUNC_ORDER_SQL["day"]))
+      .select(
+        DATE_TRUNC_SELECT_SQL.fetch(trunc_key, DATE_TRUNC_SELECT_SQL["day"]),
+        "COALESCE(SUM(usage_statistics.cost_cents), 0) AS cost_cents",
+        "#{UsageStatistic::TOTAL_TOKENS_SUM_SQL} AS total_tokens"
+      )
+
+    points.map do |point|
+      TimeSeriesPoint.new(
+        date: point.period_date.to_date.iso8601,
+        cost_cents: point.cost_cents.to_i,
+        total_tokens: point.total_tokens.to_i
+      )
+    end
+  end
+
+  def aggregate_totals(workflow_rows)
+    {
+      total_cost_cents: workflow_rows.sum(&:total_cost_cents),
+      input_tokens: workflow_rows.sum(&:input_tokens),
+      output_tokens: workflow_rows.sum(&:output_tokens),
+      total_tokens: workflow_rows.sum(&:total_tokens),
+      workflow_count: workflow_rows.size,
+      avg_cost_cents_per_workflow: workflow_rows.empty? ? 0 : (workflow_rows.sum(&:total_cost_cents).to_f / workflow_rows.size).round
+    }
+  end
+
+  def time_series_trunc
+    period.bucket
+  end
+end

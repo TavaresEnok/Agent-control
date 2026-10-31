@@ -1,0 +1,313 @@
+# Stripe setup
+
+What has to exist in the Stripe account before metered capacity can be billed,
+and how to hand this application the credential it needs.
+
+> **Status: built, and live mode not switched on.** The application creates
+> customers, opens Stripe Checkout, sends meter events and acts on webhooks. What
+> remains is a live-mode account: the objects below exist in test mode and do not
+> carry over.
+
+---
+
+## 1. Work in test mode
+
+Everything below is done in **test mode** (the toggle at the top right of the
+dashboard, or inside a **Sandbox** in the newer interface). Nothing is created in
+live mode until the whole flow has been driven end to end on test.
+
+## 2. Issue an API key
+
+**Developers → API keys** — <https://dashboard.stripe.com/test/apikeys>
+
+Either take the **Secret key** (`sk_test_…`), which is scoped to the test sandbox
+and touches no real money, or create a restricted key (`rk_test_…`) with **Write**
+on exactly these and `None` on everything else:
+
+- Billing Meters
+- Meter Events
+- Products
+- Prices
+- Customers
+- Checkout Sessions
+- Billing Portal
+- Subscriptions
+- Webhook Endpoints
+
+A restricted key is the better habit: it is revoked with one button and is
+attributable to the integration rather than to a person.
+
+> **Never a dashboard login.** A username and password is a named human's full
+> access to the account — live mode, payouts, team management — and Stripe
+> requires 2FA on it anyway. The key above is the credential for this job.
+
+> **Already created in test mode** (account `acct_1UIwA0RfWGHL113S`):
+>
+> | | |
+> | --- | --- |
+> | Meter | `mtr_test_61VUFBw05qIHrGlrX41RfWGHL113SAXI` |
+> | Product | `prod_VLYLkzDfhdW0A4` |
+> | Price | `price_1ULEYjRfWGHL113SJ5920DWf` |
+>
+> Steps 3 and 4 are the record of how, and what to repeat in live mode.
+
+## 3. The meter
+
+**Billing → Meters → Create meter**
+
+| Field | Value |
+| --- | --- |
+| Event name | `queue_minutes` |
+| Aggregation | Sum |
+| Value field | `value` |
+| Customer mapping | `stripe_customer_id` |
+
+The event name is older than the product calling this capacity *workers*. Stripe
+cannot rename a meter's event name, and the application sends `queue_minutes`, so
+it stays.
+
+Worker-**minutes**, not hours: capacity is measured exactly to the second
+(`capacity_meter_reports.quantity_seconds`) and Stripe accepts a fractional value,
+so minutes are sent unrounded and nothing is lost at this edge. One worker-hour is
+60 units.
+
+## 4. The product and its price
+
+**Product catalogue → Add product**
+
+| Field | Value |
+| --- | --- |
+| Name | Aixle Flow capacity |
+| Unit label | `worker-min` (Stripe allows twelve characters; `worker-minute` is thirteen) |
+| Pricing model | Usage-based, metered |
+| Meter | `queue_minutes` |
+| Price | **$5.00** per package of **60** units — `PRICING_QUEUE_HOURLY_RATE` at the default |
+| Package pricing | `transform_quantity[divide_by]=60`, `transform_quantity[round]=down` |
+| Billing period | Monthly |
+
+Keep the price and `PRICING_QUEUE_HOURLY_RATE` in step: the second is what
+`/how-it-works` quotes to visitors, the first is what they are actually charged.
+They are two copies of one number and will drift if nobody is watching.
+
+### Sixty at a time, so the page reads like the price we quote
+
+Priced per unit, the metered price is `PRICING_QUEUE_HOURLY_RATE` ÷ 60 and Stripe
+Checkout prints it as it is: **$0.083333333333 per unit**, thirteen decimal places
+against a product nobody prices by the minute. Package pricing buys the minutes
+sixty at a time instead, and the same page reads **"$5.00 per 60 worker-min"**.
+
+Nothing about the measurement changes. The meter still counts worker-minutes,
+exact to the second, and the application still sends one event per company per
+hour — the package is arithmetic Stripe does at invoice time, on the total for
+the period.
+
+**It rounds down**, which is the whole of the difference it makes to money: a
+part worker-hour left over at the end of a billing period is not charged for.
+Stripe requires a direction and there is under $5 in it either way; down is the
+one that cannot start an argument, and it is what the `/docs` portal's **Plans &
+limits** page tells customers.
+
+Create it with the API rather than the dashboard, which has no field for the
+transformation:
+
+```bash
+curl https://api.stripe.com/v1/prices -u "$STRIPE_SECRET_KEY:" \
+  -d product=<product id> \
+  -d currency=usd \
+  -d unit_amount=500 \
+  -d "recurring[interval]=month" \
+  -d "recurring[usage_type]=metered" \
+  -d "recurring[meter]=<meter id>" \
+  -d "transform_quantity[divide_by]=60" \
+  -d "transform_quantity[round]=down"
+```
+
+### Everyone pays in the price's currency
+
+Stripe's Adaptive Pricing converts the checkout page into the visitor's local
+currency from their IP — a customer in Jakarta was quoted rupiah at Stripe's own
+rate. That is a second price nobody here set and nobody here can reconcile
+against the worker-minutes we metered, so the application turns it off per session
+(`adaptive_pricing: { enabled: false }`). It is set in code rather than in the
+dashboard so it is version-controlled and survives somebody changing a setting.
+
+## 5. The webhook
+
+**Developers → Webhooks → Add endpoint**, pointed at `https://<host>/webhooks/stripe`,
+subscribed to:
+
+- `checkout.session.completed` — a card has been added; the company moves to
+  `active`
+- `customer.subscription.created`, `customer.subscription.updated` — the billing
+  period, a scheduled cancellation, and a subscription going `past_due`
+- `customer.subscription.deleted` — the subscription has ended
+- `invoice.payment_failed`, `invoice.paid` — a payment failing, and the invoice
+  being paid afterwards
+
+An endpoint created before the billing tab shipped is missing
+`customer.subscription.created` and `invoice.paid`. Add them under **Developers →
+Webhooks → the endpoint → Edit events**, in both accounts. Without
+`invoice.paid`, a company stopped for a failed payment stays stopped after paying.
+
+The signing secret (`whsec_…`) is shown once on creation. For local development
+use `stripe listen --forward-to localhost:4000/webhooks/stripe` instead, which
+prints its own.
+
+### What each event does
+
+| Event | Effect |
+| --- | --- |
+| `checkout.session.completed` | The company becomes `active`, and its subscription id is recorded |
+| `customer.subscription.created` / `.updated` | `active`/`trialing`: running, and the billing period and any scheduled cancellation date are recorded. `past_due`/`unpaid`: stopped for a failed payment. `incomplete`: nothing yet |
+| `customer.subscription.deleted` | Stopped as `canceled`, dated to when it ended |
+| `invoice.payment_failed` | Stopped for a failed payment; the invoice's hosted page is kept for the admin to pay. For a `canceled` company, the declined final invoice is kept to pay and every admin is emailed once |
+| `invoice.paid` | A company stopped for a failed payment runs again. A `canceled` company's paid final invoice is cleared, and Checkout opens again |
+
+A stopped company is `blocked`, with `billing_block_reason` saying why
+(`allowance`, `canceled` or `payment_failed`). It goes to `blocked`, never back to
+`trialing`: the free trial was spent once, and cancelling does not give it back.
+
+**A failed payment stops the company at once.** Stripe sends `past_due` and
+`invoice.payment_failed` together, in no promised order, so both stop it. The admin
+pays the open invoice from the Billing tab or the banner. That goes through the
+application first, which sets `payment_settings.save_default_payment_method` on the
+subscription so the card that pays becomes the card charged next month.
+
+**Only the company's current subscription can stop it.** A customer who cancelled
+and came back has two subscriptions behind them, and Stripe does not deliver
+events in order. A `deleted` or failed-payment event for any other subscription is
+ignored. A running one is adopted, since a canceled subscription never runs again.
+
+**An ended subscription stays ended.** The final invoice can fail or be paid after
+the subscription is deleted. Neither starts or stops a `canceled` company. A
+declined final invoice is kept on the company and shown on the Billing tab to pay,
+and Checkout refuses a new subscription until it is paid. Stripe's own retries keep
+charging the card in the meantime.
+
+### Failed-payment settings
+
+**Billing → Revenue recovery → Retries** decides what Stripe does once its retries
+run out. Choose **Cancel the subscription**, in both accounts. The application has
+already stopped the company on the first failure; cancelling then sends `deleted`
+and records it as `canceled`, so a new card can restore access through Checkout.
+
+## Cancelling from the application
+
+An admin cancels from **Company Settings → Billing**. The application cancels
+the subscription at once (`DELETE /v1/subscriptions/:id` with `invoice_now`), with
+the reason as `cancellation_details`, and keeps the reason in
+`billing_cancellations` too. Every admin of the company gets an email.
+
+Cancelling does not wait for the end of the period. Capacity is billed in arrears
+for every hour it is offered, so the rest of a period is not something the
+customer has already paid for. The application stops the company as `canceled`
+itself rather than waiting for `customer.subscription.deleted`. It also records
+the cancellation time as `billing_event_at`, so an older
+`customer.subscription.updated` that arrives late cannot start the company again.
+
+### The final invoice
+
+The final invoice covers usage up to the minute of cancelling, including the hour
+under way and any hour the meter had not sent yet:
+
+1. Before stopping the company, the application measures what Stripe has not been
+   sent: the hour under way up to now, the hour just closed, and any hour the meter
+   failed to send. A stopped company is offered nothing, so after this point the
+   hourly meter would bill none of it. The figures are kept on the
+   `billing_cancellations` row (`final_usage`).
+2. `invoice_now` makes the final invoice as a **draft** that Stripe would finalize
+   on its own an hour later, reading the meter again as it does.
+   `Billing::SettleCancellationJob` holds it (`auto_advance=false`), sends the
+   measured hours under the meter's own identifiers, so a repeat from the hourly
+   run is refused rather than billed twice, and waits until Stripe's meter shows
+   them. That takes about a minute.
+3. It then finalizes the invoice and charges it at once. The Billing tab shows
+   "Preparing the final invoice" until then, and a link to the invoice after.
+
+If Stripe never shows the usage (10 minutes) or cannot be reached (about 4 hours of
+retries), the job reports the error and hands the invoice back to Stripe
+(`auto_advance=true`), which finalizes it with whatever the meter has counted.
+Look for `settlement_state = 'failed'` on `billing_cancellations`.
+
+Two Stripe settings this depends on, in both accounts: **Settings → Billing →
+Invoices → Invoice finalization grace period** must stay above zero (the default
+is 1 hour), and the subscription's price must not be swapped mid-period. Either
+one makes Stripe finalize without reading the meter again.
+
+A cancellation scheduled for the period's end before this change can still be
+taken back from the same tab (**Keep subscription**) until its date.
+
+Checkout refuses to open while the company has a subscription that has not ended.
+The meter sums by customer, and every subscription carrying the price invoices
+that sum, so a second subscription would bill the same minutes twice.
+
+### Companies that were paying before the Billing tab
+
+Their billing period was never recorded, and their subscription does not save the
+card used to pay a failed invoice. Run once after deploying:
+
+```bash
+bin/rails billing:sync_subscriptions
+```
+
+It reads each paying company's subscription back from Stripe. It writes only the
+dates and the card setting; whether a company runs stays with the webhooks.
+
+---
+
+## What the application reads
+
+| Variable | Purpose |
+| --- | --- |
+| `STRIPE_SECRET_KEY` | The key from step 2 |
+| `STRIPE_WEBHOOK_SECRET` | The signing secret from step 5 |
+| `STRIPE_PRICE_ID` | The metered price from step 4 |
+
+A Stripe customer is created **lazily**, when a card is first added — not at
+signup. Signup already waits on an email round trip, and a Stripe outage must not
+be able to stop someone registering.
+
+Without all three, nothing calls Stripe at all: no card can be added, the banner
+offers no button, and capacity is still measured and recorded — only never sent.
+That is the state every self-hosted installation is in permanently.
+
+### Replays cannot bill twice
+
+Each meter event carries an identifier built from the company and the hour, and
+Stripe refuses a second event with an identifier it has already seen. That
+refusal is read as "recorded", not as a failure, which is what makes the capacity
+ledger's replay safe: an hour that failed halfway is resent in full and only the
+missing parts land.
+
+## Registration cannot open without this
+
+`REGISTRATION_ENABLED=true` on a hosted deployment with no Stripe key **refuses
+to boot** (`config/initializers/required_env.rb`). The two switches are the kind
+that drift apart quietly and are found out by a customer: people sign up, spend
+the free trial, and reach a stop with no card to add and no button to press.
+
+So the order is: configure Stripe, then open registration. Never the other way,
+and the deploy will not let you.
+
+## Before switching live mode on
+
+- [ ] The whole flow driven on test: signup → trial spent → blocked → card
+      added → running again
+- [ ] Cancel from the Billing tab → `customer.subscription.deleted` → `canceled`
+      → the final invoice issued within a few minutes, with the hour under way on it
+      → card added → running again
+- [ ] A failing card (`4000 0000 0000 0341`) → `payment_failed` → invoice paid →
+      running again
+- [ ] Meter, product and price recreated in live mode (test-mode objects do not
+      carry over), the price carrying the same `transform_quantity`
+- [ ] Live webhook endpoint created and its secret deployed
+- [ ] `PRICING_QUEUE_HOURLY_RATE` and the live price checked against each other
+- [ ] A test invoice read end to end and its worker-minutes reconciled against
+      `company_capacity_usages` for the same hours
+
+## Related
+
+- [product/self-serve-signup.md](../product/self-serve-signup.md) — the customer's
+  side: what is free, what stops, and when a card is asked for
+- [reference/configuration.md](../reference/configuration.md) — every variable
+  named here

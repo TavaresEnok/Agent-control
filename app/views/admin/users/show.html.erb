@@ -1,0 +1,82 @@
+<%#
+# User Show
+
+Customises Administrate's stock show page for users by adding an
+Impersonate / Stop Impersonate action to the header.
+
+Administrate 1.0 exposes `content_for` slots in its page templates
+(`:header_middle`, `:header_last`, `:before_main`, `:after_main`), so we inject
+our action into one of those slots and render the gem's template instead of
+copying the whole page. This keeps us in sync with future Administrate updates.
+%>
+
+<% content_for(:header_last) do %>
+  <% unless page.resource.super_admin? %>
+    <% if page.resource.deleted? %>
+      <%= button_to(
+        "Restore",
+        restore_admin_user_path(page.resource),
+        method: :post,
+        class: "button",
+        data: { turbo_confirm: "Restore #{page.resource.email}?" }
+      ) %>
+    <% elsif impersonated? && current_user.id == page.resource.id %>
+      <%= button_to(
+        t("administrate.actions.stop_impersonate"),
+        stop_impersonate_admin_user_path(page.resource),
+        method: :post,
+        class: "button button--danger"
+      ) %>
+    <% elsif !impersonated? && current_user.id != page.resource.id %>
+      <%= button_to(
+        t("administrate.actions.impersonate"),
+        impersonate_admin_user_path(page.resource),
+        method: :post,
+        class: "button"
+      ) %>
+    <% end %>
+    <% unless page.resource.deleted? || current_user.id == page.resource.id %>
+      <%= button_to(
+        "Sign out everywhere",
+        sign_out_everywhere_admin_user_path(page.resource),
+        method: :delete,
+        class: "button button--danger",
+        data: { turbo_confirm: "End every browser session of #{page.resource.email}?" }
+      ) %>
+    <% end %>
+  <% end %>
+<% end %>
+
+<%# Permanent (hard) delete — irreversible, super-admins excluded. Requires the
+    admin to type the exact email; a second data-turbo-confirm gate is added on
+    submit. This is separate from the header's soft-delete Delete action. %>
+<% content_for(:after_main) do %>
+  <% unless page.resource.super_admin? %>
+    <section class="permanent-delete" style="margin: 2rem 2rem 0; padding: 1.5rem 2rem; border: 1px solid var(--app-danger-border); border-radius: 4px;">
+      <h2 style="color: var(--app-danger-fg);">Permanently delete user</h2>
+      <p>
+        This <strong>irreversibly</strong> removes
+        <strong><%= page.resource.email %></strong> and their personal data from
+        the system. Owned projects are transferred to a company admin; board and
+        company history is kept but attributed to "Deleted user". The email
+        becomes available again. <strong>This cannot be undone.</strong>
+      </p>
+      <%= form_with(
+        url: permanent_destroy_admin_user_path(page.resource),
+        method: :delete,
+        data: { turbo_confirm: "Permanently delete #{page.resource.email}? This cannot be undone." }
+      ) do |f| %>
+        <label for="confirm_email">
+          Type <strong><%= page.resource.email %></strong> to confirm:
+        </label>
+        <%= f.text_field :confirm_email, autocomplete: "off" %>
+        <div style="margin-top: 0.75rem;">
+          <%= f.submit "Permanently delete", class: "button button--danger" %>
+        </div>
+      <% end %>
+    </section>
+  <% end %>
+<% end %>
+
+<%# `page` is passed to the show view as a local (namespace/resource_name are helpers), so forward it. %>
+<%= render template: "administrate/application/show", locals: { page: page } %>

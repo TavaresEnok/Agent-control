@@ -1,0 +1,222 @@
+# frozen_string_literal: true
+
+class Web::Company::Projects::MCPServersController < Web::Company::Projects::ApplicationController
+  def index
+    # includes(oauth_credentials: :oauth_client): MCPServerResource#oauth_status
+    # reads the loaded association in memory — and asks each credential whether it
+    # is refreshable, which touches its oauth_client — so the status column is not
+    # an N+1 across the list. :manual_oauth_client for the same reason — the form
+    # needs to know whether one is configured, on every row.
+    servers = MCPServer.visible_for_project(current_project)
+                       .includes({ oauth_credentials: :oauth_client }, :manual_oauth_client)
+                       .order(kind: :asc, created_at: :desc)
+    config_items = ConfigItem.visible_for_project(current_project).pluck(:name)
+    archived = MCPServer.for_project(current_project).archived.order(archived_at: :desc)
+
+    render inertia: "Projects/McpServers/McpServersPage", props: {
+      archived_servers: archived.map { |s| MCPServerResource.new(s, params: { user: current_user }).to_h },
+      project: project_props,
+      # params[:user] lets oauth_status resolve the CURRENT viewer's credential for
+      # per_user servers (otherwise every per_user server reads "Not connected").
+      mcp_servers: servers.map { |s|
+        MCPServerResource.new(s, params: {
+          user: current_user,
+          connector_statuses: catalog_index(servers).transform_values(&:first),
+          connector_versions: catalog_index(servers).transform_values(&:last)
+        }).to_h
+      },
+      config_item_names: config_items,
+      # The connector catalog is a second way to add an MCP server, not a
+      # separate resource, so it is served with this page and browsed from it.
+      # Searching partial-reloads only these two props.
+      connectors: catalog_connectors.map { |c| ConnectorResource.new(c).to_h },
+      connector_query: connector_query,
+      catalog_synced_at: Connector.maximum(:updated_at)
+    }
+  end
+
+  def create
+    server = current_project.mcp_servers.new
+    assign_server_params(server)
+    Versions.save!(server, actor: version_actor) { server.save! }
+    sync_manual_oauth_client(server)
+    redirect_to company_project_mcp_servers_path(current_project), notice: "MCP server created"
+  rescue ActiveRecord::RecordInvalid
+    redirect_to company_project_mcp_servers_path(current_project), inertia: { errors: server.errors }
+  end
+
+  def update
+    server = current_project.mcp_servers.unarchived.find(params[:id])
+    moved = false
+    Versions.save!(server, actor: version_actor, base_version: params[:base_version]) do
+      assign_server_params(server)
+      moved = server.destination_changed?
+      server.save!
+    end
+    sync_manual_oauth_client(server)
+    notice = moved ? "MCP server updated. Its address changed, so its stored header and env values and its OAuth connections were cleared — enter them again." : "MCP server updated"
+    redirect_to company_project_mcp_servers_path(current_project), notice: notice
+  rescue ActiveRecord::RecordInvalid
+    redirect_to company_project_mcp_servers_path(current_project), inertia: { errors: server.errors }
+  end
+
+  def destroy
+    server = current_project.mcp_servers.unarchived.find(params[:id])
+    Versions.archive!(server, actor: version_actor)
+    redirect_to company_project_mcp_servers_path(current_project), notice: "MCP server archived"
+  end
+
+  # Moves an install to the version the catalog now carries. Explicit on purpose:
+  # updating changes which code runs, which is exactly what pinning a version
+  # exists to prevent happening quietly.
+  def update_connector
+    server = current_project.mcp_servers.find(params[:id])
+    connector = Connector.find_by(name: server.connector_name)
+    return redirect_back_with(alert: "This connector is no longer in the catalog") if connector.nil?
+
+    MCP::ConnectorUpdater.apply(server: server, connector: connector, values: install_values, actor: version_actor)
+    redirect_to company_project_mcp_servers_path(current_project),
+                notice: "#{server.name} updated to #{server.connector_version}"
+  rescue MCP::ConnectorUpdater::Error, ActiveRecord::RecordInvalid => e
+    redirect_back_with(alert: e.message)
+  end
+
+  # Takes the server's current tool declarations as the approved baseline.
+  # Deliberately a human action on its own route: the drift sweep never moves
+  # a baseline by itself, or a rug pull would normalise itself away.
+  def accept_tool_drift
+    server = current_project.mcp_servers.find(params[:id])
+    outcome = MCP::ToolDriftDetector.accept(server)
+
+    notice = outcome.status == :ok ? "Tool changes accepted for #{server.name}" : nil
+    alert = notice ? nil : "Could not re-check #{server.name} (#{outcome.status}). Nothing was accepted."
+
+    redirect_to company_project_mcp_servers_path(current_project), notice: notice, alert: alert
+  end
+
+  private
+
+  # Comfortably above the curated seed (32 entries) so the default view is never
+  # a truncated version of it, and roomy enough that a search rarely hides a
+  # match behind a limit the UI does not mention.
+  CATALOG_PAGE_SIZE = 60
+  SCALAR_TYPES = [ String, Numeric, TrueClass, FalseClass ].freeze
+
+  # Answers for inputs the new version newly declares. Same coercion rule as the
+  # install path: scalars and arrays of scalars only, nested structures dropped
+  # at the door rather than trusted to be ignored downstream.
+  def install_values
+    raw = params[:values]
+    return {} unless raw.respond_to?(:to_unsafe_h)
+
+    raw.to_unsafe_h.each_with_object({}) do |(key, value), memo|
+      memo[key.to_s] = value.to_s if SCALAR_TYPES.any? { |type| value.is_a?(type) }
+    end
+  end
+
+  def redirect_back_with(alert:)
+    redirect_to company_project_mcp_servers_path(current_project), alert: alert
+  end
+
+  # One query for the whole list: every catalog-installed server needs its
+  # connector's CURRENT status and version, and resolving those per row would be
+  # an N+1 across a page of servers.
+  def catalog_index(servers)
+    @catalog_index ||= begin
+      names = servers.filter_map(&:connector_name).uniq
+      rows = names.any? ? Connector.where(name: names).pluck(:name, :status, :version) : []
+      rows.to_h { |name, status, version| [ name, [ status, version ] ] }
+    end
+  end
+
+  def connector_query
+    params[:connector_q].to_s.strip
+  end
+
+  # Two different jobs, so two different scopes.
+  #
+  # SEARCH goes over the whole mirror — ~19.5k entries — because that is the
+  # point of holding a local copy: the registry API can only match server-name
+  # substrings, so "issue tracker" finds nothing upstream.
+  #
+  # The DEFAULT view shows the curated set only. The open registry is mostly
+  # long tail: thousands of generated and abandoned entries whose only ranking
+  # signal is how recently they were published. Opening on "everything, ordered
+  # by something weak" teaches people the catalog is noise. Opening on a list
+  # assembled from measured popularity teaches them it is worth searching.
+  #
+  # The trade is real and deliberate: everything outside the curated set is
+  # reachable by search alone, never by browsing.
+  def catalog_connectors
+    return Connector.discoverable.search(connector_query).limit(CATALOG_PAGE_SIZE) if connector_query.present?
+
+    Connector.discoverable.where(featured: true).popular.limit(CATALOG_PAGE_SIZE)
+  end
+
+  # The masking sentinel MCPServerResource serializes in place of every stored
+  # header/env value (must match MASK in McpServerFormModal.tsx).
+  SECRET_MASK = ("•" * 6).freeze
+
+  def preserved_param_paths
+    [ [ :mcpServer, :env ], [ :mcpServer, :headers ], [ :values ] ]
+  end
+
+  def server_params
+    params.require(:mcp_server).permit(
+      :name, :url, :transport, :description, :enabled,
+      :command, :auth_type, :credential_scope, headers: {}, env: {}
+    ).merge(kind: :custom)
+  end
+
+  # Destination first, so the server can tell whether its stored values still
+  # apply before the submitted ones are unmasked against them.
+  def assign_server_params(server)
+    permitted = server_params
+    server.assign_attributes(permitted.except(:headers, :env))
+    server.assign_attributes(unmasked_secrets(permitted, server))
+  end
+
+  # Credentials for an authorization server that will not let us register ourselves
+  # (see MCP::RegistrationError). Only the client id and secret are hand-entered —
+  # the endpoints still come from discovery on the next connect, which is why a row
+  # is saved here with neither.
+  #
+  # Clearing the client id deletes the client, and with it (dependent: :destroy) the
+  # credentials obtained through it: they were issued to that OAuth app and are worth
+  # nothing without it.
+  def sync_manual_oauth_client(server)
+    return unless params[:mcp_server].key?(:oauth_client_id)
+
+    client_id = params[:mcp_server][:oauth_client_id].to_s.strip
+    return server.manual_oauth_client&.destroy if client_id.blank?
+
+    client = server.manual_oauth_client || server.build_manual_oauth_client(source: OauthClient::SOURCE_MANUAL)
+    client.client_id = client_id
+    secret = params[:mcp_server][:oauth_client_secret].to_s
+    client.client_secret = secret.presence unless secret == SECRET_MASK
+    client.save!
+  end
+
+  # The UI resubmits an untouched header/env value as the masking sentinel (it
+  # never sees the real secret), so each sentinel is swapped back for the stored
+  # value. Keys removed in the UI are absent and stay removed; freshly entered
+  # values pass through.
+  #
+  # Only while the server still points where the values were entered for: after
+  # a change of address a sentinel resolves to nothing, so re-pointing a server
+  # can never carry its credentials along to the new host.
+  def unmasked_secrets(permitted, server)
+    keep = server.persisted? && !server.destination_changed?
+
+    %i[headers env].each_with_object({}) do |field, secrets|
+      submitted = permitted[field]
+      next if submitted.nil?
+
+      stored = keep ? server.public_send(field) : {}
+      secrets[field] = submitted.to_h.each_with_object({}) do |(key, value), memo|
+        resolved = value == SECRET_MASK ? stored[key.to_s] : value
+        memo[key] = resolved unless resolved.nil?
+      end
+    end
+  end
+end

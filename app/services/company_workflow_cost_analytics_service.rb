@@ -1,0 +1,49 @@
+# frozen_string_literal: true
+
+# Company-wide counterpart to WorkflowCostAnalyticsService (which is project-scoped).
+# Only computes the daily cost/token time series across all of the company's workflow
+# runs — that's the one thing the Company Analytics page's Cost & Token Usage "Workflows
+# only" toggle needs; it has no per-workflow breakdown table to feed like the project page.
+# Bucketing and period filtering use workflow_runs.created_at (not terminal_sessions.created_at
+# like CompanySessionCostTokenUsageService) — intentional: workflow spend is attributed to run start.
+class CompanyWorkflowCostAnalyticsService
+  TimeSeriesPoint = Struct.new(:date, :cost_cents, :total_tokens, keyword_init: true)
+  Result = Struct.new(:time_series, keyword_init: true)
+
+  def initialize(company:, user:, scope:, period:)
+    @company = company
+    @user    = user
+    @scope   = scope.to_s
+    @period  = AnalyticsPeriod.window(period)
+    @range   = @period.range
+  end
+
+  def call
+    trunc_sql = AnalyticsPeriod.date_trunc(period, WorkflowRun.arel_table[:created_at])
+
+    points = base_runs
+      .joins("LEFT JOIN step_runs ON step_runs.workflow_run_id = workflow_runs.id")
+      .joins("LEFT JOIN usage_statistics ON usage_statistics.terminal_session_id = step_runs.terminal_session_id")
+      .group(trunc_sql)
+      .order(trunc_sql)
+      .pluck(
+        trunc_sql,
+        Arel.sql("COALESCE(SUM(usage_statistics.cost_cents), 0)"),
+        Arel.sql(UsageStatistic::TOTAL_TOKENS_SUM_SQL)
+      )
+      .map do |(date, cost, tokens)|
+        TimeSeriesPoint.new(date: date.to_date.iso8601, cost_cents: cost.to_i, total_tokens: tokens.to_i)
+      end
+
+    Result.new(time_series: points)
+  end
+
+  private
+
+  attr_reader :company, :user, :scope, :range, :period
+
+  def base_runs
+    base = WorkflowRun.joins(:project).where(projects: { company_id: company.id }, created_at: range)
+    scope == "user" ? base.where(user:) : base
+  end
+end

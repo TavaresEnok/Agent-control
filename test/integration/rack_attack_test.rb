@@ -1,0 +1,200 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+# Rack::Attack is off in the test env; these turn it on against a private store.
+class RackAttackTest < ActionDispatch::IntegrationTest
+  include ProcessModeHelper
+
+  setup do
+    # Throttles count in fixed windows of Time.now / period; a burst that
+    # straddles a boundary on a slow runner is split across two counters.
+    freeze_time
+    @previous_store = Rack::Attack.cache.store
+    Rack::Attack.cache.store = ActiveSupport::Cache::MemoryStore.new
+    Rack::Attack.enabled = true
+  end
+
+  teardown do
+    Rack::Attack.enabled = false
+    Rack::Attack.cache.store = @previous_store
+  end
+
+  test "guessing the operator's password is cut off like any other sign-in" do
+    5.times { post "/admin/login", params: { email: "admin@operator.example", password: "guess" } }
+    assert_not_equal 429, response.status
+
+    post "/admin/login", params: { email: "admin@operator.example", password: "guess" }
+
+    assert_response :too_many_requests
+  end
+
+  test "login brute-force by one email is cut off even when the attempt is sent as JSON" do
+    # req.params does not parse a JSON body, so a per-email throttle keyed on it
+    # alone let an attacker evade the limit by switching content type to
+    # application/json (which sessions#create still reads). The throttle now reads
+    # the JSON body too, so the email is seen whatever the content type.
+    body = { email: "victim@example.com", password: "guess" }
+    5.times { post "/login", params: body, as: :json }
+    assert_not_equal 429, response.status
+
+    post "/login", params: body, as: :json
+
+    assert_response :too_many_requests
+  end
+
+  test "login_email reads the address from a JSON body, flat or nested" do
+    flat = rack_request({ input: StringIO.new({ email: "A@Example.com" }.to_json), "CONTENT_TYPE" => "application/json" }, path: "/login")
+    nested = rack_request({ input: StringIO.new({ user: { email: "B@Example.com" } }.to_json), "CONTENT_TYPE" => "application/json" }, path: "/login")
+
+    assert_equal "a@example.com", Rack::Attack.login_email(flat)
+    assert_equal "b@example.com", Rack::Attack.login_email(nested)
+  end
+
+  test "a query string shaped to break the sign-in throttles is answered, not a server error" do
+    get "/mobileredir/openApp.jsp?user=x"
+    assert_response :not_found
+
+    get "/mobileredir/openApp.jsp?user[]=x"
+    assert_response :not_found
+
+    get "/mobileredir/openApp.jsp?user=x&user[a]=1"
+    assert_response :not_found
+  end
+
+  test "the sign-in throttles key on an address, and on nothing else a query string can carry" do
+    assert_equal "a@b.test", Rack::Attack.login_email(rack_request({}, path: "/login?email=A@B.test"))
+    assert_equal "a@b.test", Rack::Attack.login_email(rack_request({}, path: "/login?user[email]=A@B.test"))
+
+    assert_nil Rack::Attack.login_email(rack_request({}, path: "/login?user=x"))
+    assert_nil Rack::Attack.login_email(rack_request({}, path: "/login?user[]=x"))
+    assert_nil Rack::Attack.login_email(rack_request({}, path: "/login?email[]=a@b.test"))
+    assert_nil Rack::Attack.login_email(rack_request({}, path: "/login?user[email][x]=1"))
+    assert_nil Rack::Attack.login_email(rack_request({}, path: "/login?user=x&user[a]=1"))
+    assert_nil Rack::Attack.login_email(rack_request({}, path: "/login"))
+  end
+
+  test "junk alongside a real address does not buy the guesser a fresh bucket" do
+    5.times { post "/admin/login", params: { email: "admin@operator.example", password: "guess" } }
+    assert_not_equal 429, response.status
+
+    post "/admin/login?user=x", params: { email: "admin@operator.example", password: "guess" }
+
+    assert_response :too_many_requests
+  end
+
+  test "guessing invitation tokens from one address is cut off" do
+    30.times { get "/invitations/not-a-token" }
+    assert_not_equal 429, response.status
+
+    get "/invitations/not-a-token"
+
+    assert_response :too_many_requests
+  end
+
+  test "a generic webhook source is capped per endpoint, whichever address it posts from" do
+    60.times { |i| post "/webhooks/in/some-slug", env: { "REMOTE_ADDR" => "203.0.113.#{i % 250}" } }
+    assert_not_equal 429, response.status
+
+    post "/webhooks/in/some-slug", env: { "REMOTE_ADDR" => "198.51.100.7" }
+    assert_response :too_many_requests
+
+    post "/webhooks/in/another-slug", env: { "REMOTE_ADDR" => "198.51.100.7" }
+    assert_not_equal 429, response.status
+  end
+
+  test "guessing a SCIM token from one address is cut off" do
+    # A deployment that publishes /scim puts a company's membership list behind
+    # one bearer token and nothing else.
+    60.times { |i| get "/scim/Users", headers: { "Authorization" => "Bearer ascim_guess#{i}" } }
+    assert_not_equal 429, response.status
+
+    get "/scim/Users", headers: { "Authorization" => "Bearer ascim_one-more" }
+
+    assert_response :too_many_requests
+  end
+
+  test "SCIM is counted per credential, and the count never keys on the raw token" do
+    request = rack_request({ "HTTP_AUTHORIZATION" => "Bearer ascim_secret-value" })
+
+    key = Rack::Attack.scim_credential(request)
+
+    assert_equal 32, key.length
+    refute_includes key, "ascim_secret-value"
+  end
+
+  test "MCP calls are counted per credential, and the count never keys on the raw credential" do
+    one = rack_request({ "HTTP_X_SESSION_KEY" => "123.abc" })
+    same_as_bearer = rack_request({ "HTTP_AUTHORIZATION" => "Bearer 123.abc" })
+    other = rack_request({ "HTTP_X_SESSION_KEY" => "456.def" })
+
+    assert_equal Rack::Attack.mcp_credential(one), Rack::Attack.mcp_credential(same_as_bearer)
+    assert_not_equal Rack::Attack.mcp_credential(one), Rack::Attack.mcp_credential(other)
+    assert_not_includes Rack::Attack.mcp_credential(one), "123.abc"
+    assert_nil Rack::Attack.mcp_credential(rack_request({}))
+  end
+
+  # The gateway's own routes, as its Puma draws them (config/routes.rb).
+  test "registering runners from one address is cut off" do
+    with_process_mode("runner_gateway") do
+      30.times { post "/runner/v1/register", headers: { "Authorization" => "Bearer arreg_guess" } }
+      assert_not_equal 429, response.status
+
+      post "/runner/v1/register", headers: { "Authorization" => "Bearer arreg_guess" }
+      assert_response :too_many_requests
+
+      post "/runner/v1/register", headers: { "Authorization" => "Bearer arreg_guess" }, env: { "REMOTE_ADDR" => "198.51.100.7" }
+      assert_not_equal 429, response.status
+    end
+  end
+
+  test "the runner gateway is capped per credential, whichever address it calls from" do
+    with_process_mode("runner_gateway") do
+      600.times { |i| post "/runner/v1/token", headers: { "Authorization" => "Bearer arref_one" }, env: { "REMOTE_ADDR" => "203.0.113.#{i % 250}" } }
+      assert_not_equal 429, response.status
+
+      post "/runner/v1/token", headers: { "Authorization" => "Bearer arref_one" }
+      assert_response :too_many_requests
+
+      post "/runner/v1/token", headers: { "Authorization" => "Bearer arref_other" }
+      assert_not_equal 429, response.status
+    end
+  end
+
+  # A new bearer value per request earns a new per-token bucket, so the address
+  # is what bounds it. No protocol header: the gateway answers 400 before any
+  # lookup, which keeps the burst cheap, and the throttle runs ahead of it.
+  test "the runner gateway is capped per address, whatever bearer value each request sends" do
+    with_process_mode("runner_gateway") do
+      3000.times { |i| post "/runner/v1/token", headers: { "Authorization" => "Bearer arref_guess#{i}" } }
+      assert_not_equal 429, response.status
+
+      post "/runner/v1/token", headers: { "Authorization" => "Bearer arref_one-more" }
+      assert_response :too_many_requests
+
+      post "/runner/v1/token", headers: { "Authorization" => "Bearer arref_one-more" }, env: { "REMOTE_ADDR" => "198.51.100.7" }
+      assert_not_equal 429, response.status
+    end
+  end
+
+  test "the runner gateway count never keys on the raw token" do
+    key = Rack::Attack.runner_credential(rack_request({ "HTTP_AUTHORIZATION" => "Bearer aracc_secret-value" }, path: "/runner/v1/registration"))
+
+    assert_equal 32, key.length
+    assert_not_includes key, "aracc_secret-value"
+    assert_nil Rack::Attack.runner_credential(rack_request({}, path: "/runner/v1/register"))
+  end
+
+  test "member invites and re-sends are what the invite limit counts" do
+    assert Rack::Attack.member_invite?(rack_request({}, method: "POST", path: "/company/members"))
+    assert Rack::Attack.member_invite?(rack_request({}, method: "POST", path: "/company/members/12/resend"))
+    assert_not Rack::Attack.member_invite?(rack_request({}, method: "PATCH", path: "/company/members/12"))
+    assert_not Rack::Attack.member_invite?(rack_request({}, method: "GET", path: "/company/members"))
+  end
+
+  private
+
+  def rack_request(headers, method: "POST", path: "/mcp")
+    Rack::Attack::Request.new(Rack::MockRequest.env_for(path, { method: method }.merge(headers)))
+  end
+end

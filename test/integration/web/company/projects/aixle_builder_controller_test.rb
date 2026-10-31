@@ -1,0 +1,182 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class Web::Company::Projects::AixleBuilderControllerTest < ActionDispatch::IntegrationTest
+  setup do
+    @company = create(:company)
+    @user = create(:user, :admin, :onboarding_completed, company: @company, password: AuthHelper::TEST_PASSWORD)
+    @project = create(:project, company: @company, owner: @user)
+    sign_in_as(@user)
+  end
+
+  # ── show ──────────────────────────────────────────
+
+  test "show renders landing page" do
+    get company_project_aixle_builder_path(@project)
+    assert_inertia_page "Projects/AixleBuilder/LandingPage"
+  end
+
+  test "show includes sessions in response" do
+    create(:terminal_session, :aixle_builder, user: @user, project: @project)
+
+    get company_project_aixle_builder_path(@project)
+    assert_inertia_page "Projects/AixleBuilder/LandingPage"
+  end
+
+  test "show does not issue N+1 queries when multiple sessions exist" do
+    tools = create_list(:tool, 2, scope: @project)
+    skills = create_list(:skill, 2, scope: @project)
+    3.times do
+      session = create(:terminal_session, :aixle_builder, user: @user, project: @project)
+      session.tools << tools
+      session.skills << skills
+    end
+
+    # Count only real content queries. SCHEMA reflection and query-cache hits are
+    # issued non-deterministically depending on process warmth (a cold isolated run
+    # vs a warm parallel-suite run differ by ~8 queries) and shift with unrelated
+    # gem internals, which made a raw count flaky. Filtering them leaves the actual
+    # association loading — what an N+1 guard cares about — which is stable at 15.
+    query_count = 0
+    counter = lambda do |_name, _start, _finish, _id, payload|
+      next if payload[:name] == "SCHEMA" || payload[:cached]
+      next if payload[:sql].to_s.match?(/\A\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)/i)
+
+      query_count += 1
+    end
+    ActiveSupport::Notifications.subscribed(counter, "sql.active_record") do
+      get company_project_aixle_builder_path(@project)
+    end
+
+    assert_response :success
+    # O(1) regardless of session count: 1 primary + a bounded set of association
+    # batch loads (verified flat at 19 for both 3 and 8 sessions).
+    #
+    # 15 -> 19 with CompanyMembership. All four additions are constant, and the
+    # flatness above is what this guard actually protects:
+    #   +1  the active-membership list, which used to come free from
+    #       users.company_id on the already-loaded user row. Memoized per User
+    #       instance (User#active_memberships), so it stays one query however
+    #       many policies and permission props the request builds.
+    #   +1  Project#accessible_by?, which used to be an integer comparison and
+    #       is now a membership lookup. Deliberately NOT memoized — see the
+    #       comment there; a stale answer would grant revoked access.
+    #   +1  the companies preload behind the current-user `memberships` prop,
+    #       which feeds the company switcher. There was no membership list to
+    #       serialize before, so this has no pre-membership counterpart.
+    #   +1  the users.last_company_id write that makes the switcher choice
+    #       survive a new session. Once per session, on the first request that
+    #       resolves a membership — which a test always starts fresh, so it is
+    #       always counted here.
+    #
+    # 19 -> 20 with attachable config items: TerminalSessionResource serializes
+    # `config_item_ids`, so the session scope preloads `:config_items`. One query
+    # for the whole page however many sessions it lists — which is exactly what
+    # this guard exists to hold.
+    #
+    # 20 -> 21 with the session admission queue: the resource serializes
+    # `wait_reason` off `session_admission`, so the scope preloads it. Same
+    # shape — one query for the page, not one per session.
+    #
+    # 21 -> 22 with sidebar favorites: ApplicationController's shared `projects`
+    # prop plucks `project_favorites` once so the switcher can mark stars.
+    # 22 -> 23 with the company-entry auth gate (AD-5): one EXISTS query joining
+    # this session's proofs to the company's enabled policies, rather than
+    # plucking both sides and intersecting in Ruby. Memoized per (request,
+    # company), so it is constant per request, not per session listed — which is
+    # what this guard protects.
+    # 23 -> 25 with feature flags read through Rails.cache: the `features` prop
+    # loads the flag rows once per request (two SELECTs). The test cache is a
+    # null store, so the suite counts them; in production they come from Redis.
+    assert_operator query_count, :<=, 25, "Expected bounded content query count, got #{query_count}"
+  end
+
+  # ── start ─────────────────────────────────────────
+
+  test "start creates session and redirects to session page" do
+    SessionService.stubs(:create_and_start).returns(
+      create(:terminal_session, :aixle_builder, :started, user: @user, project: @project)
+    )
+
+    post company_project_aixle_builder_start_path(@project), params: { agent_runtime: "claude_code" }
+    assert_response :redirect
+    assert_match %r{/aixle_builder/\d+/session}, response.location
+  end
+
+  test "start ships the reference files and leaves tool selection to the builder toolset" do
+    captured = nil
+    SessionService.stubs(:create_and_start).with do |**kwargs|
+      captured = kwargs
+      true
+    end.returns(create(:terminal_session, :aixle_builder, :started, user: @user, project: @project))
+
+    post company_project_aixle_builder_start_path(@project), params: { agent_runtime: "claude_code" }
+
+    assert_response :redirect
+    params = captured[:params]
+    assert_equal({ aixle_builder: true }, params[:metadata])
+    assert_nil params[:tool_ids]
+    assert_equal %w[/workspace/references/aixle-system-reference.md /workspace/references/bmad-guide.md
+                    /workspace/references/workflow-guides.md],
+                 params[:session_config]["config_files"].keys.sort
+    assert_nil params[:session_config]["bmad_enabled"]
+  end
+
+  test "start redirects back with flash alert when session save fails" do
+    unsaved = TerminalSession.new
+    unsaved.errors.add(:base, "Test validation failure")
+    SessionService.stubs(:create_and_start).returns(unsaved)
+
+    post company_project_aixle_builder_start_path(@project), params: { agent_runtime: "claude_code" }
+    assert_redirected_to company_project_aixle_builder_path(@project)
+    assert_equal "Test validation failure", flash[:alert]
+  end
+
+  test "start redirects back with the sign-in message when the agent login has expired" do
+    create(:agent_credential, :errored, user: @user, company: @company, agent_type: "claude_code")
+
+    assert_no_difference -> { TerminalSession.count } do
+      post company_project_aixle_builder_start_path(@project), params: { agent_runtime: "claude_code" }
+    end
+
+    assert_redirected_to company_project_aixle_builder_path(@project)
+    assert_match(/Claude Code login has expired/, flash[:alert])
+  end
+
+  test "start without any agent credential redirects back with the connect-an-agent message" do
+    assert_no_difference -> { TerminalSession.count } do
+      post company_project_aixle_builder_start_path(@project), params: { agent_runtime: "claude_code" }
+    end
+
+    assert_redirected_to company_project_aixle_builder_path(@project)
+    assert_equal "No agent credentials. Connect an agent in Profile settings to run workflows.", flash[:alert]
+  end
+
+  # ── session ───────────────────────────────────────
+
+  test "session renders session page for own session" do
+    ts = create(:terminal_session, :aixle_builder, :started, user: @user, project: @project)
+
+    get company_project_aixle_builder_session_path(@project, ts)
+    assert_inertia_page "Projects/AixleBuilder/SessionPage"
+  end
+
+  test "session returns 404 for another users session" do
+    other_user = create(:user, company: @company)
+    ts = create(:terminal_session, :aixle_builder, user: other_user, project: @project)
+
+    get company_project_aixle_builder_session_path(@project, ts)
+    assert_response :not_found
+  end
+
+  # ── finish ────────────────────────────────────────
+
+  test "finish delegates to SessionService and redirects" do
+    ts = create(:terminal_session, :aixle_builder, :started, user: @user, project: @project)
+    SessionService.stubs(:finish)
+
+    post company_project_aixle_builder_finish_path(@project, ts)
+    assert_redirected_to company_project_aixle_builder_session_path(@project, ts)
+  end
+end

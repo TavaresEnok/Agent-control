@@ -1,0 +1,355 @@
+.boardRoot {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 140px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.boardArea {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  align-items: stretch;
+  background-color: var(--app-bg-paper);
+  border-radius: 12px;
+}
+
+.commentMd p {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mantine-color-text);
+}
+
+.commentMd p:last-child {
+  margin-bottom: 0;
+}
+
+.commentMd strong {
+  font-weight: 600;
+}
+
+.commentMd em {
+  font-style: italic;
+}
+
+.commentMd code {
+  background-color: var(--app-bg-elevated);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.commentMd pre {
+  background-color: var(--app-bg-elevated);
+  padding: 8px 12px;
+  border-radius: 6px;
+  overflow: auto;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.5;
+  margin: 4px 0;
+}
+
+.commentMd pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+.commentMd ul,
+.commentMd ol {
+  margin-left: 20px;
+  margin-bottom: 4px;
+  margin-top: 2px;
+}
+
+.commentMd li {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mantine-color-text);
+}
+
+.commentMd a {
+  color: var(--app-primary-strong);
+  text-decoration: underline;
+}
+
+.commentMd blockquote {
+  border-left: 3px solid var(--app-border-default);
+  padding-left: 8px;
+  margin: 4px 0;
+  color: var(--mantine-color-dimmed);
+  font-style: italic;
+}
+
+.commentMd table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 4px 0;
+}
+
+.commentMd th,
+.commentMd td {
+  border: 1px solid var(--app-border-default);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.commentMd th {
+  background-color: var(--app-bg-elevated);
+  font-weight: 600;
+}
+
+@keyframes workflowPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.workflowDotActive {
+  animation: workflowPulse 1.5s ease-in-out infinite;
+}
+
+.statusChipPulse {
+  animation: workflowPulse 1.4s ease-in-out infinite;
+}
+
+.childTaskRow:hover {
+  background-color: var(--app-bg-elevated);
+}
+
+:global(@keyframes priorityBarPulse) {
+  0%, 100% { opacity: 1; transform: scaleY(1); }
+  50% { opacity: 0.5; transform: scaleY(1.15); }
+}
+
+.addColumnBtn {
+  border: 1px dashed var(--app-border-strong);
+  border-radius: 10px;
+  color: var(--mantine-color-dimmed);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  user-select: none;
+  background: transparent;
+}
+
+.addColumnBtn:hover {
+  color: var(--mantine-color-text);
+  border-color: var(--mantine-color-dimmed);
+  background: var(--app-bg-elevated);
+}
+
+.dangerHover:hover {
+  background: rgba(200, 90, 90, 0.1) !important;
+  color: var(--mantine-color-red-6) !important;
+}
+
+/* Task card — position relative so the absolutely-placed checkbox can anchor to it */
+.taskCard {
+  position: relative;
+}
+
+/* Title row — a fixed slot is always reserved on the right for the selection checkbox, so
+   arming bulk mode (or hovering a card) never inserts a control and reflows the text. */
+.taskCardTop {
+  padding-right: 22px;
+}
+
+/* Checkbox — 16×16 native square, absolutely positioned in the reserved top-right slot.
+   Only rendered while bulk mode is armed, so there is nothing to reveal on hover. */
+.taskCardCheck {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--app-border-strong);
+  background: var(--app-bg-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
+  pointer-events: none;
+  z-index: 3;
+  padding: 0;
+}
+
+.taskCardSelectionMode .taskCardCheck {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.taskCardCheck:hover {
+  border-color: var(--app-text-secondary);
+}
+
+/* Selected state */
+.taskCardCheckSelected {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  background: var(--mantine-color-brand-6) !important;
+  border-color: var(--mantine-color-brand-6) !important;
+  color: #0a0908 !important;
+}
+
+/* Selected card accent tint */
+.taskCardSelected {
+  border-color: var(--mantine-color-brand-5) !important;
+  background-color: color-mix(in srgb, var(--mantine-color-brand-5) 8%, var(--app-bg-elevated)) !important;
+}
+
+/* Column tri-state checkbox in header */
+.colHeaderCheck {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--app-border-strong);
+  background: var(--app-bg-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, color 0.12s;
+  pointer-events: none;
+  padding: 0;
+}
+
+.colHeaderCheckVisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.colHeaderCheck:hover {
+  border-color: var(--app-text-secondary);
+}
+
+.colHeaderCheckOn {
+  background: var(--mantine-color-brand-6) !important;
+  border-color: var(--mantine-color-brand-6) !important;
+  color: #0a0908 !important;
+}
+
+.colHeaderCheckSome {
+  background: color-mix(in srgb, var(--mantine-color-brand-6) 20%, var(--app-bg-default)) !important;
+  border-color: var(--mantine-color-brand-5) !important;
+  color: var(--mantine-color-brand-5) !important;
+}
+
+/* Task detail panel — title ghost input */
+.ptTitle {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--mantine-color-text);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  padding: 2px 6px;
+  margin-left: -6px;
+  outline: none;
+  cursor: text;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+  line-height: 1.3;
+  resize: none;
+  display: block;
+}
+
+.ptTitle:hover {
+  border-color: var(--app-border-default);
+  background: var(--app-bg-elevated);
+}
+
+.ptTitle:focus {
+  border-color: var(--app-primary);
+  background: var(--app-bg-paper);
+}
+
+/* Detail tab description ghost field */
+.ptDesc {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--mantine-color-dimmed);
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 4px 6px;
+  margin-left: -6px;
+  outline: none;
+  cursor: text;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 40px;
+}
+
+.ptDesc:hover {
+  border-color: var(--app-border-default);
+  background: var(--app-bg-elevated);
+}
+
+.ptDesc:focus {
+  border-color: var(--app-primary);
+  background: var(--app-bg-paper);
+  color: var(--mantine-color-text);
+}
+
+.cmtAct:hover {
+  color: var(--mantine-color-text) !important;
+  background: var(--app-bg-elevated) !important;
+}
+
+/* Task detail panel — tabs list */
+.detailTabsList {
+  border-bottom: 1px solid var(--app-border-default);
+  padding-left: 16px;
+  padding-right: 16px;
+  gap: 0;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.detailTabsList::-webkit-scrollbar {
+  display: none;
+}
+
+/* Task detail panel — individual tab */
+.detailTab {
+  padding: 9px 11px;
+  font-size: 14px;
+  color: var(--mantine-color-dimmed);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-weight: 400;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.detailTab:hover {
+  color: var(--mantine-color-text);
+}
+
+.detailTab[data-active] {
+  color: var(--app-primary-strong);
+  border-bottom-color: var(--app-primary);
+  font-weight: 500;
+}

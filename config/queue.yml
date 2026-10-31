@@ -1,0 +1,44 @@
+# Solid Queue workers. One "default" queue is enough today — broadcast refreshes
+# from the models' `broadcasts_to` declarations, the webhook/CI resolvers, and
+# mailers — but polling and concurrency are stated explicitly so the shape is
+# visible when more job types arrive. Everything recurring belongs to Temporal
+# instead; see app/temporal/schedules.yml.
+#
+# The supervisor runs as its own `jobs` deployment (`rake solid_queue:start`),
+# not inside Puma. config/puma.rb still loads the plugin unless
+# SOLID_QUEUE_IN_PUMA is false, which is how development keeps working without a
+# second process; the deployed environments set it. Solid Queue coordinates
+# through the database, so more than one supervisor is a supported setup rather
+# than a race — but sharing Puma's was not free: the queue's threads drew on the
+# web pods' memory limit and on the same Active Record pool, which is sized from
+# RAILS_MAX_THREADS and had no room for them.
+default: &default
+  dispatchers:
+    - polling_interval: 1
+      batch_size: 500
+  workers:
+    - queues: "*"
+      threads: 3
+      processes: 1
+      polling_interval: 0.5
+
+development:
+  <<: *default
+
+test:
+  <<: *default
+
+# Solid Queue looks this file up by Rails.env and falls back to its own gem
+# defaults when the key is missing — silently. Staging had no key, so instead of
+# the settings above it ran three threads polling ten times a second, which is
+# what the supervisor logged there: `polling_interval: 0.1, pool_size: 3`.
+staging:
+  <<: *default
+
+production:
+  <<: *default
+  workers:
+    - queues: "*"
+      threads: 5
+      processes: 1
+      polling_interval: 0.5

@@ -1,0 +1,56 @@
+/* ── Session New Form ───────────────────────────── */
+
+/* Drawer layout: the body scrolls, the primary action never leaves the
+   viewport. Matches the Run Workflow drawer exactly. */
+.drawerLayout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.drawerBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 24px 24px;
+}
+
+.drawerFooter {
+  padding: 16px 24px;
+  border-top: 1px solid var(--app-border-default);
+  flex-shrink: 0;
+  background: var(--app-bg-paper);
+}
+
+/* ── Summary Preview ────────────────────────────── */
+
+.summaryRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Prompt field ───────────────────────────────── */
+
+.promptCharCount {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Model field ────────────────────────────────── */
+
+/* Bedrock inference-profile ARNs and long display names must not widen the
+   460px drawer. */
+.modelInput,
+.modelInput::placeholder {
+  text-overflow: ellipsis;
+}
+
+.modelOption {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

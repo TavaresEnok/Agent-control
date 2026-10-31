@@ -1,0 +1,119 @@
+# frozen_string_literal: true
+
+class WorkflowRunResource < ApplicationResource
+  attributes :id, :workflow_id, :project_id, :user_id,
+             :state, :started_at, :execution_started_at, :completed_at,
+             :created_at, :updated_at,
+             :failure_reason, :failed_agent_credential_id, :runner_id
+
+  # Where it runs (DESIGN.md §11): null is hosted, or, with `runner_id` set, a
+  # runner outside the record's tenant, which is never serialized. A list
+  # preloads `runner`.
+  typelize "RunnerBadge | null"
+  attribute :runner do |record|
+    (runner = record.owned_runner) && RunnerBadgeResource.new(runner).to_h
+  end
+
+  attribute :mode do |run|
+    run.mode.to_s
+  end
+
+  typelize :string?
+  attribute :failed_account_name do |run|
+    run.failed_agent_credential&.agent_type
+  end
+
+  # A step whose agent is waiting for its login to be renewed (Sessions::AuthPause).
+  typelize "{ agentType: string; since: string } | null"
+  attribute :auth_pause do |run|
+    session = run.step_runs.filter_map(&:terminal_session).find { |s| s.active? && Sessions::AuthPause.paused?(s) }
+    session && { agent_type: session.agent_type, since: session.metadata["auth_paused_at"] }
+  end
+
+  typelize :string?
+  attribute :workflow_name do |run|
+    run.workflow&.name
+  end
+
+  # The run header's description line — what this workflow does, which is a
+  # property of the workflow, not of this particular execution.
+  typelize :string?
+  attribute :workflow_description do |run|
+    run.workflow&.description
+  end
+
+  typelize :number
+  attribute :total_tokens do |run|
+    run.step_runs.sum { |sr| sr.terminal_session&.total_tokens.to_i }
+  end
+
+  typelize :number
+  attribute :steps_completed do |run|
+    if run.association(:step_runs).loaded?
+      run.step_runs.to_a.count { |sr| sr.state.to_s == "completed" }
+    else
+      run.step_runs.where(state: :completed).count
+    end
+  end
+
+  typelize :number
+  attribute :steps_total do |run|
+    run.step_runs_count
+  end
+
+  # Where a chat-started run's request came from, for the run header.
+  typelize "{ provider: string; conversation: string | null; sender: string | null; url: string | null } | null"
+  attribute :chat_origin do |run|
+    origin = Chat.origin(run).to_h
+    provider = Chat.provider(origin["provider"])
+    next nil if provider.nil?
+
+    conversation = origin["conversation"].to_h
+    { provider: provider.label, conversation: [ conversation.dig("team", "name"), conversation["name"] ].compact.join(" / ").presence,
+      sender: origin.dig("actor", "name"), url: origin["url"] }
+  end
+
+  typelize :string?
+  attribute :user_name do |run|
+    run.user&.name || User::DELETED_DISPLAY_NAME
+  end
+
+  # May the viewer steer this run (cancel / approve / retry / skip)? Mirrors
+  # WorkflowRunsPolicy so the buttons match what the POST would actually do;
+  # the policy is the enforcement, this is only what the page renders. Pass
+  # `params: { viewer: current_user }` — without the param it stays true, for
+  # the broadcast payloads that have no single viewer.
+  typelize :boolean
+  attribute :controllable_by_viewer do |run|
+    params.key?(:viewer) ? run.controllable_by?(params[:viewer]) : true
+  end
+
+  typelize :string?
+  attribute :agent_type do |run|
+    run.step_runs.first&.terminal_session&.agent_type
+  end
+
+  typelize :number
+  attribute :cost_cents do |run|
+    run.step_runs.sum { |sr| sr.terminal_session&.cost_cents.to_i }
+  end
+
+  # Distinct workflow versions the launched steps ran, oldest first. More than
+  # one means someone saved the workflow while this run was in progress.
+  typelize "number[]"
+  attribute :workflow_version_numbers do |run|
+    run.step_runs.filter_map { |sr| sr.workflow_version&.number }.uniq.sort
+  end
+
+  typelize "StepRun[]"
+  attribute :step_runs do |run|
+    step_name_map = run.workflow.steps.each_with_object({}) { |s, h| h[s.id] = s.name }
+    traefik = { http_base: Settings.traefik.http_base, ws_base: Settings.traefik.ws_base }
+
+    run.step_runs.sort_by(&:created_at).map do |sr|
+      step_params = { step_name_map: step_name_map, traefik: traefik }
+      step_params[:viewer] = params[:viewer] if params.key?(:viewer)
+      StepRunResource.new(sr, params: step_params).to_h
+    end
+  end
+end

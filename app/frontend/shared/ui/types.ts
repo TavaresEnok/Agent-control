@@ -1,0 +1,95 @@
+import type { CurrentUser, Features, Project } from '@/types/generated';
+
+export type AgentType = 'codex' | 'cursor_cli' | 'gemini_cli' | 'antigravity_cli' | 'claude_code' | 'grok' | 'kiro_cli';
+export type UserRole = 'employee' | 'admin' | 'super_admin' | 'viewer';
+
+// Both lists are kept here by hand (agentRuntimes.ts and the role labels are keyed by them), while
+// the server's own lists — CompanyMembership::AVAILABLE_AGENTS and the membership roles — reach the
+// generated types. These stop tsc the moment the two differ, e.g. a runtime added on the server only.
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type Expect<T extends true> = T;
+export type AgentTypeMatchesServer = Expect<SameUnion<AgentType, NonNullable<CurrentUser['defaultAgentRuntime']>>>;
+export type UserRoleMatchesServer = Expect<SameUnion<UserRole, NonNullable<CurrentUser['currentRole']>>>;
+
+export interface ProjectPermissions {
+  canExecute: boolean;
+  canManage: boolean;
+  canManageCompany?: boolean;
+}
+
+export type SharedProject = Pick<Project, 'id' | 'name' | 'slug' | 'state' | 'favorite'>;
+
+export interface SharedSettings {
+  env: string;
+  domain: string;
+  githubAppSlug: string | null;
+  appVersion: string | null;
+  sentryFrontendDsn: string | null;
+  sentryTracesSampleRate?: number;
+  /** Optional: a page served by an older pod does not send it. */
+  selfServeSignup?: boolean;
+  feedbackEnabled?: boolean;
+}
+
+export interface SharedPermissions {
+  isAdmin: boolean;
+  canManageMembers: boolean;
+  canManageProjects: boolean;
+  /** False for a viewer. Optional: a page served by an older pod does not send it. */
+  canWrite?: boolean;
+  /** An admin, where we host. Optional: a page served by an older pod does not send it. */
+  canManageBilling?: boolean;
+  /** Whether the Billing tab is offered at all. Wider than managing it: a workspace AWS bills reads that page but changes nothing there. */
+  canViewBilling?: boolean;
+}
+
+/**
+ * Where a workspace's billing stands. A blocked one carries why, which decides what
+ * undoes it: a card for a spent trial (`allowance`) or an ended subscription, the open
+ * invoice for a failed payment.
+ */
+export type BillingStatus = 'trialing' | 'active' | 'cancelling' | 'allowance' | 'canceled' | 'payment_failed';
+
+/** Sent only while a workspace is on the free trial, or once it has ended. */
+export interface SharedTrial {
+  state: 'trialing' | 'blocked';
+  /** Optional: a page served by an older pod does not send it. */
+  status?: BillingStatus;
+  /** How long the trial is, in days. */
+  days: number;
+  /** Days left, counting a part of a day as one. */
+  daysLeft: number;
+  /** The trial's last day, as `YYYY-MM-DD` (UTC). */
+  lastDay: string;
+  /** False where this installation has no payment provider configured. */
+  canPay: boolean;
+}
+
+/**
+ * Sent only to a workspace AWS Marketplace bills, and only while it is stopped.
+ * There is no allowance here and no card to add: the subscription is managed in
+ * the buyer's own AWS account.
+ */
+export interface SharedMarketplace {
+  status?: BillingStatus | 'awaiting_subscription';
+  /** The listing's page in AWS Marketplace, where an ended subscription is taken out again. */
+  listingUrl?: string;
+}
+
+export interface SharedProps {
+  currentUser: CurrentUser | null;
+  // Most flash entries are strings (notice/alert). `needs_setup` is a list of
+  // "what was not copied / needs setup" messages surfaced after a catalog copy.
+  flash: Record<string, string | string[] | undefined>;
+  projects?: SharedProject[];
+  permissions?: SharedPermissions;
+  settings: SharedSettings;
+  trial?: SharedTrial | null;
+  /**
+   * Server-resolved `client: true` flags (FeaturesResource, which Typelizer turns into `Features`); read them with
+   * useFeatureFlag. Partial and optional: a page served by an older pod may not send it, or not know a flag yet.
+   */
+  features?: Partial<Features>;
+  marketplace?: SharedMarketplace | null;
+  [key: string]: unknown;
+}

@@ -1,0 +1,476 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+module Activities
+  module Workflow
+    class CompleteStepActivityTest < ActiveSupport::TestCase
+      # The step's error_category and the run's failure_reason for a quota stop, kept
+      # split so this file never matches a quota pattern itself (task #195).
+      QUOTA_CATEGORY = [ "quota", "_exc", "eeded" ].join
+
+      setup do
+        @company = create(:company)
+        @user = create(:user, :admin, company: @company)
+        @project = create(:project, company: @company, owner: @user)
+        @workflow = create(:workflow, scope: @project)
+        @step = create(:step, workflow: @workflow)
+        @run = create(:workflow_run, :running, project: @project, workflow: @workflow, user: @user)
+        @credential = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+        Rails.logger.stubs(:info)
+        Rails.logger.stubs(:warn)
+        Rails.logger.stubs(:error)
+      end
+
+      # --- quota error path ---
+
+      test "detects quota error from failed session and marks step with error_category" do
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "claude_code",
+          error_message: "Your credit balance is too low to complete this request")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["quota_error"]
+        assert result["failed"]
+        refute result["valid"]
+
+        step_run.reload
+        assert_equal "failed", step_run.state
+        assert_equal "quota_exceeded", step_run.error_category
+
+        @run.reload
+        assert_equal "quota_exceeded", @run.failure_reason
+        assert_equal @credential.id, @run.failed_agent_credential_id
+      end
+
+      # --- auth error path ---
+
+      test "fails the step when the session's terminal shows an expired login" do
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "claude_code",
+          error_message: "Session terminated: agent authentication failed — Login expired · Please run /login")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["auth_error"]
+        assert result["failed"]
+        refute result["valid"]
+
+        step_run.reload
+        assert_equal "failed", step_run.state
+        assert_equal "auth_expired", step_run.error_category
+        assert_match(/Login expired/, step_run.error_message)
+
+        # Unlike a quota stop, an expired login does not condemn the run's credential.
+        @run.reload
+        assert_nil @run.failure_reason
+      end
+
+      # The words appear in plenty of healthy output — an agent editing an auth flow, a CLI's
+      # own help text. Only a session that already ended badly is read for them.
+      test "does not fail a finished step whose output merely mentions a login" do
+        session = create(:terminal_session, user: @user, agent_type: "claude_code",
+                         session_type: :workflow_step, state: "finished")
+        SessionLog.create!(
+          terminal_session: session,
+          name: "terminal_output.log",
+          file: StringIO.new("Documented the flow: run `codex login` to authenticate.\n"),
+          file_size: 60,
+          content_type: "text/plain"
+        )
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert_nil result["auth_error"]
+        assert result["valid"]
+        assert_equal "completed", step_run.reload.state
+      end
+
+      # Shrine reads the stored log as ASCII-8BIT. A byte >= 128 used to raise
+      # Encoding::CompatibilityError out of AuthErrorDetector before the step
+      # could be judged, and Temporal retried the activity.
+      test "fails the step for an expired login in a binary terminal log" do
+        log = "\xFFredraw\nLogin expired · Please run /login\n".b
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "claude_code",
+          error_message: "Session terminated: no output for 30 minutes.")
+        SessionLog.create!(
+          terminal_session: session,
+          name: "terminal_output.log",
+          file: StringIO.new(log),
+          file_size: log.bytesize,
+          content_type: "text/plain"
+        )
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["auth_error"]
+        assert result["failed"]
+        assert_equal "auth_expired", step_run.reload.error_category
+        assert_match(/Login expired/, step_run.error_message)
+      end
+
+      test "fails a session normally when its binary terminal log has no auth banner" do
+        log = "\xFFstill working on the task\n".b
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "claude_code",
+          error_message: "Session terminated: no output for 30 minutes.")
+        SessionLog.create!(
+          terminal_session: session,
+          name: "terminal_output.log",
+          file: StringIO.new(log),
+          file_size: log.bytesize,
+          content_type: "text/plain"
+        )
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert_nil result["auth_error"]
+        assert result["failed"]
+        refute result["valid"]
+        assert_match(/no output/, step_run.reload.error_message)
+      end
+
+      # --- cancelled session ---
+
+      test "fails the step when its session was cancelled rather than failed" do
+        session = create(:terminal_session, :cancelled,
+          user: @user,
+          agent_type: "claude_code",
+          error_message: "Session terminated: no output for 30 minutes.")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["failed"]
+        refute result["valid"]
+        assert_equal "failed", step_run.reload.state
+        assert_match(/no output/, step_run.error_message)
+      end
+
+      test "does not set quota_error for generic session failure" do
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "claude_code",
+          error_message: "Container exited unexpectedly")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert_nil result["quota_error"]
+        assert result["failed"]
+
+        step_run.reload
+        assert_nil step_run.error_category
+      end
+
+      test "detects cursor usage limit from terminal log when session finished" do
+        session = create(:terminal_session,
+          user: @user,
+          agent_type: "cursor_cli",
+          session_type: :workflow_step,
+          state: "finished")
+        SessionLog.create!(
+          terminal_session: session,
+          name: "terminal_output.log",
+          file: StringIO.new(<<~TEXT),
+            agent --force
+            Error: You've reached your normal usage limit.
+            You're out of usage. Ask your admin to increase your limit to continue.
+          TEXT
+          file_size: 120,
+          content_type: "text/plain"
+        )
+        credential = create(:agent_credential, user: @user, agent_type: "cursor_cli")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["quota_error"]
+        step_run.reload
+        assert_equal "failed", step_run.state
+        assert_equal "quota_exceeded", step_run.error_category
+        @run.reload
+        assert_equal "quota_exceeded", @run.failure_reason
+        assert_equal credential.id, @run.failed_agent_credential_id
+      end
+
+      test "detects quota error even when the terminal log is wrapped in ANSI escape codes" do
+        session = create(:terminal_session,
+          user: @user,
+          agent_type: "cursor_cli",
+          session_type: :workflow_step,
+          state: "finished")
+        SessionLog.create!(
+          terminal_session: session,
+          name: "terminal_output.log",
+          file: StringIO.new("\e[1m\e[31mError: You've reached your normal usage limit.\e[0m\r\n"),
+          file_size: 60,
+          content_type: "text/plain; charset=utf-8"
+        )
+        create(:agent_credential, user: @user, agent_type: "cursor_cli")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["quota_error"]
+        assert_equal "quota_exceeded", step_run.reload.error_category
+      end
+
+      test "handles session with no matching credential gracefully" do
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "codex",
+          error_message: "You exceeded your current quota")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["quota_error"]
+        @run.reload
+        assert_equal "quota_exceeded", @run.failure_reason
+        assert_nil @run.failed_agent_credential_id
+      end
+
+      # --- task #195: the stored log is the agent's work ---
+      #
+      # A session that worked normally can have printed text these patterns look for: a
+      # grep of the run failure reasons, a read of the detector's tests. Such a session
+      # finishing must complete its step, not fail it for quota and flag its credential.
+      # The pattern text below is split with `phrase` so this file never matches a
+      # pattern itself when an agent reads or greps it.
+
+      test "completes a finished Kiro session whose log shows another provider's identifier" do
+        session = create_finished_session_with_log("kiro_cli", [
+          "> grep -rn failureReason app/frontend --include=*.tsx",
+          phrase("app/frontend/pages/Projects/WorkflowRuns/ShowPage.tsx:442: {run.failureReason === '",
+                 "quota", "_exc", "eeded' && ("),
+          phrase("{\"error\": {\"status\": \"RESOURCE_EXH", "AUSTED\"}}"),
+          phrase("{\"code\": \"insufficient", "_quota\"}"),
+          "All done, the task is complete."
+        ])
+        create(:agent_credential, user: @user, agent_type: "kiro_cli")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_nil result["quota_error"]
+        assert_equal "completed", step_run.reload.state
+        assert_nil step_run.error_category
+        @run.reload
+        assert_nil @run.failure_reason
+        assert_nil @run.failed_agent_credential_id
+      end
+
+      test "completes a finished session whose own provider's message is only far above the log's tail" do
+        session = create_finished_session_with_log("kiro_cli", [
+          phrase("You have reached your mon", "thly usage lim", "it."),
+          *Array.new(QuotaErrorDetector::TAIL_LINES) { |i| "working on the task, step #{i}" }
+        ])
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_equal "completed", step_run.reload.state
+        assert_nil @run.reload.failed_agent_credential_id
+      end
+
+      test "fails the step for quota when a Kiro session's log ends on its own CLI's message" do
+        session = create_finished_session_with_log("kiro_cli", [
+          *Array.new(QuotaErrorDetector::TAIL_LINES * 2) { |i| "working on the task, step #{i}" },
+          phrase("You have reached your mon", "thly usage lim", "it."),
+          "kiro-cli exited with code 1"
+        ])
+        credential = create(:agent_credential, user: @user, agent_type: "kiro_cli")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["quota_error"]
+        step_run.reload
+        assert_equal "failed", step_run.state
+        assert_equal QUOTA_CATEGORY, step_run.error_category.to_s
+        @run.reload
+        assert_equal QUOTA_CATEGORY, @run.failure_reason.to_s
+        assert_equal credential.id, @run.failed_agent_credential_id
+      end
+
+      test "completes a session its agent finished itself even when its log ends on its own provider's message" do
+        session = create_finished_session_with_log("kiro_cli", [
+          *Array.new(QuotaErrorDetector::TAIL_LINES * 2) { |i| "working on the task, step #{i}" },
+          phrase("Summary: the scan no longer fails on \"You have reached your mon", "thly usage lim", "it.\""),
+          "finish_session(note: \"done\")"
+        ])
+        session.update!(finishing_at: 1.minute.ago)
+        create(:agent_credential, user: @user, agent_type: "kiro_cli")
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_nil result["quota_error"]
+        assert_equal "completed", step_run.reload.state
+        assert_nil step_run.error_category
+        @run.reload
+        assert_nil @run.failure_reason
+        assert_nil @run.failed_agent_credential_id
+      end
+
+      test "does not fail the step for another provider's message recorded as the session's error" do
+        session = create(:terminal_session, :failed,
+          user: @user,
+          agent_type: "kiro_cli",
+          error_message: phrase("Credit bal", "ance too low · Add funds"))
+        step_run = create(:step_run, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert_nil result["quota_error"]
+        assert result["failed"]
+        assert_nil step_run.reload.error_category
+        assert_nil @run.reload.failed_agent_credential_id
+      end
+
+      # A validator that crashes used to answer "valid" on the step's behalf, so a step
+      # whose outputs were never actually judged still reported success. A spec carrying a
+      # non-string pattern is the cheapest way to make it crash for real: matching it
+      # against a collected asset raises TypeError out of Regexp.new, which the
+      # validator's own RegexpError rescue does not catch.
+      test "fails the step when output validation could not run" do
+        @step.update!(output_asset_specs: [ { "name_pattern" => 42 } ])
+        session = create(:terminal_session, :collected,
+          user: @user,
+          agent_type: "claude_code",
+          session_type: :workflow_step)
+        step_run = create(:step_run, :running, workflow_run: @run, step: @step, terminal_session: session)
+        create(:workflow_run_asset, workflow_run: @run, produced_by_step_run: step_run, name: "report.md")
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        refute result["valid"]
+        assert result["failed"]
+
+        step_run.reload
+        assert_equal "failed", step_run.state
+        assert_match(/output validation could not run/, step_run.error_message)
+      end
+
+      # --- success path ---
+
+      test "completes step with no output specs and no assets" do
+        session = create(:terminal_session, :collected,
+          user: @user,
+          agent_type: "claude_code",
+          session_type: :workflow_step)
+        step_run = create(:step_run, :running, workflow_run: @run, step: @step, terminal_session: session)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_nil result["failed"]
+        assert_nil result["quota_error"]
+        assert_equal step_run.id, result["step_run_id"]
+        assert_equal @step.id, result["step_id"]
+        assert_equal @run.id, result["workflow_run_id"]
+        assert_equal 0, result["assets_collected"]
+
+        step_run.reload
+        assert_equal "completed", step_run.state
+        assert_not_nil step_run.completed_at
+        assert_nil step_run.error_message
+
+        @run.reload
+        assert_nil @run.failure_reason
+      end
+
+      test "completes step and counts produced assets" do
+        session = create(:terminal_session, :collected,
+          user: @user,
+          agent_type: "claude_code",
+          session_type: :workflow_step)
+        step_run = create(:step_run, :running, workflow_run: @run, step: @step, terminal_session: session)
+        create(:workflow_run_asset, workflow_run: @run, produced_by_step_run: step_run, name: "one.md")
+        create(:workflow_run_asset, workflow_run: @run, produced_by_step_run: step_run, name: "two.md")
+        # Asset produced by a different step must not be counted.
+        other_step_run = create(:step_run, workflow_run: @run, step: @step)
+        create(:workflow_run_asset, workflow_run: @run, produced_by_step_run: other_step_run, name: "other.md")
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_equal 2, result["assets_collected"]
+
+        step_run.reload
+        assert_equal "completed", step_run.state
+      end
+
+      test "completes step when output_asset_specs are satisfied" do
+        step = create(:step, workflow: @workflow,
+          output_asset_specs: [ { "name" => "report.md", "required" => true } ])
+        session = create(:terminal_session, :collected,
+          user: @user,
+          agent_type: "claude_code",
+          session_type: :workflow_step)
+        step_run = create(:step_run, :running, workflow_run: @run, step: step, terminal_session: session)
+        create(:workflow_run_asset, workflow_run: @run, produced_by_step_run: step_run, name: "report.md")
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_nil result["validation_errors"]
+        assert_equal 1, result["assets_collected"]
+
+        step_run.reload
+        assert_equal "completed", step_run.state
+      end
+
+      test "completes step when there is no terminal session" do
+        step_run = create(:step_run, :running, workflow_run: @run, step: @step, terminal_session: nil)
+
+        result = run_activity(CompleteStepActivity, { "step_run_id" => step_run.id })
+
+        assert result["valid"]
+        assert_nil result["failed"]
+        assert_equal 0, result["assets_collected"]
+
+        step_run.reload
+        assert_equal "completed", step_run.state
+        assert_not_nil step_run.completed_at
+      end
+
+      private
+
+      def phrase(*parts) = parts.join
+
+      def create_finished_session_with_log(agent_type, lines)
+        session = create(:terminal_session,
+          user: @user,
+          agent_type: agent_type,
+          session_type: :workflow_step,
+          state: "finished")
+        content = lines.join("\n") + "\n"
+        SessionLog.create!(
+          terminal_session: session,
+          name: "terminal_output.log",
+          file: StringIO.new(content),
+          file_size: content.bytesize,
+          content_type: "text/plain"
+        )
+        session
+      end
+    end
+  end
+end

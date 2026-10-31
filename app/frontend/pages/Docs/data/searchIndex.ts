@@ -1,0 +1,329 @@
+export interface SearchResult {
+  slug: string;
+  title: string;
+  section: string;
+  desc: string;
+}
+
+export const SEARCH_INDEX: SearchResult[] = [
+  {
+    slug: 'using-flow',
+    title: 'What Flow is',
+    section: 'Using Flow',
+    desc: 'What Aixle Flow does for a team: the loop from whatever starts a workflow to the results that come back, whose credential an agent works under, the company/project/profile levels, and the supported agent runtimes.',
+  },
+  {
+    slug: 'getting-started',
+    title: 'Getting started',
+    section: 'Using Flow',
+    desc: 'From an invitation to a running workflow: onboarding, connecting an agent, and the Account, Usage and MCP tabs of your profile.',
+  },
+  {
+    slug: 'project-home',
+    title: 'Project home & settings',
+    section: 'Using Flow',
+    desc: 'The Overview page KPIs, run donut and task distribution, plus project name, artifacts language, archive and delete.',
+  },
+  {
+    slug: 'tasks',
+    title: 'Tasks & the board',
+    section: 'Using Flow',
+    desc: 'Columns and their purpose, board templates, cards and their tabs, filters and view presets, and binding a column to a workflow.',
+  },
+  {
+    slug: 'running-workflows',
+    title: 'Building workflows',
+    section: 'Using Flow',
+    desc: 'Sessions and the steps inside them, what runs in its own container and how files pass between sessions, dependencies and parallel sessions, on-failure behaviour, approval sessions, and publishing to the catalog.',
+  },
+  {
+    slug: 'starting-work',
+    title: 'Triggers & gates',
+    section: 'Using Flow',
+    desc: 'Every way a workflow starts — column, schedule, Slack or Teams message, incoming webhook, tracker event, Run — who a run belongs to, and CI gates: waiting, passed, failed, stale.',
+  },
+  {
+    slug: 'session-queues',
+    title: 'Session queues',
+    section: 'Using Flow',
+    desc: 'Why a session says Queued, every combination of project limit and installation ceiling, how a reservation differs from a cap, and what clearing a limit does.',
+  },
+  {
+    slug: 'plans-and-limits',
+    title: 'Plans & limits',
+    section: 'Using Flow',
+    desc: 'Hosted Flow: what a worker costs, why capacity is charged for whether or not it is busy, the 30-day free trial on one worker, what happens when it ends, and how to add a card, cancel, or pay a failed invoice.',
+  },
+  {
+    slug: 'aws-marketplace-billing',
+    title: 'AWS Marketplace billing',
+    section: 'Using Flow',
+    desc: 'Flow bought through AWS Marketplace: capacity metered to your own AWS bill in worker-minutes, no free allowance and no card, why every company needs a limit, and how a disputed bill is settled.',
+  },
+  {
+    slug: 'sessions-and-runs',
+    title: 'Sessions & Runs',
+    section: 'Using Flow',
+    desc: 'The unified list of runs and agent sessions, the live step terminal, approve, retry, skip and cancel, and reviewing what a run produced.',
+  },
+  {
+    slug: 'assets',
+    title: 'Assets',
+    section: 'Using Flow',
+    desc: 'Uploading files for agents, promoting what a run produced into the project, search and version history.',
+  },
+  {
+    slug: 'personas',
+    title: 'Agent personas',
+    section: 'Using Flow',
+    desc: 'Reusable agent personas: what they define, why they are independent of the runtime, and how steps reference them.',
+  },
+  {
+    slug: 'agent-capabilities',
+    title: 'Wrappers, Skills & Connectors',
+    section: 'Using Flow',
+    desc: 'The three ways to extend an agent: wrappers you write, skills as packaged know-how, and connectors to external tool servers.',
+  },
+  {
+    slug: 'repositories',
+    title: 'Repositories & Integrations',
+    section: 'Using Flow',
+    desc: 'Linking the Git repositories agents work in, connecting the accounts a project needs, and what that lets a run do.',
+  },
+  {
+    slug: 'ai-builder',
+    title: 'AI Builder',
+    section: 'Using Flow',
+    desc: 'Describe a process in plain language and let the builder create the board columns, workflows and steps, then adjust them by hand.',
+  },
+  {
+    slug: 'people-and-access',
+    title: 'Team & access',
+    section: 'Using Flow',
+    desc: 'Admin, employee and viewer roles, company members, project collaborators, and what each role can see.',
+  },
+  {
+    slug: 'signing-in',
+    title: 'Signing in & SSO',
+    section: 'Using Flow',
+    desc: 'Every way to prove who you are, which methods a workspace accepts, connecting your own OpenID Connect provider, linking and removing Google or Microsoft from your account, passkeys and authentication codes, and directory sync.',
+  },
+  {
+    slug: 'secrets',
+    title: 'Secrets & Variables',
+    section: 'Using Flow',
+    desc: 'Credentials and configuration a run needs, kept out of prompts, task text and logs.',
+  },
+  {
+    slug: 'templates',
+    title: 'Templates',
+    section: 'Using Flow',
+    desc: 'Install reviewed connectors, boards, workflows and projects from the catalog, finish the setup checklist, and publish your own.',
+  },
+  {
+    slug: 'analytics',
+    title: 'Analytics & cost',
+    section: 'Using Flow',
+    desc: 'Spend, tokens, sessions and success by project, agent, workflow and source — and where cost shows up elsewhere.',
+  },
+  {
+    slug: 'company-workspace',
+    title: 'Company workspace',
+    section: 'Using Flow',
+    desc: 'Projects, the Workflow Catalog, company-wide analytics and sessions, company assets and members, and switching companies.',
+  },
+  {
+    slug: 'examples',
+    title: 'Worked examples',
+    section: 'Using Flow',
+    desc: 'Two end-to-end stories: a card that comes back as a pull request, and a workflow built from a single prompt.',
+  },
+  {
+    slug: 'user-guide',
+    title: 'User Guide',
+    section: 'User guide',
+    desc: 'Overview for operators: the path every run takes (event → trigger → workflow → agent session) and the mental model — company, project and profile, triggers and gates, whose credential a session runs on, the session queue, where results go.',
+  },
+  {
+    slug: 'quick-start',
+    title: 'Quick start',
+    section: 'User guide',
+    desc: 'Get a working Aixle Flow instance running with Docker in 10–15 minutes.',
+  },
+  {
+    slug: 'agents',
+    title: 'Agents',
+    section: 'User guide',
+    desc: 'An agent is a persona (system prompt) running on an LLM CLI runtime inside a Docker container.',
+  },
+  {
+    slug: 'runtimes',
+    title: 'Runtimes',
+    section: 'User guide',
+    desc: 'The seven LLM CLI runtimes: claude_code, cursor_cli, codex, gemini_cli, antigravity_cli, grok, and kiro_cli.',
+  },
+  {
+    slug: 'tools',
+    title: 'Tools',
+    section: 'User guide',
+    desc: 'Tools are callables agents invoke via MCP — board tools, custom container tools, and built-in lifecycle tools.',
+  },
+  {
+    slug: 'mcp',
+    title: 'MCP servers',
+    section: 'User guide',
+    desc: 'MCP servers deliver tools to agents. The internal aixle-tools server is always connected.',
+  },
+  {
+    slug: 'board',
+    title: 'Board',
+    section: 'User guide',
+    desc: 'A Kanban board with column → workflow bindings that trigger agent runs when cards move.',
+  },
+  {
+    slug: 'workflows',
+    title: 'Workflows',
+    section: 'User guide',
+    desc: 'A DAG of steps orchestrated by Temporal — each step is one agent session in one container.',
+  },
+  {
+    slug: 'prompt-guide',
+    title: 'Prompt guide',
+    section: 'User guide',
+    desc: 'How to write session instructions an agent can run: what it sees, where its files are, and what belongs on the step form.',
+  },
+  {
+    slug: 'triggers-and-gates',
+    title: 'Triggers and Gates',
+    section: 'User guide',
+    desc: "How workflows start and pause: triggers (column, manual, schedule, chat, webhook, tracker) vs gates (CI checks); the project's Triggers page; subject_policy; the webhook start API.",
+  },
+  {
+    slug: 'integrations',
+    title: 'Integrations',
+    section: 'User guide',
+    desc: 'Every integration a project can connect, what each gives, and the webhook endpoints outside services call.',
+  },
+  {
+    slug: 'github',
+    title: 'GitHub',
+    section: 'User guide',
+    desc: 'Connect GitHub with the GitHub App or a personal access token: repositories, git and gh in sessions, CI gates, GitHub Projects as trackers, starting workflows from GitHub, and the self-hosted app.',
+  },
+  {
+    slug: 'gitlab',
+    title: 'GitLab',
+    section: 'User guide',
+    desc: 'Connect GitLab with a personal access token: repositories, cloning in sessions, merge-request tools, pipeline gates and their hook, self-managed GitLab.',
+  },
+  {
+    slug: 'bitbucket',
+    title: 'Bitbucket',
+    section: 'User guide',
+    desc: 'Connect Bitbucket Cloud with the Aixle Flow app or an access token: repositories, cloning in sessions, pull-request tools, CI gates on pull-request builds.',
+  },
+  {
+    slug: 'azure-devops',
+    title: 'Azure DevOps',
+    section: 'User guide',
+    desc: 'Connect an Azure DevOps organization: the Entra service principal step, the personal access token and its three scopes, choosing Azure projects, and how SaaS differs from self-hosted.',
+  },
+  {
+    slug: 'jira',
+    title: 'Jira',
+    section: 'User guide',
+    desc: 'Connect Jira Cloud with an Atlassian account or a service account, add the admin webhook tracker triggers need, and how board columns become statuses.',
+  },
+  {
+    slug: 'linear',
+    title: 'Linear',
+    section: 'User guide',
+    desc: 'Connect Linear with the Aixle Linear app or an API key, the per-team webhooks an API key needs a workspace admin for, and how workflow states become statuses.',
+  },
+  {
+    slug: 'youtrack',
+    title: 'YouTrack',
+    section: 'User guide',
+    desc: 'Connect YouTrack Cloud or a self-hosted instance through the Aixle Flow app from JetBrains Marketplace, and how the state field becomes statuses.',
+  },
+  {
+    slug: 'trackers',
+    title: 'Trackers',
+    section: 'User guide',
+    desc: 'Azure Boards, Jira, GitHub Projects, Linear and YouTrack as trackers: the Trackers page, primary and read-only, connecting a board column, tracker triggers, the tracker tools and who a write is attributed to.',
+  },
+  {
+    slug: 'slack',
+    title: 'Slack',
+    section: 'User guide',
+    desc: 'Install the Slack app for a company: start workflows by mentioning it, status cards in the thread, the chat tools, and the self-hosted Slack app.',
+  },
+  {
+    slug: 'teams',
+    title: 'Microsoft Teams',
+    section: 'User guide',
+    desc: 'Connect a Microsoft 365 organization through its administrator: start workflows from channels, group chats and 1:1 chats, Run workflow on a message, /run and /status, status cards, files both ways, the chat tools, and the self-hosted bot.',
+  },
+  {
+    slug: 'coder',
+    title: 'Coder',
+    section: 'User guide',
+    desc: 'Connect a Coder deployment so agents can allocate remote workspaces, run commands there and release them; locks, health checks and dead-workspace cleanup.',
+  },
+  {
+    slug: 'configuration',
+    title: 'Configuration',
+    section: 'User guide',
+    desc: 'Configure Aixle Flow at three levels: environment variables, Config Items, and per-user Profile.',
+  },
+  {
+    slug: 'reference',
+    title: 'Reference',
+    section: 'Reference',
+    desc: 'Complete surface area: CLI, API, configuration. Includes the full domain model schema.',
+  },
+  {
+    slug: 'cli-ref',
+    title: 'CLI reference',
+    section: 'Reference',
+    desc: 'Complete reference for all Makefile targets: lifecycle, database, linting, images.',
+  },
+  {
+    slug: 'api-guide',
+    title: 'API',
+    section: 'Reference',
+    desc: 'REST API under /api/v1 — workflows, workflow runs, board, tasks, assets, and webhooks.',
+  },
+  {
+    slug: 'configuring-sso',
+    title: 'Configuring sign-in methods',
+    section: 'User guide',
+    desc: 'For operators: how availability is derived from credentials, registering Google and Microsoft, what per-company OIDC needs from the installation, and the claim that identifies a person.',
+  },
+  {
+    slug: 'config-schema',
+    title: 'Configuration reference',
+    section: 'Reference',
+    desc: 'Every environment variable Aixle Flow reads, organized by subsystem.',
+  },
+  {
+    slug: 'user-guide-outline',
+    title: 'User guide outline',
+    section: 'Product',
+    desc: 'The chapter-by-chapter skeleton of the end-user product guide, following the product sidebar.',
+  },
+  {
+    slug: 'changelog-product-areas',
+    title: 'Changelog product areas',
+    section: 'Product',
+    desc: 'The product-area taxonomy every user-visible changelog entry is tagged with.',
+  },
+];
+
+export function searchDocs(query: string): SearchResult[] {
+  const q = query.toLowerCase().trim();
+  if (!q) return [];
+  return SEARCH_INDEX.filter(
+    (r) => r.title.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q) || r.section.toLowerCase().includes(q),
+  );
+}

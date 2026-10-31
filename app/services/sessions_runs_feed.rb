@@ -1,0 +1,230 @@
+# frozen_string_literal: true
+
+# The unified "Sessions & Runs" list.
+#
+# Standalone agent sessions and workflow runs used to live on two pages with two
+# controllers, two filter sets and two orderings, and there was no way to see
+# "what did this project run yesterday" in one place. This builds one feed of
+# both, newest first, with workflow-step sessions folded UNDER their run instead
+# of competing with it for a top-level row.
+#
+# Ordering has to happen in SQL across both tables (you cannot paginate a feed
+# you sorted in Ruby), so the spine is a UNION ALL of (id, kind, created_at,
+# sort value). The page of ids that comes back is then hydrated with the
+# associations each kind needs, and re-ordered to match.
+#
+# `query` is a ransack `q`: its date-range scopes and the sort (`s`) mean the
+# same thing on both models, so each side of the union applies it to its own
+# table. The `filters` are the ones that do not: a status is two state
+# vocabularies, an agent is reached through a run's steps, and the search has to
+# respect who may read a prompt.
+class SessionsRunsFeed
+  # Standalone sessions only — a workflow_step session appears nested under its
+  # run, and auth/tool setup sessions are plumbing the user never asked for.
+  TOP_LEVEL_SESSION_TYPES = %w[agent_session].freeze
+
+  # The session types a FLAT, session-level list shows: standalone sessions plus
+  # workflow steps as rows of their own rather than folded under a run. The
+  # company-wide feed reads this way, and so does one member's slice of it on
+  # /user/:id. Auth/tool-setup sessions are plumbing the user never asked for.
+  LISTABLE_SESSION_TYPES = %w[agent_session workflow_step].freeze
+
+  # One status vocabulary over two state machines. A session is "finished" where
+  # a run is "completed"; asking a user to know that is asking them to know our
+  # schema.
+  # A run whose step is waiting for a session slot is itself `running` — queueing
+  # is a property of the child, not of the run — so this side cannot be a state
+  # list like the others. QUEUED_STEP asks the question the state cannot.
+  QUEUED_STEP = :queued_step
+
+  STATUS_FILTERS = {
+    "queued" => { sessions: %w[queued], runs: QUEUED_STEP },
+    "running" => { sessions: %w[running ready finishing], runs: %w[running] },
+    "completed" => { sessions: %w[finished], runs: %w[completed] },
+    "failed" => { sessions: %w[failed], runs: %w[failed] },
+    "cancelled" => { sessions: %w[cancelled], runs: %w[cancelled] },
+    "pending" => { sessions: %w[not_started], runs: %w[pending paused] }
+  }.freeze
+
+  TYPES = %w[all run solo].freeze
+
+  Page = Struct.new(:pagy, :entries, keyword_init: true)
+
+  # One row of the feed. `record` is a TerminalSession or a WorkflowRun.
+  Entry = Struct.new(:kind, :record, keyword_init: true)
+
+  def initialize(project:, viewer:, filters: {}, type: "all", query: {})
+    @project = project
+    @viewer = viewer
+    @filters = filters.to_h.symbolize_keys
+    @type = TYPES.include?(type.to_s) ? type.to_s : "all"
+    query = query.to_h.symbolize_keys
+    @sort = SessionListSort.new(query[:s])
+    @conditions = query.except(:s)
+  end
+
+  attr_reader :project, :viewer, :filters, :type, :sort, :conditions
+
+  # Returns a Page whose `entries` are already hydrated and ordered.
+  def page(page: 1, limit: 20)
+    pagy = Pagy::Offset.new(count: spine(sorted: false).count(:all), page: page, limit: limit)
+    rows = spine(sorted: true).offset(pagy.offset).limit(pagy.limit)
+
+    Page.new(pagy: pagy, entries: hydrate(rows))
+  end
+
+  # Distinct users who own something in this project's feed — the User filter's
+  # options. Members who never ran anything would only be noise.
+  def user_options
+    ids = TerminalSession.where(project: project, session_type: TOP_LEVEL_SESSION_TYPES).distinct.pluck(:user_id) |
+      WorkflowRun.where(project: project).distinct.pluck(:user_id)
+    User.where(id: ids.compact).order(:name).map { |u| { id: u.id, name: u.name.presence || u.email } }
+  end
+
+  # Workflows this project has run — the Workflow filter's options.
+  def workflow_options
+    Workflow.where(id: WorkflowRun.where(project: project).select(:workflow_id))
+            .order(:name).map { |w| { id: w.id, name: w.name } }
+  end
+
+  private
+
+  # The ordered (id, kind) spine, as a real relation so pagination is AR's job
+  # and no SQL is assembled by string interpolation.
+  #
+  # TerminalSession is only the query carrier — `from` replaces its table
+  # entirely, and the two selected aliases are the only attributes the returned
+  # objects have. Nothing but `entry_id`/`entry_kind` may be read off them.
+  #
+  # The count leaves the sort value out: for a run it is a subquery per row.
+  def spine(sorted:)
+    relation = TerminalSession.unscoped
+                              .select("feed.entry_id", "feed.entry_kind")
+                              .from(feed_alias(sorted))
+    return relation unless sorted
+
+    relation.order(sort.order(Arel.sql("feed.entry_sort_value")),
+                   Arel.sql("feed.entry_created_at DESC, feed.entry_id DESC"))
+  end
+
+  def feed_alias(sorted)
+    Arel::Nodes::TableAlias.new(Arel::Nodes::Grouping.new(union_node(sorted)), Arel.sql("feed"))
+  end
+
+  def union_node(sorted)
+    return sessions_spine(sorted).arel if type == "solo"
+    return runs_spine(sorted).arel if type == "run"
+
+    Arel::Nodes::UnionAll.new(sessions_spine(sorted).arel, runs_spine(sorted).arel)
+  end
+
+  def sessions_spine(sorted)
+    columns = [
+      "terminal_sessions.id AS entry_id",
+      "'session' AS entry_kind",
+      "terminal_sessions.created_at AS entry_created_at"
+    ]
+    columns << sort.column(TerminalSession).as("entry_sort_value") if sorted
+    filtered_sessions.reselect(*columns)
+  end
+
+  def runs_spine(sorted)
+    columns = [
+      "workflow_runs.id AS entry_id",
+      "'run' AS entry_kind",
+      "workflow_runs.created_at AS entry_created_at"
+    ]
+    columns << sort.column(WorkflowRun).as("entry_sort_value") if sorted
+    filtered_runs.reselect(*columns).distinct
+  end
+
+  def filtered_sessions
+    # A standalone session belongs to no workflow.
+    return TerminalSession.none if filters[:workflow_id].present?
+
+    scope = TerminalSession.where(project: project, session_type: TOP_LEVEL_SESSION_TYPES)
+                           .ransack(conditions).result
+    scope = scope.where(agent_type: filters[:agent_type]) if filters[:agent_type].present?
+    scope = scope.where(user_id: filters[:user_id]) if filters[:user_id].present?
+    if (states = status_states(:sessions))
+      scope = states.empty? ? scope.none : scope.where(state: states)
+    end
+    if filters[:search].present?
+      scope = scope.where("terminal_sessions.initial_prompt ILIKE :q", q: "%#{sanitize_like(filters[:search])}%")
+                   .merge(viewer_visible_scope)
+    end
+    scope
+  end
+
+  # Search matches on `initial_prompt` — a field the row itself may not be
+  # allowed to reveal (see TerminalSession#visible_to?). Without this, a
+  # private session whose hidden prompt matches someone else's search term
+  # would still surface in their results, leaking that the prompt matched.
+  IN_FLIGHT_STATES = %w[not_started queued running ready finishing].freeze
+
+  def viewer_visible_scope
+    TerminalSession.left_joins(:user).where(user_id: viewer.id).or(
+      TerminalSession.left_joins(:user).where(
+        "(terminal_sessions.state IN (:in_flight) AND users.share_active_sessions = TRUE) " \
+        "OR (terminal_sessions.state NOT IN (:in_flight) AND users.share_completed_sessions = TRUE)",
+        in_flight: IN_FLIGHT_STATES
+      )
+    )
+  end
+
+  def filtered_runs
+    scope = WorkflowRun.where(project: project).ransack(conditions).result
+    scope = scope.where(workflow_id: filters[:workflow_id]) if filters[:workflow_id].present?
+    scope = scope.where(user_id: filters[:user_id]) if filters[:user_id].present?
+    states = status_states(:runs)
+    if states == QUEUED_STEP
+      scope = scope.where(id: runs_with_queued_step)
+    elsif states
+      scope = states.empty? ? scope.none : scope.where(state: states)
+    end
+    if filters[:agent_type].present?
+      scope = scope.joins(step_runs: :terminal_session)
+                   .where(terminal_sessions: { agent_type: filters[:agent_type] })
+    end
+    if filters[:search].present?
+      scope = scope.joins(:workflow).where("workflows.name ILIKE :q", q: "%#{sanitize_like(filters[:search])}%")
+    end
+    scope
+  end
+
+  def runs_with_queued_step
+    WorkflowRun.joins(step_runs: :terminal_session)
+               .where(terminal_sessions: { state: "queued" })
+               .select(:id)
+  end
+
+  # nil means "no status filter"; [] means "this side of the union matches
+  # nothing" (e.g. Cancelled, which sessions do not have).
+  def status_states(side)
+    return nil if filters[:status].blank?
+
+    STATUS_FILTERS.dig(filters[:status].to_s, side) || []
+  end
+
+  def sanitize_like(value)
+    value.to_s.gsub(/[\\%_]/) { |c| "\\#{c}" }
+  end
+
+  def hydrate(rows)
+    rows = rows.to_a
+    session_ids = rows.select { |r| r.entry_kind == "session" }.map(&:entry_id)
+    run_ids = rows.select { |r| r.entry_kind == "run" }.map(&:entry_id)
+
+    sessions = TerminalSession.where(id: session_ids).includes(:user, :project).index_by(&:id)
+    runs = WorkflowRun.where(id: run_ids)
+                      .includes(:user, :workflow, step_runs: [ :step, { terminal_session: :user } ])
+                      .index_by(&:id)
+
+    rows.filter_map do |row|
+      record = row.entry_kind == "session" ? sessions[row.entry_id] : runs[row.entry_id]
+      next if record.nil?
+
+      Entry.new(kind: row.entry_kind, record: record)
+    end
+  end
+end

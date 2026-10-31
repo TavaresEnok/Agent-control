@@ -1,0 +1,57 @@
+<%#
+# Navigation
+
+Administrate's stock navigation, plus links to admin pages that are not Administrate
+resources — the gem builds this list from `Administrate::Namespace`, so a plain
+controller (e.g. catalog syncs) would otherwise be unreachable without knowing its URL.
+%>
+
+<nav class="navigation">
+  <%= link_to admin_root_path, class: "navigation__brand" do %>
+    <%= image_tag "/logo.svg", alt: "Aixle" %>
+    <span>Flow admin</span>
+  <% end %>
+
+  <%# Labelled and shown by app/frontend/entrypoints/admin.ts; without it the switch would do nothing. %>
+  <button type="button" class="navigation__scheme" data-color-scheme-toggle hidden></button>
+
+  <%# The sign-in page it lands on is an Inertia page, which Turbo cannot render in place. %>
+  <%= button_to "Sign out", logout_path, method: :delete, form_class: "navigation__sign-out", form: { data: { turbo: false } } %>
+
+  <%# The app sends a super admin straight back here; only an impersonation has an app to go back to. %>
+  <%= link_to(t("administrate.navigation.back_to_app"), root_url, class: "button button--alt button--nav") if impersonated? %>
+
+  <%= link_to(
+    "Dashboard",
+    admin_dashboard_path,
+    class: "navigation__link navigation__link--#{current_page?(admin_dashboard_path) || current_page?(admin_root_path) ? 'active' : 'inactive'}"
+  ) %>
+
+  <% Administrate::Namespace.new(namespace).resources_with_index_route.each do |resource| %>
+    <%#
+      `resources_with_index_route` reads the admin ROUTES, so it also returns plain
+      controllers with no dashboard or model behind them. Asking Administrate to
+      describe one of those raises `uninitialized constant …Dashboard`, which would
+      take down EVERY admin page — so anything without a dashboard is skipped here and
+      linked explicitly below.
+    %>
+    <% next unless Object.const_defined?("#{resource.to_s.classify}Dashboard") %>
+    <%= link_to(
+      display_resource_name(resource),
+      resource_index_route(resource),
+      class: "navigation__link navigation__link--#{nav_link_state(resource)}"
+    ) if accessible_action?(model_from_resource(resource), :index) %>
+  <% end %>
+
+  <%= link_to(
+    "Catalog syncs",
+    admin_catalog_syncs_path,
+    class: "navigation__link navigation__link--#{current_page?(admin_catalog_syncs_path) ? 'active' : 'inactive'}"
+  ) %>
+
+  <%= link_to(
+    "Feature flags",
+    admin_feature_flags_path,
+    class: "navigation__link navigation__link--#{request.path.start_with?(admin_feature_flags_path) ? 'active' : 'inactive'}"
+  ) %>
+</nav>

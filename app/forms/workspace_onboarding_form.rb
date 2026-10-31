@@ -1,0 +1,156 @@
+# frozen_string_literal: true
+
+# Creating a company for yourself, which is the one path where the customer —
+# not us — decides what the company is called.
+#
+# WHY A FORM AND NOT VALIDATIONS ON Company. Giving the company a session limit
+# is a rule of the paths that create a paying company — this one, and the
+# admin's create action. The seeds, the factories and a company we carry
+# legitimately make one without a limit, and a model validation would refuse
+# them all.
+#
+# The form is built twice for a stranger: once to check the answers before they
+# are emailed, and again from the signed link to write them. Only the second
+# call has anyone to own the company, which is why `save` takes the owner rather
+# than holding one.
+class WorkspaceOnboardingForm
+  include ApplicationFormWithoutActiveRecord
+
+  attribute :name, :string
+  attribute :email, :string
+  attribute :email_domain, :string
+
+  attr_reader :user, :company, :marketplace_license
+
+  validates :name, presence: true, length: { maximum: 100 }
+  validates :email, presence: true, format: { with: URI::MailTo::EMAIL_REGEXP, message: "is not an email address" }
+  validates :email_domain, presence: true
+  validate :domain_is_free, if: -> { email_domain.present? }
+  validate :domain_is_not_a_public_mailbox, if: -> { email_domain.present? }
+  validate :domain_belongs_to_the_address, if: -> { email_domain.present? && email.present? }
+  validate :marketplace_license_is_free, if: -> { marketplace_license.present? }
+  validate :marketplace_license_is_live, if: -> { marketplace_license.present? }
+
+  # `user:` is the person already signed in, whose address is not theirs to
+  # choose. A stranger supplies one instead, and proves it by opening the link.
+  def initialize(user: nil, marketplace_license: nil, **attributes)
+    @user = user
+    @marketplace_license = marketplace_license
+    super(**attributes)
+    self.email = user.email if user
+    self.email = email.to_s.strip.downcase.presence
+    self.email_domain = email_domain.to_s.strip.downcase.presence || email.to_s.split("@").last
+  end
+
+  def save(owner)
+    return false unless valid?
+
+    ActiveRecord::Base.transaction do
+      # Said out loud rather than left to the column default, which is `active`
+      # for the seeds and every other path that does not choose.
+      @company = Company.create!(name: name.strip, email_domain: email_domain, state: "active", **billing_terms)
+      owner.save! if owner.new_record?
+      owner.company_memberships.create!(company: @company, role: "admin", state: "active", accepted_at: Time.current)
+      # The trial's one worker, and a number to bill once it pays: no limit is
+      # unbounded and unbilled, which is ours to grant from the admin. The
+      # company raises it from settings after adding a card -- or at once, for
+      # a Marketplace workspace, which AWS bills from the first minute.
+      SessionConcurrencyLimit.set!(scope: @company, max_sessions: Billing::Trial::WORKERS)
+      marketplace_license&.update!(company: @company)
+    end
+    true
+  rescue ActiveRecord::RecordInvalid => e
+    # Company's own validations — a reserved domain, a name already taken — and a
+    # domain that was claimed between the check above and this write.
+    e.record.errors.each { |error| errors.add(mapped_attribute(error.attribute), error.message) }
+    false
+  rescue ActiveRecord::RecordNotUnique
+    # The same races, lost at the index rather than at the validation: two
+    # confirmations of one subscription arriving together -- a buyer
+    # double-clicking the link -- answered the second with a 500.
+    errors.add(:email_domain, "That domain already has a workspace.")
+    false
+  end
+
+  # A person for the address, for the link's own writes. Not persisted here: the
+  # transaction in `save` is what decides whether they exist at all, so a signup
+  # that fails leaves no account behind.
+  def owner_for(existing)
+    existing || User.new(email: email, name: name_from_email, state: "active")
+  end
+
+  def name_from_email
+    email.to_s.split("@").first.to_s.tr("._-", " ").split.map(&:capitalize).join(" ").presence || email.to_s
+  end
+
+  private
+
+  # AWS bills a Marketplace workspace, so it has no allowance to spend; and it
+  # waits rather than runs until AWS confirms the agreement, because metering
+  # sent before that confirmation is discarded.
+  # Blocked only while AWS has not confirmed the agreement. It usually has by
+  # now -- registration asks DescribeAgreement rather than waiting for the
+  # event -- and a workspace created blocked with nothing to unblock it is a
+  # customer who pays and cannot start.
+  def billing_terms
+    return { billing_state: "trialing" } if marketplace_license.nil?
+
+    terms = { billing_provider: Company::BILLING_PROVIDER_AWS_MARKETPLACE }
+    return terms.merge(billing_state: "active") if marketplace_license.active?
+
+    terms.merge(billing_state: "blocked", billing_block_reason: "awaiting_subscription")
+  end
+
+  # The controller sends a bound licence to sign-in instead, so reaching here
+  # means two signups raced for one subscription.
+  def marketplace_license_is_free
+    return unless marketplace_license.bound?
+
+    errors.add(:base, "That AWS Marketplace subscription already has a workspace. Sign in to reach it.")
+  end
+
+  # The controller lets a live licence past REGISTRATION_ENABLED, and `ending`
+  # is live: closing, with nothing left to confirm. A workspace made on it, or
+  # on one already ended, is blocked from birth waiting for a confirmation that
+  # cannot come.
+  def marketplace_license_is_live
+    return if marketplace_license.pending? || marketplace_license.active?
+
+    errors.add(
+      :base,
+      "That AWS Marketplace subscription has ended. Subscribe again in AWS Marketplace to set up a workspace."
+    )
+  end
+
+  def domain_is_free
+    return unless Company.exists?(email_domain: email_domain)
+
+    errors.add(:email_domain, "already has a workspace — ask someone there to invite you")
+  end
+
+  # Claiming a domain here takes it from everyone else at it, which is a bargain
+  # only an organisation's own domain can keep. At a public mail service the
+  # first person to sign up would take the service. Deliberately not a rule on
+  # Company: an operator creating a workspace from the admin has reasons we do
+  # not, and this is about what a stranger may claim unasked.
+  def domain_is_not_a_public_mailbox
+    return unless PublicEmailDomains.include?(email_domain)
+
+    errors.add(
+      :email_domain,
+      "is a public email service — sign up with an address at your organisation's own domain"
+    )
+  end
+
+  # Otherwise anyone could claim a domain they have no address at, and every
+  # later sign-in from that domain would auto-join the workspace they built.
+  def domain_belongs_to_the_address
+    return if email_domain == email.to_s.split("@").last&.downcase
+
+    errors.add(:email_domain, "must be the domain of your own email address")
+  end
+
+  def mapped_attribute(attribute)
+    attribute == :base ? :base : attribute
+  end
+end

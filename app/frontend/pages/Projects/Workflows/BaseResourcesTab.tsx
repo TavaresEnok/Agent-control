@@ -1,0 +1,334 @@
+import { Alert, Button, MultiSelect, Switch } from '@mantine/core';
+import type { ReactNode } from 'react';
+
+import type { ConfigItemPicker, RunnerSummary, Workflow } from '@/types/generated';
+
+import { AssetPicker, type AssetPickerItem } from 'shared/components/AssetPicker';
+import { ToolPicker } from 'shared/components/ToolPicker';
+import { useFeatureFlag } from 'shared/lib/hooks/useFeatureFlag';
+import { type ToolGroup } from 'shared/lib/toolPicker';
+import { RunnerSelect } from 'shared/resources/runners/runnerChoice';
+import { runnerUnusableReason } from 'shared/resources/runners/runnerCopy';
+
+interface NamedItem {
+  id: number;
+  name: string;
+}
+
+type BaseResources = Pick<
+  Workflow,
+  | 'inheritAllProjectResources'
+  | 'baseToolIds'
+  | 'baseSkillIds'
+  | 'baseMCPServerIds'
+  | 'baseAssetIds'
+  | 'baseRepositoryIds'
+  | 'baseConfigItemIds'
+  | 'runnerId'
+>;
+
+interface BaseResourcesTabProps {
+  workflow: BaseResources;
+  tools: NamedItem[];
+  toolGroups: ToolGroup[];
+  skills: NamedItem[];
+  mcpServers: NamedItem[];
+  assets: AssetPickerItem[];
+  repositories: NamedItem[];
+  configItems: ConfigItemPicker[];
+  runners: RunnerSummary[];
+  readOnly: boolean;
+  onWorkflowChange: (field: string, value: unknown) => void;
+}
+
+export function BaseResourcesTab({
+  workflow,
+  tools,
+  toolGroups,
+  skills,
+  mcpServers,
+  assets,
+  repositories,
+  configItems,
+  runners,
+  readOnly,
+  onWorkflowChange,
+}: BaseResourcesTabProps) {
+  const externalRunners = useFeatureFlag('externalRunners');
+  const toSelectData = (items: NamedItem[]) =>
+    Array.isArray(items)
+      ? items.filter((i) => i?.id != null).map((i) => ({ value: String(i.id), label: i.name ?? '' }))
+      : [];
+
+  const toStringArr = (ids: number[]) => (Array.isArray(ids) ? ids : []).map(String);
+  const toNumberArr = (vals: string[]) => (Array.isArray(vals) ? vals : []).map(Number);
+
+  // A secret is labelled as such in the picker: attaching one is a different
+  // decision from attaching a variable, and the label is what makes that visible
+  // before the warning below appears.
+  const configItemSelectData = (Array.isArray(configItems) ? configItems : [])
+    .filter((c) => c?.id != null)
+    .map((c) => ({ value: String(c.id), label: c.itemType === 'secret' ? `${c.name} (secret)` : c.name }));
+
+  const baseConfigItemIds = workflow.baseConfigItemIds ?? [];
+
+  return (
+    <div style={{ overflowY: 'auto', height: '100%', background: 'var(--bg)' }}>
+      <div style={{ padding: '28px 24px', maxWidth: 640 }}>
+        {/* Heading */}
+        <div
+          style={{
+            fontSize: 16,
+            fontWeight: 700,
+            color: 'var(--text-1)',
+            letterSpacing: '-0.02em',
+            marginBottom: 4,
+          }}
+        >
+          Base Resources
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 20 }}>
+          Default resources available to every session. Sessions can add their own on top.
+        </div>
+
+        {externalRunners ? (
+          <RunnerField
+            runners={runners}
+            runnerId={workflow.runnerId ?? null}
+            readOnly={readOnly}
+            onChange={(runnerId) => onWorkflowChange('runnerId', runnerId)}
+          />
+        ) : (
+          workflow.runnerId != null && (
+            <RunnerDisabledNotice readOnly={readOnly} onSwitchToHosted={() => onWorkflowChange('runnerId', null)} />
+          )
+        )}
+
+        {/* Inherit toggle card — toggle on LEFT, text on right */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 14px',
+            background: 'var(--bg-card)',
+            borderRadius: 7,
+            border: '1px solid var(--border)',
+            marginBottom: 20,
+          }}
+        >
+          <Switch
+            checked={workflow.inheritAllProjectResources}
+            onChange={(e) => onWorkflowChange('inheritAllProjectResources', e.currentTarget.checked)}
+            disabled={readOnly}
+            style={{ flexShrink: 0 }}
+          />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-1)' }}>Inherit all project resources</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+              Tools, skills, MCP servers, and assets from the project level are included automatically. Project
+              repositories are used only while nothing below selects one.
+            </div>
+          </div>
+        </div>
+
+        {/* 2-column grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          {/* Tools are picked through the group tree, assets through the folder tree — the rest are flat MultiSelects. */}
+          <Field label="Tools" isEmpty={workflow.baseToolIds.length === 0} emptyHint="None added">
+            <ToolPicker
+              tools={tools}
+              groups={toolGroups}
+              value={workflow.baseToolIds}
+              onChange={(ids) => onWorkflowChange('baseToolIds', ids)}
+              disabled={readOnly || workflow.inheritAllProjectResources}
+              placeholder="Select tools…"
+              aria-label="Tools"
+              inputStyles={{
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: 5,
+                fontSize: 13,
+                minHeight: 36,
+              }}
+            />
+          </Field>
+          {(
+            [
+              {
+                label: 'Skills',
+                placeholder: 'Select skills…',
+                data: toSelectData(skills),
+                value: toStringArr(workflow.baseSkillIds),
+                onChange: (v: string[]) => onWorkflowChange('baseSkillIds', toNumberArr(v)),
+                isEmpty: workflow.baseSkillIds.length === 0,
+                supersededByInherit: true,
+                emptyHint: 'None added',
+              },
+              {
+                label: 'MCP Servers',
+                placeholder: 'Select MCP servers…',
+                data: toSelectData(mcpServers),
+                value: toStringArr(workflow.baseMCPServerIds),
+                onChange: (v: string[]) => onWorkflowChange('baseMCPServerIds', toNumberArr(v)),
+                isEmpty: workflow.baseMCPServerIds.length === 0,
+                supersededByInherit: true,
+                emptyHint: 'None added',
+              },
+              {
+                label: 'Assets',
+                placeholder: '',
+                data: [],
+                value: [],
+                onChange: () => {},
+                isEmpty: workflow.baseAssetIds.length === 0,
+                supersededByInherit: true,
+                emptyHint: 'None added',
+              },
+              {
+                label: 'Secrets & Variables',
+                placeholder: 'Select secrets and variables…',
+                data: configItemSelectData,
+                value: toStringArr(baseConfigItemIds),
+                onChange: (v: string[]) => onWorkflowChange('baseConfigItemIds', toNumberArr(v)),
+                isEmpty: baseConfigItemIds.length === 0,
+                supersededByInherit: true,
+                emptyHint: 'None added — steps can attach their own',
+              },
+              {
+                // Repositories stay selectable while "inherit all" is on: unlike the
+                // resources above, they are not added on top of the project-wide set —
+                // choosing one replaces it. Disabling this would remove the only way to
+                // narrow a workflow down to a single repository.
+                label: 'Repositories',
+                placeholder: 'Select repositories…',
+                data: toSelectData(repositories),
+                value: toStringArr(workflow.baseRepositoryIds),
+                onChange: (v: string[]) => onWorkflowChange('baseRepositoryIds', toNumberArr(v)),
+                isEmpty: workflow.baseRepositoryIds.length === 0,
+                supersededByInherit: false,
+                emptyHint: workflow.inheritAllProjectResources
+                  ? 'All project repositories — select to narrow'
+                  : 'None added — steps get code only from their own selection',
+              },
+            ] as const
+          ).map(({ label, placeholder, data, value, onChange, isEmpty, supersededByInherit, emptyHint }) => (
+            <Field key={label} label={label} isEmpty={isEmpty} emptyHint={emptyHint}>
+              {label === 'Assets' ? (
+                <AssetPicker
+                  assets={assets}
+                  value={workflow.baseAssetIds}
+                  onChange={(ids) => onWorkflowChange('baseAssetIds', ids)}
+                  disabled={readOnly || (supersededByInherit && workflow.inheritAllProjectResources)}
+                  placeholder="Select assets…"
+                  aria-label="Assets"
+                />
+              ) : (
+                <MultiSelect
+                  data={data}
+                  value={[...value]}
+                  onChange={onChange}
+                  disabled={readOnly || (supersededByInherit && workflow.inheritAllProjectResources)}
+                  searchable
+                  placeholder={placeholder}
+                  styles={{
+                    input: {
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 5,
+                      fontSize: 13,
+                      minHeight: 36,
+                    },
+                  }}
+                />
+              )}
+            </Field>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Where every step of a run goes, unless the run drawer picks another runner (DESIGN.md §3.3). A
+ * runner that can no longer be used stays selected and is warned about: the reference is never
+ * cleared, and saving it is allowed because the runner may come back (§3.4).
+ */
+function RunnerField({
+  runners,
+  runnerId,
+  readOnly,
+  onChange,
+}: {
+  runners: RunnerSummary[];
+  runnerId: number | null;
+  readOnly: boolean;
+  onChange: (runnerId: number | null) => void;
+}) {
+  const selected = runners.find((runner) => runner.id === runnerId);
+  const unusable =
+    runnerId == null
+      ? null
+      : selected
+        ? runnerUnusableReason(selected)
+        : 'This runner is not available to this project.';
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <RunnerSelect
+        label="Runner"
+        hostedLabel="Hosted (default)"
+        runners={runners}
+        value={runnerId}
+        onChange={onChange}
+        disabled={readOnly}
+      />
+      {unusable && (
+        <Alert color="yellow" variant="light" mt="xs" p="xs">
+          {unusable} Runs of this workflow fail until you pick another runner or the runner is usable again.
+        </Alert>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Without the flag a workflow that still names a runner fails every run, and no runner select renders.
+ * Switching it back to Hosted is the one runner change allowed then (DESIGN.md §11).
+ */
+function RunnerDisabledNotice({ readOnly, onSwitchToHosted }: { readOnly: boolean; onSwitchToHosted: () => void }) {
+  return (
+    <Alert color="yellow" variant="light" mb={20} p="xs">
+      This workflow runs on an external runner, and external runners are not enabled for this company. Runs of this
+      workflow fail until you switch it to Hosted.
+      {!readOnly && (
+        <div style={{ marginTop: 8 }}>
+          <Button size="xs" variant="light" onClick={onSwitchToHosted}>
+            Switch to Hosted
+          </Button>
+        </div>
+      )}
+    </Alert>
+  );
+}
+
+function Field({
+  label,
+  isEmpty,
+  emptyHint,
+  children,
+}: {
+  label: string;
+  isEmpty: boolean;
+  emptyHint: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-1)', marginBottom: 5 }}>{label}</div>
+      {children}
+      {isEmpty && <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>{emptyHint}</div>}
+    </div>
+  );
+}

@@ -1,0 +1,159 @@
+/* ── Workflow run detail ────────────────────────────
+ *
+ * One layout for finished and running runs: the shared DetailHeader, the
+ * Sessions/Assets tabs, and a body that is either a stacked list of session
+ * cards or — while the run is live — that same list beside the console of the
+ * session currently producing output. The Assets tab replaces the whole area,
+ * so the console is hidden rather than left ticking beside a file list.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+}
+
+.body {
+  padding: 20px 28px 48px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* The live view needs the full width for its two columns. */
+.bodyWide {
+  max-width: none;
+  margin: 0;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(340px, 440px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.consoleStack {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.console {
+  height: 520px;
+}
+
+.paneHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.paneCount {
+  font-size: 12px;
+  color: var(--app-text-tertiary);
+  font-family: var(--app-font-mono);
+}
+
+.assetRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--app-border-default);
+  border-radius: 8px;
+  background: var(--app-bg-card);
+}
+
+.assetRow + .assetRow {
+  margin-top: 10px;
+}
+
+.assetMeta {
+  flex: 1;
+  min-width: 0;
+}
+
+.assetName {
+  font-size: 13px;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assetSub {
+  font-size: 12px;
+  color: var(--app-text-tertiary);
+  margin-top: 1px;
+}
+
+.assetActions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+
+.empty {
+  font-size: 13px;
+  color: var(--app-text-tertiary);
+  padding: 40px 4px;
+  text-align: center;
+}
+
+.actionBar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--app-accent-muted);
+  border-radius: 8px;
+  background: var(--app-action-selected);
+}
+
+.actionBarText {
+  font-size: 13px;
+  color: var(--app-text-primary);
+  margin-right: auto;
+}
+
+.terminalPlaceholder {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--app-terminal-bg);
+}
+
+@media (max-width: 1100px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+
+  .console {
+    position: static;
+  }
+}
+
+@media (max-width: 900px) {
+  .body {
+    padding: 16px 16px 40px;
+  }
+}

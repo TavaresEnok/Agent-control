@@ -1,0 +1,72 @@
+<% content_for(:title) { "Feature flags" } %>
+<%= render "styles" %>
+
+<header class="main-content__header">
+  <h1 class="main-content__page-title">Feature flags</h1>
+</header>
+
+<section class="main-content__body feature-flags">
+  <p class="flag-muted">
+    Declared in <code>config/feature_flags.yml</code>. A value is decided by the first layer that is set:
+    ENV (<code>FEATURE_&lt;KEY&gt;</code>, or the flag's own variable), then a company override, then the global value, then the declared default.
+  </p>
+
+  <% rows = @overview.rows %>
+  <% if rows.empty? %>
+    <p>No feature flags are declared.</p>
+  <% else %>
+    <table>
+      <thead>
+        <tr>
+          <th>Flag</th>
+          <th>Owner</th>
+          <th>Kind</th>
+          <th>Scope</th>
+          <th>Default</th>
+          <th>ENV</th>
+          <th>Global</th>
+          <th>Overrides</th>
+          <th>Without override</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% rows.each do |row| %>
+          <% definition = row.definition %>
+          <tr>
+            <td>
+              <%= link_to definition.key, admin_feature_flag_path(definition.key) %><br>
+              <span class="flag-muted"><%= definition.description %></span>
+            </td>
+            <td><%= definition.owner %></td>
+            <td><%= definition.kind %></td>
+            <td><%= definition.scope %></td>
+            <td><%= feature_flag_value(definition.default) %></td>
+            <td>
+              <% if row.locked? %>
+                <%= feature_flag_value(row.env_value) %>
+                <span class="flag-muted">locked by <code><%= row.env_variable %></code></span>
+              <% else %>
+                <span class="flag-muted">not set</span>
+              <% end %>
+            </td>
+            <td><%= feature_flag_value(row.global) %></td>
+            <td>
+              <% if definition.company_scoped? %>
+                <%= row.overrides_on %> on, <%= row.overrides_off %> off
+              <% else %>
+                <span class="flag-muted">global flag</span>
+              <% end %>
+            </td>
+            <td><%= feature_flag_value(row.resolution.value) %> <span class="flag-muted">(<%= feature_flag_source(row.resolution.source) %>)</span></td>
+            <td>
+              <% if row.past_remove_by? %>
+                <%= feature_flag_badge("past remove-by", "danger", title: "Remove by #{definition.remove_by}") %>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</section>

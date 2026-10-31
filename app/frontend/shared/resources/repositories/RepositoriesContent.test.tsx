@@ -1,0 +1,134 @@
+import '@testing-library/jest-dom/vitest';
+import { router } from '@inertiajs/react';
+import { describe, expect, it } from 'vitest';
+
+import type { Repository } from '@/types/generated';
+import { buildIntegration } from 'test/factories/integration';
+import { buildRepository } from 'test/factories/repository';
+import { renderPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+
+import { RepositoriesContent } from './RepositoriesContent';
+
+const makeRepo = (overrides: Partial<Repository> = {}): Repository =>
+  buildRepository({
+    id: 1,
+    fullName: 'acme/backend',
+    cloneUrl: 'https://github.com/acme/backend.git',
+    sourceBranch: 'main',
+    isPrivate: false,
+    description: 'Core API service',
+    purpose: 'Primary Rails app',
+    scopeIndicator: 'company',
+    integration: buildIntegration({ id: 10, name: 'Acme GitHub', provider: 'github' }),
+    createdAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  });
+
+describe('RepositoriesContent', () => {
+  it('marks a public repository as read-only and survives its missing integration', () => {
+    renderPage(
+      <RepositoriesContent
+        title="Code Repositories"
+        basePath="/projects/1/repositories"
+        repositories={[makeRepo({ fullName: 'rails/rails', integration: null, publicSource: true })]}
+      />,
+    );
+
+    expect(screen.getByText('rails/rails')).toBeInTheDocument();
+    expect(screen.getByText('Public (read-only)')).toBeInTheDocument();
+  });
+
+  it('renders the title and a row per seeded repository', () => {
+    renderPage(
+      <RepositoriesContent
+        title="Code Repositories"
+        basePath="/companies/1/repositories"
+        repositories={[
+          makeRepo({ id: 1, fullName: 'acme/backend' }),
+          makeRepo({ id: 2, fullName: 'acme/frontend', sourceBranch: 'develop' }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Code Repositories' })).toBeInTheDocument();
+    expect(screen.getByText('acme/backend')).toBeInTheDocument();
+    expect(screen.getByText('acme/frontend')).toBeInTheDocument();
+    // branch badge rendered for the row
+    expect(screen.getByText('develop')).toBeInTheDocument();
+    expect(screen.getByText('2 repositories')).toBeInTheDocument();
+  });
+
+  it('shows the empty state when there are no repositories', () => {
+    renderPage(
+      <RepositoriesContent title="Code Repositories" basePath="/companies/1/repositories" repositories={[]} />,
+    );
+
+    expect(screen.getByText('No repositories added')).toBeInTheDocument();
+    // The header Add button + the empty-state Add button are both present.
+    expect(screen.getAllByRole('button', { name: /add repository/i }).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('filters by scope in a project context', async () => {
+    renderPage(
+      <RepositoriesContent
+        title="Project Repositories"
+        basePath="/projects/5/repositories"
+        repositories={[
+          makeRepo({ id: 1, fullName: 'acme/service', scopeIndicator: 'project' }),
+          makeRepo({ id: 2, fullName: 'acme/shared-lib', scopeIndicator: 'company' }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('acme/service')).toBeInTheDocument();
+    expect(screen.getByText('acme/shared-lib')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Project' }));
+
+    expect(screen.getByText('acme/service')).toBeInTheDocument();
+    expect(screen.queryByText('acme/shared-lib')).not.toBeInTheDocument();
+  });
+
+  it('opens the Add Repository modal when the header button is clicked', async () => {
+    renderPage(
+      <RepositoriesContent
+        title="Code Repositories"
+        basePath="/companies/1/repositories"
+        repositories={[makeRepo()]}
+      />,
+      // AddRepositoryModal reads integrations off usePage().props
+      { props: { integrations: [] } },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /add repository/i }));
+
+    // Modal body becomes visible: assert its unique field labels are present.
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Integration')).toBeInTheDocument();
+    expect(within(dialog).getByText('Repository')).toBeInTheDocument();
+    expect(within(dialog).getByText('Source branch')).toBeInTheDocument();
+  });
+
+  it('confirming the remove dialog fires router.delete for that repo', async () => {
+    renderPage(
+      <RepositoriesContent
+        title="Code Repositories"
+        basePath="/companies/1/repositories"
+        repositories={[makeRepo({ id: 42, fullName: 'acme/legacy' })]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    // Confirm modal from @mantine/modals; click its Remove button.
+    const confirmDialog = await screen.findByRole('dialog', { name: /Remove Repository/i });
+    await userEvent.click(within(confirmDialog).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() =>
+      expect(router.delete).toHaveBeenCalledWith(
+        '/companies/1/repositories/42',
+        expect.objectContaining({ preserveScroll: true }),
+      ),
+    );
+  });
+});

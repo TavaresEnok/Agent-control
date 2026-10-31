@@ -1,0 +1,93 @@
+# frozen_string_literal: true
+
+class CompanyAnalyticsService
+  ProjectBreakdown = Struct.new(:project_id, :project_name, :sessions, :cost_cents, :tokens, keyword_init: true)
+
+  Result = Struct.new(
+    :total_sessions, :total_cost_cents, :total_tokens,
+    :avg_cost_cents_per_session, :workflows_run, :project_breakdowns,
+    keyword_init: true
+  )
+
+  def initialize(company:, user:, scope:, period:)
+    @company = company
+    @user = user
+    @scope = scope.to_s
+    @range = AnalyticsPeriod.window(period).range
+  end
+
+  def call
+    sessions = base_sessions
+    stats = usage_stats_for(sessions)
+
+    total_sessions = sessions.count
+    total_cost_cents = stats[:cost_cents]
+    total_tokens = stats[:tokens]
+    avg_cost = total_sessions.positive? ? (total_cost_cents.to_f / total_sessions).round : 0
+
+    project_breakdowns = build_project_breakdowns(sessions)
+
+    Result.new(
+      total_sessions:,
+      total_cost_cents:,
+      total_tokens:,
+      avg_cost_cents_per_session: avg_cost,
+      workflows_run: base_workflow_runs.count,
+      project_breakdowns:
+    )
+  end
+
+  private
+
+  attr_reader :company, :user, :scope, :range
+
+  def base_sessions
+    scope_sessions.where(created_at: range, session_type: AnalyticsPeriod::USAGE_SESSION_TYPES)
+  end
+
+  def scope_sessions
+    base = TerminalSession.joins(:project).where(projects: { company_id: company.id })
+    scope == "user" ? base.where(user:) : base
+  end
+
+  def usage_stats_for(sessions)
+    row = UsageStatistic
+      .where(terminal_session_id: sessions.select(:id))
+      .pick(
+        Arel.sql("COALESCE(SUM(cost_cents), 0)"),
+        Arel.sql(UsageStatistic::TOTAL_TOKENS_SUM_SQL)
+      )
+    { cost_cents: row[0].to_i, tokens: row[1].to_i }
+  end
+
+  def base_workflow_runs
+    runs = WorkflowRun.joins(:project).where(projects: { company_id: company.id }, created_at: range)
+    scope == "user" ? runs.where(user:) : runs
+  end
+
+  def build_project_breakdowns(sessions)
+    rows = sessions
+      .joins(:project)
+      .joins("LEFT JOIN usage_statistics ON usage_statistics.terminal_session_id = terminal_sessions.id")
+      .group("projects.id", "projects.name")
+      .order(Arel.sql("COALESCE(SUM(usage_statistics.cost_cents), 0) DESC"))
+      .pluck(
+        "projects.id",
+        "projects.name",
+        Arel.sql("COUNT(terminal_sessions.id)"),
+        Arel.sql("COALESCE(SUM(usage_statistics.cost_cents), 0)"),
+        Arel.sql(UsageStatistic::TOTAL_TOKENS_SUM_SQL)
+      )
+      .map do |(project_id, project_name, sess_count, cost, tokens)|
+        ProjectBreakdown.new(
+          project_id:,
+          project_name:,
+          sessions: sess_count.to_i,
+          cost_cents: cost.to_i,
+          tokens: tokens.to_i
+        )
+      end
+
+    rows
+  end
+end

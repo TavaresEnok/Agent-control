@@ -1,0 +1,382 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class IntegrationTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @user = create(:user, :employee, company: @company)
+  end
+
+  # ====== Validations ======
+
+  test "valid github integration" do
+    integration = build(:integration, :github, :active, company: @company, connected_by: @user)
+    assert { integration.valid? }
+  end
+
+  test "valid gitlab integration" do
+    integration = build(:integration, :gitlab, :active, company: @company, connected_by: @user)
+    assert { integration.valid? }
+  end
+
+  test "valid linear integration" do
+    integration = build(:integration, :linear, company: @company, connected_by: @user)
+    assert { integration.valid? }
+  end
+
+  test "valid coder integration" do
+    integration = build(:integration, :coder, :active, company: @company, connected_by: @user)
+    assert { integration.valid? }
+  end
+
+  test "coder integration round-trips coder_url and session_token through credentials" do
+    integration = build(:integration, :coder, company: @company, connected_by: @user)
+    integration.credentials_data = {
+      coder_url: "https://coder.example.com",
+      session_token: "vFVrbTLdls-XYZ"
+    }
+    integration.save!
+    integration.reload
+
+    assert_equal "https://coder.example.com", integration.credentials_data["coder_url"]
+    assert_equal "vFVrbTLdls-XYZ", integration.credentials_data["session_token"]
+    assert_equal "https://coder.example.com", integration.coder_url
+  end
+
+  test "coder integration encrypts session_token at rest" do
+    integration = build(:integration, :coder, company: @company, connected_by: @user)
+    integration.credentials_data = {
+      coder_url: "https://coder.example.com",
+      session_token: "vFVrbTLdls-XYZ"
+    }
+    integration.save!
+
+    raw = integration.read_attribute(:credentials)
+    assert { raw.present? }
+    assert { !raw.include?("vFVrbTLdls-XYZ") }
+    assert { !raw.include?("coder.example.com") }
+  end
+
+  test "coder_lock_ttl_minutes returns the stored setting" do
+    integration = build(:integration, :coder, company: @company, connected_by: @user)
+    integration.settings = { "lock_ttl_minutes" => 120 }
+    assert_equal 120, integration.coder_lock_ttl_minutes
+  end
+
+  test "coder_lock_ttl_minutes returns nil when setting is absent" do
+    integration = build(:integration, :coder, company: @company, connected_by: @user)
+    integration.settings = {}
+    assert_nil integration.coder_lock_ttl_minutes
+  end
+
+  test "IntegrationResource never serializes the session token" do
+    integration = create(:integration, :coder, :active, company: @company, connected_by: @user)
+    integration.credentials_data = {
+      coder_url: "https://coder.example.com",
+      session_token: "vFVrbTLdls-SECRET-TOKEN-XYZ"
+    }
+    integration.save!
+
+    serialized = IntegrationResource.new(integration).to_h
+    json = serialized.to_json
+
+    refute_includes json, "vFVrbTLdls-SECRET-TOKEN-XYZ"
+    refute_includes json, "session_token"
+    refute_includes json, "sessionToken"
+    # Public Coder URL field is present (camelCased by Alba transform_keys :lower_camel).
+    coder_url = serialized["coderUrl"] || serialized[:coderUrl] || serialized[:coder_url] || serialized["coder_url"]
+    assert_equal "https://coder.example.com", coder_url
+  end
+
+  test "name must be present" do
+    integration = build(:integration, name: nil, company: @company, connected_by: @user)
+    assert { !integration.valid? }
+    assert { integration.errors[:name].present? }
+  end
+
+  test "provider must be present" do
+    integration = build(:integration, provider: nil, company: @company, connected_by: @user)
+    assert { !integration.valid? }
+    assert { integration.errors[:provider].present? }
+  end
+
+  test "allows multiple company-wide integrations with same provider per company" do
+    create(:integration, :github, company: @company, connected_by: @user, name: "org-a", project_id: nil)
+    second = build(:integration, :github, company: @company, connected_by: @user, name: "org-b", project_id: nil)
+    assert { second.valid? }
+    assert second.save!
+  end
+
+  test "find_or_build_github_for_installation returns the project's row when installation_id matches" do
+    project = create(:project, company: @company, owner: @user)
+    first = create(:integration, :github, company: @company, connected_by: @user, name: "org-a", project: project)
+    first.update!(credentials_data: { "installation_id" => "111" })
+
+    found = Integration.find_or_build_github_for_installation(
+      company: @company,
+      connected_by: @user,
+      project: project,
+      installation_id: "111"
+    )
+
+    assert_equal first.id, found.id
+  end
+
+  test "find_or_build_github_for_installation builds new when installation_id unknown" do
+    project = create(:project, company: @company, owner: @user)
+    create(:integration, :github, company: @company, connected_by: @user, name: "org-a", project: project)
+
+    built = Integration.find_or_build_github_for_installation(
+      company: @company,
+      connected_by: @user,
+      project: project,
+      installation_id: "999"
+    )
+
+    assert built.new_record?
+    assert_equal @user, built.connected_by
+    assert_equal project, built.project
+  end
+
+  test "find_or_build_github_for_installation does not reach into another project" do
+    project = create(:project, company: @company, owner: @user)
+    other = create(:project, company: @company, owner: @user)
+    held = create(:integration, :github, company: @company, connected_by: @user, project: other)
+
+    built = Integration.find_or_build_github_for_installation(
+      company: @company, connected_by: @user, project: project, installation_id: held.installation_id
+    )
+
+    assert built.new_record?
+  end
+
+  test "find_or_build_github_for_pat returns the project's existing PAT row" do
+    project = create(:project, company: @company, owner: @user)
+    existing = create(:integration, :github_pat, company: @company, connected_by: @user, project: project)
+
+    found = Integration.find_or_build_github_for_pat(
+      company: @company, connected_by: @user, project: project
+    )
+
+    assert_equal existing.id, found.id
+  end
+
+  # An App installation is a different kind of connection: re-pasting a token
+  # must not overwrite the credentials of the project's App row.
+  test "find_or_build_github_for_pat ignores an App installation in the same project" do
+    project = create(:project, company: @company, owner: @user)
+    create(:integration, :github, company: @company, connected_by: @user, project: project)
+
+    built = Integration.find_or_build_github_for_pat(
+      company: @company, connected_by: @user, project: project
+    )
+
+    assert built.new_record?
+    assert_equal :github, built.provider.to_sym
+  end
+
+  test "find_or_build_github_for_pat does not reach into another project" do
+    project = create(:project, company: @company, owner: @user)
+    other = create(:project, company: @company, owner: @user)
+    create(:integration, :github_pat, company: @company, connected_by: @user, project: other)
+
+    built = Integration.find_or_build_github_for_pat(
+      company: @company, connected_by: @user, project: project
+    )
+
+    assert built.new_record?
+  end
+
+  # ====== GitHub auth mode ======
+
+  test "github_auth_mode defaults to app for connections made before PAT mode existed" do
+    integration = create(:integration, :github, company: @company, connected_by: @user)
+
+    assert_equal "app", integration.github_auth_mode
+    assert integration.github_app?
+    refute_predicate integration, :github_pat?
+  end
+
+  test "github_auth_mode reads pat from settings" do
+    integration = create(:integration, :github_pat, company: @company, connected_by: @user)
+
+    assert_equal "pat", integration.github_auth_mode
+    assert integration.github_pat?
+    refute_predicate integration, :github_app?
+    assert_equal "octodev", integration.github_account_login
+  end
+
+  # Anything but the one recognised value reads as an App installation rather
+  # than as a third mode: a settings blob is editable, and an unknown value
+  # must not turn into "skip the App checks".
+  test "github_auth_mode falls back to app for an unrecognised value" do
+    integration = create(:integration, :github, company: @company, connected_by: @user,
+                         settings: { "auth_mode" => "something-else" })
+
+    assert_equal "app", integration.github_auth_mode
+  end
+
+  test "github auth mode is nil for other providers" do
+    integration = create(:integration, :gitlab, company: @company, connected_by: @user)
+
+    assert_nil integration.github_auth_mode
+    refute_predicate integration, :github_app?
+    refute_predicate integration, :github_pat?
+  end
+
+  test "github_personal_access_token reads the encrypted credential" do
+    integration = create(:integration, :github, company: @company, connected_by: @user)
+    integration.credentials_data = { "personal_access_token" => "ghp_x" }
+
+    assert_equal "ghp_x", integration.github_personal_access_token
+  end
+
+  # ====== Enumerize ======
+
+  test "provider enumerize values" do
+    assert_equal %w[github gitlab bitbucket linear coder slack teams azure_devops jira youtrack], Integration.provider.values.map(&:to_s)
+  end
+
+  test "connectable providers are provider values" do
+    assert_empty Integration::CONNECTABLE_PROVIDERS - Integration.provider.values
+  end
+
+  test "status enumerize values" do
+    assert_equal %w[active inactive error], Integration.status.values.map(&:to_s)
+  end
+
+  test "status defaults to inactive" do
+    integration = Integration.new
+    assert_equal "inactive", integration.status
+  end
+
+  # ====== Encryption ======
+
+  test "credentials_data encrypts and decrypts hash" do
+    integration = build(:integration, company: @company, connected_by: @user)
+    data = { "installation_id" => "12345", "extra" => "value" }
+    integration.credentials_data = data
+    integration.save!
+    integration.reload
+
+    assert_equal data, integration.credentials_data
+  end
+
+  test "credentials column stores encrypted text not plain JSON" do
+    integration = build(:integration, company: @company, connected_by: @user)
+    integration.credentials_data = { "installation_id" => "12345" }
+    integration.save!
+
+    raw = integration.read_attribute(:credentials)
+    assert { raw.present? }
+    assert { raw != '{"installation_id":"12345"}' }
+  end
+
+  test "credentials_data returns empty hash when credentials blank" do
+    integration = Integration.new
+    assert_equal({}, integration.credentials_data)
+  end
+
+  # Unreadable credentials must not pass for an integration that holds none —
+  # only the display path shows them as empty.
+  test "credentials_data raises on unreadable encrypted data; the display reader does not" do
+    integration = build(:integration, company: @company, connected_by: @user)
+    integration[:credentials] = "garbage-data"
+
+    assert_raises(Encryptable::DecryptionError) { integration.credentials_data }
+    assert_equal({}, integration.credentials_data_for_display)
+  end
+
+  test "installation_id convenience method" do
+    integration = build(:integration, company: @company, connected_by: @user)
+    integration.credentials_data = { "installation_id" => "67890" }
+    assert_equal "67890", integration.installation_id
+  end
+
+  # ====== Scopes ======
+
+  test "for_company scope" do
+    other_company = create(:company)
+    create(:integration, company: @company, connected_by: @user, name: "mine")
+    create(:integration, company: other_company, connected_by: @user, name: "other")
+
+    results = Integration.for_company(@company)
+    assert_equal 1, results.count
+    assert_equal "mine", results.first.name
+  end
+
+  test "active scope" do
+    create(:integration, :active, company: @company, connected_by: @user, name: "active-one")
+    create(:integration, :error, company: @company, connected_by: @user, name: "error-one")
+
+    results = Integration.active
+    assert_equal 1, results.count
+    assert_equal "active-one", results.first.name
+  end
+
+  # ====== Associations ======
+
+  test "belongs to company" do
+    integration = create(:integration, company: @company, connected_by: @user)
+    assert_equal @company, integration.company
+  end
+
+  test "belongs to connected_by user" do
+    integration = create(:integration, company: @company, connected_by: @user)
+    assert_equal @user, integration.connected_by
+  end
+
+  test "destroying company destroys integrations" do
+    other_company = create(:company)
+    create(:user, :employee, company: other_company)
+    external_user = create(:user, :employee, company: create(:company))
+    create(:integration, company: other_company, connected_by: external_user)
+    assert_difference("Integration.count", -1) do
+      other_company.destroy
+    end
+  end
+
+  test "removing a chat install takes its channels with it and switches off the triggers that listened there" do
+    slack = create(:integration, provider: :slack, status: :active, company: @company, connected_by: @user)
+    project = create(:project, company: @company, owner: @user)
+    trigger = create(:trigger_binding, project: project, workflow: create(:workflow, scope: project), created_by: @user)
+    assert_equal slack, trigger.chat_conversation.integration
+
+    slack.destroy!
+
+    trigger.reload
+    assert_equal [ false, nil, { "provider" => "slack" } ], [ trigger.enabled, trigger.chat_conversation, trigger.filter_predicate ]
+    assert_equal 0, ChatChannelConnection.count
+  end
+
+  # ====== GitLab hooks ======
+
+  test "removing a GitLab connection removes the hooks its repositories registered" do
+    integration = create(:integration, :gitlab, :active, company: @company, connected_by: @user)
+    project = create(:project, company: @company, owner: @user)
+    hooked = create(:repository, full_name: "group/app", integration: integration, scope: project,
+                                 webhook_secret: "s" * 64, gitlab_hook_id: 42)
+    create(:repository, full_name: "group/lib", integration: integration, scope: project)
+    gitlab = Fakes::FakeGitlabService.new
+    Gitlab::RepositoryService.stubs(:new).returns(gitlab)
+
+    integration.destroy!
+
+    assert_equal [ hooked.id ], gitlab.calls_for(:remove).map { |call| call.args.first.id }
+    assert_not Repository.exists?(hooked.id)
+  end
+
+  test "a hook GitLab refuses to delete does not keep the connection" do
+    integration = create(:integration, :gitlab, :active, company: @company, connected_by: @user)
+    create(:repository, full_name: "group/app", integration: integration, webhook_secret: "s" * 64,
+                        gitlab_hook_id: 42, scope: create(:project, company: @company, owner: @user))
+    gitlab = mock("gitlab repository service")
+    gitlab.stubs(:remove).raises(StandardError, "403 Forbidden")
+    Gitlab::RepositoryService.stubs(:new).returns(gitlab)
+
+    integration.destroy!
+
+    assert_not Integration.exists?(integration.id)
+  end
+end

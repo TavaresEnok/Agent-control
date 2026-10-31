@@ -1,0 +1,60 @@
+# frozen_string_literal: true
+
+class SessionSourceBreakdownService
+  include TaskFilterable
+
+  SOURCE_LABEL = {
+    "agent_session" => "Standalone",
+    "workflow_step" => "From Workflows",
+    "auth_setup"    => "Auth Setup",
+    "tool_setup"    => "Tool Setup"
+  }.freeze
+
+  SourceRow = Struct.new(:session_type, :label, :count, keyword_init: true)
+  Result = Struct.new(:sources, keyword_init: true)
+
+  def initialize(project:, user:, scope:, period:, tags: nil, task_type: nil, participant_id: nil)
+    @project = project
+    @user    = user
+    @scope   = scope.to_s
+    @range   = AnalyticsPeriod.window(period).range
+    @tags      = Array(tags).presence
+    @task_type = task_type.presence
+    @participant_id = participant_id.presence
+  end
+
+  def call
+    rows = base_sessions
+      .group(:session_type)
+      .order(Arel.sql("COUNT(*) DESC"))
+      .pluck(:session_type, Arel.sql("COUNT(*)"))
+      .map do |(session_type, count)|
+        SourceRow.new(
+          session_type: session_type,
+          label: SOURCE_LABEL.fetch(session_type, session_type.humanize),
+          count: count.to_i
+        )
+      end
+
+    Result.new(sources: rows)
+  end
+
+  private
+
+  attr_reader :project, :user, :scope, :range, :tags, :task_type, :participant_id
+
+  def base_sessions
+    s = scope_sessions.where(created_at: range)
+    s = s.where(user_id: participant_id) if participant_id
+    apply_task_filters(s)
+  end
+
+  def scope_sessions
+    case scope
+    when "user"
+      project.terminal_sessions.where(user: user)
+    else
+      project.terminal_sessions
+    end
+  end
+end

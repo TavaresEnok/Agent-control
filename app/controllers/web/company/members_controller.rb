@@ -1,0 +1,130 @@
+# frozen_string_literal: true
+
+class Web::Company::MembersController < Web::Company::ApplicationController
+  def index
+    memberships = current_company.company_memberships
+                                 .where.not(state: "revoked")
+                                 # Soft-deleted accounts are gone from the
+                                 # product; their membership row stays for
+                                 # history but must not be listed or actionable.
+                                 .joins(:user).where(users: { deleted_at: nil })
+                                 .includes(:user, :invited_by)
+                                 .ransack(params[:q])
+                                 .result
+                                 .order(created_at: :desc)
+
+    render inertia: "Company/Members/Index", props: {
+      users: memberships.map { |m| MemberResource.new(m).to_h },
+      project_handover: current_membership&.admin? ? ProjectHandover.for_company(current_company) : nil
+    }
+  end
+
+  def create
+    result = CompanyInvitation.call(
+      company: current_company, inviter: current_user,
+      email: create_params[:email], name: create_params[:name], role: allowed_role
+    )
+
+    if result.sent?
+      redirect_to company_members_path, notice: result.message
+    elsif result.status == :invalid
+      redirect_to company_members_path, inertia: { errors: result.errors }
+    else
+      redirect_to company_members_path, inertia: { errors: { email: result.message } }
+    end
+  end
+
+  # Re-send the invitation email. Touching invited_at rotates the token
+  # payload, so the previously mailed link stops working.
+  def resend
+    membership = member_membership
+
+    if membership.invited?
+      membership.update!(invited_at: Time.current)
+      MembershipMailer.invitation(membership).deliver_later
+      redirect_to company_members_path, notice: "Invitation re-sent to #{membership.user.email}"
+    else
+      redirect_to company_members_path, alert: "Only pending invitations can be re-sent"
+    end
+  end
+
+  def update
+    membership = member_membership
+    assign_role(membership)
+
+    unless fire_state_event(membership)
+      # Two-admin race (or a stale UI): the requested transition is no longer
+      # valid for the member's current state — report instead of 500ing.
+      return redirect_to company_members_path,
+                         inertia: { errors: { base: "This action is not available for the member's current state" } }
+    end
+
+    promoted = membership.promoted_from_viewer?
+
+    if membership.save
+      notice = promoted ? "Role updated. They must connect a CLI to finish onboarding." : "Member updated"
+      redirect_to company_members_path, notice: notice
+    else
+      redirect_to company_members_path, inertia: { errors: membership.errors }
+    end
+  end
+
+  # Removing a member revokes their membership in THIS company only — the
+  # global User identity (and their other memberships) stays intact.
+  def destroy
+    membership = member_membership
+
+    if membership.revoke_with_handover(handover_params)
+      redirect_to company_members_path, notice: "Member removed"
+    else
+      redirect_to company_members_path, inertia: { errors: membership.errors }
+    end
+  end
+
+  private
+
+  ALLOWED_ROLES = CompanyMembership.role.values.freeze
+  # Front-end still sends the legacy user-level events; map them onto the
+  # membership lifecycle. (The FE never sends "archive" — removal goes through
+  # DELETE — so only these two are accepted.)
+  ALLOWED_STATE_EVENTS = %w[activate suspend].freeze
+
+  # Revoked rows are invisible to member management (they are re-invitable via
+  # #create only) — matching them here would let update/destroy act on ghosts.
+  def member_membership
+    current_company.company_memberships.where.not(state: "revoked").find_by!(user_id: params[:id])
+  end
+
+  def create_params
+    params.require(:user).permit(:email, :name)
+  end
+
+  def allowed_role
+    role = params.dig(:user, :role)
+    role if role.present? && ALLOWED_ROLES.include?(role)
+  end
+
+  def assign_role(membership)
+    role = allowed_role
+    membership.role = role if role.present?
+  end
+
+  # Fires the mapped membership event; returns false when the transition is
+  # not currently valid (so the caller can surface an error instead of AASM
+  # raising InvalidTransition).
+  def fire_state_event(membership)
+    event = params.dig(:user, :state_event)
+    return true if event.blank? || ALLOWED_STATE_EVENTS.exclude?(event)
+
+    membership_event =
+      case event
+      when "activate" then membership.invited? ? :accept : :reactivate
+      when "suspend"  then :suspend
+      end
+
+    return false unless membership.aasm(:state).may_fire_event?(membership_event)
+
+    membership.aasm(:state).fire(membership_event)
+    true
+  end
+end

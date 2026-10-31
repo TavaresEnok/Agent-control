@@ -1,0 +1,728 @@
+# frozen_string_literal: true
+
+require "open3"
+require "tmpdir"
+
+module ContainerRuntime
+  # Canonical in-memory fake for the container runtime boundary (docs/testing.md §4,
+  # R3). It is a real ContainerRuntime::BaseRuntime implementing the documented
+  # interface against an in-memory virtual filesystem + command router — replacing
+  # the old StubSupport machinery (Docker::Container/Kubeclient vendor stubs +
+  # any_instance/define_method monkeypatching + manual teardown).
+  #
+  # Callers obtain it through the existing `ContainerRuntime.build` seam; tests
+  # inject it via `stub_container_runtime` (StubSupport), which stubs
+  # `ContainerRuntime.build` to return an instance — no per-test vendor stubbing.
+  #
+  # `exec` returns the documented contract [stdout_lines, stderr_lines, exit_code]
+  # (arrays), which callers consume as `result[0].join` / `result[2].zero?`.
+  class FakeRuntime < BaseRuntime
+    FULL_ID = "abcdef1234567890abcdef"
+
+    # Mirrors ContainerRuntime::KubernetesRuntime::SESSION_RESOURCE_KINDS — the
+    # object kinds one session owns, in the deletion order the BaseRuntime
+    # garbage-collection contract promises.
+    SESSION_RESOURCE_KINDS = %w[IngressRoute Middleware Service Pod].freeze
+
+    # Lightweight container handle: create_container returns this; the runtime's
+    # own methods key off the in-memory FS, not the handle, so it only carries id.
+    Handle = Struct.new(:id) do
+      def is_a?(klass)
+        klass == FakeRuntime::Handle || super
+      end
+    end
+
+    attr_reader :fs, :execs, :agent_type, :deleted_session_resources, :uploads, :cleaned_sessions
+
+    def initialize(agent_type: "claude_code", filesystem: nil)
+      super()
+      @agent_type = agent_type
+      @fs = filesystem || build_filesystem(agent_type)
+      @execs = []
+      @written_files = {}
+      @exec_failures = []
+      @unreachable_execs = []
+      @raising_execs = []
+      @unreadable_paths = []
+      @unwritable_paths = []
+      @uploads = []
+      @upload_handler = nil
+      @terminal_pane = ""
+      @terminal_log_mtime = nil
+      @default_container_status = :running
+      @container_statuses = {}
+      @container_terminations = {}
+      @container_stdout = ""
+      @session_resources = []
+      @deleted_session_resources = []
+      @undeletable_resource_names = []
+      @cleaned_sessions = []
+    end
+
+    # Liveness injection: answer #container_status with `status` for one container
+    # id, or for every container when `container_id:` is omitted. Mirrors the
+    # vocabulary documented on BaseRuntime#container_status. Passing an exception
+    # instance makes the lookup raise instead (both real runtimes swallow control
+    # plane errors into :unknown, so this models a caller-visible failure).
+    def set_container_status(status, container_id: nil)
+      if container_id.nil?
+        @default_container_status = status
+      else
+        @container_statuses[container_id.to_s] = status
+      end
+      self
+    end
+
+    # What #container_termination answers for one container id, or for every
+    # container when `container_id:` is omitted. Defaults to nil — no record.
+    def set_container_termination(details, container_id: nil)
+      @container_terminations[container_id&.to_s] = details
+      self
+    end
+
+    # What the container wrote to its own stdout, which #container_logs hands back.
+    def set_container_stdout(text)
+      @container_stdout = text
+      self
+    end
+
+    # What the container's direct upload does with the bytes. The default records the
+    # transfer and nothing else; a test that needs the object to exist afterwards supplies
+    # a block that puts it wherever it is going to be read from.
+    def on_upload(&block)
+      @upload_handler = block
+      self
+    end
+
+    # Command failure injection: register a substring of the command line and
+    # the failure to answer it with. Everything else keeps succeeding, so the
+    # default behavior is unchanged for callers that never call this. `times:`
+    # limits it to the first N matching commands, for a failure that clears.
+    def fail_exec(substring, stderr: "", exit_code: 1, times: nil)
+      @exec_failures << { substring: substring, stderr: stderr, exit_code: exit_code, remaining: times }
+    end
+
+    # Make #exec! answer as a vanished container for commands matching
+    # `substring` — the case real runtimes signal with ContainerUnreachableError
+    # rather than an exit code (see BaseRuntime#exec!). #exec is unaffected,
+    # mirroring the two methods' documented difference.
+    def unreachable_on_exec(substring)
+      @unreachable_execs << substring
+      self
+    end
+
+    # Read failure injection: both real runtimes answer nil for a file they could
+    # not pull (tar/archive error, exec hiccup) — the same nil a missing file
+    # produces. Callers that must tell those two apart (SessionContextService's TOML
+    # append refuses to overwrite a file it failed to read) need the second case to
+    # be reachable, so the path stays in #fs and only the read fails.
+    def fail_read(path)
+      @unreadable_paths << path.to_s
+      self
+    end
+
+    # Write failure injection: both real runtimes answer false for a file they could
+    # not place (tar stream or exec error, tar exiting non-zero) rather than raising.
+    # `path` is a String or, for names with a random part, a Regexp.
+    def fail_write(path)
+      @unwritable_paths << path
+      self
+    end
+
+    # Exec failure injection for the case an exit code cannot express: the call
+    # itself blows up (websocket upgrade error, connection reset), which both real
+    # runtimes let propagate out of #exec. Callers whose behaviour depends on
+    # telling "the command answered no" apart from "the command could not answer"
+    # need this second case to be reachable.
+    def raise_on_exec(substring, error: nil)
+      @raising_execs << { substring: substring, error: error || StandardError.new("exec failed") }
+      self
+    end
+
+    # The pane `tmux capture-pane` is asked for, and the mtime `stat` reports for
+    # the captured log. Both back Sessions::LiveLogReader's single exec.
+    def set_terminal_pane(text, last_output_at: nil)
+      @terminal_pane = text
+      @terminal_log_mtime = last_output_at
+      self
+    end
+
+    # -- Lifecycle ------------------------------------------------------------
+
+    def pull_image(image)
+      { status: :cached, image: image, duration_seconds: 0 }
+    end
+
+    def create_container(_spec)
+      Handle.new(FULL_ID)
+    end
+
+    def start_container(id)
+      resolve_container(id)
+    end
+
+    def wait_for_ready(_id, _ports = [])
+      true
+    end
+
+    def stop_container(_id, _timeout = nil, _options = {})
+      nil
+    end
+
+    def remove_container(_id, _options = {})
+      nil
+    end
+
+    def remove_image(_image)
+      nil
+    end
+
+    def image_digest(image)
+      "#{image}@sha256:#{'a' * 64}"
+    end
+
+    # -- Execution ------------------------------------------------------------
+
+    def exec(_id, cmd, _opts = {})
+      @execs << cmd
+      raising = @raising_execs.find { |r| command_string(cmd).include?(r[:substring]) }
+      raise raising[:error] if raising
+
+      failure = @exec_failures.find do |f|
+        command_string(cmd).include?(f[:substring]) && (f[:remaining].nil? || f[:remaining].positive?)
+      end
+      if failure
+        failure[:remaining] -= 1 if failure[:remaining]
+        return [ [ "" ], [ failure[:stderr] ], failure[:exit_code] ]
+      end
+
+      # Sessions::LogCollector asks for its declared logs and their sizes in one exec,
+      # letting the container's shell expand the globs. Answer from the virtual FS in the
+      # `path|size` shape it parses, and route it before the `stat` probe below — the
+      # listing loop contains a `stat -c %s "$f"` that probe would otherwise claim.
+      if command_string(cmd).include?("for f in") && command_string(cmd).include?("stat -c %s")
+        return [ [ log_listing(command_string(cmd)) ], [ "" ], 0 ]
+      end
+
+      # Sessions::LogCollector has the container PUT a log straight to storage. Record the
+      # transfer and let the test say what "arrived at the other end" means — the fake
+      # models the container, not the object store.
+      if (m = command_string(cmd).match(/curl .*-T (\S+) (\S+)/))
+        source = Shellwords.split(m[1]).first.to_s
+        target = Shellwords.split(m[2]).first.to_s
+        return [ [ "" ], [ "curl: (22) no such file" ], 22 ] unless @fs.key?(source)
+
+        @uploads << { path: source, url: target }
+        @upload_handler&.call(source, target, @fs[source].to_s)
+        return [ [ "" ], [ "" ], 0 ]
+      end
+
+      # Sessions::LogCollector reads a bounded tail rather than copying the whole file.
+      # An unreadable path fails the way the real `tail` does — non-zero exit, no stdout —
+      # because "the read failed" and "the file was empty" are what the collector reports
+      # differently.
+      if (m = command_string(cmd).match(/\btail -c (\d+) (\S+)/))
+        path = Shellwords.split(m[2]).first.to_s
+        return [ [ "" ], [ "tail: cannot open '#{path}'" ], 1 ] if @unreadable_paths.include?(path) || !@fs.key?(path)
+
+        content = @fs[path].to_s
+        limit = m[1].to_i
+        kept = content.bytesize > limit ? content.byteslice(-limit, limit) : content
+        return [ [ kept ], [ "" ], 0 ]
+      end
+
+      # `test -f <path>` answers through the exit code, not stdout, and it has to
+      # reflect the virtual FS: callers use it to tell "the file is not there" apart
+      # from "the read failed", which is the whole point of asking.
+      if (probe = command_string(cmd).match(/\btest -f (\S+)/))
+        return [ [ "" ], [ "" ], @fs.key?(probe[1]) ? 0 : 1 ]
+      end
+
+      # Agents::CodexAdapter#credential_preflight stats the auth file directly —
+      # answer from the virtual FS: exit 0 + size in bytes when present, non-zero
+      # exit (empty stdout) when absent, mirroring what `stat -c%s` reports.
+      if (probe = command_string(cmd).match(/\bstat -c\s*(?:%s|'%s\|%a\|%U\|%G')\s+(\S+)/))
+        path = probe[1]
+        content = @unreadable_paths.include?(path) ? nil : @fs[path]
+        return [ [ "" ], [ "stat: cannot stat #{path}" ], 1 ] if content.nil?
+
+        output = command_string(cmd).include?("%a") ? "#{content.bytesize}|644|root|root" : content.bytesize.to_s
+        return [ [ output ], [ "" ], 0 ]
+      end
+
+      # Python an adapter runs in the container (every agent image ships python3) is run
+      # for real against the virtual FS, so what it does to a file is the outcome a test
+      # sees rather than a canned answer.
+      return run_python(cmd[2], cmd.drop(3)) if cmd.is_a?(Array) && cmd[0] == "python3" && cmd[1] == "-c"
+
+      [ [ resolve_command(cmd) ], [ "" ], 0 ]
+    end
+
+    def exec!(id, cmd, opts = {})
+      if @unreachable_execs.any? { |substring| command_string(cmd).include?(substring) }
+        @execs << cmd
+        raise ContainerRuntime::ContainerUnreachableError.new(container_identifier: container_identifier(id))
+      end
+
+      exec(id, cmd, opts)
+    end
+
+    # -- File I/O -------------------------------------------------------------
+
+    # Ownership is recorded, not just the bytes: a file written as root is one
+    # the container's own user can neither read nor delete, and `exec` here does
+    # not run as root.
+    def write_file(_id, path, content, mode: 0o644, uid: 0, gid: 0)
+      return false if @unwritable_paths.any? { |unwritable| unwritable === path.to_s }
+
+      @fs[path] = content
+      @written_files[path] = { mode: mode, uid: uid, gid: gid }
+      true
+    end
+
+    # What was written where, for tests that care who owns it.
+    def file_attributes(path) = @written_files[path]
+
+    # Every path written, in order.
+    def written_paths = @written_files.keys
+
+    # -- Session objects (the admitted launch path) ----------------------------
+    #
+    # AdmittedPhaseActivity names a session's objects before it creates them and
+    # removes them by that name at cleanup. The identity has KubernetesRuntime's
+    # shape, namespace/name.
+
+    def session_identity(session)
+      "aixle-project-#{session.project_id}/terminal-#{session.route_token}"
+    end
+
+    def cleanup_session(id)
+      @cleaned_sessions << id
+      nil
+    end
+
+    def session_absent?(id) = @cleaned_sessions.include?(id)
+
+    def read_file(_id, path)
+      return nil if @unreadable_paths.include?(path.to_s)
+
+      @fs[path]
+    end
+
+    # -- Introspection --------------------------------------------------------
+
+    def resolve_container(container_id)
+      return container_id if container_id.is_a?(Handle)
+
+      Handle.new(container_id.to_s)
+    end
+
+    def container_identifier(container)
+      return nil if container.blank?
+      return container if container.is_a?(String)
+
+      container.respond_to?(:id) ? container.id.to_s[0..11] : container.to_s
+    end
+
+    def container_status(id)
+      key = id.respond_to?(:id) ? id.id.to_s : id.to_s
+      status = @container_statuses.fetch(key, @default_container_status)
+      raise status if status.is_a?(Exception)
+
+      status
+    end
+
+    def container_termination(id)
+      key = id.respond_to?(:id) ? id.id.to_s : id.to_s
+      @container_terminations.fetch(key) { @container_terminations[nil] }
+    end
+
+    def wait_container(_id, _timeout = nil)
+      { "StatusCode" => 0 }
+    end
+
+    def container_logs(_id, stdout: true, stderr: true)
+      { stdout: stdout ? @container_stdout : "", stderr: "" }
+    end
+
+    # -- Garbage collection ---------------------------------------------------
+
+    # Seed the objects the runtime is holding. `route_token:` is the key the
+    # sweeper reconciles against TerminalSession; `created_at:` is what its
+    # minimum-age guard reads. Kinds are handed back in the deletion order the
+    # BaseRuntime contract promises.
+    def seed_session_resources(route_token:, created_at:, kinds: SESSION_RESOURCE_KINDS, namespace: "aixle-project-1", name_prefix: nil)
+      prefix = name_prefix || (route_token.present? ? "terminal-#{route_token}" : "aixle-tool")
+
+      Array(kinds).map do |kind|
+        resource = ContainerRuntime::SessionResource.new(
+          kind: kind,
+          name: "#{prefix}-#{kind.downcase}",
+          namespace: namespace,
+          route_token: route_token,
+          created_at: created_at
+        )
+        @session_resources << resource
+        resource
+      end
+    end
+
+    # Make one object refuse to be deleted, so callers can exercise the
+    # failure-counting path without stubbing the runtime.
+    def fail_session_resource_delete(name)
+      @undeletable_resource_names << name
+    end
+
+    def list_session_resources
+      @session_resources.dup
+    end
+
+    def delete_session_resource(resource)
+      return false if @undeletable_resource_names.include?(resource.name)
+
+      @session_resources.delete(resource)
+      @deleted_session_resources << resource
+      true
+    end
+
+    private
+
+    # Command router — maps the handful of shell commands the strategies run to
+    # deterministic output backed by the virtual FS (ports StubSupport.resolve_command).
+    def command_string(cmd)
+      cmd.is_a?(Array) ? cmd.join(" ") : cmd.to_s
+    end
+
+    def resolve_command(cmd)
+      cmd_str = command_string(cmd)
+
+      return "open\n" if cmd_str.include?("echo 'open'")
+      return "0\n" if cmd_str.include?(".agent_done")
+      return live_terminal_read(cmd_str) if cmd_str.include?("capture-pane")
+      return KIRO_MODEL_CATALOGUE if cmd_str.include?("--list-models")
+
+      if cmd_str.include?("find") && cmd_str.include?("/workspace/outputs")
+        return @fs.keys.select { |k| k.start_with?("/workspace/outputs/") }.join("\n")
+      end
+
+      if (m = cmd_str.match(/cat\s+(\S+)/))
+        return @fs[m[1]] || ""
+      end
+
+      ""
+    end
+
+    # Expands the collector's declared patterns against the virtual FS, as the
+    # container's shell would, and reports each match with its size. A pattern that
+    # matches nothing simply contributes no line — which is what the collector then
+    # reports as a declaration the image no longer honours.
+    def log_listing(cmd_str)
+      patterns = cmd_str[/for f in (.+?); do/, 1].to_s.split
+      sep = ::Sessions::LogCollector::FIELD_SEPARATOR
+      lines = patterns.flat_map { |pattern| @fs.keys.select { |path| File.fnmatch?(pattern, path) }.sort }
+                      .uniq
+                      .map { |path| "#{path}#{sep}#{@fs[path].to_s.bytesize}" }
+
+      # The collector probes for the in-container redaction filters in the same exec, and
+      # answers it from the same virtual FS: an image without them keeps the bounded read.
+      marker = ::Sessions::LogCollector::FILTER_MARKER_PATH
+      lines << "#{::Sessions::LogCollector::FILTERS_FIELD}#{sep}1" if @fs.key?(marker)
+
+      lines.join("\n")
+    end
+
+    # Sessions::LiveLogReader asks for the log's mtime and the pane in one exec,
+    # separated by its marker. Honour the same shape here (including the marker
+    # when the reader's command carries one) so the reader's parsing is what the
+    # test exercises.
+    def live_terminal_read(cmd_str)
+      pane = @terminal_pane.to_s
+      return pane unless cmd_str.include?(::Sessions::LiveLogReader::MARKER)
+
+      mtime = @terminal_log_mtime ? "#{@terminal_log_mtime.to_i}\n" : ""
+      "#{mtime}#{::Sessions::LiveLogReader::MARKER}\n#{pane}"
+    end
+
+    # -- Per-agent virtual filesystem with realistic fixture data -------------
+
+    # Every absolute-path argument is materialized from #fs into a scratch file, and read
+    # back afterwards — or removed from #fs if the script deleted it.
+    def run_python(script, args)
+      Dir.mktmpdir("fake-runtime") do |dir|
+        local = args.each_with_index.to_h do |arg, i|
+          arg.start_with?("/") ? [ arg, File.join(dir, "arg#{i}#{File.extname(arg)}") ] : [ arg, arg ]
+        end
+        local.each { |path, file| File.binwrite(file, @fs[path]) if path != file && @fs.key?(path) }
+
+        stdout, stderr, status = Open3.capture3("python3", "-c", script, *local.values)
+
+        local.each do |path, file|
+          next if path == file
+
+          File.exist?(file) ? @fs[path] = File.binread(file) : @fs.delete(path)
+        end
+        [ [ stdout ], [ stderr ], status.exitstatus ]
+      end
+    end
+
+    def build_filesystem(agent_type)
+      auth = AUTH_CONFIGS.fetch(agent_type)
+      log = MITM_LOGS.fetch(agent_type, "")
+
+      fs = {}
+      fs[auth[:path]] = auth[:content]
+      auth[:extra_files]&.each { |path, content| fs[path] = content }
+      fs["/var/log/mitm/http.log"] = log if log.present?
+      fs["/tmp/terminal_output.log"] = terminal_output_fixture(agent_type)
+      fs["/workspace/outputs/result.md"] = "# Result\n\nGenerated output.\n"
+      fs
+    end
+
+    def terminal_output_fixture(agent_type)
+      case agent_type
+      when "claude_code"
+        <<~LOG
+          ╭─ Claude Code ─────────────────────────────────────────╮
+          │                  Welcome back Test User!               │
+          ╰───────────────────────────────────────────────────────╯
+
+          > Create two test files with sample content
+
+          I'll create two test files for you.
+
+          ✓ Created file1.txt
+          ✓ Created file2.txt
+
+          Total cost: $0.03
+          Duration: 8.2s
+        LOG
+      when "cursor_cli"
+        <<~LOG
+
+          Cursor Agent v2026.02.13-41ac335
+          /workspace
+          (cwd is not a git repository, cursor rules and ignore
+          files don't apply)
+
+
+          Create two test files with sample content
+
+
+          Creating two test files in /workspace/outputs/.
+
+          ✓ Wrote output/file1.txt (24 bytes)
+          ✓ Wrote output/file2.txt (36 bytes)
+        LOG
+      when "codex"
+        <<~LOG
+
+          ╭───────────────────────────────────────╮
+          │ >_ OpenAI Codex (v0.104.0)            │
+          │                                       │
+          │ model:     codex-mini-latest           │
+          │ directory: /workspace                  │
+          ╰───────────────────────────────────────╯
+
+          > Create two test files with sample content
+
+          Created file1.txt and file2.txt with sample content.
+        LOG
+      when "gemini_cli"
+        <<~LOG
+          Gemini CLI v0.1.0
+          Model: gemini-2.5-pro
+
+          > Create two test files with sample content
+
+          Done. I created:
+          - file1.txt
+          - file2.txt
+        LOG
+      when "grok"
+        <<~LOG
+          Grok 1.0.3
+          model: grok-4.5
+
+          > Create two test files with sample content
+
+          Created file1.txt and file2.txt with sample content.
+        LOG
+      when "kiro_cli"
+        <<~LOG
+          kiro-cli 2.20.1
+
+          > Create two test files with sample content
+
+          Created file1.txt and file2.txt with sample content.
+        LOG
+      else
+        "$ agent running\nTask completed.\n"
+      end
+    end
+
+    AUTH_CONFIGS = {
+      "claude_code" => {
+        path: "/home/claude/.claude.json",
+        content: {
+          "oauthAccount" => {
+            "accountUuid" => "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "emailAddress" => "test@example.com",
+            "organizationUuid" => "org-uuid-1234-5678",
+            "hasExtraUsageEnabled" => false,
+            "displayName" => "Test User",
+            "organizationRole" => "admin",
+            "workspaceRole" => "workspace_developer",
+            "organizationName" => "Test Org"
+          },
+          "primaryApiKey" => "sk-ant-api03-test-key-placeholder",
+          "customApiKeyResponses" => { "approved" => [ "HfZnizK6U3g-test" ], "rejected" => [] },
+          "userID" => "0ea9651c48666ae1test"
+        }.to_json
+      },
+      "cursor_cli" => {
+        path: "/home/cursor/.config/cursor/auth.json",
+        content: {
+          "accessToken" => "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhdXRoMHx1c2VyXzAxSlE5TlNQM1k2WUQ4NTlFR1BRUzkyNjlDIiwidGltZSI6IjE3NzAyNDg3MTgiLCJleHAiOjE3NzU0MzI3MTgsInR5cGUiOiJzZXNzaW9uIn0.test-signature",
+          "refreshToken" => "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhdXRoMHx1c2VyXzAxSlE5TlNQIiwidHlwZSI6InJlZnJlc2gifQ.test-refresh-sig"
+        }.to_json
+      },
+      "codex" => {
+        path: "/home/codex/.codex/auth.json",
+        content: {
+          "auth_mode" => "chatgpt",
+          "OPENAI_API_KEY" => nil,
+          "tokens" => {
+            "id_token" => "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2lkIiwidHlwIjoiSldUIn0.test-id-token",
+            "access_token" => "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3QiLCJ0eXAiOiJKV1QifQ.test-access-token",
+            "refresh_token" => "test-codex-refresh-token",
+            "account_id" => "user-xxVJrnT5jgBXof5mAWoFlkNo"
+          },
+          "last_refresh" => Time.now.utc.iso8601
+        }.to_json
+      },
+      "gemini_cli" => {
+        path: "/home/gemini/.gemini/settings.json",
+        content: {
+          "security" => { "auth" => { "selectedType" => "gemini-api-key" } }
+        }.to_json,
+        extra_files: {
+          "/home/gemini/.gemini/gemini-credentials.json" =>
+            "9b744f9a5cab60c42a69a50f:04da5baafc2bbc778085937044112f07:2a4afe6a9c8969be3dfa312251b49ef9807b3271175bedacfc2f0f319176956cb144525368f4b9468db780e8d419f6e05ea7881b34370411bd33bdf7b913045dc9f2279f15c5b4bef8933933642f644487b5d141790619784e43c202c64016451d92"
+        }
+      },
+      # Grok CLI writes one file for every login flow: a map of auth scope => entry,
+      # with the bearer token under "key".
+      "grok" => {
+        path: "/home/grok/.grok/auth.json",
+        content: {
+          "https://accounts.x.ai/sign-in" => {
+            "key" => "grok-session-token-placeholder",
+            "token_type" => "Bearer"
+          }
+        }.to_json
+      },
+      # Kiro CLI keeps its login in a SQLite database rather than a config document,
+      # and the adapter stores it as an opaque blob. Two things make this fixture what
+      # it is: the file-format header, which is how the adapter recognises the
+      # credential, and the token payload's OAuth field names plus the selected profile's
+      # state key, which are how both the watcher and #auth_complete? tell a finished
+      # login from a database the CLI merely created (see
+      # Agents::KiroCliAdapter::AUTH_MARKERS). A fixture without them would be a
+      # database from an abandoned login, which correctly saves no credential.
+      "kiro_cli" => {
+        path: "/home/kiro/.local/share/kiro-cli/data.sqlite3",
+        content: "#{Agents::KiroCliAdapter::SQLITE_MAGIC}\x10auth_kv kirocli:odic:token " \
+                 '{"access_token":"placeholder","refresh_token":"placeholder"} ' \
+                 "state #{Agents::KiroCliAdapter::PROFILE_STATE_KEY} " \
+                 '{"arn":"arn:aws:codewhisperer:us-east-1:1:profile/A"}'
+      }
+    }.freeze
+
+    # `kiro-cli --v3 chat --list-models --format json`, trimmed to three entries and
+    # keeping the CLI's snake_case field names — which differ from the CodeWhisperer
+    # API's camelCase, and that difference is the point of the fixture.
+    KIRO_MODEL_CATALOGUE = {
+      "models" => [
+        { "model_name" => "auto", "model_id" => "auto", "description" => "Models chosen by task",
+          "context_window_tokens" => 1_000_000, "rate_multiplier" => 1.0, "rate_unit" => "Credit" },
+        { "model_name" => "claude-opus-5", "model_id" => "claude-opus-5", "description" => "Claude Opus 5",
+          "context_window_tokens" => 1_000_000, "rate_multiplier" => 2.2, "rate_unit" => "Credit" },
+        { "model_name" => "qwen3-coder-next", "model_id" => "qwen3-coder-next", "description" => "Qwen3 Coder Next",
+          "context_window_tokens" => 256_000, "rate_multiplier" => 0.05, "rate_unit" => "Credit" }
+      ],
+      "default_model" => "auto"
+    }.to_json
+
+    MITM_LOGS = {
+      "claude_code" => "",
+      "gemini_cli" => "",
+      "grok" => "",
+      "kiro_cli" => "",
+      "cursor_cli" => [
+        { _source: "http2-logger", direction: "request", scheme: "https", method: "POST",
+          host: "api2.cursor.sh", port: 443,
+          path: "/agent.v1.AgentService/Run",
+          url: "https://api2.cursor.sh/agent.v1.AgentService/Run",
+          ts: Time.now.utc.iso8601(6),
+          headers: {
+            "accept-encoding" => "gzip,br",
+            "authorization" => "Bearer eyJhbGciOiJIUzI1NiJ9.test-token",
+            "connect-protocol-version" => "1",
+            "content-type" => "application/proto",
+            "user-agent" => "connect-es/1.6.1",
+            "x-cursor-client-type" => "cli",
+            "x-cursor-client-version" => "cli-2026.02.13-41ac335",
+            "x-ghost-mode" => "true",
+            "x-request-id" => "f3b82c20-18aa-4f88-ba0d-c7036521f1e2"
+          },
+          content_length: 42, body_encoding: "text", body_truncated: false },
+        { _source: "http2-logger", direction: "response", status_code: 200,
+          host: "api2.cursor.sh",
+          path: "/agent.v1.AgentService/Run",
+          url: "https://api2.cursor.sh/agent.v1.AgentService/Run",
+          ts: (Time.now.utc + 12.5).iso8601(6),
+          headers: {
+            "Date" => Time.now.utc.httpdate,
+            "Content-Type" => "application/proto",
+            "Connection" => "close",
+            "vary" => "Origin",
+            "access-control-allow-credentials" => "true",
+            "x-request-id" => "f3b82c20-18aa-4f88-ba0d-c7036521f1e2"
+          },
+          content_length: 0, body_encoding: "text", body_truncated: false }
+      ].map(&:to_json).join("\n") + "\n",
+      "codex" => [
+        { direction: "request", scheme: "https", method: "GET",
+          host: "chatgpt.com", port: 443,
+          path: "/backend-api/codex/models?client_version=0.104.0",
+          url: "https://chatgpt.com/backend-api/codex/models?client_version=0.104.0",
+          ts: Time.now.utc.iso8601(6),
+          headers: {
+            "version" => "0.104.0",
+            "authorization" => "Bearer eyJhbGciOiJSUzI1NiJ9.test-codex-bearer",
+            "user-agent" => "codex_cli_rs/0.104.0 (Debian 12.0.0; aarch64) xterm-256color"
+          },
+          content_length: 0, body_encoding: "text", body_truncated: false },
+        { direction: "response", status_code: 200,
+          host: "chatgpt.com",
+          path: "/backend-api/codex/responses",
+          url: "https://chatgpt.com/backend-api/codex/responses",
+          ts: (Time.now.utc + 2.3).iso8601(6),
+          headers: {
+            "Date" => Time.now.utc.httpdate,
+            "Content-Type" => "text/event-stream",
+            "Connection" => "keep-alive",
+            "Server" => "cloudflare",
+            "x-oai-request-id" => "f4935b8a-2704-439f-8905-09f00f4aeee1"
+          },
+          content_length: 0, body_encoding: "text", body_truncated: false,
+          body: [
+            '{"type":"response.created","response":{"id":"resp_test123","model":"codex-mini-latest","status":"in_progress"}}',
+            '{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant"}}',
+            '{"type":"response.completed","response":{"id":"resp_test123","model":"codex-mini-latest","status":"completed",' \
+            '"usage":{"input_tokens":1547,"output_tokens":832,"total_tokens":2379,"cached_tokens":512,"reasoning_tokens":128}}}'
+          ].join("\n") }
+      ].map(&:to_json).join("\n") + "\n"
+    }.freeze
+  end
+end

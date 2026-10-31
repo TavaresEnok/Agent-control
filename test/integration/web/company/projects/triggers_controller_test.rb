@@ -1,0 +1,50 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class Web::Company::Projects::TriggersControllerTest < ActionDispatch::IntegrationTest
+  setup do
+    @company = create(:company)
+    @user = create(:user, :admin, :onboarding_completed, company: @company, password: AuthHelper::TEST_PASSWORD)
+    @project = create(:project, company: @company, owner: @user)
+    sign_in_as(@user)
+  end
+
+  test "the page gets the project's live workflows, board columns and trackers for the form's pickers" do
+    column = create(:board_column, board: create(:board, project: @project), name: "Inbox", position: 1)
+    intake = create(:workflow, scope: @project, name: "Intake")
+    ColumnWorkflowBinding.create!(board_column: column, workflow: intake, created_by: @user)
+    archived = create(:workflow, scope: @project, name: "Old")
+    archived.update_columns(deleted_at: Time.current)
+
+    get company_project_triggers_path(@project)
+
+    assert_inertia_page "Projects/Triggers/TriggersPage"
+    assert_inertia_props do |props|
+      props[:workflows].map { |w| w["name"] } == [ "Intake" ] &&
+        props[:boardColumns].map { |c| c["boundWorkflowName"] } == [ "Intake" ] &&
+        props[:trackers] == []
+    end
+  end
+
+  test "the chat form offers the connected messengers and the channels connected to the company" do
+    create(:integration, provider: :slack, status: :active, company: @company, project: nil,
+                         settings: { "bot_name" => "aixle-flow" })
+    teams = create(:integration, provider: :teams, status: :active, company: @company, project: nil)
+    create(:integration, provider: :teams, status: :active, company: create(:company), project: nil)
+    onboarding = connect_chat_channel(company: @company, provider: "teams", integration: teams,
+                                      external_id: "19:a@thread.tacv2", name: "Onboarding")
+    onboarding.update!(team_name: "Sales")
+    teams.chat_conversations.create!(provider: "teams", external_id: "19:b@thread.tacv2", kind: "channel", name: "Unconnected")
+    teams.chat_conversations.create!(provider: "teams", external_id: "a:1dm", kind: "direct")
+
+    get company_project_triggers_path(@project)
+
+    assert_inertia_props do |props|
+      props[:chatProviders].map { |p| p.values_at(:key, :botName) } == [ %w[slack aixle-flow], [ "teams", "Aixle Flow" ] ] &&
+        props[:chatProviders].last[:conversations] ==
+          [ { "id" => onboarding.id, "name" => "Onboarding", "label" => "Onboarding", "kind" => "channel",
+              "teamName" => "Sales", "provider" => "teams" } ]
+    end
+  end
+end

@@ -1,0 +1,40 @@
+# Every flag the app may check, as `Feature.enabled?(:key, ...)`. Loaded and
+# validated once at boot by FeatureFlags::Registry: an invalid entry fails boot.
+# Guide: docs/architecture/feature-flags.md
+#
+# Keys are snake_case (/\A[a-z][a-z0-9_]*\z/); FEATURE_<KEY> locks the flag.
+#
+#   board_ai_summary:
+#     description: AI summary panel on the board task drawer.   # required
+#     owner: "@AixleHQ/board"                                    # required
+#     kind: release                                              # required: release | ops
+#     scope: company                                             # required: company | global
+#     default: false                                             # required: true | false
+#     client: true                                               # optional, default false
+#                                       # sent to the browser in the `features` prop; FeaturesResource
+#                                       # turns it into the generated `Features` type that
+#                                       # useFeatureFlag takes, so no frontend list needs editing
+#     introduced: 2026-11-03                                     # optional
+#     remove_by: 2027-01-31                                      # required for kind: release
+#     env: BOARD_AI_SUMMARY_ENABLED                              # optional
+#                                       # one more variable that locks the flag, parsed like
+#                                       # FEATURE_<KEY>; FEATURE_<KEY> wins when both are set
+
+coder_reap:
+  description: Lets the Coder reaper delete dead workspaces.
+  owner: "@AixleHQ/platform"
+  kind: ops
+  scope: global
+  default: true
+  client: false
+  env: CODER_REAP_ENABLED
+
+external_runners:
+  description: External agent runners — connect a machine, Coder or Kubernetes and run agent sessions there.
+  owner: "@AixleHQ/platform"
+  kind: release
+  scope: company
+  default: false
+  client: true
+  introduced: 2026-10-26
+  remove_by: 2027-06-30    # a review checkpoint, not a planned removal date (docs/design/agent-runtimes/DESIGN.md §12.1)

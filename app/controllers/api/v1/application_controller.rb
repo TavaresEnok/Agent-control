@@ -1,0 +1,118 @@
+# frozen_string_literal: true
+
+module Api
+  module V1
+    class ApplicationController < ::ApplicationController
+      wrap_parameters false
+      include Pundit::Authorization
+      include AuthorizationConcern
+      include PaginationConcern
+
+      # Cookie-authenticated, so CSRF-protected like the web tree: SameSite=Lax
+      # leaves same-site origins (sibling subdomains, anything served under the
+      # app's host) able to post a form here. apiFetch sends X-CSRF-Token on
+      # every call. Machine endpoints opt out in Api::V1::Internal.
+      protect_from_forgery with: :exception
+      before_action :authenticate_user!
+      # The web tree's company sign-in gate, answered for the company this
+      # request acts in rather than the one the browser happens to be on.
+      before_action :enforce_company_auth_policy
+      # Authorize-by-default: every action in the api/v1 tree is Pundit-checked.
+      before_action :dynamic_authorize!
+      # Defense-in-depth verb backstop: a read-only client may only issue safe requests.
+      before_action :deny_read_only_mutation!
+
+      # Tripwire (test/dev only): fail loudly if an action never called `authorize`.
+      # Kept off in production so a coverage gap can't turn into a 500 — the
+      # NotDefinedError rescue below already makes prod fail closed (403).
+      if Rails.env.test? || Rails.env.development?
+        after_action :verify_authorized
+      end
+
+      rescue_from Pundit::NotAuthorizedError, with: :user_not_authorized
+      # Fail closed: a controller shipped without a policy denies (403) instead of 500.
+      rescue_from Pundit::NotDefinedError, with: :user_not_authorized
+      rescue_from ActiveRecord::RecordNotFound, with: :record_not_found
+      # A failed validation is the client's problem, not a server fault: without this, every
+      # `save!`/`create!` in the tree answers 500 with no hint of which field was rejected.
+      rescue_from ActiveRecord::RecordInvalid, with: :record_invalid
+      rescue_from ActionController::InvalidAuthenticityToken, with: :invalid_authenticity_token
+      rescue_from Versions::StaleVersion, with: :stale_version
+      rescue_from Versions::InUse, with: :entity_in_use
+
+      private
+
+      def policy_context
+        BaseContext.new(current_user, params)
+      end
+
+      # Defense-in-depth verb backstop, mirroring the policies' read_only?
+      # classification and failing CLOSED:
+      # - a resolvable company context (project's company / explicit company):
+      #   deny unless the user has a non-viewer ACTIVE membership THERE;
+      # - no company context: deny users with zero active memberships and pure
+      #   viewers. Super admins (no memberships by design) are exempt.
+      def deny_read_only_mutation!
+        return if request.get? || request.head?
+        return unless current_user
+        return if current_user.super_admin?
+
+        render json: { error: "Not authorized" }, status: :forbidden if read_only_request?
+      end
+
+      def read_only_request?
+        if (company = backstop_company)
+          membership = current_user.company_memberships.active.find_by(company_id: company.id)
+          membership.nil? || membership.viewer?
+        else
+          current_user.active_memberships.none? || current_user.active_memberships.all?(&:viewer?)
+        end
+      end
+
+      def backstop_company
+        ctx = policy_context
+        ctx.respond_to?(:company) ? ctx.company : nil
+      end
+
+      def enforce_company_auth_policy
+        return unless current_user
+        return if current_user.super_admin?
+
+        company = auth_policy_company
+        return if company_auth_policy_satisfied?(company)
+
+        render json: { error: "step_up_required", stepUpUrl: step_up_path(company_id: company.id) }, status: :forbidden
+      end
+
+      def auth_policy_company
+        backstop_company || current_company
+      end
+
+      def user_not_authorized
+        render json: { error: "Not authorized" }, status: :forbidden
+      end
+
+      def stale_version(error)
+        render json: { error: error.message, currentVersionNumber: error.current_number }, status: :conflict
+      end
+
+      def entity_in_use(error)
+        render json: { error: error.message, usages: error.usages }, status: :unprocessable_entity
+      end
+
+      def record_not_found
+        render json: { error: "Record not found" }, status: :not_found
+      end
+
+      def invalid_authenticity_token
+        render json: { error: "Invalid or missing CSRF token" }, status: :unprocessable_entity
+      end
+
+      def record_invalid(exception)
+        messages = exception.record ? exception.record.errors.full_messages : []
+        messages = [ exception.message ] if messages.empty?
+        render json: { error: messages.to_sentence, errors: messages }, status: :unprocessable_entity
+      end
+    end
+  end
+end

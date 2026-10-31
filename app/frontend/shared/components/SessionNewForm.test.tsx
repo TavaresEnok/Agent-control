@@ -1,0 +1,756 @@
+import '@testing-library/jest-dom/vitest';
+import { router } from '@inertiajs/react';
+import { describe, expect, it, vi } from 'vitest';
+
+import { buildRunnerSummary } from 'test/factories/runner';
+import { buildSharedUser } from 'test/factories/sharedProps';
+import { renderAuthedPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+
+import { SessionNewForm, type SessionNewFormProps } from './SessionNewForm';
+
+function makeProps(overrides: Partial<SessionNewFormProps> = {}): SessionNewFormProps {
+  return {
+    onCreatedPath: (id, projectId) => `/sessions/${id}?project=${projectId}`,
+    fallbackPath: '/fallback',
+    ...overrides,
+  };
+}
+
+// Seed SharedProps with a currentUser whose configured agents we control.
+function authProps(
+  configuredAgents: (
+    'claude_code' | 'cursor_cli' | 'codex' | 'gemini_cli' | 'antigravity_cli' | 'grok' | 'kiro_cli'
+  )[] = [],
+) {
+  return { currentUser: buildSharedUser({ configuredAgents }) };
+}
+
+describe('SessionNewForm', () => {
+  it('renders the agent runtime options and disables Start until a configured agent is chosen', () => {
+    renderAuthedPage(<SessionNewForm {...makeProps()} />, { props: authProps([]) });
+
+    // All six runtimes are shown.
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
+    expect(screen.getByText('Cursor CLI')).toBeInTheDocument();
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+    expect(screen.getByText('Gemini CLI')).toBeInTheDocument();
+    expect(screen.getByText('Antigravity CLI')).toBeInTheDocument();
+    expect(screen.getByText('Grok')).toBeInTheDocument();
+
+    // With no configured agents, every runtime tile is marked as needing setup.
+    expect(screen.getAllByText('Setup')).toHaveLength(7);
+
+    // Start is disabled because no agent can be selected.
+    expect(screen.getByRole('button', { name: /start session/i })).toBeDisabled();
+  });
+
+  it('enables Start after selecting a configured agent in interactive mode', async () => {
+    const user = userEvent.setup();
+    renderAuthedPage(<SessionNewForm {...makeProps()} />, { props: authProps(['claude_code']) });
+
+    const startBtn = screen.getByRole('button', { name: /start session/i });
+    expect(startBtn).toBeDisabled();
+
+    await user.click(screen.getByText('Claude Code'));
+
+    expect(startBtn).toBeEnabled();
+  });
+
+  it('does NOT submit when no agent is selected (click on a disabled control is a no-op)', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    renderAuthedPage(<SessionNewForm {...makeProps()} />, { props: authProps(['claude_code']) });
+
+    // Button is disabled; clicking must not fire a request or navigation.
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(router.visit).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('posts a session and navigates via onCreatedPath on success', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 'sess-77' } }),
+    } as Response);
+
+    const onCreatedPath = vi.fn((id: string) => `/sessions/${id}`);
+    renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 42, onCreatedPath })} />, {
+      props: authProps(['claude_code']),
+    });
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+
+    // The POST body carries the chosen runtime and the fixed project id.
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse(init!.body as string);
+    expect(body.terminalSession.agentType).toBe('claude_code');
+    expect(body.terminalSession.projectId).toBe(42);
+
+    await waitFor(() => expect(router.visit).toHaveBeenCalledWith('/sessions/sess-77'));
+    expect(onCreatedPath).toHaveBeenCalledWith('sess-77', 42);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('shows a server error message and does not navigate when the request fails', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ errors: ['Quota exceeded'] }),
+    } as Response);
+
+    renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1 })} />, { props: authProps(['codex']) });
+
+    await user.click(screen.getByText('Codex'));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    expect((await screen.findAllByText('Quota exceeded')).length).toBeGreaterThanOrEqual(1);
+    expect(router.visit).not.toHaveBeenCalled();
+
+    fetchSpy.mockRestore();
+  });
+
+  it('shows a per-server Connect CTA when the OAuth preflight blocks the launch (422)', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: () =>
+        Promise.resolve({
+          error: 'Connect required before launching: Sentry',
+          reauth_required: [{ mcp_server_id: 5, name: 'Sentry', connect_url: '/oauth/mcp/5/connect' }],
+        }),
+    } as Response);
+
+    renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1 })} />, { props: authProps(['claude_code']) });
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    // A Connect button per unconnected server — not a raw error, and no navigation.
+    expect(await screen.findByRole('button', { name: 'Connect Sentry' })).toBeInTheDocument();
+    expect(router.visit).not.toHaveBeenCalled();
+
+    fetchSpy.mockRestore();
+  });
+
+  it('connects an MCP server with a top-level POST, since connecting starts a flow', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: () =>
+        Promise.resolve({
+          error: 'Connect required before launching: Sentry',
+          reauth_required: [
+            { mcp_server_id: 5, name: 'Sentry', connect_url: '/oauth/mcp/5/connect', connect_method: 'post' },
+          ],
+        }),
+    } as Response);
+    // jsdom does not navigate on form submission; the submitted form is what matters.
+    const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {});
+
+    renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1 })} />, { props: authProps(['claude_code']) });
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+    await user.click(await screen.findByRole('button', { name: 'Connect Sentry' }));
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    const form = submit.mock.contexts[0] as HTMLFormElement;
+    expect(form.method).toBe('post');
+    expect(form.getAttribute('action')).toBe('/oauth/mcp/5/connect');
+
+    submit.mockRestore();
+    fetchSpy.mockRestore();
+  });
+
+  it('requires a prompt in automatic mode: Start stays disabled until text is entered', async () => {
+    const user = userEvent.setup();
+    renderAuthedPage(<SessionNewForm {...makeProps()} />, { props: authProps(['claude_code']) });
+
+    await user.click(screen.getByText('Claude Code'));
+    // Switch to Automatic (non_interactive) execution mode.
+    await user.click(screen.getByRole('radio', { name: /Automatic/ }));
+
+    const startBtn = screen.getByRole('button', { name: /start session/i });
+    expect(startBtn).toBeDisabled();
+
+    const prompt = screen.getByRole('textbox', { name: /initial prompt/i });
+    await user.type(prompt, 'Refactor the auth module');
+
+    expect(startBtn).toBeEnabled();
+  });
+
+  it('renders a session summary badge reflecting the selected agent and mode', async () => {
+    const user = userEvent.setup();
+    renderAuthedPage(<SessionNewForm {...makeProps()} />, { props: authProps(['gemini_cli']) });
+
+    await user.click(screen.getByText('Gemini CLI'));
+
+    const summary = screen.getByText('Session Summary').closest('div')!;
+    expect(within(summary.parentElement as HTMLElement).getByText('Interactive')).toBeInTheDocument();
+  });
+  it('does not render the secrets picker when the project has no config items', () => {
+    renderAuthedPage(<SessionNewForm {...makeProps()} />, { props: authProps(['claude_code']) });
+
+    expect(screen.queryByRole('combobox', { name: /secrets and variables/i })).not.toBeInTheDocument();
+  });
+
+  it('marks secrets in the picker so a secret reads differently from a variable', async () => {
+    const user = userEvent.setup();
+    renderAuthedPage(
+      <SessionNewForm
+        {...makeProps({
+          projectId: 1,
+          configItems: [
+            { id: 7, name: 'STRIPE_KEY', itemType: 'secret' },
+            { id: 8, name: 'API_BASE', itemType: 'variable' },
+          ],
+        })}
+      />,
+      { props: authProps(['claude_code']) },
+    );
+
+    const picker = screen.getByRole('combobox', { name: /secrets and variables/i });
+    await user.click(picker);
+
+    // A secret is labelled as such: attaching one is a different decision.
+    expect(await screen.findByText('STRIPE_KEY (secret)')).toBeInTheDocument();
+    expect(screen.getByText('API_BASE')).toBeInTheDocument();
+  });
+
+  it('sends the selected config item ids with the session', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 'sess-9' } }),
+    } as Response);
+
+    renderAuthedPage(
+      <SessionNewForm
+        {...makeProps({ projectId: 3, configItems: [{ id: 7, name: 'STRIPE_KEY', itemType: 'secret' }] })}
+      />,
+      { props: authProps(['claude_code']) },
+    );
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('combobox', { name: /secrets and variables/i }));
+    await user.click(await screen.findByText('STRIPE_KEY (secret)'));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(JSON.parse(init!.body as string).terminalSession.configItemIds).toEqual([7]);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('offers a tool group as a collapsed section whose tools open on demand', async () => {
+    const user = userEvent.setup();
+    renderAuthedPage(
+      <SessionNewForm
+        {...makeProps({
+          projectId: 3,
+          tools: [
+            { id: 10, name: 'Board List Tasks' },
+            { id: 11, name: 'Board Move Task' },
+            { id: 20, name: 'Echo Greeter' },
+          ],
+          toolGroups: [{ tag: 'board', label: 'Board management', toolIds: [10, 11] }],
+        })}
+      />,
+      { props: authProps(['claude_code']) },
+    );
+
+    await user.click(screen.getByRole('combobox', { name: /tools/i }));
+
+    expect(await screen.findByRole('checkbox', { name: /Board management/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Board List Tasks' })).not.toBeInTheDocument();
+    // An ungrouped tool is attachable on its own, and so is a group member once opened.
+    expect(screen.getByRole('option', { name: 'Echo Greeter' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Expand Board management' }));
+
+    expect(screen.getByRole('option', { name: 'Board List Tasks' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Board Move Task' })).toBeInTheDocument();
+  });
+
+  it('sends every member id when a tool group is selected', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 'sess-9' } }),
+    } as Response);
+
+    renderAuthedPage(
+      <SessionNewForm
+        {...makeProps({
+          projectId: 3,
+          tools: [
+            { id: 10, name: 'Board List Tasks' },
+            { id: 11, name: 'Board Move Task' },
+          ],
+          toolGroups: [{ tag: 'board', label: 'Board management', toolIds: [10, 11] }],
+        })}
+      />,
+      { props: authProps(['claude_code']) },
+    );
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('combobox', { name: /tools/i }));
+    await user.click(await screen.findByRole('checkbox', { name: /Board management/ }));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(JSON.parse(init!.body as string).terminalSession.toolIds).toEqual([10, 11]);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('sends only the picked member when one tool of a group is selected', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 'sess-9' } }),
+    } as Response);
+
+    renderAuthedPage(
+      <SessionNewForm
+        {...makeProps({
+          projectId: 3,
+          tools: [
+            { id: 10, name: 'Board List Tasks' },
+            { id: 11, name: 'Board Move Task' },
+          ],
+          toolGroups: [{ tag: 'board', label: 'Board management', toolIds: [10, 11] }],
+        })}
+      />,
+      { props: authProps(['claude_code']) },
+    );
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('combobox', { name: /tools/i }));
+    await user.click(await screen.findByRole('button', { name: 'Expand Board management' }));
+    await user.click(screen.getByRole('option', { name: 'Board Move Task' }));
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(JSON.parse(init!.body as string).terminalSession.toolIds).toEqual([11]);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('reports a pristine form as clean, even with a default runtime and a preselected project', async () => {
+    const user = userEvent.setup();
+    const onDirtyChange = vi.fn();
+    renderAuthedPage(
+      <SessionNewForm
+        {...makeProps({
+          projects: [
+            { id: 1, name: 'Alpha' },
+            { id: 2, name: 'Beta' },
+          ],
+          preSelectedProjectId: 1,
+          onDirtyChange,
+        })}
+      />,
+      {
+        props: {
+          currentUser: buildSharedUser({ configuredAgents: ['claude_code'], defaultAgentRuntime: 'claude_code' }),
+        },
+      },
+    );
+
+    expect(screen.getByRole('combobox', { name: 'Project' })).toHaveValue('Alpha');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+    await user.click(screen.getByRole('combobox', { name: 'Project' }));
+    await user.click(await screen.findByRole('option', { name: 'Beta' }));
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('reports a typed prompt as unsaved, and clean again once the form unmounts', async () => {
+    const user = userEvent.setup();
+    const onDirtyChange = vi.fn();
+    const { unmount } = renderAuthedPage(<SessionNewForm {...makeProps({ onDirtyChange })} />, {
+      props: authProps(['claude_code']),
+    });
+
+    await user.click(screen.getByRole('radio', { name: /Automatic/ }));
+    await user.type(screen.getByRole('textbox', { name: /initial prompt/i }), 'Refactor the auth module');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    unmount();
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  describe('default model label', () => {
+    const agentModels = [
+      {
+        agentType: 'claude_code',
+        models: [
+          { modelId: 'opus-9', displayName: 'Opus 9', reasoningEffortLevels: [] },
+          { modelId: 'sonnet-9', displayName: 'Sonnet 9', reasoningEffortLevels: [] },
+        ],
+        defaultModel: 'opus-9',
+      },
+      {
+        agentType: 'codex',
+        models: [{ modelId: 'gpt-9', displayName: 'GPT 9', reasoningEffortLevels: [] }],
+        defaultModel: null,
+      },
+      { agentType: 'cursor_cli', models: [], defaultModel: 'arn:aws:bedrock:us-east-1:1234:profile/abc' },
+    ];
+
+    it('names the default model of the selected runtime', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['claude_code']) });
+
+      await user.click(screen.getByText('Claude Code'));
+
+      expect(screen.getByRole('combobox', { name: 'Model' })).toHaveAttribute('placeholder', 'Default · Opus 9');
+    });
+
+    it('lists the default first in the dropdown, next to the other models', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['claude_code']) });
+
+      await user.click(screen.getByText('Claude Code'));
+      await user.click(screen.getByRole('combobox', { name: 'Model' }));
+
+      const options = await screen.findAllByRole('option');
+      expect(options.map((o) => o.textContent)).toEqual(['Default · Opus 9', 'Opus 9', 'Sonnet 9']);
+    });
+
+    it('falls back to "runtime selects" after switching to a runtime with no default', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, {
+        props: authProps(['claude_code', 'codex']),
+      });
+
+      await user.click(screen.getByText('Claude Code'));
+      await user.click(screen.getByText('Codex'));
+
+      expect(screen.getByRole('combobox', { name: 'Model' })).toHaveAttribute(
+        'placeholder',
+        'Default (runtime selects)',
+      );
+    });
+
+    it('falls back to "runtime selects" for a runtime that is not set up', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['gemini_cli']) });
+
+      await user.click(screen.getByText('Gemini CLI'));
+
+      expect(screen.getByRole('combobox', { name: 'Model' })).toHaveAttribute(
+        'placeholder',
+        'Default (runtime selects)',
+      );
+    });
+
+    it('shows the raw id when the default is not among the listed models', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['cursor_cli']) });
+
+      await user.click(screen.getByText('Cursor CLI'));
+
+      expect(screen.getByRole('combobox', { name: 'Model' })).toHaveAttribute(
+        'placeholder',
+        'Default · arn:aws:bedrock:us-east-1:1234:profile/abc',
+      );
+    });
+
+    it('starts on the default without sending a requested model', async () => {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: 'sess-1' } }),
+      } as Response);
+      renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1, agentModels })} />, {
+        props: authProps(['claude_code']),
+      });
+
+      await user.click(screen.getByText('Claude Code'));
+      await user.click(screen.getByRole('button', { name: /start session/i }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      const [, init] = fetchSpy.mock.calls[0];
+      expect(JSON.parse(init!.body as string).terminalSession).not.toHaveProperty('requestedModel');
+
+      fetchSpy.mockRestore();
+    });
+
+    it('picking the Default option clears an explicit model choice', async () => {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: 'sess-1' } }),
+      } as Response);
+      renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1, agentModels })} />, {
+        props: authProps(['claude_code']),
+      });
+
+      await user.click(screen.getByText('Claude Code'));
+      const modelField = screen.getByRole('combobox', { name: 'Model' });
+      await user.click(modelField);
+      await user.click(await screen.findByRole('option', { name: 'Sonnet 9' }));
+      expect(modelField).toHaveValue('Sonnet 9');
+
+      await user.click(modelField);
+      await user.click(await screen.findByRole('option', { name: 'Default · Opus 9' }));
+      expect(modelField).toHaveValue('');
+
+      await user.click(screen.getByRole('button', { name: /start session/i }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      const [, init] = fetchSpy.mock.calls[0];
+      expect(JSON.parse(init!.body as string).terminalSession).not.toHaveProperty('requestedModel');
+
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe('reasoning effort', () => {
+    const agentModels = [
+      {
+        agentType: 'grok',
+        models: [
+          { modelId: 'grok-5', displayName: 'Grok 5', reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'] },
+        ],
+        defaultModel: 'grok-5',
+      },
+      {
+        agentType: 'cursor_cli',
+        models: [
+          { modelId: 'claude-opus-4-8', displayName: 'Opus 4.8', reasoningEffortLevels: ['low', 'medium', 'high'] },
+        ],
+        defaultModel: 'claude-opus-4-8',
+      },
+      {
+        agentType: 'kiro_cli',
+        models: [
+          {
+            modelId: 'claude-opus-5.5',
+            displayName: 'Opus 5.5',
+            reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          },
+          {
+            modelId: 'claude-sonnet-4.6',
+            displayName: 'Sonnet 4.6',
+            reasoningEffortLevels: ['low', 'medium', 'high', 'max'],
+          },
+          { modelId: 'auto', displayName: 'Auto', reasoningEffortLevels: [] },
+        ],
+        defaultModel: 'auto',
+      },
+    ];
+
+    async function pickModel(user: ReturnType<typeof userEvent.setup>, name: string) {
+      await user.click(screen.getByRole('combobox', { name: 'Model' }));
+      await user.click(await screen.findByRole('option', { name }));
+    }
+
+    it("offers the selected runtime's levels on a chosen model and sends the one picked", async () => {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: 'sess-1' } }),
+      } as Response);
+      renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1, agentModels })} />, {
+        props: authProps(['grok']),
+      });
+
+      await user.click(screen.getByText('Grok'));
+      await pickModel(user, 'Grok 5');
+      expect(screen.getByText("The CLI may lower or ignore a level the model doesn't support.")).toBeInTheDocument();
+      await user.click(screen.getByRole('combobox', { name: 'Reasoning effort' }));
+      const options = await screen.findAllByRole('option');
+      expect(options.map((o) => o.textContent)).toEqual(['Low', 'Medium', 'High', 'Extra high']);
+      await user.click(screen.getByRole('option', { name: 'Extra high' }));
+      await user.click(screen.getByRole('button', { name: /start session/i }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      const [, init] = fetchSpy.mock.calls[0];
+      expect(JSON.parse(init!.body as string).terminalSession).toMatchObject({
+        requestedModel: 'grok-5',
+        reasoningEffort: 'xhigh',
+      });
+
+      fetchSpy.mockRestore();
+    });
+
+    it('is hidden while the model is left on Default', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['grok']) });
+
+      await user.click(screen.getByText('Grok'));
+
+      expect(screen.queryByRole('combobox', { name: 'Reasoning effort' })).not.toBeInTheDocument();
+    });
+
+    it('going back to the Default model drops the level picked', async () => {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: 'sess-1' } }),
+      } as Response);
+      renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1, agentModels })} />, {
+        props: authProps(['grok']),
+      });
+
+      await user.click(screen.getByText('Grok'));
+      await pickModel(user, 'Grok 5');
+      await user.click(screen.getByRole('combobox', { name: 'Reasoning effort' }));
+      await user.click(await screen.findByRole('option', { name: 'High' }));
+      await pickModel(user, 'Default · Grok 5');
+
+      expect(screen.queryByRole('combobox', { name: 'Reasoning effort' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /start session/i }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      const [, init] = fetchSpy.mock.calls[0];
+      const body = JSON.parse(init!.body as string).terminalSession;
+      expect(body).not.toHaveProperty('requestedModel');
+      expect(body).not.toHaveProperty('reasoningEffort');
+
+      fetchSpy.mockRestore();
+    });
+
+    it("switching to a model that doesn't take the level picked clears it, and keeps one it takes", async () => {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: 'sess-1' } }),
+      } as Response);
+      renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 1, agentModels })} />, {
+        props: authProps(['kiro_cli']),
+      });
+      const effort = () => screen.getByRole('combobox', { name: 'Reasoning effort' });
+
+      await user.click(screen.getByText('Kiro CLI'));
+      await pickModel(user, 'Opus 5.5');
+      await user.click(effort());
+      await user.click(await screen.findByRole('option', { name: 'Extra high' }));
+      expect(effort()).toHaveValue('Extra high');
+
+      await pickModel(user, 'Sonnet 4.6');
+      expect(effort()).toHaveValue('');
+      expect(screen.queryByText(/is not available for/)).not.toBeInTheDocument();
+
+      await user.click(effort());
+      await user.click(await screen.findByRole('option', { name: 'High' }));
+      await pickModel(user, 'Opus 5.5');
+      expect(effort()).toHaveValue('High');
+
+      await pickModel(user, 'Sonnet 4.6');
+      await user.click(screen.getByRole('button', { name: /start session/i }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      const [, init] = fetchSpy.mock.calls[0];
+      expect(JSON.parse(init!.body as string).terminalSession).toMatchObject({
+        requestedModel: 'claude-sonnet-4.6',
+        reasoningEffort: 'high',
+      });
+
+      fetchSpy.mockRestore();
+    });
+
+    it("offers Cursor CLI's levels once a model is chosen", async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['cursor_cli']) });
+
+      await user.click(screen.getByText('Cursor CLI'));
+      await pickModel(user, 'Opus 4.8');
+      await user.click(screen.getByRole('combobox', { name: 'Reasoning effort' }));
+
+      const options = await screen.findAllByRole('option');
+      expect(options.map((o) => o.textContent)).toEqual(['Low', 'Medium', 'High']);
+    });
+
+    it('offers exactly the levels the server sent for the selected model', async () => {
+      const user = userEvent.setup();
+      const serverModels = [
+        {
+          agentType: 'codex',
+          models: [{ modelId: 'gpt-next', displayName: 'GPT Next', reasoningEffortLevels: ['medium', 'ultra'] }],
+          defaultModel: null,
+        },
+      ];
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels: serverModels })} />, {
+        props: authProps(['codex']),
+      });
+
+      await user.click(screen.getByText('Codex'));
+      await pickModel(user, 'GPT Next');
+      await user.click(screen.getByRole('combobox', { name: 'Reasoning effort' }));
+
+      const options = await screen.findAllByRole('option');
+      expect(options.map((o) => o.textContent)).toEqual(['Medium', 'Ultra']);
+    });
+
+    it('is disabled, with the reason, for a model the server sent no levels for', async () => {
+      const user = userEvent.setup();
+      renderAuthedPage(<SessionNewForm {...makeProps({ agentModels })} />, { props: authProps(['kiro_cli']) });
+
+      await user.click(screen.getByText('Kiro CLI'));
+      await pickModel(user, 'Auto');
+
+      expect(screen.getByRole('combobox', { name: 'Reasoning effort' })).toBeDisabled();
+      expect(screen.getByText('Kiro CLI has no reasoning-effort setting for auto.')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('SessionNewForm — Runs on', () => {
+  const runners = [buildRunnerSummary({ id: 4, name: 'Prod VPC', operatedBy: 'Acme/Payments' })];
+  const props = { ...authProps(['claude_code']), features: { externalRunners: true } };
+
+  it('keeps runners off for an interactive session, and sends an automatic one to the picked runner', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: 'sess-1' } }),
+    } as Response);
+    renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 42, runners })} />, { props });
+
+    await user.click(screen.getByText('Claude Code'));
+    await user.click(screen.getByRole('combobox', { name: 'Runs on' }));
+    expect(
+      await screen.findByRole('option', { name: "Prod VPC · Connected · can't run interactive sessions yet" }),
+    ).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('radio', { name: /Automatic/ }));
+    await user.type(screen.getByLabelText(/Initial Prompt/), 'ship it');
+    await user.click(screen.getByRole('combobox', { name: 'Runs on' }));
+    await user.click(await screen.findByRole('option', { name: 'Prod VPC · Connected' }));
+    expect(screen.getByText(/which is operated by/)).toHaveTextContent('Acme/Payments');
+    await user.click(screen.getByRole('button', { name: /start session/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const body = JSON.parse(fetchSpy.mock.calls[0][1]!.body as string);
+    expect(body.terminalSession.runnerId).toBe(4);
+    fetchSpy.mockRestore();
+  });
+
+  it('shows no runner select without the flag', () => {
+    renderAuthedPage(<SessionNewForm {...makeProps({ projectId: 42, runners })} />, {
+      props: authProps(['claude_code']),
+    });
+
+    expect(screen.queryByRole('combobox', { name: 'Runs on' })).not.toBeInTheDocument();
+  });
+});

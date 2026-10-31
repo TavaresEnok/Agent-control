@@ -1,0 +1,409 @@
+# frozen_string_literal: true
+
+# Generalized "events matching X start workflow Y" rule for event sources beyond
+# the two legacy ones (column moves, task gates). A binding is matched against a
+# TriggerEvent by (project, event_type, enabled) plus JSONB containment of
+# filter_predicate within the event data.
+class TriggerBinding < ApplicationRecord
+  extend Enumerize
+
+  belongs_to :project
+  belongs_to :workflow
+  belongs_to :created_by, class_name: "User", optional: true
+  # subject_policy = create_task → the new card is created in this column.
+  belongs_to :subject_column, class_name: "BoardColumn", optional: true
+  # tracker.* events only: the tracker this binding listens to; none means any
+  # tracker in the project (what a migration between trackers wants).
+  belongs_to :project_tracker, optional: true
+  # chat.message only: the one channel the trigger listens to. It must be
+  # connected to the trigger's company (docs/design/shared-chat-workspaces.md §9).
+  belongs_to :chat_conversation, optional: true
+  # What the API and MCP call it: a connected chat channel.
+  alias_attribute :chat_channel_id, :chat_conversation_id
+
+  enumerize :trigger_mode, in: %i[auto manual], default: :auto, predicates: true
+  # What board task (if any) a run from this trigger is about. See TriggerEngine.
+  enumerize :subject_policy, in: %i[none existing_task create_task find_or_create_task],
+    default: :none, predicates: { prefix: true }
+  # What a tracker binding does with a change Aixle itself made
+  # (docs/design/task-tracker-integrations.md §6.6).
+  enumerize :aixle_changes, in: %i[ignore other_workflows always], default: :ignore
+  # What a run this trigger started tells the place it came from: nothing, that
+  # it failed (a comment on the issue, a message in the thread), or — chat
+  # only — a status card that follows the run (docs/design/teams-integration.md §8.2).
+  enumerize :status_reporting, in: %i[none failures lifecycle], default: :failures
+
+  TRACKER_EVENT_PREFIX = "tracker."
+  TRACKER_SOURCE = "tracker"
+
+  WEBHOOK_EVENT_PREFIX = "webhook."
+  SCHEDULE_EVENT_TYPE = "schedule.fired"
+
+  # Where a chat message came from. The trigger's channel says that, so its
+  # conditions may not.
+  CHAT_ROUTING_KEYS = %w[channel conversation workspace team integration_id subject service_url].freeze
+
+  validates :event_type, presence: true
+  validates :cooldown_seconds, numericality: { greater_than_or_equal_to: 0 }
+  validate :workflow_accessible_from_project
+  validate :create_task_requires_column
+  validates :subject_column_id, tenant_ids: { model: BoardColumn, error_on: :subject_column },
+                                if: -> { subject_column_id.present? && project }
+  validate :schedule_requires_cron
+  validate :workflow_supports_auto_run
+  validate :chat_command_not_reserved
+  validate :chat_provider_named, if: -> { event_type == Chat::EVENT_TYPE }
+  validates :status_reporting, inclusion: { in: %w[none failures], message: "lifecycle is for chat triggers" },
+                               unless: :chat?
+  before_validation :normalize_chat_trigger
+  validate :chat_conditions_name_no_place, if: -> { chat? && will_save_change_to_filter_predicate? }
+  validate :chat_channel_usable, if: -> { chat? && (enabled? || chat_conversation_id.present?) }
+  before_save :mirror_chat_channel, if: :chat?
+  validate :project_tracker_in_project, if: :project_tracker_id?
+  validate :tracker_event_type_known, if: :tracker_event?
+  validate :tracker_binding_not_duplicated, if: -> {
+    tracker_event? && (new_record? || will_save_change_to_filter_predicate? || will_save_change_to_project_tracker_id?)
+  }
+
+  scope :active, -> { where(enabled: true) }
+  # Match an event to bindings. Project-scoped events (column/webhook/schedule)
+  # match bindings in that project; company-scoped events (chat — one workspace
+  # serves every project of the company) fan out to bindings across all the
+  # company's projects.
+  scope :for_event, ->(event) {
+    # A generic webhook names its own event type, so without this a sender could
+    # present itself as a tracker or chat event.
+    next none if event.event_type.to_s.start_with?(TRACKER_EVENT_PREFIX) && event.source != TRACKER_SOURCE
+    next none if Chat.event?(event) && Chat.provider_for(event).nil?
+
+    rel = active.where(event_type: event.event_type)
+                .joins(:workflow).merge(Workflow.active)
+    rel = rel.merge(listening_in(event)) if Chat.event?(event)
+    if event.project_id
+      rel.where(project_id: event.project_id)
+    elsif event.company_id
+      rel.where(project_id: Project.where(company_id: event.company_id).select(:id))
+    else
+      none
+    end
+  }
+
+  # A schedule trigger is reconciled onto its Temporal Schedule synchronously
+  # (inline, in the request) whenever it is created/updated, and removed on
+  # destroy — so a scheduling failure surfaces immediately instead of being
+  # silently lost by a dropped background job. The worker-boot sync
+  # (ScheduleReconciler.reconcile_all) is the durable backstop. Skipped when
+  # Temporal is off (e.g. test) so a save never spins up a Temporal client.
+  #
+  # A binding created disabled has no Temporal schedule to reconcile, so its
+  # create is skipped: template installs create every trigger disabled, and
+  # must not depend on Temporal being reachable.
+  after_commit :reconcile_schedule, on: %i[create update], if: :schedule_needs_reconcile?
+  after_commit :remove_schedule, on: :destroy, if: :reconcile_schedule?
+  after_commit :ensure_tracker_event_delivery, on: %i[create update], if: -> { tracker_event? && enabled? }
+  # A webhook trigger's endpoint is found by its event type, not by a key, so
+  # nothing else turns it off: removing the trigger would leave its URL live.
+  after_destroy_commit :disable_webhook_endpoint, if: :webhook?
+
+  def schedule?
+    event_type == SCHEDULE_EVENT_TYPE
+  end
+
+  def self.chat_not_connected(label)
+    "#{label} is not connected for this company. Connect it on the Integrations page first — " \
+      "until then no message can reach this trigger."
+  end
+
+  def chat?
+    event_type == Chat::EVENT_TYPE
+  end
+
+  # The messenger a chat trigger listens to: the `provider` condition every
+  # `chat.message` trigger carries.
+  def chat_provider
+    return nil unless chat?
+
+    filter_predicate.to_h["provider"].presence
+  end
+
+  # Points a `chat.message` trigger at another messenger, keeping its other conditions.
+  # A channel id means nothing to another messenger, so it is dropped.
+  def assign_chat_provider(key)
+    return if key.blank? || !chat?
+
+    filter = filter_predicate.to_h
+    if chat_provider.present? && chat_provider != key.to_s
+      filter = filter.except("channel")
+      self.chat_conversation = nil
+    end
+    self.filter_predicate = filter.merge("provider" => key.to_s)
+  end
+
+  # The chat bindings an event from this conversation may start: bound to it,
+  # and only where the binding's company has the channel connected.
+  def self.listening_in(event)
+    data = event.data.to_h
+    conversations = ChatConversation.in_workspace_of(data["integration_id"]).where(external_id: data["channel"].to_s)
+    where(chat_conversation_id: conversations.select(:id))
+      .where(<<~SQL.squish)
+        EXISTS (SELECT 1 FROM chat_channel_connections connections
+                JOIN projects ON projects.company_id = connections.company_id
+                WHERE connections.chat_conversation_id = trigger_bindings.chat_conversation_id
+                  AND projects.id = trigger_bindings.project_id)
+      SQL
+  end
+
+  # Switches off the chat triggers among `scope` and drops their channel: what
+  # removing a connection, a workspace or a project's company leaves behind.
+  def self.release_chat_channels!(scope)
+    scope.where(event_type: Chat::EVENT_TYPE).where.not(chat_conversation_id: nil)
+         .update_all([ "enabled = FALSE, chat_conversation_id = NULL, filter_predicate = filter_predicate - 'channel', " \
+                       "updated_at = ?", Time.current ])
+  end
+
+  def self.chat_routing_key?(key)
+    CHAT_ROUTING_KEYS.any? { |root| key.to_s == root || key.to_s.start_with?("#{root}.") }
+  end
+
+  # Could this chat trigger be switched on as it stands?
+  def chat_channel_usable?
+    chat_channel_problem.nil?
+  end
+
+  # save! for a person creating or editing a trigger: refuses to create or switch
+  # on a chat trigger while the company has not connected its messenger. Not a
+  # validation, so a workspace disconnected later does not make every other save
+  # of the triggers it served fail.
+  def save_checking_chat!
+    normalize_chat_trigger
+    if chat? && enabled? && (new_record? || enabled_changed? || chat_provider_changed?) && !chat_connected?
+      valid? # report the binding's other problems alongside this one
+      errors.add(:base, self.class.chat_not_connected(Chat.provider(chat_provider)&.label || "The messenger"))
+      raise ActiveRecord::RecordInvalid, self
+    end
+
+    save!
+  end
+
+  # May this binding start its workflow right now? Off, or bound to a deleted
+  # workflow, it may not — whatever still calls it (a stale schedule, a queued event).
+  def live?
+    enabled && workflow.present? && !workflow.deleted?
+  end
+
+  # Does the event data satisfy every condition in the predicate? Supports
+  # equality (scalar values), operator objects ({"op","value"}) and dot-path
+  # fields. Empty predicate ⇒ matches any event of this type. See TriggerFilter.
+  # A chat message's text compares without regard to case: people type
+  # "Deploy" and "deploy" for the same command. A chat trigger's channel is
+  # matched by .listening_in, before this.
+  def matches?(data)
+    return false unless tracker_scope_matches?(data) && aixle_change_allowed?(data)
+
+    conditions = chat? ? filter_predicate.to_h.except("channel") : filter_predicate
+    TriggerFilter.match?(conditions, data, ignore_case: chat? ? %w[text] : [])
+  end
+
+  def webhook?
+    event_type.to_s.start_with?(WEBHOOK_EVENT_PREFIX)
+  end
+
+  def tracker_event?
+    event_type.to_s.start_with?(TRACKER_EVENT_PREFIX)
+  end
+
+  private
+
+  def chat_conditions_name_no_place
+    routing = filter_predicate.to_h.keys.map(&:to_s).select { |key| self.class.chat_routing_key?(key) }
+    # The stored copy of the trigger's own channel, sent back unchanged.
+    routing -= [ "channel" ] if chat_conversation && filter_predicate.to_h["channel"].to_s == chat_conversation.external_id
+    return if routing.empty?
+
+    errors.add(:filter_predicate, "can't name where a message comes from (#{routing.join(', ')}) — choose the trigger's channel instead")
+  end
+
+  def chat_channel_usable
+    problem = chat_channel_problem
+    errors.add(:chat_channel, problem) if problem
+  end
+
+  def chat_channel_problem
+    return "is required — connect a channel to this company and choose it" if chat_conversation.nil?
+    return "belongs to another messenger" if chat_conversation.provider.to_s != chat_provider.to_s
+    return "can't be a direct chat" if chat_conversation.direct?
+
+    connected = ChatChannelConnection.exists?(chat_conversation_id: chat_conversation_id, company_id: project&.company_id)
+    connected ? nil : "is not connected to this company"
+  end
+
+  # Kept beside the channel until every running release matches on the
+  # channel itself, not on this condition.
+  def mirror_chat_channel
+    filter = filter_predicate.to_h.except("channel")
+    filter["channel"] = chat_conversation.external_id if chat_conversation
+    self.filter_predicate = filter unless filter == filter_predicate.to_h
+  end
+
+  def disable_webhook_endpoint
+    return if TriggerBinding.where(project_id: project_id, event_type: event_type).exists?
+
+    WebhookEndpoint.where(project_id: project_id).where("config ->> 'event_type' = ?", event_type)
+                   .update_all(enabled: false, updated_at: Time.current)
+  end
+
+  def normalize_chat_trigger
+    keep_chat_provider if persisted? && chat?
+  end
+
+  def chat_provider_changed?
+    return false if new_record?
+
+    filter_predicate_was.to_h["provider"].to_s != chat_provider.to_s
+  end
+
+  def chat_connected?
+    chat_provider.present? && Integration.active.exists?(provider: chat_provider, company_id: project&.company_id)
+  end
+
+  def tracker_scope_matches?(data)
+    return true unless tracker_event? && project_tracker_id
+
+    data.to_h.dig("tracker", "id").to_i == project_tracker_id
+  end
+
+  def aixle_change_allowed?(data)
+    origin = data.to_h["origin"]
+    return true unless tracker_event? && origin.is_a?(Hash) && origin["aixle"]
+
+    case aixle_changes.to_s
+    when "always" then true
+    when "other_workflows" then Array(origin["chain"]).map(&:to_i).exclude?(workflow_id)
+    else false
+    end
+  end
+
+  # A binding keeps the tracker it names through a detach, so it stays editable
+  # without being widened to any tracker; it just cannot be moved onto one.
+  def project_tracker_in_project
+    return if project_tracker && project_tracker.project_id == project_id &&
+              (!project_tracker.detached? || !will_save_change_to_project_tracker_id?)
+
+    errors.add(:project_tracker, "must be an attached tracker of this project")
+  end
+
+  # Every binding a tracker event matches starts its own run, so a copy would
+  # start the workflow twice per event.
+  def tracker_binding_not_duplicated
+    copies = TriggerBinding.where(project_id: project_id, workflow_id: workflow_id, event_type: event_type,
+                                  project_tracker_id: project_tracker_id)
+                           .where("filter_predicate = ?::jsonb", filter_predicate.to_json)
+    copies = copies.where.not(id: id) if persisted?
+    return unless copies.exists?
+
+    errors.add(:workflow, "already has a trigger for this tracker event with the same conditions")
+  end
+
+  def ensure_tracker_event_delivery
+    trackers = project_tracker ? [ project_tracker ] : ProjectTracker.usable.for_project(project)
+    trackers.each { |tracker| Trackers::EnsureEventDeliveryJob.perform_later(tracker.id) }
+  end
+
+  def workflow_accessible_from_project
+    return unless workflow && project
+
+    unless Workflow.visible_for_project(project).exists?(id: workflow_id)
+      errors.add(:workflow, "must be accessible from this project")
+    end
+  end
+
+  def create_task_requires_column
+    return unless subject_policy_create_task? || subject_policy_find_or_create_task?
+
+    errors.add(:subject_column, "is required when subject_policy is #{subject_policy}") if subject_column_id.blank?
+  end
+
+  def tracker_event_type_known
+    return if Trackers::EventPipeline::EVENT_TYPES.include?(event_type)
+
+    errors.add(:event_type, "must be one of #{Trackers::EventPipeline::EVENT_TYPES.join(', ')}")
+  end
+
+  def schedule_requires_cron
+    return unless schedule?
+
+    errors.add(:schedule_config, "must include a cron expression") if schedule_config["cron"].blank?
+  end
+
+  # Help is answered before any binding runs, so a trigger whose text command
+  # is that word would appear in the catalog and never fire. Compare the
+  # command itself (optional leading slash), not whether a looser operator
+  # could also match the word.
+  def chat_command_not_reserved
+    return unless chat?
+    return unless filter_predicate.is_a?(Hash)
+
+    value = chat_text_command.to_s.strip
+    return if value.blank?
+
+    if value.match?(Chat::RESERVED_COMMAND)
+      errors.add(:filter_predicate, "can't use #{value.delete_prefix('/').downcase} — Aixle answers that word before any trigger")
+    elsif chat_provider == Chat::TeamsProvider::KEY && value.match?(Teams::Commands::RESERVED)
+      errors.add(:filter_predicate, "can't use #{value.delete_prefix('/').downcase} — Teams answers it as a command")
+    end
+  end
+
+  # Replacing a chat trigger's conditions keeps the messenger it listens to;
+  # moving it to another one is assign_chat_provider.
+  def keep_chat_provider
+    previous = filter_predicate_was.to_h["provider"]
+    return if previous.blank? || filter_predicate.to_h.key?("provider")
+
+    self.filter_predicate = filter_predicate.to_h.merge("provider" => previous)
+  end
+
+  # A `chat.message` trigger matches whichever messenger it names, so it must name one.
+  def chat_provider_named
+    provider = filter_predicate.to_h["provider"]
+    return if provider.is_a?(String) && Chat::PROVIDERS.key?(provider)
+
+    errors.add(:filter_predicate, "must name the messenger: provider is one of #{Chat::PROVIDERS.keys.join(', ')}")
+  end
+
+  def chat_text_command
+    text = filter_predicate["text"]
+    return nil if text.blank?
+
+    text.is_a?(Hash) ? text["value"] : text
+  end
+
+  # Off-board triggers (slack / webhook / schedule) fire unattended in
+  # non-interactive mode, so every step must allow auto-run — otherwise the launch
+  # is silently skipped at fire time (WorkflowService#validate_mode!). Column
+  # triggers are exempt by design: their manual mode puts a human on the button.
+  def workflow_supports_auto_run
+    return unless enabled? && workflow
+
+    manual_steps = workflow.steps.not_deleted.reject(&:allow_non_interactive)
+    return if manual_steps.empty?
+
+    errors.add(:workflow,
+      "can't run unattended — enable auto-run on these steps first: #{manual_steps.map(&:name).join(', ')}")
+  end
+
+  def reconcile_schedule?
+    schedule? && TemporalService.enabled?
+  end
+
+  def schedule_needs_reconcile?
+    reconcile_schedule? && !(previously_new_record? && !enabled?)
+  end
+
+  def reconcile_schedule
+    ScheduleReconciler.reconcile(self)
+  end
+
+  def remove_schedule
+    ScheduleReconciler.remove(id)
+  end
+end

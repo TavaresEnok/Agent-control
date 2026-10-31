@@ -1,0 +1,227 @@
+workflows:
+  - name: container_workflow
+    owner: aixle_ruby
+    activities:
+      - name: container_phase_activity
+        task_queue: aixle_ruby
+
+  - name: scheduled_trigger_workflow
+    owner: aixle_ruby
+    activities:
+      - name: workflow_fire_schedule_trigger_activity
+        task_queue: aixle_ruby
+
+  - name: capacity_metering_workflow
+    owner: aixle_ruby
+    activities:
+      - name: billing_report_capacity_activity
+        task_queue: aixle_ruby
+
+  - name: marketplace_events_workflow
+    owner: aixle_ruby
+    activities:
+      - name: billing_drain_marketplace_events_activity
+        task_queue: aixle_ruby
+
+  - name: usage_rollup_workflow
+    owner: aixle_ruby
+    activities:
+      - name: usage_rollup_hours_activity
+        task_queue: aixle_ruby
+
+  - name: outbox_relay_workflow
+    owner: aixle_ruby
+    activities:
+      - name: outbox_relay_drain_activity
+        task_queue: aixle_ruby
+
+  - name: gate_reconciliation_workflow
+    owner: aixle_ruby
+    activities:
+      - name: gates_reconcile_ci_activity
+        task_queue: aixle_ruby
+
+  - name: stale_session_cleanup_workflow
+    owner: aixle_ruby
+    activities:
+      - name: session_cleanup_stale_activity
+        task_queue: aixle_ruby
+
+  - name: stale_run_cleanup_workflow
+    owner: aixle_ruby
+    activities:
+      - name: workflow_cleanup_stale_runs_activity
+        task_queue: aixle_ruby
+
+  - name: dead_container_scan_workflow
+    owner: aixle_ruby
+    activities:
+      - name: session_scan_dead_containers_activity
+        task_queue: aixle_ruby
+
+  - name: dismissed_asset_cleanup_workflow
+    owner: aixle_ruby
+    activities:
+      - name: asset_cleanup_dismissed_activity
+        task_queue: aixle_ruby
+
+  - name: tool_result_cleanup_workflow
+    owner: aixle_ruby
+    activities:
+      - name: tool_results_cleanup_activity
+        task_queue: aixle_ruby
+
+  - name: membership_invitation_reminder_workflow
+    owner: aixle_ruby
+    activities:
+      - name: membership_remind_pending_invitations_activity
+        task_queue: aixle_ruby
+
+  - name: quota_error_scan_workflow
+    owner: aixle_ruby
+    activities:
+      - name: workflow_scan_quota_errors_activity
+        task_queue: aixle_ruby
+
+  - name: no_output_scan_workflow
+    owner: aixle_ruby
+    activities:
+      - name: workflow_scan_no_output_sessions_activity
+        task_queue: aixle_ruby
+
+  - name: coder_sweep_expired_locks_workflow
+    owner: aixle_ruby
+    activities:
+      - name: coder_sweep_expired_locks_activity
+        task_queue: aixle_ruby
+
+  - name: coder_reap_dead_workspaces_workflow
+    owner: aixle_ruby
+    activities:
+      - name: coder_reap_dead_workspaces_activity
+        task_queue: aixle_ruby
+
+  - name: container_sweep_orphaned_resources_workflow
+    owner: aixle_ruby
+    activities:
+      - name: container_sweep_orphaned_resources_activity
+        task_queue: aixle_ruby
+
+  - name: mcp_connector_catalog_sync_workflow
+    owner: aixle_ruby
+    activities:
+      - name: mcp_sync_connector_catalog_activity
+        task_queue: aixle_ruby
+
+  - name: skills_catalog_sync_workflow
+    owner: aixle_ruby
+    activities:
+      - name: skills_sync_catalog_activity
+        task_queue: aixle_ruby
+
+  - name: skills_demand_sync_workflow
+    owner: aixle_ruby
+    activities:
+      - name: skills_sync_catalog_activity
+        task_queue: aixle_ruby
+
+  - name: templates_catalog_sync_workflow
+    owner: aixle_ruby
+    activities:
+      - name: templates_sync_catalog_activity
+        task_queue: aixle_ruby
+
+  - name: mcp_tool_drift_scan_workflow
+    owner: aixle_ruby
+    activities:
+      - name: mcp_scan_tool_drift_activity
+        task_queue: aixle_ruby
+
+  - name: agent_token_refresh_workflow
+    owner: aixle_ruby
+    activities:
+      - name: agent_credentials_refresh_expiring_tokens_activity
+        task_queue: aixle_ruby
+
+  - name: agent_credential_fan_out_workflow
+    owner: aixle_ruby
+    activities:
+      - name: agent_credentials_fan_out_activity
+        task_queue: aixle_ruby
+
+  - name: oauth_token_refresh_workflow
+    owner: aixle_ruby
+    activities:
+      - name: oauth_refresh_expiring_tokens_activity
+        task_queue: aixle_ruby
+
+  - name: tracker_subscription_refresh_workflow
+    owner: aixle_ruby
+    activities:
+      - name: trackers_refresh_subscriptions_activity
+        task_queue: aixle_ruby
+
+  - name: tracker_personal_data_workflow
+    owner: aixle_ruby
+    activities:
+      - name: trackers_report_personal_data_activity
+        task_queue: aixle_ruby
+
+  - name: workflow_execution_workflow
+    owner: aixle_ruby
+    activities:
+      - name: workflow_prepare_step_activity
+        task_queue: aixle_ruby
+      - name: workflow_complete_step_activity
+        task_queue: aixle_ruby
+      - name: workflow_update_workflow_run_status_activity
+        task_queue: aixle_ruby
+      - name: workflow_prepare_step_list_activity
+        task_queue: aixle_ruby
+      - name: workflow_create_step_run_activity
+        task_queue: aixle_ruby
+      - name: workflow_fetch_mode_activity
+        task_queue: aixle_ruby
+      - name: workflow_check_skip_activity
+        task_queue: aixle_ruby
+      - name: workflow_launch_step_session_activity
+        task_queue: aixle_ruby
+      - name: workflow_mark_step_skipped_activity
+        task_queue: aixle_ruby
+
+  - name: container_workflow_v2
+    owner: aixle_ruby
+    activities:
+      - name: container_admitted_phase_activity
+        task_queue: aixle_ruby
+
+  - name: session_admission_reconciliation_workflow
+    owner: aixle_ruby
+    activities:
+      - name: session_reconcile_admissions_activity
+        task_queue: aixle_ruby
+
+  - name: workflow_execution_workflow_v2
+    owner: aixle_ruby
+    activities:
+      - name: workflow_prepare_step_activity
+        task_queue: aixle_ruby
+      - name: workflow_complete_step_activity
+        task_queue: aixle_ruby
+      - name: workflow_update_workflow_run_status_activity
+        task_queue: aixle_ruby
+      - name: workflow_prepare_step_list_activity
+        task_queue: aixle_ruby
+      - name: workflow_create_step_run_activity
+        task_queue: aixle_ruby
+      - name: workflow_fetch_mode_activity
+        task_queue: aixle_ruby
+      - name: workflow_check_skip_activity
+        task_queue: aixle_ruby
+      - name: workflow_launch_step_session_activity
+        task_queue: aixle_ruby
+      - name: workflow_mark_step_skipped_activity
+        task_queue: aixle_ruby
+
+      - name: workflow_step_session_status_activity
+        task_queue: aixle_ruby

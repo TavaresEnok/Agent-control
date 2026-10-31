@@ -1,0 +1,152 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+module Auth
+  class PolicyResolverTest < ActiveSupport::TestCase
+    setup do
+      @company = create(:company)
+      @password = IdentityProvider.password
+      @google = IdentityProvider.deployment!("google")
+      @user = create(:user, company: @company)
+    end
+
+    def policy_for(provider)
+      CompanyAuthPolicy.find_by!(company: @company, identity_provider: provider)
+    end
+
+    test "a new company starts with every deployment provider enabled" do
+      kinds = Auth::PolicyResolver.allowed_providers(@company).map { |p| p.kind.to_s }
+
+      assert_includes kinds, "password"
+      assert_includes kinds, "google"
+    end
+
+    test "a disabled policy leaves the effective set" do
+      policy_for(@password).update!(enabled: false)
+
+      kinds = Auth::PolicyResolver.allowed_providers(@company).map { |p| p.kind.to_s }
+
+      refute_includes kinds, "password"
+      assert_includes kinds, "google"
+    end
+
+    test "the deployment allowlist is a ceiling the company cannot raise" do
+      # Both policies enabled, but the installation only offers password.
+      Settings.auth.stubs(:enabled_kinds).returns("password")
+
+      kinds = Auth::PolicyResolver.allowed_providers(@company).map { |p| p.kind.to_s }
+
+      assert_equal [ "password" ], kinds
+    end
+
+    test "a session is satisfied by a proof the company still accepts" do
+      user_session = begin
+        s = UserSession.start!(user: @user)
+        Auth::SessionService.record_proof(s, @password)
+        s
+      end
+
+      assert Auth::PolicyResolver.satisfied?(company: @company, user_session: user_session, user: @user)
+    end
+
+    test "disabling a provider voids its proof on the next read" do
+      user_session = begin
+        s = UserSession.start!(user: @user)
+        Auth::SessionService.record_proof(s, @password)
+        s
+      end
+      policy_for(@password).update!(enabled: false)
+
+      refute Auth::PolicyResolver.satisfied?(company: @company, user_session: user_session, user: @user)
+    end
+
+    test "a proof for another company's connection does not satisfy this one" do
+      other = create(:company)
+      connection = create(:identity_provider, company: other, kind: "oidc")
+      create(:company_auth_policy, company: @company, identity_provider: connection, enabled: true)
+      user_session = begin
+        s = UserSession.start!(user: @user)
+        Auth::SessionService.record_proof(s, connection)
+        s
+      end
+
+      # Even with an enabled policy row, a company-scoped provider owned by a
+      # different company never satisfies entry here.
+      refute Auth::PolicyResolver.satisfied?(company: @company, user_session: user_session, user: @user)
+    end
+
+    test "satisfied_company_ids keeps the companies that accept one of the given proofs" do
+      sso_only = create(:company)
+      connection = create(:identity_provider, company: sso_only, kind: "oidc")
+      CompanyAuthPolicy.where(company: sso_only).update_all(enabled: false)
+      create(:company_auth_policy, company: sso_only, identity_provider: connection, enabled: true)
+      foreign = create(:company)
+      create(:company_auth_policy, company: foreign, identity_provider: connection, enabled: true)
+      ids = [ @company.id, sso_only.id, foreign.id ]
+
+      assert_equal [ @company.id, foreign.id ].sort,
+                   Auth::PolicyResolver.satisfied_company_ids(company_ids: ids, provider_ids: [ @password.id ]).sort
+      assert_equal [ sso_only.id ],
+                   Auth::PolicyResolver.satisfied_company_ids(company_ids: ids, provider_ids: [ connection.id ])
+      assert_empty Auth::PolicyResolver.satisfied_company_ids(company_ids: ids, provider_ids: [])
+    end
+
+    test "a super admin bypasses every company policy surface" do
+      super_admin = create(:user, :super_admin)
+      user_session = begin
+        s = UserSession.start!(user: super_admin)
+        Auth::SessionService.record_proof(s, @password)
+        s
+      end
+      policy_for(@password).update!(enabled: false)
+      policy_for(@google).update!(enabled: false)
+
+      assert Auth::PolicyResolver.satisfied?(
+        company: @company, user_session: user_session, user: super_admin
+      )
+    end
+
+    test "stranded_members names who a prospective policy would lock out" do
+      with_password = create(:user, company: @company)
+
+      with_google = create(:user, company: @company)
+      create(:user_identity, user: with_google, identity_provider: @google, subject: "google-sub")
+
+      stranded = Auth::PolicyResolver.stranded_members(@company, [ @google.id ])
+
+      assert_includes stranded, with_password
+      refute_includes stranded, with_google
+    end
+
+    test "a super admin is never counted as stranded" do
+      super_admin = create(:user, :super_admin, company: @company)
+
+      stranded = Auth::PolicyResolver.stranded_members(@company, [])
+
+      refute_includes stranded, super_admin
+    end
+
+    test "companies_stranded_without names the companies a removal would leave with no accepted method" do
+      google_identity = create(:user_identity, user: @user, identity_provider: @google)
+      strict = create(:company, name: "Strict Co")
+      create(:company_membership, user: @user, company: strict, role: "employee", state: "active")
+      CompanyAuthPolicy.find_by!(company: strict, identity_provider: @password).update!(enabled: false)
+
+      # Strict accepts Google but not the password the user also holds.
+      assert_equal [ strict ], Auth::PolicyResolver.companies_stranded_without(@user, google_identity)
+
+      # A company that never accepted the removed method is not this removal's doing.
+      CompanyAuthPolicy.find_by!(company: strict, identity_provider: @google).update!(enabled: false)
+      assert_empty Auth::PolicyResolver.companies_stranded_without(@user, google_identity)
+    end
+
+    test "companies_stranded_without counts a second identity of the same kind as a way in" do
+      first = create(:user_identity, user: @user, identity_provider: @google)
+      create(:user_identity, user: @user, identity_provider: @google)
+      policy_for(@password).update!(enabled: false)
+
+      assert_empty Auth::PolicyResolver.companies_stranded_without(@user, first)
+    end
+  end
+end

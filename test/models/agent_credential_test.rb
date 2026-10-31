@@ -1,0 +1,910 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class AgentCredentialTest < ActiveSupport::TestCase
+  include ActionMailer::TestHelper
+
+  setup do
+    @company = create(:company)
+    @user = create(:user, company: @company)
+    # The default agent credential is a per-company property, so it lives on the
+    # membership: one separately-billed credential per company.
+    @membership = @user.company_memberships.sole
+  end
+
+  # --- Login blocks, without decrypting ---
+
+  # The current user (credentials included) is serialized on every page.
+  test "the names of the login blocks are known without decrypting the credential" do
+    credential = create(:agent_credential, user: @user, agent_type: "claude_code")
+    credential.update!(config_data: { "claudeAiOauth" => { "accessToken" => "t" }, "designOauth" => {} })
+
+    # Unreadable ciphertext: an answer here cannot have come from decrypting it.
+    credential.update_column(:encrypted_config_data, "not-a-ciphertext")
+
+    assert_equal %w[claudeAiOauth designOauth], AgentCredential.find(credential.id).config_keys
+  end
+
+  test "a credential written before the names were recorded still answers them" do
+    credential = create(:agent_credential, user: @user, agent_type: "claude_code")
+    credential.update!(config_data: { "primaryApiKey" => "k" })
+    credential.update_column(:metadata, credential.metadata.except("config_keys"))
+
+    assert_equal %w[primaryApiKey], AgentCredential.find(credential.id).config_keys
+  end
+
+  # --- Auto-set default on creation ---
+
+  test "first credential sets the membership default_agent_credential" do
+    credential = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    assert_equal credential.id, @membership.reload.default_agent_credential_id
+  end
+
+  test "subsequent credential updates the membership default_agent_credential" do
+    create(:agent_credential, user: @user, agent_type: "claude_code")
+    second = create(:agent_credential, user: @user, agent_type: "gemini_cli")
+
+    assert_equal second.id, @membership.reload.default_agent_credential_id
+  end
+
+  # --- Reassign on deletion ---
+
+  test "deleting default credential falls back to most recent remaining" do
+    first = create(:agent_credential, user: @user, agent_type: "claude_code")
+    second = create(:agent_credential, user: @user, agent_type: "gemini_cli")
+    assert_equal second.id, @membership.reload.default_agent_credential_id
+
+    second.destroy!
+
+    assert_equal first.id, @membership.reload.default_agent_credential_id
+  end
+
+  test "deleting last credential sets default to nil" do
+    credential = create(:agent_credential, user: @user, agent_type: "claude_code")
+    assert_equal credential.id, @membership.reload.default_agent_credential_id
+
+    credential.destroy!
+
+    assert_nil @membership.reload.default_agent_credential_id
+  end
+
+  test "deleting non-default credential does not change default" do
+    first = create(:agent_credential, user: @user, agent_type: "claude_code")
+    second = create(:agent_credential, user: @user, agent_type: "gemini_cli")
+    assert_equal second.id, @membership.reload.default_agent_credential_id
+
+    first.destroy!
+
+    @user.reload
+    assert_equal second.id, @membership.reload.default_agent_credential_id
+  end
+
+  # --- from_artifacts: clean replacement + preserved preferences ---
+
+  test "from_artifacts fully replaces config_data (no merge with previous auth)" do
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", { "primaryApiKey" => "sk-old", "oauthAccount" => { "id" => "a" } })
+
+    cred = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", { "claudeAiOauth" => { "accessToken" => "sk-ant-new" } })
+
+    assert_equal({ "claudeAiOauth" => { "accessToken" => "sk-ant-new" } }, cred.config_data)
+    refute cred.config_data.key?("primaryApiKey")
+    refute cred.config_data.key?("oauthAccount")
+  end
+
+  test "from_artifacts preserves user default_model on a token refresh" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.update!(metadata: (cred.metadata || {}).merge("default_model" => "claude-opus-4-8"))
+
+    updated = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", { "primaryApiKey" => "sk-fresh" })
+
+    assert_equal "claude-opus-4-8", updated.metadata["default_model"]
+    assert_equal({ "primaryApiKey" => "sk-fresh" }, updated.config_data)
+  end
+
+  test "from_artifacts drops default_model on a new authorization" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.update!(metadata: (cred.metadata || {}).merge(
+      "default_model" => "arn:aws:bedrock:us-east-1:1234:application-inference-profile/abc",
+      "google_cloud_project" => "keep-me"
+    ))
+
+    updated = AgentCredential.from_artifacts(
+      @user.id, @company.id, "claude_code",
+      { "claudeAiOauth" => { "accessToken" => "sk-ant-oat01-new" } },
+      new_authorization: true
+    )
+
+    refute updated.metadata.key?("default_model"),
+           "a model chosen under the previous auth cannot be invoked by the new one"
+    assert_equal "keep-me", updated.metadata["google_cloud_project"],
+                 "non-auth settings still survive a new authorization"
+  end
+
+  test "from_artifacts on a new authorization is a no-op when no default_model was set" do
+    create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    updated = AgentCredential.from_artifacts(
+      @user.id, @company.id, "claude_code", { "primaryApiKey" => "sk-fresh" }, new_authorization: true
+    )
+
+    refute updated.metadata.key?("default_model")
+    assert_equal({ "primaryApiKey" => "sk-fresh" }, updated.config_data)
+  end
+
+  # --- Default model ---
+
+  test "default_model returns nil when nothing is pinned" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    assert_nil cred.default_model
+  end
+
+  test "default_model returns a still-supported pin unchanged" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.update!(metadata: (cred.metadata || {}).merge("default_model" => "claude-opus-5"))
+
+    assert_equal "claude-opus-5", cred.default_model
+  end
+
+  test "default_model maps a retired pin forward without rewriting what is stored" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.update!(metadata: (cred.metadata || {}).merge("default_model" => "claude-3-7-sonnet-20250219"))
+
+    assert_equal "claude-sonnet-5", cred.default_model,
+                 "a pin the vendor retired must resolve to a model that still answers"
+    assert_equal "claude-3-7-sonnet-20250219", cred.reload.metadata["default_model"],
+                 "the stored choice is left alone — the mapping is a read-time rescue"
+  end
+
+  test "default_model leaves a Bedrock inference-profile ARN untouched" do
+    arn = "arn:aws:bedrock:us-east-1:1234:application-inference-profile/abc"
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.update!(metadata: (cred.metadata || {}).merge("default_model" => arn))
+
+    assert_equal arn, cred.default_model
+  end
+
+  # --- Model cache invalidation ---
+
+  test "models_cache_key is per-credential" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    assert_equal "agent_models/claude_code/#{cred.id}", cred.models_cache_key
+  end
+
+  test "changing config_data invalidates the cached model list" do
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    Rails.cache.write(cred.models_cache_key, [ { model_id: "stale" } ])
+
+    cred.update!(config_data: { "primaryApiKey" => "sk-rotated" })
+
+    assert_nil Rails.cache.read(cred.models_cache_key)
+  end
+
+  test "touching last_used_at does not invalidate the cached model list" do
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    Rails.cache.write(cred.models_cache_key, [ { model_id: "fresh" } ])
+
+    cred.touch(:last_used_at)
+
+    assert_equal [ { model_id: "fresh" } ], Rails.cache.read(cred.models_cache_key)
+  end
+
+  # --- expires_at is derived from the stored token (before_save :sync_expires_at) ---
+
+  # Build a Claude Code config whose OAuth token expires at `time` (epoch-ms, as
+  # Claude stores it). ClaudeCodeAdapter#token_expires_at reads this back as ms.
+  def claude_config(expires_at:)
+    { "claudeAiOauth" => { "accessToken" => "sk-ant-tok", "expiresAt" => (expires_at.to_f * 1000).to_i } }
+  end
+
+  test "expires_at is populated from the token expiry, converting epoch-ms to a Time" do
+    token_exp = 90.minutes.from_now
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: token_exp))
+
+    assert_not_nil cred.expires_at
+    assert_in_delta token_exp.to_i, cred.expires_at.to_i, 2
+  end
+
+  test "from_artifacts populates expires_at from the persisted token" do
+    token_exp = 30.minutes.from_now
+    cred = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_config(expires_at: token_exp))
+
+    assert_in_delta token_exp.to_i, cred.reload.expires_at.to_i, 2
+  end
+
+  test "expires_at stays nil when the config carries no token expiry" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: { "primaryApiKey" => "sk-ant" })
+
+    assert_nil cred.expires_at
+  end
+
+  test "codex/cursor credentials keep expires_at nil (adapter reports no expiry)" do
+    codex = create(:agent_credential, user: @user, agent_type: "codex")
+    cursor = create(:agent_credential, user: @user, agent_type: "cursor_cli")
+
+    assert_nil codex.expires_at
+    assert_nil cursor.expires_at
+  end
+
+  test "changing the stored token recomputes expires_at" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.hour.from_now))
+
+    later = 5.hours.from_now
+    cred.update!(config_data: claude_config(expires_at: later))
+
+    assert_in_delta later.to_i, cred.reload.expires_at.to_i, 2
+  end
+
+  test "re-auth to a tokenless config clears a previously-set expires_at" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.hour.from_now))
+    assert_not_nil cred.expires_at
+
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", { "primaryApiKey" => "sk-ant" })
+
+    assert_nil cred.reload.expires_at
+  end
+
+  test "a metadata-only save does not recompute expires_at (guarded on config change)" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.hour.from_now))
+    # Poison the column bypassing callbacks; a stray recompute would reset it to the
+    # token-derived (~1h) value, so the sentinel surviving proves the guard held.
+    sentinel = 99.days.from_now
+    cred.update_column(:expires_at, sentinel)
+
+    cred.update!(metadata: (cred.metadata || {}).merge("default_model" => "claude-opus-4-8"))
+
+    assert_in_delta sentinel.to_i, cred.reload.expires_at.to_i, 2
+  end
+
+  # --- .not_expired scope ---
+
+  test "not_expired excludes claude creds whose token already expired and keeps null-expiry creds" do
+    expired = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                        config_data: claude_config(expires_at: 1.hour.ago))
+    null_expiry = create(:agent_credential, user: @user, agent_type: "codex")
+
+    not_expired = AgentCredential.not_expired
+    assert_includes not_expired, null_expiry
+    refute_includes not_expired, expired
+  end
+
+  test "not_expired includes claude creds whose token is still valid" do
+    valid = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                      config_data: claude_config(expires_at: 1.hour.from_now))
+
+    assert_includes AgentCredential.not_expired, valid
+  end
+
+  # --- refreshable / refresh_due scopes (consumed by the token-refresh sweep) ---
+
+  test "refreshable limits to REFRESHABLE_AGENT_TYPES" do
+    claude = create(:agent_credential, user: @user, agent_type: "claude_code")
+    codex = create(:agent_credential, user: @user, agent_type: "codex")
+    cursor = create(:agent_credential, user: @user, agent_type: "cursor_cli")
+    gemini = create(:agent_credential, user: @user, agent_type: "gemini_cli")
+
+    refreshable = AgentCredential.refreshable
+    assert_includes refreshable, claude
+    assert_includes refreshable, codex
+    assert_includes refreshable, cursor
+    refute_includes refreshable, gemini
+  end
+
+  test "refresh_due returns creds expiring within the window and excludes far-future ones" do
+    other = create(:user, company: @company)
+    due = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                    config_data: claude_config(expires_at: 5.minutes.from_now))
+    far = create(:agent_credential, user: other, agent_type: "claude_code",
+                                    config_data: claude_config(expires_at: 2.hours.from_now))
+
+    due_now = AgentCredential.refresh_due
+    assert_includes due_now, due
+    refute_includes due_now, far
+  end
+
+  # A runtime that declares `expiry: :token` cannot legitimately carry a NULL expiry — the
+  # token has one by construction — so a NULL says the column was never derived, and the
+  # row sat outside the sweep however dead it was. That is how a Cursor credential stayed
+  # `active` with a token months past its end. Refreshing settles which it is.
+  test "refresh_due picks up a token-bearing runtime whose expiry was never derived" do
+    undetermined = create(:agent_credential, user: @user, agent_type: "codex")
+    assert_nil undetermined.expires_at
+
+    assert_includes AgentCredential.refresh_due, undetermined
+  end
+
+  # The other reading of NULL, and the one that must stay out: an API key does not expire,
+  # so there is nothing to refresh and nothing to derive.
+  test "refresh_due leaves a runtime whose credential genuinely has no expiry alone" do
+    api_key_cred = create(:agent_credential, user: @user, agent_type: "gemini_cli")
+    assert_nil api_key_cred.expires_at
+
+    refute_includes AgentCredential.refresh_due, api_key_cred
+  end
+
+  test "refresh_due honors a custom window argument" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 90.minutes.from_now))
+
+    refute_includes AgentCredential.refresh_due, cred            # outside default 60m
+    assert_includes AgentCredential.refresh_due(2.hours), cred   # inside a 2h window
+  end
+
+  test "refresh_due excludes errored credentials" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 5.minutes.from_now))
+    cred.mark_refresh_error!("invalid_grant", permanent: true)
+
+    refute_includes AgentCredential.refresh_due, cred
+  end
+
+  # --- the owner is told when the platform gives up ---
+
+  test "mark_refresh_error! mails the owner when the credential crosses into error" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    assert_enqueued_emails 1 do
+      cred.mark_refresh_error!("claudeAiOauth invalid_grant — reconnection required", permanent: true)
+    end
+  end
+
+  test "a transient refresh failure does not mail anyone" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    assert_no_enqueued_emails do
+      cred.mark_refresh_error!("network timeout")
+    end
+  end
+
+  test "a credential already in error does not mail again on the next failure" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.mark_refresh_error!("invalid_grant", permanent: true)
+
+    assert_no_enqueued_emails do
+      cred.mark_refresh_error!("invalid_grant", permanent: true)
+    end
+  end
+
+  # --- base_login_expired? / unrecoverably_expired? (the launch gate) ---
+
+  test "base_login_expired? reads the base block, not the soonest expiry across blocks" do
+    config = claude_config(expires_at: 2.hours.from_now).merge(
+      "designOauth" => { "accessToken" => "design-tok", "expiresAt" => (1.hour.ago.to_f * 1000).to_i }
+    )
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code", config_data: config)
+
+    # expires_at (the column) follows the dead add-on; the base login is still good.
+    assert cred.expires_at.past?
+    assert_equal false, cred.base_login_expired? # rubocop:disable Minitest/RefuteFalse
+  end
+
+  test "base_login_expired? is true once the base block has expired" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.minute.ago))
+
+    assert cred.base_login_expired?
+  end
+
+  test "base_login_expired? is false for a credential with no expiry at all" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: { "primaryApiKey" => "sk-ant-api-key" })
+
+    assert_equal false, cred.base_login_expired? # rubocop:disable Minitest/RefuteFalse
+  end
+
+  test "unrecoverably_expired? is false while no live session holds the tokens" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.minute.ago))
+
+    # Nothing holds it, so the launch-time refresh can still save this session.
+    assert_equal false, cred.unrecoverably_expired? # rubocop:disable Minitest/RefuteFalse
+  end
+
+  test "unrecoverably_expired? is true when a live session pins an expired login" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.minute.ago))
+    create(:terminal_session, user: @user, company_id: cred.company_id,
+                              agent_type: "claude_code", state: "ready")
+
+    assert cred.unrecoverably_expired?
+  end
+
+  test "unrecoverably_expired? ignores the session being launched" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 1.minute.ago))
+    launching = create(:terminal_session, user: @user, company_id: cred.company_id,
+                                          agent_type: "claude_code", state: "queued")
+
+    assert_equal false, cred.unrecoverably_expired?(excluding_session_id: launching.id) # rubocop:disable Minitest/RefuteFalse
+  end
+
+  # A Grok login captured before the CLI stored refresh tokens: nothing renews it, and the
+  # launch-time top-up is what says so instead of starting a session that cannot sign in.
+  test "refresh_if_expiring! condemns an expired login that carries no refresh token" do
+    cred = create(:agent_credential, user: @user, agent_type: "grok",
+                                     config_data: { "auth" => { "default" => { "key" => "tok",
+                                                                              "expires_at" => 1.minute.ago.iso8601 } } })
+
+    result = nil
+    assert_no_error_reported { result = cred.refresh_if_expiring! }
+
+    assert result[:permanent]
+    assert_equal "error", cred.reload.status
+  end
+
+  # --- without_live_session scope (keeps the sweep off tokens a container holds) ---
+
+  test "without_live_session excludes a credential a live session holds" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 5.minutes.from_now))
+    create(:terminal_session, user: @user, company_id: cred.company_id,
+                              agent_type: "claude_code", state: "running")
+
+    refute_includes AgentCredential.without_live_session, cred
+  end
+
+  test "without_live_session ignores sessions that already ended" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 5.minutes.from_now))
+    create(:terminal_session, user: @user, company_id: cred.company_id,
+                              agent_type: "claude_code", state: "finished")
+
+    assert_includes AgentCredential.without_live_session, cred
+  end
+
+  # A session on a different agent holds different token material, so it says nothing
+  # about whether this credential is safe to refresh.
+  test "without_live_session only counts sessions on the same agent type" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 5.minutes.from_now))
+    create(:terminal_session, user: @user, company_id: cred.company_id,
+                              agent_type: "codex", state: "running")
+
+    assert_includes AgentCredential.without_live_session, cred
+  end
+
+  test "without_live_session only counts sessions belonging to the credential owner" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: claude_config(expires_at: 5.minutes.from_now))
+    other = create(:user, company: @company)
+    create(:terminal_session, user: other, company_id: cred.company_id,
+                              agent_type: "claude_code", state: "running")
+
+    assert_includes AgentCredential.without_live_session, cred
+  end
+
+  # --- refresh_if_expiring! (launch-time top-up) ---
+
+  # A session runs about as long as the token lives, so one started on a token with
+  # minutes left dies halfway through. The sweep only tops up in the last stretch of
+  # a token's life, which is why the launch does its own check.
+  def refreshable_claude_config(expires_at:)
+    { "claudeAiOauth" => { "accessToken" => "old-tok", "refreshToken" => "old-ref",
+                           "expiresAt" => (expires_at.to_f * 1000).to_i } }
+  end
+
+  def stub_token_endpoint
+    stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL)
+      .to_return(status: 200,
+                 body: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3_600 }.to_json,
+                 headers: { "Content-Type" => "application/json" })
+  end
+
+  test "refresh_if_expiring! leaves a token with plenty of life alone" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 3.hours.from_now))
+
+    assert_equal :not_needed, cred.refresh_if_expiring!
+  end
+
+  test "refresh_if_expiring! tops up a token that would not outlive the session" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 20.minutes.from_now))
+    stub_token_endpoint
+
+    result = cred.refresh_if_expiring!
+
+    assert_equal :refreshed, result[:status]
+    assert_equal "new-tok", cred.reload.config_data.dig("claudeAiOauth", "accessToken")
+  end
+
+  # The launch writes the very object it asked into the container, and the refresh
+  # revokes the access token it replaced.
+  test "refresh_if_expiring! leaves the caller holding the renewed token" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 20.minutes.from_now))
+    stub_token_endpoint
+
+    cred.refresh_if_expiring!
+
+    assert_equal %w[new-tok new-ref], cred.config_data["claudeAiOauth"].values_at("accessToken", "refreshToken")
+  end
+
+  # Rotating while another container runs on these tokens invalidates the copy it is
+  # using — one session about to start would take the others down with it.
+  test "refresh_if_expiring! defers to a container already holding the tokens" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 20.minutes.from_now))
+    create(:terminal_session, user: @user, company_id: cred.company_id,
+                              agent_type: "claude_code", state: "running")
+
+    assert_equal :held, cred.refresh_if_expiring!
+    assert_equal "old-tok", cred.reload.config_data.dig("claudeAiOauth", "accessToken")
+  end
+
+  # A static refresh token stays valid in the holder's container, so the launch tops up.
+  test "refresh_if_expiring! does not defer to a holder when the refresh token does not rotate" do
+    cred = create(:agent_credential, user: @user, agent_type: "cursor_cli",
+                                     config_data: { "accessToken" => "old", "refreshToken" => "old" })
+    cred.update_column(:expires_at, 20.minutes.from_now)
+    create(:terminal_session, user: @user, company_id: cred.company_id,
+                              agent_type: "cursor_cli", state: "running")
+    stub_request(:post, Agents::CursorCliAdapter::CURSOR_AUTH_URL)
+      .to_return(status: 200, headers: { "Content-Type" => "application/json" },
+                 body: { access_token: "new", id_token: "id", shouldLogout: false }.to_json)
+
+    assert_equal :refreshed, cred.refresh_if_expiring![:status]
+  end
+
+  # The session being launched is the one asking, and its container has not been
+  # handed anything yet — it must not block its own top-up.
+  test "refresh_if_expiring! ignores the session it is launching for" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 20.minutes.from_now))
+    launching = create(:terminal_session, user: @user, company_id: cred.company_id,
+                                          agent_type: "claude_code", state: "running")
+    stub_token_endpoint
+
+    result = cred.refresh_if_expiring!(excluding_session_id: launching.id)
+
+    assert_equal :refreshed, result[:status]
+  end
+
+  # --- signed_in_at: a person signing in, not a token refresh ---
+
+  test "a new authorization records when the user signed in; a refresh does not move it" do
+    travel_to Time.zone.parse("2026-09-28 17:40:00 UTC") do
+      AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_config(expires_at: 8.hours.from_now),
+                                     new_authorization: true)
+    end
+    travel_to Time.zone.parse("2026-09-29 01:30:00 UTC") do
+      AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_config(expires_at: 8.hours.from_now))
+    end
+
+    cred = AgentCredential.find_by!(user: @user, agent_type: "claude_code")
+    assert_equal Time.zone.parse("2026-09-28 17:40:00 UTC"), cred.signed_in_at
+  end
+
+  # --- renew! (every refresh goes through here) ---
+
+  # An API key has nothing to refresh, so a failed attempt's error would otherwise stay
+  # forever — one transient failure away from condemning a working credential.
+  test "renew! clears a stale error from a credential with no expiry" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code", config_data: { "primaryApiKey" => "sk-ant" })
+    cred.mark_refresh_error!("PG::UndefinedColumn")
+    cred.mark_refresh_error!("PG::UndefinedColumn")
+
+    assert_equal :not_needed, cred.renew!(source: :sweep)[:status]
+
+    cred.reload
+    assert_equal "active", cred.status
+    assert_nil cred.refresh_error
+    assert_equal 0, cred.refresh_failure_count
+  end
+
+  test "renew! leaves the failure count of a token that simply is not due yet" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 2.hours.from_now))
+    cred.mark_refresh_error!("network timeout")
+
+    assert_equal :not_needed, cred.renew!(source: :sweep)[:status]
+
+    assert_equal 1, cred.reload.refresh_failure_count
+  end
+
+  test "renew! records a successful refresh and clears an earlier failure" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 5.minutes.from_now))
+    cred.mark_refresh_error!("network timeout")
+    stub_token_endpoint
+
+    assert_no_error_reported { assert_equal :refreshed, cred.renew!(source: :sweep)[:status] }
+
+    cred.reload
+    assert_nil cred.refresh_error
+    assert_equal 0, cred.refresh_failure_count
+  end
+
+  # A vendor ending a login is nothing we can fix, so it never becomes an error-tracker
+  # issue: the owner is mailed, and the log line is what is left to investigate it by.
+  test "renew! condemns a grant the vendor refused and mails the owner, logging it without a report" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 5.minutes.from_now))
+    stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL)
+      .to_return(status: 400, body: { error: "invalid_grant" }.to_json,
+                 headers: { "Content-Type" => "application/json" })
+    Rails.logger.stubs(:warn)
+    Rails.logger.expects(:warn).with(all_of(includes("[AgentCredential] refresh failed"), includes("credential=#{cred.id}"),
+                                            includes("agent_type=claude_code"), includes("source=sweep"),
+                                            includes("claudeAiOauth invalid_grant")))
+
+    assert_enqueued_emails 1 do
+      assert_no_error_reported { cred.renew!(source: :sweep) }
+    end
+
+    assert_equal "error", cred.reload.status
+  end
+
+  # The add-on is not permanent — the base login still runs sessions — but its refusal
+  # is just as much the vendor's verdict, which only a new Design login reverses.
+  test "renew! does not report a refused designOauth block" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code", config_data: {
+      "claudeAiOauth" => { "accessToken" => "base-a", "refreshToken" => "base-r",
+                           "expiresAt" => (8.hours.from_now.to_f * 1000).to_i },
+      "designOauth" => { "accessToken" => "d-a", "refreshToken" => "dead", "clientId" => "design-client",
+                         "expiresAt" => (5.minutes.from_now.to_f * 1000).to_i }
+    })
+    stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL)
+      .to_return(status: 400, body: { error: "invalid_grant" }.to_json,
+                 headers: { "Content-Type" => "application/json" })
+
+    assert_no_error_reported { assert_equal :error, cred.renew!(source: :sweep)[:status] }
+
+    assert_equal "active", cred.reload.status
+  end
+
+  # One blip is usually gone by the next sweep. A run of them long enough to condemn the
+  # credential may be ours, and is reported once — not again on every attempt after it.
+  test "renew! reports a transient failure only on the one that condemns the credential" do
+    cred = create(:agent_credential, user: @user, agent_type: "cursor_cli",
+                                     config_data: { "accessToken" => "old", "refreshToken" => "r1" })
+    stub_request(:post, Agents::CursorCliAdapter::CURSOR_AUTH_URL).to_raise(Errno::ECONNRESET)
+
+    (AgentCredential::MAX_REFRESH_FAILURES - 1).times do
+      assert_no_error_reported { cred.renew!(source: :sweep) }
+    end
+    assert_equal "active", cred.reload.status
+    assert_match(/ECONNRESET/, cred.refresh_error)
+
+    report = assert_error_reported(AgentCredential::RefreshFailed) { cred.renew!(source: :sweep) }
+
+    assert_equal "error", cred.reload.status
+    assert_equal AgentCredential::REFRESH_ERROR_SOURCE, report.source
+    assert_equal :error, report.severity
+    assert_match(/ECONNRESET/, report.error.message)
+    assert_equal({ agent_type: "cursor_cli", refresh_source: "sweep", failure_count: AgentCredential::MAX_REFRESH_FAILURES },
+                 report.context.slice(:agent_type, :refresh_source, :failure_count))
+
+    assert_no_error_reported do
+      cred.renew!(source: :launch)
+      cred.renew!(source: :container)
+    end
+    assert_equal AgentCredential::MAX_REFRESH_FAILURES + 2, cred.reload.refresh_failure_count
+  end
+
+  test "a successful refresh restarts the streak, so the failures either side of it are not reported" do
+    cred = create(:agent_credential, user: @user, agent_type: "cursor_cli",
+                                     config_data: { "accessToken" => "old", "refreshToken" => "r1" })
+    stub_request(:post, Agents::CursorCliAdapter::CURSOR_AUTH_URL)
+      .to_raise(Errno::ECONNRESET).times(2)
+      .then.to_return(status: 200, body: { access_token: "new" }.to_json)
+      .then.to_raise(Errno::ECONNRESET)
+
+    assert_no_error_reported do
+      5.times { cred.renew!(source: :sweep) }
+    end
+
+    cred.reload
+    assert_equal "active", cred.status
+    assert_equal 2, cred.refresh_failure_count
+  end
+
+  test "sign_in_required? is every permanent failure and a refused add-on block, never a transient one" do
+    assert AgentCredential.sign_in_required?({ status: :error, detail: "cursor session ended — sign in again", permanent: true })
+    assert AgentCredential.sign_in_required?({ status: :error, detail: "designOauth invalid_grant — reconnection required",
+                                               permanent: false, sign_in_required: true })
+    refute AgentCredential.sign_in_required?({ status: :error, detail: "SocketError: getaddrinfo", permanent: false })
+  end
+
+  test "without_retired_grants drops a block whose refresh token was replaced and keeps a new one" do
+    cred = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1", "rt-1"))
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-2", "rt-2"))
+    cred.reload
+
+    stale = claude_login("at-1", "rt-1").merge("oauthAccount" => { "emailAddress" => "a@example.com" })
+    assert_equal({ "oauthAccount" => { "emailAddress" => "a@example.com" } }, cred.without_retired_grants(stale))
+
+    rotated = claude_login("at-3", "rt-3")
+    assert_equal rotated, cred.without_retired_grants(rotated), "a token we never replaced is a real rotation"
+  end
+
+  test "without_retired_grants leaves agents without refresh tokens alone" do
+    cred = create(:agent_credential, user: @user, agent_type: "codex")
+    captured = { "tokens" => { "refresh_token" => "anything" } }
+
+    assert_equal captured, cred.without_retired_grants(captured)
+  end
+
+  # The provider call runs outside any transaction: rolling back the write of a
+  # refresh token the provider has already rotated would lose the only valid one.
+  test "refresh_if_expiring! calls the provider with no transaction open" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 20.minutes.from_now))
+    open_transactions = nil
+    stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL).to_return do
+      open_transactions = ActiveRecord::Base.connection.open_transactions
+      { status: 200, body: { access_token: "new-tok", refresh_token: "new-ref", expires_in: 3_600 }.to_json,
+        headers: { "Content-Type" => "application/json" } }
+    end
+    baseline = ActiveRecord::Base.connection.open_transactions
+
+    cred.refresh_if_expiring!
+
+    assert_equal baseline, open_transactions
+  end
+
+  test "a launch that finds another refresh under way does not refresh again" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code",
+                                     config_data: refreshable_claude_config(expires_at: 20.minutes.from_now))
+    AgentCredential.where(id: cred.id).update_all(refresh_lease_until: 0.5.seconds.from_now, refresh_lease_token: "other")
+
+    result = cred.refresh_if_expiring!
+
+    # That refresher never renewed it, so the launch says so instead of replaying the grant.
+    assert_equal :error, result[:status]
+    assert_not_requested :post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL
+  end
+
+  test "the refresh lease is given back, and a lapsed one can be taken" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    assert_equal :done, cred.with_refresh_lease { :done }
+    assert_nil cred.reload.refresh_lease_until
+
+    AgentCredential.where(id: cred.id).update_all(refresh_lease_until: 1.minute.ago, refresh_lease_token: "crashed")
+    assert_equal :done, cred.with_refresh_lease { cred.with_refresh_lease { :done } }
+  end
+
+  # --- status / refresh error lifecycle ---
+
+  test "mark_refresh_error! increments failure count and records the message" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    cred.mark_refresh_error!("network timeout")
+
+    assert_equal "active", cred.status
+    assert_equal 1, cred.refresh_failure_count
+    assert_equal "network timeout", cred.refresh_error
+  end
+
+  test "mark_refresh_error! escalates to error after MAX_REFRESH_FAILURES consecutive failures" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    AgentCredential::MAX_REFRESH_FAILURES.times { cred.mark_refresh_error!("transient") }
+
+    assert_equal "error", cred.status
+  end
+
+  test "mark_refresh_error! with permanent: true escalates immediately" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    cred.mark_refresh_error!("invalid_grant", permanent: true)
+
+    assert_equal "error", cred.status
+    assert_equal 1, cred.refresh_failure_count
+    assert_equal "invalid_grant", cred.refresh_error
+  end
+
+  test "mark_refresh_error! truncates long messages to 500 chars" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+    cred.mark_refresh_error!("x" * 600)
+
+    assert_equal 500, cred.refresh_error.length
+  end
+
+  test "clear_refresh_error! resets status and clears error fields" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.mark_refresh_error!("invalid_grant", permanent: true)
+    assert_equal "error", cred.status
+
+    cred.clear_refresh_error!
+
+    assert_equal "active", cred.status
+    assert_nil cred.refresh_error
+    assert_equal 0, cred.refresh_failure_count
+  end
+
+  test "from_artifacts resets status to active on re-authentication" do
+    cred = create(:agent_credential, user: @user, agent_type: "claude_code")
+    cred.mark_refresh_error!("invalid_grant", permanent: true)
+    assert_equal "error", cred.status
+
+    updated = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", { "primaryApiKey" => "sk-new" })
+
+    assert_equal "active", updated.status
+    assert_nil updated.refresh_error
+    assert_equal 0, updated.refresh_failure_count
+  end
+  # --- Replaced refresh tokens and handing the new grant to the holders ---
+
+  def claude_login(access_token, refresh_token, expires_in: 8.hours)
+    { "claudeAiOauth" => { "accessToken" => access_token, "refreshToken" => refresh_token,
+                           "expiresAt" => (expires_in.from_now.to_f * 1000).to_i } }
+  end
+
+  test "remembers a refresh token it replaced, and the block it came from" do
+    cred = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1", "rt-1"))
+
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-2", "rt-2"))
+
+    cred.reload
+    assert_equal "claudeAiOauth", cred.retired_refresh_token_block("rt-1")
+    assert_nil cred.retired_refresh_token_block("rt-2"), "the current token is not a replaced one"
+    assert_nil cred.retired_refresh_token_block("never-ours")
+    refute_includes cred.metadata.to_json, "rt-1", "only a digest is kept"
+  end
+
+  test "forgets a replaced refresh token once no container can still hold it" do
+    cred = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1", "rt-1"))
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-2", "rt-2"))
+
+    travel(AgentCredential::RETIRED_REFRESH_TOKEN_TTL + 1.minute) do
+      assert_nil cred.reload.retired_refresh_token_block("rt-1")
+    end
+  end
+
+  test "hands a replaced grant to the other holders, not to the session it was written for" do
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1", "rt-1"))
+
+    cred = AgentCredential.find_by!(user: @user, agent_type: "claude_code")
+    TemporalService.expects(:start_workflow)
+                   .with(TemporalWorkflowRegistry.workflows["agent_credential_fan_out_workflow"],
+                         { credential_id: cred.id, origin_session_id: 77 }, has_key(:id))
+                   .returns(ok: true)
+
+    AgentCredential.rotating_for_session(77) do
+      AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-2", "rt-2"))
+    end
+  end
+
+  # The refused block keeps no refresh token, so there is nothing for the new one to replace;
+  # the holders waiting on that login still have to be handed the new one.
+  test "hands a re-login after the vendor refused the grant to every holder" do
+    cred = AgentCredential.from_artifacts(@user.id, @company.id, "claude_code",
+                                          { "claudeAiOauth" => { "scopes" => %w[user:inference] } })
+    TemporalService.expects(:start_workflow)
+                   .with(anything, { credential_id: cred.id, origin_session_id: nil }, has_key(:id))
+                   .returns(ok: true)
+
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-new", "rt-new"),
+                                   new_authorization: true)
+  end
+
+  test "a write that keeps the refresh token hands nothing out" do
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1", "rt-1"))
+
+    TemporalService.expects(:start_workflow).never
+
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1b", "rt-1"))
+  end
+
+  test "a writer that delivers to the holders itself is not doubled by the fan-out" do
+    AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-1", "rt-1"))
+
+    TemporalService.expects(:start_workflow).never
+
+    AgentCredential.delivering_inline do
+      AgentCredential.from_artifacts(@user.id, @company.id, "claude_code", claude_login("at-2", "rt-2"))
+    end
+  end
+end

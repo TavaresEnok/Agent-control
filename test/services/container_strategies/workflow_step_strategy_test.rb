@@ -1,0 +1,358 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+module ContainerStrategies
+  class WorkflowStepStrategyTest < ActiveSupport::TestCase
+    setup do
+      @company = create(:company)
+      @user = create(:user, :admin, company: @company)
+      @project = create(:project, company: @company, owner: @user)
+
+      Rails.logger.stubs(:info)
+      Rails.logger.stubs(:warn)
+      Rails.logger.stubs(:error)
+    end
+
+    teardown do
+      cleanup_runtime_overrides
+    end
+
+    # == Inheritance / static config ==
+
+    test "inherits from AgentSessionStrategy" do
+      assert_operator WorkflowStepStrategy, :<, AgentSessionStrategy
+    end
+
+    test "session_type is workflow_step" do
+      assert_equal "workflow_step", minimal_strategy.send(:session_type)
+    end
+
+    test "services_ports exposes only the ttyd port" do
+      assert_equal [ 7681 ], minimal_strategy.send(:services_ports)
+    end
+
+    test "build_labels marks the session as workflow_step" do
+      labels = minimal_strategy.build_labels
+
+      assert_equal "workflow_step", labels["aixle.session_type"]
+      assert_equal "claude_code", labels["aixle.agent_type"]
+    end
+
+    test "phase_config returns workflow-step timeouts per phase" do
+      strategy = minimal_strategy
+
+      assert_equal({ timeout: 600 }, strategy.phase_config(:pull_image))
+      assert_equal(
+        { timeout: 600, await_signal: :container_finished, signal_timeout: 82_800 },
+        strategy.phase_config(:exec)
+      )
+      assert_equal(
+        { timeout: 120, always: true, retry: { max_attempts: 2, interval: 5 } },
+        strategy.phase_config(:cleanup)
+      )
+      assert_equal({ timeout: 300 }, strategy.phase_config(:something_else))
+    end
+
+    # 2026-10-15: BMAD's own ceiling equalled the whole exec budget, so a slow npm
+    # registry timed the phase out and the step failed on the retry exec cannot make.
+    test "the exec budget keeps five minutes for setup beyond the BMAD install's ceiling" do
+      exec_timeout = minimal_strategy.phase_config(:exec)[:timeout]
+
+      assert_operator exec_timeout - BmadMethodInjector::INSTALL_TIMEOUT, :>=, 300
+    end
+
+    # == build_env_vars ==
+
+    test "build_env_vars carries neither the step's instructions nor its agent's persona" do
+      agent = create(:agent, scope: @project, persona: "You are a QA reviewer.", principles: "Verify everything.")
+      session, = create_workflow_step_session(instructions: "Review the pull request", agent: agent)
+
+      env_vars = build_strategy(session: session).build_env_vars
+
+      assert_includes env_vars, "SESSION_TYPE=workflow_step"
+      [ "Review the pull request", "You are a QA reviewer.", "Verify everything." ].each do |text|
+        assert_not env_vars.any? { |v| v.include?(text) }, "#{text} must not be in the environment"
+      end
+    end
+
+    test "the step's instructions are the prompt the CLI is launched with" do
+      session, = create_workflow_step_session(instructions: "Review the pull request")
+      session.update!(mode: "non_interactive", initial_prompt: "session summary")
+
+      assert_equal "Review the pull request", build_strategy(session: session).send(:agent_prompt, session)
+    end
+
+    # == before_cleanup ==
+
+    test "before_cleanup collects container outputs into WorkflowRunAssets and returns counts" do
+      stub_container_runtime(agent_type: "claude_code")
+      create(:agent_credential, user: @user, agent_type: "claude_code")
+      session, step_run, _step, workflow_run = create_workflow_step_session
+      strategy = build_strategy(session: session)
+
+      result = nil
+      assert_difference "WorkflowRunAsset.count", 1 do
+        assert_no_difference "Asset.count" do # workflow outputs are WorkflowRunAssets, not Assets
+          result = strategy.before_cleanup(container_id: "abc123")
+        end
+      end
+
+      assert_equal 1, result[:outputs_count]
+      assert_operator result[:logs_count], :>=, 1
+
+      asset = workflow_run.workflow_run_assets.reload.last
+      assert_equal "result.md", asset.name
+      assert_equal step_run, asset.produced_by_step_run
+      assert_equal "# Result\n\nGenerated output.\n".bytesize, asset.file_size
+      assert asset.file.present?, "expected the collected output to have an attached file"
+
+      assert_operator session.session_logs.reload.count, :>=, 1
+    end
+
+    test "before_cleanup returns empty hash when no container_id is given" do
+      session, = create_workflow_step_session
+      strategy = build_strategy(session: session)
+
+      assert_equal({}, strategy.before_cleanup(container_id: nil))
+    end
+
+    # == cleanup phase ==
+
+    test "the run hears about a container that failed to start only once its session has failed" do
+      stub_container_runtime(agent_type: "claude_code")
+      create(:agent_credential, user: @user, agent_type: "claude_code")
+      session, = create_workflow_step_session
+      session.update!(state: "running")
+      WorkflowService.expects(:notify_container_finished).with { TerminalSession.find(session.id).failed? }.once
+
+      run_cleanup_phase(session, error: "Phase start_container failed: Waiting for cluster capacity")
+
+      assert_predicate session.reload, :failed?
+    end
+
+    test "the run hears about a finished step once its outputs are collected" do
+      stub_container_runtime(agent_type: "claude_code")
+      create(:agent_credential, user: @user, agent_type: "claude_code")
+      session, step_run, = create_workflow_step_session
+      session.update!(state: "finishing")
+      WorkflowService.expects(:notify_container_finished)
+        .with { |step_run:| step_run.produced_workflow_run_assets.exists? }.once
+
+      run_cleanup_phase(session)
+
+      assert_predicate session.reload, :finished?
+      assert_equal 1, step_run.produced_workflow_run_assets.count
+    end
+
+    # == inject_prior_step_outputs ==
+
+    test "inject_prior_step_outputs downloads dependency outputs and run input assets into the container" do
+      fake = stub_container_runtime(agent_type: "claude_code")
+      Settings.stubs(:container_asset_host).returns(nil)
+
+      workflow = create(:workflow, scope: @project)
+      dep_step = create(:step, workflow: workflow, position: 1)
+      current_step = create(:step, workflow: workflow, position: 2, depends_on_step_ids: [ dep_step.id ])
+      workflow_run = create(:workflow_run, workflow: workflow, project: @project, user: @user)
+      dep_step_run = create(:step_run, workflow_run: workflow_run, step: dep_step)
+      session = create(:terminal_session, :agent_session, user: @user, project: @project, agent_type: "claude_code")
+      create(:step_run, workflow_run: workflow_run, step: current_step, terminal_session: session)
+
+      # Output produced by the dependency step (wired to the current step via depends_on_step_ids).
+      workflow_run.workflow_run_assets.create!(
+        name: "prior.md", produced_by_step_run: dep_step_run,
+        content_type: "text/markdown", file_size: 5,
+        file: WorkflowRunAssetUploader.upload(StringIO.new("prior"), :store)
+      )
+
+      # Run-level input asset.
+      input_asset = create(:asset, scope: @project.company, name: "brief.md", created_by: @user)
+      create(:asset_version, :with_file, asset: input_asset, version: 1, uploaded_by: @user)
+      workflow_run.update!(input_asset_ids: [ input_asset.id ])
+
+      strategy = build_strategy(session: session)
+      strategy.send(:inject_prior_step_outputs, "abc123")
+
+      commands = fake.execs.map { |c| Array(c).join(" ") }
+      assert commands.any? { |c| c.include?("mkdir") && c.include?("/workspace/assets") },
+        "expected the assets dir to be created"
+      assert commands.any? { |c| c.include?("curl") && c.include?("/workspace/assets/prior.md") },
+        "expected the dependency output to be downloaded"
+      assert commands.any? { |c| c.include?("curl") && c.include?("/workspace/assets/brief.md") },
+        "expected the run input asset to be downloaded"
+    end
+
+    test "inject_prior_step_outputs creates the parent of a nested output and skips a stored path that would leave the assets directory" do
+      fake = stub_container_runtime(agent_type: "claude_code")
+      Settings.stubs(:container_asset_host).returns(nil)
+
+      workflow = create(:workflow, scope: @project)
+      dep_step = create(:step, workflow: workflow, position: 1)
+      current_step = create(:step, workflow: workflow, position: 2, depends_on_step_ids: [ dep_step.id ])
+      workflow_run = create(:workflow_run, workflow: workflow, project: @project, user: @user)
+      dep_step_run = create(:step_run, workflow_run: workflow_run, step: dep_step)
+      session = create(:terminal_session, :agent_session, user: @user, project: @project, agent_type: "claude_code")
+      create(:step_run, workflow_run: workflow_run, step: current_step, terminal_session: session)
+
+      %w[reports/summary.md legacy.md].each do |name|
+        workflow_run.workflow_run_assets.create!(
+          name: name, produced_by_step_run: dep_step_run, content_type: "text/markdown", file_size: 5,
+          file: WorkflowRunAssetUploader.upload(StringIO.new("prior"), :store)
+        )
+      end
+      workflow_run.workflow_run_assets.find_by!(name: "legacy.md").update_column(:name, "../../root/.bashrc")
+
+      input_asset = create(:asset, scope: @project.company, name: "brief.md", created_by: @user)
+      create(:asset_version, :with_file, asset: input_asset, version: 1, uploaded_by: @user)
+      input_asset.update_column(:name, "../etc/profile")
+      workflow_run.update!(input_asset_ids: [ input_asset.id ])
+
+      build_strategy(session: session).send(:inject_prior_step_outputs, "abc123")
+
+      downloads = fake.execs.map { |c| Array(c).join(" ") }.select { |c| c.include?("curl") }
+      assert_equal 1, downloads.size
+      assert_includes downloads.first, "mkdir -p /workspace/assets/reports && curl -sSL -o /workspace/assets/reports/summary.md"
+    end
+
+    test "inject_prior_step_outputs copies outputs from every step upstream, the nearest one's copy last" do
+      fake = stub_container_runtime(agent_type: "claude_code")
+      Settings.stubs(:container_asset_host).returns(nil)
+
+      workflow = create(:workflow, scope: @project)
+      collect = create(:step, workflow: workflow, position: 1)
+      analyze = create(:step, workflow: workflow, position: 2, depends_on_step_ids: [ collect.id ])
+      report = create(:step, workflow: workflow, position: 3, depends_on_step_ids: [ analyze.id ])
+      workflow_run = create(:workflow_run, workflow: workflow, project: @project, user: @user)
+      session = create(:terminal_session, :agent_session, user: @user, project: @project, agent_type: "claude_code")
+      create(:step_run, workflow_run: workflow_run, step: report, terminal_session: session)
+      { analyze => "analyze", collect => "collect" }.each do |step, body|
+        workflow_run.workflow_run_assets.create!(
+          name: "summary.md", produced_by_step_run: create(:step_run, workflow_run: workflow_run, step: step),
+          content_type: "text/markdown", file_size: 5, file: WorkflowRunAssetUploader.upload(StringIO.new(body), :store)
+        )
+      end
+      collect_url = workflow_run.workflow_run_assets.joins(:produced_by_step_run)
+                                .find_by!(step_runs: { step_id: collect.id }).file.url
+
+      build_strategy(session: session).send(:inject_prior_step_outputs, "abc123")
+
+      downloads = fake.execs.map { |c| Array(c).join(" ") }.select { |c| c.include?("curl") }
+      assert_equal 2, downloads.size
+      assert_includes downloads.first, Shellwords.escape(collect_url), "the farther step's copy is written first"
+    end
+
+    test "inject_prior_step_outputs writes the request body of the webhook that started the run, as the agent" do
+      fake = stub_container_runtime(agent_type: "claude_code")
+      session, _step_run, _step, workflow_run = create_workflow_step_session
+      body = { "title" => "Security Hub scan", "description" => "## Totals\n375 findings" }
+      workflow_run.update!(shared_context: { "webhook" => { "payload" => body } })
+
+      build_strategy(session: session).send(:inject_prior_step_outputs, "abc123")
+
+      assert_equal body, JSON.parse(fake.fs["/workspace/assets/webhook-payload.json"])
+      assert_equal 1001, fake.file_attributes("/workspace/assets/webhook-payload.json")[:uid]
+    end
+
+    test "inject_prior_step_outputs places the files copied from the task's tracker issue where the tracker tools put them" do
+      fake = stub_container_runtime(agent_type: "claude_code")
+      Settings.stubs(:container_asset_host).returns(nil)
+      session, _step_run, _step, workflow_run = create_workflow_step_session
+      board = create(:board, project: @project)
+      task = create(:board_task, board: board, board_column: create(:board_column, board: board))
+      workflow_run.update!(board_task: task)
+      copy = task.task_assets.create!(name: "trace.log", source: :tracker, file: StringIO.new("t"))
+      task.task_assets.create!(name: "notes.md", file: StringIO.new("n"))
+      TrackerAttachment.create!(project: @project, provider: "jira", instance: "c1", issue_id: "10100", external_id: "1",
+                                direction: :imported, content_sha256: "s", task_asset: copy, data: { "issue_key" => "ENG-1" })
+
+      build_strategy(session: session).send(:inject_prior_step_outputs, "abc123")
+
+      commands = fake.execs.map { |c| Array(c).join(" ") }
+      assert(commands.any? { |c| c.include?("curl") && c.include?("/workspace/tracker/ENG-1/trace.log") })
+      assert(commands.none? { |c| c.include?("notes.md") }, "a file people attached on the card is not a tracker file")
+    end
+
+    test "inject_prior_step_outputs writes no payload file for a run no webhook started" do
+      fake = stub_container_runtime(agent_type: "claude_code")
+      session, = create_workflow_step_session
+
+      build_strategy(session: session).send(:inject_prior_step_outputs, "abc123")
+
+      assert_nil fake.fs["/workspace/assets/webhook-payload.json"]
+    end
+
+    test "the agent prompt is the step's instructions with references rendered" do
+      stub_container_runtime(agent_type: "claude_code")
+      workflow = create(:workflow, scope: @project)
+      asset = create(:asset, scope: @project, name: "brief.md", created_by: @user)
+      step = create(:step, workflow: workflow, asset_ids: [ asset.id ], instructions: "Read {{asset:#{asset.id}}}.")
+      workflow_run = create(:workflow_run, workflow: workflow, project: @project, user: @user)
+      session = create(:terminal_session, :agent_session, user: @user, project: @project, agent_type: "claude_code")
+      create(:step_run, workflow_run: workflow_run, step: step, terminal_session: session)
+
+      assert_equal "Read `/workspace/assets/brief.md`.", build_strategy(session: session).send(:agent_prompt, session.reload)
+    end
+
+    # == rewrite_url_for_container ==
+
+    test "rewrite_url_for_container swaps host/scheme/port when a container asset host is configured" do
+      Settings.stubs(:container_asset_host).returns("web:4000")
+
+      rewritten = minimal_strategy.send(:rewrite_url_for_container, "https://minio.local:9000/bucket/out.md")
+
+      uri = URI.parse(rewritten)
+      assert_equal "http", uri.scheme
+      assert_equal "web", uri.host
+      assert_equal 4000, uri.port
+      assert_equal "/bucket/out.md", uri.path
+    end
+
+    test "rewrite_url_for_container returns the url unchanged when no host is configured" do
+      Settings.stubs(:container_asset_host).returns(nil)
+
+      url = "https://minio.local:9000/bucket/out.md"
+      assert_equal url, minimal_strategy.send(:rewrite_url_for_container, url)
+    end
+
+    private
+
+    def minimal_strategy(agent_type: "claude_code")
+      WorkflowStepStrategy.new(
+        user_id: @user.id,
+        agent_type: agent_type,
+        session_id: 0,
+        route_token: "tok-#{SecureRandom.hex(4)}",
+        credential: nil
+      )
+    end
+
+    def run_cleanup_phase(session, error: nil)
+      ContainerService.new(
+        strategy: build_strategy(session: session),
+        state: { container_id: "abc123", session_id: session.id, error: error }.compact
+      ).run_phase(:cleanup)
+    end
+
+    def build_strategy(session:, agent_type: "claude_code", credential: nil)
+      WorkflowStepStrategy.new(
+        user_id: @user.id,
+        agent_type: agent_type,
+        session_id: session.id,
+        route_token: session.route_token,
+        credential: credential
+      )
+    end
+
+    # Builds the workflow → step → run → step_run → session chain the strategy reads.
+    # Returns [session, step_run, step, workflow_run].
+    def create_workflow_step_session(instructions: "Do the thing", agent: nil)
+      workflow = create(:workflow, scope: @project)
+      step = create(:step, workflow: workflow, instructions: instructions, agent: agent)
+      workflow_run = create(:workflow_run, workflow: workflow, project: @project, user: @user)
+      session = create(:terminal_session, session_type: "workflow_step", user: @user, project: @project, agent_type: "claude_code")
+      step_run = create(:step_run, workflow_run: workflow_run, step: step, terminal_session: session)
+      [ session, step_run, step, workflow_run ]
+    end
+  end
+end

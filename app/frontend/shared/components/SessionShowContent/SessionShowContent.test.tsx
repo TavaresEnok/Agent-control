@@ -1,0 +1,635 @@
+import '@testing-library/jest-dom/vitest';
+import { router } from '@inertiajs/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildRunnerBadge } from 'test/factories/runner';
+import { FakeWebSocket, installFakeWebSocket } from 'test/fakeWebSocket';
+import { act, renderPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+import type TerminalSession from 'types/generated/TerminalSession';
+
+import { SessionShowContent, type SessionShowContext } from './SessionShowContent';
+
+function makeSession(overrides: Partial<TerminalSession> = {}): TerminalSession {
+  return {
+    id: 7,
+    sessionType: 'terminal',
+    agentType: 'claude_code',
+    state: 'ready',
+    mode: 'interactive',
+    queuedAt: null,
+    waitReason: null,
+    launchPhase: null,
+    launchError: null,
+    startedAt: '2026-06-26T10:00:00Z',
+    finishingAt: null,
+    finishedAt: null,
+    createdAt: '2026-06-26T09:59:00Z',
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    costCents: 0,
+    models: [],
+    requestedModel: null,
+    reasoningEffort: null,
+    artifactsReviewed: null,
+    initialPrompt: null,
+    errorMessage: null,
+    containerId: null,
+    projectId: null,
+    userId: 1,
+    viewable: true,
+    ownedByViewer: true,
+    routeToken: null,
+    configuredAgentId: null,
+    contextMetadata: null,
+    metadata: null,
+    collectedAt: null,
+    runnerId: null,
+    runner: null,
+    updatedAt: '2026-06-26T10:00:00Z',
+    websocketUrl: 'wss://example.test/ttyd/abc/ws',
+    uploadUrl: null,
+    terminalLogUrl: null,
+    watcherUrl: null,
+    ideUrl: null,
+    cableStream: 'signed-stream',
+    sessionConfig: { configFiles: [] },
+    toolIds: [],
+    skillIds: [],
+    mcpServerIds: [],
+    configItemIds: [],
+    inputAssetIds: [],
+    repositoryIds: [],
+    failedRepositories: [],
+    userName: null,
+    userEmail: null,
+    projectName: null,
+    pendingArtifactsCount: 0,
+    sessionLogsCount: 0,
+    cloudConnectRequested: false,
+    authNotice: null,
+    ...overrides,
+  };
+}
+
+const ctx: SessionShowContext = {
+  backPath: '/sessions',
+  newSessionPath: '/sessions/new',
+  artifactsPath: '/sessions/7/artifacts',
+};
+
+describe('SessionShowContent', () => {
+  beforeEach(() => {
+    installFakeWebSocket();
+  });
+
+  it('shows queue waiting and cancellation without mounting a terminal', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'queued', startedAt: null, launchPhase: 'queued_for_slot' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByText('Waiting for a free session slot')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel session' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Terminal' })).not.toBeInTheDocument();
+  });
+
+  // A session sits in `queued` right through dispatch, so this state on its own
+  // never meant the pool was full — saying so blamed the user's own limit for
+  // every launch, and for every launch that failed outright.
+  it('does not blame the queue while a granted slot is starting up', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'queued', startedAt: null, launchPhase: 'starting' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByText('Starting session…')).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for a free session slot')).not.toBeInTheDocument();
+  });
+
+  it('shows what the launch itself failed on instead of a queue wait', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          state: 'queued',
+          startedAt: null,
+          launchPhase: 'starting',
+          launchError: 'GitHub token expired; reconnect the integration',
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByText('GitHub token expired; reconnect the integration')).toBeInTheDocument();
+  });
+
+  // The agent's context leaves a failed clone out, so the session page is the
+  // only place the user learns why a repository is missing.
+  it('lists the repositories that did not clone, and why', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          failedRepositories: [{ id: 3, fullName: 'acme/api', error: 'Integration not active' }],
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByText('A repository did not clone')).toBeInTheDocument();
+    expect(screen.getByText('acme/api')).toBeInTheDocument();
+    expect(screen.getByText(/Integration not active/)).toBeInTheDocument();
+  });
+
+  it('says the login was refused and links to signing in again', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          authNotice: { state: 'expired', agentType: 'claude_code', at: '2026-10-08T10:00:00Z' },
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByRole('alert', { name: 'The Claude Code login was refused' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in again' })).toHaveAttribute(
+      'href',
+      '/profile?authenticate=claude_code',
+    );
+  });
+
+  it('tells the person the login is back, since nothing is typed into their session', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          authNotice: { state: 'renewed', agentType: 'claude_code', at: '2026-10-08T10:05:00Z' },
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByRole('alert', { name: 'Login renewed' })).toHaveTextContent(/Send your last message again/);
+    expect(screen.queryByText(/login was refused/)).not.toBeInTheDocument();
+  });
+
+  it('names cluster capacity as the reason when that is what it is', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'queued', startedAt: null, launchPhase: 'cluster_capacity' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+    expect(screen.getByText('Waiting for cluster capacity')).toBeInTheDocument();
+  });
+
+  it('treats cancelled sessions as terminal without finish controls', () => {
+    renderPage(
+      <SessionShowContent session={makeSession({ state: 'cancelled' })} cableStream="signed-stream" context={ctx} />,
+    );
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Finish session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Terminal' })).not.toBeInTheDocument();
+  });
+  it('renders the shared detail header: breadcrumb, title, status, id and runtime', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ id: 42, state: 'ready', initialPrompt: 'Audit the GA4 property', userName: 'Ada' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    // The title is the session's own first prompt line, not the runtime name —
+    // the runtime moved to the meta line where runs put it too.
+    expect(screen.getByRole('heading', { name: 'Audit the GA4 property' })).toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument();
+    expect(screen.getByText('#42')).toBeInTheDocument();
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sessions & Runs' })).toHaveAttribute('href', '/sessions');
+  });
+
+  it("shows the session's runner in the header, linking to the runner, with the flag on", () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ projectId: 3, runnerId: 4, runner: buildRunnerBadge({ id: 4, name: 'Prod VPC' }) })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+      { props: { features: { externalRunners: true } } },
+    );
+
+    expect(screen.getByText('Runs on')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Prod VPC · Manual' })).toHaveAttribute(
+      'href',
+      '/company/projects/3/runners/4',
+    );
+  });
+
+  it('says Hosted in the header for a session without a runner, and nothing without the flag', () => {
+    const session = makeSession({ projectId: 3 });
+    const { unmount } = renderPage(<SessionShowContent session={session} cableStream="signed-stream" context={ctx} />, {
+      props: { features: { externalRunners: true } },
+    });
+    expect(screen.getByText('Runs on')).toBeInTheDocument();
+    expect(screen.getByText('Hosted')).toBeInTheDocument();
+    unmount();
+
+    renderPage(<SessionShowContent session={session} cableStream="signed-stream" context={ctx} />);
+    expect(screen.queryByText('Runs on')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hosted')).not.toBeInTheDocument();
+  });
+
+  it('labels a standalone session as such and a workflow-step session by its position', () => {
+    const { unmount } = renderPage(
+      <SessionShowContent session={makeSession()} cableStream="signed-stream" context={ctx} />,
+    );
+    expect(screen.getByText('Standalone session')).toBeInTheDocument();
+    unmount();
+
+    renderPage(
+      <SessionShowContent
+        session={makeSession()}
+        cableStream="signed-stream"
+        context={ctx}
+        workflowContext={{
+          runId: 1702,
+          runName: 'Release notes digest',
+          runPath: '/runs/1702',
+          stepName: 'Post to Slack',
+          stepPosition: 2,
+          stepsTotal: 2,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Post to Slack' })).toBeInTheDocument();
+    expect(screen.getByText('Step 2 of 2 · Workflow step')).toBeInTheDocument();
+    // The run sits between the list and the session in the breadcrumb.
+    expect(screen.getByRole('link', { name: 'Release notes digest · Run #1702' })).toHaveAttribute(
+      'href',
+      '/runs/1702',
+    );
+  });
+
+  it('shows the Finish action for an active session and POSTs to finish then reloads', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ id: 99, state: 'running' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /finish session/i }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/terminal_sessions/99/finish',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    await waitFor(() => expect(router.reload).toHaveBeenCalled());
+
+    fetchSpy.mockRestore();
+  });
+
+  it('copies the session link and shows a notification', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    renderPage(<SessionShowContent session={makeSession()} cableStream="signed-stream" context={ctx} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /copy session link/i }));
+
+    expect(writeText).toHaveBeenCalledWith(window.location.href);
+    expect(await screen.findByText('Session link copied')).toBeInTheDocument();
+  });
+
+  it('reports cost, tokens and models in the header stats for a finished session', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          state: 'finished',
+          finishedAt: '2026-06-26T10:05:00Z',
+          costCents: 250,
+          totalTokens: 12000,
+          inputTokens: 8000,
+          outputTokens: 4000,
+          models: ['claude-sonnet'],
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getByText('Finished')).toBeInTheDocument();
+    expect(screen.getByText('$2.50')).toBeInTheDocument();
+    expect(screen.getByText('12.0k')).toBeInTheDocument();
+    expect(screen.getByText('claude-sonnet')).toBeInTheDocument();
+    // The token line breaks the total down rather than hiding it in a tooltip.
+    expect(screen.getByText('8.0k')).toBeInTheDocument();
+  });
+
+  it('offers a Review outputs action when a finished session left files pending', async () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'finished', finishedAt: '2026-06-26T10:05:00Z', pendingArtifactsCount: 3 })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getByText('3 files are waiting for review.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /review outputs/i }));
+    expect(router.visit).toHaveBeenCalledWith('/sessions/7/artifacts');
+  });
+
+  it('renders a finished session in the same read-only console frame', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'finished', finishedAt: '2026-06-26T10:05:00Z', costCents: 478 })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getByText(/read-only/)).toBeInTheDocument();
+    // No live terminal for a terminal session.
+    expect(screen.queryByRole('group', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /finish session/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the workflow prompt collapsed until requested', async () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'finished', initialPrompt: 'Generate a detailed release report' })}
+        cableStream="signed-stream"
+        context={ctx}
+        workflowContext={{
+          runId: 12,
+          runName: 'Release workflow',
+          runPath: '/runs/12',
+          stepName: 'Generate report',
+          stepPosition: 1,
+          stepsTotal: 2,
+        }}
+      />,
+    );
+
+    const disclosure = screen.getByText('Prompt').closest('details');
+    expect(disclosure).not.toHaveAttribute('open');
+
+    await userEvent.click(screen.getByText('Prompt'));
+
+    expect(disclosure).toHaveAttribute('open');
+    expect(screen.getByText('Generate a detailed release report')).toBeInTheDocument();
+  });
+
+  it('renders the error message for a failed session', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          state: 'failed',
+          finishedAt: '2026-06-26T10:05:00Z',
+          errorMessage: 'Container exploded',
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getAllByText('Failed').length).toBeGreaterThan(0);
+    expect(screen.getByText('Container exploded')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /finish session/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the starting state when the session is not yet ready', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'not_started', websocketUrl: undefined })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getByText('Starting session…')).toBeInTheDocument();
+    // Header chip plus waiting chip both render the humanized state.
+    expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
+  });
+
+  it('renders the finishing overlay while the session is finishing', () => {
+    renderPage(
+      <SessionShowContent session={makeSession({ state: 'finishing' })} cableStream="signed-stream" context={ctx} />,
+    );
+
+    expect(screen.getByText(/finishing session/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /finish session/i })).not.toBeInTheDocument();
+  });
+
+  it("connects the live terminal to the session's websocket when ready", async () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'ready', websocketUrl: 'wss://host.test/sess/ws' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getByRole('group', { name: 'Terminal' })).toBeInTheDocument();
+    await waitFor(() => expect(FakeWebSocket.latest()?.url).toBe('wss://host.test/sess/ws'));
+  });
+
+  it("presents someone else's shared session as watch-only", () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({
+          state: 'ready',
+          ownedByViewer: false,
+          userName: 'Dana Vega',
+          websocketUrl: 'wss://host.test/sess/ws',
+          ideUrl: 'https://host.test/ide',
+        })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    // The terminal is still shown — watching is the point — but takes no keystrokes.
+    expect(screen.getByRole('group', { name: "Read-only view of another user's session" })).toBeInTheDocument();
+    expect(screen.getByText('View only')).toBeInTheDocument();
+    // No editor: an overlay on VS Code is just a broken editor.
+    expect(screen.queryByTitle('VS Code Editor')).not.toBeInTheDocument();
+    // Finish is owner-only at the API, so it is not offered here.
+    expect(screen.queryByRole('button', { name: /finish session/i })).not.toBeInTheDocument();
+  });
+
+  it('leaves the owner able to type and to finish their own session', () => {
+    renderPage(
+      <SessionShowContent
+        session={makeSession({ state: 'ready', ownedByViewer: true, websocketUrl: 'wss://host.test/sess/ws' })}
+        cableStream="signed-stream"
+        context={ctx}
+      />,
+    );
+
+    expect(screen.getByRole('group', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read-only view of another user's session")).not.toBeInTheDocument();
+    expect(screen.queryByText('View only')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /finish session/i })).toBeInTheDocument();
+  });
+
+  describe('full screen console', () => {
+    const liveSession = (overrides: Partial<TerminalSession> = {}) =>
+      makeSession({ state: 'ready', websocketUrl: 'wss://host.test/sess/ws', ...overrides });
+
+    it('pins the live console over the page and restores it on Esc without reloading the terminal', async () => {
+      renderPage(<SessionShowContent session={liveSession()} cableStream="signed-stream" context={ctx} />);
+
+      const terminal = screen.getByRole('group', { name: 'Terminal' });
+      const frame = screen.getByRole('region', { name: 'Console' });
+      expect(frame).not.toHaveAttribute('data-maximized');
+
+      await userEvent.click(screen.getByRole('button', { name: /full screen/i }));
+
+      expect(frame).toHaveAttribute('data-maximized');
+      expect(screen.getByRole('button', { name: /exit full screen/i })).toHaveAttribute('aria-pressed', 'true');
+      // The header is covered, so Finish and Copy link move onto the console bar.
+      expect(within(frame).getByRole('button', { name: /finish session/i })).toBeInTheDocument();
+      expect(within(frame).getByRole('button', { name: /copy session link/i })).toBeInTheDocument();
+      // Same node: remounting it would drop the ttyd websocket.
+      expect(screen.getByRole('group', { name: 'Terminal' })).toBe(terminal);
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(frame).not.toHaveAttribute('data-maximized');
+      expect(within(frame).queryByRole('button', { name: /finish session/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('group', { name: 'Terminal' })).toBe(terminal);
+    });
+
+    it('puts the console frame into browser fullscreen and follows the browser out of it', async () => {
+      let fullscreenElement: Element | null = null;
+      const fullscreenDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'fullscreenElement');
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreenElement });
+      const requestFullscreen = vi.fn(function (this: Element) {
+        fullscreenElement = screen.getByRole('region', { name: 'Console' });
+        document.dispatchEvent(new Event('fullscreenchange'));
+        return Promise.resolve();
+      });
+      HTMLElement.prototype.requestFullscreen = requestFullscreen;
+
+      try {
+        renderPage(<SessionShowContent session={liveSession()} cableStream="signed-stream" context={ctx} />);
+        const frame = screen.getByRole('region', { name: 'Console' });
+
+        await userEvent.click(screen.getByRole('button', { name: /full screen/i }));
+
+        expect(requestFullscreen).toHaveBeenCalledTimes(1);
+        expect(fullscreenElement).toBe(frame);
+        expect(frame).toHaveAttribute('data-maximized');
+
+        // The browser handles Esc itself in fullscreen and only reports the exit.
+        fullscreenElement = null;
+        act(() => {
+          document.dispatchEvent(new Event('fullscreenchange'));
+        });
+
+        expect(frame).not.toHaveAttribute('data-maximized');
+        expect(screen.getByRole('button', { name: /full screen/i })).toHaveAttribute('aria-pressed', 'false');
+      } finally {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).requestFullscreen;
+        delete (document as Partial<Document> & { fullscreenElement?: Element | null }).fullscreenElement;
+        if (fullscreenDescriptor) Object.defineProperty(Document.prototype, 'fullscreenElement', fullscreenDescriptor);
+      }
+    });
+
+    it('shows only the agent terminal while full screen and brings the editor back after', async () => {
+      renderPage(
+        <SessionShowContent
+          session={liveSession({ ideUrl: 'https://host.test/ide' })}
+          cableStream="signed-stream"
+          context={ctx}
+        />,
+      );
+      expect(screen.getByTitle('VS Code Editor')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /full screen/i }));
+
+      expect(screen.queryByTitle('VS Code Editor')).not.toBeInTheDocument();
+      expect(screen.getByRole('group', { name: 'Terminal' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /show editor/i })).not.toBeInTheDocument();
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.getByTitle('VS Code Editor')).toBeInTheDocument();
+      expect(screen.getByRole('group', { name: 'Terminal' })).toBeInTheDocument();
+    });
+
+    it('toggles with the keyboard shortcut', async () => {
+      renderPage(<SessionShowContent session={liveSession()} cableStream="signed-stream" context={ctx} />);
+      const frame = screen.getByRole('region', { name: 'Console' });
+
+      await userEvent.keyboard('{Control>}{Shift>}F{/Shift}{/Control}');
+      expect(frame).toHaveAttribute('data-maximized');
+
+      await userEvent.keyboard('{Control>}{Shift>}F{/Shift}{/Control}');
+      expect(frame).not.toHaveAttribute('data-maximized');
+    });
+
+    it('takes the shortcut from inside the terminal but leaves Esc there to the CLI', async () => {
+      renderPage(<SessionShowContent session={liveSession()} cableStream="signed-stream" context={ctx} />);
+      const frame = screen.getByRole('region', { name: 'Console' });
+      await userEvent.click(await screen.findByRole('textbox', { name: 'Terminal input' }));
+
+      await userEvent.keyboard('{Control>}{Shift>}F{/Shift}{/Control}');
+      expect(frame).toHaveAttribute('data-maximized');
+
+      await userEvent.keyboard('{Escape}');
+      expect(frame).toHaveAttribute('data-maximized');
+    });
+
+    it('lets a viewer go full screen while the terminal stays read-only', async () => {
+      renderPage(
+        <SessionShowContent
+          session={liveSession({ ownedByViewer: false })}
+          cableStream="signed-stream"
+          context={ctx}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: /full screen/i }));
+
+      const frame = screen.getByRole('region', { name: 'Console' });
+      expect(frame).toHaveAttribute('data-maximized');
+      expect(within(frame).getByLabelText("Read-only view of another user's session")).toBeInTheDocument();
+      expect(within(frame).queryByRole('button', { name: /finish session/i })).not.toBeInTheDocument();
+      expect(within(frame).getByRole('button', { name: /copy session link/i })).toBeInTheDocument();
+    });
+
+    it('offers the same control on a finished session', async () => {
+      renderPage(
+        <SessionShowContent
+          session={makeSession({ state: 'finished', finishedAt: '2026-06-26T10:05:00Z' })}
+          cableStream="signed-stream"
+          context={ctx}
+        />,
+      );
+
+      const frame = screen.getByRole('region', { name: 'Console' });
+
+      await userEvent.click(screen.getByRole('button', { name: /full screen/i }));
+      expect(frame).toHaveAttribute('data-maximized');
+
+      await userEvent.click(screen.getByRole('button', { name: /exit full screen/i }));
+      expect(frame).not.toHaveAttribute('data-maximized');
+    });
+  });
+});

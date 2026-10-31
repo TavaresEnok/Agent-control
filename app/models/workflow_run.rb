@@ -1,0 +1,232 @@
+# frozen_string_literal: true
+
+class WorkflowRun < ApplicationRecord
+  # The newest `limit` runs of each task, newest first, keyed by task id — what a page
+  # of cards shows, without loading every task's whole run history.
+  def self.recent_by_task(task_ids, limit:)
+    return {} if task_ids.blank?
+
+    ranked = where(board_task_id: task_ids).select(
+      "workflow_runs.*, ROW_NUMBER() OVER (PARTITION BY board_task_id ORDER BY created_at DESC, id DESC) AS task_rank"
+    )
+    from(ranked, :workflow_runs).where("task_rank <= ?", limit).order(created_at: :desc, id: :desc)
+                                .group_by(&:board_task_id)
+  end
+
+  # A run whose step is waiting for a session slot is itself `running`: queueing
+  # is a property of the child. A board card that reads the run state therefore
+  # claims work is happening while nothing is — so the runs that are actually
+  # waiting are resolved once per page and reported as `queued`.
+  #
+  # "Waiting" means a queued step session and nothing else in flight: a run with
+  # one step running and another queued is still working, and must not read as
+  # parked.
+  def self.waiting_for_slot_ids(run_ids)
+    return Set.new if run_ids.blank?
+
+    sessions = TerminalSession.joins(:step_run)
+                              .where(step_runs: { workflow_run_id: run_ids })
+                              .pluck(Arel.sql("step_runs.workflow_run_id"), :state)
+    sessions.group_by(&:first).filter_map do |run_id, rows|
+      states = rows.map(&:last)
+      run_id if states.include?("queued") && (states & %w[running ready finishing]).empty?
+    end.to_set
+  end
+
+  include WorkflowRunStateMachine
+  include CreatedWithinDates
+  include RunnerReference
+  extend Enumerize
+
+  belongs_to :workflow
+  belongs_to :project
+  # Optional so a permanently-deleted user's runs survive with user_id nullified
+  # (FK is ON DELETE :nullify). A run still requires a user at creation time.
+  belongs_to :user, optional: true
+  belongs_to :board_task, optional: true, touch: true
+  belongs_to :failed_agent_credential, class_name: "AgentCredential", optional: true
+  belongs_to :retried_from_run, class_name: "WorkflowRun", optional: true
+
+  has_many :step_runs, dependent: :destroy
+  has_many :workflow_run_assets, dependent: :destroy
+  has_many :column_transitions, dependent: :nullify
+
+  enumerize :mode, in: %i[interactive non_interactive mixed], default: :interactive, predicates: true
+  # How the run was launched. A `trigger` run's event and binding are on its
+  # TriggerDispatch; runs created before this column existed have none.
+  enumerize :source, in: %i[web mcp retry trigger]
+
+  def runner_project = project
+
+  def execution_workflow_id
+    "workflow-execution-#{id}"
+  end
+
+  validates :mode, presence: true
+  validates :idempotency_key, length: { maximum: 255 }, allow_nil: true
+  # Run assets are copied into every step container and run repositories are
+  # cloned with their integration's token, so the ids — posted by a user or
+  # carried in by a webhook — must be this project's.
+  validates :input_asset_ids, tenant_ids: { model: Asset }, if: -> { new_record? || will_save_change_to_input_asset_ids? }
+  validates :repository_ids, tenant_ids: { model: Repository }, if: -> { new_record? || will_save_change_to_repository_ids? }
+
+  broadcasts_to ->(run) { run }, on: :update
+  after_commit :broadcast_run_list_update, on: :update
+
+  # Transactional outbox for run dispatch, mirroring TriggerEvent's. `state` is
+  # the run's own lifecycle; `relay_state` answers a different question — was the
+  # Temporal execution that drives this run ever confirmed started?
+  #
+  # WHY IT IS NOT THE SAME QUESTION: WorkflowService.start dials Temporal inline,
+  # and TemporalService.start_workflow does not raise on a failed RPC — it returns
+  # { ok: false, ... }. A run whose start never reached Temporal therefore looked
+  # exactly like one the worker had not picked up yet: `state` "pending", nothing
+  # logged above a Rails.logger.error, and no retry anywhere. It would sit there
+  # forever.
+  RELAY_GRACE = 2.minutes
+
+  # Stop re-dispatching a run whose start keeps failing, so one poison run cannot
+  # churn forever. Same ceiling as TriggerEvent: ~33h at the grace cadence, which
+  # rides out a long outage without burying it.
+  RELAY_MAX_ATTEMPTS = 1000
+
+  # What the relay re-drives. Deliberately narrower than "relay_state pending":
+  #
+  # * `state: "pending"` — a run the worker has already advanced is running
+  #   whether or not our inline call got its confirmation, and re-driving it would
+  #   be pointless. It stops being swept and keeps its honest relay_state.
+  # * `stop_requested_at: nil` — never start an execution for a run somebody
+  #   cancelled while it sat undispatched.
+  scope :stuck_for_relay, ->(now = Time.current) {
+    where(relay_state: "pending", state: "pending", stop_requested_at: nil)
+      .where(relay_attempts: ...RELAY_MAX_ATTEMPTS)
+      .where(created_at: ..(now - RELAY_GRACE))
+      .where("relay_claimed_at IS NULL OR relay_claimed_at <= ?", now - RELAY_GRACE)
+      .order(:id)
+  }
+
+  scope :active, -> { where(state: %w[pending running paused]) }
+  # What the run cost: the usage of every session its step runs ran in. A session
+  # shared by several step runs is counted once, which a JOIN would not do.
+  scope :with_total_cost_cents, -> {
+    select(arel_table[Arel.star], <<~SQL.squish)
+      (SELECT COALESCE(SUM(usage_statistics.cost_cents), 0)::bigint FROM usage_statistics
+       WHERE usage_statistics.terminal_session_id IN
+         (SELECT step_runs.terminal_session_id FROM step_runs WHERE step_runs.workflow_run_id = workflow_runs.id))
+      AS total_cost_cents
+    SQL
+  }
+
+  # A finished run's duration, from its first step leaving the admission queue to
+  # its end — the SQL twin of #execution_seconds.
+  EXECUTION_SECONDS_SQL = "EXTRACT(EPOCH FROM (workflow_runs.completed_at - workflow_runs.execution_started_at))::bigint"
+
+  scope :timed, -> { where.not(execution_started_at: nil).where.not(completed_at: nil) }
+  scope :for_project_in_period, ->(project, range) { where(project: project, created_at: range) }
+  scope :for_user_in_project, ->(project, user, range) { where(project: project, user: user, created_at: range) }
+  scope :for_user_in_period, ->(user, range) { where(user: user, created_at: range) }
+
+  def self.ransackable_attributes(_auth_object = nil)
+    %w[state mode project_id user_id created_at cost_cents total_tokens duration_seconds]
+  end
+
+  def self.ransackable_associations(_auth_object = nil)
+    []
+  end
+
+  def self.ransackable_scopes(_auth_object = nil)
+    %w[created_from created_until]
+  end
+
+  # A run has no cost or tokens of its own: they are its step sessions', each
+  # counted once — the same sums its list row shows.
+  ransacker :cost_cents, type: :integer do
+    Arel.sql(<<~SQL.squish)
+      (SELECT COALESCE(SUM(step_sessions.cost_cents), 0) FROM terminal_sessions step_sessions
+       WHERE step_sessions.id IN
+         (SELECT run_steps.terminal_session_id FROM step_runs run_steps WHERE run_steps.workflow_run_id = workflow_runs.id))
+    SQL
+  end
+
+  ransacker :total_tokens, type: :integer do
+    Arel.sql(<<~SQL.squish)
+      (SELECT COALESCE(SUM(step_sessions.total_tokens), 0) FROM terminal_sessions step_sessions
+       WHERE step_sessions.id IN
+         (SELECT run_steps.terminal_session_id FROM step_runs run_steps WHERE run_steps.workflow_run_id = workflow_runs.id))
+    SQL
+  end
+
+  # First step leaving the queue to completion; a live run counts up to now, as
+  # its list row does.
+  ransacker :duration_seconds, type: :integer do
+    Arel.sql(<<~SQL.squish)
+      EXTRACT(EPOCH FROM (COALESCE(workflow_runs.completed_at,
+        CASE WHEN workflow_runs.state IN ('pending', 'running', 'paused') THEN NOW() END)
+        - workflow_runs.execution_started_at))
+    SQL
+  end
+
+  def execution_seconds
+    return unless execution_started_at && completed_at
+
+    seconds = (completed_at - execution_started_at).round
+    seconds unless seconds.negative?
+  end
+
+  def can_run_non_interactive?
+    workflow.steps.not_deleted.all?(&:allow_non_interactive)
+  end
+
+  def step_auto_run?(step_id)
+    override = step_overrides[step_id.to_s]
+    return override["auto_run"] unless override.nil?
+
+    nil
+  end
+
+  def current_step_run
+    step_runs.where(state: %w[pending running waiting_input]).order(:created_at).last
+  end
+
+  # Latest failed step the user may retry via API (current_step_run excludes failed — that caused 404 on retry).
+  def latest_failed_step_run
+    step_runs.where(state: :failed).order(updated_at: :desc).first
+  end
+
+  # May `viewer` STEER this run — cancel it, or approve / retry / skip one of its
+  # steps? Reaching a run is a project-level question and stays that way (the
+  # whole team watches the board's automation); acting on one is not. A run is
+  # somebody's work in flight, the same way their session is, and the person who
+  # started it is the one who knows whether a waiting step should be approved or
+  # skipped.
+  #
+  # Company admins keep an override, because a run nobody can cancel blocks the
+  # board card behind it and its owner may well be asleep.
+  def controllable_by?(viewer)
+    return false if viewer.nil?
+    return true if user_id == viewer.id
+
+    viewer.company_memberships.active.find_by(company_id: project&.company_id)&.admin? || false
+  end
+
+  def mark_quota_failed!(credential_id:)
+    update!(failure_reason: "quota_exceeded", failed_agent_credential_id: credential_id)
+  end
+
+  private
+
+  # RunnerReference: the run's own project, and its company read off the
+  # workflow (same project, TenantColumns keeps workflows.company_id), which
+  # every list that renders the badge already loads, so no project is loaded.
+  def runner_tenant_ids = [ workflow&.company_id, project_id ]
+
+  # Id only, like TerminalSession#broadcast_session_list_update: the page
+  # fetches the row back through its own authorized endpoint.
+  def broadcast_run_list_update
+    return unless project
+
+    InertiaCable.broadcast([ project, :sessions_runs ], { type: "run_update", id: id })
+  rescue StandardError => e
+    Rails.logger.warn("[WorkflowRun] Run-list update for #{id} not sent: #{e.class}: #{e.message}")
+  end
+end

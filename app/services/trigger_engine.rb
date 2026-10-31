@@ -1,0 +1,431 @@
+# frozen_string_literal: true
+
+# TriggerEngine is the single "brain" of the event-driven trigger layer.
+#
+# Every trigger source converges here instead of each one hard-coding its own
+# call into WorkflowService.enqueue:
+#
+#   • column auto-binding   → TaskService.check_auto_trigger → record_column_trigger → dispatch_pending
+#   • task gate resolution  → TaskService.resolve_gate/remove_gate → record_column_trigger → dispatch_pending
+#   • manual launch button  → TaskService.trigger_workflow → record_event + dispatch_pending
+#   • chat / webhook         → Webhooks::ProcessEventJob → publish (record + dispatch_pending)
+#   • schedule              → FireScheduleTriggerActivity → record_event + fire_for_binding
+#
+# Transactional outbox: internal producers record a "pending" TriggerEvent INSIDE
+# the same DB transaction as their domain write, then dispatch it inline (the
+# happy path). If the process dies after the commit but before/while dispatching,
+# the event is left "pending" and OutboxRelay (a Temporal cron) sweeps it later
+# and dispatches it. Double-firing is prevented by the TriggerDispatch unique
+# dedup_key, which is stable per (event, target) across inline + relay retries.
+#
+# Responsibilities:
+#   1. record_event   — persist a normalized TriggerEvent (audit / replay / outbox).
+#   2. dispatch_pending — route a recorded event to its target(s) once, then mark it
+#                         dispatched; the single entry point shared by the inline
+#                         path and the relay.
+#   3. fire_*         — start a workflow once, idempotently (TriggerDispatch ledger),
+#                       always through WorkflowService.enqueue.
+class TriggerEngine
+  # event_type → how dispatch_pending routes it.
+  COLUMN_EVENT_TYPE = "board.column.auto_triggered"
+  MANUAL_EVENT_TYPE = "workflow.manual_requested"
+
+  class << self
+    # Persist a normalized event WITHOUT dispatching.
+    #
+    # relay_state: "pending" enrols the event in the outbox (the relay will sweep
+    # it if it is never dispatched). "dispatched" records an inert audit row that
+    # the relay ignores — used by paths that dispatch through another durable
+    # mechanism (e.g. the schedule activity, which Temporal already retries).
+    def record_event(event_type:, source:, subject: nil, data: {}, project: nil, company: nil, board_task: nil,
+                     actor: nil, dedup_key: nil, relay_state: "pending")
+      TriggerEvent.create!(
+        event_type: event_type,
+        source: source,
+        subject: subject&.to_s,
+        data: data.deep_stringify_keys,
+        project_id: project&.id,
+        company_id: company&.id,
+        board_task_id: board_task&.id,
+        actor_id: actor&.id,
+        dedup_key: dedup_key,
+        relay_state: relay_state,
+        occurred_at: Time.current
+      )
+    end
+
+    # Persist a normalized event AND dispatch it. Used by the generic webhook /
+    # Slack ingestion path. Idempotent on dedup_key: a redelivered event is
+    # recorded once and dispatched once.
+    def publish(event_type:, source:, subject: nil, data: {}, project: nil, company: nil, board_task: nil, dedup_key: nil)
+      event = record_event(
+        event_type: event_type, source: source, subject: subject,
+        data: data, project: project, company: company, board_task: board_task, dedup_key: dedup_key,
+        relay_state: "pending"
+      )
+      dispatch_pending(event)
+      event
+    rescue ActiveRecord::RecordNotUnique
+      # Same dedup_key already ingested — already recorded (and dispatched) once.
+      TriggerEvent.find_by(dedup_key: dedup_key)
+    end
+
+    # Route a recorded "pending" event to its target(s) exactly once, then mark it
+    # dispatched. Shared by the inline producer path (called right after the
+    # producer's transaction commits) and OutboxRelay (crash recovery). Idempotent:
+    # safe to call more than once for the same event — TriggerDispatch dedup
+    # suppresses any duplicate workflow launch. Returns the array of WorkflowRuns.
+    def dispatch_pending(event)
+      return [] if event.nil?
+
+      # Atomically claim the event so only one of the inline path / relay routes it.
+      # Accepts a stuck "dispatching" row (a router that died mid-flight, which the
+      # relay re-sweeps past the grace window); route_pending stays idempotent via
+      # the TriggerDispatch dedup_key, so a re-route never double-launches.
+      claimed = TriggerEvent
+        .where(id: event.id, relay_state: %w[pending dispatching])
+        .update_all(relay_state: "dispatching", updated_at: Time.current)
+      return [] unless claimed == 1
+
+      event.reload
+      runs = route_pending(event)
+      # A chat provider's file links are needed until every run has its files.
+      data = Chat.provider_for(event)&.scrub(event.data) || event.data
+      event.update!(relay_state: "dispatched", dispatched_at: Time.current, data: data)
+      Array(runs).compact
+    rescue StandardError => e
+      attempts = event.relay_attempts.to_i + 1
+      next_state = attempts >= TriggerEvent::RELAY_MAX_ATTEMPTS ? "failed" : "pending"
+      # Given up on: the file links it carried are dropped all the same.
+      data = next_state == "failed" ? (Chat.provider_for(event)&.scrub(event.data) || event.data) : event.data
+      event.update_columns(
+        relay_state: next_state, relay_attempts: attempts, data: data,
+        relay_error: e.message.to_s.truncate(250), updated_at: Time.current
+      )
+      Rails.logger.error("[TriggerEngine] dispatch_pending failed for event ##{event.id} (attempt #{attempts}): #{e.message}")
+      []
+    end
+
+    # Match an event against the generalized binding registry and fire each.
+    # Returns the array of created workflow runs (nils for suppressed duplicates).
+    # A chat message asking for help, or one no trigger matched, gets the
+    # conversation's trigger catalog instead of silence.
+    def dispatch(event)
+      return [] if event.project_id.blank? && event.company_id.blank?
+
+      if Chat.connect_request?(event)
+        Chat.answer_connect(event)
+        return []
+      end
+      if Chat.help_request?(event)
+        Chat.answer_help(event)
+        return []
+      end
+      return [] if Chat.answer_command(event)
+
+      if Chat.private_request?(event)
+        Chat.answer_private(event)
+        return []
+      end
+
+      matched = TriggerBinding.for_event(event).select { |b| b.matches?(event.data) }
+      if matched.empty? && Chat.event?(event)
+        Chat.answer_help(event)
+        return []
+      end
+
+      matched.map do |binding|
+        fire_for_binding(binding: binding, event: event, task: event.board_task, actor: binding.created_by)
+      end
+    end
+
+    # Fire the workflow bound to a TriggerBinding (Slack/webhook/custom source).
+    # The binding's subject_policy decides what board task (if any) the run is
+    # about: none → task-less project run; existing_task → the event's task;
+    # create_task → a fresh card in the binding's subject_column.
+    def fire_for_binding(binding:, event:, task: nil, actor: nil)
+      return nil unless binding.live?
+
+      actor ||= binding.created_by
+      return nil if actor.nil? # a run requires a user
+
+      # Resolve the subject (which may CREATE a card for subject_policy:create_task)
+      # inside fire_workflow's dispatch lock, so a re-dispatch of the same event
+      # never creates a duplicate card or a second run.
+      fire_workflow(
+        workflow: binding.workflow,
+        project: binding.project,
+        actor: actor,
+        event: event,
+        source: "trigger_binding:#{binding.id}",
+        trigger_binding: binding
+      ) { resolve_subject(binding: binding, event: event, fallback_task: task) }
+    end
+
+    # Record a pending column auto-trigger event (no dispatch). Called INSIDE the
+    # producer's transaction so the event commits atomically with the task move /
+    # gate change. The caller dispatches it (inline) after the transaction commits.
+    # `actor` is who the launched run will BELONG to (TaskService.run_owner_for
+    # decides); `requested_by` is who caused the trigger. They differ whenever a
+    # card is assigned to someone other than the person who moved it, so both are
+    # recorded — the run must be owned by the assignee, and the audit trail must
+    # still say who moved the card.
+    def record_column_trigger(binding:, task:, actor:, requested_by: nil)
+      record_event(
+        event_type: COLUMN_EVENT_TYPE,
+        source: "column_workflow_binding:#{binding.id}",
+        subject: task.id,
+        data: { "column_id" => binding.board_column_id, "workflow_id" => binding.workflow_id,
+                "requested_by_id" => (requested_by || actor)&.id },
+        project: task.board.project,
+        board_task: task,
+        actor: actor,
+        relay_state: "pending"
+      )
+    end
+
+    # Records a column auto-trigger event and dispatches it immediately. Retained
+    # as a convenience entry point (and for callers that want the synchronous run).
+    def fire_for_column_binding(binding:, task:, actor:)
+      event = record_column_trigger(binding: binding, task: task, actor: actor)
+      dispatch_pending(event).first
+    end
+
+    # Low-level: start a workflow at most once for (event, target), recording a
+    # TriggerDispatch ledger row whose unique dedup_key suppresses duplicates from
+    # at-least-once delivery and relay retries.
+    #
+    # The launch runs under dispatch.with_lock so two concurrent callers for the
+    # same (event, target) serialize: the loser re-reads the row and sees the run.
+    # It also RESUMES a dispatch left in "matched" with no run — the state a crash
+    # between the ledger insert and WorkflowService.enqueue leaves behind — so the
+    # relay finishes the launch instead of suppressing it forever. The subject is
+    # resolved inside the lock (via the block) so a re-dispatch never creates a
+    # second card. Returns the WorkflowRun (or nil if suppressed / skipped).
+    #
+    # The run is created and recorded on the dispatch inside the lock; its
+    # Temporal execution starts only after that commits
+    # (WorkflowService.dispatch_or_leave_to_relay). A failed start leaves a
+    # committed, relay-enrolled run rather than rolling the run back while the
+    # event is replayed later, which would report a failure and then fire anyway,
+    # or fire twice.
+    def fire_workflow(workflow:, project:, actor:, event:, source:, trigger_binding: nil, task: nil,
+                      runner_id: WorkflowService::RUNNER_NOT_PICKED)
+      dedup_key = dispatch_dedup_key(event, trigger_binding, source)
+
+      dispatch = find_or_create_dispatch(
+        event: event, trigger_binding: trigger_binding, source: source, dedup_key: dedup_key
+      )
+
+      result = nil
+      decided = nil
+      dispatch.with_lock do
+        if dispatch.workflow_run_id.present?
+          result = dispatch.workflow_run            # already started → idempotent no-op
+        elsif dispatch.status == "skipped"
+          result = nil                              # a prior attempt decided not to start
+        elsif cooling_down?(trigger_binding, dispatch)
+          dispatch.update!(status: "skipped", detail: { "reason" => "cooldown" })
+          decided = "skipped"
+        else
+          subject = block_given? ? yield : task     # resolve (and maybe create) inside the lock
+          result = WorkflowService.enqueue(
+            workflow: workflow, project: project, user: actor, source: :trigger,
+            task: subject, mode: :non_interactive, runner_id: runner_id,
+            input_asset_ids: input_asset_ids_for(event, project),
+            shared_context: Chat.run_context(event).merge(
+              Trackers::TriggerSupport.run_context(event), Webhooks::TriggerSupport.run_context(event)
+            )
+          )
+          started = result.try(:persisted?)
+          dispatch.update!(
+            workflow_run_id: result.try(:id),
+            status: started ? "started" : "skipped",
+            detail: started ? {} : { "reason" => skip_reason(result) }
+          )
+          decided = started ? "dispatched" : "skipped"
+          WorkflowService.dispatch_or_leave_to_relay(result) if started
+          copy_issue_files(result, trigger_binding, event, subject) if started
+        end
+      end
+      # Said once, by the attempt that decided; a replay of the event decides nothing.
+      Triggers.announce(dispatch.id, decided) if decided && (trigger_binding || source == Chat::ACTION_SOURCE)
+      result
+    end
+
+    private
+
+    # Route a pending event to its dispatch target by type. Column/manual events
+    # carry the launch intent (workflow_id + actor) and are fired directly; every
+    # other source is matched against the binding registry.
+    def route_pending(event)
+      case event.event_type
+      when COLUMN_EVENT_TYPE then fire_recorded_launch(event, source: "column_workflow_binding")
+      when MANUAL_EVENT_TYPE then fire_recorded_launch(event, source: "manual")
+      else dispatch(event)
+      end
+    end
+
+    # Fire a workflow from an event that recorded its own launch intent (column
+    # auto-trigger / manual button). The decision to fire was already made when the
+    # event was recorded (guards applied in TaskService); the relay simply finishes
+    # the launch the recorded intent describes.
+    def fire_recorded_launch(event, source:)
+      workflow = Workflow.find_by(id: event.data["workflow_id"])
+      task = event.board_task
+      actor = event.actor
+      return [] if workflow.nil? || task.nil? || actor.nil?
+
+      # Only a manual launch records a runner pick (TaskService.trigger_workflow);
+      # a column binding carries none, so its run takes the workflow's runner.
+      picked = event.data.to_h.key?("runner_id") ? { runner_id: event.data["runner_id"] } : {}
+      [ fire_workflow(
+        workflow: workflow, project: event.project, task: task,
+        actor: actor, event: event, source: source, **picked
+      ) ].compact
+    end
+
+    # cooldown_seconds: at most one run per window per binding. The binding's row
+    # lock makes two events arriving together agree on which one was first.
+    def cooling_down?(binding, dispatch)
+      return false unless binding&.cooldown_seconds.to_i.positive?
+
+      binding.lock!
+      TriggerDispatch.where(trigger_binding_id: binding.id, status: "started").where.not(id: dispatch.id)
+                     .exists?(created_at: binding.cooldown_seconds.seconds.ago..)
+    end
+
+    def find_or_create_dispatch(event:, trigger_binding:, source:, dedup_key:)
+      TriggerDispatch.create!(
+        trigger_event: event,
+        trigger_binding: trigger_binding,
+        source: source,
+        dedup_key: dedup_key,
+        status: "matched"
+      )
+    rescue ActiveRecord::RecordNotUnique
+      TriggerDispatch.find_by!(dedup_key: dedup_key)
+    end
+
+    # Input assets for the run. Chat events carry raw file metadata (not yet
+    # ingested) because a company-scoped message can fan out to several
+    # projects — so each fired run downloads the attachments into ITS OWN project
+    # here, at fire time. Other sources pass through any pre-resolved ids.
+    # A generic webhook's `data` IS the sender's request body, so nothing in it is
+    # trusted as a reference: asset ids are kept only when they are this
+    # project's, and chat files are fetched only for events a chat provider's
+    # own receiver produced, through an integration of this project's company.
+    def input_asset_ids_for(event, project)
+      provider = Chat.provider_for(event)
+      if event.data["files"].present? && project && provider
+        ingested = provider.ingest_files(event, project)
+        return Array(ingested) unless ingested.nil?
+      end
+
+      owned_asset_ids(event.data["input_asset_ids"], project)
+    rescue StandardError => e
+      Rails.logger.error("[TriggerEngine] chat file ingest failed for project ##{project&.id}: #{e.message}")
+      owned_asset_ids(event.data["input_asset_ids"], project)
+    end
+
+    # Out of the dispatch lock, unlike chat files: an issue can carry dozens of
+    # large files (docs/design/tracker-attachments.md §7.5).
+    def copy_issue_files(run, binding, event, task)
+      return unless binding&.copy_attachments && task && Trackers::TriggerSupport.event?(event)
+
+      Trackers::IssueFileCopy.pending!(run.id)
+      Trackers::CopyAttachmentsJob.perform_later(run.id)
+    end
+
+    def owned_asset_ids(ids, project)
+      return [] if project.nil?
+
+      wanted = Array(ids).compact_blank.map(&:to_i)
+      return [] if wanted.empty?
+
+      TenantScope.owned(Asset, project: project).where(id: wanted).pluck(:id)
+    end
+
+    # Human-readable reason a launch didn't start, recorded on the dispatch so a
+    # skip is diagnosable instead of silently swallowed. The most common cause is
+    # WorkflowService#validate_mode! rejecting steps that require user interaction.
+    def skip_reason(result)
+      msgs = result.try(:errors)&.full_messages
+      msgs.presence&.join("; ") || "workflow did not start"
+    end
+
+    # Resolve the board task a binding's run should be about, per subject_policy.
+    def resolve_subject(binding:, event:, fallback_task:)
+      tracker = Trackers::TriggerSupport.event?(event)
+      case binding.subject_policy.to_s
+      when "existing_task"
+        (tracker && Trackers::TriggerSupport.linked_task(binding, event)) || event.board_task || fallback_task
+      when "create_task" then create_subject_task(binding, event)
+      when "find_or_create_task"
+        return create_subject_task(binding, event) unless tracker
+
+        Trackers::TriggerSupport.find_or_create_task(binding, event) { create_subject_task(binding, event) }
+      else nil # none → task-less, project-level run
+      end
+    end
+
+    def create_subject_task(binding, event)
+      column = binding.subject_column
+      return nil if column.nil?
+
+      tracker = Trackers::TriggerSupport.event?(event)
+      template = binding.subject_title_template.presence || (Trackers::TriggerSupport::DEFAULT_TITLE if tracker)
+      # Create directly (not via TaskService) so we don't re-enter check_auto_trigger.
+      task = column.board.board_tasks.create!(
+        board_column: column,
+        title: render_title(template, event, binding.event_type),
+        description: tracker ? Trackers::TriggerSupport.task_body(event) : render_subject_body(event, binding.event_type)
+      )
+      Trackers::TriggerSupport.link!(task, binding, event) if tracker
+      task
+    rescue ActiveRecord::RecordInvalid => e
+      Rails.logger.error("[TriggerEngine] create_task failed for binding ##{binding.id}: #{e.message}")
+      nil
+    end
+
+    # Routing/transport keys (and Slack's raw markup of a text the card already
+    # shows) that aren't part of the user-facing payload and shouldn't leak into
+    # the created card's body.
+    INTERNAL_DATA_KEYS = %w[channel ts thread_ts team integration_id input_asset_ids files raw_text service_url].freeze
+
+    # Renders the triggering payload into the created card's description so the
+    # run's input is visible on the board. Returns nil when there's nothing useful
+    # to show (e.g. an empty schedule fire).
+    def render_subject_body(event, label)
+      # A generic webhook's payload is the sender's own, so only a chat
+      # message loses the keys the messaging port routes by.
+      internal = Chat.event?(event) ? INTERNAL_DATA_KEYS + Chat::TRANSPORT_KEYS : INTERNAL_DATA_KEYS
+      payload = (event.data || {}).except(*internal)
+      return nil if payload.blank?
+
+      "Triggered by `#{label}`\n\n```json\n#{JSON.pretty_generate(payload)}\n```"
+    end
+
+    # Minimal title templating: {{date}} and {{<event.data key or dot-path>}}.
+    def render_title(template, event, label)
+      tpl = template.presence || "#{label} — {{date}}"
+      tpl.gsub(/\{\{\s*([\w.]+)\s*\}\}/) do
+        key = Regexp.last_match(1)
+        next (event.occurred_at || Time.current).to_date.to_s if key == "date"
+
+        key.split(".").reduce(event.data.to_h) { |value, part| value.is_a?(Hash) ? value[part] : nil }.to_s
+      end.strip.presence || label
+    end
+
+    # Internal events carry no external dedup_key → key on the event id so a
+    # dispatch is always unique (never suppresses an expected launch). External
+    # events carry a stable dedup_key (e.g. Slack event_id) → re-delivery of the
+    # same event for the same binding is suppressed. Stable across inline + relay
+    # retries for the same event, which is what makes re-dispatch safe.
+    def dispatch_dedup_key(event, trigger_binding, source)
+      base = event.dedup_key.presence || "event:#{event.id}"
+      target = trigger_binding ? "binding:#{trigger_binding.id}" : source
+      "#{base}:#{target}"
+    end
+  end
+end

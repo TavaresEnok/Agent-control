@@ -1,0 +1,268 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class WorkflowRunTest < ActiveSupport::TestCase
+  include ActiveJob::TestHelper
+
+  setup do
+    @company = create(:company, name: "wrtest-co-#{SecureRandom.hex(4)}")
+    @admin = create(:user, :admin, company: @company)
+    @project = create(:project, company: @company, owner: @admin, name: "wrtest-proj-#{SecureRandom.hex(4)}")
+    @workflow = create(:workflow, scope: @project, name: "wrtest-wf-#{SecureRandom.hex(4)}")
+  end
+
+  test "recent_by_task gives each task its newest runs, newest first" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    busy = create(:board_task, board: board, board_column: column)
+    quiet = create(:board_task, board: board, board_column: column)
+    run = lambda do |task, at|
+      create(:workflow_run, :completed, workflow: @workflow, project: @project, user: @admin, board_task: task, created_at: at)
+    end
+    run.call(busy, 3.hours.ago)
+    middle = run.call(busy, 2.hours.ago)
+    newest = run.call(busy, 1.hour.ago)
+    only = run.call(quiet, 5.hours.ago)
+
+    recent = WorkflowRun.recent_by_task([ busy.id, quiet.id ], limit: 2)
+
+    assert_equal [ newest.id, middle.id ], recent[busy.id].map(&:id)
+    assert_equal [ only.id ], recent[quiet.id].map(&:id)
+    assert_equal({}, WorkflowRun.recent_by_task([], limit: 2))
+  end
+
+  test "an update tells the project's Sessions & Runs list the run's id, and nothing more" do
+    run = create(:workflow_run, :running, workflow: @workflow, project: @project, user: @admin)
+    sent = []
+    recorder = ->(stream, payload) { sent << [ stream, payload ] }
+    InertiaCable.on_broadcast(&recorder)
+
+    run.send(:broadcast_run_list_update)
+
+    assert_equal [ [ InertiaCable::Streams::StreamName.stream_name_from([ @project, :sessions_runs ]),
+                     { type: "run_update", id: run.id } ] ], sent
+  ensure
+    InertiaCable.off_broadcast(&recorder)
+  end
+
+  test "controllable_by? is true for the run's owner" do
+    owner = create(:user, :employee, company: @company)
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: owner)
+
+    assert run.controllable_by?(owner)
+  end
+
+  test "controllable_by? is false for another member of the same company" do
+    owner = create(:user, :employee, company: @company)
+    other = create(:user, :employee, company: @company)
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: owner)
+
+    assert_not run.controllable_by?(other)
+  end
+
+  test "controllable_by? lets a company admin override" do
+    owner = create(:user, :employee, company: @company)
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: owner)
+
+    assert run.controllable_by?(@admin)
+  end
+
+  test "controllable_by? ignores an admin membership in a different company" do
+    owner = create(:user, :employee, company: @company)
+    outsider = create(:user, :admin, company: create(:company, name: "wrtest-other-#{SecureRandom.hex(4)}"))
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: owner)
+
+    assert_not run.controllable_by?(outsider)
+  end
+
+  test "controllable_by? is false without a viewer" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+
+    assert_not run.controllable_by?(nil)
+  end
+
+  test "failing a run tells the source that started it, whoever failed it" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    dispatch = TriggerDispatch.create!(trigger_event: create(:trigger_event), workflow_run: run,
+                                       dedup_key: SecureRandom.hex, status: "started")
+    run.start!
+
+    assert_enqueued_with(job: Triggers::ReportRunTransitionJob, args: [ dispatch.id, "failed" ]) { run.fail! }
+    assert_equal "failed", run.state
+    assert_not_nil run.completed_at
+  end
+
+  test "starting and completing a run tell the source that started it, and a run no trigger started tells nobody" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    dispatch = TriggerDispatch.create!(trigger_event: create(:trigger_event), workflow_run: run,
+                                       dedup_key: SecureRandom.hex, status: "started")
+
+    assert_enqueued_with(job: Triggers::ReportRunTransitionJob, args: [ dispatch.id, "running" ]) { run.start! }
+    assert_enqueued_with(job: Triggers::ReportRunTransitionJob, args: [ dispatch.id, "completed" ]) { run.complete! }
+
+    manual = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    assert_no_enqueued_jobs(only: Triggers::ReportRunTransitionJob) { manual.start! }
+  end
+
+  test "with_total_cost_cents adds up the sessions its step runs ran in, each once" do
+    run = create(:workflow_run, workflow: @workflow, project: @project, user: @admin)
+    idle = create(:workflow_run, workflow: @workflow, project: @project, user: @admin)
+    shared, other, unrelated = create_list(:terminal_session, 3, :agent_session, user: @admin, project: @project)
+    [ shared, shared, other ].each do |session|
+      create(:step_run, workflow_run: run, step: create(:step, workflow: @workflow), terminal_session: session)
+    end
+    UsageStatistic.create!(terminal_session: shared, cost_cents: 150)
+    UsageStatistic.create!(terminal_session: other, cost_cents: 100)
+    UsageStatistic.create!(terminal_session: unrelated, cost_cents: 999)
+
+    costs = WorkflowRun.with_total_cost_cents.where(id: [ run.id, idle.id ]).to_h { |r| [ r.id, r.total_cost_cents ] }
+
+    assert_equal({ run.id => 250, idle.id => 0 }, costs)
+  end
+
+  test "default state is pending" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    assert_equal "pending", run.state
+  end
+
+  test "state transitions: pending -> running -> completed" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    assert run.may_start?
+
+    run.start!
+    assert_equal "running", run.state
+    assert_not_nil run.started_at
+
+    run.complete!
+    assert_equal "completed", run.state
+    assert_not_nil run.completed_at
+  end
+
+  test "state transitions: running -> failed" do
+    run = create(:workflow_run, :running, project: @project, workflow: @workflow, user: @project.owner)
+    run.fail!
+    assert_equal "failed", run.state
+  end
+
+  test "state transitions: running -> cancelled" do
+    run = create(:workflow_run, :running, project: @project, workflow: @workflow, user: @project.owner)
+    run.cancel!
+    assert_equal "cancelled", run.state
+  end
+
+  test "state transitions: running -> paused -> running" do
+    run = create(:workflow_run, :running, project: @project, workflow: @workflow, user: @project.owner)
+    run.pause!
+    assert_equal "paused", run.state
+
+    run.resume!
+    assert_equal "running", run.state
+  end
+
+  test "cannot transition from pending to completed" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    assert_not run.may_complete?
+  end
+
+  test "can_run_non_interactive? returns true when all steps allow it" do
+    create(:step, workflow: @workflow, allow_non_interactive: true)
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    assert run.can_run_non_interactive?
+  end
+
+  test "can_run_non_interactive? returns false when any step requires interaction" do
+    create(:step, workflow: @workflow, allow_non_interactive: false)
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    assert_not run.can_run_non_interactive?
+  end
+
+  test "mode enumerize validates allowed values" do
+    run = build(:workflow_run, project: @project, workflow: @workflow, user: @project.owner, mode: "interactive")
+    assert run.valid?
+
+    run.mode = "non_interactive"
+    assert run.valid?
+
+    run.mode = "mixed"
+    assert run.valid?
+  end
+
+  test "current_step_run returns latest pending/running step run" do
+    run = create(:workflow_run, :running, project: @project, workflow: @workflow, user: @project.owner)
+    step = create(:step, workflow: @workflow)
+    step_run = create(:step_run, workflow_run: run, step: step, state: "running")
+
+    assert_equal step_run, run.current_step_run
+  end
+
+  # --- mark_quota_failed! ---
+
+  test "mark_quota_failed! sets failure_reason and credential FK" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+    credential = create(:agent_credential, user: @admin, agent_type: "claude_code")
+
+    run.mark_quota_failed!(credential_id: credential.id)
+    run.reload
+
+    assert_equal "quota_exceeded", run.failure_reason
+    assert_equal credential.id, run.failed_agent_credential_id
+  end
+
+  test "mark_quota_failed! works with nil credential_id" do
+    run = create(:workflow_run, project: @project, workflow: @workflow, user: @admin)
+
+    run.mark_quota_failed!(credential_id: nil)
+    run.reload
+
+    assert_equal "quota_exceeded", run.failure_reason
+    assert_nil run.failed_agent_credential_id
+  end
+
+  # A board card reads the run state, so a run whose step is waiting for a
+  # session slot would claim work is happening while nothing is.
+  test "waiting_for_slot_ids finds a run whose only step is waiting" do
+    run = create(:workflow_run, :running)
+    step_run = create(:step_run, :running, workflow_run: run)
+    step_run.update!(terminal_session: create(:terminal_session, user: run.user, project: run.project,
+                                              session_type: "workflow_step", state: "queued"))
+
+    assert_includes WorkflowRun.waiting_for_slot_ids([ run.id ]), run.id
+  end
+
+  test "waiting_for_slot_ids leaves a run that is still executing alone" do
+    run = create(:workflow_run, :running)
+    working = create(:step_run, :running, workflow_run: run)
+    working.update!(terminal_session: create(:terminal_session, user: run.user, project: run.project,
+                                             session_type: "workflow_step", state: "ready"))
+    waiting = create(:step_run, workflow_run: run)
+    waiting.update!(terminal_session: create(:terminal_session, user: run.user, project: run.project,
+                                             session_type: "workflow_step", state: "queued"))
+
+    assert_empty WorkflowRun.waiting_for_slot_ids([ run.id ])
+  end
+
+  test "waiting_for_slot_ids answers for a whole page in one query" do
+    assert_empty WorkflowRun.waiting_for_slot_ids([])
+  end
+  test "refuses input assets and repositories that belong to another tenant" do
+    project = create(:project, :standalone)
+    other = create(:project, :standalone)
+    run = build(:workflow_run, project: project, workflow: create(:workflow, scope: project),
+      input_asset_ids: [ create(:asset, scope: other).id ],
+      repository_ids: [ create(:repository, scope: other).id ])
+
+    assert_not run.valid?
+    assert run.errors[:input_asset_ids].any?
+    assert run.errors[:repository_ids].any?
+  end
+
+  test "accepts the project's own and its company's assets" do
+    project = create(:project, :standalone)
+    run = build(:workflow_run, project: project, workflow: create(:workflow, scope: project),
+      input_asset_ids: [ create(:asset, scope: project).id, create(:asset, scope: project.company).id ],
+      repository_ids: [ create(:repository, scope: project).id ])
+
+    assert run.valid?, run.errors.full_messages.to_sentence
+  end
+end

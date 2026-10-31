@@ -1,0 +1,33 @@
+services:
+  web:
+    image: web
+    depends_on:
+      - db
+    environment:
+      # Marks the run as CI so vitest applies the slower-runner timeout budget
+      # (see vitest.config.ts). `docker compose run` only forwards declared env vars,
+      # not the runner's ambient CI=true, so it must be set here explicitly.
+      CI: "true"
+      # Coverage gate (task #288), set by ci.yml and forwarded via code-check.yml:
+      # 1 = measure coverage and enforce the floors, 0 = skip. The Makefile honors it
+      # (empty → on). `docker compose run` only forwards declared env vars, so it must
+      # be listed here.
+      RUN_COVERAGE: ${RUN_COVERAGE:-}
+      APP_VERSION: ci
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_NAME: aixle_test
+      PORT: 4000
+      RAILS_ENV: test
+      RAILS_LOG_TO_STDOUT: "true"
+      RAILS_SECRET_KEY_BASE: secret
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+  db:
+    # Pulled from Google's Docker Hub mirror to avoid Docker Hub's anonymous
+    # pull rate limit on CI runners (shared egress IPs hit it quickly). The
+    # mirror serves the identical official image, no auth required.
+    image: mirror.gcr.io/library/postgres:15.3-alpine
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust

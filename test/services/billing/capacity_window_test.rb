@@ -1,0 +1,388 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class Billing::CapacityWindowTest < ActiveSupport::TestCase
+  setup do
+    @hour = Time.utc(2026, 9, 23, 10)
+    @acme = create(:company)
+    @globex = create(:company)
+  end
+
+  def change(company, max_sessions, at)
+    CompanyCapacityChange.record!(company_id: company.id, max_sessions: max_sessions, occurred_at: at)
+  end
+
+  def window = Billing::CapacityWindow.for_hour(@hour)
+
+  def state(company, billing_state, at)
+    CompanyBillingStateChange.record!(company_id: company.id, billing_state: billing_state, occurred_at: at)
+  end
+
+
+  # A whole hour at N is N queue-hours, i.e. N * 60 queue-minutes.
+  def assert_minutes(expected, result, message = nil)
+    assert_equal BigDecimal(expected.to_s), result.quantity_minutes, message
+  end
+
+  test "an hour with no capacity anywhere measures nothing" do
+    result = window
+
+    assert_minutes 0, result
+    assert_empty result.per_company
+    assert_equal 2, result.unbounded_companies
+  end
+
+  test "a limit unchanged through the hour is measured once" do
+    change(@acme, 10, @hour - 2.hours)
+
+    result = window
+
+    assert_minutes 600, result, "ten queues for a whole hour is 600 queue-minutes"
+    assert_equal 10, result.peak_concurrent
+  end
+
+  test "companies are summed" do
+    change(@acme, 10, @hour - 2.hours)
+    change(@globex, 5, @hour - 2.hours)
+
+    assert_minutes 900, window
+  end
+
+  # The point of the log: a sample taken at any single moment misses this.
+  test "a limit raised for part of the hour is billed for exactly that part" do
+    change(@acme, 2, @hour - 2.hours)
+    change(@acme, 50, @hour + 20.minutes)
+    change(@acme, 2, @hour + 30.minutes)
+
+    result = window
+
+    # 20 min at 2, 10 min at 50, 30 min at 2 = 40 + 500 + 60
+    assert_minutes 600, result
+    assert_equal 50, result.peak_concurrent, "the peak is measured, and not what is billed"
+  end
+
+  # The canonical question: half an hour at one, half at three. Two queue-hours,
+  # because that is what the customer was given — not three, which is only the
+  # most they ever had at once.
+  test "half an hour at one and half at three is two queue-hours" do
+    change(@acme, 1, @hour - 2.hours)
+    change(@acme, 3, @hour + 30.minutes)
+
+    result = window
+
+    assert_minutes 120, result
+    assert_equal 3, result.peak_concurrent
+  end
+
+  test "the same hour the other way round costs the same" do
+    change(@acme, 3, @hour - 2.hours)
+    change(@acme, 1, @hour + 30.minutes)
+
+    assert_minutes 120, window
+  end
+
+  # Peak of the sum, not sum of the peaks: the installation never offered more
+  # than ten at any instant, so ten is what it is billed.
+  test "capacity moving between companies is not double counted" do
+    change(@acme, 10, @hour - 2.hours)
+    change(@acme, nil, @hour + 30.minutes)
+    change(@globex, 10, @hour + 30.minutes)
+
+    assert_minutes 600, window, "ten throughout, whoever was holding it"
+    assert_equal 10, window.peak_concurrent
+  end
+
+  test "a limit removed mid-hour still bills the hour at its peak" do
+    change(@acme, 8, @hour - 2.hours)
+    change(@acme, nil, @hour + 45.minutes)
+
+    result = window
+
+    assert_minutes 360, result, "45 minutes at eight, then nothing"
+    assert_equal 2, result.unbounded_companies, "both the company that lost its limit and the one that never had one"
+  end
+
+  test "changes after the hour do not reach it" do
+    change(@acme, 3, @hour - 2.hours)
+    change(@acme, 99, @hour + 1.hour + 1.minute)
+
+    assert_minutes 180, window
+  end
+
+  # Capacity set before the log existed has no entry to read, so the live row is
+  # the only truth available for it.
+  test "a company with no log entry falls back to its live limit" do
+    SessionConcurrencyLimit.set!(scope: @acme, max_sessions: 7)
+    CompanyCapacityChange.delete_all
+
+    assert_minutes 420, window
+  end
+
+  # A workspace created at 04:26 was billed for the whole of 04:00: it has no
+  # entry at the top of the hour, so the fallback above read its live row back
+  # to a time it did not exist. That is every new customer's first hour.
+  test "a company whose first entry lands mid-hour is billed only from then" do
+    SessionConcurrencyLimit.set!(scope: @acme, max_sessions: 7)
+    CompanyCapacityChange.delete_all
+    change(@acme, 7, @hour + 26.minutes)
+
+    assert_minutes 238, window, "34 minutes at seven, not the whole hour"
+  end
+
+  # ── Changing payer ────────────────────────────────────────────────────────
+  #
+  # The hour is measured after it closes, against the company as it is then, so
+  # without a mark of when the new payer took over the whole hour goes to them —
+  # including the part the old payer has already invoiced.
+
+  # A workspace that had been trialing all hour and moved onto AWS Marketplace
+  # at :36 handed AWS the whole hour, thirty-six free minutes included.
+  test "a company that changed payer mid-hour is billed by the new one only from then" do
+    change(@acme, 2, @hour - 2.hours)
+    @acme.update!(billing_provider_since: @hour + 36.minutes)
+
+    assert_minutes 48, window, "24 minutes at two, not the whole hour"
+  end
+
+  # The sharper half. Where the old payer was Stripe, Billing::FinalUsage
+  # measures up to the switch and puts those minutes on its final invoice, so
+  # billing them again here charges the customer twice for the same capacity.
+  test "the part the old payer already invoiced is not billed again" do
+    change(@acme, 1, @hour - 2.hours)
+    @acme.update!(billing_provider_since: @hour + 45.minutes)
+
+    assert_equal 15, window.per_company[@acme.id] / 60
+    assert_equal 60, window.offered_per_company[@acme.id] / 60,
+                 "what it was offered does not change; only who owes for it does"
+  end
+
+  test "a switch before the hour leaves the whole hour with the payer" do
+    change(@acme, 3, @hour - 2.hours)
+    @acme.update!(billing_provider_since: @hour - 1.minute)
+
+    assert_minutes 180, window
+  end
+
+  # The hour is measured at five past the next one, so a switch made in those
+  # five minutes is "after the hour" and still lands in this measurement -- and
+  # the breakdown goes to the payer the company has by then, which is the new
+  # one. It owes nothing: the hour belongs to the payer that held it, who has
+  # already been sent it.
+  test "a switch after the hour leaves the new payer owing nothing for it" do
+    change(@acme, 3, @hour - 2.hours)
+    @acme.update!(billing_provider_since: @hour + 1.hour + 1.minute)
+
+    assert_minutes 0, window
+    assert_equal 180, window.offered_per_company[@acme.id] / 60,
+                 "what it was offered does not change; only who owes for it does"
+  end
+
+  # Every company that has only ever had one payer, and every company that
+  # existed before this was recorded at all.
+  test "a company that never changed payer is measured as before" do
+    change(@acme, 4, @hour - 2.hours)
+
+    assert_nil @acme.reload.billing_provider_since
+    assert_minutes 240, window
+  end
+
+  # How an internal organisation is free today: it has no limit row at all, so it
+  # is unbounded AND contributes nothing to the metered quantity. The two facts
+  # are the same absence, which is what makes the arrangement fragile — a paying
+  # customer whose row is deleted becomes free by the same mechanism.
+  test "a company with no limit is unbounded and adds nothing to the bill" do
+    change(@acme, 10, @hour - 2.hours)
+
+    result = window
+
+    assert_minutes 600, result, "only the bounded company is billed"
+    assert_equal [ @acme.id ], result.per_company.keys, "the unbounded company is not in the breakdown at all"
+    assert_equal 1, result.unbounded_companies
+  end
+
+  # Admission refuses a suspended company (SessionService#preflight_company_active!),
+  # so its capacity cannot be occupied and billing for it would overcharge. The two
+  # rules have to agree: were admission to let it run, skipping it here would make
+  # suspending a company a way to keep the capacity and stop paying for it.
+  test "a suspended company is not metered, because it cannot run sessions" do
+    change(@acme, 10, @hour - 2.hours)
+    change(@globex, 5, @hour - 2.hours)
+    @globex.update_column(:state, "suspended")
+
+    result = window
+
+    assert_minutes 600, result
+    assert_equal [ @acme.id ], result.per_company.keys
+  end
+
+  test "an archived company is not metered on the same rule" do
+    change(@acme, 10, @hour - 2.hours)
+    change(@globex, 5, @hour - 2.hours)
+    @globex.update_column(:state, "archived")
+
+    assert_minutes 600, window
+  end
+
+  # ── The free allowance ────────────────────────────────────────────────────
+  #
+  # One number, two consumers: what the drain will hand out is what the meter
+  # measures. A company capped to one session must be measured at one, or its
+  # first invoice is for capacity it never had.
+
+  class WithTrial < Billing::CapacityWindowTest
+    setup { Settings.stubs(:deployment).returns(Hashie::Mash.new(mode: Deployment::SAAS)) }
+
+    test "a workspace started mid-hour is billed from then, not from the top of the hour" do
+      change(@acme, 2, @hour - 2.hours)
+      state(@acme, "blocked", @hour - 2.hours)
+      state(@acme, "active", @hour + 47.minutes)
+
+      assert_minutes 26, window, "13 minutes at two, and nothing while it was stopped"
+    end
+
+    # The hour is free whoever reads it afterwards. It used to be decided by
+    # filtering the company's live row at five past the next hour, so a trial
+    # that became a paying workspace in those five minutes had its free hour
+    # invoiced.
+    test "an hour a workspace spent on free capacity is billed to nobody" do
+      change(@acme, 2, @hour - 2.hours)
+      state(@acme, "trialing", @hour - 2.hours)
+
+      assert_minutes 0, window, "the allowance paid for it"
+      assert_equal 60, window.offered_per_company[@acme.id] / 60,
+                   "and it is still counted, at the trial's one worker, because that is what the allowance is spent from"
+    end
+
+    test "a trial that starts paying mid-hour owes only from then" do
+      change(@acme, 2, @hour - 2.hours)
+      state(@acme, "trialing", @hour - 2.hours)
+      state(@acme, "active", @hour + 30.minutes)
+
+      assert_minutes 60, window, "two workers for the half hour it was paying for"
+    end
+
+    test "a workspace stopped mid-hour is billed up to then" do
+      change(@acme, 1, @hour - 2.hours)
+      state(@acme, "active", @hour - 2.hours)
+      state(@acme, "blocked", @hour + 20.minutes)
+
+      assert_minutes 20, window
+    end
+
+    # The allowance is spent from what a workspace was offered, and a stopped one
+    # was offered nothing — so being stopped must not quietly spend it either.
+    test "a stopped workspace spends no allowance for the time it was stopped" do
+      change(@acme, 2, @hour - 2.hours)
+      state(@acme, "blocked", @hour - 2.hours)
+      state(@acme, "active", @hour + 30.minutes)
+
+      assert_equal 60, window.offered_per_company[@acme.id] / 60, "two workers for half an hour"
+    end
+
+    # Both can move in one hour, and which came first decides what was offered in
+    # between.
+    test "capacity and billing state move on the same timeline" do
+      change(@acme, 1, @hour - 2.hours)
+      state(@acme, "active", @hour - 2.hours)
+      change(@acme, 6, @hour + 15.minutes)
+      state(@acme, "blocked", @hour + 30.minutes)
+
+      # 15 at one, then 15 at six, then stopped: 15 + 90
+      assert_minutes 105, window
+    end
+
+    test "a workspace whose state never changed in the hour is measured as before" do
+      change(@acme, 3, @hour - 2.hours)
+      state(@acme, "active", @hour - 2.hours)
+
+      assert_minutes 180, window
+    end
+
+    # The drain grants it one, so one is what it is measured at: the trial is
+    # spent an hour an hour, whatever limit the workspace set.
+    test "a trialing company is measured at one worker, whatever limit it asked for" do
+      @acme.update!(billing_state: "trialing")
+      change(@acme, 10, @hour - 2.hours)
+
+      assert_equal 60, window.offered_per_company[@acme.id] / 60
+    end
+
+    # Its hours are ours to count and nobody's to invoice: the allowance is spent
+    # from the same measurement a paying company is billed from.
+    test "a trialing company is measured but not billed" do
+      @acme.update!(billing_state: "trialing")
+      change(@acme, 10, @hour - 2.hours)
+      change(@globex, 5, @hour - 2.hours)
+
+      result = window
+
+      assert_includes result.offered_per_company, @acme.id
+      assert_not_includes result.per_company, @acme.id
+      assert_minutes 300, result, "only the paying company reaches the provider"
+    end
+
+    # Why the newborn is left out of the opening rather than opened at zero: a
+    # zero means "no limit set", and `offered` answers that with the ceiling —
+    # so a zero would have billed the ceiling for the part of the hour before
+    # the company existed, which is the same bug wearing the other hat.
+    test "a company whose first entry lands mid-hour is not measured at its ceiling before it" do
+      @acme.update!(billing_state: "trialing")
+      CompanyCapacityChange.delete_all
+      change(@acme, 1, @hour + 26.minutes)
+
+      assert_equal 34, window.offered_per_company[@acme.id] / 60
+    end
+
+    test "a company we carry is measured but not billed" do
+      @acme.update!(managed_by_aixle: true)
+      change(@acme, 2, @hour - 2.hours)
+      change(@globex, 5, @hour - 2.hours)
+
+      result = window
+
+      assert_includes result.offered_per_company, @acme.id
+      assert_not_includes result.per_company, @acme.id
+      assert_minutes 300, result, "only the paying company reaches the provider"
+    end
+
+    test "a blocked company is offered nothing at all" do
+      @acme.update!(billing_state: "blocked")
+      change(@acme, 10, @hour - 2.hours)
+
+      assert_not_includes window.offered_per_company, @acme.id
+      assert_minutes 0, window
+    end
+
+    # "No limit" is not a way past the trial's one worker, nor a way to spend
+    # none of it.
+    # Going onto the trial sets the limit to one and logs it, so an unbounded
+    # trialing company is one from before that: no limit and nothing in the log.
+    test "an unbounded trialing company is measured at one worker too" do
+      @acme.update!(billing_state: "trialing")
+      SessionConcurrencyLimit.for_companies.delete_all
+      CompanyCapacityChange.delete_all
+
+      assert_equal 60, window.offered_per_company[@acme.id] / 60
+    end
+
+    test "a raise during the trial does not spend it any faster" do
+      @acme.update!(billing_state: "trialing")
+      change(@acme, 2, @hour - 2.hours)
+      change(@acme, 40, @hour + 30.minutes)
+
+      assert_equal 60, window.offered_per_company[@acme.id] / 60
+    end
+  end
+
+  # What a company cancelling mid-hour is billed for: the hour up to then, and
+  # nobody else's.
+  test "an hour cut short is measured up to the cut, for the companies asked about" do
+    change(@acme, 2, @hour - 2.hours)
+    change(@globex, 5, @hour - 2.hours)
+
+    result = Billing::CapacityWindow.for_hour(@hour, until_time: @hour + 20.minutes, company_ids: [ @acme.id ])
+
+    assert_equal({ @acme.id => 2 * 20 * 60 }, result.per_company)
+  end
+end

@@ -1,0 +1,17 @@
+common: &common
+  adapter: redis
+  url: <%= Settings.redis.url %>
+  channel_prefix: <%= "aixle_" + Rails.env %>
+
+development:
+  <<: *common
+
+test:
+  <<: *common
+  adapter: test
+
+staging:
+  <<: *common
+
+production:
+  <<: *common

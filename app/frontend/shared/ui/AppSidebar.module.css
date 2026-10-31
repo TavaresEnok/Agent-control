@@ -1,0 +1,994 @@
+/* ── Root ─────────────────────────────────────────────────────────────────── */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--app-border-default);
+  background-color: var(--app-bg-paper);
+  overflow: hidden;
+  flex-shrink: 0;
+  /* The rail's own width IS the collapse interaction, so it stays animated —
+     but only here, and only while it is actually collapsing. */
+  transition:
+    width 0.2s cubic-bezier(0.2, 0, 0, 1),
+    min-width 0.2s cubic-bezier(0.2, 0, 0, 1);
+  z-index: 20;
+}
+
+.rootCollapsed {
+  /* width/minWidth are set via inline style */
+}
+
+/* ── Scroll area ─────────────────────────────────────────────────────────── */
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px;
+  scrollbar-width: none;
+}
+
+.scrollArea::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Nav group label ─────────────────────────────────────────────────────── */
+
+.navGroupLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--app-text-tertiary);
+  padding: 0 10px;
+  margin: 12px 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  transition:
+    opacity 0.15s,
+    color 0.12s;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 5px;
+  font-family: inherit;
+}
+
+.navGroupLabel:hover {
+  color: var(--app-text-secondary);
+}
+
+.navGroupLabelCollapsed {
+  opacity: 0;
+  min-height: 4px;
+  height: 4px;
+  margin: 8px 0 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.groupCaret {
+  display: flex;
+  opacity: 0.6;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.groupCaretCollapsed {
+  transform: rotate(-90deg);
+}
+
+/* ── Nav overview item (first "Overview" item) ───────────────────────────── */
+
+.navOverview {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  color: var(--app-text-secondary);
+  padding: 7px 10px;
+  border-radius: 5px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  letter-spacing: -0.01em;
+  transition:
+    background 0.12s,
+    color 0.12s;
+  white-space: nowrap;
+  text-decoration: none;
+  width: 100%;
+}
+
+.navOverview:hover {
+  background: var(--app-action-hover);
+  color: var(--app-text-primary);
+}
+
+.navOverviewActive {
+  background: var(--app-action-selected);
+  color: var(--app-primary-strong);
+}
+
+/* ── Nav items ───────────────────────────────────────────────────────────── */
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  color: var(--app-text-secondary);
+  padding: 6px 10px;
+  border-radius: 5px;
+  margin-bottom: 2px;
+  cursor: pointer;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  transition:
+    background 0.12s,
+    color 0.12s;
+  text-decoration: none;
+  width: 100%;
+}
+
+.navItem:hover {
+  background: var(--app-action-hover);
+  color: var(--app-text-primary);
+}
+
+.navItemActive {
+  background: var(--app-action-selected);
+  color: var(--app-primary-strong);
+}
+
+.navItemIcon {
+  flex-shrink: 0;
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+}
+
+.navItemLabel {
+  flex: 1;
+  transition: opacity 0.15s;
+  overflow: hidden;
+}
+
+/* Collapsed nav items */
+
+.navOverviewCollapsed {
+  padding: 5px 0;
+  gap: 0;
+  justify-content: center;
+  margin-bottom: 0;
+}
+
+.navItemCollapsed {
+  padding: 5px 0;
+  gap: 0;
+  justify-content: center;
+}
+
+.navItemIconCollapsed {
+  width: var(--sb-col-width, 60px);
+  text-align: center;
+  margin: 0 auto;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.navItemLabelCollapsed {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+/* ── Workspace switcher ──────────────────────────────────────────────────── */
+
+.swArea {
+  padding: 14px 10px 12px;
+  border-bottom: 1px solid var(--app-border-default);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.swAreaCollapsed {
+  padding: 10px 0 8px;
+}
+
+/* Company switcher row (only rendered for users with >1 active membership) */
+.coBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 10px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.coBtn:hover {
+  background: var(--app-action-hover);
+}
+
+.coName {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.coItemName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--app-text-primary);
+  line-height: 1.3;
+}
+
+.coItemRole {
+  font-size: 11px;
+  color: var(--app-text-tertiary);
+  line-height: 1.3;
+}
+
+.swBtn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  width: 100%;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.swBtn:hover,
+.swBtnOpen {
+  background: var(--app-action-hover);
+}
+
+.swBtnCollapsed {
+  gap: 0;
+  padding: 6px 0;
+  justify-content: center;
+}
+
+.swIco {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  background: var(--app-action-selected);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition:
+    background 0.22s,
+    color 0.22s;
+}
+
+.swIcoCompany {
+  background: var(--app-action-hover);
+}
+
+.swIcoCollapsed {
+  margin: 0 auto;
+}
+
+.swIcoLetter {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--app-primary-strong);
+}
+
+.swText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  transition: opacity 0.15s;
+}
+
+.swTextCollapsed {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+.swName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+  font-family: var(--app-font-heading);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.swSub {
+  font-size: 11px;
+  color: var(--app-text-tertiary);
+  margin: 1px 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.swCaret {
+  color: var(--app-text-tertiary);
+  flex-shrink: 0;
+  transition:
+    transform 0.2s,
+    opacity 0.15s,
+    width 0.15s;
+}
+
+.swCaretOpen {
+  transform: rotate(180deg);
+}
+
+.swCaretCollapsed {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+/* ── Workspace switcher dropdown ─────────────────────────────────────────── */
+
+.swDropdown {
+  background: var(--app-bg-paper) !important;
+  border: 1px solid var(--app-border-strong) !important;
+  border-radius: 9px !important;
+  padding: 0 !important;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7) !important;
+  width: 216px !important;
+  left: 4px !important;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 88px);
+}
+
+.swSearch {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--app-border-default);
+  flex: none;
+}
+
+.swSearchInput {
+  width: 100%;
+  background: var(--app-bg-default);
+  border: 1px solid var(--app-border-strong);
+  border-radius: 5px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--app-text-secondary);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.swSearchInput:focus {
+  border-color: rgba(224, 88, 46, 0.28);
+}
+
+.swSection {
+  padding: 10px 10px 8px;
+  flex: none;
+}
+
+.swProjectsSection {
+  padding: 10px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.swProjectsList {
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+}
+
+.dpLabel {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--app-text-tertiary);
+  padding: 0 6px;
+  margin: 0 0 6px;
+  line-height: 1;
+}
+
+.dpItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  width: 100%;
+  transition: background 0.12s;
+}
+
+.dpItem:hover {
+  background: var(--app-action-hover);
+}
+
+.dpItemActive {
+  background: var(--app-action-selected);
+}
+
+.dpItemActiveCo {
+  background: var(--app-action-hover);
+}
+
+/* Project rows in the switcher: tighter than Admin rows; star sits outside the link. */
+.dpProjectRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  margin-bottom: 2px;
+  width: 100%;
+  transition: background 0.12s;
+}
+
+.dpProjectRow:hover {
+  background: var(--app-action-hover);
+}
+
+.dpProjectRow:hover .dpName {
+  color: var(--app-text-primary);
+}
+
+.dpItemLink {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.dpIco {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  background: var(--app-action-selected);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dpProjectRow .dpIco {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.dpIcoCompany {
+  background: var(--app-action-hover);
+}
+
+.dpIcoLetter {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--app-primary-strong);
+}
+
+.dpName {
+  font-size: 13px;
+  color: var(--app-text-secondary);
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  margin: 0;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dpStar {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--app-text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    opacity 0.12s;
+  font-family: inherit;
+}
+
+.dpProjectRow:hover .dpStar,
+.dpStarOn,
+.dpStar:focus-visible {
+  opacity: 1;
+}
+
+.dpStar:hover {
+  background: var(--app-action-hover);
+  color: var(--app-accent);
+}
+
+.dpStar:active {
+  transform: scale(0.92);
+}
+
+.dpStarOn {
+  color: var(--app-accent);
+}
+
+.dpStar:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 1px;
+}
+
+.dpSplit {
+  height: 1px;
+  background: var(--app-border-default);
+  margin: 7px 8px;
+  flex-shrink: 0;
+}
+
+.dpCheck {
+  color: var(--app-primary-strong);
+  flex-shrink: 0;
+}
+
+.dpFooter {
+  padding: 8px 10px 12px;
+  border-top: 1px solid var(--app-border-default);
+  flex: none;
+}
+
+.dpNewProject {
+  font-size: 13px;
+  color: var(--app-text-tertiary);
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition:
+    color 0.12s,
+    background 0.12s;
+  display: block;
+  user-select: none;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+}
+
+.dpNewProject:hover {
+  color: var(--app-text-secondary);
+  background: var(--app-action-hover);
+}
+
+/* ── Collapse row ────────────────────────────────────────────────────────── */
+
+.collapseRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 8px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.collapseRowCollapsed {
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+.collapseBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--app-text-tertiary);
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+  user-select: none;
+}
+
+.collapseBtn:hover {
+  background: var(--app-action-hover);
+  color: var(--app-text-secondary);
+}
+
+/* ── User footer ─────────────────────────────────────────────────────────── */
+
+.navFoot {
+  border-top: 1px solid var(--app-border-default);
+  padding: 10px 10px 12px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.navFootCollapsed {
+  padding: 8px 0 10px;
+}
+
+.userRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.12s;
+}
+
+.userRowCollapsed {
+  padding: 5px 0;
+  gap: 0;
+}
+
+.userRow:hover {
+  background: var(--app-action-hover);
+}
+
+.userAvatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--app-action-selected);
+  border: 1px solid var(--mantine-color-brand-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.userAvatarCollapsed {
+  margin: 0 auto;
+}
+
+.userAvatarInitials {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--app-primary-strong);
+}
+
+.userName {
+  font-size: 12px;
+  color: var(--app-text-tertiary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity 0.15s;
+}
+
+.userNameCollapsed {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+.userCaret {
+  color: var(--app-text-tertiary);
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.userCaretCollapsed {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+/* ── Mobile toggle ───────────────────────────────────────────────────────── */
+
+/* Mobile chrome. This used to be a 40x40 button with `position: fixed;
+   bottom: 16px; left: 16px`, which sat on top of table rows and the page
+   footer. It is now a real sticky top bar: it takes layout space instead of
+   covering content, and the hit area clears 44x44. */
+.mobileBar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  background-color: var(--app-bg-paper);
+  border-bottom: 1px solid var(--app-border-default);
+}
+
+.mobileToggle {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--app-text-secondary);
+}
+
+.mobileToggle:hover {
+  background-color: var(--app-action-hover);
+}
+
+.mobileBarTitle {
+  font-family: var(--app-font-heading);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+  letter-spacing: -0.01em;
+}
+
+/* "Connect an agent" nudge — shown when onboarding skipped the agent step but
+   the user now has a role that can run things. */
+.agentNudge {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 8px 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-warning-border, var(--app-border));
+  border-radius: 6px;
+  background: var(--app-warning-bg, var(--app-action-hover));
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.agentNudge:hover {
+  background: var(--app-action-hover);
+}
+
+.agentNudgeIcon {
+  color: var(--app-warning-fg, var(--app-text-secondary));
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.agentNudgeText {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--app-text-secondary);
+}
+
+.agentNudgeCollapsed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px auto 4px;
+  padding: 6px;
+  border-radius: 6px;
+  color: var(--app-warning-fg, var(--app-text-secondary));
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.agentNudgeCollapsed:hover {
+  background: var(--app-action-hover);
+}
+
+/* Collapsed company switcher: no room for the name, so an icon carries it. */
+.coBtnCollapsed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 5px 0;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  color: var(--app-text-secondary);
+  cursor: pointer;
+}
+
+.coBtnCollapsed:hover {
+  background: var(--app-action-hover);
+}
+
+/* ── Company rail (Slack-style) ───────────────────────────────────────────── */
+/* Only rendered for multi-company users — see CompanyRail. */
+
+.shell {
+  display: flex;
+  flex-shrink: 0;
+  height: 100%;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 52px;
+  min-width: 52px;
+  padding: 10px 0;
+  border-right: 1px solid var(--app-border-default);
+  background: var(--app-bg-default);
+  overflow-y: auto;
+  scrollbar-width: none;
+  z-index: 21;
+}
+
+.rail::-webkit-scrollbar {
+  display: none;
+}
+
+.railItem {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Active company gets the accent bar Slack uses, not just a colour change —
+   colour alone is not a reliable signal. */
+.railItemActive::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 22px;
+  border-radius: 0 2px 2px 0;
+  background: var(--app-accent);
+}
+
+.railTile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--app-text-secondary);
+  background: var(--app-action-hover);
+  border: 1px solid transparent;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
+}
+
+.railItem:hover .railTile {
+  color: var(--app-text-primary);
+  border-color: var(--app-border-default);
+}
+
+.railItemActive .railTile {
+  color: var(--app-text-primary);
+  border-color: var(--app-accent);
+}
+
+/* ─── AI Builder banner ──────────────────────────────────────────────────────
+   Previously inline styles hardcoded to dark-scheme literals (#d1cfcd on
+   #0a0908), which rendered the app's most prominent CTA as grey-on-white — read
+   as disabled — in light mode. Now on the --app-cta-invert-* token pair. */
+
+.aiBannerCollapsed {
+  margin: 8px 0 4px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.aiBanner {
+  padding: 10px 10px 4px;
+  flex-shrink: 0;
+}
+
+.aiBannerCard {
+  border: 1px solid var(--app-border-default);
+  border-radius: 8px;
+  background: var(--app-bg-card);
+  padding: 10px;
+}
+
+.aiBannerIcon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--app-action-selected);
+  border: 1px solid var(--app-border-active);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--app-primary-strong);
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+
+.aiBannerCta {
+  background: var(--app-cta-invert-bg);
+  color: var(--app-cta-invert-fg);
+  border-radius: 5px;
+  width: 100%;
+  border: 1px solid transparent;
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.12s;
+}
+
+.aiBannerCta:hover {
+  background: var(--app-cta-invert-bg-hover);
+}
+
+.aiBannerCap {
+  font-size: 11px;
+  color: var(--app-text-tertiary);
+  line-height: 1.45;
+  margin-top: 9px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root,
+  .navGroupLabel,
+  .navItemLabel,
+  .swText,
+  .userName,
+  .userCaret {
+    transition: none;
+  }
+}

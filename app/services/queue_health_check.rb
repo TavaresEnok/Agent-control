@@ -1,0 +1,176 @@
+# frozen_string_literal: true
+
+# Watches whether work is actually moving, from a process that is not the one
+# doing the moving.
+#
+# WHY IT DOES NOT LIVE IN TEMPORAL: every other recurring job in this app is a
+# Temporal schedule executed by the worker (config/queue.yml says so, and that
+# convention is right for work). This one is not work, it is the watch — and on
+# 2026-09-12 the worker itself was what failed. Its Sentry interceptor, the
+# admission reconciler, the quota and no-output scanners, the outbox relay: every
+# safety net in the installation was a Temporal schedule, so they all stopped
+# together, silently, and nothing noticed for nearly two hours. A watchdog hosted
+# by the thing it watches is not a watchdog. This one runs in the Solid Queue
+# supervisor (the `jobs` deployment), which stayed up throughout.
+#
+# WHAT IT WATCHES: symptoms, not liveness. "Is a worker polling?" is a question
+# with a fragile answer; "has any run been sitting unstarted for five minutes?" is
+# a question the database can answer alone, it is the thing the queue is sold on,
+# and it is true whatever the cause — a crashed worker, an unreachable Temporal, a
+# wedged task queue, or something nobody has thought of yet.
+class QueueHealthCheck
+  # A run the worker has not started. Normally this is seconds: the run row and
+  # the Temporal execution are created in the same call, and the first activity
+  # follows immediately. Queueing for capacity happens one level down, at the
+  # session — an admitted run whose step is waiting for a slot is `running`, not
+  # `pending` — so nothing legitimate parks a run here.
+  UNSTARTED_RUN_THRESHOLD = 5.minutes
+
+  # A long wait for a slot is a full pool — the feature working — for as long as
+  # the pool keeps granting, or is full of sessions that are still running: a
+  # project limited to one session whose runs take hours queues behind them all
+  # day. What is worth seeing is a pool that has granted nothing for this long
+  # while somebody waits AND a slot it could grant is not in live use — capacity
+  # the drain is not handing out, or a reservation whose session ended this long
+  # ago and was never released. A warning to look at, not an outage.
+  ADMISSION_WAIT_THRESHOLD = 30.minutes
+
+  class << self
+    def call(now: Time.current)
+      stats = snapshot(now: now)
+      report(stats)
+      stats
+    end
+
+    def snapshot(now: Time.current)
+      unstarted = WorkflowRun.where(state: "pending", stop_requested_at: nil)
+                             .where(created_at: ..(now - UNSTARTED_RUN_THRESHOLD))
+      undispatched = WorkflowRun.stuck_for_relay(now)
+      waiting = SessionAdmission.unreleased.where(admitted_at: nil, stop_requested_at: nil)
+
+      {
+        overcommitted_companies: SessionConcurrencyLimit.overcommitted_companies,
+        unstarted_runs: unstarted.count,
+        oldest_unstarted_seconds: age(unstarted.minimum(:created_at), now),
+        undispatched_runs: undispatched.count,
+        oldest_undispatched_seconds: age(undispatched.minimum(:created_at), now),
+        queued_admissions: waiting.count,
+        oldest_admission_wait_seconds: age(waiting.minimum(:created_at), now),
+        stalled_pools: stalled_pools(now),
+        pinned_reservations: SessionRuntimeOperation.pinning.count,
+        pinned_overdue: SessionRuntimeOperation.pinning
+                                               .where(absent_since: ..(now - (2 * SessionAdmissionPolicy.pinned_release_window))).count,
+        pinned_release_disabled: !SessionAdmissionPolicy.pinned_release_enabled?
+      }
+    end
+
+    # What each number means when it is not zero, in the order an operator should
+    # read them. `undispatched_runs` is listed before `unstarted_runs` because it
+    # is the more specific diagnosis of the same symptom: the run never reached
+    # Temporal at all, rather than reaching it and finding nobody home.
+    def problems(stats)
+      problems = []
+      if stats[:undispatched_runs].positive?
+        problems << "#{stats[:undispatched_runs]} run(s) never reached Temporal " \
+                    "(oldest #{stats[:oldest_undispatched_seconds]}s)"
+      end
+      if stats[:unstarted_runs].positive?
+        problems << "#{stats[:unstarted_runs]} run(s) unstarted for over " \
+                    "#{UNSTARTED_RUN_THRESHOLD.inspect} (oldest #{stats[:oldest_unstarted_seconds]}s) — " \
+                    "nothing is executing the queue"
+      end
+      # The model allows a company to be lowered below its own reservations, so
+      # the drain keeps the company hard and the reservations are the promise
+      # being broken. Nothing else tells anyone.
+      stats[:overcommitted_companies].each do |row|
+        problems << "company ##{row[:company_id]} has project reservations totalling #{row[:reserved]}, " \
+                    "above its limit of #{row[:limit]} — the company limit is being honoured and the " \
+                    "reservations are not"
+      end
+      # A pin on its own is not news any more: the reconciler releases one after a
+      # few minutes of proven absence, so reporting every pin would page somebody
+      # for the ordinary end of a cancelled session. What is news is a pin that
+      # nothing is going to end — the release switched off, or a window that has
+      # gone by twice over without the slot coming back.
+      if stats[:pinned_reservations].positive? && stats[:pinned_release_disabled]
+        problems << "#{stats[:pinned_reservations]} reservation(s) pinned by an unprovable runtime operation, " \
+                    "and automatic release is switched off — they hold capacity until an operator releases them"
+      elsif stats[:pinned_overdue].positive?
+        problems << "#{stats[:pinned_overdue]} reservation(s) have stayed pinned well past the confirmation " \
+                    "window, so the reconciler is not managing to release them"
+      end
+      problems
+    end
+
+    def warnings(stats)
+      stats[:stalled_pools].map do |pool|
+        "pool #{pool[:key]} has granted no slot for #{ADMISSION_WAIT_THRESHOLD.inspect} while a session waits " \
+          "(oldest #{pool[:oldest_wait_seconds]}s, #{pool[:occupied]}/#{pool[:limit]} slots occupied)"
+      end
+    end
+
+    private
+
+    def age(timestamp, now) = timestamp ? (now - timestamp).to_i : 0
+
+    def stalled_pools(now)
+      since = now - ADMISSION_WAIT_THRESHOLD
+      oldest = SessionAdmission.unreleased.where(admitted_at: nil, stop_requested_at: nil, created_at: ..since)
+                               .group(:session_admission_pool_id).minimum(:created_at)
+      return [] if oldest.empty?
+
+      moving = SessionAdmission.where(session_admission_pool_id: oldest.keys, admitted_at: since..)
+                               .distinct.pluck(:session_admission_pool_id)
+      pools = SessionAdmissionPool.where(id: oldest.keys - moving).order(:id).to_a
+      return [] if pools.empty?
+
+      ids = pools.map(&:id)
+      live = live_occupants(since)
+      held = live.where(session_admission_pool_id: ids).group(:session_admission_pool_id).count
+      occupied = SessionAdmission.occupied.where(session_admission_pool_id: ids)
+                                 .group(:session_admission_pool_id).count
+      # The drain's own arithmetic rather than the pool's limit: a pool under its
+      # own cap can be waiting on its company's limit, which live sessions in the
+      # company's other projects fill just as legitimately.
+      budget = SessionAdmissionBudget.new(pools.map(&:key), occupied: live)
+      pools.filter_map do |pool|
+        next unless budget.clamp(pool.limit - held.fetch(pool.id, 0), pool.key).positive?
+
+        { key: pool.key, limit: pool.limit, occupied: occupied.fetch(pool.id, 0),
+          oldest_wait_seconds: age(oldest[pool.id], now) }
+      end
+    end
+
+    # A session that has ended keeps its slot until its container is proven gone,
+    # which can take minutes (Pod deletion, a pinned operation's confirmation
+    # window), so it only stops counting as live once it has been over for the
+    # whole threshold.
+    def live_occupants(since)
+      SessionAdmission.occupied.joins(:terminal_session)
+                      .where("terminal_sessions.state NOT IN (?) OR terminal_sessions.finished_at > ?",
+                             TerminalSession::TERMINAL_STATES, since)
+    end
+
+    # One structured line every tick so the log pipeline has a series to draw, and
+    # a Sentry event only when something is actually wrong — a watchdog that cries
+    # every minute is one nobody reads.
+    def report(stats)
+      Rails.logger.info("[QueueHealth] #{stats.to_json}")
+      notify("Queue is not draining", problems(stats), stats, level: :error)
+      notify("Admission queue is not moving", warnings(stats), stats, level: :warning)
+      stats
+    end
+
+    # A fixed fingerprint per kind: the message carries counts and ages, and every
+    # new number would otherwise be a new issue.
+    def notify(headline, found, stats, level:)
+      return if found.empty?
+
+      message = "#{headline}: #{found.join('; ')}"
+      Rails.logger.public_send(level == :error ? :error : :warn, "[QueueHealth] #{message}")
+      return unless Sentry.initialized?
+
+      Sentry.capture_message(message, level: level, extra: stats, fingerprint: [ "queue-health", headline ])
+    end
+  end
+end

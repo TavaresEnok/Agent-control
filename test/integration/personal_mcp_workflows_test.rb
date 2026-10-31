@@ -1,0 +1,555 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class PersonalMCPWorkflowsTest < ActionDispatch::IntegrationTest
+  setup do
+    @user = create(:user, :with_company)
+    @company = @user.companies.first
+    @project = create(:project, company: @company, owner: @user)
+    @workflow = create(:workflow, scope: @project)
+    @token = @user.regenerate_mcp_token!
+  end
+
+  def call_tool(name, args = {}, token: @token)
+    post "/mcp",
+         params: { jsonrpc: "2.0", id: 1, method: "tools/call",
+                   params: { name: name, arguments: args } }.to_json,
+         headers: { "Content-Type" => "application/json",
+                    "Accept" => "application/json, text/event-stream",
+                    "Authorization" => "Bearer #{token}" }
+    response.parsed_body
+  end
+
+  def payload(body) = JSON.parse(body.dig("result", "content").first["text"])
+  def error?(body) = body.dig("result", "isError")
+  def text(body) = body.dig("result", "content").map { |c| c["text"] }.join(" ")
+
+  test "list_workflows lists project-visible workflows" do
+    names = payload(call_tool("list_workflows", { project_id: @project.id }))["workflows"].map { |w| w["name"] }
+    assert_includes names, @workflow.name
+  end
+
+  test "list_workflows counts steps with a single grouped query" do
+    other = create(:workflow, scope: @project)
+    create(:step, workflow: other)
+    create(:step, workflow: @workflow)
+
+    assert_queries_match(/GROUP BY "steps"\."workflow_id"/, count: 1) do
+      call_tool("list_workflows", { project_id: @project.id })
+    end
+  end
+
+  test "create_workflow then get_workflow and create_workflow_step" do
+    created = payload(call_tool("create_workflow", { project_id: @project.id, name: "Built by MCP" }))
+    wf_id = created["id"]
+    assert Workflow.exists?(wf_id)
+
+    step_body = call_tool("create_workflow_step",
+                          { project_id: @project.id, workflow_id: wf_id, name: "Step 1", instructions: "do it" })
+    assert_not error?(step_body)
+
+    detail = payload(call_tool("get_workflow", { project_id: @project.id, workflow_id: wf_id }))
+    assert_equal 1, detail["steps_count"]
+    assert_equal "Step 1", detail["steps"].first["name"]
+  end
+
+  test "update_workflow edits name, description and base resources, and get_workflow reports them" do
+    tool = create(:tool, scope: @project)
+    skill = create(:skill, scope: @project)
+    server = create(:mcp_server, scope: @project)
+    asset = create(:asset, scope: @project)
+
+    updated = payload(call_tool("update_workflow",
+                                { project_id: @project.id, workflow_id: @workflow.id,
+                                  name: "Renamed", description: "new description",
+                                  base_tool_ids: [ tool.id ], base_skill_ids: [ skill.id ],
+                                  base_mcp_server_ids: [ server.id ],
+                                  base_asset_ids: [ asset.id ],
+                                  inherit_all_project_resources: true }))
+    assert_equal "Renamed", updated["name"]
+    assert_includes updated["updated_fields"], "base_tool_ids"
+
+    detail = payload(call_tool("get_workflow", { project_id: @project.id, workflow_id: @workflow.id }))
+    assert_equal "Renamed", detail["name"]
+    assert_equal "new description", detail["description"]
+    assert_equal [ tool.id ], detail["base_tool_ids"]
+    assert_equal [ skill.id ], detail["base_skill_ids"]
+    assert_equal [ server.id ], detail["base_mcp_server_ids"]
+    assert_equal [ asset.id ], detail["base_asset_ids"]
+    assert detail["inherit_all_project_resources"]
+    assert_nil detail["published_at"]
+
+    nothing = call_tool("update_workflow", { project_id: @project.id, workflow_id: @workflow.id })
+    assert error?(nothing)
+    assert_match(/no fields/i, text(nothing))
+  end
+
+  # The flag lives in the config JSON, which does no ActiveRecord casting: stored
+  # unconverted, a false would land as a truthy value and quietly grant every
+  # step every resource in the project.
+  test "update_workflow turns inherit_all_project_resources back off" do
+    @workflow.merge_config!(inherit_all_project_resources: true)
+
+    updated = payload(call_tool("update_workflow",
+                                { project_id: @project.id, workflow_id: @workflow.id,
+                                  inherit_all_project_resources: false }))
+
+    assert_not updated["inherit_all_project_resources"]
+    assert_not @workflow.reload.inherit_all_project_resources
+  end
+
+  test "get_workflow returns long instructions in full and get_workflow_step adds the wiring" do
+    long = "x" * 900
+    agent = create(:agent, scope: @project)
+    tool = create(:tool, scope: @project)
+    repository = create(:repository, scope: @project)
+    step = create(:step, workflow: @workflow, instructions: long, agent: agent,
+                         tool_ids: [ tool.id ], bmad_enabled: true,
+                         repository_ids: [ repository.id ], max_retries: 2)
+    create(:sub_step, step: step, name: "check A", instructions: long)
+
+    listed = payload(call_tool("get_workflow", { project_id: @project.id, workflow_id: @workflow.id }))["steps"].first
+    assert_equal long, listed["instructions"]
+    assert_equal long, listed["sub_steps"].first["instructions"]
+
+    full = payload(call_tool("get_workflow_step",
+                             { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id }))
+    assert_equal long, full["instructions"]
+    assert_equal long, full["sub_steps"].first["instructions"]
+    assert_equal agent.id, full.dig("agent", "id")
+    assert_equal [ tool.id ], full["tool_ids"]
+    assert full["bmad_enabled"]
+    assert_equal [ repository.id ], full["repository_ids"]
+    assert_equal 2, full["max_retries"]
+    assert_equal "fail", full["on_failure"]
+    assert_equal "never", full["skip_policy"]
+  end
+
+  test "create_workflow_step wires agent, tools, skills, servers, deps and flags in one call" do
+    first = payload(call_tool("create_workflow_step",
+                              { project_id: @project.id, workflow_id: @workflow.id, name: "S1" }))
+    agent = create(:agent, scope: @project)
+    tool = create(:tool, scope: @project)
+    skill = create(:skill, scope: @project)
+    server = create(:mcp_server, scope: @project)
+
+    created = payload(call_tool("create_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, name: "S2",
+                                  instructions: "do it", agent_id: agent.id,
+                                  tool_ids: [ tool.id ], skill_ids: [ skill.id ],
+                                  mcp_server_ids: [ server.id ], depends_on_step_ids: [ first["id"] ],
+                                  bmad_enabled: true, allow_non_interactive: true }))
+
+    step = Step.find(created["id"])
+    assert_equal agent.id, step.agent_id
+    assert_equal [ tool.id ], step.tool_ids
+    assert_equal [ skill.id ], step.skill_ids
+    assert_equal [ server.id ], step.mcp_server_ids
+    assert_equal [ first["id"] ], step.depends_on_step_ids
+    assert step.bmad_enabled
+    assert step.allow_non_interactive
+  end
+
+  test "update_workflow_step toggles bmad_enabled and allow_non_interactive" do
+    step = create(:step, workflow: @workflow)
+
+    body = call_tool("update_workflow_step",
+                     { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                       bmad_enabled: true, allow_non_interactive: true })
+    assert_not error?(body)
+    assert_includes payload(body)["updated_fields"], "bmad_enabled"
+
+    step.reload
+    assert step.bmad_enabled
+    assert step.allow_non_interactive
+  end
+
+  test "workflow step runtime creates, updates, clears and reads back without changing other fields" do
+    agent = create(:agent, scope: @project)
+    tool = create(:tool, scope: @project)
+    created = payload(call_tool("create_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, name: "Runtime step",
+                                  instructions: "keep me", agent_id: agent.id, tool_ids: [ tool.id ],
+                                  required_agent_runtime: "claude_code" }))
+
+    assert_equal "claude_code", created["required_agent_runtime"]
+    step = Step.find(created["id"])
+    original = step.attributes.slice("name", "instructions", "agent_id", "tool_ids", "skill_ids",
+                                     "mcp_server_ids", "config_item_ids", "depends_on_step_ids",
+                                     "bmad_enabled", "allow_non_interactive")
+
+    updated = payload(call_tool("update_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                                  required_agent_runtime: "codex" }))
+    assert_equal [ "required_agent_runtime" ], updated["updated_fields"]
+    assert_equal original, step.reload.attributes.slice(*original.keys)
+
+    read_back = payload(call_tool("get_workflow_step",
+                                  { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id }))
+    assert_equal "codex", read_back["required_agent_runtime"]
+
+    payload(call_tool("update_workflow_step",
+                      { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                        required_agent_runtime: nil }))
+    assert_nil step.reload.required_agent_runtime
+  end
+
+  test "workflow step runtime schema and persistence reject unsupported values" do
+    create_schema = PersonalTools::CreateWorkflowStep.tool_definition.input_schema
+    update_schema = PersonalTools::UpdateWorkflowStep.tool_definition.input_schema
+
+    [ create_schema, update_schema ].each do |schema|
+      runtime = schema.dig("properties", "required_agent_runtime")
+      assert_equal %w[string null], runtime["type"]
+      assert_equal Step::SUPPORTED_AGENT_RUNTIMES + [ nil ], runtime["enum"]
+    end
+
+    invalid = call_tool("create_workflow_step",
+                        { project_id: @project.id, workflow_id: @workflow.id, name: "Bad runtime",
+                          required_agent_runtime: "unsupported" })
+    assert error?(invalid)
+    assert_match(/required_agent_runtime/, text(invalid))
+
+    step = create(:step, workflow: @workflow)
+    assert_not step.update(required_agent_runtime: "unsupported")
+  end
+
+  test "workflow step reasoning effort creates, updates, clears and reads back" do
+    created = payload(call_tool("create_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, name: "Review",
+                                  required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                                  reasoning_effort: "high" }))
+    assert_equal "high", created["reasoning_effort"]
+    step = Step.find(created["id"])
+
+    updated = payload(call_tool("update_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                                  reasoning_effort: "max" }))
+    assert_equal [ "reasoning_effort" ], updated["updated_fields"]
+
+    read_back = payload(call_tool("get_workflow_step",
+                                  { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id }))
+    assert_equal "max", read_back["reasoning_effort"]
+
+    payload(call_tool("update_workflow_step",
+                      { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id, reasoning_effort: nil }))
+    assert_nil step.reload.reasoning_effort
+  end
+
+  test "workflow step reasoning effort the runtime does not take is refused" do
+    [ PersonalTools::CreateWorkflowStep, PersonalTools::UpdateWorkflowStep ].each do |tool|
+      effort = tool.tool_definition.input_schema.dig("properties", "reasoning_effort")
+      assert_equal %w[string null], effort["type"]
+      assert_equal AgentRuntime.reasoning_effort_levels + [ nil ], effort["enum"]
+    end
+
+    invalid = call_tool("create_workflow_step",
+                        { project_id: @project.id, workflow_id: @workflow.id, name: "Too hard",
+                          required_agent_runtime: "gemini_cli", preferred_model: "gemini-3-pro",
+                          reasoning_effort: "max" })
+    assert error?(invalid)
+    assert_match(/Reasoning effort max is not available for gemini_cli/, text(invalid))
+  end
+
+  # A level and its model are kept consistent: neither the default model nor a step that
+  # leaves its runtime to resolution has anything to check it against.
+  test "workflow step reasoning effort without an explicit model or runtime is refused" do
+    no_model = call_tool("create_workflow_step",
+                         { project_id: @project.id, workflow_id: @workflow.id, name: "Default",
+                           required_agent_runtime: "kiro_cli", reasoning_effort: "high" })
+    assert error?(no_model)
+    assert_match(/Reasoning effort needs an explicitly chosen model/, text(no_model))
+
+    no_runtime = call_tool("create_workflow_step",
+                           { project_id: @project.id, workflow_id: @workflow.id, name: "Resolved",
+                             preferred_model: "claude-opus-5.5", reasoning_effort: "high" })
+    assert error?(no_runtime)
+    assert_match(/Reasoning effort needs an explicitly chosen runtime/, text(no_runtime))
+
+    step = Step.find(payload(call_tool("create_workflow_step",
+                                       { project_id: @project.id, workflow_id: @workflow.id, name: "Review",
+                                         required_agent_runtime: "kiro_cli", preferred_model: "claude-opus-5.5",
+                                         reasoning_effort: "high" }))["id"])
+    clear_model = call_tool("update_workflow_step",
+                            { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                              preferred_model: nil })
+    assert error?(clear_model)
+    assert_equal [ "claude-opus-5.5", "high" ], [ step.reload.preferred_model, step.reasoning_effort ]
+  end
+
+  # Cursor CLI takes a level only on a model the step names, so the model and the
+  # level have to be writable through the same tools.
+  test "a Cursor step's preferred model and reasoning effort are set, changed and cleared together" do
+    [ PersonalTools::CreateWorkflowStep, PersonalTools::UpdateWorkflowStep ].each do |tool|
+      model = tool.tool_definition.input_schema.dig("properties", "preferred_model")
+      assert_equal %w[string null], model["type"]
+      assert_equal Step::MODEL_ID_JSON_PATTERN, model["pattern"]
+    end
+
+    created = payload(call_tool("create_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, name: "Review",
+                                  required_agent_runtime: "cursor_cli", preferred_model: "claude-opus-4-8",
+                                  reasoning_effort: "high" }))
+    assert_equal({ "preferred_model" => "claude-opus-4-8", "reasoning_effort" => "high" },
+                 created.slice("preferred_model", "reasoning_effort"))
+    step = Step.find(created["id"])
+
+    updated = payload(call_tool("update_workflow_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                                  preferred_model: "gpt-6-sol", reasoning_effort: "low" }))
+    assert_equal %w[preferred_model reasoning_effort], updated["updated_fields"].sort
+    assert_equal [ "gpt-6-sol", "low" ], [ step.reload.preferred_model, step.reasoning_effort ]
+
+    payload(call_tool("update_workflow_step",
+                      { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                        preferred_model: nil, reasoning_effort: nil }))
+    assert_equal [ nil, nil ], [ step.reload.preferred_model, step.reasoning_effort ]
+
+    invalid = call_tool("update_workflow_step",
+                        { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id,
+                          preferred_model: "Not A Model" })
+    assert error?(invalid)
+  end
+
+  test "duplicate_workflow copies steps and reports what needs manual setup" do
+    step = create(:step, workflow: @workflow, name: "S1", instructions: "work")
+    create(:sub_step, step: step, name: "check A")
+
+    copy = payload(call_tool("duplicate_workflow",
+                             { project_id: @project.id, workflow_id: @workflow.id, name: "Copy of it" }))
+    assert_not_equal @workflow.id, copy["id"]
+    assert_equal "Copy of it", copy["name"]
+    assert_equal @project.id, copy["project_id"]
+    assert_equal @workflow.id, copy["source_workflow_id"]
+    assert_equal 1, copy["steps_count"]
+    assert copy["needs_setup"].any? { |m| m.match?(/not copied/i) }
+
+    duplicated_step = Workflow.find(copy["id"]).steps.not_deleted.first
+    assert_equal "S1", duplicated_step.name
+    assert_equal [ "check A" ], duplicated_step.sub_steps.active.map(&:name)
+  end
+
+  test "duplicate_workflow copies into another reachable project and refuses an unreachable one" do
+    create(:step, workflow: @workflow, name: "S1")
+    target = create(:project, company: @company, owner: @user)
+
+    copied = payload(call_tool("duplicate_workflow",
+                               { project_id: @project.id, workflow_id: @workflow.id,
+                                 target_project_id: target.id }))
+    assert_equal target.id, copied["project_id"]
+    assert_equal target.id, Workflow.find(copied["id"]).scope_id
+
+    outsider = create(:user, :with_company)
+    outsider_project = create(:project, company: outsider.companies.first, owner: outsider)
+    denied = call_tool("duplicate_workflow",
+                       { project_id: @project.id, workflow_id: @workflow.id,
+                         target_project_id: outsider_project.id })
+    assert error?(denied)
+    assert_match(/not found/i, text(denied))
+  end
+
+  test "trigger_workflow starts a run and list/get_workflow_run report it" do
+    run_obj = @workflow.runs.create!(project: @project, user: @user, state: "pending")
+    WorkflowService.stubs(:start).returns(run_obj)
+
+    body = call_tool("trigger_workflow", { project_id: @project.id, workflow_id: @workflow.id })
+    assert_not error?(body)
+    assert_equal run_obj.id, payload(body)["run_id"]
+
+    runs = payload(call_tool("list_workflow_runs", { project_id: @project.id }))["runs"]
+    assert_includes runs.map { |r| r["id"] }, run_obj.id
+
+    detail = payload(call_tool("get_workflow_run", { project_id: @project.id, run_id: run_obj.id }))
+    assert_equal "pending", detail["state"]
+  end
+
+  test "trigger_workflow records an MCP launch and starts a repeated idempotency_key only once" do
+    create(:agent_credential, user: @user, company: @company)
+    mock_workflow_execution_start
+    args = { project_id: @project.id, workflow_id: @workflow.id, idempotency_key: "launch-1" }
+
+    first = payload(call_tool("trigger_workflow", args))
+    repeat = nil
+    assert_no_difference("WorkflowRun.count") { repeat = payload(call_tool("trigger_workflow", args)) }
+
+    assert_equal first["run_id"], repeat["run_id"]
+    assert repeat["replayed"]
+    detail = payload(call_tool("get_workflow_run", { project_id: @project.id, run_id: first["run_id"] }))
+    assert_equal "mcp", detail["source"]
+    assert_nil detail["retried_from_run_id"]
+  end
+
+  test "trigger_workflow refuses an idempotency_key already spent on another workflow" do
+    create(:agent_credential, user: @user, company: @company)
+    mock_workflow_execution_start
+    call_tool("trigger_workflow", { project_id: @project.id, workflow_id: @workflow.id, idempotency_key: "launch-1" })
+    other = create(:workflow, scope: @project)
+
+    body = nil
+    assert_no_difference("WorkflowRun.count") do
+      body = call_tool("trigger_workflow", { project_id: @project.id, workflow_id: other.id, idempotency_key: "launch-1" })
+    end
+
+    assert error?(body)
+    assert_match(/already started run \d+ of another workflow/, text(body))
+  end
+
+  test "sub-steps, update, reorder and delete round-trip through workflow authoring tools" do
+    s1 = payload(call_tool("create_workflow_step", { project_id: @project.id, workflow_id: @workflow.id, name: "S1" }))
+    s2 = payload(call_tool("create_workflow_step", { project_id: @project.id, workflow_id: @workflow.id, name: "S2" }))
+
+    sub = call_tool("create_sub_step",
+                    { project_id: @project.id, workflow_id: @workflow.id, step_id: s1["id"], name: "check A" })
+    assert_not error?(sub)
+
+    sub_edited = payload(call_tool("update_sub_step",
+                                   { project_id: @project.id, workflow_id: @workflow.id, step_id: s1["id"],
+                                     sub_step_id: payload(sub)["id"], name: "check A (edited)",
+                                     instructions: "do A", required: false }))
+    assert_equal "check A (edited)", sub_edited["name"]
+    assert_equal [ "name", "instructions", "required" ], sub_edited["updated_fields"]
+
+    read_back = payload(call_tool("get_workflow_step",
+                                  { project_id: @project.id, workflow_id: @workflow.id, step_id: s1["id"] }))
+    assert_equal [ { "id" => payload(sub)["id"], "name" => "check A (edited)", "position" => 1,
+                     "required" => false, "instructions" => "do A" } ], read_back["sub_steps"]
+
+    dropped = payload(call_tool("delete_sub_step",
+                                { project_id: @project.id, workflow_id: @workflow.id, step_id: s1["id"],
+                                  sub_step_id: payload(sub)["id"] }))
+    assert dropped["soft_deleted"]
+    assert SubStep.find(payload(sub)["id"]).deleted?
+
+    upd = call_tool("update_workflow_step",
+                    { project_id: @project.id, workflow_id: @workflow.id, step_id: s2["id"],
+                      depends_on_step_ids: [ s1["id"] ] })
+    assert_not error?(upd)
+
+    reordered = call_tool("reorder_workflow_steps",
+                          { project_id: @project.id, workflow_id: @workflow.id, step_ids: [ s2["id"], s1["id"] ] })
+    assert_not error?(reordered)
+
+    # s1 has a dependent (s2) → delete rejected
+    blocked = call_tool("delete_workflow_step", { project_id: @project.id, workflow_id: @workflow.id, step_id: s1["id"] })
+    assert error?(blocked)
+    assert_match(/depend on it/i, blocked.dig("result", "content").map { |c| c["text"] }.join(" "))
+
+    ok = call_tool("delete_workflow_step", { project_id: @project.id, workflow_id: @workflow.id, step_id: s2["id"] })
+    assert_not error?(ok)
+  end
+
+  test "reorder_sub_steps rewrites positions and rejects a partial id list" do
+    step = @workflow.steps.create!(name: "S", position: 1)
+    a = create(:sub_step, step: step, name: "A", position: 1)
+    b = create(:sub_step, step: step, name: "B", position: 2)
+
+    partial = call_tool("reorder_sub_steps", { project_id: @project.id, workflow_id: @workflow.id,
+                                               step_id: step.id, sub_step_ids: [ b.id ] })
+    assert error?(partial)
+    assert_match(/missing sub-step ids/i, text(partial))
+
+    ok = payload(call_tool("reorder_sub_steps", { project_id: @project.id, workflow_id: @workflow.id,
+                                                  step_id: step.id, sub_step_ids: [ b.id, a.id ] }))
+    assert_equal [ b.id, a.id ], ok["new_order"]
+
+    read_back = payload(call_tool("get_workflow_step",
+                                  { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id }))
+    assert_equal %w[B A], read_back["sub_steps"].map { |ss| ss["name"] }
+  end
+
+  test "delete_sub_step soft-deletes a sub-step that already ran, keeping run history" do
+    step = @workflow.steps.create!(name: "S", position: 1)
+    sub = create(:sub_step, step: step)
+    run = @workflow.runs.create!(project: @project, user: @user, state: "running")
+    ssr = create(:sub_step_run, sub_step: sub, step_run: run.step_runs.create!(step: step, state: "running"))
+
+    body = payload(call_tool("delete_sub_step",
+                             { project_id: @project.id, workflow_id: @workflow.id,
+                               step_id: step.id, sub_step_id: sub.id }))
+    assert body["soft_deleted"]
+    assert sub.reload.deleted?
+    assert SubStepRun.exists?(ssr.id)
+
+    read_back = payload(call_tool("get_workflow_step",
+                                  { project_id: @project.id, workflow_id: @workflow.id, step_id: step.id }))
+    assert_empty read_back["sub_steps"]
+  end
+
+  test "sub-step authoring tools reject a sub_step_id from another step" do
+    mine = @workflow.steps.create!(name: "Mine", position: 1)
+    other = @workflow.steps.create!(name: "Other", position: 2)
+    foreign = create(:sub_step, step: other)
+
+    %w[update_sub_step delete_sub_step].each do |tool|
+      body = call_tool(tool, { project_id: @project.id, workflow_id: @workflow.id,
+                               step_id: mine.id, sub_step_id: foreign.id, name: "hijacked" })
+      assert error?(body), "#{tool} accepted a foreign sub_step_id"
+      assert_match(/not found/i, text(body))
+    end
+    assert_not_equal "hijacked", foreign.reload.name
+    assert_not foreign.deleted?
+  end
+
+  test "update_sub_step with no updatable field is an error" do
+    step = @workflow.steps.create!(name: "S", position: 1)
+    sub = create(:sub_step, step: step)
+
+    body = call_tool("update_sub_step", { project_id: @project.id, workflow_id: @workflow.id,
+                                          step_id: step.id, sub_step_id: sub.id })
+    assert error?(body)
+    assert_match(/no fields to update/i, text(body))
+  end
+
+  test "cancel_workflow_run delegates to WorkflowService.cancel" do
+    run = @workflow.runs.create!(project: @project, user: @user, state: "running")
+    WorkflowService.expects(:cancel).with(run: run)
+
+    body = call_tool("cancel_workflow_run", { project_id: @project.id, run_id: run.id })
+    assert_not error?(body)
+  end
+
+  test "run control: approve / retry / skip delegate to WorkflowService" do
+    run = @workflow.runs.create!(project: @project, user: @user, state: "running")
+    sr = run.step_runs.create!(step: @workflow.steps.create!(name: "S", position: 1), state: "pending")
+    # sr is the run's only pending step_run, so the real WorkflowRun#current_step_run
+    # (state IN pending/running/waiting_input, newest) resolves to it on the reloaded
+    # run the tool looks up — no stubbing of the class under test needed (R5/R6).
+
+    WorkflowService.expects(:approve_step).with(step_run: sr)
+    assert_not error?(call_tool("approve_step_run", { project_id: @project.id, run_id: run.id }))
+
+    WorkflowService.expects(:skip_step).with(step_run: sr, reason: "n/a")
+    assert_not error?(call_tool("skip_step_run", { project_id: @project.id, run_id: run.id, reason: "n/a" }))
+  end
+
+  test "list_agents lists project agents" do
+    assert_not error?(call_tool("list_agents", { project_id: @project.id }))
+  end
+
+  test "delete_workflow soft-deletes and cannot cross into another project" do
+    other = create(:user, :with_company)
+    other_project = create(:project, company: other.companies.first, owner: other)
+    other_wf = create(:workflow, scope: other_project)
+
+    denied = call_tool("delete_workflow", { project_id: @project.id, workflow_id: other_wf.id })
+    assert error?(denied)
+    assert_match(/not found/i, denied.dig("result", "content").first["text"])
+
+    ok = call_tool("delete_workflow", { project_id: @project.id, workflow_id: @workflow.id })
+    assert_not error?(ok)
+    assert @workflow.reload.deleted_at.present?
+  end
+
+  test "a read-only viewer can list but not create workflows" do
+    viewer = create(:user, :viewer, company: @company)
+    @project.add_collaborator(viewer)
+    vtoken = viewer.regenerate_mcp_token!
+
+    assert_not error?(call_tool("list_workflows", { project_id: @project.id }, token: vtoken))
+
+    write = call_tool("create_workflow", { project_id: @project.id, name: "nope" }, token: vtoken)
+    assert error?(write)
+    assert_match(/not allowed/i, write.dig("result", "content").first["text"])
+  end
+end

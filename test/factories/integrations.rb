@@ -1,0 +1,285 @@
+# frozen_string_literal: true
+
+FactoryBot.define do
+  factory :integration do
+    sequence(:name) { |n| "org-#{n}" }
+    provider { :github }
+    status { :inactive }
+    company
+    connected_by factory: %i[user]
+
+    after(:build) do |integration|
+      integration.credentials_data = { installation_id: rand(10_000..99_999).to_s }
+    end
+
+    trait :github do
+      provider { :github }
+    end
+
+    # The developer path: a personal access token instead of an App
+    # installation. `auth_mode` in settings is what every reader branches on —
+    # there is no column for it — so it must be set, or the row reads as an App
+    # installation with no installation id.
+    trait :github_pat do
+      provider { :github }
+
+      after(:build) do |integration|
+        integration.credentials_data = { personal_access_token: "ghp_test_#{SecureRandom.hex(8)}" }
+        integration.settings = {
+          "auth_mode" => "pat",
+          "account_login" => "octodev",
+          "account_type" => "User",
+          "token_scopes" => %w[repo]
+        }
+      end
+    end
+
+    trait :gitlab do
+      provider { :gitlab }
+      after(:build) do |integration|
+        integration.credentials_data = { personal_access_token: "glpat-test_#{SecureRandom.hex(8)}" }
+      end
+    end
+
+    # Token mode with a workspace access token (a bot, so no account uuid).
+    # `:bitbucket_api_token` is a user's scoped API token instead.
+    trait :bitbucket do
+      provider { :bitbucket }
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+
+      after(:build) do |integration|
+        integration.credentials_data = { "token" => "bb-access-token-#{SecureRandom.hex(8)}" }
+        integration.settings = {
+          "auth_mode" => "token", "token_kind" => "access_token",
+          "workspace_uuid" => "{8f1d6b2a-0000-4000-8000-00000000b17b}", "workspace_slug" => "acme"
+        }
+      end
+    end
+
+    trait :bitbucket_api_token do
+      bitbucket
+
+      after(:build) do |integration|
+        integration.settings = integration.settings.merge(
+          "token_kind" => "api_token", "account_uuid" => "{4a5b6c7d-0000-4000-8000-0000000000aa}"
+        )
+      end
+    end
+
+    # App mode: draws on an installation bound to the integration's company.
+    trait :bitbucket_app do
+      provider { :bitbucket }
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+      bitbucket_installation { association(:bitbucket_installation, :bound, :with_token, company: company) }
+
+      after(:build) do |integration|
+        installation = integration.bitbucket_installation
+        integration.credentials_data = {}
+        integration.settings = {
+          "auth_mode" => "app",
+          "workspace_uuid" => installation&.workspace_uuid,
+          "workspace_slug" => installation&.workspace_slug
+        }.compact
+      end
+    end
+
+    # A Linear connection with an API key, covering the ENG and OPS teams of
+    # FakeLinear::Api's workspace.
+    trait :linear do
+      provider { :linear }
+      name { "Linear · Acme" }
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+
+      transient do
+        auth_mode { "api_key" }
+        dedicated_identity { true }
+        linear_teams do
+          [ { "id" => FakeLinear::Api::ENG, "key" => "ENG", "name" => "Engineering" },
+            { "id" => FakeLinear::Api::OPS, "key" => "OPS", "name" => "Operations" } ]
+        end
+      end
+
+      after(:build) do |integration, evaluator|
+        integration.credentials_data =
+          if evaluator.auth_mode == "api_key"
+            { "api_key" => "lin_api_test_#{SecureRandom.hex(8)}" }
+          else
+            { "access_token" => "lin_oauth_token", "refresh_token" => "lin_refresh", "expires_at" => 1.hour.from_now.iso8601 }
+          end
+        integration.settings = {
+          "auth_mode" => evaluator.auth_mode, "organization_id" => FakeLinear::Api::ORGANIZATION, "organization_name" => "Acme",
+          "url_key" => "acme", "linear_teams" => evaluator.linear_teams, "identity_display_name" => "Aixle Bot",
+          "dedicated_identity" => evaluator.dedicated_identity,
+          "tracker_identity" => { "id" => FakeLinear::Api::BOT_ID, "name" => "Aixle Bot", "login" => "aixle" }
+        }
+      end
+    end
+
+    trait :youtrack do
+      provider { :youtrack }
+      name { "YouTrack · acme.youtrack.cloud" }
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+
+      transient do
+        youtrack_projects do
+          [ { "id" => FakeYoutrack::Api::APP, "key" => "APP", "name" => "Application", "status_field" => "State",
+              "assignee_field" => "Assignee" },
+            { "id" => FakeYoutrack::Api::OPS, "key" => "OPS", "name" => "Operations", "status_field" => "State",
+              "assignee_field" => "Assignee" } ]
+        end
+      end
+
+      after(:build) do |integration, evaluator|
+        integration.credentials_data = { "permanent_token" => "perm:#{SecureRandom.hex(8)}" }
+        integration.settings = {
+          "auth_mode" => "app", "base_url" => FakeYoutrack::Api::BASE_URL,
+          "youtrack_projects" => evaluator.youtrack_projects, "identity_display_name" => "Aixle Bot",
+          "identity_login" => "aixle", "tracker_identity" => { "id" => FakeYoutrack::Api::BOT[:id], "name" => "Aixle Bot", "login" => "aixle" }
+        }
+      end
+    end
+
+    trait :linear_oauth do
+      linear
+      auth_mode { "oauth" }
+    end
+
+    # A GitHub App installation on an organization, covering the Roadmap project
+    # of FakeGithub::ProjectsApi.
+    trait :github_projects do
+      provider { :github }
+      name { "acme-corp" }
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+
+      after(:build) do |integration|
+        integration.settings = {
+          "auth_mode" => "app", "account_login" => "acme-corp", "account_type" => "Organization",
+          "target_type" => "Organization",
+          "app_permissions" => { "organization_projects" => "write", "issues" => "write", "contents" => "write" },
+          "github_projects" => [ { "id" => FakeGithub::ProjectsApi::ROADMAP, "number" => 1, "title" => "Roadmap",
+                                   "url" => "https://github.com/orgs/acme-corp/projects/1", "status_field" => "Status" } ]
+        }
+      end
+    end
+
+    trait :coder do
+      provider { :coder }
+      after(:build) do |integration|
+        integration.credentials_data = {
+          coder_url: "https://coder.example.com",
+          session_token: "coder-test-#{SecureRandom.hex(8)}",
+          user_id: SecureRandom.uuid
+        }
+        integration.settings = {
+          coder_username:   "test-user",
+          coder_user_email: "test@example.com",
+          lock_ttl_minutes: 60
+        }
+      end
+    end
+
+    # Azure connections are project-scoped by validation and name one Azure
+    # project. The installation carries the approval; `azure_project_id` must be
+    # inside its approved scope or the record will not save.
+    trait :azure_devops do
+      provider { :azure_devops }
+
+      transient do
+        azure_project_id { SecureRandom.uuid }
+        enabled_capabilities { AzureDevops::IntegrationService::DEFAULT_CAPABILITIES }
+      end
+
+      # Both the project and the installation have to sit in the integration's
+      # own company — the model rejects the record otherwise, which is the point
+      # of those validations.
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+      azure_devops_installation do
+        association(:azure_devops_installation, :active, :approved,
+                    company: company, allowed_project_ids: [ azure_project_id ])
+      end
+
+      after(:build) do |integration, evaluator|
+        installation = integration.azure_devops_installation
+        integration.credentials_data = {}
+        integration.settings = {
+          "auth_mode" => "service_principal",
+          "organization_slug" => installation&.organization_slug,
+          "tenant_id" => installation&.tenant_id,
+          "client_id" => installation&.client_id,
+          "azure_project_id" => evaluator.azure_project_id,
+          "azure_project_name" => "Customer Platform",
+          "enabled_capabilities" => evaluator.enabled_capabilities
+        }.compact
+      end
+    end
+
+    # The fallback identity mode: acts as the token's owner, carries no
+    # installation, and is gated on Settings.azure_devops.pat_mode_enabled.
+    trait :azure_devops_pat do
+      provider { :azure_devops }
+      azure_devops_installation { nil }
+
+      transient do
+        azure_project_id { SecureRandom.uuid }
+      end
+
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+
+      after(:build) do |integration, evaluator|
+        integration.credentials_data = { "personal_access_token" => "azdo-test-#{SecureRandom.hex(8)}" }
+        integration.settings = {
+          "auth_mode" => "pat",
+          "organization_slug" => "contoso",
+          "azure_project_id" => evaluator.azure_project_id,
+          "enabled_capabilities" => AzureDevops::IntegrationService::DEFAULT_CAPABILITIES
+        }
+      end
+    end
+
+    # A service-account connection to one site, covering ENG and OPS (the
+    # projects FakeJira::Api knows). `:jira_oauth` is the 3LO one.
+    trait :jira do
+      provider { :jira }
+      name { "Jira · acme.atlassian.net" }
+      project { association(:project, company: company, owner: association(:user, company: company)) }
+
+      transient do
+        auth_mode { "service_account" }
+        jira_projects do
+          [ { "id" => "10000", "key" => "ENG", "name" => "Engineering" },
+            { "id" => "10001", "key" => "OPS", "name" => "Operations" } ]
+        end
+      end
+
+      after(:build) do |integration, evaluator|
+        token = { "access_token" => "jira-token", "expires_at" => 1.hour.from_now.iso8601 }
+        integration.credentials_data =
+          if evaluator.auth_mode == "service_account"
+            token.merge("client_id" => "sa-client", "client_secret" => "sa-secret")
+          else
+            token.merge("refresh_token" => "jira-refresh")
+          end
+        integration.settings = {
+          "auth_mode" => evaluator.auth_mode, "cloud_id" => "cloud-acme", "site_url" => "https://acme.atlassian.net",
+          "site_name" => "acme.atlassian.net", "jira_projects" => evaluator.jira_projects,
+          "identity_display_name" => "Aixle Bot", "dedicated_identity" => evaluator.auth_mode == "service_account",
+          "tracker_identity" => { "id" => FakeJira::Api::BOT_ID, "name" => "Aixle Bot" }
+        }
+      end
+    end
+
+    trait :jira_oauth do
+      jira
+      auth_mode { "oauth" }
+    end
+
+    trait :active do
+      status { :active }
+    end
+
+    trait :error do
+      status { :error }
+      settings { { error: "Connection failed" } }
+    end
+  end
+end

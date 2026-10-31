@@ -1,0 +1,270 @@
+# frozen_string_literal: true
+
+class Web::ProfileController < Web::ApplicationController
+  include AnalyticsPeriodParams
+
+  layout "inertia"
+
+  before_action :require_auth
+  before_action :refuse_mcp_token_change_while_impersonating, only: %i[regenerate_mcp_token disable_mcp_token]
+
+  def show
+    render inertia: "Profile/Show", props: {
+      profile: CurrentUserResource.new(current_user, params: { current_membership: current_membership }).to_h,
+      # Invitations the user has NOT accepted yet. `profile.memberships` is
+      # active-only, so without this an outstanding invitation is visible
+      # nowhere in the product — only in the email, which may be lost.
+      # Profile-only (not a shared prop): pointless weight on every request.
+      pending_invitations: current_user.company_memberships
+                                       .invited
+                                       .includes(:company)
+                                       .map { |m| MembershipResource.new(m).to_h },
+      project_handovers: project_handovers,
+      language_options: CompanyMembership::AGENT_LANGUAGES,
+      other_sessions_count: current_user.user_sessions.live.where.not(id: current_user_session&.id).count,
+      agent_models: current_membership&.agent_models_for_props || [],
+      cable_stream: inertia_cable_stream(current_user),
+      # Plan-usage windows are fetched from runtime vendors over HTTP, so they
+      # are deferred: the page must never wait on a provider to render.
+      # `?refresh=1` is the Refresh button; the service
+      # throttles it so the button can't turn into a 429 generator.
+      usage_limits: InertiaRails.defer(group: "limits") {
+        Agents::SubscriptionUsageService.new(membership: current_membership, force: params[:refresh].present?).call
+      }
+    }
+  end
+
+  # The personal MCP server: its own tab rather than a card on the account
+  # page, because connecting a client and choosing what that client may do are
+  # a task of their own — and the tool picker alone is longer than the rest of
+  # the profile put together.
+  # The person's own security surface: their sign-in methods, passkeys,
+  # one-time codes and every live session they hold. All of it is theirs — no
+  # company-admin surface reaches these (AD-18).
+  def security
+    render inertia: "Profile/Security", props: {
+      sign_in_methods: sign_in_methods,
+      linkable_kinds: Auth::SignInMethods.linkable_kinds(current_user),
+      password: {
+        set: current_user.password_set?,
+        changed_at: current_user.password_changed_at,
+        accepted: Auth::SignInMethods.password_accepted?(current_user),
+        min_length: User::PASSWORD_MIN_LENGTH
+      },
+      passkeys: current_user.webauthn_credentials.order(created_at: :desc).map { |c|
+        { id: c.id, name: c.display_name, last_used_at: c.last_used_at, created_at: c.created_at }
+      },
+      totp_enabled: current_user.totp_enabled?,
+      sessions: UserSession.live.where(user: current_user).order(created_at: :desc).map { |s|
+        { id: s.id, ip: s.ip_address, user_agent: s.user_agent, last_seen_at: s.last_seen_at,
+          created_at: s.created_at, current: s.id == current_user_session&.id }
+      }
+    }
+  end
+
+  def mcp
+    render inertia: "Profile/Mcp", props: {
+      mcp: {
+        enabled: current_user.mcp_enabled?,
+        last_used_at: current_user.mcp_token_last_used_at,
+        server_url: Tools::PersonalMCP.public_url,
+        server_name: Tools::PersonalMCP::NAME,
+        # Present only right after regeneration — shown once, never persisted.
+        token: session.delete(:mcp_token_plaintext),
+        tool_groups: Tools::PersonalMCP.catalog_groups,
+        # nil means "every tool, including ones added later" — the client
+        # renders that as everything checked, and sends nil back for it.
+        enabled_tools: current_user.mcp_enabled_tools
+      }
+    }, encrypt_history: true
+  end
+
+  # Ends every other browser this person is signed in on; this one stays.
+  def sign_out_other_sessions
+    ended = UserSession.revoke_all_for!(current_user, except: current_user_session)
+    redirect_to profile_path, notice: "Signed out of #{ended} other #{'session'.pluralize(ended)}"
+  end
+
+  # Enable / rotate in one action: the previous token stops working the
+  # moment a new digest lands.
+  def regenerate_mcp_token
+    session[:mcp_token_plaintext] = current_user.regenerate_mcp_token!(
+      proof_provider_ids: current_user_session&.proved_provider_ids || []
+    )
+    redirect_to mcp_profile_path, notice: "MCP token generated — copy it now, it won't be shown again"
+  end
+
+  def disable_mcp_token
+    current_user.disable_mcp_token!
+    redirect_to mcp_profile_path, notice: "MCP access disabled"
+  end
+
+  # `tool_names` absent/null — or a list covering the whole registry — stores
+  # NULL, i.e. "every tool", so tools added in a later release are on without
+  # the user having to come back here. An empty array is a real, if odd,
+  # choice: a server with no tools. Names are intersected with the registry
+  # rather than validated, so a stale name from an old tab is dropped, not a
+  # 500.
+  def update_mcp_tools
+    names = params[:tool_names]
+    Tools::PersonalMCP.update_selection!(current_user, names.nil? ? nil : Array(names).map(&:to_s))
+
+    redirect_to mcp_profile_path, notice: "MCP tools updated"
+  end
+
+  def usage
+    # Usage is ALWAYS a current-company slice — a dual-membership user's other
+    # companies' sessions/costs must never surface here.
+    company = current_company or raise ActiveRecord::RecordNotFound
+    period = analytics_window
+    project_id = params[:project_id].presence
+
+    render inertia: "Profile/Usage", props: {
+      **analytics_period_props,
+      project_id:,
+      summary: InertiaRails.defer(group: "usage") {
+        r = UserAnalyticsService.new(user: current_user, company:, period:, project_id:).call
+        {
+          totalSessions: r.total_sessions,
+          totalCostCents: r.total_cost_cents,
+          totalTokens: r.total_tokens,
+          avgCostCentsPerSession: r.avg_cost_cents_per_session,
+          workflowsRun: r.workflows_run,
+          projectBreakdowns: r.project_breakdowns.map { |p|
+            { projectId: p.project_id, projectName: p.project_name, sessions: p.sessions, costCents: p.cost_cents, tokens: p.tokens }
+          }
+        }
+      },
+      agent_activity: InertiaRails.defer(group: "usage") {
+        r = UserAgentActivityService.new(user: current_user, company:, period:, project_id:).call
+        { sessionsByAgent: r.sessions_by_agent.map { |a| { agentType: a.agent_type, sessions: a.sessions, costCents: a.cost_cents, tokens: a.tokens } } }
+      },
+      cost_token: InertiaRails.defer(group: "usage") {
+        r = UserSessionCostTokenUsageService.new(user: current_user, company:, period:, project_id:).call
+        { timeSeries: r.time_series.map { |p| { date: p.date, costCents: p.cost_cents, totalTokens: p.total_tokens } } }
+      },
+      activity_heatmap: InertiaRails.defer(group: "usage") {
+        scope = current_user.terminal_sessions.joins(:project).where(projects: { company_id: company.id })
+        scope = scope.where(project_id:) if project_id
+        { days: ActivityHeatmapService.new(scope:).call.map { |d| { date: d.date, count: d.count } } }
+      },
+      sessions: InertiaRails.defer(group: "usage") {
+        current_user.terminal_sessions
+              .joins(:project).where(projects: { company_id: company.id })
+              .with_cached_resource_counts
+              .includes(:user, :project, :session_admission,
+                        :tools, :skills, :mcp_servers, :input_assets, :repositories, :config_items, :runner)
+              .where.not(session_type: "auth_setup")
+              .order(created_at: :desc)
+              .limit(per_page)
+              .map { |s| TerminalSessionResource.new(s, params: { viewer: current_user }).to_h }
+      }
+    }
+  end
+
+  # The profile form edits two records now: the name is global (User), while the
+  # agent language is a per-company onboarding answer and lives on the CURRENT
+  # membership. Permitting only :name here silently dropped language changes.
+  def update
+    user_ok = current_user.update(profile_params)
+    membership_ok = update_current_membership_profile
+
+    if user_ok && membership_ok
+      redirect_to profile_path, notice: "Profile updated successfully"
+    else
+      errors = current_user.errors.any? ? current_user.errors : current_membership&.errors
+      redirect_to profile_path, inertia: { errors: errors }
+    end
+  end
+
+  def update_default_model
+    credential = current_company_credentials.find(params[:agent_credential_id])
+    meta = credential.metadata || {}
+    if params[:default_model].present?
+      meta["default_model"] = params[:default_model]
+    else
+      meta.delete("default_model")
+    end
+    credential.update!(metadata: meta)
+
+    redirect_to profile_path, notice: "Default model updated"
+  end
+
+  def destroy_credential
+    credential = current_company_credentials.find(params[:agent_credential_id])
+    credential.destroy!
+
+    redirect_to profile_path, notice: "#{credential.agent_type.titleize} credentials removed"
+  end
+
+  private
+
+  def sign_in_methods
+    current_user.user_identities.includes(:identity_provider).order(:created_at).map do |identity|
+      removable = Auth::SignInMethods::REMOVABLE_KINDS.include?(identity.kind.to_s)
+      {
+        id: identity.id,
+        kind: identity.kind.to_s,
+        name: identity.identity_provider.display_name,
+        email: identity.email,
+        last_used_at: identity.last_used_at,
+        removable: removable,
+        removal_refusal: removable ? Auth::SignInMethods.removal_refusal(current_user, identity) : nil
+      }
+    end
+  end
+
+  # Leaving a company you own projects in hands them over first.
+  def project_handovers
+    current_user.company_memberships.where.not(state: "revoked")
+                .where(company_id: current_user.owned_projects.select(:company_id))
+                .includes(:company).map do |m|
+      { membership_id: m.id, **ProjectHandover.for_company(m.company, owner: current_user) }
+    end
+  end
+
+  def require_auth
+    redirect_to login_path unless signed_in?
+  end
+
+  # An impersonation proves no sign-in method of the person's, so a token issued
+  # under it reaches none of their companies; and rotating or disabling the token
+  # cuts off the clients the person set up themselves.
+  def refuse_mcp_token_change_while_impersonating
+    return unless impersonated?
+
+    redirect_to mcp_profile_path, alert: "The MCP token cannot be changed while impersonating."
+  end
+
+  # The credentials this page may edit: the acting user's, in the company they are
+  # acting for. The page only ever renders that set (CurrentUserResource serializes the
+  # current membership's credentials), so an id from another company is a 404 — editing
+  # or deleting it here would reach across a tenant boundary.
+  def current_company_credentials
+    raise ActiveRecord::RecordNotFound unless current_membership
+
+    current_membership.credentials_scope
+  end
+
+  # Session sharing is a GLOBAL user preference, not a per-company one: it says
+  # what the person is willing to let colleagues watch, which does not change
+  # when they switch company.
+  def profile_params
+    params.require(:profile).permit(:name, :share_active_sessions, :share_completed_sessions)
+  end
+
+  # Per-company answers editable from the profile. Super admins have no
+  # membership, so there is nothing to write.
+  def membership_profile_params
+    params.require(:profile).permit(:preferred_agent_language, :default_agent_credential_id)
+  end
+
+  def update_current_membership_profile
+    return true if current_membership.nil?
+
+    attrs = membership_profile_params
+    return true if attrs.empty?
+
+    current_membership.update(attrs)
+  end
+end

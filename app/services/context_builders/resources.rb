@@ -1,0 +1,169 @@
+# frozen_string_literal: true
+
+module ContextBuilders
+  class Resources < Base
+    HELPER_HOSTS = { "github" => "GitHub", "gitlab" => "GitLab", "bitbucket" => "Bitbucket" }.freeze
+    PULL_REQUEST_HOSTS = HELPER_HOSTS.slice(*PullRequests::PROVIDERS.keys).freeze
+
+    def applicable?
+      session.repository_ids.present? ||
+        session.input_asset_ids.present? ||
+        session.skill_ids.present?
+    end
+
+    def build
+      parts = []
+      parts << build_repositories if session.repository_ids.present?
+      parts << build_assets if session.input_asset_ids.present?
+      parts << build_skills if session.skill_ids.present?
+
+      return [] if parts.compact.empty?
+
+      [ section(
+        tag: "available-resources",
+        priority: :info,
+        content: parts.compact.join("\n\n")
+      ) ]
+    end
+
+    private
+
+    def build_repositories
+      repos = Repository.where(id: session.repository_ids).to_a
+      return nil if repos.empty?
+
+      failed = (session.metadata || {}).fetch("failed_repos", []).map { |f| f["id"] }
+      cloned = repos.reject { |r| failed.include?(r.id) }
+      return nil if cloned.empty?
+
+      # The path the provisioner actually chose, not a path recomputed from the
+      # repository name. Two repositories can share a basename, and a rename
+      # upstream does not move a checkout that already exists.
+      paths = RepositoryWorkspacePath.for_session(session, cloned)
+
+      lines = [ "## Available Repositories" ]
+      lines << ""
+      lines << "The following code repositories have been cloned into this session:"
+      lines << ""
+      lines << "| ID | Repository | Path | Branch | Access | Purpose |"
+      lines << "|---|---|---|---|---|---|"
+      cloned.each do |repo|
+        purpose = repo.purpose.presence || "—"
+        access = repo.public_source? ? "public, read-only" : "integration"
+        lines << "| #{repo.id} | #{repo.full_name} | #{paths[repo.id]} | #{repo.source_branch} | #{access} | #{purpose} |"
+      end
+      lines << ""
+      lines << "Use the repository **ID** when calling tools that require a `repository_id` parameter."
+      helper_hosts = hosts_among(cloned, HELPER_HOSTS)
+      if helper_hosts.any?
+        lines << ""
+        lines << "#{helper_hosts.to_sentence} repositories authenticate through a credential helper configured in " \
+                 "each checkout, which fetches a fresh token for every `git fetch` and `git push`. Do not " \
+                 "add credentials to the remote URL."
+      end
+      if cloned.any? { |repo| repo.integration&.github? }
+        lines << ""
+        lines << "`gh` authenticates the same way, per call, for the repository it targets: run it inside the " \
+                 "checkout or pass `-R <owner>/<repo>`. Do not run `gh auth login` or export a token. Use it to " \
+                 "read; open, review and merge pull requests with the `pull_request_*` tools below."
+      end
+      pull_request_hosts = hosts_among(cloned, PULL_REQUEST_HOSTS)
+      if pull_request_hosts.any?
+        lines << ""
+        lines << "Pull requests on #{pull_request_hosts.to_sentence} repositories (merge requests, on GitLab) go " \
+                 "through the `pull_request_*` tools — the same tools on every host, and the only path that " \
+                 "records each write so a retry does not open a second pull request.#{cli_note(pull_request_hosts)} " \
+                 "Wait for CI with `pull_request_checks` or a board gate, and merge with `expected_head_sha` set to " \
+                 "the head commit you reviewed — if the branch has moved since, the merge is refused."
+      end
+      if cloned.any?(&:azure_devops?)
+        lines << ""
+        lines << "Azure DevOps repositories authenticate through a credential helper configured in each " \
+                 "checkout, so ordinary `git fetch` and `git push` work without any extra step and keep " \
+                 "working after the underlying token expires. Do not add credentials to the remote URL. " \
+                 "Pull requests and review threads are reached with the `azure_devops_*` tools, " \
+                 "not with `gh`; Boards work items with the `tracker_*` tools."
+      end
+      unless cloned.all?(&:public_source?)
+        lines << ""
+        lines << "Each checkout of a connected repository carries every branch and the full commit history " \
+                 "(`git branch -r` lists them all); file contents of other revisions download on first use."
+      end
+      if cloned.any?(&:public_source?)
+        lines << ""
+        lines << "Repositories marked **public, read-only** were cloned anonymously. There are no " \
+                 "credentials for them: read the code, but do not try to push, open pull requests, " \
+                 "or call tools that write to them."
+      end
+      lines.join("\n")
+    end
+
+    def cli_note(hosts)
+      missing = [ ("`glab`" if hosts.include?("GitLab")), ("Bitbucket CLI" if hosts.include?("Bitbucket")) ].compact
+      missing.any? ? " There is no #{missing.to_sentence(two_words_connector: ' or ', last_word_connector: ', or ')} in this session." : ""
+    end
+
+    def hosts_among(repositories, hosts)
+      present = repositories.filter_map { |repo| repo.integration&.provider&.to_s }.to_set
+      hosts.select { |provider, _| present.include?(provider) }.values
+    end
+
+    def build_assets
+      assets = Asset.where(id: session.input_asset_ids).to_a
+      return nil if assets.empty?
+
+      lines = [ "## Input Assets (pre-loaded in /workspace/assets/)" ]
+      lines << ""
+      assets.each do |asset|
+        folder = asset.folder.present? ? "#{asset.folder}/" : ""
+        line = "- **#{asset.name}** (id: #{asset.id}) → `/workspace/assets/#{folder}#{asset.name}`"
+        line += " — public link: #{asset.share_url}" if asset.shared?
+        lines << line
+      end
+      lines.join("\n")
+    end
+
+    def build_skills
+      skills = Skill.where(id: session.skill_ids).to_a
+      return nil if skills.empty?
+
+      if adapter.includes_skills_in_context?
+        build_skills_full(skills)
+      else
+        build_skills_summary(skills)
+      end
+    end
+
+    def build_skills_full(skills)
+      lines = [ "## Skills" ]
+      lines << ""
+      skills.each do |skill|
+        next if skill.content.blank?
+
+        lines << "### #{skill.title.presence || skill.name}"
+        lines << ""
+        lines << skill.content
+        lines << ""
+      end
+      lines.join("\n")
+    end
+
+    def build_skills_summary(skills)
+      lines = [ "## Skills" ]
+      lines << ""
+      skills.each do |skill|
+        next if skill.content.blank?
+
+        title = skill.title.presence || skill.name
+        source = skill.source.present? ? " (#{skill.source})" : ""
+        desc = skill.description.presence
+        lines << "- **#{title}**#{source}#{desc ? ": #{desc}" : ""}"
+      end
+      lines.join("\n")
+    end
+
+    def adapter
+      @adapter ||= AgentCredentialsService.for(session.agent_type).adapter
+    end
+  end
+end

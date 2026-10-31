@@ -1,0 +1,1283 @@
+import '@testing-library/jest-dom/vitest';
+import type { ComponentProps } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  buildChatChannel,
+  buildChatConnectCode,
+  buildChatConversationOption,
+  buildChatProviderOption,
+} from 'test/factories/chatChannel';
+import { buildSharedProps, buildSharedUser } from 'test/factories/sharedProps';
+import { buildChatTrigger } from 'test/factories/trigger';
+import { answerFetch, jsonResponse } from 'test/fetchStub';
+import { act, renderPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+
+import { TriggerFormPanel } from './TriggerFormPanel';
+import type { Trigger } from './types';
+
+// TriggerFormPanel takes plain props (it reads only currentUser off usePage, to name who a new
+// trigger will run as) and talks to the backend through
+// apiFetch() -> the global fetch() the test setup stubs. `defaultKind` seeds the create-mode kind and
+// `editing` puts the form into (kind-locked) edit mode, so each trigger kind and its per-kind branches
+// can be rendered directly without driving the kind Select. Tests that assert a request spy on fetch()
+// and dispatch by HTTP method.
+
+type PanelProps = ComponentProps<typeof TriggerFormPanel>;
+
+// TriggerColumnOption / Trigger are local interfaces (no Typelizer type, so no factory exists);
+// these literals match those interfaces exactly.
+const columns: PanelProps['columns'] = [
+  { id: 1, name: 'Backlog' },
+  { id: 2, name: 'In Progress', boundWorkflowName: 'Other Flow' },
+];
+
+const slack = buildChatProviderOption({ conversations: [buildChatConversationOption()] });
+const teams = buildChatProviderOption({
+  key: 'teams',
+  label: 'Microsoft Teams',
+  botName: 'Aixle Flow',
+  conversations: [
+    buildChatConversationOption({
+      id: 21,
+      name: 'Onboarding',
+      label: 'Onboarding',
+      teamName: 'Sales',
+      provider: 'teams',
+    }),
+    buildChatConversationOption({
+      id: 22,
+      name: 'Launch crew',
+      label: 'Launch crew',
+      kind: 'group',
+      provider: 'teams',
+    }),
+  ],
+});
+
+const baseProps = (overrides: Partial<PanelProps> = {}): PanelProps => ({
+  projectId: 7,
+  workflowId: 3,
+  columns,
+  editing: null,
+  defaultKind: 'column',
+  onClose: vi.fn(),
+  onSaved: vi.fn(),
+  ...overrides,
+});
+
+const json = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+// The panel issues exactly one POST (create) or PATCH (edit) per submit; return a fresh Response each
+// call so its body is always readable.
+function installFetch(make: () => Response = () => json({})) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(make()));
+}
+
+const bodyOf = (spy: ReturnType<typeof installFetch>, method: string) => {
+  const call = spy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === method);
+  if (!call) throw new Error(`no ${method} call recorded`);
+  return JSON.parse((call[1] as RequestInit).body as string);
+};
+
+function getScrim(): HTMLElement {
+  return screen.getByTestId('trigger-form-scrim');
+}
+
+// Opens a Mantine Select by its current display value, then clicks the option whose name matches.
+async function pickOption(currentDisplay: RegExp | string, optionName: RegExp | string) {
+  await userEvent.click(screen.getByDisplayValue(currentDisplay));
+  await userEvent.click(await screen.findByRole('option', { name: optionName }));
+}
+
+const channelSelect = () => screen.getByRole('combobox', { name: 'Channel' });
+
+async function chooseChannel(name: string) {
+  await userEvent.click(channelSelect());
+  await userEvent.click(await screen.findByRole('option', { name }));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('Projects/Workflows/TriggerFormPanel', () => {
+  // -------------------------------------------------------------------------
+  // Create mode — kind selector + column defaults
+  // -------------------------------------------------------------------------
+  it('renders the create header, an editable kind selector, and the column fields by default', () => {
+    renderPage(<TriggerFormPanel {...baseProps()} />);
+
+    // "Add trigger" is both the header title and the footer submit button in create mode.
+    expect(screen.getAllByText('Add trigger')).toHaveLength(2);
+    // The kind is editable in create mode (not the locked read-only label of edit mode).
+    expect(screen.getByDisplayValue('Task enters column')).toBeInTheDocument();
+    expect(screen.queryByText('Type is locked when editing')).not.toBeInTheDocument();
+    // Column-kind fields.
+    expect(screen.getByText('Column')).toBeInTheDocument();
+    expect(screen.getByText('Mode')).toBeInTheDocument();
+    expect(screen.getByText('Cooldown (s)')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Auto' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Manual' })).not.toBeChecked();
+    // Footer actions.
+    expect(screen.getByRole('button', { name: 'Add trigger' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('names the signed-in user as who a new off-board trigger will run as', async () => {
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'schedule' })} />, {
+      props: buildSharedProps({ currentUser: buildSharedUser({ name: 'Nils Aker' }) }),
+    });
+
+    expect(screen.getByText('Runs as')).toBeInTheDocument();
+    expect(screen.getByText('Nils Aker')).toBeInTheDocument();
+    expect(screen.getByText(/use their credentials/)).toBeInTheDocument();
+  });
+
+  it('labels a column trigger as created by the signed-in user, not run as them', () => {
+    renderPage(<TriggerFormPanel {...baseProps()} />, {
+      props: buildSharedProps({ currentUser: buildSharedUser({ name: 'Nils Aker' }) }),
+    });
+
+    expect(screen.getByText('Created by')).toBeInTheDocument();
+    expect(screen.getByText(/belongs to whoever the card is on/)).toBeInTheDocument();
+  });
+
+  it('keeps the original creator when editing, and warns when the trigger has none', () => {
+    const editing: Trigger = {
+      id: 9,
+      kind: 'schedule',
+      event_type: 'schedule.fired',
+      schedule_config: { cron: '0 9 * * 1-5', timezone: 'UTC' },
+      created_by: { id: 4, name: 'Ada Ruiz' },
+    };
+
+    const { unmount } = renderPage(<TriggerFormPanel {...baseProps({ editing })} />, {
+      props: buildSharedProps({ currentUser: buildSharedUser({ name: 'Nils Aker' }) }),
+    });
+
+    expect(screen.getByText('Ada Ruiz')).toBeInTheDocument();
+    expect(screen.queryByText('Nils Aker')).not.toBeInTheDocument();
+    unmount();
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing: { ...editing, created_by: null } })} />, {
+      props: buildSharedProps({ currentUser: buildSharedUser({ name: 'Nils Aker' }) }),
+    });
+
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.getByText(/cannot start a run/)).toBeInTheDocument();
+  });
+
+  it('switches the rendered fields when the kind Select changes to chat', async () => {
+    renderPage(<TriggerFormPanel {...baseProps({ chatProviders: [slack] })} />);
+
+    // Kind is the first combobox; changing it swaps the per-kind field block.
+    const [kindSelect] = screen.getAllByRole('combobox');
+    await userEvent.click(kindSelect);
+    await userEvent.click(await screen.findByRole('option', { name: 'Chat message' }));
+
+    expect(channelSelect()).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect a new channel…' })).toBeInTheDocument();
+    expect(screen.getByText(/help lists the\s+commands of a conversation/)).toBeInTheDocument();
+    expect(screen.queryByText('Mode')).not.toBeInTheDocument();
+  });
+
+  it('posts a column trigger with the default column, mode, and cooldown and calls onSaved', async () => {
+    const onSaved = vi.fn();
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ onSaved })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    // columns[0] (Backlog, unbound) is the default column; mode/cooldown keep their initial values.
+    expect(bodyOf(fetchSpy, 'POST')).toEqual({
+      trigger: { kind: 'column', board_column_id: '1', trigger_mode: 'auto', cooldown_seconds: 5 },
+    });
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  it('posts a column trigger with manual mode after toggling it', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps()} />);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Manual' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger.trigger_mode).toBe('manual');
+  });
+
+  // -------------------------------------------------------------------------
+  // Schedule kind — cron validation + submit
+  // -------------------------------------------------------------------------
+  it('describes a valid cron, disables submit on empty and invalid cron', async () => {
+    installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'schedule' })} />);
+
+    // Default cron is valid: a human-readable description shows and submit is enabled.
+    expect(screen.getByText(/^Runs:/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add trigger' })).toBeEnabled();
+
+    const cronInput = screen.getByPlaceholderText('0 9 * * 1-5');
+    await userEvent.clear(cronInput);
+    // Empty cron: prompt + disabled submit (no "Invalid cron" field error because the input is blank).
+    expect(await screen.findByText('Enter a cron expression')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add trigger' })).toBeDisabled();
+
+    await userEvent.type(cronInput, 'zzz');
+    // Invalid cron: parse-error description + the input-level "Invalid cron" error + disabled submit.
+    expect(await screen.findByText('Not a valid cron expression')).toBeInTheDocument();
+    expect(screen.getByText('Invalid cron')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add trigger' })).toBeDisabled();
+  });
+
+  it('posts a schedule trigger with its cron/timezone and an empty filter when no subject is set', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'schedule' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger).toEqual({
+      kind: 'schedule',
+      schedule_config: { cron: '0 9 * * 1-5', timezone: 'UTC' },
+      filter_predicate: {},
+      subject_policy: 'none',
+    });
+  });
+
+  it('reveals the task column/title fields and posts the subject block when create_task is chosen', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'schedule' })} />);
+
+    await pickOption(/project-level run/, 'Create a task');
+
+    expect(await screen.findByText('Task column')).toBeInTheDocument();
+    const titleInput = screen.getByPlaceholderText(/webhook\.received/);
+    await userEvent.type(titleInput, 'nightly digest');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const trigger = bodyOf(fetchSpy, 'POST').trigger;
+    expect(trigger.subject_policy).toBe('create_task'); // TriggerBinding enum, not a session id
+    expect(trigger.subject_column_id).toBe('1'); // default columns[0]
+    expect(trigger.subject_title_template).toBe('nightly digest');
+  });
+
+  // -------------------------------------------------------------------------
+  // Chat kind
+  // -------------------------------------------------------------------------
+  it('posts a Slack chat trigger with its channel and a text predicate, and no channel condition', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack] })} />);
+
+    await chooseChannel('#deploys');
+    await userEvent.type(screen.getByPlaceholderText('ship it (optional)'), 'deploy');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger).toEqual({
+      kind: 'chat',
+      chat_provider: 'slack',
+      chat_channel_id: 11,
+      filter_predicate: { provider: 'slack', text: { op: 'contains', value: 'deploy' } },
+      status_reporting: 'lifecycle',
+      cooldown_seconds: 0,
+      subject_policy: 'none',
+    });
+  });
+
+  it("offers the company's Teams channels grouped by team, and group chats apart", async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack, teams] })} />);
+
+    await pickOption('Slack', 'Microsoft Teams');
+    await userEvent.click(channelSelect());
+    const sales = await screen.findByRole('group', { name: 'Sales' });
+    expect(within(screen.getByRole('group', { name: 'Group chats' })).getByRole('option')).toHaveTextContent(
+      'Launch crew',
+    );
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+    await userEvent.click(within(sales).getByRole('option', { name: 'Onboarding' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const trigger = bodyOf(fetchSpy, 'POST').trigger;
+    expect(trigger.chat_provider).toBe('teams');
+    expect(trigger.chat_channel_id).toBe(21);
+    expect(trigger.filter_predicate).toEqual({ provider: 'teams' });
+  });
+
+  it('will not add a chat trigger without a channel, and points at connecting one', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(
+      <TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [buildChatProviderOption()] })} />,
+    );
+
+    expect(screen.getByText('No Slack channel is connected to your company yet.')).toBeInTheDocument();
+    await userEvent.click(channelSelect());
+    expect(await screen.findByText('Connect a new channel with the button below')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    expect(await screen.findByText('Choose the channel this trigger listens to')).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('clears the channel when the messenger changes', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack, teams] })} />);
+
+    await chooseChannel('#deploys');
+    expect(channelSelect()).toHaveValue('#deploys');
+    await pickOption('Slack', 'Microsoft Teams');
+
+    expect(channelSelect()).toHaveValue('');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+    expect(await screen.findByText('Choose the channel this trigger listens to')).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('saves a switched-off chat trigger with no channel, but asks for one to switch it on', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(
+      <TriggerFormPanel
+        {...baseProps({ editing: buildChatTrigger({ chat_channel: null, enabled: false }), chatProviders: [slack] })}
+      />,
+    );
+
+    expect(channelSelect()).toHaveValue('');
+    await userEvent.click(screen.getByRole('switch', { name: 'Trigger enabled' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+    expect(await screen.findByText('Choose the channel this trigger listens to')).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('switch', { name: 'Trigger enabled' }));
+    expect(screen.queryByText('Choose the channel this trigger listens to')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'PATCH').trigger).toMatchObject({ chat_channel_id: null, enabled: false });
+  });
+
+  it("keeps the edited trigger's channel when the page's list does not have it", async () => {
+    const editing = buildChatTrigger({
+      chat_provider: 'teams',
+      chat_channel: buildChatChannel({
+        id: 29,
+        name: 'Escalations',
+        label: 'Escalations',
+        team_name: 'Support',
+        provider: 'teams',
+      }),
+      filter_predicate: { provider: 'teams' },
+      status_reporting: 'failures',
+    });
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing, chatProviders: [teams] })} />);
+
+    expect(channelSelect()).toHaveValue('Escalations');
+    expect(screen.getByDisplayValue('Only when a run fails')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const trigger = bodyOf(fetchSpy, 'PATCH').trigger;
+    expect(trigger.chat_channel_id).toBe(29);
+    expect(trigger.filter_predicate).toEqual({ provider: 'teams' });
+    expect(trigger.status_reporting).toBe('failures');
+  });
+
+  it('says which messengers to connect when none is', () => {
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat' })} />);
+
+    expect(screen.getByText('Connect Slack or Microsoft Teams on the Integrations page first.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect a new channel…' })).not.toBeInTheDocument();
+  });
+
+  it('posts the cooldown set on a slack trigger, and 0 for a cleared one', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack] })} />);
+
+    await chooseChannel('#deploys');
+    const cooldown = screen.getByRole('textbox', { name: 'Cooldown (s)' });
+    await userEvent.clear(cooldown);
+    await userEvent.type(cooldown, '300');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(bodyOf(fetchSpy, 'POST').trigger.cooldown_seconds).toBe(300);
+
+    fetchSpy.mockClear();
+    await userEvent.clear(cooldown);
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(bodyOf(fetchSpy, 'POST').trigger.cooldown_seconds).toBe(0);
+  });
+
+  it('follows a run with a status card by default, and can report only failures', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack] })} />);
+
+    await chooseChannel('#deploys');
+    await pickOption('A status card that follows the run', 'Only when a run fails');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger.status_reporting).toBe('failures');
+  });
+
+  it('posts only the messenger as the condition when the pattern is left blank', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack] })} />);
+
+    await chooseChannel('#deploys');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger.filter_predicate).toEqual({ provider: 'slack' });
+  });
+
+  it('reveals and posts the slack subject block with its own title placeholder', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack] })} />);
+
+    await chooseChannel('#deploys');
+    await pickOption(/project-level run/, 'Create a task');
+
+    expect(await screen.findByText('Task column')).toBeInTheDocument();
+    await userEvent.type(screen.getByPlaceholderText(/chat\.message/), 'from slack');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const trigger = bodyOf(fetchSpy, 'POST').trigger;
+    expect(trigger.subject_policy).toBe('create_task'); // TriggerBinding enum, not a session id
+    expect(trigger.subject_title_template).toBe('from slack');
+  });
+
+  describe('connecting a new channel', () => {
+    const CODES = '/api/v1/projects/7/chat_connect_codes';
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('adds the channel the posted code connected, selects it and saves the trigger with it', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const issued = buildChatConnectCode({
+        channel_name: '#releases',
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+      });
+      const releases = buildChatChannel({ id: 12, name: 'releases', label: '#releases' });
+      let state: 'pending' | 'redeemed' = 'pending';
+      const fetchSpy = answerFetch({
+        [`POST ${CODES}`]: jsonResponse(issued, 201),
+        [`GET ${CODES}/31`]: () => ({ ...issued, state, ...(state === 'redeemed' ? { channel: releases } : {}) }),
+        'POST /api/v1/projects/7/workflows/3/triggers': jsonResponse({ id: 40 }, 201),
+      });
+
+      renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack] })} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Connect a new channel…' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Connect a Slack channel' });
+      await userEvent.type(within(dialog).getByRole('textbox', { name: 'Channel' }), '#releases');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Get code' }));
+      expect(await within(dialog).findByRole('textbox', { name: 'Message to post' })).toHaveValue(
+        'connect aixle-7F3K9QXM',
+      );
+      state = 'redeemed';
+      await act(() => vi.advanceTimersByTimeAsync(3000));
+      expect(await within(dialog).findByText('Connected to #releases')).toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+
+      expect(channelSelect()).toHaveValue('#releases');
+      await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/v1/projects/7/workflows/3/triggers',
+          expect.objectContaining({ method: 'POST' }),
+        ),
+      );
+      const save = fetchSpy.mock.calls.find(([url]) => url === '/api/v1/projects/7/workflows/3/triggers');
+      expect(JSON.parse(save?.[1]?.body as string).trigger.chat_channel_id).toBe(12);
+    });
+
+    it('asks for the code on behalf of the trigger being edited', async () => {
+      const fetchSpy = answerFetch({
+        [`POST ${CODES}`]: jsonResponse(buildChatConnectCode(), 201),
+        [`GET ${CODES}/31`]: buildChatConnectCode(),
+      });
+
+      renderPage(<TriggerFormPanel {...baseProps({ editing: buildChatTrigger({ id: 9 }), chatProviders: [slack] })} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Connect a new channel…' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Connect a Slack channel' });
+      await userEvent.type(within(dialog).getByRole('textbox', { name: 'Channel' }), '#deploys');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Get code' }));
+
+      expect(await within(dialog).findByRole('textbox', { name: 'Message to post' })).toBeInTheDocument();
+      expect(bodyOf(fetchSpy, 'POST')).toEqual({ provider: 'slack', channel: '#deploys', trigger_id: 9 });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Webhook kind
+  // -------------------------------------------------------------------------
+  it('posts a webhook trigger with verification, secret, and an eq filter', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook' })} />);
+
+    // Verification + secret only appear on create (immutable after creation).
+    await pickOption('Shared token', 'HMAC SHA-256');
+    await userEvent.type(screen.getByPlaceholderText('generated if left blank'), 'sek');
+    await userEvent.type(screen.getByPlaceholderText('ref'), 'branch');
+    await userEvent.type(screen.getByPlaceholderText('refs/heads/main'), 'main');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    // condOp defaults to 'eq', so the value is stored directly (not wrapped in an {op,value} object).
+    expect(bodyOf(fetchSpy, 'POST').trigger).toEqual({
+      kind: 'webhook',
+      verification_strategy: 'hmac_sha256',
+      secret: 'sek',
+      filter_predicate: { branch: 'main' },
+      subject_policy: 'none',
+    });
+  });
+
+  // The server generates the secret when none is typed, so an untouched form
+  // still produces a webhook that the bare URL cannot fire.
+  it('defaults a webhook to shared-token verification and leaves the secret to the server', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger).toEqual({
+      kind: 'webhook',
+      verification_strategy: 'shared_token',
+      filter_predicate: {},
+      subject_policy: 'none',
+    });
+  });
+
+  it('sends none only when the user picks the unauthenticated option', async () => {
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook' })} />);
+
+    await pickOption('Shared token', /anyone with the URL/);
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(bodyOf(fetchSpy, 'POST').trigger.verification_strategy).toBe('none');
+  });
+
+  it('reveals the webhook subject block when create_task is chosen', async () => {
+    installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook' })} />);
+
+    expect(screen.queryByText('Task column')).not.toBeInTheDocument();
+    await pickOption(/project-level run/, 'Create a task');
+    expect(await screen.findByText('Task column')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Webhook create — success view with the ready-to-run cURL example (issue #624)
+  // -------------------------------------------------------------------------
+  it('stays open on a success view showing the URL, secret, and no-auth cURL after a webhook is created', async () => {
+    installFetch(() =>
+      json({ webhook_url: 'https://example.test/hooks/abc', webhook_secret: '', verification_strategy: 'none' }),
+    );
+    const onSaved = vi.fn();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook', onSaved })} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    expect(await screen.findByText('Webhook trigger created')).toBeInTheDocument();
+    expect(screen.getByText('https://example.test/hooks/abc')).toBeInTheDocument();
+    expect(screen.getByText('Request URL')).toBeInTheDocument();
+    expect(screen.queryByText('Secret')).not.toBeInTheDocument();
+    expect(screen.getByText(/Example request \(no auth\)/)).toBeInTheDocument();
+    expect(screen.getByText(/curl -X POST 'https:\/\/example\.test\/hooks\/abc'/)).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it('shows the shared-token cURL and the secret when the webhook uses shared_token verification', async () => {
+    installFetch(() =>
+      json({
+        webhook_url: 'https://example.test/hooks/xyz',
+        webhook_secret: 'sek_123',
+        verification_strategy: 'shared_token',
+      }),
+    );
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook' })} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    expect(await screen.findByText('Webhook trigger created')).toBeInTheDocument();
+    expect(screen.getByText('sek_123')).toBeInTheDocument();
+    expect(screen.getByText(/Example request \(shared token\)/)).toBeInTheDocument();
+    expect(screen.getByText(/X-Webhook-Token: sek_123/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy curl' })).toBeInTheDocument();
+  });
+
+  it('shows the HMAC SHA-256 cURL for an hmac_sha256 webhook', async () => {
+    installFetch(() =>
+      json({
+        webhook_url: 'https://example.test/hooks/hm',
+        webhook_secret: 'topsecret',
+        verification_strategy: 'hmac_sha256',
+      }),
+    );
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook' })} />);
+    await pickOption('Shared token', 'HMAC SHA-256');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    expect(await screen.findByText(/Example request \(HMAC SHA-256\)/)).toBeInTheDocument();
+    expect(screen.getByText(/X-Hub-Signature-256: sha256=\$SIG/)).toBeInTheDocument();
+    expect(screen.getByText(/openssl dgst -sha256 -hmac 'topsecret'/)).toBeInTheDocument();
+  });
+
+  it('ignores the scrim and refreshes the list via ✕ on the webhook success view', async () => {
+    installFetch(() => json({ webhook_url: 'https://example.test/hooks/abc', webhook_secret: '' }));
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook', onSaved, onClose })} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+    expect(await screen.findByText('Webhook trigger created')).toBeInTheDocument();
+
+    await userEvent.click(getScrim());
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('Webhook trigger created')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not show the success view for a non-webhook trigger — it closes via onSaved', async () => {
+    installFetch(() => json({ webhook_url: 'https://example.test/should-be-ignored' }));
+    const onSaved = vi.fn();
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack], onSaved })} />);
+    await chooseChannel('#deploys');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(screen.queryByText('Webhook trigger created')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Edit mode — kind locked, seeded from the trigger
+  // -------------------------------------------------------------------------
+  it('locks the kind and patches a column trigger with the kind query param', async () => {
+    const editing: Trigger = {
+      id: 1,
+      kind: 'column',
+      event_type: 'task.entered_column',
+      board_column_id: 1,
+      trigger_mode: 'manual',
+      cooldown_seconds: 30,
+    };
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing })} />);
+
+    // Type is a locked read-only label in edit mode, not a Select.
+    expect(screen.getByText('Type is locked when editing')).toBeInTheDocument();
+    expect(screen.getByText('Task enters column')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Manual' })).toBeChecked();
+    // A column edit has no Trigger enabled switch (that only shows for non-column kinds).
+    expect(screen.queryByRole('switch', { name: 'Trigger enabled' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers/1?kind=column',
+        expect.objectContaining({ method: 'PATCH' }),
+      ),
+    );
+    // Column edits omit board_column_id (immutable) and never touch the subject/enabled block.
+    expect(bodyOf(fetchSpy, 'PATCH').trigger).toEqual({ trigger_mode: 'manual', cooldown_seconds: 30 });
+  });
+
+  it('seeds a slack edit from its channel and a structured text predicate, and patches enabled + filter', async () => {
+    const editing = buildChatTrigger({
+      filter_predicate: { provider: 'slack', text: { op: 'regex', value: 'deploy' } },
+      cooldown_seconds: 120,
+    });
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing, chatProviders: [slack] })} />);
+
+    expect(channelSelect()).toHaveValue('#deploys');
+    expect(screen.getByPlaceholderText('ship it (optional)')).toHaveValue('deploy');
+    expect(screen.getByRole('textbox', { name: 'Cooldown (s)' })).toHaveValue('120');
+    const enabledSwitch = screen.getByRole('switch', { name: 'Trigger enabled' });
+    expect(enabledSwitch).toBeChecked();
+    expect(screen.getByText(/not run when you turn it back on/)).toBeInTheDocument();
+
+    await userEvent.click(enabledSwitch); // toggle off
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers/2',
+        expect.objectContaining({ method: 'PATCH' }),
+      ),
+    );
+    const trigger = bodyOf(fetchSpy, 'PATCH').trigger;
+    expect(trigger.filter_predicate).toEqual({ provider: 'slack', text: { op: 'regex', value: 'deploy' } });
+    expect(trigger.chat_channel_id).toBe(11);
+    expect(trigger.cooldown_seconds).toBe(120);
+    expect(trigger.enabled).toBe(false);
+    expect(trigger.kind).toBeUndefined(); // edits never resend the (locked) kind
+  });
+
+  it('keeps the conditions set through the API that the form has no field for, but none on the channel', async () => {
+    const editing = buildChatTrigger({
+      filter_predicate: {
+        provider: 'slack',
+        text: { op: 'contains', value: 'deploy' },
+        user: 'U1',
+        'actor.id': 'A7',
+        channel: 'C042',
+        'conversation.id': 'C042',
+      },
+    });
+    const fetchSpy = installFetch();
+    renderPage(<TriggerFormPanel {...baseProps({ editing, chatProviders: [slack] })} />);
+
+    const text = screen.getByPlaceholderText('ship it (optional)');
+    await userEvent.clear(text);
+    await userEvent.type(text, 'release');
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'PATCH' })),
+    );
+    expect(bodyOf(fetchSpy, 'PATCH').trigger.filter_predicate).toEqual({
+      provider: 'slack',
+      text: { op: 'contains', value: 'release' },
+      user: 'U1',
+      'actor.id': 'A7',
+    });
+  });
+
+  it('seeds a slack edit from a plain-string text predicate', () => {
+    const editing = buildChatTrigger({ filter_predicate: { provider: 'slack', text: 'shipit' } });
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing, chatProviders: [slack] })} />);
+
+    expect(screen.getByPlaceholderText('ship it (optional)')).toHaveValue('shipit');
+  });
+
+  it('seeds a switched-off slack edit with no text predicate', () => {
+    const editing = buildChatTrigger({ enabled: false });
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing, chatProviders: [slack] })} />);
+
+    expect(channelSelect()).toHaveValue('#deploys');
+    expect(screen.getByPlaceholderText('ship it (optional)')).toHaveValue('');
+    expect(screen.getByRole('switch', { name: 'Trigger enabled' })).not.toBeChecked();
+  });
+
+  it('seeds a slack edit from a structured text predicate missing op/value', () => {
+    const editing = buildChatTrigger({ filter_predicate: { provider: 'slack', text: {} } });
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing, chatProviders: [slack] })} />);
+
+    // Missing op/value fall back to 'contains'/'' (the empty pattern reflects the '' fallback).
+    expect(screen.getByPlaceholderText('ship it (optional)')).toHaveValue('');
+  });
+
+  it('seeds a webhook edit from a structured predicate, hides verification, and patches an {op,value} filter', async () => {
+    const editing: Trigger = {
+      id: 5,
+      kind: 'webhook',
+      event_type: 'webhook.received',
+      filter_predicate: { ref: { op: 'contains', value: 'main' } },
+      subject_policy: 'none',
+      enabled: false,
+    };
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing })} />);
+
+    // Verification/secret are create-only; absent when editing.
+    expect(screen.queryByText('Verification')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('ref')).toHaveValue('ref');
+    expect(screen.getByPlaceholderText('refs/heads/main')).toHaveValue('main');
+    expect(screen.getByRole('switch', { name: 'Trigger enabled' })).not.toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers/5',
+        expect.objectContaining({ method: 'PATCH' }),
+      ),
+    );
+    const trigger = bodyOf(fetchSpy, 'PATCH').trigger;
+    // Non-eq op wraps the value in an {op,value} object; no verification_strategy/secret on edit.
+    expect(trigger.filter_predicate).toEqual({ ref: { op: 'contains', value: 'main' } });
+    expect(trigger.verification_strategy).toBeUndefined();
+    expect(trigger.enabled).toBe(false);
+  });
+
+  it('seeds a webhook edit from a plain-scalar predicate', () => {
+    const editing: Trigger = {
+      id: 5,
+      kind: 'webhook',
+      event_type: 'webhook.received',
+      filter_predicate: { branch: 'develop' },
+      subject_policy: 'none',
+      enabled: true,
+    };
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing })} />);
+
+    expect(screen.getByPlaceholderText('ref')).toHaveValue('branch');
+    expect(screen.getByPlaceholderText('refs/heads/main')).toHaveValue('develop');
+  });
+
+  it('seeds an empty webhook edit from an empty predicate', () => {
+    const editing: Trigger = {
+      id: 5,
+      kind: 'webhook',
+      event_type: 'webhook.received',
+      filter_predicate: {},
+      subject_policy: 'none',
+      enabled: true,
+    };
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing })} />);
+
+    expect(screen.getByPlaceholderText('ref')).toHaveValue('');
+    expect(screen.getByPlaceholderText('refs/heads/main')).toHaveValue('');
+  });
+
+  it('seeds a webhook edit from a structured predicate whose value is null', () => {
+    const editing: Trigger = {
+      id: 5,
+      kind: 'webhook',
+      event_type: 'webhook.received',
+      filter_predicate: { ref: { value: null } },
+      subject_policy: 'none',
+      enabled: true,
+    };
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing })} />);
+
+    expect(screen.getByPlaceholderText('ref')).toHaveValue('ref');
+    // null value => empty string (missing op falls back to 'eq').
+    expect(screen.getByPlaceholderText('refs/heads/main')).toHaveValue('');
+  });
+
+  it('seeds a schedule edit and patches its config plus the enabled flag', async () => {
+    const editing: Trigger = {
+      id: 6,
+      kind: 'schedule',
+      event_type: 'schedule.tick',
+      schedule_config: { cron: '*/5 * * * *', timezone: 'America/New_York' },
+      subject_policy: 'none',
+    };
+    const fetchSpy = installFetch();
+
+    renderPage(<TriggerFormPanel {...baseProps({ editing })} />);
+
+    expect(screen.getByPlaceholderText('0 9 * * 1-5')).toHaveValue('*/5 * * * *');
+    // enabled defaults to true when the trigger omits it; schedule is non-column so the switch shows.
+    expect(screen.getByRole('switch', { name: 'Trigger enabled' })).toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/projects/7/workflows/3/triggers/6',
+        expect.objectContaining({ method: 'PATCH' }),
+      ),
+    );
+    expect(bodyOf(fetchSpy, 'PATCH').trigger).toEqual({
+      schedule_config: { cron: '*/5 * * * *', timezone: 'America/New_York' },
+      filter_predicate: {},
+      subject_policy: 'none',
+      enabled: true,
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Error handling + close
+  // -------------------------------------------------------------------------
+  it('shows the joined server errors and does not call onSaved when the save fails', async () => {
+    const onSaved = vi.fn();
+    installFetch(() =>
+      json({ errors: ['Chat channel is required — connect a channel to this company and choose it', 'Nope'] }, 422),
+    );
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack], onSaved })} />);
+
+    await chooseChannel('#deploys');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    expect(
+      await screen.findByText('Chat channel is required — connect a channel to this company and choose it, Nope'),
+    ).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a generic error message when the failed response has no parseable body', async () => {
+    const onSaved = vi.fn();
+    // Invalid JSON => res.json() rejects => caught as {} => default message.
+    installFetch(() => new Response('boom', { status: 500, headers: { 'Content-Type': 'application/json' } }));
+
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'webhook', onSaved })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+    expect(await screen.findByText('Failed to save trigger')).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('keeps the form open with its values intact when the scrim is clicked', async () => {
+    const onClose = vi.fn();
+    const onSaved = vi.fn();
+    renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'chat', chatProviders: [slack], onClose, onSaved })} />);
+
+    await chooseChannel('#deploys');
+    const pattern = screen.getByPlaceholderText('ship it (optional)');
+    await userEvent.type(pattern, 'PRESERVE-ME');
+    await userEvent.click(getScrim());
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(pattern).toHaveValue('PRESERVE-ME');
+    expect(channelSelect()).toHaveValue('#deploys');
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('keeps an edited form open with its changed values when the scrim is clicked', async () => {
+    const onClose = vi.fn();
+    const onSaved = vi.fn();
+    const editing = buildChatTrigger({ filter_predicate: { provider: 'slack', text: 'existing' } });
+    renderPage(<TriggerFormPanel {...baseProps({ editing, onClose, onSaved })} />);
+
+    const pattern = screen.getByPlaceholderText('ship it (optional)');
+    await userEvent.clear(pattern);
+    await userEvent.type(pattern, 'edited');
+    await userEvent.click(getScrim());
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(pattern).toHaveValue('edited');
+    expect(screen.getByRole('button', { name: 'Update trigger' })).toBeInTheDocument();
+  });
+
+  it('calls onClose from the Cancel button', async () => {
+    const onClose = vi.fn();
+    renderPage(<TriggerFormPanel {...baseProps({ onClose })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onClose from the header close button', async () => {
+    const onClose = vi.fn();
+    renderPage(<TriggerFormPanel {...baseProps({ onClose })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Tracker kind
+  // -------------------------------------------------------------------------
+  describe('tracker kind', () => {
+    const trackers: NonNullable<PanelProps['trackers']> = [
+      { id: 5, handle: 'boards', name: 'Customer Platform', provider: 'azure_devops' },
+    ];
+
+    it('is offered only once the project has a tracker', async () => {
+      renderPage(<TriggerFormPanel {...baseProps()} />);
+      await userEvent.click(screen.getByDisplayValue('Task enters column'));
+      expect(screen.queryByRole('option', { name: 'Task tracker event' })).not.toBeInTheDocument();
+    });
+
+    it("posts a status-change trigger for any tracker that reuses the issue's task", async () => {
+      const fetchSpy = installFetch();
+      renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'tracker', trackers })} />);
+
+      await userEvent.type(screen.getByRole('combobox', { name: 'Moves to' }), 'Ready for AI{enter}');
+      await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'POST' })),
+      );
+      expect(bodyOf(fetchSpy, 'POST').trigger).toEqual({
+        kind: 'tracker',
+        event_type: 'tracker.issue.status_changed',
+        project_tracker_id: null,
+        aixle_changes: 'ignore',
+        copy_attachments: false,
+        filter_predicate: { 'change.to.name': { op: 'in', value: ['Ready for AI'] } },
+        subject_policy: 'find_or_create_task',
+        status_reporting: 'failures',
+        subject_column_id: '1',
+      });
+    });
+
+    it("copies the issue's files to the task when the switch is on, and says what that is for", async () => {
+      const fetchSpy = installFetch();
+      renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'tracker', trackers })} />);
+
+      expect(screen.getByText(/People see them on the card, and every step's agent finds them/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('switch', { name: 'Copy issue files to the task' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      expect(bodyOf(fetchSpy, 'POST').trigger.copy_attachments).toBe(true);
+    });
+
+    it('comments on the issue when a run fails unless the switch is turned off', async () => {
+      const fetchSpy = installFetch();
+      renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'tracker', trackers })} />);
+
+      const notify = screen.getByRole('switch', { name: /comment on the issue when a run fails/i });
+      expect(notify).toBeChecked();
+      await userEvent.click(notify);
+      await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      expect(bodyOf(fetchSpy, 'POST').trigger.status_reporting).toBe('none');
+    });
+
+    it('edits a tracker trigger without resending its event type', async () => {
+      const fetchSpy = installFetch();
+      const editing: Trigger = {
+        id: 21,
+        kind: 'tracker',
+        event_type: 'tracker.comment.created',
+        project_tracker_id: 5,
+        aixle_changes: 'other_workflows',
+        subject_policy: 'none',
+        filter_predicate: { 'comment.mentions_me': true },
+        status_reporting: 'none',
+        enabled: true,
+      };
+      renderPage(<TriggerFormPanel {...baseProps({ editing, trackers })} />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'PATCH' })),
+      );
+      expect(bodyOf(fetchSpy, 'PATCH').trigger).toEqual({
+        project_tracker_id: '5',
+        aixle_changes: 'other_workflows',
+        copy_attachments: false,
+        filter_predicate: { 'comment.mentions_me': true },
+        subject_policy: 'none',
+        status_reporting: 'none',
+        enabled: true,
+      });
+    });
+
+    it('keeps conditions set through the API that the form has no field for, and lists them', async () => {
+      const fetchSpy = installFetch();
+      const editing: Trigger = {
+        id: 22,
+        kind: 'tracker',
+        event_type: 'tracker.issue.status_changed',
+        project_tracker_id: null,
+        aixle_changes: 'ignore',
+        subject_policy: 'none',
+        filter_predicate: {
+          'change.to.name': { op: 'in', value: ['Ready for AI'] },
+          'issue.type': 'Bug',
+          'issue.labels': { op: 'includes', value: 'ai' },
+        },
+        enabled: true,
+      };
+      renderPage(<TriggerFormPanel {...baseProps({ editing, trackers })} />);
+
+      expect(screen.getByText('issue.type = "Bug"')).toBeInTheDocument();
+      expect(screen.getByText('issue.labels includes "ai"')).toBeInTheDocument();
+      await userEvent.type(screen.getByRole('textbox', { name: 'Text contains' }), 'login');
+      await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'PATCH' })),
+      );
+      expect(bodyOf(fetchSpy, 'PATCH').trigger.filter_predicate).toEqual({
+        'change.to.name': { op: 'in', value: ['Ready for AI'] },
+        'issue.type': 'Bug',
+        'issue.labels': { op: 'includes', value: 'ai' },
+        text: { op: 'contains', value: 'login' },
+      });
+    });
+
+    it('defaults to a project-level run where the project has no board', async () => {
+      const fetchSpy = installFetch();
+      renderPage(<TriggerFormPanel {...baseProps({ defaultKind: 'tracker', trackers, columns: [] })} />);
+
+      expect(screen.getByDisplayValue('None — project-level run')).toBeInTheDocument();
+      expect(screen.getByText('This project has no board, so a run cannot get a new task.')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Add trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'POST' })),
+      );
+      const trigger = bodyOf(fetchSpy, 'POST').trigger;
+      expect(trigger.subject_policy).toBe('none');
+      expect(trigger).not.toHaveProperty('subject_column_id');
+    });
+
+    it('keeps a trigger on its detached tracker and says it does not fire', async () => {
+      const fetchSpy = installFetch();
+      const editing: Trigger = {
+        id: 23,
+        kind: 'tracker',
+        event_type: 'tracker.issue.created',
+        project_tracker_id: 6,
+        aixle_changes: 'ignore',
+        subject_policy: 'none',
+        filter_predicate: {},
+        enabled: true,
+      };
+      const withDetached = [
+        ...trackers,
+        { id: 6, handle: 'legacy', name: 'Legacy', provider: 'jira', status: 'detached' },
+      ];
+      renderPage(<TriggerFormPanel {...baseProps({ editing, trackers: withDetached })} />);
+
+      expect(screen.getByDisplayValue('Legacy (legacy) — detached')).toBeInTheDocument();
+      expect(screen.getByText(/This tracker is detached, so the trigger does not fire/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'PATCH' })),
+      );
+      expect(bodyOf(fetchSpy, 'PATCH').trigger.project_tracker_id).toBe('6');
+    });
+
+    it('is not offered when every tracker is detached', async () => {
+      renderPage(
+        <TriggerFormPanel
+          {...baseProps({
+            trackers: [{ id: 6, handle: 'legacy', name: 'Legacy', provider: 'jira', status: 'detached' }],
+          })}
+        />,
+      );
+      await userEvent.click(screen.getByDisplayValue('Task enters column'));
+      expect(screen.queryByRole('option', { name: 'Task tracker event' })).not.toBeInTheDocument();
+    });
+
+    it('says when a mention cannot start the trigger yet', () => {
+      const editing: Trigger = {
+        id: 24,
+        kind: 'tracker',
+        event_type: 'tracker.comment.created',
+        project_tracker_id: 5,
+        aixle_changes: 'ignore',
+        subject_policy: 'none',
+        filter_predicate: { 'comment.mentions_me': true },
+        enabled: true,
+      };
+      installFetch();
+      renderPage(
+        <TriggerFormPanel {...baseProps({ editing, trackers: [{ ...trackers[0], mentionsRecognized: false }] })} />,
+      );
+
+      expect(
+        screen.getByText(/This trigger cannot fire yet\. Aixle learns its own Azure DevOps account/),
+      ).toBeInTheDocument();
+    });
+  });
+  describe('on the project Triggers page', () => {
+    const workflows = [
+      { id: 3, name: 'Intake' },
+      { id: 4, name: 'Release' },
+    ];
+
+    it('asks which workflow a new trigger starts, and posts to that workflow', async () => {
+      const fetchSpy = installFetch(() => json({ id: 1 }, 201));
+      renderPage(<TriggerFormPanel {...baseProps({ workflowId: undefined, workflows })} />);
+
+      const save = screen.getByRole('button', { name: 'Add trigger' });
+      expect(save).toBeDisabled();
+
+      await userEvent.click(screen.getByRole('combobox', { name: 'Workflow' }));
+      await userEvent.click(await screen.findByRole('option', { name: 'Release' }));
+      await userEvent.click(save);
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/v1/projects/7/workflows/4/triggers',
+          expect.objectContaining({ method: 'POST' }),
+        ),
+      );
+    });
+
+    it('keeps an edited trigger on its own workflow', async () => {
+      const fetchSpy = installFetch();
+      const editing: Trigger = {
+        id: 9,
+        kind: 'schedule',
+        event_type: 'schedule.fired',
+        schedule_config: { cron: '0 9 * * 1-5', timezone: 'UTC' },
+        subject_policy: 'none',
+        enabled: true,
+        workflow_id: 4,
+        workflow_name: 'Release',
+      };
+      renderPage(<TriggerFormPanel {...baseProps({ workflowId: undefined, workflows, editing })} />);
+
+      expect(screen.getByText('Release')).toBeInTheDocument();
+      expect(screen.queryByRole('combobox', { name: 'Workflow' })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Update trigger' }));
+
+      await waitFor(() =>
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/v1/projects/7/workflows/4/triggers/9',
+          expect.objectContaining({ method: 'PATCH' }),
+        ),
+      );
+    });
+  });
+});

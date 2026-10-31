@@ -1,0 +1,437 @@
+import '@testing-library/jest-dom/vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { MCPServer } from '@/types/generated';
+import { renderPage, screen, userEvent, within } from 'test/renderPage';
+
+import { McpServersContent } from './McpServersContent';
+
+function makeServer(overrides: Partial<MCPServer> = {}): MCPServer {
+  return {
+    id: 1,
+    name: 'playwright',
+    url: 'https://mcp.example.com/pw',
+    transport: 'http',
+    headers: {},
+    description: null,
+    kind: 'custom',
+    scopeType: null,
+    scopeId: null,
+    scopeIndicator: 'project',
+    enabled: true,
+    internal: false,
+    command: null,
+    env: {},
+    connectorName: null,
+    connectorVersion: null,
+    connectorStatus: null,
+    connectorVersionPinned: true,
+    connectorUpdateVersion: null,
+    toolBaseline: false,
+    toolDrift: null,
+    authType: 'none',
+    credentialScope: 'shared',
+    oauthClientId: null,
+    oauthClientSecretPresent: false,
+    oauthStatus: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    currentVersionNumber: 1,
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+const baseProps = {
+  configItemNames: ['API_KEY'],
+  projectId: 1,
+  basePath: '/company/mcp_servers',
+  title: 'MCP Servers',
+  subtitle: 'Connect external tools',
+  editableScope: 'company' as const,
+};
+
+describe('McpServersContent', () => {
+  it('renders the title, subtitle, and a row per custom server', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 1, name: 'playwright' }), makeServer({ id: 2, name: 'context7' })]}
+      />,
+    );
+
+    expect(screen.getByText('MCP Servers')).toBeInTheDocument();
+    expect(screen.getByText('Connect external tools')).toBeInTheDocument();
+    expect(screen.getByText('playwright')).toBeInTheDocument();
+    expect(screen.getByText('context7')).toBeInTheDocument();
+  });
+
+  it('shows the empty state with an "add your first" CTA when there are no servers and no active filters', async () => {
+    renderPage(<McpServersContent {...baseProps} mcpServers={[]} />);
+
+    // The kind filter defaults to "All", so this is the unfiltered empty state.
+    expect(screen.getByText('No MCP servers configured')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add one manually/i })).toBeInTheDocument();
+  });
+
+  it('narrows the list as you type in the search box', async () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 1, name: 'playwright' }), makeServer({ id: 2, name: 'context7' })]}
+      />,
+    );
+
+    await userEvent.type(screen.getByPlaceholderText(/search by name/i), 'context');
+
+    expect(screen.getByText('context7')).toBeInTheDocument();
+    expect(screen.queryByText('playwright')).not.toBeInTheDocument();
+  });
+
+  it('hides custom servers when the kind filter is switched to System', async () => {
+    renderPage(
+      <McpServersContent {...baseProps} mcpServers={[makeServer({ id: 1, name: 'playwright', kind: 'custom' })]} />,
+    );
+
+    // Default filter is "custom", so the row is visible first.
+    expect(screen.getByText('playwright')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('System'));
+
+    // No internal servers in fixtures -> filtered list becomes empty.
+    expect(screen.queryByText('playwright')).not.toBeInTheDocument();
+    expect(screen.getByText('No MCP servers match your filters')).toBeInTheDocument();
+  });
+
+  it('opens the Add MCP Server form modal when the add button is clicked', async () => {
+    renderPage(<McpServersContent {...baseProps} mcpServers={[makeServer()]} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /add manually/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Add MCP Server')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /create/i })).toBeInTheDocument();
+  });
+
+  it('opens the archive confirmation modal from a row archive action', async () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 7, name: 'Doomed Server', kind: 'custom', scopeIndicator: 'project' })]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Archive MCP Server')).toBeInTheDocument();
+    expect(within(dialog).getByText('Doomed Server')).toBeInTheDocument();
+  });
+
+  it('shows the "no matches" empty state (without a CTA) when an active search filters everything out', async () => {
+    renderPage(<McpServersContent {...baseProps} mcpServers={[makeServer({ id: 1, name: 'playwright' })]} />);
+
+    await userEvent.type(screen.getByPlaceholderText(/search by name/i), 'zzz-no-such-server');
+
+    expect(screen.getByText('No MCP servers match your filters')).toBeInTheDocument();
+    // The "add your first" CTA only shows when there are no active filters.
+    expect(screen.queryByRole('button', { name: /add one manually/i })).not.toBeInTheDocument();
+  });
+
+  it('shows both system and custom servers when the kind filter is "All"', async () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[
+          makeServer({ id: 1, name: 'Custom One', kind: 'custom', scopeIndicator: 'project' }),
+          makeServer({
+            id: 2,
+            name: 'System One',
+            kind: 'internal',
+            internal: true,
+            scopeIndicator: 'internal',
+          }),
+        ]}
+      />,
+    );
+
+    // The filter defaults to "All", so both rows are visible without touching it.
+    expect(screen.getByText('Custom One')).toBeInTheDocument();
+    expect(screen.getByText('System One')).toBeInTheDocument();
+
+    // Narrowing to Custom hides the internal row.
+    await userEvent.click(screen.getByText('Custom'));
+
+    expect(screen.getByText('Custom One')).toBeInTheDocument();
+    expect(screen.queryByText('System One')).not.toBeInTheDocument();
+  });
+
+  it('renders the server name, URL, transport, scope, and status cells in the row', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[
+          makeServer({
+            id: 1,
+            name: 'playwright',
+            url: 'https://mcp.example.com/pw',
+            transport: 'sse',
+            scopeIndicator: 'project',
+            enabled: true,
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('playwright')).toBeInTheDocument();
+    expect(screen.getByText('https://mcp.example.com/pw')).toBeInTheDocument();
+    // Transport badge is uppercased.
+    expect(screen.getByText('SSE')).toBeInTheDocument();
+    // Scope badge — company scope no longer exists; MCPServer allows Project only.
+    expect(screen.getByText('Project')).toBeInTheDocument();
+    // Status badge.
+    expect(screen.getByText('Enabled')).toBeInTheDocument();
+  });
+
+  it('renders an em dash for the URL cell when the server has no URL', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 1, name: 'Stdio Server', transport: 'stdio', url: null })]}
+      />,
+    );
+
+    // The Connection column also renders an em dash for a non-OAuth server, so
+    // scope the assertion to the row's URL cell.
+    const row = screen.getByText('Stdio Server').closest('tr') as HTMLElement;
+    expect(within(row).getAllByText('—').length).toBeGreaterThan(0);
+    expect(screen.getByText('STDIO')).toBeInTheDocument();
+  });
+
+  it('shows a Disabled status badge for a disabled server', () => {
+    renderPage(
+      <McpServersContent {...baseProps} mcpServers={[makeServer({ id: 1, name: 'Off Server', enabled: false })]} />,
+    );
+
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
+    expect(screen.queryByText('Enabled')).not.toBeInTheDocument();
+  });
+
+  it('renders a Project scope badge for project-scoped servers', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 1, name: 'Project Server', scopeIndicator: 'project' })]}
+      />,
+    );
+
+    expect(screen.getByText('Project')).toBeInTheDocument();
+  });
+
+  it('renders a System scope badge and a "System" read-only label for internal servers', async () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[
+          makeServer({
+            id: 1,
+            name: 'Builtin Server',
+            kind: 'internal',
+            internal: true,
+            scopeIndicator: 'internal',
+          }),
+        ]}
+      />,
+    );
+
+    // Internal servers are filtered out under the default "custom" filter; switch to All.
+    await userEvent.click(screen.getByText('All'));
+
+    // Scope badge text "System" plus the read-only label "System" both render.
+    expect(screen.getAllByText('System').length).toBeGreaterThanOrEqual(1);
+    // Internal servers are not editable, so no edit/delete icons render.
+    expect(screen.getByText('Builtin Server')).toBeInTheDocument();
+  });
+
+  it('opens the edit form modal pre-titled "Edit MCP Server" with a Save button when editing a row', async () => {
+    const { container } = renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 5, name: 'Editable Server', kind: 'custom', scopeIndicator: 'project' })]}
+      />,
+    );
+
+    // ActionIcons have no accessible name; locate the edit button via its pencil icon.
+    const editIcon = container.querySelector('.tabler-icon-edit');
+    expect(editIcon).not.toBeNull();
+    const editButton = editIcon!.closest('button');
+    expect(editButton).not.toBeNull();
+    await userEvent.click(editButton!);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Edit MCP Server')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /save/i })).toBeInTheDocument();
+  });
+
+  // MCPServer refuses any scope but Project, so there is no company tier left to
+  // present. This pins that: the word must not reappear in the UI.
+  // Connecting is a top-level redirect off-site, not an edit: it belongs where the
+  // status is shown, not behind a settings form.
+  it('offers Connect in the row when an oauth server is not connected', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 3, name: 'Linear', authType: 'oauth', oauthStatus: 'pending' })]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
+  });
+
+  it('offers Reconnect when the credential broke', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 3, name: 'Linear', authType: 'oauth', oauthStatus: 'error' })]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
+  it('shows a plain badge once connected, with nothing left to do', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 3, name: 'Linear', authType: 'oauth', oauthStatus: 'active' })]}
+      />,
+    );
+
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+  });
+
+  describe('Connect navigation', () => {
+    // window.location is read-only in jsdom; swap it for a plain object so the
+    // top-level navigation OAuth requires can be observed.
+    const originalLocation = window.location;
+
+    beforeEach(() => {
+      Object.defineProperty(window, 'location', { configurable: true, writable: true, value: { href: '' } });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, 'location', { configurable: true, writable: true, value: originalLocation });
+    });
+
+    it('shows the button working, because discovery runs before the redirect', async () => {
+      renderPage(
+        <McpServersContent
+          {...baseProps}
+          mcpServers={[
+            makeServer({ id: 12, name: 'Linear', authType: 'oauth', oauthStatus: 'pending' }),
+            makeServer({ id: 13, name: 'Sentry', authType: 'oauth', oauthStatus: 'pending' }),
+          ]}
+        />,
+      );
+
+      const [connect, other] = screen.getAllByRole('button', { name: 'Connect' });
+      await userEvent.click(connect);
+
+      expect(connect).toHaveAttribute('data-loading', 'true');
+      expect(other).toBeDisabled();
+    });
+
+    it('posts a top-level form to the connect entry rather than making an Inertia visit', async () => {
+      // jsdom does not navigate on form submission; the submitted form is what matters.
+      const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {});
+      renderPage(
+        <McpServersContent
+          {...baseProps}
+          mcpServers={[makeServer({ id: 12, name: 'Linear', authType: 'oauth', oauthStatus: 'pending' })]}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+      expect(submit).toHaveBeenCalledTimes(1);
+      const form = submit.mock.contexts[0] as HTMLFormElement;
+      expect(form.method).toBe('post');
+      expect(form.getAttribute('action')).toBe('/oauth/mcp/12/connect');
+      expect(new FormData(form).get('return_to')).toBe(baseProps.basePath);
+      submit.mockRestore();
+    });
+  });
+
+  it('never labels a connector as company-scoped', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 1, name: 'Project Server', kind: 'custom', scopeIndicator: 'project' })]}
+      />,
+    );
+
+    expect(screen.queryByText('Company')).not.toBeInTheDocument();
+  });
+
+  it('shows a photo placeholder icon for a catalog-installed row and a plug icon for a hand-added row', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[
+          makeServer({ id: 1, name: 'From catalog', connectorName: 'io.github.acme/mcp' }),
+          makeServer({ id: 2, name: 'Hand added', connectorName: null }),
+        ]}
+      />,
+    );
+
+    const catalogRow = screen.getByText('From catalog').closest('tr') as HTMLElement;
+    const manualRow = screen.getByText('Hand added').closest('tr') as HTMLElement;
+    expect(catalogRow.querySelector('.tabler-icon-photo')).not.toBeNull();
+    expect(catalogRow.querySelector('.tabler-icon-plug')).toBeNull();
+    expect(manualRow.querySelector('.tabler-icon-plug')).not.toBeNull();
+    expect(manualRow.querySelector('.tabler-icon-photo')).toBeNull();
+  });
+
+  it('truncates a very long name and URL instead of breaking the row layout', () => {
+    const longName = 'a'.repeat(120);
+    const longUrl = `https://mcp.example.com/${'segment-'.repeat(30)}`;
+    renderPage(<McpServersContent {...baseProps} mcpServers={[makeServer({ id: 1, name: longName, url: longUrl })]} />);
+
+    const nameEl = screen.getByText(longName);
+    const urlEl = screen.getByText(longUrl);
+    expect(nameEl).toHaveAttribute('data-truncate', 'end');
+    expect(urlEl).toHaveAttribute('data-truncate', 'end');
+  });
+
+  it('shows a pluralized connector count in the toolbar', () => {
+    renderPage(
+      <McpServersContent
+        {...baseProps}
+        mcpServers={[makeServer({ id: 1, name: 'playwright' }), makeServer({ id: 2, name: 'context7' })]}
+      />,
+    );
+
+    expect(screen.getByText('2 connectors')).toBeInTheDocument();
+  });
+
+  it('renders edit, archive and history actions for every custom server', () => {
+    renderPage(
+      <McpServersContent
+        configItemNames={['API_KEY']}
+        projectId={1}
+        basePath="/company/mcp_servers"
+        title="MCP Servers"
+        subtitle="Connect external tools"
+        mcpServers={[
+          makeServer({ id: 1, name: 'Server A', kind: 'custom', scopeIndicator: 'project' }),
+          makeServer({ id: 2, name: 'Server B', kind: 'custom', scopeIndicator: 'project' }),
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Archive' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'History of Server A' })).toBeInTheDocument();
+  });
+});

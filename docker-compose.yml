@@ -1,0 +1,243 @@
+# Dev containers run as the host user (UID/GID, exported by the Makefile), so
+# everything they write into these bind-mounts is owned by that user on a Linux
+# host — no root, no chown. The caches are bind-mounts rather than named volumes
+# for the same reason: a named volume is created root-owned.
+#
+# Both web and worker mount the Docker socket (local DockerRuntime only):
+#   - worker drives container lifecycle (docker-api gem);
+#   - web hosts the MCP process, whose get_config_item arms log redaction
+#     (Sessions::SecretRegistry writes /var/log/mitm/redact.list into the agent
+#     container) before it hands out a secret. Without the socket every secret
+#     read fails closed with "log redaction could not be armed".
+# The socket is root-equivalent on the host: this is a local-development
+# trade-off. In k8s production web uses kubeclient and has no such mount.
+x-docker-volumes: &docker-volumes
+  - .:/app:cached
+  - ./.docker-cache/bundle:/bundle_cache
+  - ./.docker-cache/home:/home/app
+  - ./docker/remote/db_dumps:/db_dumps:cached
+  - /var/run/docker.sock:/var/run/docker.sock
+
+# The socket is root:docker 0660 and the containers run as the host UID with no
+# supplementary group, so they must join the socket's group to open it.
+# DOCKER_GID is the socket's gid: `make` exports it; for a plain `docker compose`
+# set it in .env (see .env.example) — the fallback 0 does not grant access on Linux.
+x-docker-group: &docker-group
+  - "${DOCKER_GID:-0}"
+
+x-db-environment: &db-environment
+  DB_HOST: db
+  DB_PORT: 5432
+  DB_USERNAME: postgres
+  DB_NAME: aixle_development
+
+x-web-environment: &web-environment
+  <<: *db-environment
+  APP_VERSION: dev
+  HOME: /home/app
+  # The container runs as the host's uid, which has no passwd entry inside the
+  # image. Go's user.Current() needs one or $USER, and without either the
+  # Temporal test server refuses to boot ("error detecting resource: user:
+  # Current requires cgo or $USER set in environment") — every workflow test
+  # fails with a Go dependency-injection wall of text. CI sets USER itself, so
+  # only local runs saw it.
+  USER: app
+  BUNDLE_PATH: /bundle_cache
+  GEM_HOME: /bundle_cache
+  GEM_PATH: /bundle_cache
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  RAILS_LOG_TO_STDOUT: 'true'
+  # Puma's thread budget and the value config/settings.yml sizes the Active
+  # Record pool from — matches the Puma default so dev doesn't run 10 request
+  # threads against a 5-connection pool. The worker overrides it.
+  RAILS_MAX_THREADS: '10'
+  # The ports the stack listens on, overridable so a second stack can run
+  # beside the first on one machine (a worktree under review, say) instead of
+  # colliding on 4000/4001/4002/4003. Everything derived from them follows:
+  # config/puma.rb and config/puma_mcp.rb bind them, and config/settings.yml
+  # builds domain, asset_host, container_asset_host and the internal base URL
+  # from the same two values.
+  PORT: ${PORT:-4000}
+  MCP_PORT: ${MCP_PORT:-4002}
+  RUNNER_GATEWAY_PORT: ${RUNNER_GATEWAY_PORT:-4003}
+  VITE_RUBY_PORT: ${VITE_RUBY_PORT:-4001}
+  REDIS_URL: redis://redis:6379/1
+  DOCKER_NETWORK: ${DOCKER_NETWORK:-app_default}
+  DOCKER_AGENT_NETWORK: ${DOCKER_AGENT_NETWORK:-app_agents}
+
+services:
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    restart: on-failure
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${TEMPORAL_HOST_PORT:-7233}:7233"
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=postgres
+      - POSTGRES_SEEDS=db
+      - LOG_LEVEL=error
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+    attach: false
+
+  temporal-ui:
+    image: temporalio/ui:2.43.3
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${TEMPORAL_UI_HOST_PORT:-8080}:8080"
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_UI_PORT=8080
+    restart: on-failure:5
+    attach: false
+
+  web:
+    build:
+      dockerfile: ./Dockerfile
+    image: ${WEB_IMAGE:-web}
+    # Exported by the Makefile. A plain `docker compose` does not see them —
+    # they are shell variables, not environment ones — and lands on 1000:1000;
+    # set them in .env to make both paths agree (see .env.example).
+    user: "${UID:-1000}:${GID:-1000}"
+    group_add: *docker-group
+    volumes: *docker-volumes
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:${PORT:-4000}:${PORT:-4000}'
+      - '${BIND_ADDRESS:-127.0.0.1}:${VITE_RUBY_PORT:-4001}:${VITE_RUBY_PORT:-4001}'
+      - '${BIND_ADDRESS:-127.0.0.1}:${MCP_PORT:-4002}:${MCP_PORT:-4002}'  # MCP server (separate Puma via Procfile.dev)
+      - '${BIND_ADDRESS:-127.0.0.1}:${RUNNER_GATEWAY_PORT:-4003}:${RUNNER_GATEWAY_PORT:-4003}'  # runner gateway (separate Puma via Procfile.dev)
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otlp-ingest:
+        condition: service_started
+    environment:
+      <<: *web-environment
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${DOCKER_NETWORK:-app_default}-api.rule=PathPrefix(`/api`)"
+      - "traefik.http.services.${DOCKER_NETWORK:-app_default}-api.loadbalancer.server.port=${PORT:-4000}"
+    entrypoint: bin/docker-entrypoint
+    command: dev
+    # On the agent network so containers reach MCP, credential vending and the
+    # usage ingest; db, redis and temporal are deliberately not.
+    networks: [ default, agents ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-4000}/up || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  worker:
+    image: ${WEB_IMAGE:-web}
+    user: "${UID:-1000}:${GID:-1000}"
+    group_add: *docker-group
+    volumes: *docker-volumes
+    environment:
+      <<: *web-environment
+      TEMPORAL_ENABLED: 'true'
+      TEMPORAL_DEBUG: 'true'
+      TEMPORAL_WORKER_GRACEFUL_SHUTDOWN_PERIOD: '900'
+      RAILS_MAX_THREADS: '20'
+    command: bin/temporal_worker
+    depends_on:
+      web:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    stop_grace_period: 20m
+    restart: on-failure:5
+
+  db:
+    image: postgres:15.3-alpine
+    # The lock table is sized at startup, as max_locks_per_transaction ×
+    # max_connections, and relation locks are taken on indexes as well as
+    # tables. The suite runs one worker per core, each in a transaction over a
+    # schema of ~114 tables and several hundred indexes, so the default 64 runs
+    # out: every worker then fails with "out of shared memory", thousands of
+    # errors deep, and the one real failure underneath is unreadable.
+    command: postgres -c max_locks_per_transaction=256
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    attach: false
+
+  redis:
+    image: redis:7.2-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    attach: false
+
+  traefik:
+    image: traefik:v3.6.6
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_HOST_PORT:-80}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_HOST_PORT:-443}:443"
+      - "${BIND_ADDRESS:-127.0.0.1}:${TRAEFIK_DASHBOARD_HOST_PORT:-8090}:8080"
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=${DOCKER_AGENT_NETWORK:-app_agents}"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--log.level=DEBUG"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    environment:
+      PORT: ${PORT:-4000}
+    networks: [ default, agents ]
+    attach: false
+
+  otlp-ingest:
+    build:
+      context: ./docker/otlp-ingest
+      dockerfile: Dockerfile
+    image: aixle/otlp-ingest:latest
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:${OTLP_HOST_PORT:-4318}:4318'
+    networks: [ default, agents ]
+    attach: false
+
+volumes:
+  pg_data:
+  redis_data:
+
+networks:
+  # Fixed, not Compose-derived (docs/project/worktree-stack.md).
+  default:
+    name: ${DOCKER_NETWORK:-app_default}
+  # The only network agent containers join (Settings.docker.agent_network). It
+  # holds web, otlp-ingest and traefik — what an agent has to reach — and not
+  # db (trust auth), redis or temporal (no auth at all), which an agent on the
+  # platform's own network could read and write outright.
+  agents:
+    name: ${DOCKER_AGENT_NETWORK:-app_agents}

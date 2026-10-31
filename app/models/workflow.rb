@@ -1,0 +1,279 @@
+# frozen_string_literal: true
+
+class Workflow < ApplicationRecord
+  include ProjectOwnedReferences
+  belongs_to :scope, polymorphic: true, optional: true
+  include TenantColumns
+  include Versioned
+  include DecodesHtmlEntities
+  include RunnerReference
+  belongs_to :published_by, class_name: "User", optional: true
+
+  has_many :steps, dependent: :destroy
+  has_many :runs, class_name: "WorkflowRun", dependent: :destroy
+  has_many :column_workflow_bindings
+  has_many :trigger_bindings, dependent: :destroy
+
+  before_destroy :purge_steps, prepend: true
+  before_destroy :check_column_bindings
+
+  ALLOWED_CONFIG_KEYS = %w[
+    base_tool_ids base_skill_ids base_mcp_server_ids
+    base_asset_ids base_repository_ids base_config_item_ids
+    inherit_all_project_resources
+  ].freeze
+
+  decodes_html_entities :name
+
+  validates :name, presence: true
+  validates :name, uniqueness: { scope: %i[scope_type scope_id], conditions: -> { where(deleted_at: nil) },
+                                 message: "already exists in this scope" }
+  validates :scope_type, presence: true, inclusion: { in: %w[Project System] }
+  validates :scope, presence: true, unless: -> { scope_type == "System" }
+  validate :config_keys_whitelist
+  validate :base_config_item_ids_belong_to_project
+  validate :base_resource_ids_belong_to_project
+
+  scope :active, -> { where(deleted_at: nil) }
+  scope :published, -> { where.not(published_at: nil) }
+  scope :published_in_company, ->(company) { active.published.belonging_to_company(company) }
+  scope :system, -> { where(scope_type: "System") }
+  scope :for_project, ->(project) { where(scope_type: "Project", scope_id: project.id) }
+
+  scope :visible_for_project, ->(project) {
+    active.where(scope_type: "Project", scope_id: project.id)
+  }
+  # Every workflow this company can see: the workflows of all its projects.
+  scope :belonging_to_company, ->(company) {
+    active.where(scope_type: "Project", scope_id: company.project_ids)
+  }
+
+  # The steps a caller should render, preload-safe. `steps.not_deleted` builds a fresh
+  # relation, which throws away a preloaded `:steps` association and re-queries — one
+  # query per workflow on any page that lists workflows, plus one per step for
+  # `sub_steps`. Filtering the loaded records in Ruby keeps the preload (and its
+  # `default_scope` position order).
+  def visible_steps
+    association(:steps).loaded? ? steps.reject(&:deleted?) : steps.not_deleted.to_a
+  end
+
+  RunStats = Data.define(:count, :last_at, :last_state, :active)
+  EMPTY_RUN_STATS = RunStats.new(count: 0, last_at: nil, last_state: nil, active: false)
+
+  # One grouped read for a list. `runs.size` / `runs.max_by` is a COUNT plus a
+  # SELECT * per workflow and loads every historical run. List callers attach
+  # this before WorkflowResource; a single record loads its own row lazily.
+  def self.attach_run_stats(workflows)
+    list = workflows.to_a
+    indexed = load_run_stats(list.map(&:id))
+    list.each { |workflow| workflow.run_stats = indexed.fetch(workflow.id, EMPTY_RUN_STATS) }
+    list
+  end
+
+  def run_stats
+    return @run_stats if instance_variable_defined?(:@run_stats)
+
+    self.class.attach_run_stats([ self ])
+    @run_stats
+  end
+
+  attr_writer :run_stats
+
+  def self.load_run_stats(ids)
+    return {} if ids.empty?
+
+    boolean = ActiveModel::Type::Boolean.new
+    WorkflowRun.where(workflow_id: ids).group(:workflow_id).pluck(
+      :workflow_id,
+      Arel.sql("COUNT(*)"),
+      Arel.sql('MAX("workflow_runs"."created_at")'),
+      Arel.sql('(ARRAY_AGG("workflow_runs"."state" ORDER BY "workflow_runs"."created_at" DESC, "workflow_runs"."id" DESC))[1]'),
+      Arel.sql(%{BOOL_OR("workflow_runs"."state" IN ('running', 'paused'))})
+    ).to_h do |workflow_id, count, last_at, last_state, active|
+      [ workflow_id, RunStats.new(
+        count: count.to_i,
+        last_at: last_at,
+        last_state: last_state,
+        active: boolean.cast(active) || false
+      ) ]
+    end
+  end
+  private_class_method :load_run_stats
+
+  # The one way a workflow is deleted — from the UI, the API and the personal MCP
+  # alike. Refused while a run is live or a board column still starts it;
+  # otherwise every trigger that could start it again is switched off (their
+  # schedules go with them) and it is marked deleted, in one transaction. Its
+  # runs and their history stay.
+  def soft_delete!
+    raise ActiveRecord::RecordNotDestroyed.new("Cannot delete — it has active runs", self) if has_active_runs?
+
+    if column_workflow_bindings.any?
+      bound = column_workflow_bindings.includes(board_column: { board: :project })
+      descs = bound.map { |b| "'#{b.board_column.name}' in project '#{b.board_column.board.project.name}'" }
+      raise ActiveRecord::RecordNotDestroyed.new("Cannot delete — bound to column #{descs.join(', ')}", self)
+    end
+
+    transaction do
+      trigger_bindings.where(enabled: true).find_each { |binding| binding.update!(enabled: false) }
+      update!(deleted_at: Time.current)
+    end
+  end
+
+  def deleted?
+    deleted_at.present?
+  end
+
+  alias archived? deleted?
+  alias archive! soft_delete!
+
+  # Triggers archiving switched off stay off unless named here — a schedule
+  # coming back to life on its own would start runs nobody asked for.
+  def unarchive!(enable_trigger_ids: [])
+    transaction do
+      update!(deleted_at: nil)
+      trigger_bindings.where(id: enable_trigger_ids).find_each do |binding|
+        # Its channel may have been disconnected meanwhile; it waits for a new one.
+        next if binding.chat? && !binding.chat_channel_usable?
+
+        binding.update!(enabled: true)
+      end
+    end
+  end
+
+  def published?
+    published_at.present?
+  end
+
+  def publish!(user)
+    update!(published_at: Time.current, published_by: user)
+  end
+
+  def unpublish!
+    update!(published_at: nil, published_by: nil)
+  end
+
+  def has_active_runs?
+    runs.where(state: %w[running paused]).exists?
+  end
+
+  def scope_indicator
+    return "system" if scope_type == "System"
+
+    "project"
+  end
+
+  def system?
+    scope_type == "System"
+  end
+
+  # A System workflow has no project, so it can only run hosted (DESIGN.md §3.1).
+  def runner_project
+    scope if scope_type == "Project"
+  end
+
+  def base_tool_ids
+    config&.dig("base_tool_ids") || []
+  end
+
+  def base_skill_ids
+    config&.dig("base_skill_ids") || []
+  end
+
+  def base_mcp_server_ids
+    config&.dig("base_mcp_server_ids") || []
+  end
+
+  def base_asset_ids
+    config&.dig("base_asset_ids") || []
+  end
+
+  def base_repository_ids
+    config&.dig("base_repository_ids") || []
+  end
+
+  def base_config_item_ids
+    config&.dig("base_config_item_ids") || []
+  end
+
+  def inherit_all_project_resources
+    config&.dig("inherit_all_project_resources") || false
+  end
+
+  def merge_config!(updates)
+    self.config = (config || {}).merge(updates.stringify_keys)
+    save!
+  end
+
+  def self.ransackable_attributes(_auth_object = nil)
+    %w[name description scope_type created_at updated_at]
+  end
+
+  def self.ransackable_associations(_auth_object = nil)
+    %w[scope]
+  end
+
+  private
+
+  def config_keys_whitelist
+    return if config.blank?
+
+    unknown = config.keys - ALLOWED_CONFIG_KEYS
+    errors.add(:config, "contains unknown keys: #{unknown.join(', ')}") if unknown.any?
+  end
+
+  # The base set decides what `get_config_item` may decrypt for every session
+  # this workflow spawns, so it may only name config items of the workflow's own
+  # project. A System workflow (Aixle Builder) has no project and therefore no
+  # base config items at all.
+  BASE_RESOURCES = {
+    "base_tool_ids" => :tools, "base_skill_ids" => :skills, "base_mcp_server_ids" => :mcp_servers,
+    "base_asset_ids" => :assets, "base_repository_ids" => :repositories
+  }.freeze
+
+  def base_resource_ids_belong_to_project
+    return unless scope_type == "Project" && will_save_change_to_config?
+
+    before = (attribute_in_database(:config) || {}).to_h.stringify_keys
+    after = (config || {}).to_h.stringify_keys
+    BASE_RESOURCES.each do |key, kind|
+      validate_owned_ids(scope, kind, :config, before[key], after[key], label: key)
+    end
+  end
+
+  def base_config_item_ids_belong_to_project
+    ids = base_config_item_ids
+    return if ids.blank?
+
+    unless scope_type == "Project"
+      errors.add(:config, "base_config_item_ids can only be set on a project-scoped workflow")
+      return
+    end
+
+    owned = ConfigItem.where(scope_type: "Project", scope_id: scope_id, id: ids).pluck(:id)
+    foreign = ids.map(&:to_i) - owned
+    return if foreign.empty?
+
+    errors.add(:config, "base_config_item_ids contains items outside this project: #{foreign.sort.join(', ')}")
+  end
+
+  def purge_steps
+    step_ids = steps.pluck(:id)
+    return if step_ids.empty?
+
+    sub_step_ids = SubStep.where(step_id: step_ids).pluck(:id)
+    SubStepRun.where(sub_step_id: sub_step_ids).delete_all if sub_step_ids.any?
+    SubStep.where(step_id: step_ids).delete_all
+    StepRun.where(step_id: step_ids).delete_all
+    Step.where(id: step_ids).delete_all
+  end
+
+  def check_column_bindings
+    return if column_workflow_bindings.empty?
+
+    bound = column_workflow_bindings.includes(board_column: { board: :project })
+    descs = bound.map { |b| "'#{b.board_column.name}' in project '#{b.board_column.board.project.name}'" }
+    errors.add(:base, "Cannot delete — bound to column #{descs.join(', ')}")
+    throw(:abort)
+  end
+end

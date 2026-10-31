@@ -1,0 +1,124 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class Web::ProfileUsageControllerTest < ActionDispatch::IntegrationTest
+  setup do
+    @company = create(:company)
+    @user = create(:user, :admin, :onboarding_completed, company: @company, password: AuthHelper::TEST_PASSWORD)
+    @project = create(:project, company: @company, owner: @user)
+    sign_in_as(@user)
+  end
+
+  def seed_session(user:, project:, cost_cents: 150, tokens: 1500, session_type: "agent_session",
+                   agent_type: "claude_code", created_at: Time.current)
+    session = build(:terminal_session, user:, project:, session_type:, agent_type:, created_at:)
+    session.save!(validate: false)
+    UsageStatistic.create!(
+      terminal_session: session,
+      cost_cents:, input_tokens: tokens, output_tokens: 0,
+      cache_write_tokens: 0, cache_read_tokens: 0
+    )
+    session
+  end
+
+  test "renders usage page with default period" do
+    get usage_profile_path
+    assert_inertia_page "Profile/Usage"
+    assert_inertia_props period: "30d"
+  end
+
+  test "passes custom period" do
+    get usage_profile_path(period: "7d")
+    assert_inertia_props period: "7d"
+  end
+
+  test "passes a custom range back to the picker" do
+    travel_to Time.zone.parse("2026-10-08 12:00") do
+      get usage_profile_path(period: "custom", from: "2026-09-24", to: "2026-10-07")
+      assert_inertia_props period: "custom", from: "2026-09-24", to: "2026-10-07"
+    end
+  end
+
+  test "declares all usage props as deferred" do
+    get usage_profile_path
+    assert_inertia_deferred_props :summary, :agent_activity, :cost_token,
+                                  :activity_heatmap, :sessions, group: "usage"
+  end
+
+  test "deferred props resolve to zeros for an empty user" do
+    get usage_profile_path
+    inertia_load_deferred_props("usage")
+
+    assert_inertia_props do |props|
+      props[:summary][:totalSessions] == 0 &&
+        props[:summary][:projectBreakdowns] == [] &&
+        props[:activityHeatmap][:days] == [] &&
+        props[:sessions] == []
+    end
+  end
+
+  test "deferred props return real data when sessions exist" do
+    seed_session(user: @user, project: @project)
+
+    get usage_profile_path
+    inertia_load_deferred_props("usage")
+
+    assert_inertia_props do |props|
+      props[:summary][:totalSessions] == 1 &&
+        props[:summary][:totalCostCents] == 150 &&
+        props[:summary][:totalTokens] == 1500 &&
+        props[:summary][:projectBreakdowns].length == 1 &&
+        props[:activityHeatmap][:days].length == 1 &&
+        props[:sessions].length == 1
+    end
+  end
+
+  test "project-less (legacy) sessions are excluded and reconciliation still holds" do
+    seed_session(user: @user, project: @project, cost_cents: 100, tokens: 1000)
+    seed_session(user: @user, project: nil, cost_cents: 250, tokens: 500)
+
+    get usage_profile_path
+    inertia_load_deferred_props("usage")
+
+    # Usage analytics are company-scoped via the project join, so NULL-project
+    # sessions (legacy only — project-less starts are disabled) never appear.
+    assert_inertia_props do |props|
+      s = props[:summary]
+      breakdowns = s[:projectBreakdowns]
+      s[:totalSessions] == 1 &&
+        s[:totalCostCents] == 100 &&
+        s[:totalTokens] == 1000 &&
+        breakdowns.length == 1 &&
+        breakdowns.none? { |p| p[:projectName] == "(No project)" } &&
+        breakdowns.sum { |p| p[:costCents] } == s[:totalCostCents]
+    end
+  end
+
+  test "user_id cannot point the page at a colleague" do
+    colleague = create(:user, :employee, :onboarding_completed, company: @company)
+    seed_session(user: colleague, project: @project, cost_cents: 300, tokens: 3000)
+    create(:terminal_session, :agent_session, user: colleague, project: @project, initial_prompt: "private plan")
+
+    get usage_profile_path(user_id: colleague.id)
+    inertia_load_deferred_props("usage")
+
+    assert_equal 0, inertia.props[:summary][:totalSessions]
+    assert_empty inertia.props[:sessions]
+  end
+
+  test "super_admin is redirected away from profile usage" do
+    delete logout_path
+    super_admin = create(:user, :super_admin, :onboarding_completed, password: AuthHelper::TEST_PASSWORD)
+    sign_in_as(super_admin)
+
+    get usage_profile_path
+    assert_redirected_to admin_root_path
+  end
+
+  test "unauthenticated request is redirected to login" do
+    delete logout_path
+    get usage_profile_path
+    assert_redirected_to login_path
+  end
+end

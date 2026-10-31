@@ -1,0 +1,280 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class AdmittedPhaseActivityTest < ActiveSupport::TestCase
+  setup do
+    user = create(:user, :with_company)
+    project = create(:project, owner: user, company: user.companies.first)
+    with_scope_defaults(project: 1)
+    @session = create(:terminal_session, user: user, project: project)
+    @admission = SessionAdmissionService.enqueue!(@session)
+    SessionAdmissionService.drain!
+    @admission.reload.update!(runtime_kind: "ContainerRuntime::DockerRuntime", runtime_id: "runtime-id")
+    @runtime = ContainerRuntime::DockerRuntime.new
+    ContainerRuntime.stubs(:build).returns(@runtime)
+    @activity = Activities::Container::AdmittedPhaseActivity.new
+  end
+
+  def cleanup
+    @activity.run(Hashie::Mash.new(phase: "cleanup", admission_id: @admission.id))
+  end
+
+  def exec_phase
+    @activity.run(Hashie::Mash.new(phase: "exec", admission_id: @admission.id, permit_token: @admission.permit_token))
+  end
+
+  def stub_exec_raising(error)
+    stub_exec { raise error }
+  end
+
+  def stub_exec(&behaviour)
+    strategy = Object.new
+    strategy.define_singleton_method(:exec) { |**| behaviour.call }
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    SessionService.stubs(:revalidate_admission!)
+  end
+
+  # Ten of these a day reached Sentry as errors: somebody closes the dialog or
+  # cancels the run while a phase is in flight, and the next phase finds a closed
+  # permit. Expected control flow, and it was burying the failures that are not.
+  test "a stop somebody asked for is raised as an expected error" do
+    @admission.update!(stop_requested_at: Time.current)
+
+    error = assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal TemporalExceptions::BENIGN, error.category
+  end
+
+  # The same closed permit, for a reason nobody asked for: something else
+  # restarted this launch. Still non-retryable, but it keeps its report.
+  test "a stale permit is not filed with the cancellations" do
+    error = assert_raises(Temporalio::Error::ApplicationError) do
+      @activity.run(Hashie::Mash.new(phase: "exec", admission_id: @admission.id,
+                                     permit_token: "a-token-from-another-launch"))
+    end
+
+    assert_equal TemporalExceptions::UNSPECIFIED, error.category
+  end
+
+  test "a failure that provably never left the process keeps the phase retryable" do
+    stub_exec_raising(NoMethodError.new("undefined method 'blank' for nil"))
+
+    assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal "retryable", @admission.session_runtime_operations.find_by(phase: "exec").state
+  end
+
+  test "a failure that may have reached the runtime is recorded as uncertain" do
+    stub_exec_raising(Errno::ECONNRESET.new("connection reset by peer"))
+
+    error = assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal TemporalExceptions::UNSPECIFIED, error.category
+    assert_equal "uncertain", @admission.session_runtime_operations.find_by(phase: "exec").state
+    # Recorded, but not a lien on the pool: an exec can only act inside a
+    # container, and release is reached only once that container is provably
+    # gone. What AD-5 retains a slot for is an unprovable CREATE — the sibling
+    # test below.
+    SessionAdmissionService.release!(@admission)
+    assert @admission.reload.released_at
+  end
+
+  test "a login the user has to renew is raised as an expected error" do
+    credential = create(:agent_credential, :errored, user: @session.user)
+    stub_exec_raising(AgentCredential::PreflightError.new(credential))
+
+    error = assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal TemporalExceptions::BENIGN, error.category
+  end
+
+  test "a phase that breaks after a stop was requested is filed with the stop" do
+    admission = @admission
+    stub_exec do
+      admission.update_column(:stop_requested_at, Time.current)
+      raise "Could not write the session's prompt into the container"
+    end
+
+    error = assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal TemporalExceptions::BENIGN, error.category
+  end
+
+  test "a cancelled activity is raised as an expected error" do
+    stub_exec_raising(Temporalio::Error::CanceledError.new("Activity canceled"))
+
+    error = assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal TemporalExceptions::BENIGN, error.category
+  end
+
+  test "a definitive credential preflight failure is not left uncertain" do
+    stub_exec_raising(ContainerStrategies::AgentSessionStrategy::ProvisioningError.new("auth_file_missing", {}))
+
+    assert_raises(Temporalio::Error::ApplicationError) { exec_phase }
+
+    assert_equal "retryable", @admission.session_runtime_operations.find_by(phase: "exec").state
+  end
+
+  test "an absent runtime finalizes session and releases its slot" do
+    @runtime.expects(:session_absent?).with("runtime-id").returns(true)
+    @runtime.expects(:cleanup_session).never
+    cleanup
+    assert @admission.reload.released_at
+    assert_equal "finished", @session.reload.state
+  end
+
+  test "an unresolved operation holds the slot but no longer blocks the deletion" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    @admission.session_runtime_operations.create!(phase: "create_container", state: "in_flight")
+    strategy.stubs(:before_cleanup).returns({})
+    # Refusing to delete was a deadlock: the workload kept the slot honestly
+    # occupied, and the operation could never resolve because the deletion that
+    # would prove absence was the thing being refused.
+    @runtime.expects(:cleanup_session).with("runtime-id")
+    @runtime.stubs(:session_absent?).returns(false, true)
+
+    result = cleanup
+
+    assert result[:unresolved_operation], "the reservation must still wait for an operator"
+    assert_nil @admission.reload.released_at
+  end
+
+  # Same deletion, same unprovable operation — but an exec cannot bring a
+  # workload back, so once the container is confirmed gone the slot goes back to
+  # the pool instead of waiting for a human who has nothing left to check.
+  test "an unresolved exec is deleted and released once the container is gone" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    @admission.session_runtime_operations.create!(phase: "exec", state: "in_flight")
+    strategy.stubs(:before_cleanup).returns({})
+    @runtime.expects(:cleanup_session).with("runtime-id")
+    @runtime.stubs(:session_absent?).returns(false, true)
+
+    result = cleanup
+
+    assert_nil result[:unresolved_operation]
+    assert @admission.reload.released_at
+  end
+
+  test "an unresolved external operation never releases the slot, even once the runtime is gone" do
+    @admission.session_runtime_operations.create!(phase: "create_container", state: "uncertain")
+    @runtime.expects(:session_absent?).returns(true)
+    @runtime.expects(:cleanup_session).never
+
+    result = cleanup
+
+    # AD-5: a late create must never find its slot handed to someone else, so
+    # an unprovable operation keeps the reservation until an operator resolves it.
+    assert result[:unresolved_operation]
+    assert_nil @admission.reload.released_at
+  end
+
+  test "accepted deletion is insufficient while runtime remains visible" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    # The activity loads its own session instance; stub its lookup, not all instances.
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    strategy.expects(:before_cleanup).returns({})
+    @runtime.expects(:session_absent?).with("runtime-id").returns(false).twice
+    @runtime.expects(:cleanup_session).with("runtime-id")
+
+    result = cleanup
+
+    assert result[:cleanup_pending], "an unconfirmed delete must report back, not fail the execution"
+    assert_nil @admission.reload.released_at
+    assert_equal 1, SessionAdmission.occupied.count
+  end
+
+  test "a session that finished settles its own state while the runtime is still going away" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    strategy.stubs(:before_cleanup).returns({})
+    @runtime.stubs(:session_absent?).returns(false)
+    @runtime.stubs(:cleanup_session)
+
+    cleanup
+
+    assert_equal "finished", @session.reload.state, "queue latency must not leave the UI on a dead session"
+    assert_nil @admission.reload.released_at, "capacity is only returned once the runtime is confirmed gone"
+  end
+
+  # Production, 2026-09-09: someone pressed Finish four seconds into an
+  # Antigravity authentication session, before the launch reached `exec`. The
+  # next activity found a closed permit, and "Session admission is closed" — the
+  # queue talking to itself — became both the session's error message and the
+  # reason it was marked failed. Nothing had failed.
+  test "a finish requested mid-launch is not reported as a failure" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    strategy.stubs(:before_cleanup).returns({})
+    @runtime.stubs(:session_absent?).returns(true)
+    @session.update!(state: "running", finishing_at: Time.current)
+
+    @activity.run(Hashie::Mash.new(phase: "cleanup", admission_id: @admission.id,
+      error: "Session admission is closed"))
+
+    assert_equal "cancelled", @session.reload.state,
+      "closing the dialog on a container that never came up is a cancellation"
+    assert_nil @session.error_message
+  end
+
+  test "a session that was usable before the user finished it is finished" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    strategy.stubs(:before_cleanup).returns({})
+    @runtime.stubs(:session_absent?).returns(true)
+    @session.update!(state: "running", finishing_at: Time.current, ready_at: 1.minute.ago)
+
+    @activity.run(Hashie::Mash.new(phase: "cleanup", admission_id: @admission.id))
+
+    assert_equal "finished", @session.reload.state
+  end
+
+  test "a real error still fails a session the user asked to finish" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    strategy.stubs(:before_cleanup).returns({})
+    @runtime.stubs(:session_absent?).returns(true)
+    @session.update!(state: "running", finishing_at: Time.current)
+
+    @activity.run(Hashie::Mash.new(phase: "cleanup", admission_id: @admission.id,
+      error: "Agent image could not be pulled"))
+
+    assert_equal "failed", @session.reload.state
+    assert_equal "Agent image could not be pulled", @session.error_message
+  end
+
+  test "output collection does not repeat when cleanup is retried" do
+    strategy = mock("strategy")
+    @session.stubs(:strategy).returns(strategy)
+    SessionAdmission.stubs(:find).with(@admission.id).returns(@admission)
+    @admission.stubs(:terminal_session).returns(@session)
+    strategy.expects(:before_cleanup).once.returns({})
+    @runtime.stubs(:cleanup_session)
+    @runtime.stubs(:session_absent?).returns(false)
+    cleanup
+
+    @runtime.stubs(:session_absent?).returns(false, true)
+    cleanup
+
+    assert @admission.reload.released_at
+  end
+end

@@ -1,0 +1,335 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+# Wire contract of the MCP endpoint after the swap to the official mcp gem:
+# same paths (/action_mcp alias + /mcp), same auth (X-Session-Key = mcp_key),
+# same availability semantics (hide in tools/list; actionable in-band error
+# for entitled-but-disconnected on tools/call; opaque error otherwise).
+class McpControllerTest < ActionDispatch::IntegrationTest
+  setup do
+    @user = create(:user, :with_company)
+    @company = @user.companies.first
+    @project = create(:project, company: @company, owner: @user)
+    @session = create(:terminal_session, :agent_session, :started, user: @user, project: @project)
+  end
+
+  def rpc(method, params = {}, key: @session.mcp_key, path: "/action_mcp", protocol_version: nil)
+    post path,
+         params: { jsonrpc: "2.0", id: 1, method: method, params: params }.to_json,
+         headers: { "Content-Type" => "application/json",
+                    "Accept" => "application/json, text/event-stream",
+                    "X-Session-Key" => key,
+                    "MCP-Protocol-Version" => protocol_version }.compact
+    response.parsed_body
+  end
+
+  # One request of the stateless "modern" lifecycle (2026-07-28, SEP-2575) —
+  # the one Claude Code speaks: no `initialize`, no session id, the protocol
+  # version and client capabilities carried in a per-request `_meta` envelope
+  # and mirrored in routing headers.
+  def modern_rpc(method, params = {}, name: nil, version: MCP::Configuration::LATEST_MODERN_PROTOCOL_VERSION,
+                 envelope: nil)
+    envelope ||= {
+      "io.modelcontextprotocol/protocolVersion" => version,
+      "io.modelcontextprotocol/clientCapabilities" => {},
+      "io.modelcontextprotocol/clientInfo" => { name: "claude-code", version: "1" }
+    }
+    post "/action_mcp",
+         params: { jsonrpc: "2.0", id: 1, method: method, params: params.merge(_meta: envelope) }.to_json,
+         headers: { "Content-Type" => "application/json",
+                    "Accept" => "application/json, text/event-stream",
+                    "X-Session-Key" => @session.mcp_key,
+                    "MCP-Protocol-Version" => version,
+                    "Mcp-Method" => method,
+                    "Mcp-Name" => name }.compact
+    response.parsed_body
+  end
+
+  def attach_platform_tool(name)
+    Tool.shadow_for(Tools::Registry.fetch(name)).tap { |row| @session.tools << row }
+  end
+
+  def listed_tools(body)
+    body.dig("result", "tools")
+  end
+
+  # ── auth ──
+
+  test "rejects requests without a valid session key" do
+    rpc("tools/list", key: nil)
+    assert_response :unauthorized
+
+    rpc("tools/list", key: "wrong")
+    assert_response :unauthorized
+  end
+
+  test "accepts the key as a bearer token" do
+    post "/action_mcp",
+         params: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }.to_json,
+         headers: { "Content-Type" => "application/json",
+                    "Accept" => "application/json, text/event-stream",
+                    "Authorization" => "Bearer #{@session.mcp_key}" }
+    assert_response :success
+  end
+
+  # A query string lands in ingress and proxy logs.
+  test "refuses a key sent as a query parameter" do
+    post "/action_mcp?session_key=#{@session.mcp_key}",
+         params: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }.to_json,
+         headers: { "Content-Type" => "application/json", "Accept" => "application/json, text/event-stream" }
+
+    assert_response :unauthorized
+  end
+
+  test "a key minted for one session does not open another" do
+    other = create(:terminal_session, :agent_session, :started, user: @user, project: @project)
+    forged = "#{other.id}.#{@session.mcp_key.split('.', 2).last}"
+
+    rpc("tools/list", key: forged)
+
+    assert_response :unauthorized
+  end
+
+  # Sessions launched before keys were derived hold a random key in their container.
+  test "a session launched with a stored random key still authenticates" do
+    @session.update_column(:mcp_key, "legacy-random-key")
+
+    rpc("tools/list", key: "legacy-random-key")
+
+    assert_response :success
+  end
+
+  test "an ended session's key is refused" do
+    @session.update_column(:state, "finished")
+
+    rpc("tools/list")
+
+    assert_response :unauthorized
+  end
+
+  test "initialize negotiates and reports the server" do
+    body = rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } })
+
+    assert_response :success
+    assert_equal "aixle-tools", body.dig("result", "serverInfo", "name")
+    assert_equal "2025-06-18", body.dig("result", "protocolVersion")
+  end
+
+  test "initialize never agrees to a version whose lifecycle has no handshake" do
+    attach_platform_tool("board_list_tasks")
+
+    negotiated = rpc("initialize", { protocolVersion: "2026-07-28", capabilities: {},
+                                     clientInfo: { name: "claude-code", version: "1" } })
+                 .dig("result", "protocolVersion")
+
+    assert_equal MCP::Configuration::LATEST_HANDSHAKE_PROTOCOL_VERSION, negotiated
+
+    tools = listed_tools(rpc("tools/list", {}, protocol_version: negotiated))
+
+    assert_response :success
+    assert_includes tools.map { |t| t["name"] }, "board_list_tasks"
+  end
+
+  test "a modern tools/list serves the session's tools with the stamps its schema requires" do
+    attach_platform_tool("board_list_tasks")
+
+    result = modern_rpc("tools/list")["result"]
+
+    assert_response :success
+    assert_includes result["tools"].map { |t| t["name"] }, "board_list_tasks"
+    assert_equal "complete", result["resultType"]
+    assert_equal 0, result["ttlMs"]
+    assert_equal "private", result["cacheScope"]
+  end
+
+  # ── tools/list ──
+
+  test "tools/list serves available tools sorted with tags in _meta" do
+    attach_platform_tool("mark_sub_step")
+    attach_platform_tool("board_list_tasks")
+
+    tools = listed_tools(rpc("tools/list"))
+
+    names = tools.map { |t| t["name"] }
+    assert_equal names.sort, names
+    assert_includes names, "board_list_tasks"
+    board = tools.find { |t| t["name"] == "board_list_tasks" }
+    assert_equal [ "board" ], board.dig("_meta", "ai.aixle/tags")
+    assert_equal "object", board.dig("inputSchema", "type")
+  end
+
+  test "tools/list hides an integration-gated tool until the integration is active" do
+    attach_platform_tool("chat_post_message")
+    attach_platform_tool("board_list_tasks")
+
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+    refute_includes names, "chat_post_message"
+
+    create(:integration, company: @company, project: @project, provider: :slack,
+                         status: :active, connected_by: @user)
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+    assert_includes names, "chat_post_message"
+  end
+
+  test "tools/list serializes from the definition even when the shadow row is stale" do
+    row = attach_platform_tool("read_tool_result")
+    row.update_columns(description: "STALE", input_schema: { "type" => "object" })
+
+    serialized = listed_tools(rpc("tools/list")).find { |t| t["name"] == "read_tool_result" }
+    definition = Tools::Registry.fetch("read_tool_result")
+
+    assert_equal definition.description, serialized["description"]
+    assert_equal definition.input_schema["properties"].keys,
+                 serialized.dig("inputSchema", "properties").keys
+  end
+
+  # ── tools/call ──
+
+  test "tools/call executes an available tool" do
+    attach_platform_tool("list_sub_steps")
+
+    body = rpc("tools/call", { name: "list_sub_steps", arguments: {} })
+
+    text = body.dig("result", "content").map { |c| c["text"] }.join("\n")
+    # Reaches the handler, which demands workflow context — proof of dispatch.
+    assert_match(/workflow context/i, text)
+  end
+
+  test "tools/call on an entitled-but-disconnected tool returns an actionable in-band error" do
+    attach_platform_tool("chat_post_message")
+
+    body = rpc("tools/call", { name: "chat_post_message", arguments: { text: "hi" } })
+
+    assert body.dig("result", "isError")
+    text = body.dig("result", "content").map { |c| c["text"] }.join("\n")
+    assert_match(/chat integration is not connected/i, text)
+    assert_match(/Project Settings/, text)
+  end
+
+  test "the in-band error for a disconnected tool is stamped on the modern wire" do
+    # The disconnected tool is hidden from the server that serves tools/list,
+    # so its call is served by one that registers it with the remedy as its
+    # handler — which is what puts the result on the gem's own path and earns
+    # the `resultType` 2026-07-28 requires. Without it a modern client drops
+    # the remedy instead of showing it.
+    attach_platform_tool("chat_post_message")
+
+    result = modern_rpc("tools/call", { name: "chat_post_message", arguments: { text: "hi" } },
+                        name: "chat_post_message")["result"]
+
+    assert_equal "complete", result["resultType"]
+    assert result["isError"]
+    assert_match(/chat integration is not connected/i,
+                 result["content"].map { |c| c["text"] }.join("\n"))
+  end
+
+  # ── the remedy never outranks the protocol (SEP-2575 validation) ──
+  #
+  # The remedy is the one result this app produces for a request the gem would
+  # answer "tool not found". Reaching it must still cost a valid modern
+  # request: an unsupported version, a malformed envelope or a header that
+  # contradicts the body has to be refused exactly as it is for a connected
+  # tool, never answered with a successful in-band result.
+
+  test "a disconnected tool's call at an unserved modern version is refused with -32022" do
+    attach_platform_tool("chat_post_message")
+
+    body = modern_rpc("tools/call", { name: "chat_post_message", arguments: { text: "hi" } },
+                      name: "chat_post_message", version: "2099-01-01")
+
+    assert_response :bad_request
+    assert_nil body["result"]
+    assert_equal MCP::ErrorCodes::UNSUPPORTED_PROTOCOL_VERSION, body.dig("error", "code")
+    assert_equal MCP::Configuration::SUPPORTED_MODERN_PROTOCOL_VERSIONS,
+                 body.dig("error", "data", "supported")
+  end
+
+  test "a disconnected tool's call with a malformed modern envelope is refused with -32602" do
+    attach_platform_tool("chat_post_message")
+
+    # `clientCapabilities` is REQUIRED and must be an object: the loose
+    # `RequestEnvelope.modern?` classifier accepts this envelope, only
+    # `RequestEnvelope.parse!` rejects it.
+    version = MCP::Configuration::LATEST_MODERN_PROTOCOL_VERSION
+    body = modern_rpc("tools/call", { name: "chat_post_message", arguments: { text: "hi" } },
+                      name: "chat_post_message",
+                      envelope: { "io.modelcontextprotocol/protocolVersion" => version,
+                                  "io.modelcontextprotocol/clientCapabilities" => "not-an-object" })
+
+    assert_nil body["result"]
+    assert_equal(-32602, body.dig("error", "code"))
+    assert_match(/clientCapabilities/, body.dig("error", "message").to_s)
+  end
+
+  test "a disconnected tool's call whose routing headers contradict the body is refused with -32020" do
+    attach_platform_tool("chat_post_message")
+
+    # `Mcp-Name` mirrors the called tool so intermediaries can route without
+    # parsing bodies; SEP-2575 requires it on the name-bearing methods.
+    body = modern_rpc("tools/call", { name: "chat_post_message", arguments: { text: "hi" } },
+                      name: "board_list_tasks")
+
+    assert_response :bad_request
+    assert_nil body["result"]
+    assert_equal MCP::ErrorCodes::HEADER_MISMATCH, body.dig("error", "code")
+  end
+
+  test "tools/call outside the entitlement stays an opaque protocol error" do
+    body = rpc("tools/call", { name: "chat_post_message", arguments: {} })
+
+    assert_nil body["result"]
+    assert body["error"].present?
+    refute_match(/Project Settings/, body["error"]["message"].to_s)
+  end
+
+  test "the /mcp alias serves the same endpoint" do
+    attach_platform_tool("board_list_tasks")
+
+    names = listed_tools(rpc("tools/list", path: "/mcp")).map { |t| t["name"] }
+    assert_includes names, "board_list_tasks"
+  end
+
+  test "a tampered custom tool is hidden from serving (digest fail-closed)" do
+    tool = create(:tool, scope: @project, name: "my_linter", docker_image: "l:1")
+    @session.tools << tool
+
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+    assert_includes names, "my_linter"
+
+    tool.update_columns(description: "tampered past validations")
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+    refute_includes names, "my_linter"
+  end
+
+  # A row written before `$ref` was forbidden still carries a digest that
+  # matches, so it passes the tamper check and reaches the schema validator
+  # inside the gem. That raise used to escape tools/list and 500 every request
+  # the session made — including calls to the tools that were fine.
+  test "a tool whose schema the gem refuses is dropped instead of taking tools/list down" do
+    attach_platform_tool("board_list_tasks")
+    legacy = create(:tool, scope: @project, name: "legacy_linter", docker_image: "l:1")
+    @session.tools << legacy
+    legacy.update_columns(input_schema: { "type" => "object", "properties" => { "q" => { "$ref" => "shared" } } })
+    legacy.update_columns(definition_digest: legacy.reload.compute_definition_digest)
+
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+
+    assert_response :success
+    assert_includes names, "board_list_tasks", "one unusable tool must not cost the session the others"
+    refute_includes names, "legacy_linter"
+  end
+
+  # ── integration-gated Coder tools ──
+
+  test "Coder tools surface through aixle-tools once the Coder integration is active" do
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+    refute_includes names, "coder_ssh_exec"
+
+    create(:integration, company: @company, project: @project,
+                         provider: :coder, status: :active, connected_by: @user)
+
+    names = listed_tools(rpc("tools/list")).map { |t| t["name"] }
+    assert_includes names, "coder_ssh_exec"
+  end
+end

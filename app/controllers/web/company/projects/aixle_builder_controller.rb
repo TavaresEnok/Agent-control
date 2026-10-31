@@ -1,0 +1,118 @@
+# frozen_string_literal: true
+
+class Web::Company::Projects::AixleBuilderController < Web::Company::Projects::ApplicationController
+  WORKFLOW_GUIDES_NOTE = "> These guides are shared with the personal MCP server. In the builder you are " \
+                         "already inside one project: skip `list_projects` and never pass `project_id`."
+
+  def show
+    sessions = current_project.terminal_sessions
+                       .with_cached_resource_counts
+                       .includes(:user, :project, :session_admission,
+                                 :tools, :skills, :mcp_servers, :config_items,
+                                 :input_assets, :repositories, :runner)
+                       .where(user: current_user)
+                       .where("metadata @> ?", { aixle_builder: true }.to_json)
+                       .order(created_at: :desc)
+                       .limit(20)
+
+    active_session = sessions.find { |s| %w[not_started queued running ready].include?(s.state) }
+
+    render inertia: "Projects/AixleBuilder/LandingPage", props: {
+      sessions: -> { sessions.map { |s| TerminalSessionResource.new(s, params: { viewer: current_user }).to_h } },
+      active_session_id: -> { active_session&.id },
+      configured_agents: -> { current_project_membership&.configured_agents || [] },
+      default_agent_runtime: -> { current_project_membership&.default_agent_runtime },
+      assets: -> { Asset.accessible_from_project(current_project).map { |a| AssetPickerResource.new(a).to_h } },
+      agent_models: InertiaRails.defer { current_project_membership&.agent_models_for_props || [] }
+    }
+  end
+
+  def start
+    session = SessionService.create_and_start(
+      user: current_user,
+      project: current_project,
+      session_type: "agent_session",
+      agent_type: params[:agent_runtime] || current_project_membership&.default_agent_runtime || "claude_code",
+      params: {
+        mode: "interactive",
+        initial_prompt: "Help me automate a process in this project — start by asking what I want to automate.",
+        requested_model: params[:preferred_model],
+        metadata: { aixle_builder: true },
+        input_asset_ids: Array(params[:input_asset_ids]).map(&:to_i),
+        session_config: { "config_files" => builder_reference_files }
+      }
+    )
+
+    unless session.persisted?
+      redirect_to company_project_aixle_builder_path(current_project), alert: session.errors.full_messages.to_sentence.presence || "Failed to create session"
+      return
+    end
+
+    redirect_to company_project_aixle_builder_session_path(current_project, session)
+  rescue Oauth::PreflightError, CloudAuth::PreflightError, AgentCredential::PreflightError,
+         SessionService::UnsafeMcpUrlError, SessionAdmissionService::Stopped => e
+    redirect_to company_project_aixle_builder_path(current_project), alert: e.message
+  end
+
+  def show_session
+    ts = current_project.terminal_sessions
+                 .where(user: current_user)
+                 .where("metadata @> ?", { aixle_builder: true }.to_json)
+                 .find_by(id: params[:id])
+    return head :not_found unless ts
+
+    render inertia: "Projects/AixleBuilder/SessionPage", props: {
+      session: -> { TerminalSessionResource.new(ts, params: { viewer: current_user }).to_h },
+      cable_stream: -> { inertia_cable_stream(ts) },
+      builder_activities: InertiaRails.defer {
+        ts.reload
+        activities = ts.metadata&.dig("builder_activities") || []
+        Rails.logger.info("[AixleBuilder] builder_activities count=#{activities.size} for session=#{ts.id}")
+        activities.last(100).reverse.map do |a|
+          a.transform_keys { |k| k.to_s.camelize(:lower) }
+        end
+      },
+      workflows: InertiaRails.defer {
+        Workflow.attach_run_stats(
+          Workflow.visible_for_project(current_project).includes(:steps).order(:name)
+        ).map { |w| WorkflowResource.new(w).to_h }
+      },
+      board_columns: InertiaRails.defer {
+        board = current_project.board
+        if board
+          board.board_columns
+               .with_tasks_count
+               .includes(column_workflow_binding: :workflow)
+               .order(:position)
+               .map { |c| BoardColumnResource.new(c).to_h }
+        else
+          []
+        end
+      }
+    }
+  end
+
+  def finish
+    ts = current_project.terminal_sessions
+                 .where(user: current_user)
+                 .where("metadata @> ?", { aixle_builder: true }.to_json)
+                 .find_by(id: params[:id])
+    return head :not_found unless ts
+
+    SessionService.finish(session: ts)
+    redirect_to company_project_aixle_builder_session_path(current_project, ts)
+  rescue TerminalSession::InvalidStateError => e
+    redirect_to company_project_aixle_builder_session_path(current_project, ts), alert: e.message
+  end
+
+  private
+
+  def builder_reference_files
+    dir = ContextBuilders::AixleBuilder::REFERENCE_DIR
+    files = Rails.root.join("references").glob("*.md").to_h { |path| [ "#{dir}/#{path.basename}", path.read ] }
+    files.merge(
+      "#{dir}/workflow-guides.md" => [ WORKFLOW_GUIDES_NOTE, Tools::PersonalMCPGuides.build_workflow,
+                                       Tools::PersonalMCPGuides.author_step ].join("\n\n")
+    )
+  end
+end

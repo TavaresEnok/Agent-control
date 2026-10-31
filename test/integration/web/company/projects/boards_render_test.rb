@@ -1,0 +1,95 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class Web::Company::Projects::BoardsRenderTest < ActionDispatch::IntegrationTest
+  setup do
+    @company = create(:company)
+    @user = create(:user, :admin, :onboarding_completed, company: @company, password: AuthHelper::TEST_PASSWORD)
+    @project = create(:project, company: @company, owner: @user)
+    Bullet.enable = false
+    sign_in_as(@user)
+  end
+
+  teardown { Bullet.enable = true }
+
+  test "show renders the board page with a populated board" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    create(:board_task, board: board, board_column: column)
+
+    get company_project_board_path(@project)
+    assert_response :success
+    assert_inertia_page "Projects/Board/BoardPage"
+  end
+
+  test "show ships one page of tasks per column, not the whole board" do
+    board = create(:board, project: @project)
+    backlog = create(:board_column, board: board, name: "Backlog")
+    done = create(:board_column, board: board, name: "Done")
+    overflow = BoardTask::PAGE_SIZE + 3
+    overflow.times { |i| create(:board_task, board: board, board_column: backlog, position: i) }
+    create(:board_task, board: board, board_column: done, position: 0)
+
+    get company_project_board_path(@project)
+    assert_response :success
+
+    props = inertia.props
+    assert_equal BoardTask::PAGE_SIZE, props[:tasks].count { |t| t[:boardColumnId] == backlog.id }
+    assert_equal 1, props[:tasks].count { |t| t[:boardColumnId] == done.id }
+    assert_equal BoardTask::PAGE_SIZE, props[:tasksPageSize]
+  end
+
+  test "show sends every column its total task count, excluding archived tasks" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    create_list(:board_task, 2, board: board, board_column: column)
+    create(:board_task, board: board, board_column: column, archived_at: Time.current)
+
+    get company_project_board_path(@project)
+    assert_response :success
+
+    column_props = inertia.props[:columns].find { |c| c[:id] == column.id }
+    assert_equal 2, column_props[:tasksCount]
+  end
+
+  test "show sends the board-wide tag and epic options the filters need" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    create(:board_task, board: board, board_column: column, tags: %w[api ui])
+    epic = create(:board_task, board: board, board_column: column, task_type: :epic, title: "Checkout revamp")
+
+    get company_project_board_path(@project)
+    assert_response :success
+
+    props = inertia.props
+    assert_equal %w[api ui], props[:boardTags]
+    assert_equal [ { "id" => epic.id, "number" => epic.number, "title" => "Checkout revamp" } ], props[:epics]
+  end
+
+  test "show renders the board page with a selected task" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    task = create(:board_task, board: board, board_column: column)
+
+    get company_project_board_path(@project, n: task.number)
+    assert_response :success
+    assert_inertia_page "Projects/Board/BoardPage"
+  end
+
+  test "a selected task's runs say what each one cost" do
+    board = create(:board, project: @project)
+    column = create(:board_column, board: board)
+    task = create(:board_task, board: board, board_column: column)
+    workflow = create(:workflow, scope: @project)
+    run = create(:workflow_run, workflow: workflow, project: @project, user: @user, board_task: task)
+    session = create(:terminal_session, :agent_session, user: @user, project: @project)
+    create(:step_run, workflow_run: run, step: create(:step, workflow: workflow), terminal_session: session)
+    UsageStatistic.create!(terminal_session: session, cost_cents: 250)
+
+    get company_project_board_path(@project, n: task.number)
+
+    assert_response :success
+    assert_equal [ 250 ], inertia.props[:taskWorkflowRuns].map { |r| r[:totalCostCents] }
+  end
+end

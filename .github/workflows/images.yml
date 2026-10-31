@@ -1,0 +1,418 @@
+name: Build Images
+
+# Publishes every runtime image to GHCR, which is free and unmetered for public
+# repositories. Deployments consume these published tags; nothing here touches a
+# cloud account, so forks and external contributors can read the whole pipeline.
+
+on:
+  push:
+    # Only a release tag publishes (docs/operations/releasing.md). develop is the
+    # integration branch and deliberately does not build images: every merge would
+    # otherwise republish images that nothing is ready to deploy.
+    tags:
+      - "v*"
+  # Weekly canary. It builds the vendors' newest CLI releases — passing the newest
+  # version instead of the pin wherever the registry names a source for it — so a
+  # vendor-side break is found here, on a Monday morning, rather than in a user's
+  # session, and a green run says a pin can be raised. It
+  # publishes only `canary-YYYYMMDD` — not `latest` and not a version a deployment
+  # could pick up — so promoting a canary stays a human act: raise the pin and release.
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Serialise per ref rather than cancelling: a cancelled publish can leave a tag
+# pointing at a half-pushed manifest, so let an in-flight build finish.
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # GHCR rejects uppercase path segments, so the owner is written out in
+  # lowercase rather than interpolated from github.repository.
+  REGISTRY_PREFIX: ghcr.io/aixlehq
+
+jobs:
+  # One tag for every image of a run, so the web image can name the agent images built
+  # beside it: X.Y.Z for a release, canary-YYYYMMDD for the canary, and the short
+  # commit for a hand-run build.
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      app_version: ${{ steps.version.outputs.app_version }}
+      stable: ${{ steps.version.outputs.stable }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          stable=false
+          app_version="$GITHUB_SHA"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if ! [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::${GITHUB_REF_NAME} is not a vX.Y.Z or vX.Y.Z-pre release tag."
+              exit 1
+            fi
+            # A tag off develop would still move `latest`, `X` and `X.Y`.
+            git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/develop; then
+              echo "::error::${GITHUB_REF_NAME} is not on develop; releases are tagged from develop."
+              exit 1
+            fi
+            app_version="$tag"
+            if [[ "$tag" != *-* ]]; then stable=true; fi
+          elif [ "$EVENT" = "schedule" ]; then
+            tag="canary-$(date -u +%Y%m%d)"
+          else
+            tag="${GITHUB_SHA::7}"
+          fi
+          { echo "tag=${tag}"; echo "app_version=${app_version}"; echo "stable=${stable}"; } >> "$GITHUB_OUTPUT"
+
+  web:
+    name: Build Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY_PREFIX }}/flow-web
+          # `latest` and the X.Y / X aliases move with stable releases only; a pre-release
+          # (vX.Y.Z-rc.N) publishes just its own tag.
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.version.outputs.tag }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.stable == 'true' }}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build And Push Web Image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          # The deployable image; the default (last) stage is the development one.
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # AGENT_IMAGE_TAG becomes the image's default, so web X.Y.Z launches the agent
+          # images X.Y.Z rather than whatever `latest` is when a session starts.
+          build-args: |
+            APP_VERSION=${{ needs.version.outputs.app_version }}
+            AGENT_IMAGE_TAG=${{ needs.version.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  otlp-ingest:
+    name: Build OTLP Ingest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY_PREFIX }}/flow-otlp-ingest
+          # `latest` and the X.Y / X aliases move with stable releases only; a pre-release
+          # (vX.Y.Z-rc.N) publishes just its own tag.
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.version.outputs.tag }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.stable == 'true' }}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build And Push OTLP Ingest Image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./docker/otlp-ingest
+          file: ./docker/otlp-ingest/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  agent-base:
+    name: Build Agent Base
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: version
+    # The agent images build FROM this digest, not a tag: the canary once referenced a
+    # commit tag it never published and every agent build failed with "not found".
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY_PREFIX }}/flow-agent-base-core
+          # `latest` and the X.Y / X aliases move with stable releases only; a pre-release
+          # (vX.Y.Z-rc.N) publishes just its own tag.
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.version.outputs.tag }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.stable == 'true' }}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build And Push Agent Base Core Image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./docker/base
+          file: ./docker/base/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # The build matrix is config/agent_runtimes.json, the same list the app launches
+  # runtimes from, so an image can be neither forgotten nor published for a runtime
+  # the app does not know.
+  runtimes:
+    name: Read Runtime Registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.registry.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: config/agent_runtimes.json
+          sparse-checkout-cone-mode: false
+
+      - name: Build Matrix
+        id: registry
+        run: |
+          matrix="$(jq -c '{include: [.runtimes[] | {
+            label, image, dockerfile,
+            id,
+            cli_version: (.cli_version // ""),
+            has_latest: (.cli_latest != null)
+          }]}' config/agent_runtimes.json)"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  agent-images:
+    name: Build ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [version, agent-base, runtimes]
+    strategy:
+      # Each image stands alone: one vendor's broken release must not cancel the others'
+      # builds, or the canary reports every runtime as failed.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.runtimes.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY_PREFIX }}/flow-${{ matrix.image }}
+          # `latest` and the X.Y / X aliases move with stable releases only; a pre-release
+          # (vX.Y.Z-rc.N) publishes just its own tag.
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.version.outputs.tag }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.stable == 'true' }}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      # A release build installs the registry's pin; the canary swaps in the vendor's
+      # newest release where the registry names a source for it.
+      - name: Resolve CLI Version
+        id: cli
+        env:
+          RUNTIME: ${{ matrix.id }}
+          PINNED: ${{ matrix.cli_version }}
+          HAS_LATEST: ${{ matrix.has_latest }}
+          CANARY: ${{ github.event_name == 'schedule' }}
+        run: |
+          set -euo pipefail
+          version="$PINNED"
+          if [ "$CANARY" = "true" ] && [ "$HAS_LATEST" = "true" ]; then
+            version="$(bin/agent-cli-latest "$RUNTIME")"
+          fi
+          if [ -n "$version" ]; then echo "build_arg=CLI_VERSION=${version}" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Build And Push Image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./docker
+          file: ./${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY_PREFIX }}/flow-agent-base-core@${{ needs.agent-base.outputs.digest }}
+            ${{ steps.cli.outputs.build_arg }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # What this build actually shipped. The canary installs the newest releases, so this
+      # line — not the registry — says which one a published canary tag contains, and
+      # comparing it with the pin is how a vendor bump gets noticed.
+      #
+      # Only on the canary: reading the file means pulling the image back (buildx pushes
+      # straight to the registry without keeping it locally), which is a minute per image
+      # and not worth paying on every release build.
+      - name: Report Shipped CLI Version
+        if: github.event_name == 'schedule'
+        run: |
+          image="${{ env.REGISTRY_PREFIX }}/flow-${{ matrix.image }}:${{ needs.version.outputs.tag }}"
+          version="$(docker run --rm --entrypoint cat "$image" /etc/aixle-cli-version)"
+          echo "**${{ matrix.label }}** ships CLI version \`${version}\`" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p shipped && printf '%s\n' "$version" > "shipped/${{ matrix.image }}"
+
+      - name: Hand The Version To The Report
+        if: github.event_name == 'schedule'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shipped-${{ matrix.image }}
+          path: shipped/${{ matrix.image }}
+          retention-days: 7
+
+  # What the canary found, as one issue kept up to date: every pin against the vendor's
+  # newest release, what the canary built and whether it built, and the vendor's release
+  # notes in between (bin/agent-cli-report; run it locally for the same view). Closed
+  # once every pin is current and every newest-release lookup answered.
+  cli-report:
+    name: Report CLI Updates
+    if: ${{ always() && github.event_name == 'schedule' }}
+    needs: [version, agent-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            config/agent_runtimes.json
+            bin/agent-cli-report
+            bin/agent-cli-latest
+          sparse-checkout-cone-mode: false
+
+      - name: Collect Shipped Versions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: shipped-*
+          path: shipped
+          merge-multiple: true
+
+      - name: Write Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          SHIPPED_DIR: shipped
+          TITLE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          bin/agent-cli-report > "$RUNNER_TEMP/report.md"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: agent-cli-updates
+        run: |
+          set -euo pipefail
+          gh label create "$LABEL" --color 0e8a16 --description "Weekly canary: agent CLI pins behind the vendors" --force >/dev/null
+          number="$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')"
+          outdated="$(sed -n 's/^<!-- outdated: \([0-9]*\) -->$/\1/p' "$RUNNER_TEMP/report.md")"
+          failed="$(sed -n 's/^<!-- lookup-failed: \([0-9]*\) -->$/\1/p' "$RUNNER_TEMP/report.md")"
+          if [ "${outdated:-0}" -eq 0 ] && [ "${failed:-0}" -eq 0 ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "Every pinned CLI is on the vendor's newest release."
+            fi
+          elif [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$RUNNER_TEMP/report.md"
+          else
+            gh issue create --title "Agent CLI updates available" --label "$LABEL" --body-file "$RUNNER_TEMP/report.md"
+          fi

@@ -1,0 +1,9 @@
+{
+  "base": "AixleHQ/flow",
+  "repository": "https://github.com/AixleHQ/flow.git",
+  "branch": "develop",
+  "commit": "e6ec5a286120aed3a036d85871e796b2f6c97d70",
+  "license": "Apache-2.0",
+  "imported_at": "2026-10-31",
+  "decision_ref": "docs/ADR-001-BASE-DA-PLATAFORMA.md"
+}

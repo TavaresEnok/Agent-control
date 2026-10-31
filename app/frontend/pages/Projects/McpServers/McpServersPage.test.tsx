@@ -1,0 +1,113 @@
+import '@testing-library/jest-dom/vitest';
+import { describe, expect, it } from 'vitest';
+
+import type { MCPServer } from '@/types/generated';
+import { renderAuthedPage, screen, userEvent, within } from 'test/renderPage';
+
+import McpServersPage from './McpServersPage';
+
+const server = (overrides: Partial<MCPServer> = {}): MCPServer => ({
+  id: 1,
+  name: 'playwright',
+  url: 'https://mcp.example.com',
+  transport: 'http',
+  headers: {},
+  description: null,
+  kind: 'custom',
+  scopeType: 'Project',
+  scopeId: 42,
+  scopeIndicator: 'project',
+  enabled: true,
+  internal: false,
+  command: null,
+  env: {},
+  connectorName: null,
+  connectorVersion: null,
+  connectorStatus: null,
+  connectorVersionPinned: true,
+  connectorUpdateVersion: null,
+  toolBaseline: false,
+  toolDrift: null,
+  authType: 'none',
+  credentialScope: 'shared',
+  oauthClientId: null,
+  oauthClientSecretPresent: false,
+  oauthStatus: null,
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+  currentVersionNumber: 1,
+  archivedAt: null,
+  ...overrides,
+});
+
+const project = { id: 7, name: 'Polaris' };
+
+describe('Projects/McpServers/McpServersPage', () => {
+  it('renders the heading and subtitle from seeded props', () => {
+    renderAuthedPage(<McpServersPage />, {
+      props: { project, mcpServers: [], configItemNames: [] },
+    });
+
+    expect(screen.getByText('Connectors')).toBeInTheDocument();
+    expect(
+      screen.getByText('MCP servers this project can use — installed from the public catalog or added by hand.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the unfiltered empty state with its CTA when there are no servers', () => {
+    // The kind filter defaults to "all", so an empty list is genuinely empty rather
+    // than filtered, and the inline CTA is offered.
+    renderAuthedPage(<McpServersPage />, {
+      props: { project, mcpServers: [], configItemNames: [] },
+    });
+
+    expect(screen.getByText('No MCP servers configured')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add one manually' })).toBeInTheDocument();
+  });
+
+  it('lists custom servers and filters them by the search query', async () => {
+    renderAuthedPage(<McpServersPage />, {
+      props: {
+        project,
+        mcpServers: [server({ id: 1, name: 'playwright' }), server({ id: 2, name: 'context7' })],
+        configItemNames: [],
+      },
+    });
+
+    expect(screen.getByText('playwright')).toBeInTheDocument();
+    expect(screen.getByText('context7')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText('Search by name...'), 'context');
+
+    expect(screen.queryByText('playwright')).not.toBeInTheDocument();
+    expect(screen.getByText('context7')).toBeInTheDocument();
+  });
+
+  it('opens the add-server form modal when the primary action is clicked', async () => {
+    renderAuthedPage(<McpServersPage />, {
+      props: { project, mcpServers: [], configItemNames: [] },
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add manually' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Add MCP Server')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeInTheDocument();
+  });
+
+  it('exposes edit controls for an editable project server', () => {
+    renderAuthedPage(<McpServersPage />, {
+      props: {
+        project,
+        mcpServers: [server({ id: 9, scopeIndicator: 'project', kind: 'custom' })],
+        configItemNames: [],
+      },
+    });
+
+    expect(screen.getByText('playwright')).toBeInTheDocument();
+    // Edit/Delete action icons are rendered (they have accessible tooltips, not text labels),
+    // so assert the row has interactive controls rather than a read-only label.
+    expect(screen.queryByText('Read-only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Company')).not.toBeInTheDocument();
+  });
+});

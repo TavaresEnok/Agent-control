@@ -1,0 +1,90 @@
+# Gemini CLI operations
+
+## Decision
+
+Aixle continues to use Gemini CLI for its `gemini_cli` runtime. The integration
+authenticates with a company-scoped Google AI Studio API key through
+`GEMINI_API_KEY` and selects `gemini-api-key` in `~/.gemini/settings.json`.
+Google's June 2026 individual-account transition does not remove this supported
+API-key path.
+
+Antigravity CLI is therefore not a drop-in replacement for this runtime. Its
+account authentication, executable, configuration directory, plugin model, and
+telemetry contract differ. Supporting it should be a separate runtime and adapter
+rather than changing the meaning of `gemini_cli` or silently migrating stored
+credentials.
+
+## Runtime contract
+
+- Image package: `@google/gemini-cli`, pinned by `cli_version` in
+  `config/agent_runtimes.json` (0.60.0). **Do not raise it past 0.60.x yet:** from 0.61.0
+  `--yolo` no longer approves edits to build files (`package.json`, lockfiles,
+  `Dockerfile`, `Makefile`, …) — the CLI opens a "Build File Modification" dialog that no
+  one answers in a headless session (upstream #29250). From 0.63.0 (#29506) `--yolo` also
+  asks "Untrusted Command Flags" before a shell command whose arguments appeared in
+  earlier tool output, and every shell output counts as untrusted, local commands
+  included: a `find` in the workspace followed by `cat` of a file it listed prompts.
+  0.64.0 narrowed it (#29672) but kept the prompt, so nearly every session would stop
+  there. Neither has a setting, flag or policy rule that turns it off: both override an
+  allow decision, an admin policy's included (checked against 0.65.0 on 2026-10-26, live
+  against a scripted model API). Upstream #29833, on `main` but not yet released, limits
+  the second check to external output; the build-file dialog stays even then. The weekly
+  canary keeps reporting the newer release; that is expected until upstream offers a
+  switch.
+- Executable: `gemini`.
+- Authentication: `GEMINI_API_KEY`; personal OAuth is not captured or injected.
+- Configuration: `/home/gemini/.gemini/settings.json`.
+- Context: `/home/gemini/.gemini/GEMINI.md`.
+- Skills: `/home/gemini/.gemini/skills`.
+- Folder trust: `/home/gemini/.gemini/trustedFolders.json`.
+- MCP: `mcpServers` merged into the settings file; stdio and HTTP transports are supported.
+- Invocation: `gemini --yolo`, with an optional `--model`. Automatic sessions pass
+  the initial prompt through `AGENT_PROMPT`, using the same CLI invocation without
+  a launcher-side lifecycle callback.
+- Hooks and extensions: provided by the upstream CLI; Aixle does not rewrite their config.
+- Telemetry: local OTLP metrics/logs are correlated with `terminal_session_token`.
+
+Gemini CLI 0.57.0 rejects `general.defaultApprovalMode: yolo`; the persisted
+setting accepts only `default`, `auto_edit`, or `plan`. Aixle therefore omits it
+and supplies YOLO approval only through the explicit `--yolo` invocation.
+
+The authentication container preselects `gemini-api-key`. Google-login OAuth
+credentials are intentionally unsupported by this integration. Reconnect any
+credential created by an older image so the stored value is an AI Studio API key
+rather than an OAuth access token.
+
+## Verification
+
+After building the image, run:
+
+```sh
+docker run --rm --entrypoint gemini aixle/gemini-cli:latest --version
+docker run --rm --entrypoint gemini aixle/gemini-cli:latest --help
+```
+
+The version must match the `gemini_cli` pin in `config/agent_runtimes.json`; help must
+list `--model`, `--yolo`, `mcp`, `skills`, and `hooks`. For an authenticated end-to-end
+smoke test, inject a test API key and run headlessly without printing the key:
+
+```sh
+docker run --rm -e GEMINI_API_KEY --entrypoint gemini \
+  aixle/gemini-cli:latest --yolo --output-format json -p \
+  'Reply with exactly AIXLE_GEMINI_OK'
+```
+
+The command must exit zero and return `AIXLE_GEMINI_OK`. A 401/403 indicates an
+invalid or unsupported key; an individual-account migration message indicates an
+OAuth credential was used instead of the required API-key mode.
+
+## Upgrade and rollback
+
+To upgrade, raise `cli_version` for `gemini_cli` in `config/agent_runtimes.json`,
+build the image (`make build-agents`), run the adapter tests and
+the image/E2E checks above, then publish the immutable image before updating the
+deployment. Review upstream changes to settings, authentication, MCP, skills,
+hooks, invocation flags, Node requirements, and OTLP event names on every upgrade.
+
+To roll back, deploy the previous immutable Gemini image digest. If a source
+rollback is needed, revert the version pin and settings migration together, rebuild,
+and repeat the smoke test. Do not delete or transform stored company API keys, so
+rollback requires no credential migration.

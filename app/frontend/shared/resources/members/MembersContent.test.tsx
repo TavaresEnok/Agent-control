@@ -1,0 +1,354 @@
+import '@testing-library/jest-dom/vitest';
+import { router } from '@inertiajs/react';
+import { describe, expect, it } from 'vitest';
+
+import type { Member } from '@/types/generated';
+import { buildSharedPermissions, buildSharedUser } from 'test/factories/sharedProps';
+import { buildSharedProps, renderAuthedPage, renderPage, screen, userEvent, waitFor, within } from 'test/renderPage';
+
+import { MembersContent } from './MembersContent';
+
+const makeUser = (over: Partial<Member> = {}): Member => ({
+  id: 1,
+  email: 'ada@example.com',
+  name: 'Ada Lovelace',
+  role: 'employee',
+  state: 'active',
+  position: null,
+  invitedAt: null,
+  acceptedAt: null,
+  invitationExpired: false,
+  createdAt: '2024-01-01T00:00:00Z',
+  invitedBy: null,
+  ...over,
+});
+
+const baseProps = (users: Member[]) => ({
+  users,
+  basePath: '/company/members',
+  title: 'Members',
+});
+
+describe('MembersContent', () => {
+  it('renders the title and a row for each seeded user', () => {
+    renderPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 1, name: 'Ada Lovelace', email: 'ada@example.com' }),
+          makeUser({ id: 2, name: 'Grace Hopper', email: 'grace@example.com', role: 'admin' }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Members' })).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('grace@example.com')).toBeInTheDocument();
+    expect(screen.getByText('2 members')).toBeInTheDocument();
+  });
+
+  it('shows the empty state when there are no members', () => {
+    renderPage(<MembersContent {...baseProps([])} />);
+
+    expect(screen.getByText('No members yet')).toBeInTheDocument();
+    expect(screen.getByText('0 members')).toBeInTheDocument();
+  });
+
+  it('search narrows the list to matching members', async () => {
+    renderPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 1, name: 'Ada Lovelace', email: 'ada@example.com' }),
+          makeUser({ id: 2, name: 'Grace Hopper', email: 'grace@example.com' }),
+        ])}
+      />,
+    );
+
+    await userEvent.type(screen.getByPlaceholderText(/search by name or email/i), 'grace');
+
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument();
+    expect(screen.getByText('1 member')).toBeInTheDocument();
+  });
+
+  it('defaults the status filter to Active & Pending, hiding suspended members until "All Statuses" is picked', async () => {
+    renderPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 1, name: 'Ada Lovelace', state: 'active' }),
+          makeUser({ id: 2, name: 'Grace Hopper', state: 'suspended' }),
+          makeUser({ id: 3, name: 'Ivy Invitee', state: 'invited' }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Ivy Invitee')).toBeInTheDocument();
+    expect(screen.queryByText('Grace Hopper')).not.toBeInTheDocument();
+    expect(screen.getByText('2 members')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'All Statuses' }));
+
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
+    expect(screen.getByText('3 members')).toBeInTheDocument();
+  });
+
+  it('the Pending filter lists only invitations', async () => {
+    renderPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 1, name: 'Ada Lovelace', state: 'active' }),
+          makeUser({ id: 3, name: 'Ivy Invitee', state: 'invited' }),
+        ])}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Pending' }));
+
+    expect(screen.getByText('Ivy Invitee')).toBeInTheDocument();
+    expect(screen.queryByText('Ada Lovelace')).not.toBeInTheDocument();
+  });
+
+  it('the Invite Member button opens the invite drawer', async () => {
+    renderAuthedPage(<MembersContent {...baseProps([makeUser()])} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /invite member/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Invite Member')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /send invite/i })).toBeInTheDocument();
+  });
+
+  it('confirming Remove in the row menu fires router.delete', async () => {
+    // Two active admins so neither is the "last admin" (which would disable Remove).
+    renderAuthedPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 7, name: 'Ada Lovelace', role: 'admin', state: 'active' }),
+          makeUser({ id: 8, name: 'Grace Hopper', role: 'admin', state: 'active' }),
+        ])}
+      />,
+    );
+
+    // Open the action menu of Ada's row specifically (each row has one ActionIcon button).
+    const adaRow = screen.getByText('Ada Lovelace').closest('tr') as HTMLElement;
+    await userEvent.click(within(adaRow).getByRole('button'));
+
+    // The menu actions render in a dropdown; click the Remove item once visible.
+    const remove = await screen.findByRole('menuitem', { name: /remove/i });
+    await userEvent.click(remove);
+
+    // Removal is guarded by a styled confirm modal, not window.confirm.
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() =>
+      expect(router.delete).toHaveBeenCalledWith(
+        '/company/members/7',
+        expect.objectContaining({ preserveScroll: true }),
+      ),
+    );
+  });
+
+  it('removing a member who owns projects asks who takes them over and sends the choices', async () => {
+    renderAuthedPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 7, name: 'Ada Lovelace', role: 'employee', state: 'active' }),
+          makeUser({ id: 8, name: 'Grace Hopper', role: 'admin', state: 'active' }),
+        ])}
+        projectHandover={{
+          projects: [{ id: 10, name: 'Gateway', ownerId: 7 }],
+          candidates: [{ id: 8, name: 'Grace Hopper', email: 'grace@example.com', companyAdmin: true }],
+          heirIds: [8],
+        }}
+      />,
+    );
+
+    const adaRow = screen.getByText('Ada Lovelace').closest('tr') as HTMLElement;
+    await userEvent.click(within(adaRow).getByRole('button'));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /remove/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Gateway')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Transfer and remove' }));
+
+    expect(router.delete).toHaveBeenCalledWith(
+      '/company/members/7',
+      expect.objectContaining({ data: { handover: [{ projectId: 10, userId: 8 }] } }),
+    );
+  });
+
+  it('the "Make Admin" menu action fires router.patch with the new role', async () => {
+    renderAuthedPage(<MembersContent {...baseProps([makeUser({ id: 9, name: 'Ada Lovelace', role: 'employee' })])} />);
+
+    // Open the row's action menu (the dots icon button).
+    const row = screen.getByText('Ada Lovelace').closest('tr') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button'));
+
+    const makeAdmin = await screen.findByRole('menuitem', { name: /make admin/i });
+    await userEvent.click(makeAdmin);
+
+    await waitFor(() =>
+      expect(router.patch).toHaveBeenCalledWith(
+        '/company/members/9',
+        { user: { role: 'admin' } },
+        expect.objectContaining({ preserveScroll: true }),
+      ),
+    );
+  });
+
+  it('promoting a viewer asks for confirmation, then patches the role to employee', async () => {
+    renderAuthedPage(<MembersContent {...baseProps([makeUser({ id: 11, name: 'Vic Viewer', role: 'viewer' })])} />);
+
+    const row = screen.getByText('Vic Viewer').closest('tr') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button'));
+
+    expect(screen.queryByRole('menuitem', { name: /make admin/i })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('menuitem', { name: /make employee/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/connect at least one CLI/i)).toBeInTheDocument();
+    expect(router.patch).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Make Employee' }));
+
+    await waitFor(() =>
+      expect(router.patch).toHaveBeenCalledWith(
+        '/company/members/11',
+        { user: { role: 'employee' } },
+        expect.objectContaining({ preserveScroll: true }),
+      ),
+    );
+  });
+
+  it('offers no Make Employee on a suspended viewer', async () => {
+    renderAuthedPage(
+      <MembersContent
+        {...baseProps([makeUser({ id: 12, name: 'Sid Suspended', role: 'viewer', state: 'suspended' })])}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'All Statuses' }));
+
+    const row = screen.getByText('Sid Suspended').closest('tr') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button'));
+
+    expect(await screen.findByRole('menuitem', { name: /activate/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /make employee/i })).not.toBeInTheDocument();
+  });
+
+  it('a pending invite shows a Pending badge and resends from the row', async () => {
+    renderAuthedPage(<MembersContent {...baseProps([makeUser({ id: 3, name: 'Ivy Invitee', state: 'invited' })])} />);
+
+    const row = screen.getByText('Ivy Invitee').closest('tr') as HTMLElement;
+    expect(within(row).getByText('Pending')).toBeInTheDocument();
+
+    await userEvent.click(within(row).getByRole('button', { name: 'Resend invitation to Ivy Invitee' }));
+
+    expect(router.post).toHaveBeenCalledWith(
+      '/company/members/3/resend',
+      {},
+      expect.objectContaining({ preserveScroll: true }),
+    );
+  });
+
+  it('an invite past its link lifetime reads Expired and can still be resent', () => {
+    renderAuthedPage(
+      <MembersContent
+        {...baseProps([makeUser({ id: 4, name: 'Old Invitee', state: 'invited', invitationExpired: true })])}
+      />,
+    );
+
+    const row = screen.getByText('Old Invitee').closest('tr') as HTMLElement;
+    expect(within(row).getByText('Expired')).toBeInTheDocument();
+    expect(within(row).queryByText('Pending')).not.toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Resend invitation to Old Invitee' })).toBeInTheDocument();
+  });
+
+  it('offers no Resend on an active member', () => {
+    renderAuthedPage(<MembersContent {...baseProps([makeUser({ id: 2, name: 'Grace Hopper' })])} />);
+
+    expect(screen.queryByRole('button', { name: /resend invitation/i })).not.toBeInTheDocument();
+  });
+
+  it('renders a non-empty badge for a viewer member', () => {
+    renderPage(<MembersContent {...baseProps([makeUser({ id: 5, name: 'Vic Viewer', role: 'viewer' })])} />);
+
+    const row = screen.getByText('Vic Viewer').closest('tr') as HTMLElement;
+    expect(within(row).getByText('Viewer')).toBeInTheDocument();
+  });
+
+  describe('when the current user cannot manage members', () => {
+    const readOnlyProps = buildSharedProps({
+      currentUser: buildSharedUser({ id: 1 }),
+      permissions: buildSharedPermissions({ isAdmin: false, canManageMembers: false, canManageProjects: false }),
+    });
+
+    it('hides the Invite Member button', () => {
+      renderPage(<MembersContent {...baseProps([makeUser({ id: 2, name: 'Grace Hopper' })])} />, {
+        props: readOnlyProps,
+      });
+
+      // The page itself stays readable — only the control that always fails is gone.
+      expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /invite member/i })).not.toBeInTheDocument();
+    });
+
+    it('offers no per-row action menu and drops the Actions column', () => {
+      renderPage(
+        <MembersContent
+          {...baseProps([
+            makeUser({ id: 2, name: 'Grace Hopper', role: 'admin' }),
+            makeUser({ id: 3, name: 'Ivy Invitee', role: 'employee' }),
+          ])}
+        />,
+        { props: readOnlyProps },
+      );
+
+      const row = screen.getByText('Grace Hopper').closest('tr') as HTMLElement;
+      expect(within(row).queryByRole('button', { name: /actions for/i })).not.toBeInTheDocument();
+      // Case-insensitive: the header label is uppercased by CSS, not in the DOM text.
+      expect(screen.queryByRole('columnheader', { name: /actions/i })).not.toBeInTheDocument();
+    });
+
+    it('treats absent shared permissions the same as no permission', () => {
+      renderPage(<MembersContent {...baseProps([makeUser({ id: 2, name: 'Grace Hopper' })])} />, {
+        props: buildSharedProps({ currentUser: buildSharedUser({ id: 1 }), permissions: undefined }),
+      });
+
+      expect(screen.queryByRole('button', { name: /invite member/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /actions for/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the Invite Member button and the row menu when the user can manage members', () => {
+    renderAuthedPage(<MembersContent {...baseProps([makeUser({ id: 2, name: 'Grace Hopper' })])} />);
+
+    expect(screen.getByRole('button', { name: /invite member/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /actions/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for Grace Hopper' })).toBeInTheDocument();
+  });
+
+  it('shows a "You" pill and no action menu on the current user\'s own row', () => {
+    renderPage(
+      <MembersContent
+        {...baseProps([
+          makeUser({ id: 1, name: 'Ada Lovelace' }),
+          makeUser({ id: 2, name: 'Grace Hopper', role: 'admin' }),
+        ])}
+      />,
+      { props: buildSharedProps({ currentUser: buildSharedUser({ id: 1 }) }) },
+    );
+
+    const selfRow = screen.getByText('Ada Lovelace').closest('tr') as HTMLElement;
+    expect(within(selfRow).getByText('You')).toBeInTheDocument();
+    expect(within(selfRow).queryByRole('button')).not.toBeInTheDocument();
+
+    const otherRow = screen.getByText('Grace Hopper').closest('tr') as HTMLElement;
+    expect(within(otherRow).queryByText('You')).not.toBeInTheDocument();
+    expect(within(otherRow).getByRole('button')).toBeInTheDocument();
+  });
+});

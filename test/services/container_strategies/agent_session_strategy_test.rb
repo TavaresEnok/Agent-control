@@ -1,0 +1,1170 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+module ContainerStrategies
+  class AgentSessionStrategyTest < ActiveSupport::TestCase
+    setup do
+      @company = create(:company)
+      @user = create(:user, :admin, company: @company)
+      @session = create(:terminal_session, user: @user, agent_type: "claude_code")
+      @credential = create(:agent_credential, user: @user, agent_type: "claude_code")
+
+      Rails.logger.stubs(:info)
+      Rails.logger.stubs(:warn)
+      Rails.logger.stubs(:error)
+    end
+
+    # == Model resolution is per company ==
+    #
+    # The default model is pinned on a credential, and a credential belongs to one
+    # company. A pin made against another company's Bedrock account does not exist here,
+    # so launching on it would leave every session on a model that never answers.
+
+    test "resolve_model prefers the pin on this session's company credential" do
+      @credential.update!(metadata: { "default_model" => "mine" })
+      other_credential_with_pin("other-tenant-model")
+
+      assert_equal "mine", build_strategy.send(:resolve_model, @session)
+    end
+
+    test "resolve_model ignores a pin that belongs to another company" do
+      other_credential_with_pin("other-tenant-model")
+
+      assert_nil build_strategy.send(:resolve_model, @session)
+    end
+
+    # A pin the vendor has since retired answers 404, so launching on it would fail
+    # every session until the user noticed and re-picked.
+    test "resolve_model launches a retired pin on its replacement" do
+      @credential.update!(metadata: { "default_model" => "claude-3-7-sonnet-20250219" })
+
+      assert_equal "claude-sonnet-5", build_strategy.send(:resolve_model, @session)
+    end
+
+    test "resolve_model passes an Antigravity session selection through to launch" do
+      @session.update!(agent_type: "antigravity_cli", requested_model: "claude-sonnet-4-6")
+
+      assert_equal "claude-sonnet-4-6", build_strategy(agent_type: "antigravity_cli").send(:resolve_model, @session)
+    end
+
+    # == Inheritance Tests ==
+
+    test "inherits from AgentBaseStrategy" do
+      assert_operator AgentSessionStrategy, :<, AgentBaseStrategy
+    end
+
+    # == Environment Variables Tests ==
+
+    test "builds env vars with agent_session type" do
+      strategy = build_strategy
+
+      env_vars = strategy.build_env_vars
+
+      assert_includes env_vars, "SESSION_TYPE=agent_session"
+      refute env_vars.any? { |v| v == "SESSION_TYPE=auth_setup" }
+    end
+
+    test "commits as the deployment's bot, on its domain without the port" do
+      Settings.stubs(:domain).returns("flow.example.com:8443")
+
+      env_vars = build_strategy.build_env_vars
+
+      assert_includes env_vars, "GIT_AUTHOR_NAME=Aixle Flow"
+      assert_includes env_vars, "GIT_AUTHOR_EMAIL=noreply@flow.example.com"
+      assert_includes env_vars, "GIT_COMMITTER_NAME=Aixle Flow"
+      assert_includes env_vars, "GIT_COMMITTER_EMAIL=noreply@flow.example.com"
+    end
+
+    test "does not include MCP env vars (MCP configured via config files)" do
+      strategy = build_strategy
+
+      env_vars = strategy.build_env_vars
+
+      refute env_vars.any? { |v| v.start_with?("MCP_SERVER_URL=") }
+      refute env_vars.any? { |v| v.start_with?("MCP_SESSION_KEY=") }
+    end
+
+    # Without these the container has no way to report a token the CLI rotated, and the
+    # rotation is lost whenever the pod dies before cleanup.
+    test "builds env vars telling the watcher where to report a rotated token" do
+      strategy = build_strategy
+
+      env_vars = strategy.build_env_vars
+
+      assert_includes env_vars, "CREDENTIAL_SYNC_URL=#{Settings.agents.credential_sync_url}"
+      assert_includes env_vars, "CREDENTIAL_SYNC_KEY=#{Agents::SessionKey.generate(@session)}"
+      paths = env_vars.find { |v| v.start_with?("CREDENTIAL_SYNC_PATHS=") }
+      assert_includes paths.to_s, "/home/claude/.claude/.credentials.json"
+    end
+
+    # The proxy hands the CLI's OAuth refresh to the platform (Agents::RefreshBroker), with
+    # the same key the watcher uses.
+    test "builds env vars telling the proxy where to hand the CLI's refreshes" do
+      env_vars = build_strategy.build_env_vars
+
+      assert_includes env_vars, "CREDENTIAL_REFRESH_URL=#{Settings.agents.credential_refresh_url}"
+      assert_includes env_vars, "CREDENTIAL_REFRESH_TARGETS=platform.claude.com/v1/oauth/token,api.anthropic.com/v1/oauth/token"
+    end
+
+    # The ingest refuses unkeyed batches only for sessions whose launch handed a key
+    # out; the marker is how it knows, and the key must be what the ingest recomputes.
+    test "hands the container its usage key and marks the session as keyed" do
+      env_vars = build_strategy.build_env_vars
+
+      attrs = env_vars.find { |v| v.start_with?("OTEL_RESOURCE_ATTRIBUTES=") }
+      key = UsageStatistics::SessionKey.generate(@session.route_token)
+      assert_equal "OTEL_RESOURCE_ATTRIBUTES=terminal_session_token=#{@session.route_token},terminal_session_key=#{key}", attrs
+      assert UsageStatistics::SessionKey.required_for?(@session.reload)
+    end
+
+    # On the Docker runtime an agent container must be bounded and kept off the
+    # platform's own network, where trust-auth Postgres and unauthenticated Redis live.
+    test "an agent container is bounded and joins the agent network only" do
+      host_config = build_strategy.build_host_config
+
+      assert_equal Settings.docker.agent_network, host_config["NetworkMode"]
+      assert_equal Settings.container_execution.limits.agent_session.memory_mb * 1024 * 1024, host_config["Memory"]
+      assert_equal Settings.container_execution.limits.agent_session.pids_limit, host_config["PidsLimit"]
+      assert_operator host_config["CpuQuota"], :>, 0
+    end
+
+    test "only the Claude Code container keeps setuid escalation, for its sudo" do
+      claude = build_strategy(agent_type: "claude_code")
+      assert_nil claude.build_host_config["SecurityOpt"]
+      assert_equal [ "NET_RAW" ], claude.build_host_config["CapDrop"]
+      assert claude.before_create_container[:privilege_escalation]
+
+      codex = build_strategy(agent_type: "codex")
+      assert_equal [ "no-new-privileges" ], codex.build_host_config["SecurityOpt"]
+      assert_equal [ "NET_RAW" ], codex.build_host_config["CapDrop"]
+    end
+
+    test "TTYD_CMD is bash for agent sessions" do
+      strategy = build_strategy(agent_type: "claude_code")
+
+      env_vars = strategy.build_env_vars
+      ttyd_cmd = env_vars.find { |v| v.start_with?("TTYD_CMD=") }
+
+      assert_equal "TTYD_CMD=bash", ttyd_cmd
+    end
+
+    # == Labels Tests ==
+
+    test "builds labels with agent_session type" do
+      strategy = build_strategy
+
+      labels = strategy.build_labels
+
+      assert_equal "agent_session", labels["aixle.session_type"]
+    end
+
+    # == before_exec Tests ==
+
+    test "before_exec loads credentials into container via assembler" do
+      strategy = build_strategy
+
+      container_mock = mock("container")
+      ContainerRuntime.stubs(:build).returns(mock("rt").tap { |m| m.stubs(:resolve_container).returns(container_mock) })
+      strategy.stubs(:resolve_container).returns(container_mock)
+
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.expects(:container_identifier).with(container_mock).returns("abc123")
+
+      SessionContextService.expects(:assemble_session_context).with(
+        container_mock, @session, credential: @credential
+      )
+
+      strategy.before_exec(container_id: "container_ref")
+    end
+
+    # A session runs about as long as the token lives, so one handed a token with
+    # minutes left dies halfway through on an opaque 401. The sweep only tops up in
+    # the last stretch of a token's life — the launch has to check for itself.
+    #
+    # The refresh rotates the grant and the vendor revokes the access token it replaced,
+    # so the container must get the new pair: the one from before the refresh is dead on
+    # arrival ("Login expired · Please run /login").
+    test "before_exec tops up a token that would expire mid-session and hands the container the new one" do
+      runtime = stub_container_runtime
+      Thread.current[:session_context_runtime] = nil
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "old-tok", "refreshToken" => "old-ref",
+                             "expiresAt" => (20.minutes.from_now.to_f * 1000).to_i }
+      })
+      stub_token_refresh(access_token: "fresh-tok", refresh_token: "fresh-ref")
+
+      run_before_exec(build_strategy)
+
+      assert_equal "fresh-tok", @credential.reload.config_data.dig("claudeAiOauth", "accessToken")
+      written = JSON.parse(runtime.fs.fetch("/home/claude/.claude/.credentials.json"))
+      assert_equal %w[fresh-tok fresh-ref], written["claudeAiOauth"].values_at("accessToken", "refreshToken")
+    ensure
+      cleanup_runtime_overrides
+    end
+
+    # A container handed the replaced design token gets "DesignSync needs design-system
+    # authorization", and the user signs in to Design again for a login that was fine.
+    test "before_exec hands the container the topped-up design token, not the one it replaced" do
+      runtime = stub_container_runtime
+      Thread.current[:session_context_runtime] = nil
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "base-tok", "refreshToken" => "base-ref",
+                             "expiresAt" => (3.hours.from_now.to_f * 1000).to_i },
+        "designOauth" => { "accessToken" => "old-design-tok", "refreshToken" => "old-design-ref",
+                           "expiresAt" => (15.minutes.from_now.to_f * 1000).to_i, "clientId" => "design-client" }
+      })
+      stub_token_refresh(access_token: "fresh-design-tok", refresh_token: "fresh-design-ref")
+
+      run_before_exec(build_strategy)
+
+      written = JSON.parse(runtime.fs.fetch("/home/claude/.claude/.credentials.json"))
+      assert_equal %w[fresh-design-tok fresh-design-ref], written["designOauth"].values_at("accessToken", "refreshToken")
+      assert_equal "base-tok", written.dig("claudeAiOauth", "accessToken")
+    ensure
+      cleanup_runtime_overrides
+    end
+
+    # Nothing inside the container can recover from a rejected base login, so the
+    # launch stops with the message that names the fix instead of starting a session
+    # doomed to 401 on its first call.
+    test "before_exec refuses to launch when the base login is permanently rejected" do
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "old-tok", "refreshToken" => "dead-ref",
+                             "expiresAt" => (20.minutes.from_now.to_f * 1000).to_i }
+      })
+      stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL)
+        .to_return(status: 400,
+                   body: { error: "invalid_grant", error_description: "Refresh token expired" }.to_json,
+                   headers: { "Content-Type" => "application/json" })
+      SessionContextService.expects(:assemble_session_context).never
+
+      error = assert_raises(AgentCredential::PreflightError) { run_before_exec(build_strategy) }
+
+      assert_includes error.message, "expired"
+      assert_equal "error", @credential.reload.status
+    end
+
+    # A login this server cannot decrypt must not start a session with no
+    # credentials in it; signing in again stores a readable one.
+    test "before_exec refuses to launch on a login it cannot decrypt, and says to sign in again" do
+      @credential.update_column(:encrypted_config_data, "not-a-ciphertext")
+      SessionContextService.expects(:assemble_session_context).never
+
+      error = assert_raises(AgentCredential::PreflightError) { run_before_exec(build_strategy(credential: @credential.reload)) }
+
+      assert_includes error.message, "can't be read"
+    end
+
+    # The token in hand is still valid for a while — a token endpoint having a bad
+    # minute is no reason to refuse the session.
+    test "before_exec starts the session anyway when the top-up fails transiently" do
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "old-tok", "refreshToken" => "old-ref",
+                             "expiresAt" => (20.minutes.from_now.to_f * 1000).to_i }
+      })
+      stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL).to_return(status: 500, body: "boom")
+      SessionContextService.expects(:assemble_session_context).once
+
+      run_before_exec(build_strategy)
+
+      assert_equal "active", @credential.reload.status
+    end
+
+    # Deferring to the container that holds the tokens is the right call, but it means
+    # starting on whatever is stored — which the logs have to say, or the resulting
+    # mid-session 401 has nothing to correlate it to.
+    test "before_exec says so when it starts on a token another live session holds" do
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "old-tok", "refreshToken" => "old-ref",
+                             "expiresAt" => (20.minutes.from_now.to_f * 1000).to_i }
+      })
+      create(:terminal_session, user: @user, company_id: @credential.company_id,
+                                agent_type: "claude_code", state: "running")
+      SessionContextService.stubs(:assemble_session_context)
+      Rails.logger.expects(:warn).with(regexp_matches(/another live session holds these tokens/)).at_least_once
+
+      run_before_exec(build_strategy)
+
+      assert_equal "old-tok", @credential.reload.config_data.dig("claudeAiOauth", "accessToken")
+    end
+
+    # Deferring is only tolerable while the token is alive. A dead one cannot be renewed
+    # from inside the container either, so starting would buy 30 minutes of an agent
+    # staring at a login prompt before the no-output watchdog reaps it.
+    test "before_exec refuses to start on an expired login another live session holds" do
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "dead-tok", "refreshToken" => "dead-ref",
+                             "expiresAt" => (1.minute.ago.to_f * 1000).to_i }
+      })
+      create(:terminal_session, user: @user, company_id: @credential.company_id,
+                                agent_type: "claude_code", state: "ready")
+      SessionContextService.expects(:assemble_session_context).never
+
+      assert_raises(AgentCredential::PreflightError) { run_before_exec(build_strategy) }
+    end
+
+    # Kiro's V3 engine answers every prompt with "log in again" while its login has no
+    # profile selected, so a login captured without one is completed before launch.
+    test "before_exec launches a Kiro login on the profile it did not store" do
+      @session.update!(agent_type: "kiro_cli")
+      credential = create(:agent_credential, :kiro_cli, user: @user, config_data: kiro_login_without_profile)
+      stub_request(:post, "https://management.us-east-1.kiro.dev/")
+        .with(headers: { "X-Amz-Target" => Agents::KiroCliAdapter::LIST_PROFILES_TARGET })
+        .to_return(status: 200, headers: { "Content-Type" => "application/json" },
+                   body: { "profiles" => [ { "arn" => "arn:aws:codewhisperer:us-east-1:5678:profile/IDC",
+                                             "profileName" => "KiroProfile" } ] }.to_json)
+      launched = nil
+      SessionContextService.stubs(:assemble_session_context).with { |*args, **kwargs|
+        launched = (kwargs[:credential] || args.last[:credential]).config_data
+      }
+
+      run_before_exec(build_strategy(agent_type: "kiro_cli", credential: credential))
+
+      assert_equal "arn:aws:codewhisperer:us-east-1:5678:profile/IDC", kiro_profile_arn(launched)
+      assert_equal "arn:aws:codewhisperer:us-east-1:5678:profile/IDC", kiro_profile_arn(credential.reload.config_data)
+    end
+
+    test "before_exec rejects a nil credential before assembling context" do
+      strategy = AgentSessionStrategy.new(
+        user_id: @user.id,
+        agent_type: "claude_code",
+        session_id: @session.id,
+        route_token: @session.route_token,
+        credential: nil
+      )
+
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.expects(:container_identifier).with(container_mock).returns("abc123")
+
+      SessionContextService.expects(:assemble_session_context).never
+
+      error = assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      assert_equal "credential_not_resolved", error.code
+      assert_equal @session.id, error.details[:session_id]
+      assert_equal @session.session_type, error.details[:session_type]
+      assert_equal @session.mode, error.details[:mode]
+      assert_equal @session.agent_type, error.details[:session_agent_type]
+      assert_equal "claude_code", error.details[:input_agent_type]
+      assert_equal @user.id, error.details[:user_id]
+      assert_equal @session.company_id, error.details[:session_company_id]
+      assert_nil error.details[:project_id]
+      assert_nil error.details[:project_company_id]
+      assert_equal @company.id, error.details[:effective_company_id]
+      assert_includes error.details[:credential_candidates], [ @credential.id, @company.id, "claude_code" ]
+    end
+
+    test "unresolved credential diagnostic contains no credential secrets" do
+      secret = "top-secret-token"
+      @credential.update!(config_data: { "tokens" => { "access_token" => secret } })
+      strategy = AgentSessionStrategy.new(
+        user_id: @user.id,
+        agent_type: "claude_code",
+        session_id: @session.id,
+        route_token: @session.route_token,
+        credential: nil
+      )
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+      strategy.stubs(:runtime).returns(stub(container_identifier: "abc123"))
+      SessionContextService.expects(:assemble_session_context).never
+
+      error = assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      diagnostic = error.details.to_json
+      refute_includes diagnostic, secret
+      refute_includes diagnostic, "access_token"
+      refute_includes diagnostic, "config_data"
+    end
+
+    test "before_exec preserves context assembly errors without running preflight" do
+      strategy = build_strategy
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+      strategy.stubs(:runtime).returns(stub(container_identifier: "abc123"))
+      assembly_error = RuntimeError.new("credential write failed")
+      SessionContextService.expects(:assemble_session_context).raises(assembly_error)
+
+      error = assert_raises(RuntimeError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      assert_same assembly_error, error
+    end
+
+    # task #1327 (owner decision, board comment 8142): the preflight is a pure
+    # existence + non-zero-size stat — no file content is read, nothing is logged
+    # on success, so there is no diagnostic or redaction to assert on here.
+    test "Codex preflight accepts a non-empty auth file regardless of content" do
+      strategy, = build_codex_preflight_strategy({ "tokens" => { "access_token" => "top-secret-access" } }.to_json)
+
+      assert_nothing_raised { strategy.before_exec(container_id: "container_ref") }
+    end
+
+    test "Codex preflight rejects a missing auth file" do
+      strategy, = build_codex_preflight_strategy(nil)
+
+      error = assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      assert_equal "auth_file_missing", error.code
+      assert_equal Agents::CodexAdapter.new.config_path, error.details[:path]
+      refute error.details[:exists]
+      assert_equal 1, error.details[:attempts]
+    end
+
+    # Review decision on PR #252: a retry would mask a real seed/entrypoint race
+    # instead of surfacing it, so a preflight failure fails the session on the
+    # first attempt — no reseed.
+    test "Codex preflight fails immediately when the written auth file disappears, without reseeding" do
+      strategy, = build_codex_preflight_strategy(nil)
+      SessionContextService.expects(:inject_credential).never
+
+      error = assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      assert_equal "auth_file_missing", error.code
+      assert_equal 1, error.details[:attempts]
+    end
+
+    test "credential preflight fails immediately when the initial verified write fails, without reseeding" do
+      strategy, = build_codex_preflight_strategy(nil)
+      auth_path = Agents::CodexAdapter.new.config_path
+      write_error = AgentCredentialsService::CredentialWriteError.new(
+        path: auth_path, container: "abc123", write_outcome: "verification_failed"
+      )
+      SessionContextService.unstub(:assemble_session_context)
+      SessionContextService.expects(:assemble_session_context).once.raises(write_error)
+      SessionContextService.expects(:inject_credential).never
+
+      error = assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      assert_equal "auth_file_write_failed", error.code
+      assert_equal 1, error.details[:attempt]
+      assert_equal 1, error.details[:attempts]
+    end
+
+    test "interactive first login proceeds without a stored credential" do
+      @session.update!(agent_type: "codex", mode: "interactive", session_type: "agent_session")
+      strategy = AgentSessionStrategy.new(
+        user_id: @user.id, agent_type: "codex", session_id: @session.id,
+        route_token: @session.route_token, credential: nil
+      )
+      container = mock("container")
+      strategy.stubs(:resolve_container).returns(container)
+      strategy.stubs(:runtime).returns(stub(container_identifier: "abc123"))
+      SessionContextService.expects(:assemble_session_context).with(container, @session, credential: nil)
+
+      assert_nothing_raised { strategy.before_exec(container_id: "container_ref") }
+    end
+
+    test "Codex preflight rejects a zero-byte auth file" do
+      strategy, = build_codex_preflight_strategy("")
+
+      error = assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+
+      assert_equal "auth_file_empty", error.code
+    end
+
+    test "failed Codex preflight prevents tmux launch" do
+      strategy, = build_codex_preflight_strategy(nil)
+      strategy.expects(:send_tmux_command).never
+
+      assert_raises(AgentSessionStrategy::ProvisioningError) do
+        strategy.before_exec(container_id: "container_ref")
+      end
+    end
+
+    # == before_cleanup Tests ==
+
+    test "before_cleanup sets logs_count and outputs_count in result" do
+      strategy = build_strategy
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+
+      mock_adapter = mock("adapter")
+      mock_adapter.stubs(:respond_to?).with(:session_log_paths).returns(false)
+      mock_adapter.stubs(:respond_to?).with(:collect_usage).returns(false)
+
+      mock_service = mock("service")
+      mock_service.stubs(:adapter).returns(mock_adapter)
+      AgentCredentialsService.stubs(:for).returns(mock_service)
+
+      strategy.stubs(:collect_outputs).returns(0)
+      strategy.stubs(:collect_logs).returns([ 0, {} ])
+      strategy.stubs(:collect_terminal_output).returns(0)
+      strategy.stubs(:persist_refreshed_credentials)
+      strategy.stubs(:persist_credential_metadata)
+      strategy.stubs(:collect_usage)
+
+      result = strategy.before_cleanup(container_id: "abc123")
+
+      assert result.key?(:logs_count)
+      assert result.key?(:outputs_count)
+    end
+
+    # == Full Flow Tests ==
+
+    test "session_type returns agent_session" do
+      strategy = build_strategy
+
+      assert_equal "agent_session", strategy.send(:session_type)
+    end
+
+    test "services_ports returns ttyd and OpenVSCode Server ports without file watcher" do
+      strategy = build_strategy
+
+      ports = strategy.send(:services_ports)
+
+      assert_includes ports, 7681
+      assert_includes ports, 8443
+      refute_includes ports, 4040
+    end
+
+    test "exec result does not include watcher_url" do
+      strategy = build_strategy
+      @session.update!(mode: "interactive")
+      runtime_mock = mock("runtime")
+
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+      strategy.stubs(:mark_session_ready)
+
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.stubs(:container_identifier).returns("abc123")
+      runtime_mock.stubs(:exec)
+
+      result = strategy.exec(container_id: "abc123")
+
+      refute result.key?(:watcher_url)
+      assert result.key?(:websocket_url)
+      assert result.key?(:ide_url)
+    end
+
+    test "ttyd_command returns bash" do
+      strategy = build_strategy(agent_type: "claude_code")
+
+      cmd = strategy.send(:ttyd_command)
+
+      assert_equal "bash", cmd
+    end
+
+    # == before_exec delegates to assembler ==
+
+    test "before_exec delegates to SessionContextService.assemble_session_context" do
+      strategy = build_strategy
+
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.expects(:container_identifier).with(container_mock).returns("abc123")
+
+      SessionContextService.expects(:assemble_session_context).with(
+        container_mock, @session, credential: @credential
+      )
+
+      strategy.before_exec(container_id: "container_ref")
+    end
+
+    test "before_exec raises when container not ready" do
+      strategy = build_strategy
+
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.expects(:container_identifier).returns(nil)
+
+      error = assert_raises(RuntimeError) do
+        strategy.before_exec(container_id: "bad_ref")
+      end
+      assert_match(/Container not ready/, error.message)
+    end
+
+    # == before_cleanup Tests ==
+
+    # These three drive the real collector against the blessed runtime fake rather than
+    # stubbing the read: the bug they now guard (a log dropped without a word) lived
+    # exactly in the seam a stubbed reader hides.
+    test "before_cleanup collects every declared log, including the one behind a glob" do
+      runtime = stub_container_runtime
+      runtime.fs["/var/log/context.log"] = "injected context\n"
+      runtime.fs["/var/log/mitm/http.log"] = "POST /v1/messages\n"
+      runtime.fs["/home/claude/.claude/projects/-workspace/session.jsonl"] = %({"type":"assistant"}\n)
+      strategy = cleanup_strategy
+
+      assert_difference "SessionLog.count", 3 do
+        result = strategy.before_cleanup(container_id: "abc123")
+        assert_equal 3, result[:logs_count]
+      end
+
+      assert_not_nil @session.session_logs.find_by(name: "session.jsonl")
+      assert_not_nil @session.session_logs.find_by(name: "context.log")
+    ensure
+      cleanup_runtime_overrides
+    end
+
+    test "before_cleanup records a log it could not read instead of dropping it" do
+      runtime = stub_container_runtime
+      runtime.fs["/var/log/context.log"] = "injected context\n"
+      runtime.fs["/var/log/mitm/http.log"] = "POST /v1/messages\n"
+      runtime.fail_read("/var/log/context.log")
+      strategy = cleanup_strategy
+
+      strategy.before_cleanup(container_id: "abc123")
+
+      report = @session.session_logs.find_by(name: Sessions::LogCollector::REPORT_NAME)
+      assert_not_nil report, "an unreadable log left no trace of having been attempted"
+      assert_includes report.file.read, "/var/log/context.log"
+      assert_nil @session.session_logs.find_by(name: "context.log")
+    ensure
+      cleanup_runtime_overrides
+    end
+
+    test "before_cleanup persists nothing for a declared log that is empty" do
+      runtime = stub_container_runtime
+      runtime.fs["/var/log/context.log"] = ""
+      runtime.fs["/var/log/mitm/http.log"] = "POST /v1/messages\n"
+      strategy = cleanup_strategy
+
+      strategy.before_cleanup(container_id: "abc123")
+
+      assert_nil @session.session_logs.find_by(name: "context.log")
+    ensure
+      cleanup_runtime_overrides
+    end
+
+    test "before_cleanup collects usage when adapter supports it" do
+      strategy = build_strategy
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+
+      mock_adapter = mock("adapter")
+      mock_adapter.stubs(:respond_to?).with(:session_log_paths).returns(false)
+      mock_adapter.stubs(:respond_to?).with(:collect_usage).returns(true)
+      mock_adapter.expects(:collect_usage).with(@session, is_a(Hash))
+
+      mock_service = mock("service")
+      mock_service.stubs(:adapter).returns(mock_adapter)
+      AgentCredentialsService.stubs(:for).returns(mock_service)
+
+      strategy.stubs(:collect_outputs).returns(0)
+      strategy.stubs(:collect_logs).returns([ 0, {} ])
+      strategy.stubs(:collect_terminal_output).returns(0)
+      strategy.stubs(:persist_refreshed_credentials)
+      strategy.stubs(:persist_credential_metadata)
+
+      result = strategy.before_cleanup(container_id: "abc123")
+
+      assert_equal 0, result[:logs_count]
+      assert_equal 0, result[:outputs_count]
+    end
+
+    # == Credential metadata env vars ==
+
+    test "builds env vars with credential metadata for gemini" do
+      @session.update!(agent_type: "gemini_cli")
+      @credential.update!(agent_type: "gemini_cli", metadata: { "google_cloud_project" => "my-project" })
+      strategy = build_strategy(agent_type: "gemini_cli")
+
+      env_vars = strategy.build_env_vars
+
+      # GeminiCliAdapter no longer maps metadata to env vars (API key auth)
+      refute env_vars.any? { |v| v == "GOOGLE_CLOUD_PROJECT=my-project" }
+    end
+
+    # == Grok ==
+
+    test "builds env vars for a grok session with the company API key and MITM tracking" do
+      @session.update!(agent_type: "grok")
+      @credential.update!(agent_type: "grok", config_data: { "api_key" => "xai-company-key" })
+      strategy = build_strategy(agent_type: "grok")
+
+      env_vars = strategy.build_env_vars
+
+      assert_includes env_vars, "AGENT_TYPE=grok"
+      assert_includes env_vars, "HOME_DIR=/home/grok"
+      assert_includes env_vars, "AUTH_WATCH_PATH=/home/grok/.grok/auth.json"
+      assert_includes env_vars, "MITM_TRACKED_DOMAINS=x.ai,grok.com"
+      assert_includes env_vars, "XAI_API_KEY=xai-company-key"
+    end
+
+    # == Conflicting provider env ==
+    #
+    # XAI_API_KEY outranks a stored session token in the Grok CLI's own credential
+    # resolution, so a key left in the environment would silently bill a different
+    # xAI account than the one the user signed in with. `scrub_conflicting_auth_env`
+    # runs last, after every other env source has had its say.
+    #
+    # There is deliberately no arbitrary per-session env channel any more: a session
+    # reaches its config items through the `get_config_item` MCP tool and nothing is
+    # injected into the container (see spec-session-config-item-access). The adapters'
+    # own `default_env_vars` are therefore the only producer left, and the scrub stays
+    # as the net for them. Per-adapter key lists are covered in the adapter tests.
+
+    test "build_env_vars keeps XAI_API_KEY when the grok credential is an API-key login" do
+      @session.update!(agent_type: "grok")
+      @credential.update!(agent_type: "grok", config_data: { "api_key" => "xai-company-key" })
+
+      env_vars = build_strategy(agent_type: "grok").build_env_vars
+
+      assert_includes env_vars, "XAI_API_KEY=xai-company-key"
+    end
+
+    test "build_env_vars carries no XAI_API_KEY when the grok credential is a session token" do
+      @session.update!(agent_type: "grok")
+      @credential.update!(agent_type: "grok", config_data: {
+        "auth" => { "https://accounts.x.ai/sign-in" => { "key" => "session-token" } }
+      })
+
+      env_vars = build_strategy(agent_type: "grok").build_env_vars
+
+      assert_not env_vars.any? { |v| v.start_with?("XAI_API_KEY=") }
+    end
+
+    test "build_env_vars injects no config item values — the MCP tool is the only channel" do
+      project = create(:project, company: @company, owner: @user)
+      @session.update!(project: project)
+      @session.config_items << create(:config_item, :secret, scope: project, name: "STRIPE_KEY",
+                                                            value: "sk_live_abc123")
+
+      env_vars = build_strategy.build_env_vars
+
+      assert_not env_vars.any? { |v| v.include?("sk_live_abc123") }
+      assert_not env_vars.any? { |v| v.start_with?("STRIPE_KEY=") }
+    end
+
+    test "builds env vars skips blank credential metadata values" do
+      @credential.update!(metadata: { "empty_key" => "" })
+      strategy = build_strategy
+
+      env_vars = strategy.build_env_vars
+
+      refute env_vars.any? { |v| v.start_with?("empty_key=") }
+    end
+
+    # The prompt is the whole task: in an environment variable it would sit in the
+    # pod spec and in every process the agent starts.
+    test "a non_interactive prompt reaches the CLI from a file only the agent can read" do
+      @session.update!(agent_type: "codex", mode: "non_interactive", initial_prompt: "Run tests")
+      strategy = build_strategy(agent_type: "codex")
+      container_mock = mock("container")
+
+      mock_adapter = mock("adapter")
+      mock_adapter.expects(:session_command).with(mode: "non_interactive", model: nil, effort: nil).returns("codex --yolo")
+      mock_adapter.stubs(:container_uid).returns(1001)
+      mock_service = mock("service")
+      mock_service.stubs(:adapter).returns(mock_adapter)
+      AgentCredentialsService.expects(:for).with("codex").returns(mock_service)
+
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.expects(:write_file)
+                  .with(container_mock, "/tmp/.aixle-prompt", "Run tests", mode: 0o600, uid: 1001, gid: 1001)
+                  .returns(true)
+      runtime_mock.expects(:exec).with do |container, command|
+        send_keys = command[2].match(/tmux send-keys -t agent (.+?) Enter;/)&.[](0)
+        delivered_command = Shellwords.split(send_keys).fetch(4)
+
+        container == container_mock && command[0] == "sh" && command[1] == "-c" &&
+          delivered_command == 'codex --yolo "$(cat /tmp/.aixle-prompt)"'
+      end
+
+      strategy.send(:launch_agent_in_tmux, container_mock)
+    end
+
+    test "the session's reasoning effort reaches the launch command the way its CLI takes it" do
+      @session.update!(mode: "interactive", requested_model: "claude-opus-5", reasoning_effort: "high")
+
+      assert_equal "claude --model claude-opus-5 --effort high", launched_command(build_strategy)
+    end
+
+    test "a session without a reasoning effort launches exactly as before" do
+      @session.update!(mode: "interactive", requested_model: "claude-opus-5", reasoning_effort: nil)
+
+      assert_equal "claude --model claude-opus-5", launched_command(build_strategy)
+    end
+
+    test "build_env_vars carries no prompt" do
+      @session.update!(mode: "non_interactive", initial_prompt: "Refactor the billing module")
+
+      env_vars = build_strategy.build_env_vars
+
+      assert_not env_vars.any? { |v| v.include?("Refactor the billing module") }
+    end
+
+    # == collect_terminal_output (raw pipe-pane log → single SessionLog) ==
+
+    test "collect_terminal_output stores the raw terminal log as a text/plain SessionLog" do
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {
+        "/tmp/terminal_output.log" => "\e[31mred\e[0m done"
+      })
+      ContainerRuntime.stubs(:build).returns(fake)
+      strategy = build_strategy
+
+      assert_difference "SessionLog.count", 1 do
+        assert_equal 1, strategy.send(:collect_terminal_output, "abc123", @session)
+      end
+
+      log = @session.session_logs.last
+      assert_equal "terminal_output.log", log.name
+      assert_equal "text/plain; charset=utf-8", log.content_type
+      assert_equal "\e[31mred\e[0m done".bytesize, log.file_size
+      refute fake.execs.any? { |cmd| cmd.join(" ").include?("capture-pane") },
+             "collect_terminal_output must not run capture-pane (pipe-pane already wrote the file)"
+    end
+
+    test "collect_terminal_output skips blank content" do
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {
+        "/tmp/terminal_output.log" => ""
+      })
+      ContainerRuntime.stubs(:build).returns(fake)
+      strategy = build_strategy
+
+      assert_no_difference "SessionLog.count" do
+        assert_equal 0, strategy.send(:collect_terminal_output, "abc123", @session)
+      end
+    end
+
+    # A killed container (out of memory, evicted) cannot be exec'd into, so the file read
+    # fails — but the pane was also tee'd to the container's stdout, which outlives it.
+    test "collect_terminal_output keeps a killed container's terminal from its stdout" do
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {
+        "/tmp/terminal_output.log" => "unreachable"
+      })
+      fake.fail_read("/tmp/terminal_output.log")
+      fake.set_container_stdout("\e[32mPASS\e[0m src/app.spec.ts\n")
+      ContainerRuntime.stubs(:build).returns(fake)
+      strategy = build_strategy
+
+      assert_difference "SessionLog.count", 1 do
+        assert_equal 1, strategy.send(:collect_terminal_output, "abc123", @session)
+      end
+
+      log = @session.session_logs.find_by(name: "terminal_output.log")
+      assert_equal "\e[32mPASS\e[0m src/app.spec.ts\n", log.file.read
+    end
+
+    test "collect_terminal_output prefers the file over the container's stdout" do
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {
+        "/tmp/terminal_output.log" => "pane"
+      })
+      fake.set_container_stdout("entrypoint banner\npane")
+      ContainerRuntime.stubs(:build).returns(fake)
+
+      build_strategy.send(:collect_terminal_output, "abc123", @session)
+
+      assert_equal "pane", @session.session_logs.find_by(name: "terminal_output.log").file.read
+    end
+
+    test "collect_terminal_output stores nothing when neither the file nor stdout has output" do
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {})
+      ContainerRuntime.stubs(:build).returns(fake)
+
+      assert_no_difference "SessionLog.count" do
+        assert_equal 0, build_strategy.send(:collect_terminal_output, "abc123", @session)
+      end
+    end
+
+    # == persist_refreshed_credentials (#2: capture tokens refreshed mid-session) ==
+
+    test "persist_refreshed_credentials updates existing credential when token changed" do
+      @credential.update!(config_data: { "claudeAiOauth" => { "accessToken" => "old", "refreshToken" => "r1",
+                                                              "expiresAt" => (1.hour.from_now.to_f * 1000).to_i } })
+      strategy = build_strategy
+      container = mock("container")
+      agent_service = AgentCredentialsService.for("claude_code")
+      strategy.stubs(:read_file_from_container).returns(nil)
+      strategy.stubs(:read_file_from_container).with(container, "/home/claude/.claude.json").returns({}.to_json)
+      # A rotation the CLI made in the container: new tokens, a later expiry.
+      strategy.stubs(:read_file_from_container)
+              .with(container, "/home/claude/.claude/.credentials.json")
+              .returns({ "claudeAiOauth" => { "accessToken" => "NEW", "refreshToken" => "r2",
+                                              "expiresAt" => (8.hours.from_now.to_f * 1000).to_i } }.to_json)
+
+      strategy.send(:persist_refreshed_credentials, container, @session, agent_service)
+
+      assert_equal "NEW", @credential.reload.config_data.dig("claudeAiOauth", "accessToken")
+    end
+
+    test "persist_refreshed_credentials is a no-op when the token is unchanged" do
+      @credential.update!(config_data: { "claudeAiOauth" => { "accessToken" => "same" } })
+      strategy = build_strategy
+      container = mock("container")
+      agent_service = AgentCredentialsService.for("claude_code")
+      strategy.stubs(:read_file_from_container).returns(nil)
+      strategy.stubs(:read_file_from_container).with(container, "/home/claude/.claude.json").returns({}.to_json)
+      strategy.stubs(:read_file_from_container)
+              .with(container, "/home/claude/.claude/.credentials.json")
+              .returns({ "claudeAiOauth" => { "accessToken" => "same" } }.to_json)
+
+      AgentCredential.expects(:from_artifacts).never
+
+      strategy.send(:persist_refreshed_credentials, container, @session, agent_service)
+    end
+
+    test "persist_refreshed_credentials does not overwrite a newer stored token with an older one" do
+      # A concurrent session refreshed first (stored token, expiresAt 2000); this
+      # container still holds the older, now-rotated token (expiresAt 1000).
+      @credential.update!(config_data: { "claudeAiOauth" => { "accessToken" => "live", "expiresAt" => 2000 } })
+      strategy = build_strategy
+      container = mock("container")
+      agent_service = AgentCredentialsService.for("claude_code")
+      strategy.stubs(:read_file_from_container).returns(nil)
+      strategy.stubs(:read_file_from_container).with(container, "/home/claude/.claude.json").returns({}.to_json)
+      strategy.stubs(:read_file_from_container)
+              .with(container, "/home/claude/.claude/.credentials.json")
+              .returns({ "claudeAiOauth" => { "accessToken" => "stale", "expiresAt" => 1000 } }.to_json)
+
+      strategy.send(:persist_refreshed_credentials, container, @session, agent_service)
+
+      assert_equal "live", @credential.reload.config_data.dig("claudeAiOauth", "accessToken")
+    end
+
+    test "persist_refreshed_credentials does not re-arm a designOauth grant the vendor refused" do
+      refuse_design_login!
+      refute @credential.config_data["designOauth"].key?("refreshToken")
+      expires_at = @credential.expires_at
+
+      persist_container_design_block({ "accessToken" => "d-a", "refreshToken" => "dead", "clientId" => "design-client",
+                                       "expiresAt" => (1.hour.from_now.to_f * 1000).to_i })
+
+      design = @credential.config_data["designOauth"]
+      assert_nil design["refreshToken"], "the refused grant must not come back from the container's stale copy"
+      assert_nil design["accessToken"]
+      assert_equal expires_at, @credential.expires_at
+    end
+
+    test "persist_refreshed_credentials still takes a designOauth rotation the container made itself" do
+      refuse_design_login!
+
+      persist_container_design_block({ "accessToken" => "d-a2", "refreshToken" => "rotated", "clientId" => "design-client",
+                                       "expiresAt" => (1.hour.from_now.to_f * 1000).to_i })
+
+      assert_equal %w[d-a2 rotated], @credential.config_data["designOauth"].values_at("accessToken", "refreshToken")
+    end
+
+    test "resolve_output_scope falls back to the user's active membership company" do
+      strategy = build_strategy
+      @session.update_columns(project_id: nil)
+
+      assert_equal [ "Company", @company.id ], strategy.send(:resolve_output_scope, @session.reload)
+    end
+
+    test "resolve_output_scope raises for a project-less session of a user with no active membership" do
+      strategy = build_strategy
+      @session.update_columns(project_id: nil)
+      @user.company_memberships.each { |m| m.update_columns(state: "revoked") }
+
+      error = assert_raises(RuntimeError) { strategy.send(:resolve_output_scope, @session.reload) }
+      assert_match(/no active membership/, error.message)
+    end
+
+    test "persist_refreshed_credentials does not create a credential when none exists" do
+      @credential.destroy!
+      strategy = build_strategy
+      container = mock("container")
+      agent_service = AgentCredentialsService.for("claude_code")
+      strategy.stubs(:read_file_from_container).returns(nil)
+      strategy.stubs(:read_file_from_container).with(container, "/home/claude/.claude.json").returns({}.to_json)
+      strategy.stubs(:read_file_from_container)
+              .with(container, "/home/claude/.claude/.credentials.json")
+              .returns({ "claudeAiOauth" => { "accessToken" => "NEW" } }.to_json)
+
+      assert_no_difference "AgentCredential.count" do
+        strategy.send(:persist_refreshed_credentials, container, @session, agent_service)
+      end
+    end
+
+    # == collect_outputs (nested output dirs — session #61 regression) ==
+
+    test "collect_outputs recurses subdirectories and names assets by path relative to outputs" do
+      # Session 61: the agent wrote its deliverable into /workspace/outputs/presentation/*.
+      # A `find -maxdepth 1` scan collected zero of them. Guard: nested files are collected,
+      # and the path relative to outputs (not the bare basename) becomes the asset name — so
+      # two files sharing a basename across subdirs both survive the name-uniqueness index.
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {
+        "/workspace/outputs/presentation/index.html"      => "<html>deck</html>",
+        "/workspace/outputs/presentation/assets/logo.svg" => "<svg>brand</svg>",
+        "/workspace/outputs/notes/logo.svg"               => "<svg>other</svg>",
+        "/workspace/outputs/report.md"                    => "# top level"
+      })
+      ContainerRuntime.stubs(:build).returns(fake)
+      strategy = build_strategy
+
+      count = nil
+      assert_difference "Asset.count", 4 do
+        count = strategy.send(:collect_outputs, "abc123", @session)
+      end
+
+      assert_equal 4, count
+      names = @session.output_assets.pluck(:name)
+      assert_includes names, "presentation/index.html"
+      assert_includes names, "presentation/assets/logo.svg"
+      assert_includes names, "notes/logo.svg"
+      assert_includes names, "report.md"
+
+      refute fake.execs.any? { |cmd| cmd.join(" ").include?("-maxdepth") },
+             "collect_outputs must not cap find depth"
+    end
+
+    test "collect_outputs skips blank files" do
+      fake = ContainerRuntime::FakeRuntime.new(agent_type: "claude_code", filesystem: {
+        "/workspace/outputs/empty.txt" => ""
+      })
+      ContainerRuntime.stubs(:build).returns(fake)
+      strategy = build_strategy
+
+      assert_no_difference "Asset.count" do
+        assert_equal 0, strategy.send(:collect_outputs, "abc123", @session)
+      end
+    end
+
+    private
+
+    # A second company the same person works for, holding its own claude_code credential
+    # with its own default-model pin.
+    def other_credential_with_pin(model)
+      other_company = create(:company)
+      create(:company_membership, user: @user, company: other_company)
+      create(:agent_credential, user: @user, company: other_company, agent_type: "claude_code",
+                                metadata: { "default_model" => model })
+    end
+
+    # before_cleanup does five things; these tests are about one of them, so the other
+    # four are stubbed and the collector is left real.
+    def cleanup_strategy
+      strategy = build_strategy
+      strategy.stubs(:collect_outputs).returns(0)
+      strategy.stubs(:collect_terminal_output).returns(0)
+      strategy.stubs(:persist_refreshed_credentials)
+      strategy.stubs(:persist_credential_metadata)
+      strategy.stubs(:collect_usage)
+      strategy
+    end
+
+    # The command launch_agent_in_tmux types into the agent pane.
+    def launched_command(strategy)
+      delivered = nil
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.expects(:exec).with do |_container, command|
+        send_keys = command[2].match(/tmux send-keys -t agent (.+?) Enter;/)&.[](0)
+        delivered = Shellwords.split(send_keys).fetch(4)
+        true
+      end
+
+      strategy.send(:launch_agent_in_tmux, mock("container"))
+      delivered
+    end
+
+    def build_strategy(agent_type: "claude_code", credential: nil)
+      cred = credential.nil? ? @credential : credential
+      AgentSessionStrategy.new(
+        user_id: @user.id,
+        agent_type: agent_type,
+        session_id: @session.id,
+        route_token: @session.route_token,
+        credential: cred
+      )
+    end
+
+    def stub_token_refresh(access_token:, refresh_token:)
+      stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL)
+        .to_return(status: 200,
+                   body: { access_token: access_token, refresh_token: refresh_token, expires_in: 28_800 }.to_json,
+                   headers: { "Content-Type" => "application/json" })
+    end
+
+    def refuse_design_login!
+      @credential.update!(config_data: {
+        "claudeAiOauth" => { "accessToken" => "base-a", "refreshToken" => "base-r",
+                             "expiresAt" => (8.hours.from_now.to_f * 1000).to_i },
+        "designOauth" => { "accessToken" => "d-a", "refreshToken" => "dead", "clientId" => "design-client",
+                           "expiresAt" => (5.minutes.from_now.to_f * 1000).to_i }
+      })
+      stub_request(:post, Agents::ClaudeCodeAdapter::OAUTH_TOKEN_URL)
+        .to_return(status: 400, body: { error: "invalid_grant" }.to_json,
+                   headers: { "Content-Type" => "application/json" })
+      @credential.renew!(source: :sweep)
+      @credential.reload
+    end
+
+    def persist_container_design_block(design_block)
+      strategy = build_strategy
+      container = mock("container")
+      strategy.stubs(:read_file_from_container).returns(nil)
+      strategy.stubs(:read_file_from_container).with(container, "/home/claude/.claude.json").returns({}.to_json)
+      strategy.stubs(:read_file_from_container)
+              .with(container, "/home/claude/.claude/.credentials.json")
+              .returns({ "claudeAiOauth" => @credential.config_data["claudeAiOauth"], "designOauth" => design_block }.to_json)
+
+      strategy.send(:persist_refreshed_credentials, container, @session, AgentCredentialsService.for("claude_code"))
+      @credential.reload
+    end
+
+    # Drive before_exec with the container plumbing stubbed out — these tests are
+    # about what the launch does with the credential, not about the runtime.
+    def run_before_exec(strategy)
+      container_mock = mock("container")
+      strategy.stubs(:resolve_container).returns(container_mock)
+      runtime_mock = mock("runtime")
+      strategy.stubs(:runtime).returns(runtime_mock)
+      runtime_mock.stubs(:container_identifier).with(container_mock).returns("abc123")
+      strategy.stubs(:run_credential_preflight!)
+
+      strategy.before_exec(container_id: "container_ref")
+    end
+
+    def kiro_login_without_profile
+      Tempfile.create([ "kiro-login", ".sqlite3" ]) do |file|
+        db = SQLite3::Database.new(file.path)
+        db.execute("CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO auth_kv VALUES (?, ?)", [ "kirocli:odic:token", {
+          "access_token" => "tok", "refresh_token" => "ref", "expires_at" => 2.hours.from_now.utc.iso8601
+        }.to_json ])
+        db.close
+        { "state_b64" => Base64.strict_encode64(File.binread(file.path)) }
+      end
+    end
+
+    def kiro_profile_arn(config_data)
+      Agents::KiroCliAdapter.new.credential_identity(config_data)
+    end
+
+    def build_codex_preflight_strategy(auth_content)
+      @session.update!(agent_type: "codex")
+      credential = create(:agent_credential, user: @user, agent_type: "codex")
+      filesystem = {}
+      filesystem[Agents::CodexAdapter.new.config_path] = auth_content unless auth_content.nil?
+      runtime = ContainerRuntime::FakeRuntime.new(agent_type: "codex", filesystem: filesystem)
+      strategy = build_strategy(agent_type: "codex", credential: credential)
+      container = runtime.resolve_container("container_ref")
+      strategy.stubs(:resolve_container).returns(container)
+      strategy.stubs(:runtime).returns(runtime)
+      SessionContextService.stubs(:assemble_session_context).returns(true)
+      SessionContextService.stubs(:inject_credential).returns(true)
+      [ strategy, runtime, container ]
+    end
+  end
+end

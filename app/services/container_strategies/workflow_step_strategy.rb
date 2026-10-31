@@ -1,0 +1,239 @@
+# frozen_string_literal: true
+
+require "shellwords"
+
+module ContainerStrategies
+  # WorkflowStepStrategy
+  # Strategy for workflow step containers — reuses AgentSessionStrategy behavior
+  # but labels the session as "workflow_step" and always operates in non-interactive
+  # mode (the agent receives its prompt from the step instructions).
+  #
+  class WorkflowStepStrategy < AgentSessionStrategy
+    def before_cleanup(container_id: nil, **)
+      return {} if container_id.blank?
+
+      container = resolve_container(container_id)
+      session = TerminalSession.find(input[:session_id])
+      agent_service = AgentCredentialsService.for(input[:agent_type])
+
+      logs_count, log_contents = collect_logs(container, session, agent_service)
+      logs_count += collect_terminal_output(container, session)
+      collect_usage(session, agent_service, log_contents)
+      persist_refreshed_credentials(container, session, agent_service)
+
+      outputs_count = collect_workflow_outputs(container_id)
+
+      # Provider-agnostic teardown hook: every integration that holds
+      # session-scoped runtime state (Coder workspace locks today, others
+      # later) releases it here. The dispatcher lives in
+      # `IntegrationCleanupService` so this strategy stays integration-free.
+      IntegrationCleanupService.release_session_locks!(session)
+
+      Rails.logger.info("[WorkflowStepStrategy] Cleanup: #{logs_count} logs, #{outputs_count} workflow assets")
+      { logs_count: logs_count, outputs_count: outputs_count }
+    end
+
+    def before_exec(container_id:, **)
+      result = super
+      inject_prior_step_outputs(container_id)
+      result
+    end
+
+    def build_labels
+      super.merge("aixle.session_type" => "workflow_step")
+    end
+
+    protected
+
+    def session_type = "workflow_step"
+
+    def services_ports
+      [ 7681 ]
+    end
+
+    private
+
+    def collect_workflow_outputs(container_id)
+      session = TerminalSession.find(input[:session_id])
+      step_run = session.step_run
+      unless step_run
+        Rails.logger.info("[WorkflowStepStrategy] No step_run for session #{session.id}, skipping output collection")
+        return 0
+      end
+
+      workflow_run = step_run.workflow_run
+      container = resolve_container(container_id)
+      output_dir = "/workspace/outputs"
+
+      result = runtime.exec(
+        container,
+        [ "/bin/sh", "-c", "find #{output_dir} -type f 2>/dev/null || true" ],
+        stdout: true, stderr: true
+      )
+      Rails.logger.info("[WorkflowStepStrategy] find exit=#{result[2]}, stdout=#{result[0].join.strip[0..200]}")
+      return 0 unless result[2].zero?
+
+      files = result[0].join.split("\n").reject(&:blank?)
+      Rails.logger.info("[WorkflowStepStrategy] Found #{files.size} output files for step_run=#{step_run.id}")
+      count = 0
+
+      files.each do |file_path|
+        relative = file_path.sub("#{output_dir}/", "")
+        content = read_file_from_container(container, file_path)
+        if content.blank?
+          Rails.logger.warn("[WorkflowStepStrategy] Skipped output #{file_path}: #{content.nil? ? 'unreadable' : 'empty'}")
+          next
+        end
+
+        tmpfile = Tempfile.new([ "wf_output_", File.extname(relative) ])
+        tmpfile.binmode
+        tmpfile.write(content)
+        tmpfile.rewind
+
+        content_type = Marcel::MimeType.for(tmpfile, name: relative)
+
+        workflow_run.workflow_run_assets.create!(
+          name: relative,
+          produced_by_step_run: step_run,
+          content_type: content_type,
+          file_size: content.bytesize,
+          s3_key: "workflow_runs/#{workflow_run.id}/steps/#{step_run.id}/#{relative}",
+          file: tmpfile
+        )
+        count += 1
+      rescue StandardError => e
+        Rails.logger.warn("[WorkflowStepStrategy] Failed to collect output #{file_path}: #{e.message}")
+      ensure
+        tmpfile&.close!
+      end
+
+      count
+    rescue StandardError => e
+      Rails.logger.warn("[WorkflowStepStrategy] Output collection failed: #{e.message}")
+      0
+    end
+
+    def inject_prior_step_outputs(container_id)
+      session = TerminalSession.find(input[:session_id])
+      step_run = session.step_run
+      return unless step_run
+
+      workflow_run = step_run.workflow_run
+      step = step_run.step
+      container = resolve_container(container_id)
+
+      runtime.exec(container, [ "mkdir", "-p", Asset::CONTAINER_DIR ])
+
+      injected_names = []
+
+      upstream_ids = step.upstream_step_ids
+      if upstream_ids.present?
+        nearness = upstream_ids.each_with_index.to_h
+        prior_assets = workflow_run.workflow_run_assets
+          .joins("JOIN step_runs ON step_runs.id = workflow_run_assets.produced_by_step_run_id")
+          .where(step_runs: { step_id: upstream_ids })
+          .select("workflow_run_assets.*, step_runs.step_id AS producer_step_id")
+
+        # Farthest first: when two earlier steps wrote the same name, the copy
+        # from the nearest one lands last and is the one the step reads.
+        prior_assets.sort_by { |wra| [ -nearness.fetch(wra.producer_step_id), wra.id ] }.each do |wra|
+          next unless wra.file
+          next unless download_to_container(container, wra.file.url, wra.name)
+
+          injected_names << wra.name
+        rescue StandardError => e
+          Rails.logger.warn("[WorkflowStepStrategy] Failed to inject #{wra.name}: #{e.message}")
+        end
+      end
+
+      inject_workflow_run_assets(container, workflow_run, injected_names)
+      inject_tracker_files(container, workflow_run)
+      # Last, so an asset of the same name cannot stand in for the request body.
+      inject_webhook_payload(container, workflow_run, injected_names)
+
+      Rails.logger.info("[WorkflowStepStrategy] Injected #{injected_names.size} files into /workspace/assets/: #{injected_names.join(', ')}")
+    end
+
+    def inject_workflow_run_assets(container, workflow_run, injected_names)
+      ids = workflow_run.input_asset_ids
+      return if ids.blank?
+
+      TenantScope.owned(Asset, project: workflow_run.project).where(id: ids).each do |asset|
+        version = asset.latest_version
+        next unless version&.file
+
+        next unless download_to_container(container, version.file.url, asset.name)
+
+        injected_names << asset.name
+      rescue StandardError => e
+        Rails.logger.warn("[WorkflowStepStrategy] Failed to inject run asset #{asset.name}: #{e.message}")
+      end
+    end
+
+    # Files copied from the task's tracker issue, where tracker_download_attachments puts them.
+    def inject_tracker_files(container, workflow_run)
+      copies = workflow_run.board_task&.task_assets&.with_source(:tracker)&.includes(:tracker_attachment)
+      return if copies.blank?
+
+      uid = AgentCredentialsService.for(input[:agent_type]).adapter.container_uid
+      workspace = Trackers::Workspace.new(runtime: runtime, container: container, uid: uid)
+      copies.each do |copy|
+        path = Trackers::Workspace.path_for(copy.tracker_attachment&.issue_key || "issue", copy.name)
+        next unless path && copy.file
+
+        Rails.logger.warn("[WorkflowStepStrategy] Failed to place tracker file #{path}") unless workspace.fetch(copy.file.url, path)
+      rescue StandardError => e
+        Rails.logger.warn("[WorkflowStepStrategy] Failed to place tracker file #{copy.name}: #{e.message}")
+      end
+    end
+
+    def inject_webhook_payload(container, workflow_run, injected_names)
+      payload = Webhooks::TriggerSupport.payload(workflow_run)
+      return if payload.blank?
+
+      path = Webhooks::TriggerSupport::PAYLOAD_PATH
+      uid = AgentCredentialsService.for(input[:agent_type]).adapter.container_uid
+      if runtime.write_file(container, path, JSON.pretty_generate(payload), uid: uid, gid: uid)
+        injected_names << File.basename(path)
+      else
+        Rails.logger.warn("[WorkflowStepStrategy] Failed to write the webhook payload to #{path}")
+      end
+    end
+
+    def download_to_container(container, url, name)
+      target_path = SafeRelativePath.join(Asset::CONTAINER_DIR, name)
+      unless target_path
+        Rails.logger.warn("[WorkflowStepStrategy] Skipped asset with an unsafe name: #{name.inspect}")
+        return false
+      end
+
+      # Asset names are user-supplied and free-form (spaces and quotes included), so the path has
+      # to be escaped rather than wrapped in quotes — a name carrying one would otherwise rewrite
+      # this command instead of naming a file.
+      safe_dir = Shellwords.escape(File.dirname(target_path))
+      safe_path = Shellwords.escape(target_path)
+      safe_url = Shellwords.escape(rewrite_url_for_container(url))
+      runtime.exec(container, [ "sh", "-c", "mkdir -p #{safe_dir} && curl -sSL -o #{safe_path} #{safe_url}" ])
+      Rails.logger.info("[WorkflowStepStrategy] Downloaded → #{target_path}")
+      true
+    end
+
+    def rewrite_url_for_container(url)
+      ContainerAssetUrl.call(url, host: Settings.container_asset_host)
+    end
+
+    # Context from step_run (board task, run params) is injected by SessionContextConstructor,
+    # not here. This method only returns the step's instructions, references rendered.
+    def build_workflow_prompt(step, step_run)
+      return nil unless step
+
+      InstructionReferences::Renderer.new(step: step, project: step_run&.workflow_run&.project).render(step.instructions)
+    end
+
+    # The step's own instructions, not the session's initial prompt.
+    def agent_prompt(session)
+      step_run = session.step_run
+      build_workflow_prompt(step_run&.step, step_run)
+    end
+  end
+end

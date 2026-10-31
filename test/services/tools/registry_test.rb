@@ -1,0 +1,91 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class Tools::RegistryTest < ActiveSupport::TestCase
+  # Filesystem cross-check (no name list to maintain): every InternalTools
+  # handler file that declares a tool block must be discovered, and vice
+  # versa. Catches a silent eager_load_namespace miss — Zeitwerk deliberately
+  # does nothing when a namespace isn't managed.
+  test "discovers exactly the handler files that declare tool blocks" do
+    handler_files = Dir[Rails.root.join("app/services/internal_tools/*.rb")] +
+                    Dir[Rails.root.join("app/services/personal_tools/*.rb")]
+    declared = handler_files.select { |f| File.read(f).match?(/^\s+tool do$/) }
+                            .map { |f| File.basename(f, ".rb") }
+
+    assert_equal declared.sort, Tools::Registry.names.sort
+    assert_operator Tools::Registry.names.size, :>=, 49
+  end
+
+  test "fetch returns a frozen definition with a resolvable handler" do
+    definition = Tools::Registry.fetch("chat_post_message")
+
+    assert definition.frozen?
+    assert_equal "Chat Post Message", definition.display_name
+    assert_equal InternalTools::ChatPostMessage, definition.handler_class
+    assert_equal %i[messaging chat], definition.tags
+    assert_equal "chat", definition.requires_integration.to_s
+    assert_nil Tools::Registry.fetch("nope_not_a_tool")
+  end
+
+  test "session lifecycle and sub-step tools are reserved to the top-level agent" do
+    %w[finish_session fail_session mark_sub_step].each do |name|
+      assert_includes Tools::Registry.fetch(name).description,
+        "Only the top-level agent may call this: a subagent reports back", name
+    end
+  end
+
+  test "injectable covers the auto-injection rule groups" do
+    rules = Tools::Registry.injectable.flat_map(&:inject_rules).uniq.sort
+
+    assert_equal %i[azure_integration_connected azure_repositories_attached coder_integration_connected
+                    config_items_attached container_tools_present github_repositories_attached
+                    non_interactive_session pull_request_repositories_attached tracker_run workflow_step_session], rules
+  end
+
+  test "grouping axes cover every definition" do
+    defs = Tools::Registry.definitions.values
+
+    assert_equal 22, defs.count { |d| d.inject_rules.include?(:workflow_step_session) }
+    assert_equal 3, defs.count { |d| d.inject_rules.intersect?(%i[container_tools_present non_interactive_session]) }
+
+    # Azure is injected rather than picked, so every one of its tools must
+    # carry a rule and none may be attachable — a tool that fell out of this
+    # would be unreachable: hidden from the picker AND never injected.
+    azure = defs.select { |d| d.tags.include?(:azure_devops) }
+    assert_equal 17, azure.size
+    assert azure.none?(&:user_attachable), "Azure tools must not be offered in the picker"
+    assert azure.all? { |d| d.inject_rules.intersect?(%i[azure_repositories_attached azure_integration_connected]) }
+
+    # The same holds for the pull_request_* tools: injected with a GitLab or
+    # Bitbucket repository, never picked.
+    pull_requests = defs.select { |d| d.tags.include?(:pull_requests) }
+    assert_equal 10, pull_requests.size
+    assert pull_requests.none?(&:user_attachable)
+    assert pull_requests.all? { |d| d.inject_rules == %i[pull_request_repositories_attached] }
+    assert pull_requests.all? { |d| d.requires_integration.to_s == PullRequests::CAPABILITY }
+  end
+
+  test "ui_groups offer one entry per visible tag, session tools only" do
+    groups = Tools::Registry.ui_groups
+
+    assert_equal %w[board tracker chat coder assets session_supervision], groups.map { |g| g[:tag] }
+    assert_equal %w[chat_delete_message chat_post_message chat_read_thread chat_update_message],
+                 groups.find { |g| g[:tag] == "chat" }[:tool_names]
+
+    defs = groups.flat_map { |g| g[:tool_names] }.map { |n| Tools::Registry.fetch(n) }
+
+    # A personal (audience :user) tool shares tags with the session ones but has
+    # no shadow row, so it must never be pulled into a picker group.
+    assert defs.all? { |d| d.audience == :session }, "picker groups must hold session tools only"
+    assert defs.all?(&:user_attachable)
+  end
+
+  test "no tool carries two picker-visible tags" do
+    doubled = Tools::Registry.definitions.values.select do |d|
+      d.tags.count { |t| Tools::TagCatalog.ui_visible?(t) } > 1
+    end
+
+    assert_empty doubled.map(&:name), "a tool in two picker groups would fight over its own ids"
+  end
+end

@@ -1,0 +1,259 @@
+# Temporal Schedules Configuration
+
+schedules:
+  - workflow: stale_session_cleanup_workflow
+    cron: "0 * * * *"
+    enabled: true
+
+  # Settles WorkflowRun rows still running/paused after their Temporal execution
+  # closed or disappeared without writing a final status — they hold pod quota and
+  # read as live. Each sweep is one describe per candidate run, so it runs often.
+  - workflow: stale_run_cleanup_workflow
+    cron: "*/15 * * * *"
+    enabled: true
+
+  - workflow: dismissed_asset_cleanup_workflow
+    cron: "0 3 * * *"
+    enabled: true
+
+  # Expires tool output past TOOL_RESULTS_RETENTION_DAYS and fails results stuck
+  # in processing. Hourly so a stuck result is settled within two hours.
+  - workflow: tool_result_cleanup_workflow
+    cron: "17 * * * *"
+    enabled: true
+    overlap: skip
+
+  - workflow: quota_error_scan_workflow
+    cron: "* * * * *"
+    enabled: true
+
+  # Terminates sessions that have been `ready` (agent working) but produced no
+  # terminal output for 30 minutes. Catches agents blocked on an interactive
+  # prompt (e.g. claude.ai spend-limit dialog) that the quota scanner misses
+  # because the blocking prompt may appear before any quota-error text.
+  # SKIP overlap: same sessions could be processed by two concurrent sweeps.
+  - workflow: no_output_scan_workflow
+    cron: "* * * * *"
+    overlap: skip
+    enabled: true
+
+  # Watchdog for agent containers that died without telling anyone (node failure,
+  # eviction, OOM kill). The pods are bare pods with restartPolicy: Never, so
+  # nothing else notices: the session stays `ready` and its container workflow
+  # waits 23 hours for a signal that will never arrive.
+  #
+  # Every minute, because the cost of a miss is a workflow step wedged for a day,
+  # while the scan is one runtime lookup per active session. Nothing is failed on a
+  # single sighting — the activity requires two, two minutes apart — so the cadence
+  # sets detection latency (~3 minutes), not sensitivity.
+  #
+  # SKIP overlap: a slow sweep must not be joined by the next one re-checking the
+  # same sessions, which would confirm a session dead against its own first
+  # sighting.
+  - workflow: dead_container_scan_workflow
+    cron: "* * * * *"
+    overlap: skip
+    enabled: true
+
+  # Transactional-outbox safety net, both halves: re-dispatches trigger events a
+  # producer committed but crashed before dispatching, then re-drives runs whose
+  # Temporal execution was never confirmed started (a Temporal outage during
+  # WorkflowService.start used to strand those in `pending` forever). Every minute
+  # is the finest cron granularity; the happy path dispatches inline, so this only
+  # recovers crashes and outages.
+  # SKIP overlap: the relay is idempotent and must never run two drains at once.
+  - workflow: outbox_relay_workflow
+    cron: "* * * * *"
+    overlap: skip
+    enabled: true
+
+  # Recovery path for CI gates whose resolving webhook never arrived: asks the CI
+  # provider what happened to each pending gate's run and resolves it with the
+  # provider's own verdict, or marks it stale when the run/repository cannot be
+  # read at all or the gate's TTL has run out. Without it, one lost delivery parks
+  # a card's automation permanently.
+  #
+  # Every 5 minutes against a 10-minute grace window: a gate is probed no sooner
+  # than 10 minutes after it was created (and no more often than that afterwards),
+  # so the cadence sets recovery latency, not how often a provider is called. The
+  # webhook remains the fast path — this only ever sees the gates it missed.
+  #
+  # SKIP overlap: a slow sweep must not be joined by the next one probing the same
+  # gates. Claiming is FOR UPDATE SKIP LOCKED, so an overlap would be safe, just
+  # wasteful in provider requests.
+  - workflow: gate_reconciliation_workflow
+    cron: "*/5 * * * *"
+    overlap: skip
+    enabled: true
+
+  - workflow: coder_sweep_expired_locks_workflow
+    cron: "0 * * * *"
+    enabled: true
+
+  # Deletes pool workspaces whose Coder agent is gone for good. The pool runs on
+  # spot: when an instance is reclaimed the agent dies with the OS, Coder keeps
+  # reporting the last build as a succeeded start, and nothing ever brought the
+  # workspace back — so the effective pool decayed with the interruption rate.
+  #
+  # Every 10 minutes against a 10-minute confirmation window: a workspace is
+  # deleted on the second sighting, so ~20 minutes after it died. Nothing is
+  # deleted on a single sighting, and a box that answers an SSH probe is never
+  # deleted at all, so the cadence sets detection latency, not sensitivity.
+  #
+  # SKIP overlap: a slow sweep (each confirmation costs one SSH probe that has
+  # to time out) must not be joined by the next one confirming a workspace dead
+  # against its own first sighting.
+  - workflow: coder_reap_dead_workspaces_workflow
+    cron: "*/10 * * * *"
+    overlap: skip
+    enabled: true
+
+  # Reclaims the Kubernetes objects of agent sessions that ended without the
+  # happy-path teardown running — the node-died case, which otherwise leaves an
+  # IngressRoute and an endpoint-less Service answering 503 on the session URL
+  # forever.
+  #
+  # Every 10 minutes against a 15-minute minimum object age: an orphan is gone
+  # within ~25 minutes, while nothing created inside the last quarter hour can
+  # be looked at. SKIP overlap: two sweeps would enumerate the same objects and
+  # race each other's deletes, turning a benign 404 into log noise.
+  - workflow: container_sweep_orphaned_resources_workflow
+    cron: "*/10 * * * *"
+    overlap: skip
+    enabled: true
+
+  # Mirrors the Official MCP Registry into the local connector catalog.
+  #
+  # Weekly, not the hourly cadence the registry suggests to aggregators. What
+  # goes stale is DISCOVERY only: an install re-fetches the manifest live, so a
+  # week-old mirror can never produce a week-old configuration. The cost is that
+  # a newly published connector takes up to a week to become searchable, which
+  # is an acceptable trade for a catalog measured in thousands of entries that
+  # change slowly.
+  #
+  # SKIP overlap: a first run walks the whole registry and must not race a second
+  # walk writing the same natural keys. Correctness does not depend on the
+  # cadence — the sync resumes from the newest mirrored change, so a missed or
+  # doubled run both converge.
+  - workflow: mcp_connector_catalog_sync_workflow
+    cron: "15 5 * * 1"
+    overlap: skip
+    enabled: true
+
+  # Rebuilds the skills catalog mirror. skills.sh publishes no list endpoint and no
+  # change feed, so this is a seeded sweep of the public search endpoint rather than
+  # a walk — coverage comes from the seeds, freshness from re-running. Weekly for
+  # the same reason as the connector sync: only browse goes stale, since typed
+  # searches query upstream live. SKIP overlap: two sweeps would duplicate every
+  # request and write the same natural keys.
+  - workflow: skills_catalog_sync_workflow
+    cron: "45 5 * * 1"
+    overlap: skip
+    enabled: true
+
+  # Mirrors the public templates repository (AixleHQ/flow-templates). Hourly: a
+  # run at an unchanged commit is two small requests and no writes, and a merged
+  # template should appear the same day. SKIP overlap: two runs would write the
+  # same slugs.
+  - workflow: templates_catalog_sync_workflow
+    cron: "20 * * * *"
+    overlap: skip
+    enabled: true
+
+  # Follows demand rather than the static seed list: sweeps the terms users actually
+  # searched for (CatalogSearchQuery, unattributed), then the same bounded description
+  # backfill and audit passes. Daily is affordable because it is narrow — a few dozen
+  # requests against the terms people are about to install from, versus the ~110-request
+  # weekly full sweep. SKIP overlap: two runs would duplicate every request.
+  - workflow: skills_demand_sync_workflow
+    cron: "20 4 * * *"
+    overlap: skip
+    enabled: true
+
+  # Re-probes catalog-installed MCP servers for tools whose declarations changed
+  # after approval (rug pull, OWASP MCP03:2025). Daily: the change is durable,
+  # and each scan makes one outbound request per installed server. SKIP overlap:
+  # a slow sweep must not be joined by the next one probing the same servers.
+  - workflow: mcp_tool_drift_scan_workflow
+    cron: "40 4 * * *"
+    overlap: skip
+    enabled: true
+
+  # Proactive server-side OAuth token refresh for agent-CLI credentials nearing
+  # expiry. SKIP overlap: each sweep does read-merge-write under a row lock, so
+  # two batches must never run concurrently (mirrors outbox_relay_workflow).
+  - workflow: agent_token_refresh_workflow
+    cron: "*/5 * * * *"
+    overlap: skip
+    enabled: true
+
+  # Proactive server-side OAuth token refresh for integration + MCP-server
+  # credentials nearing expiry (oauth-unification §4.5). SKIP overlap: each refresh
+  # is a read-merge-write under a row lock, so two sweeps must never run at once.
+  - workflow: oauth_token_refresh_workflow
+    cron: "*/5 * * * *"
+    overlap: skip
+    enabled: true
+
+  # Extends tracker webhooks that expire (Jira's dynamic webhooks last 30 days)
+  # a week ahead, and keeps idle Jira 3LO grants alive. Daily is plenty for both.
+  - workflow: tracker_subscription_refresh_workflow
+    cron: "41 4 * * *"
+    overlap: skip
+    enabled: true
+
+  # Atlassian's Personal Data Reporting API: daily, so each account id is
+  # reported once its 7-day cycle comes round (Trackers::Jira::PersonalDataReporter).
+  - workflow: tracker_personal_data_workflow
+    cron: "17 5 * * *"
+    overlap: skip
+    enabled: true
+
+  # Reminds invitees whose invitation is unaccepted and within 2 days of the
+  # 7-day expiry. Hourly is plenty: `reminded_at` makes it idempotent, so the
+  # cadence only affects how promptly the single reminder goes out.
+  - workflow: membership_invitation_reminder_workflow
+    cron: "30 * * * *"
+    overlap: skip
+    enabled: true
+
+  - workflow: session_admission_reconciliation_workflow
+    cron: "* * * * *"
+    overlap: skip
+    enabled: true
+
+  # Capacity metering. Runs at five past so the hour it measures has closed.
+  #
+  # SKIP overlap and a single activity attempt: AWS Marketplace counts one record
+  # per hour PER POD, so two passes — or one retried onto another replica — bill
+  # the same hour twice. A failed send is replayed by the next run from the
+  # ledger, inside the six hours AWS still accepts records for.
+  - workflow: capacity_metering_workflow
+    cron: "5 * * * *"
+    overlap: skip
+    enabled: true
+
+  # Drains the AWS Marketplace subscription queue: agreements created and ended,
+  # licences updated and deprovisioned.
+  #
+  # Every minute, because one of those events opens a one-hour window to report
+  # a cancelling customer's last usage and the rest of that hour is spent
+  # measuring and sending. The cost of the cadence is one long-polled receive
+  # against an empty queue.
+  #
+  # SKIP overlap: two drains would read the same messages inside one visibility
+  # timeout and apply the same events twice. Both halves are idempotent, so an
+  # overlap would be safe rather than wrong -- but it would also be pointless.
+  - workflow: marketplace_events_workflow
+    cron: "* * * * *"
+    overlap: skip
+    enabled: true
+
+  # Usage rollup for the tenant report. Five minutes after metering, because each
+  # hour copies the ledger row the meter writes. It revisits the last three hours,
+  # so a late ledger row or a late transition still lands, and measures any hour
+  # before them that was never measured — all of history on its first run.
+  - workflow: usage_rollup_workflow
+    cron: "10 * * * *"
+    overlap: skip
+    enabled: true

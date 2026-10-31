@@ -1,0 +1,708 @@
+import { router, usePage } from '@inertiajs/react';
+import { Badge, Box, Button, Card, Group, MultiSelect, Select, Stack, Switch, Text, Textarea } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { IconAdjustments, IconPlayerPlay, IconRobot, IconSparkles } from '@tabler/icons-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import type { ConfigItemPicker, RunnerSummary } from '@/types/generated';
+
+import { AssetPicker, type AssetPickerItem } from 'shared/components/AssetPicker';
+import { ReasoningEffortSelect } from 'shared/components/ReasoningEffortSelect';
+import { ToolPicker } from 'shared/components/ToolPicker';
+import { apiFetch } from 'shared/lib/apiFetch';
+import { useFeatureFlag } from 'shared/lib/hooks/useFeatureFlag';
+import { useProjectPermissions } from 'shared/lib/hooks/useProjectPermissions';
+import { postNavigate } from 'shared/lib/postNavigate';
+import { type ToolGroup } from 'shared/lib/toolPicker';
+import { RunnerCredentialNote, RunnerSelect } from 'shared/resources/runners/runnerChoice';
+import { runnerUnusableReason } from 'shared/resources/runners/runnerCopy';
+import { apiV1TerminalSessionsPath } from 'shared/routes';
+import { AGENT_RUNTIMES, isAgentType, NO_AGENT_CREDENTIALS } from 'shared/ui/agentRuntimes';
+import { FormSection, ModeCards, RuntimeTiles } from 'shared/ui/sessions';
+import type { AgentType, SharedProps } from 'shared/ui/types';
+
+import classes from './SessionNewForm.module.css';
+
+/** Cost context for the commit moment — see sessions_controller#session_cost_hint. */
+export interface SessionCostHint {
+  avgCostCentsByRuntime: Record<string, number>;
+  monthToDateCents: number;
+}
+
+export interface NamedItem {
+  id: number;
+  name: string;
+}
+
+/** Picker payload for a project config item — names and types only, never a value. */
+export type ConfigItemOption = ConfigItemPicker;
+
+export interface SessionNewFormProps {
+  projectId?: number;
+  projects?: NamedItem[];
+  agentModels?: AgentModelsEntry[];
+  agents?: NamedItem[];
+  tools?: NamedItem[];
+  /**
+   * Tag groups the picker offers as collapsible sections ("Board management",
+   * "Slack"), exactly as the workflow builder offers them: the header attaches
+   * the whole family in one click, the rows under it attach single tools.
+   */
+  toolGroups?: ToolGroup[];
+  skills?: NamedItem[];
+  mcpServers?: NamedItem[];
+  repositories?: NamedItem[];
+  assets?: AssetPickerItem[];
+  configItems?: ConfigItemOption[];
+  /** The runners the fixed project can see; only read with the externalRunners flag. */
+  runners?: RunnerSummary[];
+  /** Where to redirect after session creation */
+  onCreatedPath: (sessionId: string, projectId: number) => string;
+  /** Fallback redirect if no session id returned */
+  fallbackPath: string;
+  /** Pre-selected project for company-level form */
+  preSelectedProjectId?: number | null;
+  /** Typical spend for this runtime + what has already gone this month. */
+  costHint?: SessionCostHint;
+  /**
+   * `page` keeps the bordered card; `drawer` drops it and pins Start to a
+   * footer, so the 460px side panel matches the Run Workflow drawer exactly.
+   */
+  layout?: 'page' | 'drawer';
+  /** Reports whether the form holds input that unmounting it would throw away; false again on unmount. */
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+const formatCents = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
+
+interface AgentModel {
+  modelId: string;
+  displayName: string;
+  /** The reasoning-effort levels the runtime takes for this model, from the server. */
+  reasoningEffortLevels: string[];
+}
+
+interface AgentModelsEntry {
+  agentType: string;
+  models: AgentModel[];
+  /** The model a session on this runtime launches with when none is picked. */
+  defaultModel?: string | null;
+}
+
+// Stands in for "no model" inside the dropdown; never stored in state or sent.
+const DEFAULT_MODEL_OPTION = '__runtime_default__';
+
+export const SessionNewForm = ({
+  projectId: fixedProjectId,
+  projects,
+  agentModels = [],
+  agents = [],
+  tools = [],
+  toolGroups = [],
+  skills = [],
+  mcpServers = [],
+  repositories = [],
+  assets = [],
+  configItems = [],
+  runners = [],
+  onCreatedPath,
+  fallbackPath,
+  preSelectedProjectId,
+  costHint,
+  layout = 'page',
+  onDirtyChange,
+}: SessionNewFormProps) => {
+  const { currentUser } = usePage().props as unknown as SharedProps;
+  const { canExecute } = useProjectPermissions();
+  const externalRunners = useFeatureFlag('externalRunners');
+  const configuredAgents = currentUser?.configuredAgents ?? [];
+  const defaultRuntime = currentUser?.defaultAgentRuntime;
+  const initialAgent = defaultRuntime && configuredAgents.includes(defaultRuntime) ? defaultRuntime : '';
+
+  const [seed] = useState(() => ({
+    projectId: fixedProjectId ? String(fixedProjectId) : preSelectedProjectId ? String(preSelectedProjectId) : null,
+    agentType: initialAgent,
+  }));
+  const [projectId, setProjectId] = useState<string | null>(seed.projectId);
+  const [agentType, setAgentType] = useState<string>(seed.agentType);
+  const [mode, setMode] = useState('interactive');
+  const [initialPrompt, setInitialPrompt] = useState('');
+  const [bmadEnabled, setBmadEnabled] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // OAuth session-start preflight (§4.6): MCP servers the user must connect before this
+  // session can launch. Populated from the API's 422 { reauth_required } response.
+  const [reauthRequired, setReauthRequired] = useState<{ name: string; connectUrl: string; connectMethod?: string }[]>(
+    [],
+  );
+
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedEffort, setSelectedEffort] = useState<string | null>(null);
+  const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+  const [selectedToolIds, setSelectedToolIds] = useState<number[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [selectedAssets, setSelectedAssets] = useState<number[]>([]);
+  const [selectedConfigItems, setSelectedConfigItems] = useState<string[]>([]);
+  const [runnerId, setRunnerId] = useState<number | null>(null);
+
+  const resolvedProjectId = fixedProjectId ? String(fixedProjectId) : projectId;
+  const showProjectSelector = !fixedProjectId && projects && projects.length > 0;
+  // Runners belong to a project, so the pick needs one fixed by the page.
+  const showRunner = externalRunners && !!fixedProjectId;
+  const runner = runners.find((r) => r.id === runnerId);
+  const runnerWarning = runner ? runnerUnusableReason(runner) : null;
+
+  const modelsMap = useMemo(() => {
+    const m: Record<string, AgentModel[]> = {};
+    for (const entry of agentModels) m[entry.agentType] = entry.models;
+    return m;
+  }, [agentModels]);
+
+  const models = useMemo(() => (agentType ? (modelsMap[agentType] ?? []) : []), [agentType, modelsMap]);
+
+  const effortLevelsFor = (model: string | null) =>
+    model ? models.find((m) => m.modelId === model)?.reasoningEffortLevels : undefined;
+
+  const defaultModelId = agentType ? (agentModels.find((e) => e.agentType === agentType)?.defaultModel ?? null) : null;
+  const defaultModelLabel = defaultModelId
+    ? `Default · ${models.find((m) => m.modelId === defaultModelId)?.displayName || defaultModelId}`
+    : 'Default (runtime selects)';
+
+  const modelOptions = useMemo(
+    () => [
+      ...(agentType ? [{ value: DEFAULT_MODEL_OPTION, label: defaultModelLabel }] : []),
+      ...models.filter((m) => m.modelId).map((m) => ({ value: m.modelId, label: m.displayName || m.modelId })),
+    ],
+    [agentType, defaultModelLabel, models],
+  );
+  const modelFieldLabel = selectedModel
+    ? (modelOptions.find((o) => o.value === selectedModel)?.label ?? selectedModel)
+    : defaultModelLabel;
+
+  const avgCostCents = agentType ? (costHint?.avgCostCentsByRuntime?.[agentType] ?? null) : null;
+
+  const canSubmit =
+    !!agentType &&
+    configuredAgents.includes(agentType as AgentType) &&
+    (mode === 'interactive' || initialPrompt.trim().length > 0);
+
+  const configCount = useMemo(() => {
+    let count = 0;
+    if (selectedPersona) count++;
+    if (selectedModel) count++;
+    if (selectedEffort) count++;
+    count +=
+      selectedToolIds.length +
+      selectedSkills.length +
+      selectedMcpServers.length +
+      selectedRepos.length +
+      selectedAssets.length +
+      selectedConfigItems.length;
+    if (bmadEnabled) count++;
+    return count;
+  }, [
+    selectedPersona,
+    selectedModel,
+    selectedEffort,
+    selectedToolIds,
+    selectedSkills,
+    selectedMcpServers,
+    selectedRepos,
+    selectedAssets,
+    selectedConfigItems,
+    bmadEnabled,
+  ]);
+
+  const dirty =
+    projectId !== seed.projectId ||
+    agentType !== seed.agentType ||
+    mode !== 'interactive' ||
+    configCount > 0 ||
+    runnerId !== null;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  const handleStart = useCallback(async () => {
+    if (!canSubmit) return;
+    setLoading(true);
+    setError(null);
+    setReauthRequired([]);
+
+    try {
+      const res = await apiFetch(apiV1TerminalSessionsPath(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          terminalSession: {
+            projectId: resolvedProjectId ? Number(resolvedProjectId) : undefined,
+            sessionType: 'agent_session',
+            agentType: agentType,
+            mode,
+            initialPrompt: mode === 'non_interactive' ? initialPrompt : null,
+            requestedModel: selectedModel || undefined,
+            reasoningEffort: (selectedModel && selectedEffort) || undefined,
+            configuredAgentId: selectedPersona ? Number(selectedPersona) : undefined,
+            toolIds: selectedToolIds.length > 0 ? selectedToolIds : undefined,
+            skillIds: selectedSkills.length > 0 ? selectedSkills.map(Number) : undefined,
+            mcpServerIds: selectedMcpServers.length > 0 ? selectedMcpServers.map(Number) : undefined,
+            repositoryIds: selectedRepos.length > 0 ? selectedRepos.map(Number) : undefined,
+            inputAssetIds: selectedAssets.length > 0 ? selectedAssets : undefined,
+            configItemIds: selectedConfigItems.length > 0 ? selectedConfigItems.map(Number) : undefined,
+            sessionConfig: bmadEnabled ? { bmadEnabled: true } : {},
+            ...(showRunner && runnerId !== null && { runnerId }),
+          },
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const sessionId = data?.data?.id ?? data?.id;
+        if (sessionId) {
+          router.visit(onCreatedPath(String(sessionId), resolvedProjectId ? Number(resolvedProjectId) : 0));
+        } else {
+          router.visit(fallbackPath);
+        }
+      } else {
+        const errData = await res.json().catch(() => null);
+        const reauth = errData?.reauth_required;
+        if (res.status === 422 && Array.isArray(reauth) && reauth.length > 0) {
+          // Preflight blocked the launch: surface a Connect CTA per server instead of a raw error.
+          setReauthRequired(
+            reauth.map((r: { name: string; connect_url: string; connect_method?: string }) => ({
+              name: r.name,
+              connectUrl: r.connect_url,
+              connectMethod: r.connect_method,
+            })),
+          );
+        } else {
+          const msg = errData?.errors?.[0] ?? errData?.error ?? 'Failed to create session';
+          setError(msg);
+          notifications.show({ message: msg, color: 'red' });
+        }
+      }
+    } catch {
+      setError('Network error');
+    }
+    setLoading(false);
+  }, [
+    canSubmit,
+    resolvedProjectId,
+    agentType,
+    mode,
+    initialPrompt,
+    bmadEnabled,
+    selectedModel,
+    selectedEffort,
+    selectedPersona,
+    selectedToolIds,
+    selectedSkills,
+    selectedMcpServers,
+    selectedRepos,
+    selectedAssets,
+    selectedConfigItems,
+    showRunner,
+    runnerId,
+    onCreatedPath,
+    fallbackPath,
+  ]);
+
+  const agentConfig = isAgentType(agentType) ? AGENT_RUNTIMES[agentType] : null;
+  const isDrawer = layout === 'drawer';
+
+  const startButton = canExecute ? (
+    <Button
+      size="md"
+      leftSection={<IconPlayerPlay size={18} />}
+      onClick={handleStart}
+      loading={loading}
+      disabled={!canSubmit}
+      fullWidth
+      /* No `color` override: the primary action keeps the brand accent
+         whichever runtime is selected. Coloring it per vendor meant the
+         most expensive button in the app changed color as you picked,
+         and its default (Mantine orange) measured 2.57:1. Runtime
+         identity stays on the runtime picker above. */
+    >
+      Start Session
+    </Button>
+  ) : null;
+
+  const body = (
+    <Stack gap="lg">
+      {/* ── Project Selector (company-level only) ──── */}
+      {showProjectSelector && (
+        <Select
+          label="Project"
+          placeholder="No project (optional)"
+          data={projects!.map((p) => ({ value: String(p.id), label: p.name }))}
+          value={projectId}
+          onChange={setProjectId}
+          searchable
+          clearable
+          size="md"
+        />
+      )}
+
+      {/* ── Agent runtime → Execution mode → Configuration: the same order,
+             with the same controls, as the Run Workflow drawer. ─────────── */}
+      <Box>
+        <FormSection icon={<IconRobot size={14} />} first>
+          Agent runtime
+        </FormSection>
+        <RuntimeTiles
+          value={agentType || null}
+          configured={configuredAgents}
+          onChange={(type) => {
+            setAgentType(type);
+            setSelectedModel(null);
+            setSelectedEffort(null);
+          }}
+        />
+        {configuredAgents.length === 0 && (
+          <Text size="xs" c="dimmed" mt={8}>
+            {NO_AGENT_CREDENTIALS}
+          </Text>
+        )}
+      </Box>
+
+      <Box>
+        <FormSection icon={<IconPlayerPlay size={14} />}>Execution mode</FormSection>
+        <ModeCards
+          aria-label="Execution mode"
+          value={mode}
+          onChange={(val) => {
+            setMode(val);
+            if (val === 'interactive') {
+              setInitialPrompt('');
+              setRunnerId(null);
+            }
+          }}
+          options={[
+            { value: 'interactive', title: 'Interactive', description: 'You steer each turn' },
+            { value: 'non_interactive', title: 'Automatic', description: 'Runs on its own' },
+          ]}
+        />
+      </Box>
+
+      {mode === 'non_interactive' && (
+        <Box>
+          <Textarea
+            label="Initial Prompt"
+            placeholder="Describe the task for the agent..."
+            value={initialPrompt}
+            onChange={(e) => setInitialPrompt(e.currentTarget.value)}
+            autosize
+            minRows={3}
+            maxRows={10}
+            required
+            error={initialPrompt.trim().length === 0 ? 'Prompt is required for automatic mode' : undefined}
+            size="md"
+          />
+          {initialPrompt.length > 0 && (
+            <Text size="xs" c="dimmed" ta="right" mt={2} className={classes.promptCharCount}>
+              {initialPrompt.length} chars
+            </Text>
+          )}
+        </Box>
+      )}
+
+      {/* ── Configuration ───────────────────────────── */}
+      <FormSection icon={<IconAdjustments size={14} />}>Configuration</FormSection>
+
+      {showRunner && (
+        <Box>
+          <RunnerSelect
+            label="Runs on"
+            hostedLabel="Hosted"
+            runners={runners}
+            value={runnerId}
+            onChange={setRunnerId}
+            interactive={mode === 'interactive'}
+          />
+          <RunnerCredentialNote runner={runner} />
+          {runnerWarning && (
+            <Text size="xs" c="var(--app-warning-fg)" mt={4}>
+              {runnerWarning} The session fails at launch.
+            </Text>
+          )}
+        </Box>
+      )}
+
+      <Select
+        label="Model"
+        placeholder={defaultModelLabel}
+        title={modelFieldLabel}
+        value={selectedModel}
+        onChange={(value) => {
+          const model = value === DEFAULT_MODEL_OPTION ? null : value;
+          setSelectedModel(model);
+          // A level needs an explicitly chosen model that takes it, so one the new
+          // model doesn't take (or Default, which takes none) clears it.
+          if (selectedEffort && !(effortLevelsFor(model) ?? []).includes(selectedEffort)) {
+            setSelectedEffort(null);
+          }
+        }}
+        data={modelOptions}
+        classNames={{ input: classes.modelInput, option: classes.modelOption }}
+        searchable
+        clearable
+        disabled={!agentType}
+      />
+
+      {/* A level needs an explicitly chosen model; the server refuses one without it. */}
+      {selectedModel && (
+        <ReasoningEffortSelect
+          label="Reasoning effort"
+          runtime={agentType || null}
+          model={selectedModel}
+          levels={effortLevelsFor(selectedModel)}
+          value={selectedEffort}
+          onChange={setSelectedEffort}
+        />
+      )}
+
+      {agents.length > 0 && (
+        <Select
+          label="Agent Persona"
+          placeholder="Default (no persona)"
+          leftSection={<IconRobot size={16} />}
+          data={agents.map((a) => ({ value: String(a.id), label: a.name }))}
+          value={selectedPersona}
+          onChange={setSelectedPersona}
+          searchable
+          clearable
+        />
+      )}
+
+      {tools.length > 0 && (
+        <ToolPicker
+          label="Tools"
+          placeholder="Select tools..."
+          tools={tools}
+          groups={toolGroups}
+          value={selectedToolIds}
+          onChange={setSelectedToolIds}
+        />
+      )}
+
+      {skills.length > 0 && (
+        <MultiSelect
+          label="Skills"
+          placeholder="Select skills..."
+          data={skills.map((s) => ({ value: String(s.id), label: s.name }))}
+          value={selectedSkills}
+          onChange={setSelectedSkills}
+          searchable
+          clearable
+        />
+      )}
+
+      {mcpServers.length > 0 && (
+        <MultiSelect
+          label="MCP Servers"
+          placeholder="Select MCP servers..."
+          data={mcpServers.map((s) => ({ value: String(s.id), label: s.name }))}
+          value={selectedMcpServers}
+          onChange={setSelectedMcpServers}
+          searchable
+          clearable
+        />
+      )}
+
+      {repositories.length > 0 && (
+        <MultiSelect
+          label="Repositories"
+          placeholder="Select repositories..."
+          data={repositories.map((r) => ({ value: String(r.id), label: r.name }))}
+          value={selectedRepos}
+          onChange={setSelectedRepos}
+          searchable
+          clearable
+        />
+      )}
+
+      {assets.length > 0 && (
+        <Box>
+          <Text size="sm" fw={500} mb={4}>
+            Assets
+          </Text>
+          <AssetPicker
+            assets={assets}
+            value={selectedAssets}
+            onChange={setSelectedAssets}
+            placeholder="Select assets…"
+            aria-label="Assets"
+          />
+        </Box>
+      )}
+
+      {configItems.length > 0 && (
+        <MultiSelect
+          label="Secrets & Variables"
+          description="The agent can read these with the get_config_item tool instead of asking you to paste a credential."
+          placeholder="Select secrets and variables..."
+          aria-label="Secrets and variables"
+          data={configItems.map((c) => ({
+            value: String(c.id),
+            label: c.itemType === 'secret' ? `${c.name} (secret)` : c.name,
+          }))}
+          value={selectedConfigItems}
+          onChange={setSelectedConfigItems}
+          searchable
+          clearable
+        />
+      )}
+
+      {/* ── Execution ───────────────────────────────── */}
+      <FormSection icon={<IconSparkles size={14} />}>Execution</FormSection>
+
+      <Switch
+        label="Use BMAD Method"
+        description="Enable BMAD methodology modules for this session"
+        checked={bmadEnabled}
+        onChange={(e) => setBmadEnabled(e.currentTarget.checked)}
+      />
+
+      {/* ── Summary Preview ─────────────────────────── */}
+      {(agentType || configCount > 0) && (
+        <Card withBorder p="sm" bg="var(--app-bg-elevated)">
+          <Stack gap={6}>
+            <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+              Session Summary
+            </Text>
+            {/* The one number that belongs on this screen. Everything else in
+                  the product reports cost after the fact. */}
+            {costHint && (
+              <Text size="xs" c="var(--app-text-secondary)">
+                {avgCostCents != null ? (
+                  <>
+                    Typically <strong>{formatCents(avgCostCents)}</strong> per session on this runtime
+                    {' · '}
+                  </>
+                ) : null}
+                <strong>{formatCents(costHint.monthToDateCents)}</strong> spent by you in this project this month
+              </Text>
+            )}
+            <div className={classes.summaryRow}>
+              {agentConfig && (
+                <Badge color={agentConfig.mantineColor} size="sm" variant="filled">
+                  {agentConfig.label}
+                </Badge>
+              )}
+              <Badge size="sm" variant="outline">
+                {mode === 'interactive' ? 'Interactive' : 'Automatic'}
+              </Badge>
+              {selectedModel && (
+                <Badge size="xs" variant="light">
+                  {models.find((m) => m.modelId === selectedModel)?.displayName ?? selectedModel}
+                </Badge>
+              )}
+              {selectedPersona && (
+                <Badge size="xs" variant="light" leftSection={<IconRobot size={10} />}>
+                  {agents.find((a) => String(a.id) === selectedPersona)?.name ?? 'Persona'}
+                </Badge>
+              )}
+              {selectedToolIds.length > 0 && (
+                <Badge size="xs" variant="outline" color="yellow">
+                  {selectedToolIds.length} tool{selectedToolIds.length > 1 ? 's' : ''}
+                </Badge>
+              )}
+              {selectedSkills.length > 0 && (
+                <Badge size="xs" variant="outline" color="grape">
+                  {selectedSkills.length} skill{selectedSkills.length > 1 ? 's' : ''}
+                </Badge>
+              )}
+              {selectedMcpServers.length > 0 && (
+                <Badge size="xs" variant="outline" color="cyan">
+                  {selectedMcpServers.length} MCP
+                </Badge>
+              )}
+              {selectedRepos.length > 0 && (
+                <Badge size="xs" variant="outline" color="green">
+                  {selectedRepos.length} repo{selectedRepos.length > 1 ? 's' : ''}
+                </Badge>
+              )}
+              {selectedAssets.length > 0 && (
+                <Badge size="xs" variant="outline">
+                  {selectedAssets.length} asset{selectedAssets.length > 1 ? 's' : ''}
+                </Badge>
+              )}
+              {bmadEnabled && (
+                <Badge size="xs" variant="light" color="blue">
+                  BMAD
+                </Badge>
+              )}
+            </div>
+          </Stack>
+        </Card>
+      )}
+
+      {error && (
+        <Text c="var(--app-danger-fg)" size="sm">
+          {error}
+        </Text>
+      )}
+
+      {/* ── OAuth preflight: Connect CTA (§4.6) ─────── */}
+      {reauthRequired.length > 0 && (
+        <Card withBorder padding="sm" styles={{ root: { borderColor: 'var(--mantine-color-yellow-5)' } }}>
+          <Text fw={600} size="sm">
+            Connect required before launching
+          </Text>
+          <Text c="dimmed" size="xs" mb="xs">
+            These MCP servers need you to connect your account first.
+          </Text>
+          <Group gap="xs">
+            {reauthRequired.map((r) => (
+              <Button
+                key={r.connectUrl}
+                variant="light"
+                color="yellow"
+                onClick={() => {
+                  // A top-level browser navigation, not an Inertia visit. An OAuth connect
+                  // starts a flow, so it is a POST; the cloud CTA is a page (the profile,
+                  // with the modal to open) whose URL may already carry a query.
+                  if (r.connectMethod === 'post') {
+                    postNavigate(r.connectUrl, { return_to: window.location.pathname });
+                    return;
+                  }
+                  const separator = r.connectUrl.includes('?') ? '&' : '?';
+                  window.location.href = `${r.connectUrl}${separator}return_to=${encodeURIComponent(
+                    window.location.pathname,
+                  )}`;
+                }}
+              >
+                Connect {r.name}
+              </Button>
+            ))}
+          </Group>
+        </Card>
+      )}
+
+      {/* On a page the primary action closes the form; in a drawer it lives
+            in the pinned footer instead, where the design puts it. */}
+      {!isDrawer && startButton}
+    </Stack>
+  );
+
+  if (isDrawer) {
+    return (
+      <div className={classes.drawerLayout}>
+        <div className={classes.drawerBody}>{body}</div>
+        <div className={classes.drawerFooter}>{startButton}</div>
+      </div>
+    );
+  }
+
+  return (
+    <Card withBorder p="xl">
+      {body}
+    </Card>
+  );
+};
