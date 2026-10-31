@@ -1,0 +1,21 @@
+{
+  "observer": "manager_host",
+  "commit": "5d22773c97d17101e4263678aad3077cb96a5331",
+  "ruby_syntax_files": 11,
+  "ruby_syntax_exit": 0,
+  "process_probe_unit_exit": 0,
+  "launch_evidence_unit_exit": 0,
+  "preflight_exit": 0,
+  "temporal_integration_exit": 1,
+  "reason": "First real start returned ok:true but run_id:nil; official SDK handle first_execution_run_id/result_run_id contains nonempty UUID. No scenario passed.",
+  "build_attempts": [
+    "default bridge unavailable; no daemon/network reconfiguration",
+    "APT post-invoke failed with default seccomp; preserved log",
+    "isolated build succeeded using network host and seccomp unconfined; no service started in build container"
+  ],
+  "execution_network": "none",
+  "runtime_image": "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df",
+  "artifacts_external": "/home/enok/srv_projetos/runtime/agent-control/g0-temporal-20261031/tools/f0/temporal/artifacts/g0-aefd04ce7d732582610f5533b2ab28da",
+  "checks_not_repeated": "mobile/guard unchanged",
+  "gate": "G0 PENDENTE"
+}

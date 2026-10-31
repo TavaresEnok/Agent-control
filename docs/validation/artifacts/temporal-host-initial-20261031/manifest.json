@@ -1,0 +1,44 @@
+{
+  "ruby": "4.0.9",
+  "sdk": "1.10.0",
+  "gems": {
+    "rake": "13.4.2",
+    "base64": "0.3.0",
+    "bigdecimal": "4.1.3",
+    "concurrent-ruby": "1.3.8",
+    "connection_pool": "3.0.2",
+    "drb": "2.2.3",
+    "i18n": "1.15.2",
+    "json": "2.21.2",
+    "logger": "1.7.0",
+    "prism": "1.9.0",
+    "minitest": "6.0.6",
+    "securerandom": "0.4.1",
+    "tzinfo": "2.0.6",
+    "uri": "1.1.2",
+    "activesupport": "8.1.4",
+    "bundler": "4.0.20",
+    "google-protobuf": "4.36.2",
+    "hashie": "5.2.0",
+    "ostruct": "0.6.3",
+    "temporalio": "1.10.0"
+  },
+  "cli_version": "temporal version 1.9.1 (Server 1.32.0, UI 2.54.1)",
+  "cli_sha256": "712217694cac9f786a72d4b6c876cd15f3dcf1bf31434d9fed6af25242a327a0",
+  "upstream": {
+    "base": "AixleHQ/flow",
+    "repository": "https://github.com/AixleHQ/flow.git",
+    "branch": "develop",
+    "commit": "e6ec5a286120aed3a036d85871e796b2f6c97d70",
+    "license": "Apache-2.0",
+    "imported_at": "2026-10-31",
+    "decision_ref": "docs/ADR-001-BASE-DA-PLATAFORMA.md"
+  },
+  "sources": {
+    "app/services/temporal_service.rb": "8033f32378e9cdc30207477badd8efb7475e7172e870ebff71725eefd220e5b7",
+    "app/temporal/workflows/base.rb": "bfa617e371daf84e3da4034ecc4386e39fd5768ce300d9290616c189728b7296",
+    "app/temporal/temporal_input.rb": "7e277f909fd2740138a8e9c44733de05b65497857d3256054754db71002d1483"
+  },
+  "namespace": "agent-control-g0-aefd04ce7d732582610f5533b2ab28da",
+  "queue": "agent-control-g0-aefd04ce7d732582610f5533b2ab28da"
+}
