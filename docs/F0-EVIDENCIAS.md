@@ -32,6 +32,13 @@ controlador, ainda sem recibos físicos novos. Worktree
 `task-b15c348c94b6-g0-lote4-status`, HEAD inicial `c78bd74`.
 Política exclusiva EV-15, pausas e origem/Zed preservadas; G0 PENDENTE, sem F1.
 
+**Atualização lote5:** EV-22–24 consolidam o recibo físico de preflight lote4,
+o preparo IPAM/seccomp e a distinção RF55 por modo. Lotes1–4 DONE/revisões PASS
+e duas entregas lote5 implementadas/revisadas conforme controlador; execução dos
+scripts novos ainda pendente. Worktree `task-9add58f6088a-g0-lote5-status`, HEAD
+inicial `25298dc`. Os NOT RUN de EV-20/21 descrevem seus snapshots históricos.
+G0 PENDENTE, F1 não iniciada; política exclusiva EV-15, pausas e Zed preservados.
+
 ---
 
 ## EV-01 — Ambiente local e ferramentas instaladas
@@ -494,3 +501,74 @@ Política exclusiva EV-15, pausas e origem/Zed preservadas; G0 PENDENTE, sem F1.
 - Próximos comandos/aceite e demais eliminatórios em
   [F0-LOTE4](validation/F0-LOTE4.md). Implementação concluída não aprova execução,
   revisão documental ou G0; nenhuma operação de serviço nesta entrega.
+
+## EV-22 — Preflight físico lote4: unidades PASS, matrizes completas pendentes
+
+- **Comprovado por execução da gerência**, observer `manager_host`,
+  `2026-10-31T20:08:26.586348+00:00`, candidato
+  `c9a2c3b03c70f2d21a36b491c165260c17307911`; incorporado em `929259f`.
+  [Recibo](validation/artifacts/lote4-host-preflight-20261031/receipt.json), SHA-256
+  `fb618f94058ac6884d1179c15969b64fdec6d79deafc859ff6b15f43d8a758df`.
+  **21/21 hashes e 12.688 bytes** dos arquivos listados no
+  [manifesto](validation/artifacts/lote4-host-preflight-20261031/sha256.json)
+  conferidos offline nesta entrega, sem reler logs completos ou repetir suítes.
+- Build frozen de acesso e Ruby MCP **6/42**, cookie **2/9** PASS, zero
+  failures/errors/skips. Receita apt ttyd falhou exit100; binário oficial fixado
+  ttyd1.7.7 x86_64 com SHA-256
+  `8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55`
+  resolveu dependência, sem provar gate de segurança.
+- Ruby transporte SSH **6/48** e runner **2/12** PASS **somente compat**, com
+  `seccomp=unconfined` explícito. Perfil padrão falhou `ThreadError EPERM`;
+  não reclassificado como PASS. Ensaio SSH completo parou no pool automático
+  Docker esgotado/sobreposto antes dos contêineres; cleanup PASS. Acesso não foi
+  repetido contra o bloqueio conhecido. Nenhuma matriz HTTP/WS/MCP ou SSH remoto
+  PASS; execução completa **NOT RUN além do setup**.
+- [Preflight de rede](validation/artifacts/lote4-host-preflight-20261031/ssh-ipam-preflight.json),
+  `20:07:26.554130+00:00`: create/removal da rede interna isolada
+  `172.28.96.0/28` exit0. Preparo sem workload, sem reserva permanente do CIDR,
+  sem alterar daemon/sysctl/default network; não prova fronteira E4/E7.
+
+## EV-23 — Recuperação IPAM/seccomp implementada; novo físico pendente
+
+- **Comprovado por código/documentação:** entrega
+  `2ef1cea4d696ed9437e59ea165dbdf23d549ae3a`, incorporada por `25298dc`;
+  [F0-LAB-HOST-RECUPERACAO](validation/F0-LAB-HOST-RECUPERACAO.md).
+  Revisão independente concluída conforme controlador; IDs de parecer não
+  fornecidos aqui. Scripts exigem subnet privada canônica /24–/28 e recusam
+  overlap IPAM/rotas ou diagnóstico inválido antes de mutação. Rede interna
+  exclusiva, sem fallback automático; `--seccomp-compat` somente opt-in local.
+- Preserva autenticação/CSRF/cookies/pins, limites e no-new-privileges; não
+  altera produto/daemon. Retém CIDR, IDs e perfil efetivo sanitizado antes de
+  cleanup com ownership; correção R1 retém recibo inicial antes de remover.
+  Checks administrativos com Docker simulado não são runtime físico.
+- Comandos com imagens fixas, critérios e retenção em
+  [F0-LOTE5](validation/F0-LOTE5.md). Scripts novos **ainda sem execução física**;
+  aguardar novo recibo gerencial, preservar negativos ttyd/WS e seccomp padrão.
+  Não repetir instalação nem unidades verdes por rotina.
+- Conforme controlador, lote4 retomou após recuperação de cota **na mesma conta**,
+  sem substitutos, e terminou revisado PASS. Isso é continuidade da fila, distinta
+  do preparo IPAM/seccomp; nenhum saldo, reset ou saúde de conta foi medido aqui.
+
+## EV-24 — RF55 por modo: CLI própria remota versus UI privada hospedada
+
+- **Comprovado por documentação**, avaliação entregue em
+  `35852e82729c24c01558878961d1ff11b1ce3846`, incorporada por `e2eef71`;
+  [F0-CODEX-NATIVO-ELEGIBILIDADE](validation/F0-CODEX-NATIVO-ELEGIBILIDADE.md)
+  e [registro S1–S6](validation/artifacts/codex-eligibility/sources-20261031.json).
+  Consulta oficial registrada em 2026-10-31; revisão independente conforme
+  controlador. Esta consolidação usa a pesquisa retida, sem nova consulta ou CLI.
+- Classificação documental: CLI oficial inalterada do único titular em servidor
+  privado remoto, login/cache/refresh gerenciados pela CLI e `codex exec` direto
+  **documented_supported**, condicionado ao escopo S1–S3. Não certifica versão,
+  plano, titular, entitlement/modelo, capacidade ou conta desta instalação.
+- A UI móvel privada Aixle continua **requires_clarification só na fronteira da
+  UI hospedada**; equivalência a controle remoto pessoal é inferência técnica.
+  Pergunta específica ao provedor está no documento e **não foi enviada**.
+  A regra genérica antiga sobre todo Codex remoto fica delimitada por este marco,
+  sem apagar EV-09/20/21 ou promover launcher atual a modo nativo.
+- App-server/SIWC têm escopos próprios; suporte CLI não os autoriza. Matriz
+  exata em F0-LOTE5 e na pesquisa. Adaptador composto atual (extração/persistência
+  de auth, chamadas bearer, refresh externo/MITM) não é o modo nativo proposto.
+  Antes de login: substituições revisadas, prova E4, RF46/T28 e resposta da UI.
+  Próximo experimento é launcher **sintético proposto/NOT RUN**, sem conta;
+  nenhuma autenticação/inferência ou implantação ocorreu. ADR da base inalterado.
