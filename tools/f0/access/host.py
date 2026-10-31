@@ -4,6 +4,7 @@ build: filtered source context; online downloads with NO services.
 run: local immutable image IDs only; exclusive internal network; no published ports.
 """
 import argparse
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -20,6 +21,83 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lab_network import Ownership, preflight, runtime
 BASE = "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df"
 PG = "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
+ARTIFACT_LIMIT = 2 * 1024 * 1024
+# Fixed paths only; no report-controlled paths, symlinks, devices or services.
+COLLECT = r'''
+require "json"
+result = {}
+%w[report.json gateway.yml].each do |name|
+  begin
+    path = "/lab-state/" + name
+    stat = File.lstat(path)
+    raise "invalid file" unless stat.file? && stat.size <= 2097152
+    File.open(path, File::RDONLY | File::NOFOLLOW | File::NONBLOCK) do |f|
+      raise "changed file" unless f.stat.ino == stat.ino && f.stat.dev == stat.dev
+      bytes = f.read(2097153)
+      raise "oversized file" if bytes.bytesize > 2097152
+      result[name] = {"data" => [bytes].pack("m0")}
+    end
+  rescue Errno::ENOENT
+    result[name] = {"error" => "missing"}
+  rescue StandardError
+    result[name] = {"error" => "invalid"}
+  end
+end
+STDOUT.write(JSON.generate(result))
+'''
+
+
+def prepare_pg(execute, name, token):
+    """TCP is unavailable in the entrypoint's temporary socket-only server."""
+    connection = ("exec", name, "psql", "-X", "-w", "-h", "127.0.0.1", "-p", "5432",
+                  "-U", "f0_access_lab", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At", "-c")
+    deadline = time.monotonic() + 40
+    while True:
+        try:
+            execute("pg-readiness", "exec", name, "pg_isready", "-h", "127.0.0.1", "-p", "5432",
+                    "-U", "f0_access_lab", "-d", "postgres", timeout=3)
+            identity = execute("pg-identity", *connection,
+                               "SELECT current_user, current_database(), inet_server_addr(), inet_server_port()",
+                               timeout=3).strip()
+            if identity != "f0_access_lab|postgres|127.0.0.1|5432":
+                raise RuntimeError("Disposable PG identity mismatch")
+            break
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Disposable PG final TCP readiness timeout") from None
+            time.sleep(1)
+    # No IF NOT EXISTS: preexisting databases are refused before COMMENT/app DDL.
+    execute("pg-create", *connection, "CREATE DATABASE aixle_test OWNER f0_access_lab")
+    execute("pg-comment", *connection,
+            f"COMMENT ON DATABASE aixle_test IS 'agent-control:access:disposable:{token}'")
+
+
+def retain_artifacts(payload, out):
+    if len(payload) > ARTIFACT_LIMIT * 3:
+        raise ValueError("Oversized collector response")
+    entries = json.loads(payload)
+    if not isinstance(entries, dict) or set(entries) != {"report.json", "gateway.yml"}:
+        raise ValueError("Invalid collector response")
+    errors = {}
+    for name in ("report.json", "gateway.yml"):
+        try:
+            entry = entries[name]
+            if not isinstance(entry, dict) or set(entry) != {"data"} or not isinstance(entry["data"], str):
+                raise ValueError("Missing or invalid artifact")
+            data = base64.b64decode(entry["data"], validate=True)
+            if not data or len(data) > ARTIFACT_LIMIT:
+                raise ValueError("Invalid artifact size")
+            text = data.decode("utf-8")
+            if name == "report.json":
+                report = json.loads(text)
+                if not isinstance(report, dict) or report.get("status") not in {"PASS", "FAIL_OR_NOTRUN"}:
+                    raise ValueError("Invalid report")
+            elif "\x00" in text:
+                raise ValueError("Invalid gateway text")
+            (out / name).write_bytes(data)
+        except (ValueError, TypeError, OSError):
+            errors[name] = "missing-or-invalid"
+    return errors
 
 
 def source_paths():
@@ -82,8 +160,27 @@ def run(image, gateway, subnet, seccomp_compat=False):
     result = {"status": "NOTRUN", "fixture": token, "images": [image, gateway, pg],
               "subnet": subnet, "seccomp": "unconfined" if seccomp_compat else "docker-default"}
 
-    def docker(*args):
-        return command(["docker", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode()
+    def docker(*args, timeout=120):
+        return command(["docker", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout).stdout.decode()
+
+    def administrative(stage, *args, **kwargs):
+        result["stage"] = stage
+        try:
+            return docker(*args, **kwargs)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            # Never persist argv or free-form stderr: either may contain keys.
+            raw = error.stderr or b""
+            if isinstance(raw, str):
+                raw = raw.encode()
+            result["diagnostic"] = {"stage": stage, "error_class": type(error).__name__,
+                                    "exit_code": getattr(error, "returncode", None),
+                                    "stderr_bytes": len(raw),
+                                    "stderr_categories": [label for marker, label in (
+                                        (b"already exists", "already-exists"),
+                                        (b"Connection refused", "connection-refused"),
+                                        (b"permission denied", "permission-denied"),
+                                        (b"syntax error", "sql-syntax")) if marker in raw[:4096]]}
+            raise
 
     def start(suffix, img, args=(), env=(), mounts=()):
         name = prefix + "-" + suffix
@@ -105,11 +202,11 @@ def run(image, gateway, subnet, seccomp_compat=False):
         owned.append(name)
         # A failed start still leaves a container: retain and remove it in finally.
         # Failed create is retained only when its unique ownership label confirms it.
-        docker("start", name)
+        administrative(suffix + "-start", "start", name)
         return name
 
     try:
-        for kind, name in [("network", prefix), ("volume", prefix)] + [("container", prefix + "-" + s) for s in ("pg", "web", "gateway", "terminal")]:
+        for kind, name in [("network", prefix), ("volume", prefix)] + [("container", prefix + "-" + s) for s in ("pg", "web", "gateway", "terminal", "collector")]:
             try:
                 docker(kind, "inspect", name)
             except subprocess.CalledProcessError:
@@ -124,20 +221,7 @@ def run(image, gateway, subnet, seccomp_compat=False):
         state = f"type=volume,source={prefix},target=/lab-state"
         pg_name = start("pg", pg, env=("POSTGRES_USER=f0_access_lab", "POSTGRES_DB=postgres",
                         "POSTGRES_HOST_AUTH_METHOD=trust", "PGDATA=/tmp/pgdata"))
-        for _ in range(40):
-            try:
-                docker("exec", pg_name, "pg_isready", "-U", "f0_access_lab", "-d", "postgres")
-                break
-            except subprocess.CalledProcessError:
-                time.sleep(1)
-        else:
-            raise RuntimeError("Disposable PG readiness failed")
-        # CREATE DATABASE refuses a preexisting database. No IF NOT EXISTS, drop, migrate or seeds.
-        docker("exec", pg_name, "psql", "-U", "f0_access_lab", "-d", "postgres", "-v", "ON_ERROR_STOP=1",
-               "-c", "CREATE DATABASE aixle_test OWNER f0_access_lab")
-        comment = f"agent-control:access:disposable:{token}"
-        docker("exec", pg_name, "psql", "-U", "f0_access_lab", "-d", "postgres", "-v", "ON_ERROR_STOP=1",
-               "-c", f"COMMENT ON DATABASE aixle_test IS '{comment}'")
+        prepare_pg(administrative, pg_name, token)
         start("terminal", image, args=("ttyd", "-W", "-p", "7681", "sh", "-c",
               "printf SYNTHETIC_TTYD_ACCESS; sleep 30"))
         env = ("RAILS_ENV=test", "BUNDLE_FROZEN=true", "DB_HOST=pg", "DB_USERNAME=f0_access_lab",
@@ -145,6 +229,7 @@ def run(image, gateway, subnet, seccomp_compat=False):
                "DOMAIN=web:4000", "PROTOCOL=http", "SOLID_QUEUE_IN_PUMA=false", "MITM_DISABLED=true",
                "HOME=/tmp", "BOOTSNAP_CACHE_DIR=/tmp/bootsnap", "RAILS_LOG_TO_STDOUT=true")
         web = start("web", image, env=env, mounts=(state,))
+        result["stage"] = "web-boot"
         # Gateway consumes config written by the real strategy's labels in run.rb.
         for _ in range(90):
             try:
@@ -158,28 +243,48 @@ def run(image, gateway, subnet, seccomp_compat=False):
             raise RuntimeError("Rails config readiness timeout")
         start("gateway", gateway, args=("--entrypoints.web.address=:8080",
               "--providers.file.filename=/lab-state/gateway.yml", "--log.level=ERROR"), mounts=(state + ",readonly",))
-        exit_code = int(docker("wait", web).strip())
-        # Retain reports before cleanup. Raw cookies/tokens never leave tmpfs/volume.
-        docker("cp", web + ":/lab-state/report.json", str(out / "report.json"))
-        docker("cp", web + ":/lab-state/gateway.yml", str(out / "gateway.yml"))
+        exit_code = int(administrative("web-wait", "wait", web).strip())
         result.update(status="PASS" if exit_code == 0 else "FAIL", exit_code=exit_code)
     except Exception as error:
         # Never serialize subprocess arguments (may contain synthetic signing keys).
         result.update(status="NOTRUN", error_class=type(error).__name__)
     finally:
+        # Collection is independent of web liveness and Docker's mount-blind cp.
+        if ("container", prefix + "-web") in ownership.resources:
+            try:
+                ownership.require("volume", prefix)
+                current, _ = ownership.inspect("volume", prefix)
+                if current != ownership.resources[("volume", prefix)]:
+                    raise ValueError("Volume identity changed")
+                name = prefix + "-collector"
+                argv = ["create", "--pull=never", "--name", name, "--label", f"agent-control.fixture={token}",
+                        "--network", "none", "--memory", "128m", "--cpus", "0.5", "--pids-limit", "32",
+                        "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+                        "--mount", f"type=volume,source={prefix},target=/lab-state,readonly", "--entrypoint", "ruby"]
+                if seccomp_compat:
+                    argv += ["--security-opt", "seccomp=unconfined"]
+                ownership.create("container", name, *argv, image, "-e", COLLECT)
+                ownership.require("container", name)
+                payload = docker("start", "--attach", name, timeout=30)
+                if docker("inspect", "--format", "{{.State.ExitCode}}", name).strip() != "0":
+                    raise RuntimeError("Collector failed")
+                result["artifact_errors"] = retain_artifacts(payload, out)
+                if result["artifact_errors"]:
+                    result["retention_error"] = True
+                elif result["status"] == "PASS" and json.loads((out / "report.json").read_text())["status"] != "PASS":
+                    result["status"] = "FAIL"
+                    result["report_exit_mismatch"] = True
+            except Exception as error:
+                result["retention_error"] = True
+                result["collector_error_class"] = type(error).__name__
         owned = [name for kind, name in ownership.resources if kind == "container"]
         result["resources"] = ownership.receipt()
         # Logs contain no request bodies/cookies: Rails logger is disabled in harness.
         for name in owned:
             try:
-                logs = command(["docker", "logs", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
-                (out / (name.removeprefix(prefix + "-") + ".log")).write_bytes(logs)
-                if name.endswith("-web"):
-                    for artifact in ("report.json", "gateway.yml"):
-                        try:
-                            docker("cp", name + ":/lab-state/" + artifact, str(out / artifact))
-                        except subprocess.CalledProcessError:
-                            result["missing_" + artifact] = True
+                if not name.endswith("-collector"):
+                    logs = command(["docker", "logs", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+                    (out / (name.removeprefix(prefix + "-") + ".log")).write_bytes(logs)
                 inspect = json.loads(docker("inspect", name))[0]
                 # Do not retain Config.Env (signing key). Topology/effective limits only.
                 safe = runtime(inspect)
@@ -205,6 +310,7 @@ def run(image, gateway, subnet, seccomp_compat=False):
                     failures.append(kind + ":" + prefix)
         result["cleanup_failures"] = failures
         result["cleanup_status"] = "FAIL" if failures else "PASS"
+        result["gate_status"] = "PASS" if result["status"] == "PASS" and not failures and not result.get("retention_error") else "FAIL"
         (out / "receipt.json").write_text(json.dumps(result, indent=2) + "\n")
         hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.iterdir()) if p.is_file()}
         (out / "sha256.json").write_text(json.dumps(hashes, indent=2) + "\n")
