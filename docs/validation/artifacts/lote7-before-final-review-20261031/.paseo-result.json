@@ -1,0 +1,18 @@
+{
+  "status": "completed",
+  "summary": "Implementação documental lote7 concluída nos quatro arquivos autorizados. SSH físico PASS atribuído à gerência e limitado a standalone Settings, sem repetição; acesso manteve matriz NOTRUN por Net::OpenTimeout após PG/schema/cookies. Próximo gate exige overlay da correção 9e63929, ID imutável, checks novos e uma matriz física gerencial preservando negativos ttyd/WS. G0 pendente, F1 não iniciada; histórico, pausas e política exclusiva preservados. Revisão independente e execução física são fases seguintes.",
+  "files": [
+    "docs/STATUS.md",
+    "docs/F0-CHECKLIST.md",
+    "docs/F0-EVIDENCIAS.md",
+    "docs/validation/F0-LOTE7.md"
+  ],
+  "tests": [
+    {
+      "command": "git diff --check",
+      "status": "passed",
+      "exit_code": 0
+    }
+  ],
+  "problems": []
+}
