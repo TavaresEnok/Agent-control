@@ -15,6 +15,7 @@ require "yaml"
 require "digest"
 require_relative "mcp_evidence"
 require_relative "session_cookie"
+require_relative "readiness"
 
 module F0Access
   class Lab
@@ -435,14 +436,21 @@ module F0Access
       @server = Puma::Server.new(Rails.application)
       @server.add_tcp_listener("0.0.0.0", 4000)
       @server.run
-      40.times do
-        begin
-          request("/up", host: "gateway", port: 8080)
-          break
-        rescue Errno::ECONNREFUSED, SocketError
-          sleep 0.5
-        end
+      readiness = Readiness.new
+      @rows << readiness.call(phase: :backend, uri: URI("http://web:4000/up")) do |response|
+        response.code == "200" && response["content-type"].to_s.include?("text/html") &&
+          response.body.to_s.include?("background-color: green")
       end
+      return unless @rows.last[:status] == "PASS"
+      # Positive real route/config control, not an authorization verdict. A
+      # generic listener's /up 404 cannot establish gateway readiness.
+      @rows << readiness.call(phase: :gateway,
+        uri: URI("http://gateway:8080/t/#{@terminal.route_token}/tty/"),
+        headers: { "Cookie" => @identities[:owner][:cookie] }) do |response|
+        response.code == "200" && response["content-type"].to_s.include?("text/html") &&
+          response.body.to_s.match?(/<title>ttyd - Terminal<\/title>/i)
+      end
+      return unless @rows.last[:status] == "PASS"
       http_matrix
       mcp_matrix
       # mcp_matrix regenerated the personal token; retain the actual latest one.
@@ -464,7 +472,7 @@ module F0Access
         app/controllers/concerns/auth_concern.rb app/controllers/api/v1/internal/ws_auth_controller.rb
         app/channels/application_cable/connection.rb app/controllers/mcp_controller.rb
         docker/traefik/dynamic.yml tools/f0/access/run.rb tools/f0/access/session_cookie.rb
-        tools/f0/access/mcp_evidence.rb tools/f0/access/web_socket.rb].to_h do |path|
+        tools/f0/access/mcp_evidence.rb tools/f0/access/web_socket.rb tools/f0/access/readiness.rb].to_h do |path|
         [path, File.file?(path) ? Digest::SHA256.file(path).hexdigest : "MISSING"]
       end
       File.write("/lab-state/report.json", JSON.pretty_generate(report) + "\n")

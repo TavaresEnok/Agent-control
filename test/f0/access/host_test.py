@@ -36,7 +36,7 @@ class HostTest(unittest.TestCase):
 
     def exercise_lifecycle(self, fail_boot=False, fail_start=False, fail_create=False, partial_create=False, compat=True,
                            partial_network=False, pg_error=None, collector_error=False, missing=False, web_exit=1,
-                           collector_partial=False, report_pass=False, removal_error=False):
+                           collector_partial=False, report_pass=False, removal_error=False, pg_transient=False):
         calls = []
         retained_before_removal = []
         digest = "sha256:" + "a" * 64
@@ -76,6 +76,9 @@ class HostTest(unittest.TestCase):
                     raise subprocess.CalledProcessError(125, argv)
                 if words[0] == "logs":
                     output = b"synthetic start diagnostic\n"
+                if words[0] == "exec" and "pg_isready" in words and pg_transient:
+                    if sum("pg_isready" in c for c in calls) == 1:
+                        raise subprocess.CalledProcessError(2, argv, stderr=b'Connection refused SIGNING_KEY=secret')
                 if words[0] == "exec" and "psql" in words:
                     if words[-1].startswith("SELECT current_user"):
                         output = b"f0_access_lab|postgres|127.0.0.1|5432\n"
@@ -86,7 +89,10 @@ class HostTest(unittest.TestCase):
                         raise subprocess.CalledProcessError(125, argv)
                     output = json.dumps({name: ({"error": "missing"} if missing else {
                         "data": base64.b64encode(data).decode()}) for name, data in (
-                            ("report.json", json.dumps({"status": "PASS" if report_pass else "FAIL_OR_NOTRUN"}).encode()),
+                            ("report.json", json.dumps({"status": "PASS" if report_pass else "FAIL_OR_NOTRUN",
+                                "rows": [{"name": "readiness/gateway", "status": "NOTRUN", "phase": "gateway",
+                                          "endpoint": "gateway/terminal/tty", "attempts": 4,
+                                          "reason": "startup_deadline", "last_error_class": "Net::OpenTimeout"}]}).encode()),
                             ("gateway.yml", b'http: {}\n'))}).encode()
                 if words[:2] == ["exec", "f0-access-" + "b" * 24 + "-web"] and "test" in words and fail_boot:
                     raise subprocess.CalledProcessError(1, argv)
@@ -136,6 +142,13 @@ class HostTest(unittest.TestCase):
                 self.assertEqual(3, receipt["diagnostic"]["exit_code"])
                 self.assertEqual(["permission-denied"], receipt["diagnostic"]["stderr_categories"])
                 self.assertFalse(any("-web" in c[-1] for c in calls if c[1] == "start"))
+            if pg_transient:
+                self.assertNotIn("diagnostic", receipt)
+                self.assertEqual("web-completed", receipt["stage"])
+                self.assertEqual("recovered", receipt["administrative_attempt_errors"][0]["outcome"])
+                self.assertEqual("pg-readiness", receipt["administrative_attempt_errors"][0]["stage"])
+                self.assertEqual("Net::OpenTimeout", receipt["startup"][0]["last_error_class"])
+                self.assertEqual(4, receipt["startup"][0]["attempts"])
             if collector_error or collector_partial or missing:
                 self.assertTrue(receipt["retention_error"])
                 self.assertEqual("FAIL", receipt["gate_status"])
@@ -197,6 +210,10 @@ class HostTest(unittest.TestCase):
         for phase in ("CREATE", "COMMENT"):
             with self.subTest(phase=phase):
                 self.exercise_lifecycle(pg_error=phase)
+
+    def test_recovered_pg_attempt_is_history_and_web_startup_is_retained(self):
+        with patch.object(host.time, "sleep"):
+            self.exercise_lifecycle(pg_transient=True)
 
     def test_stopped_web_artifacts_missing_never_pass(self):
         self.exercise_lifecycle(missing=True, web_exit=0)
