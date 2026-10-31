@@ -1,5 +1,6 @@
 """Offline checks of the administrative lifecycle, not Rails authorization tests."""
 import importlib.util
+import base64
 import json
 from pathlib import Path
 import subprocess
@@ -34,7 +35,8 @@ class HostTest(unittest.TestCase):
             execute.assert_not_called()
 
     def exercise_lifecycle(self, fail_boot=False, fail_start=False, fail_create=False, partial_create=False, compat=True,
-                           partial_network=False):
+                           partial_network=False, pg_error=None, collector_error=False, missing=False, web_exit=1,
+                           collector_partial=False, report_pass=False, removal_error=False):
         calls = []
         retained_before_removal = []
         digest = "sha256:" + "a" * 64
@@ -74,14 +76,26 @@ class HostTest(unittest.TestCase):
                     raise subprocess.CalledProcessError(125, argv)
                 if words[0] == "logs":
                     output = b"synthetic start diagnostic\n"
+                if words[0] == "exec" and "psql" in words:
+                    if words[-1].startswith("SELECT current_user"):
+                        output = b"f0_access_lab|postgres|127.0.0.1|5432\n"
+                    elif pg_error and words[-1].startswith(pg_error):
+                        raise subprocess.CalledProcessError(3, argv, stderr=b'ERROR: permission denied SIGNING_KEY=secret')
+                if words[:2] == ["start", "--attach"]:
+                    if collector_error:
+                        raise subprocess.CalledProcessError(125, argv)
+                    output = json.dumps({name: ({"error": "missing"} if missing else {
+                        "data": base64.b64encode(data).decode()}) for name, data in (
+                            ("report.json", json.dumps({"status": "PASS" if report_pass else "FAIL_OR_NOTRUN"}).encode()),
+                            ("gateway.yml", b'http: {}\n'))}).encode()
                 if words[:2] == ["exec", "f0-access-" + "b" * 24 + "-web"] and "test" in words and fail_boot:
                     raise subprocess.CalledProcessError(1, argv)
                 if words[:2] == ["inspect", "--format"]:
-                    output = b"false" if fail_boot else b"true"
+                    output = b"0" if "{{.State.ExitCode}}" in words else (b"false" if fail_boot else b"true")
                 elif words[0] == "inspect":
                     output = json.dumps([resources[words[1]]]).encode()
                 elif words[0] == "wait":
-                    output = b"1"  # Negative security findings must propagate.
+                    output = str(web_exit).encode()  # Negative security findings must propagate.
                 elif words[0] == "cp":
                     Path(words[-1]).write_text('{"status":"FAIL_OR_NOTRUN"}')
                 if words[0] == "create" or words[:2] in (["network", "create"], ["volume", "create"]):
@@ -92,23 +106,50 @@ class HostTest(unittest.TestCase):
                                            "Memory": 1, "NanoCpus": 1, "PidsLimit": 1, "PortBindings": {},
                                            "SecurityOpt": ["no-new-privileges"] + (["seccomp=unconfined"] if compat else []),
                                            "CapDrop": ["ALL"]}}
-                    if (partial_create and words[0] == "create") or (partial_network and words[:2] == ["network", "create"]):
+                    if (partial_create and words[0] == "create") or (partial_network and words[:2] == ["network", "create"]) or (collector_partial and name.endswith("-collector")):
                         raise subprocess.CalledProcessError(125, argv)
+                if removal_error and words[0] == "rm" and words[-1].endswith("-collector"):
+                    raise subprocess.CalledProcessError(1, argv)
                 return subprocess.CompletedProcess(argv, 0, stdout=output, stderr=b"")
 
             with patch.object(host, "ROOT", Path(temporary)), patch.object(host, "command", side_effect=fake_command), patch.object(host.secrets, "token_hex", return_value="b" * 24):
-                self.assertEqual(1, host.run(digest, digest, "172.28.96.0/28", seccomp_compat=compat))
+                self.assertEqual(0 if report_pass and not removal_error else 1,
+                                 host.run(digest, digest, "172.28.96.0/28", seccomp_compat=compat))
             receipt_path = next(Path(temporary).rglob("receipt.json"))
             receipt = json.loads(receipt_path.read_text())
-            self.assertEqual("NOTRUN" if fail_boot or fail_start or fail_create or partial_create or partial_network else "FAIL", receipt["status"])
-            self.assertEqual([], receipt["cleanup_failures"])
-            self.assertEqual("PASS", receipt["cleanup_status"])
+            self.assertEqual("NOTRUN" if fail_boot or fail_start or fail_create or partial_create or partial_network or pg_error else ("PASS" if web_exit == 0 and (report_pass or missing or collector_error or collector_partial) else "FAIL"), receipt["status"])
+            self.assertEqual(["f0-access-" + "b" * 24 + "-collector"] if removal_error else [], receipt["cleanup_failures"])
+            self.assertEqual("FAIL" if removal_error else "PASS", receipt["cleanup_status"])
+            if removal_error:
+                self.assertFalse(receipt.get("retention_error", False))
+                self.assertEqual("FAIL", receipt["gate_status"])
+            if report_pass and not removal_error:
+                self.assertEqual("PASS", receipt["gate_status"])
             self.assertTrue(retained_before_removal)
             self.assertEqual("unconfined" if compat else "docker-default", receipt["seccomp"])
             self.assertEqual("172.28.96.0/28", receipt["subnet"])
             self.assertNotIn("SIGNING_KEY", "".join(p.read_text() for p in receipt_path.parent.glob("*.json")))
             manifest = json.loads((receipt_path.parent / "sha256.json").read_text())
             self.assertIn("receipt.json", manifest)
+            if pg_error:
+                self.assertEqual("pg-create" if pg_error == "CREATE" else "pg-comment", receipt["stage"])
+                self.assertEqual(3, receipt["diagnostic"]["exit_code"])
+                self.assertEqual(["permission-denied"], receipt["diagnostic"]["stderr_categories"])
+                self.assertFalse(any("-web" in c[-1] for c in calls if c[1] == "start"))
+            if collector_error or collector_partial or missing:
+                self.assertTrue(receipt["retention_error"])
+                self.assertEqual("FAIL", receipt["gate_status"])
+                self.assertNotIn("report.json", manifest)
+            if not (fail_boot or fail_start or fail_create or partial_create or partial_network or pg_error):
+                collector = next(c for c in calls if c[1] == "create" and "-collector" in " ".join(c))
+                self.assertEqual("none", collector[collector.index("--network") + 1])
+                self.assertIn("--read-only", collector)
+                self.assertIn("readonly", collector[collector.index("--mount") + 1])
+                self.assertEqual("ruby", collector[collector.index("--entrypoint") + 1])
+                self.assertIn("--memory", collector)
+                self.assertTrue(any(r["name"].endswith("-collector") for r in receipt["resources"]))
+                self.assertLess(next(i for i, c in enumerate(calls) if c[1:3] == ["wait", "f0-access-" + "b" * 24 + "-web"]),
+                                calls.index(collector))
             if fail_start or partial_create:
                 self.assertEqual("CalledProcessError", receipt["error_class"])
                 self.assertEqual("synthetic start diagnostic\n", (receipt_path.parent / "pg.log").read_text())
@@ -148,8 +189,74 @@ class HostTest(unittest.TestCase):
             self.assertLess(calls.index(["docker", "inspect", name]), first_remove)
             self.assertLess(first_remove, next(i for i, c in enumerate(calls) if c[1:3] == ["volume", "rm"]))
             self.assertLess(first_remove, next(i for i, c in enumerate(calls) if c[1:3] == ["network", "rm"]))
-        else:
-            self.assertTrue(any(c[1] == "cp" and c[2].endswith("report.json") for c in calls[:first_remove]))
+        self.assertFalse(any(c[1] == "cp" for c in calls))
+        if not (fail_start or partial_create or pg_error or collector_partial):
+            self.assertTrue(any(c[1:3] == ["start", "--attach"] for c in calls[:first_remove]))
+
+    def test_create_and_comment_diagnostics_never_export_argv_or_stderr_secrets(self):
+        for phase in ("CREATE", "COMMENT"):
+            with self.subTest(phase=phase):
+                self.exercise_lifecycle(pg_error=phase)
+
+    def test_stopped_web_artifacts_missing_never_pass(self):
+        self.exercise_lifecycle(missing=True, web_exit=0)
+
+    def test_collector_start_failure_retains_owned_helper_and_cleans_it(self):
+        self.exercise_lifecycle(collector_error=True, web_exit=0)
+
+    def test_partially_created_collector_is_retained_and_removed_by_ownership(self):
+        self.exercise_lifecycle(collector_partial=True, web_exit=0)
+
+    def test_zero_exit_with_negative_report_cannot_pass(self):
+        self.exercise_lifecycle(web_exit=0)
+
+    def test_successful_artifact_retention_does_not_hide_cleanup_failure(self):
+        self.exercise_lifecycle(web_exit=0, report_pass=True, removal_error=True)
+
+    def test_positive_administrative_gate_requires_report_retention_and_cleanup(self):
+        self.exercise_lifecycle(web_exit=0, report_pass=True)
+
+    def test_readiness_rejects_temporary_socket_server_then_checks_final_identity(self):
+        calls = []
+        def execute(stage, *args, **kwargs):
+            calls.append((stage, args))
+            if stage == "pg-readiness":
+                self.assertIn("127.0.0.1", args)
+                if len(calls) == 1:
+                    raise subprocess.CalledProcessError(2, args)
+            if stage == "pg-identity":
+                return "f0_access_lab|postgres|127.0.0.1|5432\n"
+            return ""
+        with patch.object(host.time, "sleep") as sleep:
+            host.prepare_pg(execute, "owned-pg", "fixture")
+        self.assertEqual(1, sleep.call_count)
+        self.assertEqual(["pg-readiness", "pg-readiness", "pg-identity", "pg-create", "pg-comment"],
+                         [stage for stage, _ in calls])
+
+    def test_wrong_identity_and_readiness_timeout_prevent_ddl(self):
+        calls = []
+        def execute(stage, *args, **kwargs):
+            calls.append(stage)
+            return "wrong-role|postgres|127.0.0.1|5432"
+        with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
+            host.prepare_pg(execute, "owned-pg", "fixture")
+        self.assertNotIn("pg-create", calls)
+        with patch.object(host.time, "monotonic", side_effect=[0, 41]), \
+                patch.object(host.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "readiness timeout"):
+                host.prepare_pg(lambda *a, **k: (_ for _ in ()).throw(subprocess.CalledProcessError(2, [])), "owned-pg", "fixture")
+            sleep.assert_not_called()
+
+    def test_artifact_types_size_and_untrusted_paths_are_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            with self.assertRaises(ValueError):
+                host.retain_artifacts('{"../../secret": {}}', out)
+            for data in (b'[]', b'{"status":"unexpected"}', b'x' * (host.ARTIFACT_LIMIT + 1)):
+                errors = host.retain_artifacts(json.dumps({"report.json": {"data": base64.b64encode(data).decode()},
+                                                          "gateway.yml": {"error": "missing"}}), out)
+                self.assertEqual({"report.json", "gateway.yml"}, set(errors))
+                self.assertEqual([], list(out.iterdir()))
 
     def test_findings_are_not_pass_and_evidence_precedes_cleanup(self):
         self.exercise_lifecycle()

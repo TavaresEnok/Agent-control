@@ -1,5 +1,12 @@
 # F0/G0 lote5 — recuperação administrativa dos laboratórios E4/E7
 
+Atualização lote6 (acesso): lote5 `9add58f6088a` DONE e revisado. As tentativas
+físicas seguintes estão preservadas em
+[receipt.json](artifacts/lote5-host-attempts-20261031/receipt.json), runs e bytes.
+`ff5a1eff` falhou no preparo por EACCES do Gemfile.lock; `e890e3a3` parou com
+somente PG criado e cleanup PASS. Não são resultados de autorização/pin, acesso
+ou SSH remoto. E4/E7 e G0 continuam PENDENTES.
+
 G0 **PENDENTE**, F1 não iniciada. Plano1.1/Adendo, commits, IDs, falhas, recibos,
 pausas e trabalho do Zed preservados. Implementação limitada à preparação dos
 harnesses; revisão independente e gates físicos são fases posteriores pela
@@ -32,8 +39,8 @@ verdes por rotina. O PG usa o digest local fixado no script de acesso
 Todos os contêineres de runtime usam `--pull=never`.
 
 ```sh
-cd /home/enok/srv_projetos/worktrees/14v3rrig/task-9add58f6088a-g0-lab-host-recovery
-python3 -B tools/f0/access/host.py run --image sha256:77b44cec68ac9029e10f15f7b1c497502f9e05796985becec070f4910b8b0b9b --gateway sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222 --subnet 172.28.96.0/28 --seccomp-compat
+cd /home/enok/srv_projetos/worktrees/14v3rrig/task-271a4475560c-g0-access-startup-retention
+python3 -B tools/f0/access/host.py run --image sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242 --gateway sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222 --subnet 172.28.96.0/28 --seccomp-compat
 python3 -B tools/f0/ssh/host-run.py sha256:311e145514ccfad8830130f8da1507890f432836222ab80470a04b987944e0e6 sha256:54cc44a07a861f438df5920952ddd9e4e13096a5ed7b7e7b287c5cd2ef30c4f5 --subnet 172.28.96.16/28 --seccomp-compat
 ```
 
@@ -68,6 +75,31 @@ resultado e o manifesto de hashes. Se a gravação inicial falhar, o cleanup nã
 começa. Testes offline observam o conteúdo em disco durante as remoções,
 inclusive após falha de start e criação parcialmente confirmada da rede.
 
+Lote6: o PG temporário do entrypoint só oferece Unix socket. O administrador
+exige `pg_isready -h 127.0.0.1 -p 5432` e consulta SQL pela mesma conexão TCP,
+com `psql -X -w -v ON_ERROR_STOP=1`, role `f0_access_lab`, DB `postgres`, endereço
+e porta exatos. Tentativas têm timeout e prazo de prontidão de 40 segundos;
+esperar não constitui sucesso. Somente então CREATE (sem IF NOT EXISTS) e COMMENT
+descartável são permitidos. O guard anterior de marker/DB vazio no runner continua
+antes do DDL. O recibo distingue readiness/identity/CREATE/COMMENT/start/boot/wait;
+falhas subprocesso guardam exit, tamanho do stderr e categorias fixas extraídas
+dos primeiros 4096 bytes, sem texto livre, argv ou Config.Env.
+
+No Docker20.10, `docker cp` não lê arquivos em tmpfs/montagens de forma confiável.
+O acesso coleta somente `/lab-state/report.json` e `/lab-state/gateway.yml`
+com helper efêmero Ruby da mesma imagem local imutável, entrypoint explícito,
+sem iniciar serviços. Não depende do web em execução. Volume próprio revalidado,
+montagem readonly, rede none, rootfs readonly, cap-drop ALL, no-new-privileges,
+128 MiB/0.5 CPU/32 PIDs e perfil seccomp solicitado. Arquivos devem ser regulares,
+sem symlinks, até 2 MiB cada, UTF-8; report deve ser objeto JSON com status válido.
+Não lê chaves, Config.Env ou caminhos indicados no report. O coletor tem label/ID,
+inspect sanitizado e cleanup por ownership, inclusive após criação parcial.
+Artefatos e recibo inicial precedem qualquer remoção. `retention_error` e
+`cleanup_status` são independentes; ambos bloqueiam `gate_status=PASS` quando
+falham. Arquivo ausente nunca aprova o gate, nem exit zero com report negativo.
+Após revisão independente, a gerência executa a candidata administrativa uma vez;
+este preparo não homologa E4.
+
 ## Alternativa de preparo no Docker 20.10
 
 Somente se for necessário preparar novas imagens após revisão: este host rejeita
@@ -85,6 +117,12 @@ copiar contexto por `docker cp`; executar nele os comandos de instalação das
 receitas, download ttyd com checksum quando aplicável, `bundle install` frozen e
 `bundle check`. Rodar apenas o instalador, com rede host exclusivamente para esses
 downloads. Confirmar exit0 e a arquitetura/hash; reter comandos/IDs/recibo.
+Antes de parar/commit, normalizar ownership dos arquivos da aplicação em `/work`
+para o usuário de runtime (nesta receita root: `chown -R 0:0 /work` dentro do
+contêiner de preparo), equivalente ao COPY padrão do Dockerfile. `docker cp`
+preservou UID1000/mode600 no primeiro ensaio; root com cap-drop ALL não podia ler.
+Preservar bytes e modos: sem chmod amplo ou retirada de cap-drop. A gerência já
+fez essa normalização na imagem `439b8d...`; não reconstruir nem repetir Ruby.
 Com o contêiner parado, usar `docker commit` para imagem somente de dependências
 e código revisado; fixar CMD/ENTRYPOINT conforme Dockerfile do laboratório
 (acesso: `bundle exec ruby tools/f0/access/run.rb`; central: entrypoint vazio,

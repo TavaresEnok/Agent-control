@@ -1,11 +1,11 @@
 # F0 E4/T36 — laboratório real de acesso, candidato para execução HOST
 
-Atualização lote5: os comandos de runtime e preparo para Docker 20.10 vigentes
+Atualização lote6: os comandos de runtime e preparo para Docker 20.10 vigentes
 estão em [F0-LAB-HOST-RECUPERACAO.md](F0-LAB-HOST-RECUPERACAO.md). Exigem
 `--subnet` explícito e, neste host, `--seccomp-compat` opt-in. Usar as imagens já
 preparadas; não reinstalar dependências ou repetir os testes Ruby verdes.
 O histórico abaixo registra a preparação anterior; placeholders de imagens e
-worktree antigos foram substituídos pelos comandos exatos do lote5.
+worktree antigos foram substituídos pelos comandos exatos do lote6.
 O recibo físico lote4 confirma MCP 6/42 e cookie 2/9 PASS; a matriz completa E4
 continua **PENDENTE**, assim como G0. Nenhum oráculo foi alterado neste lote.
 
@@ -24,16 +24,15 @@ Não inicia Codex nem outro agente, Temporal, mail worker ou dispatcher.
 
 ## Operação administrativa exata, após revisão independente
 
-Na worktree indicada, o gerente executa separadamente o build online, **sem
-serviços em execução neste laboratório**:
+Para o próximo ensaio administrativo após revisão independente, usar a imagem
+corrigida já preparada, sem rebuild ou repetição dos testes Ruby verdes:
 
 ```sh
-cd /home/enok/srv_projetos/worktrees/14v3rrig/task-b15c348c94b6-g0-access-real
-python3 tools/f0/access/host.py build
-docker image inspect --format '{{.Id}}' f0-access-candidate
+cd /home/enok/srv_projetos/worktrees/14v3rrig/task-271a4475560c-g0-access-startup-retention
+python3 -B tools/f0/access/host.py run --image sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242 --gateway sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222 --subnet 172.28.96.0/28 --seccomp-compat
 ```
 
-O build usa Ruby 4.0.9 no digest aprovado, instala as bibliotecas de sistema,
+A receita histórica de build usa Ruby 4.0.9 no digest aprovado, instala as bibliotecas de sistema,
 ttyd e o bundle **completo** do Gemfile.lock BASE, frozen. A imagem SQLdeps de
 AR isolado não é suficiente. Downloads acontecem somente nesse build. O contexto
 é construído por lista de arquivos versionados de app/config/lib/db/public/bin,
@@ -41,14 +40,7 @@ mais o laboratório e o middleware Traefik; exclui `.env*`, chaves, credenciais
 criptografadas, configurações locais, symlinks, artefatos, .git e node_modules.
 Nenhum arquivo `.env` do host é aberto. Não montar a worktree no runtime.
 
-Disponibilizar previamente uma imagem **local** Traefik compatível com
-`addAuthCookiesToResponse` do middleware upstream e informar seu ID imutável:
-
-```sh
-python3 tools/f0/access/host.py run --image sha256:ID_DE_64_HEXA_DO_BUILD --gateway sha256:ID_DE_64_HEXA_DO_TRAEFIK_LOCAL
-```
-
-Os dois IDs são os únicos parâmetros administrativos pendentes. Tags mutáveis
+O gateway local acima é imutável, assim como a imagem corrigida. Tags mutáveis
 são recusadas. PG usa o digest fixado já empregado no laboratório integrado;
 runtime usa `--pull=never`. Não usa compose raiz, default bridge, daemon/sysctl,
 sudo, CLI autenticada ou API paga. O build usa `--network=host` apenas para
@@ -56,8 +48,9 @@ downloads no contêiner de build; não altera a rede do host.
 
 Runtime: uma rede Docker `--internal` exclusiva com nome aleatório de 96 bits,
 labels próprias; PG, web, gateway e ttyd sem portas publicadas. Web limitado a
-2 GiB/2 CPUs, demais a 512 MiB/1 CPU cada; máximo agregado 3.5 GiB/5 CPUs e
-1024 PIDs. Todos sem capabilities e com no-new-privileges. PG roda como postgres,
+2 GiB/2 CPUs, demais serviços a 512 MiB/1 CPU cada; o helper transitório de
+retenção acrescenta 128 MiB/0.5 CPU/32 PIDs aos 3.5 GiB/5 CPUs/1024 PIDs dos
+serviços. Todos sem capabilities e com no-new-privileges. PG roda como postgres,
 dados somente em tmpfs. Volume exclusivo guarda apenas configs e relatório, e
 é removido no fim. Nenhum socket Docker é montado.
 
@@ -67,6 +60,18 @@ DB=`aixle_test`, role=`f0_access_lab`, COMMENT=`agent-control:access:disposable:
 e zero tabelas públicas. Divergência impede `load db/schema.rb`. Não há migração,
 seeds ou DB remoto. A confiança PG é limitada à rede descartável deste ensaio,
 sem senha real; não é uma proposta de configuração de produção.
+
+Lote6 exige prontidão TCP final em 127.0.0.1:5432, indisponível no PG temporário
+por socket, seguida de SQL com identidade/DB/endereço/porta exatos antes do CREATE
+e COMMENT. Deadline, exit e diagnóstico categórico sanitizado ficam no recibo,
+sem argv/signing key/Config.Env. A coleta após web parado usa helper Ruby sem
+serviços, rede none e volume próprio readonly, da mesma imagem fixa. Só lê os
+dois arquivos sanitizados fixos, regulares, sem symlinks e até 2 MiB cada; valida
+UTF-8 e estrutura/status JSON do report. Helper tem limites, label/ID, inspect e
+cleanup por ownership. Não usa docker cp de montagens. Falhas de retenção e
+remoção são registradas separadamente e impedem o gate; ausência de arquivo não
+é PASS. Ver detalhes e ownership equivalente a COPY no preparo alternativo em
+[F0-LAB-HOST-RECUPERACAO.md](F0-LAB-HOST-RECUPERACAO.md). E4 segue PENDENTE.
 
 ## Percursos e resultados exigidos
 
@@ -200,7 +205,9 @@ git diff --check
 O primeiro valida filtragem do contexto e ciclo administrativo/retention/cleanup
 com Docker simulado, inclusive falha de boot, start com exit 125 após criação
 (logs/inspect retidos antes da remoção) e create recusado sem adoção do nome.
-São seis testes locais; não contam como prova de acesso.
+São 22 testes locais no lote6, incluindo prontidão TCP/identidade, falha SQL,
+coleta após web parado, ausência/tipos/tamanho de artefatos, criação parcial do
+helper e falha de remoção separada da retenção; não contam como prova de acesso.
 O segundo contém seis testes dirigidos do classificador, incluindo erros internos,
 protocolo inválido, 401 indevido para identidade válida, id divergente, envelope
 ambíguo e recusa de outra ferramenta. Ele usa respostas sintéticas somente para
