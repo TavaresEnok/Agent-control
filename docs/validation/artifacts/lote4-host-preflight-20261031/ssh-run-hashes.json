@@ -1,0 +1,21 @@
+{
+  "cleanup.json": "b1c520a694db3c0ec535b2dd4aa1bf6f78ec5356bc4d24cd76993ee7b54cfe64",
+  "code/app/services/agent_control/open_ssh_transport.rb": "58be644525dfe47bc8d144f4e375cbcf9d7bb02dcdec7fe191e2b31f7700e797",
+  "code/app/services/coder/ssh_runner.rb": "7ce2198f5071122e410c7d373852cb1bf18a85926a1b08a95ae5239838cad470",
+  "code/docs/validation/F0-SSH-INTEGRADO.md": "5a06a939fa4296a9b28b4be1c0b54364192fcd62a47fdcfa64d78765a34969e6",
+  "code/test/f0/ssh/check_syntax.py": "d1cc3896b63f22f0d855ba6aad9171877cd2d2a700f68fe2295f47a23866e9d8",
+  "code/test/f0/ssh/host_run_test.py": "9baf8c15514639597710a720bd608c3a1f2367bf59fff650b9faf32b6cb2af20",
+  "code/test/f0/ssh/runner_test.rb": "edcd78a2211dc4466b886e66952aada82ef199f3791e4884257b4d8c85169370",
+  "code/test/f0/ssh/secret_absence_test.py": "8be8a6270c62819cc23d8faa21752304db00559befff35661d61e4fc03ec2597",
+  "code/test/services/agent_control/open_ssh_transport_test.rb": "8f186bab4e91f1c95435079d24a11a354f459ebb2675dd129f4c2e3365764035",
+  "code/test/services/coder/ssh_runner_test.rb": "37acb1a99b4ca2878ca6c168ac0a1e08929448856d0839824c6c4383e136aee4",
+  "code/tools/f0/ssh/Dockerfile.central": "fa750c6e95471a126abe643ab0f8383344f8144069c554ee6e7aeb883cc91b46",
+  "code/tools/f0/ssh/Dockerfile.target": "078d17d3edacfef40c3e646283f6208c2ec76da4c8621ed240c763dcbaab71cd",
+  "code/tools/f0/ssh/boot.rb": "1b3bc4aa62050e7ccfe000fc68ac7e1e2b7839ed53e4d1e8902e1cd79487ca1d",
+  "code/tools/f0/ssh/host-run.py": "e8cf0d4c491fbfc1b790c083e0b44170ee4ed0e7931ee5430b817b682f61fb20",
+  "code/tools/f0/ssh/scenario.rb": "eae1fbd90157ca89e9a5204fc044da5011227ea5bca86c82a3f8b9a2b2eda122",
+  "code/tools/f0/ssh/target.sh": "cc77687804972a5ee31d8029efb432b5852f80bb52424c91a90a9fb533ac9fff",
+  "commands.json": "a0af0b9adc7aab1be2f250fbd4f853e6bc1dff396c951a4863d68ecd4a7e242e",
+  "gate.json": "831989a0633930db7e0571159015c07e443fa40ef320ee4afe0a26af8eed4189",
+  "operations.log": "9fc627b7797418574c991c803ce0ae5fbd67a1b265a4d025fadac9b140266331"
+}

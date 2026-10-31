@@ -1,0 +1,58 @@
+Hit:1 http://deb.debian.org/debian trixie InRelease
+Hit:2 http://deb.debian.org/debian trixie-updates InRelease
+Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+Fetched 43.4 kB in 0s (289 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  git-man liberror-perl
+Suggested packages:
+  gettext-base git-doc git-email git-gui gitk gitweb git-cvs git-mediawiki
+  git-svn
+Recommended packages:
+  less ssh-client
+The following NEW packages will be installed:
+  git git-man liberror-perl
+0 upgraded, 3 newly installed, 0 to remove and 1 not upgraded.
+Need to get 11.1 MB of archives.
+After this operation, 52.7 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian trixie/main amd64 liberror-perl all 0.17030-1 [26.9 kB]
+Get:2 http://deb.debian.org/debian trixie/main amd64 git-man all 1:2.47.3-0+deb13u1 [2205 kB]
+Get:3 http://deb.debian.org/debian trixie/main amd64 git amd64 1:2.47.3-0+deb13u1 [8862 kB]
+Fetched 11.1 MB in 0s (65.1 MB/s)
+Selecting previously unselected package liberror-perl.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 17233 files and directories currently installed.)
+Preparing to unpack .../liberror-perl_0.17030-1_all.deb ...
+Unpacking liberror-perl (0.17030-1) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../git-man_1%3a2.47.3-0+deb13u1_all.deb ...
+Unpacking git-man (1:2.47.3-0+deb13u1) ...
+Selecting previously unselected package git.
+Preparing to unpack .../git_1%3a2.47.3-0+deb13u1_amd64.deb ...
+Unpacking git (1:2.47.3-0+deb13u1) ...
+Setting up liberror-perl (0.17030-1) ...
+Setting up git-man (1:2.47.3-0+deb13u1) ...
+Setting up git (1:2.47.3-0+deb13u1) ...
+ttyd version 1.7.7-40e79c7
+The Gemfile's dependencies are satisfied
+Syntax OK
+Run options: --seed 16165
+
+# Running:
+
+......
+
+Finished in 0.003228s, 1858.8247 runs/s, 13011.7732 assertions/s.
+
+6 runs, 42 assertions, 0 failures, 0 errors, 0 skips
+Run options: --seed 33804
+
+# Running:
+
+..
+
+Finished in 0.027068s, 73.8882 runs/s, 332.4967 assertions/s.
+
+2 runs, 9 assertions, 0 failures, 0 errors, 0 skips

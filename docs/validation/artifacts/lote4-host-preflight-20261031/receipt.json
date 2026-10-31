@@ -1,0 +1,53 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T20:08:26.586348+00:00",
+  "candidate_commit": "c9a2c3b03c70f2d21a36b491c165260c17307911",
+  "images": {
+    "agent-control-f0-access:candidate": "sha256:77b44cec68ac9029e10f15f7b1c497502f9e05796985becec070f4910b8b0b9b",
+    "agent-control-f0-ssh-central:candidate": "sha256:311e145514ccfad8830130f8da1507890f432836222ab80470a04b987944e0e6",
+    "agent-control-f0-ssh-target:candidate": "sha256:54cc44a07a861f438df5920952ddd9e4e13096a5ed7b7e7b287c5cd2ef30c4f5",
+    "traefik:v3.6.6": "sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222"
+  },
+  "access_build_unit_tests": {
+    "mcp": [
+      6,
+      42,
+      0,
+      0,
+      0
+    ],
+    "cookie": [
+      2,
+      9,
+      0,
+      0,
+      0
+    ],
+    "format": "runs,assertions,failures,errors,skips",
+    "status": "PASS",
+    "ttyd": "1.7.7 sha2568a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55 from upstream fixed recipe; Debian apt package absent"
+  },
+  "ssh_units_compat": {
+    "transport": [
+      6,
+      48,
+      0,
+      0,
+      0
+    ],
+    "runner": [
+      2,
+      12,
+      0,
+      0,
+      0
+    ],
+    "status": "PASS with explicit seccomp=unconfined; default seccomp failed ThreadError EPERM"
+  },
+  "physical_full_status": "NOT RUN beyond setup: SSH failed Docker default IPAM before containers; access not repeated against known common blocker",
+  "ipam_preflight": "Isolated internal network172.28.96.0/28 create/removal exit0; no default network/daemon/sysctl changed",
+  "remaining": "Implement explicit subnet and lab-only compatibility flags in scripts then review and execute real matrices",
+  "gate": "G0 PENDENTE",
+  "raw_access": "/home/enok/srv_projetos/runtime/agent-control/g0-access-20261031",
+  "raw_ssh": "/home/enok/srv_projetos/runtime/agent-control/g0-ssh-20261031"
+}

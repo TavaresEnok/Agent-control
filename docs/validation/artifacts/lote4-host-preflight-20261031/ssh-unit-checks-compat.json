@@ -1,0 +1,62 @@
+[
+  {
+    "script": "test/services/agent_control/open_ssh_transport_test.rb",
+    "command": [
+      "docker",
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--memory=1g",
+      "--cpus=1",
+      "--pids-limit=256",
+      "--security-opt",
+      "no-new-privileges:true",
+      "--security-opt",
+      "seccomp=unconfined",
+      "--mount",
+      "type=bind,src=/home/enok/srv_projetos/runtime/agent-control/g0-ssh-20261031,dst=/work,readonly",
+      "--workdir",
+      "/work",
+      "--env",
+      "BUNDLE_GEMFILE=/work/tools/f0/integrated/Gemfile",
+      "--env",
+      "BUNDLE_FROZEN=true",
+      "sha256:311e145514ccfad8830130f8da1507890f432836222ab80470a04b987944e0e6",
+      "ruby",
+      "test/services/agent_control/open_ssh_transport_test.rb"
+    ],
+    "exit": 0,
+    "at": "2026-10-31T20:07:26.314569+00:00"
+  },
+  {
+    "script": "test/f0/ssh/runner_test.rb",
+    "command": [
+      "docker",
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--memory=1g",
+      "--cpus=1",
+      "--pids-limit=256",
+      "--security-opt",
+      "no-new-privileges:true",
+      "--security-opt",
+      "seccomp=unconfined",
+      "--mount",
+      "type=bind,src=/home/enok/srv_projetos/runtime/agent-control/g0-ssh-20261031,dst=/work,readonly",
+      "--workdir",
+      "/work",
+      "--env",
+      "BUNDLE_GEMFILE=/work/tools/f0/integrated/Gemfile",
+      "--env",
+      "BUNDLE_FROZEN=true",
+      "sha256:311e145514ccfad8830130f8da1507890f432836222ab80470a04b987944e0e6",
+      "ruby",
+      "test/f0/ssh/runner_test.rb"
+    ],
+    "exit": 0,
+    "at": "2026-10-31T20:07:29.209726+00:00"
+  }
+]

@@ -1,0 +1,23 @@
+[
+  [
+    "docker",
+    "image",
+    "inspect",
+    "sha256:311e145514ccfad8830130f8da1507890f432836222ab80470a04b987944e0e6"
+  ],
+  [
+    "docker",
+    "image",
+    "inspect",
+    "sha256:54cc44a07a861f438df5920952ddd9e4e13096a5ed7b7e7b287c5cd2ef30c4f5"
+  ],
+  [
+    "docker",
+    "network",
+    "create",
+    "--internal",
+    "--label",
+    "agent-control.fixture=c8bf15a857b4a31771d6f1b94f2732b1",
+    "f0-ssh-c8bf15a857b4a31771d6f1b94f2732b1"
+  ]
+]

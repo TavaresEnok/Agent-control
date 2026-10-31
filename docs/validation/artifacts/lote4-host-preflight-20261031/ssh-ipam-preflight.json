@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-31T20:07:26.554130+00:00",
+  "command": [
+    "docker",
+    "network",
+    "create",
+    "--internal",
+    "--subnet",
+    "172.28.96.0/28",
+    "--label",
+    "agent-control.fixture=ipam-preflight-20261031",
+    "agent-control-ipam-probe-c385e2a829e5"
+  ],
+  "exit": 0,
+  "stdout": "45114e04ba157800f9276fd9cd0c8aae23e388181fde24301dbc26bd8d92cce0\n",
+  "stderr": "",
+  "purpose": "Scoped network preflight only; no workload or existing network changed",
+  "cleanup_exit": 0
+}

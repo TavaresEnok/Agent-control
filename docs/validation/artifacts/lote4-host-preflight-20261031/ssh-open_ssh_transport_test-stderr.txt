@@ -1,0 +1,8 @@
+/usr/local/bundle/gems/minitest-6.0.6/lib/minitest/parallel.rb:30:in 'Thread#initialize': can't create Thread: Operation not permitted (ThreadError)
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest/parallel.rb:30:in 'Thread.new'
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest/parallel.rb:30:in 'block in Minitest::Parallel::Executor#start'
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest/parallel.rb:29:in 'Array#initialize'
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest/parallel.rb:29:in 'Array.new'
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest/parallel.rb:29:in 'Minitest::Parallel::Executor#start'
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest.rb:313:in 'Minitest.run'
+	from /usr/local/bundle/gems/minitest-6.0.6/lib/minitest.rb:84:in 'block in Minitest.autorun'

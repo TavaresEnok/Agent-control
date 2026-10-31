@@ -1,0 +1,6 @@
+{
+  "candidate_commit": "c9a2c3b03c70f2d21a36b491c165260c17307911",
+  "at": "2026-10-31T20:03:14.896903+00:00",
+  "source_files": 2697,
+  "scope": "Filtered reviewed application snapshot; dependency image reused, no host dotenv or credentials"
+}

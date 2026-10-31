@@ -1,0 +1,7 @@
+[
+  {
+    "script": "test/services/agent_control/open_ssh_transport_test.rb",
+    "exit": 1,
+    "at": "2026-10-31T20:06:50.576973+00:00"
+  }
+]
