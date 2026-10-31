@@ -1,0 +1,25 @@
+{
+  "job_id": "86638eaf657a",
+  "state": "exited",
+  "exit_code": 0,
+  "reason": "completed",
+  "diagnosis": "the command completed successfully after 3s",
+  "command": "set -eu\ncd /lab/home/source\ngit fetch /lab/home/307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610.bundle HEAD\ngit checkout --detach c7455f7f0c4d833a9b788f0c46d5ae37db5f130f\necho execution >> /lab/home/execution-counter\nsleep 2\nsh test.sh\nobserved=$(git rev-parse HEAD)\ntest \"$observed\" = c7455f7f0c4d833a9b788f0c46d5ae37db5f130f\nprintf '\n---aixle_job_result---\nobserved_sha=%s\nartifact_sha256=307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610\n' \"$observed\"",
+  "workspace": "disposable",
+  "pid": 102,
+  "pgid": 102,
+  "command_pid": 109,
+  "command_pgid": 109,
+  "started_at": "2026-10-31T20:43:28Z",
+  "finished_at": "2026-10-31T20:43:31Z",
+  "elapsed_seconds": 3,
+  "last_heartbeat_at": "2026-10-31T20:43:28Z",
+  "heartbeat_age_seconds": 3,
+  "log_path": "/tmp/aixle-jobs/86638eaf657a.log",
+  "log_bytes": 333,
+  "tail": "From /lab/home/307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610.bundle\n * branch            HEAD       -> FETCH_HEAD\nHEAD is now at c7455f7 Laboratory change\n\n---aixle_job_result---\nobserved_sha=c7455f7f0c4d833a9b788f0c46d5ae37db5f130f\nartifact_sha256=307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610\n",
+  "result": {
+    "observed_sha": "c7455f7f0c4d833a9b788f0c46d5ae37db5f130f",
+    "artifact_sha256": "307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610"
+  }
+}

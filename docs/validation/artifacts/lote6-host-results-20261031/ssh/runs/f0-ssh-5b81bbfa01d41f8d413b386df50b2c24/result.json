@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "initial_sha": "de8151ea5fa30b0b5a9031c7859bbb4877235aed",
+  "central_sha": "c7455f7f0c4d833a9b788f0c46d5ae37db5f130f",
+  "artifact_sha256": "307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610",
+  "job_id": "86638eaf657a",
+  "executions": 1,
+  "synthetic_secret_absent": true,
+  "forced_channel_drop": "NOT RUN",
+  "boundary": "real SshRunner/OpenSSH/journal; standalone Settings; no CoderPrepareRepo/MCP/SQL/AI authentication"
+}

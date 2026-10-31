@@ -1,0 +1,768 @@
+-- enable_extension("citext")
+   -> 0.0862s
+-- enable_extension("pg_catalog.plpgsql")
+   -> 0.0076s
+-- create_table("agent_credentials", {force: :cascade})
+   -> 0.0239s
+-- create_table("agents", {force: :cascade})
+   -> 0.0186s
+-- add_check_constraint("agents", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "agents_tenant_columns", validate: false})
+   -> 0.0013s
+-- create_table("asset_versions", {force: :cascade})
+   -> 0.0087s
+-- create_table("assets", {force: :cascade})
+   -> 0.0449s
+-- add_check_constraint("assets", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL OR scope_type::text = 'Company'::text AND project_id IS NULL AND company_id = scope_id", {name: "assets_tenant_columns", validate: false})
+   -> 0.0013s
+-- create_table("audits", {force: :cascade})
+   -> 0.0108s
+-- create_table("azure_devops_deliveries", {force: :cascade})
+   -> 0.0384s
+-- create_table("azure_devops_installations", {force: :cascade})
+   -> 0.0126s
+-- create_table("azure_devops_operations", {force: :cascade})
+   -> 0.0131s
+-- create_table("azure_devops_subscriptions", {force: :cascade})
+   -> 0.0088s
+-- create_table("billing_cancellations", {force: :cascade})
+   -> 0.0070s
+-- create_table("bitbucket_installations", {force: :cascade})
+   -> 0.0145s
+-- create_table("bitbucket_pairings", {force: :cascade})
+   -> 0.0091s
+-- create_table("board_activities", {force: :cascade})
+   -> 0.0149s
+-- create_table("board_columns", {force: :cascade})
+   -> 0.0088s
+-- create_table("board_tasks", {force: :cascade})
+   -> 0.0162s
+-- create_table("board_view_presets", {force: :cascade})
+   -> 0.0110s
+-- create_table("boards", {force: :cascade})
+   -> 0.0063s
+-- create_table("capacity_meter_reports", {force: :cascade})
+   -> 0.0101s
+-- create_table("catalog_namespaces", {force: :cascade})
+   -> 0.0055s
+-- create_table("catalog_search_queries", {force: :cascade})
+   -> 0.0094s
+-- create_table("catalog_skills", {force: :cascade})
+   -> 0.0330s
+-- create_table("catalog_templates", {force: :cascade})
+   -> 0.0113s
+-- create_table("chat_channel_connections", {force: :cascade})
+   -> 0.0075s
+-- create_table("chat_connect_codes", {force: :cascade})
+   -> 0.0104s
+-- create_table("chat_conversations", {force: :cascade})
+   -> 0.0087s
+-- create_table("chat_identities", {force: :cascade})
+   -> 0.0061s
+-- create_table("chat_messages", {force: :cascade})
+   -> 0.0065s
+-- create_table("chat_workspaces", {force: :cascade})
+   -> 0.0060s
+-- create_table("column_transitions", {force: :cascade})
+   -> 0.0179s
+-- create_table("column_workflow_bindings", {force: :cascade})
+   -> 0.0080s
+-- create_table("companies", {force: :cascade})
+   -> 0.0342s
+-- create_table("company_auth_policies", {force: :cascade})
+   -> 0.0078s
+-- create_table("company_billing_state_changes", {force: :cascade})
+   -> 0.0083s
+-- create_table("company_capacity_changes", {force: :cascade})
+   -> 0.0073s
+-- create_table("company_capacity_usages", {force: :cascade})
+   -> 0.0073s
+-- create_table("company_memberships", {force: :cascade})
+   -> 0.0148s
+-- create_table("company_usage_hours", {force: :cascade})
+   -> 0.0123s
+-- create_table("config_item_accesses", {force: :cascade})
+   -> 0.0082s
+-- create_table("config_items", {force: :cascade})
+   -> 0.0090s
+-- add_check_constraint("config_items", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "config_items_tenant_columns", validate: false})
+   -> 0.0010s
+-- create_table("connectors", {force: :cascade})
+   -> 0.0170s
+-- create_table("entity_versions", {force: :cascade})
+   -> 0.0359s
+-- create_table("external_resources", {force: :cascade})
+   -> 0.0079s
+-- create_table("feature_flag_overrides", {force: :cascade})
+   -> 0.0085s
+-- create_table("feature_flags", {force: :cascade})
+   -> 0.0065s
+-- create_table("feedback_attachments", {force: :cascade})
+   -> 0.0054s
+-- create_table("feedback_submissions", {force: :cascade})
+   -> 0.0080s
+-- create_table("folders", {force: :cascade})
+   -> 0.0106s
+-- add_check_constraint("folders", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL OR scope_type::text = 'Company'::text AND project_id IS NULL AND company_id = scope_id", {name: "folders_tenant_columns", validate: false})
+   -> 0.0012s
+-- create_table("gates", {force: :cascade})
+   -> 0.0270s
+-- create_table("identity_providers", {force: :cascade})
+   -> 0.0152s
+-- create_table("integration_data", {force: :cascade})
+   -> 0.0147s
+-- create_table("integrations", {force: :cascade})
+   -> 0.0256s
+-- create_table("magic_link_tokens", {force: :cascade})
+   -> 0.0085s
+-- create_table("marketplace_licenses", {force: :cascade})
+   -> 0.0173s
+-- create_table("marketplace_subscription_events", {force: :cascade})
+   -> 0.0117s
+-- create_table("mcp_servers", {force: :cascade})
+   -> 0.0456s
+-- add_check_constraint("mcp_servers", "project_id IS NULL AND company_id IS NULL OR scope_type IS NULL AND scope_id IS NULL AND project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "mcp_servers_tenant_columns", validate: false})
+   -> 0.0019s
+-- create_table("oauth_clients", {force: :cascade})
+   -> 0.0208s
+-- create_table("oauth_credentials", {force: :cascade})
+   -> 0.0194s
+-- create_table("project_collaborators", {force: :cascade})
+   -> 0.0077s
+-- create_table("project_favorites", {force: :cascade})
+   -> 0.0069s
+-- create_table("project_trackers", {force: :cascade})
+   -> 0.0125s
+-- create_table("projects", {force: :cascade})
+   -> 0.0102s
+-- create_table("pull_request_operations", {force: :cascade})
+   -> 0.0072s
+-- create_table("received_webhooks", {force: :cascade})
+   -> 0.0089s
+-- create_table("repositories", {force: :cascade})
+   -> 0.0221s
+-- add_check_constraint("repositories", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "repositories_tenant_columns", validate: false})
+   -> 0.0011s
+-- create_table("runner_credentials", {force: :cascade})
+   -> 0.0176s
+-- create_table("runner_environments", {force: :cascade})
+   -> 0.0188s
+-- create_table("runners", {force: :cascade})
+   -> 0.0229s
+-- create_table("scim_configurations", {force: :cascade})
+   -> 0.0240s
+-- create_table("session_admission_policies", {force: :cascade})
+   -> 0.0066s
+-- create_table("session_admission_pools", {force: :cascade})
+   -> 0.0069s
+-- create_table("session_admissions", {force: :cascade})
+   -> 0.0171s
+-- create_table("session_concurrency_limits", {force: :cascade})
+   -> 0.0086s
+-- add_check_constraint("session_concurrency_limits", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL OR scope_type::text = 'Company'::text AND project_id IS NULL AND company_id = scope_id", {name: "session_concurrency_limits_tenant_columns", validate: false})
+   -> 0.0020s
+-- create_table("session_config_items", {id: false, force: :cascade})
+   -> 0.0037s
+-- create_table("session_input_assets", {id: false, force: :cascade})
+   -> 0.0027s
+-- create_table("session_logs", {force: :cascade})
+   -> 0.0054s
+-- create_table("session_mcp_servers", {id: false, force: :cascade})
+   -> 0.0025s
+-- create_table("session_repositories", {id: false, force: :cascade})
+   -> 0.0023s
+-- create_table("session_runtime_operations", {force: :cascade})
+   -> 0.0084s
+-- create_table("session_skills", {id: false, force: :cascade})
+   -> 0.0023s
+-- create_table("session_tools", {id: false, force: :cascade})
+   -> 0.0025s
+-- create_table("skills", {force: :cascade})
+   -> 0.0176s
+-- add_check_constraint("skills", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "skills_tenant_columns", validate: false})
+   -> 0.0010s
+-- create_table("solid_queue_blocked_executions", {force: :cascade})
+   -> 0.0078s
+-- create_table("solid_queue_claimed_executions", {force: :cascade})
+   -> 0.0056s
+-- create_table("solid_queue_failed_executions", {force: :cascade})
+   -> 0.0046s
+-- create_table("solid_queue_jobs", {force: :cascade})
+   -> 0.0109s
+-- create_table("solid_queue_pauses", {force: :cascade})
+   -> 0.0053s
+-- create_table("solid_queue_processes", {force: :cascade})
+   -> 0.0077s
+-- create_table("solid_queue_ready_executions", {force: :cascade})
+   -> 0.0085s
+-- create_table("solid_queue_recurring_executions", {force: :cascade})
+   -> 0.0069s
+-- create_table("solid_queue_recurring_tasks", {force: :cascade})
+   -> 0.0083s
+-- create_table("solid_queue_scheduled_executions", {force: :cascade})
+   -> 0.0068s
+-- create_table("solid_queue_semaphores", {force: :cascade})
+   -> 0.0097s
+-- create_table("step_runs", {force: :cascade})
+   -> 0.0274s
+-- create_table("steps", {force: :cascade})
+   -> 0.0173s
+-- create_table("sub_step_runs", {force: :cascade})
+   -> 0.0066s
+-- create_table("sub_steps", {force: :cascade})
+   -> 0.0077s
+-- create_table("task_assets", {force: :cascade})
+   -> 0.0309s
+-- create_table("task_comments", {force: :cascade})
+   -> 0.0091s
+-- create_table("template_installs", {force: :cascade})
+   -> 0.0092s
+-- create_table("template_setup_items", {force: :cascade})
+   -> 0.0080s
+-- create_table("terminal_sessions", {force: :cascade})
+   -> 0.0259s
+-- create_table("tool_files", {force: :cascade})
+   -> 0.0060s
+-- create_table("tool_results", {force: :cascade})
+   -> 0.0097s
+-- create_table("tools", {force: :cascade})
+   -> 0.0246s
+-- add_check_constraint("tools", "name::text !~~ 'mcp\\_\\_%'::text", {name: "tools_name_not_managed_namespace", validate: false})
+   -> 0.0013s
+-- add_check_constraint("tools", "project_id IS NULL AND company_id IS NULL OR scope_type IS NULL AND scope_id IS NULL AND project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "tools_tenant_columns", validate: false})
+   -> 0.0016s
+-- create_table("tracker_accounts", {force: :cascade})
+   -> 0.0086s
+-- create_table("tracker_attachments", {force: :cascade})
+   -> 0.0179s
+-- create_table("tracker_deliveries", {force: :cascade})
+   -> 0.0067s
+-- create_table("tracker_operations", {force: :cascade})
+   -> 0.0083s
+-- create_table("tracker_subscriptions", {force: :cascade})
+   -> 0.0090s
+-- create_table("trigger_bindings", {force: :cascade})
+   -> 0.0157s
+-- create_table("trigger_dispatches", {force: :cascade})
+   -> 0.0102s
+-- create_table("trigger_events", {force: :cascade})
+   -> 0.0380s
+-- create_table("usage_statistics", {force: :cascade})
+   -> 0.0102s
+-- create_table("user_identities", {force: :cascade})
+   -> 0.0088s
+-- create_table("user_session_proofs", {force: :cascade})
+   -> 0.0081s
+-- create_table("user_sessions", {force: :cascade})
+   -> 0.0138s
+-- create_table("users", {force: :cascade})
+   -> 0.0181s
+-- create_table("webauthn_credentials", {force: :cascade})
+   -> 0.0074s
+-- create_table("webhook_endpoints", {force: :cascade})
+   -> 0.0134s
+-- create_table("workflow_run_assets", {force: :cascade})
+   -> 0.0244s
+-- create_table("workflow_runs", {force: :cascade})
+   -> 0.0422s
+-- create_table("workflows", {force: :cascade})
+   -> 0.0357s
+-- add_check_constraint("workflows", "project_id IS NULL AND company_id IS NULL OR scope_type::text = 'System'::text AND project_id IS NULL AND company_id IS NULL OR scope_type::text = 'Project'::text AND project_id = scope_id AND company_id IS NOT NULL", {name: "workflows_tenant_columns", validate: false})
+   -> 0.0015s
+-- create_table("youtrack_pairings", {force: :cascade})
+   -> 0.0201s
+-- add_foreign_key("agent_credentials", "companies")
+   -> 0.0054s
+-- add_foreign_key("agent_credentials", "users")
+   -> 0.0036s
+-- add_foreign_key("agents", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0025s
+-- add_foreign_key("agents", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_agents_project_company", on_delete: :cascade, validate: false})
+   -> 0.0021s
+-- add_foreign_key("agents", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0021s
+-- add_foreign_key("asset_versions", "assets", {on_delete: :cascade})
+   -> 0.0045s
+-- add_foreign_key("asset_versions", "users", {column: "uploaded_by_id", on_delete: :nullify})
+   -> 0.0033s
+-- add_foreign_key("assets", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0025s
+-- add_foreign_key("assets", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_assets_project_company", on_delete: :cascade, validate: false})
+   -> 0.0026s
+-- add_foreign_key("assets", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0028s
+-- add_foreign_key("assets", "step_runs", {on_delete: :nullify})
+   -> 0.0094s
+-- add_foreign_key("assets", "terminal_sessions", {column: "shared_in_session_id", on_delete: :nullify})
+   -> 0.0058s
+-- add_foreign_key("assets", "terminal_sessions", {on_delete: :nullify})
+   -> 0.0038s
+-- add_foreign_key("assets", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("assets", "users", {column: "shared_by_id", on_delete: :nullify})
+   -> 0.0030s
+-- add_foreign_key("azure_devops_deliveries", "azure_devops_subscriptions")
+   -> 0.0044s
+-- add_foreign_key("azure_devops_installations", "companies")
+   -> 0.0033s
+-- add_foreign_key("azure_devops_installations", "users", {column: "approved_by_id", on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("azure_devops_operations", "integrations", {on_delete: :cascade})
+   -> 0.0047s
+-- add_foreign_key("azure_devops_subscriptions", "integrations", {on_delete: :cascade})
+   -> 0.0026s
+-- add_foreign_key("billing_cancellations", "companies", {on_delete: :cascade})
+   -> 0.0033s
+-- add_foreign_key("billing_cancellations", "users", {on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("bitbucket_installations", "companies", {on_delete: :nullify})
+   -> 0.0034s
+-- add_foreign_key("bitbucket_installations", "users", {column: "bound_by_id", on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("bitbucket_pairings", "bitbucket_installations", {on_delete: :cascade})
+   -> 0.0030s
+-- add_foreign_key("board_activities", "board_tasks", {on_delete: :cascade})
+   -> 0.0041s
+-- add_foreign_key("board_activities", "boards", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("board_activities", "users", {column: "actor_id", on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("board_columns", "boards", {on_delete: :cascade})
+   -> 0.0030s
+-- add_foreign_key("board_tasks", "board_columns")
+   -> 0.0028s
+-- add_foreign_key("board_tasks", "board_tasks", {column: "parent_task_id", on_delete: :nullify})
+   -> 0.0023s
+-- add_foreign_key("board_tasks", "boards", {on_delete: :cascade})
+   -> 0.0025s
+-- add_foreign_key("board_tasks", "users", {column: "assignee_id", on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("board_view_presets", "boards", {on_delete: :cascade})
+   -> 0.0032s
+-- add_foreign_key("board_view_presets", "users")
+   -> 0.0063s
+-- add_foreign_key("boards", "projects", {on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("chat_channel_connections", "chat_conversations", {on_delete: :cascade})
+   -> 0.0038s
+-- add_foreign_key("chat_channel_connections", "companies", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("chat_channel_connections", "users", {column: "requested_by_id", on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("chat_connect_codes", "chat_channel_connections", {on_delete: :nullify})
+   -> 0.0055s
+-- add_foreign_key("chat_connect_codes", "companies", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("chat_connect_codes", "projects", {on_delete: :cascade})
+   -> 0.0026s
+-- add_foreign_key("chat_connect_codes", "trigger_bindings", {on_delete: :nullify})
+   -> 0.0036s
+-- add_foreign_key("chat_connect_codes", "users", {column: "requested_by_id", on_delete: :nullify})
+   -> 0.0025s
+-- add_foreign_key("chat_conversations", "chat_workspaces", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("chat_conversations", "integrations", {on_delete: :nullify})
+   -> 0.0024s
+-- add_foreign_key("chat_identities", "users", {on_delete: :cascade})
+   -> 0.0025s
+-- add_foreign_key("chat_messages", "chat_conversations", {on_delete: :cascade})
+   -> 0.0025s
+-- add_foreign_key("chat_messages", "companies", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("column_transitions", "board_columns", {column: "from_column_id", on_delete: :cascade})
+   -> 0.0034s
+-- add_foreign_key("column_transitions", "board_columns", {column: "to_column_id", on_delete: :cascade})
+   -> 0.0023s
+-- add_foreign_key("column_transitions", "board_tasks", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("column_transitions", "users", {column: "actor_id", on_delete: :nullify})
+   -> 0.0045s
+-- add_foreign_key("column_transitions", "workflow_runs", {on_delete: :nullify})
+   -> 0.0090s
+-- add_foreign_key("column_workflow_bindings", "board_columns", {on_delete: :cascade})
+   -> 0.0038s
+-- add_foreign_key("column_workflow_bindings", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("column_workflow_bindings", "workflows", {on_delete: :cascade})
+   -> 0.0043s
+-- add_foreign_key("company_auth_policies", "companies")
+   -> 0.0046s
+-- add_foreign_key("company_auth_policies", "identity_providers")
+   -> 0.0054s
+-- add_foreign_key("company_billing_state_changes", "companies", {on_delete: :cascade})
+   -> 0.0033s
+-- add_foreign_key("company_capacity_changes", "companies", {on_delete: :cascade})
+   -> 0.0032s
+-- add_foreign_key("company_capacity_usages", "companies", {on_delete: :cascade})
+   -> 0.0032s
+-- add_foreign_key("company_memberships", "agent_credentials", {column: "default_agent_credential_id", on_delete: :nullify})
+   -> 0.0055s
+-- add_foreign_key("company_memberships", "companies")
+   -> 0.0043s
+-- add_foreign_key("company_memberships", "users")
+   -> 0.0031s
+-- add_foreign_key("company_memberships", "users", {column: "invited_by_id", on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("company_usage_hours", "companies", {on_delete: :cascade})
+   -> 0.0034s
+-- add_foreign_key("config_items", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0029s
+-- add_foreign_key("config_items", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_config_items_project_company", on_delete: :cascade, validate: false})
+   -> 0.0025s
+-- add_foreign_key("config_items", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0023s
+-- add_foreign_key("entity_versions", "companies", {on_delete: :cascade})
+   -> 0.0075s
+-- add_foreign_key("entity_versions", "entity_versions", {column: "restored_from_id", on_delete: :nullify})
+   -> 0.0022s
+-- add_foreign_key("entity_versions", "projects", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("entity_versions", "terminal_sessions", {on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("entity_versions", "users", {column: "author_id", on_delete: :nullify})
+   -> 0.0022s
+-- add_foreign_key("external_resources", "board_tasks", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("feature_flag_overrides", "companies", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("feature_flag_overrides", "feature_flags", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("feature_flag_overrides", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0022s
+-- add_foreign_key("feature_flags", "users", {column: "updated_by_id", on_delete: :nullify})
+   -> 0.0055s
+-- add_foreign_key("feedback_attachments", "feedback_submissions", {on_delete: :cascade})
+   -> 0.0034s
+-- add_foreign_key("feedback_submissions", "companies", {on_delete: :cascade})
+   -> 0.0040s
+-- add_foreign_key("feedback_submissions", "users", {on_delete: :nullify})
+   -> 0.0025s
+-- add_foreign_key("folders", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0023s
+-- add_foreign_key("folders", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_folders_project_company", on_delete: :cascade, validate: false})
+   -> 0.0024s
+-- add_foreign_key("folders", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0022s
+-- add_foreign_key("folders", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0033s
+-- add_foreign_key("gates", "board_tasks", {on_delete: :cascade})
+   -> 0.0038s
+-- add_foreign_key("gates", "users", {column: "creator_id", on_delete: :nullify})
+   -> 0.0023s
+-- add_foreign_key("identity_providers", "companies")
+   -> 0.0021s
+-- add_foreign_key("integration_data", "integrations", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("integrations", "azure_devops_installations", {on_delete: :restrict})
+   -> 0.0021s
+-- add_foreign_key("integrations", "bitbucket_installations", {on_delete: :restrict})
+   -> 0.0020s
+-- add_foreign_key("integrations", "chat_workspaces", {on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("integrations", "companies")
+   -> 0.0021s
+-- add_foreign_key("integrations", "projects", {on_delete: :cascade})
+   -> 0.0021s
+-- add_foreign_key("integrations", "users", {column: "connected_by_id", on_delete: :nullify})
+   -> 0.0023s
+-- add_foreign_key("magic_link_tokens", "users")
+   -> 0.0031s
+-- add_foreign_key("marketplace_licenses", "companies")
+   -> 0.0034s
+-- add_foreign_key("marketplace_licenses", "companies", {column: "proposed_company_id", on_delete: :nullify})
+   -> 0.0025s
+-- add_foreign_key("marketplace_subscription_events", "marketplace_licenses")
+   -> 0.0027s
+-- add_foreign_key("mcp_servers", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0029s
+-- add_foreign_key("mcp_servers", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_mcp_servers_project_company", on_delete: :cascade, validate: false})
+   -> 0.0022s
+-- add_foreign_key("mcp_servers", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0022s
+-- add_foreign_key("oauth_clients", "mcp_servers", {on_delete: :cascade})
+   -> 0.0041s
+-- add_foreign_key("oauth_credentials", "mcp_servers", {on_delete: :cascade})
+   -> 0.0039s
+-- add_foreign_key("oauth_credentials", "oauth_clients")
+   -> 0.0040s
+-- add_foreign_key("oauth_credentials", "users", {column: "connected_by_id", on_delete: :nullify})
+   -> 0.0025s
+-- add_foreign_key("project_collaborators", "projects", {on_delete: :cascade})
+   -> 0.0031s
+-- add_foreign_key("project_collaborators", "users")
+   -> 0.0031s
+-- add_foreign_key("project_favorites", "projects", {on_delete: :cascade})
+   -> 0.0032s
+-- add_foreign_key("project_favorites", "users")
+   -> 0.0025s
+-- add_foreign_key("project_trackers", "integrations", {on_delete: :cascade})
+   -> 0.0029s
+-- add_foreign_key("project_trackers", "projects", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("projects", "companies")
+   -> 0.0025s
+-- add_foreign_key("projects", "users", {column: "owner_id"})
+   -> 0.0023s
+-- add_foreign_key("pull_request_operations", "integrations", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("pull_request_operations", "repositories", {on_delete: :cascade})
+   -> 0.0039s
+-- add_foreign_key("received_webhooks", "webhook_endpoints", {on_delete: :cascade})
+   -> 0.0042s
+-- add_foreign_key("repositories", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0024s
+-- add_foreign_key("repositories", "integrations", {column: ["integration_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_repositories_integration_company", validate: false})
+   -> 0.0020s
+-- add_foreign_key("repositories", "integrations", {on_delete: :cascade})
+   -> 0.0047s
+-- add_foreign_key("repositories", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_repositories_project_company", on_delete: :cascade, validate: false})
+   -> 0.0033s
+-- add_foreign_key("repositories", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0036s
+-- add_foreign_key("runner_credentials", "companies", {on_delete: :cascade})
+   -> 0.0047s
+-- add_foreign_key("runner_credentials", "runner_environments", {column: ["runner_environment_id", "runner_id"], primary_key: ["id", "runner_id"], name: "fk_runner_credentials_environment_runner", on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("runner_credentials", "runner_environments", {on_delete: :cascade})
+   -> 0.0031s
+-- add_foreign_key("runner_credentials", "runners", {column: ["runner_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_runner_credentials_runner_company", on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("runner_credentials", "runners", {on_delete: :cascade})
+   -> 0.0036s
+-- add_foreign_key("runner_environments", "companies", {on_delete: :cascade})
+   -> 0.0034s
+-- add_foreign_key("runner_environments", "runners", {column: ["runner_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_runner_environments_runner_company", on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("runner_environments", "runners", {on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("runners", "companies", {on_delete: :cascade})
+   -> 0.0033s
+-- add_foreign_key("runners", "integrations")
+   -> 0.0027s
+-- add_foreign_key("runners", "integrations", {column: ["integration_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_runners_integration_company"})
+   -> 0.0026s
+-- add_foreign_key("runners", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_runners_project_company", on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("runners", "projects", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("runners", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0029s
+-- add_foreign_key("scim_configurations", "companies")
+   -> 0.0034s
+-- add_foreign_key("scim_configurations", "identity_providers")
+   -> 0.0029s
+-- add_foreign_key("session_admissions", "session_admission_pools")
+   -> 0.0042s
+-- add_foreign_key("session_admissions", "terminal_sessions")
+   -> 0.0027s
+-- add_foreign_key("session_concurrency_limits", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0024s
+-- add_foreign_key("session_concurrency_limits", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_session_concurrency_limits_project_company", on_delete: :cascade, validate: false})
+   -> 0.0026s
+-- add_foreign_key("session_concurrency_limits", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0027s
+-- add_foreign_key("session_input_assets", "assets", {on_delete: :cascade})
+   -> 0.0038s
+-- add_foreign_key("session_input_assets", "terminal_sessions", {on_delete: :cascade})
+   -> 0.0026s
+-- add_foreign_key("session_logs", "terminal_sessions", {on_delete: :cascade})
+   -> 0.0029s
+-- add_foreign_key("session_mcp_servers", "mcp_servers", {on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("session_mcp_servers", "terminal_sessions", {on_delete: :cascade})
+   -> 0.0037s
+-- add_foreign_key("session_repositories", "repositories", {on_delete: :cascade})
+   -> 0.0038s
+-- add_foreign_key("session_repositories", "terminal_sessions", {on_delete: :cascade})
+   -> 0.0037s
+-- add_foreign_key("session_runtime_operations", "session_admissions")
+   -> 0.0031s
+-- add_foreign_key("session_skills", "skills", {on_delete: :cascade})
+   -> 0.0038s
+-- add_foreign_key("session_skills", "terminal_sessions", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("session_tools", "terminal_sessions", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("session_tools", "tools", {on_delete: :cascade})
+   -> 0.0034s
+-- add_foreign_key("skills", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0026s
+-- add_foreign_key("skills", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_skills_project_company", on_delete: :cascade, validate: false})
+   -> 0.0022s
+-- add_foreign_key("skills", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0029s
+-- add_foreign_key("solid_queue_blocked_executions", "solid_queue_jobs", {column: "job_id", on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("solid_queue_claimed_executions", "solid_queue_jobs", {column: "job_id", on_delete: :cascade})
+   -> 0.0025s
+-- add_foreign_key("solid_queue_failed_executions", "solid_queue_jobs", {column: "job_id", on_delete: :cascade})
+   -> 0.0039s
+-- add_foreign_key("solid_queue_ready_executions", "solid_queue_jobs", {column: "job_id", on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("solid_queue_recurring_executions", "solid_queue_jobs", {column: "job_id", on_delete: :cascade})
+   -> 0.0023s
+-- add_foreign_key("solid_queue_scheduled_executions", "solid_queue_jobs", {column: "job_id", on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("step_runs", "entity_versions", {column: "workflow_version_id", on_delete: :nullify})
+   -> 0.0024s
+-- add_foreign_key("step_runs", "steps", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("step_runs", "terminal_sessions")
+   -> 0.0024s
+-- add_foreign_key("step_runs", "workflow_runs", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("steps", "agents", {on_delete: :nullify})
+   -> 0.0032s
+-- add_foreign_key("steps", "workflows", {on_delete: :cascade})
+   -> 0.0026s
+-- add_foreign_key("sub_step_runs", "step_runs", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("sub_step_runs", "sub_steps")
+   -> 0.0033s
+-- add_foreign_key("sub_steps", "steps")
+   -> 0.0024s
+-- add_foreign_key("task_assets", "board_tasks", {on_delete: :cascade})
+   -> 0.0033s
+-- add_foreign_key("task_assets", "terminal_sessions", {column: "shared_in_session_id", on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("task_assets", "users", {column: "author_id", on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("task_assets", "users", {column: "shared_by_id", on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("task_comments", "board_tasks", {on_delete: :cascade})
+   -> 0.0029s
+-- add_foreign_key("task_comments", "users", {column: "author_id", on_delete: :nullify})
+   -> 0.0025s
+-- add_foreign_key("template_installs", "projects", {on_delete: :cascade})
+   -> 0.0032s
+-- add_foreign_key("template_installs", "users", {column: "installed_by_id", on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("template_setup_items", "template_installs", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("terminal_sessions", "agents", {column: "configured_agent_id", on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("terminal_sessions", "companies")
+   -> 0.0029s
+-- add_foreign_key("terminal_sessions", "projects", {on_delete: :nullify})
+   -> 0.0026s
+-- add_foreign_key("terminal_sessions", "runners")
+   -> 0.0035s
+-- add_foreign_key("terminal_sessions", "runners", {column: ["runner_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_terminal_sessions_runner_company"})
+   -> 0.0026s
+-- add_foreign_key("terminal_sessions", "users", {on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("tool_files", "tools", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("tool_results", "step_runs", {on_delete: :nullify})
+   -> 0.0032s
+-- add_foreign_key("tool_results", "terminal_sessions", {on_delete: :nullify})
+   -> 0.0029s
+-- add_foreign_key("tool_results", "tools", {on_delete: :cascade})
+   -> 0.0026s
+-- add_foreign_key("tools", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0022s
+-- add_foreign_key("tools", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_tools_project_company", on_delete: :cascade, validate: false})
+   -> 0.0020s
+-- add_foreign_key("tools", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0021s
+-- add_foreign_key("tracker_attachments", "projects", {on_delete: :cascade})
+   -> 0.0028s
+-- add_foreign_key("tracker_attachments", "task_assets", {on_delete: :nullify})
+   -> 0.0021s
+-- add_foreign_key("tracker_deliveries", "tracker_subscriptions", {on_delete: :cascade})
+   -> 0.0032s
+-- add_foreign_key("tracker_operations", "project_trackers", {on_delete: :cascade})
+   -> 0.0034s
+-- add_foreign_key("tracker_subscriptions", "integrations", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("trigger_bindings", "board_columns", {column: "subject_column_id", on_delete: :nullify})
+   -> 0.0024s
+-- add_foreign_key("trigger_bindings", "chat_conversations", {on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("trigger_bindings", "project_trackers", {on_delete: :restrict})
+   -> 0.0024s
+-- add_foreign_key("trigger_bindings", "projects", {on_delete: :cascade})
+   -> 0.0022s
+-- add_foreign_key("trigger_bindings", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0023s
+-- add_foreign_key("trigger_bindings", "workflows", {on_delete: :cascade})
+   -> 0.0025s
+-- add_foreign_key("trigger_dispatches", "trigger_bindings", {on_delete: :nullify})
+   -> 0.0030s
+-- add_foreign_key("trigger_dispatches", "trigger_events", {on_delete: :cascade})
+   -> 0.0033s
+-- add_foreign_key("trigger_dispatches", "workflow_runs", {on_delete: :nullify})
+   -> 0.0021s
+-- add_foreign_key("trigger_events", "board_tasks", {on_delete: :nullify})
+   -> 0.0022s
+-- add_foreign_key("trigger_events", "companies", {on_delete: :cascade})
+   -> 0.0030s
+-- add_foreign_key("trigger_events", "projects", {on_delete: :nullify})
+   -> 0.0024s
+-- add_foreign_key("trigger_events", "users", {column: "actor_id", on_delete: :nullify})
+   -> 0.0024s
+-- add_foreign_key("usage_statistics", "terminal_sessions")
+   -> 0.0028s
+-- add_foreign_key("user_identities", "identity_providers")
+   -> 0.0026s
+-- add_foreign_key("user_identities", "users")
+   -> 0.0023s
+-- add_foreign_key("user_session_proofs", "identity_providers")
+   -> 0.0027s
+-- add_foreign_key("user_session_proofs", "user_sessions", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("user_sessions", "users", {column: "impersonator_id", on_delete: :nullify})
+   -> 0.0023s
+-- add_foreign_key("user_sessions", "users", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("users", "companies", {column: "last_company_id", on_delete: :nullify})
+   -> 0.0027s
+-- add_foreign_key("webauthn_credentials", "users")
+   -> 0.0028s
+-- add_foreign_key("webhook_endpoints", "companies", {on_delete: :cascade})
+   -> 0.0024s
+-- add_foreign_key("webhook_endpoints", "projects", {on_delete: :cascade})
+   -> 0.0021s
+-- add_foreign_key("webhook_endpoints", "users", {column: "created_by_id", on_delete: :nullify})
+   -> 0.0023s
+-- add_foreign_key("workflow_run_assets", "step_runs", {column: "produced_by_step_run_id", on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("workflow_run_assets", "terminal_sessions", {column: "shared_in_session_id", on_delete: :nullify})
+   -> 0.0022s
+-- add_foreign_key("workflow_run_assets", "users", {column: "shared_by_id", on_delete: :nullify})
+   -> 0.0022s
+-- add_foreign_key("workflow_run_assets", "workflow_runs", {on_delete: :cascade})
+   -> 0.0022s
+-- add_foreign_key("workflow_runs", "agent_credentials", {column: "failed_agent_credential_id", on_delete: :nullify})
+   -> 0.0021s
+-- add_foreign_key("workflow_runs", "board_tasks", {on_delete: :nullify})
+   -> 0.0025s
+-- add_foreign_key("workflow_runs", "projects", {on_delete: :cascade})
+   -> 0.0029s
+-- add_foreign_key("workflow_runs", "runners")
+   -> 0.0064s
+-- add_foreign_key("workflow_runs", "users", {on_delete: :nullify})
+   -> 0.0058s
+-- add_foreign_key("workflow_runs", "workflow_runs", {column: "retried_from_run_id", on_delete: :nullify})
+   -> 0.0044s
+-- add_foreign_key("workflow_runs", "workflows", {on_delete: :cascade})
+   -> 0.0035s
+-- add_foreign_key("workflows", "companies", {on_delete: :cascade, validate: false})
+   -> 0.0029s
+-- add_foreign_key("workflows", "projects", {column: ["project_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_workflows_project_company", on_delete: :cascade, validate: false})
+   -> 0.0027s
+-- add_foreign_key("workflows", "projects", {on_delete: :cascade, validate: false})
+   -> 0.0024s
+-- add_foreign_key("workflows", "runners")
+   -> 0.0027s
+-- add_foreign_key("workflows", "runners", {column: ["runner_id", "company_id"], primary_key: ["id", "company_id"], name: "fk_workflows_runner_company"})
+   -> 0.0031s
+-- add_foreign_key("workflows", "users", {column: "published_by_id", on_delete: :nullify})
+   -> 0.0029s
+-- add_foreign_key("youtrack_pairings", "companies", {on_delete: :cascade})
+   -> 0.0037s
+-- add_foreign_key("youtrack_pairings", "integrations", {on_delete: :nullify})
+   -> 0.0028s
+-- add_foreign_key("youtrack_pairings", "projects", {on_delete: :cascade})
+   -> 0.0027s
+-- add_foreign_key("youtrack_pairings", "users", {on_delete: :cascade})
+   -> 0.0026s

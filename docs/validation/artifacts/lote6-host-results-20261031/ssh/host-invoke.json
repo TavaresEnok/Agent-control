@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "tools/f0/ssh/host-run.py",
+    "sha256:311e145514ccfad8830130f8da1507890f432836222ab80470a04b987944e0e6",
+    "sha256:54cc44a07a861f438df5920952ddd9e4e13096a5ed7b7e7b287c5cd2ef30c4f5",
+    "--subnet",
+    "172.28.96.16/28",
+    "--seccomp-compat"
+  ],
+  "exit_code": 0,
+  "finished_at": "2026-10-31T20:43:32.966911+00:00"
+}

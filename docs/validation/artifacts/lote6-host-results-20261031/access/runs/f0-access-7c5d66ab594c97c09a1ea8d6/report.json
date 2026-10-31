@@ -1,0 +1,67 @@
+{
+  "status": "FAIL_OR_NOTRUN",
+  "g0": "PENDENTE",
+  "db": {
+    "db": "aixle_test",
+    "role": "f0_access_lab",
+    "comment": "agent-control:access:disposable:7c5d66ab594c97c09a1ea8d6"
+  },
+  "csrf": "explicitly enabled; positive and negative network mutations required",
+  "versions": {
+    "ruby": "4.0.9",
+    "rails": "8.1.4"
+  },
+  "cable_adapter": "async: single process laboratory, not production Redis",
+  "ai_mode": "No provider CLI/MITM/broker launched; no claim of RF55 global or T28",
+  "rows": [
+    {
+      "name": "session-cookie/1/round-trip",
+      "status": "PASS",
+      "observed": {
+        "set_cookie": true,
+        "real_verifier": true,
+        "session_and_csrf_recovered": true
+      }
+    },
+    {
+      "name": "session-cookie/2/round-trip",
+      "status": "PASS",
+      "observed": {
+        "set_cookie": true,
+        "real_verifier": true,
+        "session_and_csrf_recovered": true
+      }
+    },
+    {
+      "name": "session-cookie/3/round-trip",
+      "status": "PASS",
+      "observed": {
+        "set_cookie": true,
+        "real_verifier": true,
+        "session_and_csrf_recovered": true
+      }
+    },
+    {
+      "name": "boot-or-scenario",
+      "status": "NOTRUN",
+      "error_class": "Net::OpenTimeout",
+      "location": "/usr/local/bundle/gems/net-http-0.9.1/lib/net/http.rb:1682:in 'Net::HTTP#connect'"
+    }
+  ],
+  "source_sha256": {
+    "Gemfile.lock": "a1e786288bd8bb83f40d89aa0aaf1f9cdda063d0efe261027e8fa12de08848d8",
+    "db/schema.rb": "7d2b196423adad3362a7519a92151162af537a6298955bf2eff265a4304e299c",
+    "config/routes.rb": "2e9ed79f6d9b9883c70518b1521c2996349d30c14caf8c87ea79d7fef0ee36dd",
+    "config/routes/web.rb": "a9dd39f39c34b189197f5370fb323fdea5775b3ad30acfa67986a6a7b80b0014",
+    "config/routes/mcp.rb": "fcccc35030dc1f071b16db35d8553d829b67d1196edfa4b0b609f94437a96a2b",
+    "app/controllers/concerns/auth_concern.rb": "a7822a84ce1b2e48d326ccaa8865fce137c3b258cb618c52100e0c28ea682a86",
+    "app/controllers/api/v1/internal/ws_auth_controller.rb": "f358fd94ba6a9f11d3223b18c94cf48b3086e70b3858e412fbca7347d596ddb9",
+    "app/channels/application_cable/connection.rb": "6c789f1e5c39151ecd0b829bed6f6ec07023cb266b8d305e7658cbb6624466c8",
+    "app/controllers/mcp_controller.rb": "83271ae1e895e869353eded3cc55145b2f86e7d1596920faf58bb6a099033157",
+    "docker/traefik/dynamic.yml": "cdbe309d17fb2b9fedb946de8703b60a9fc3f6b7a6317f6cc53b0909b0c6a6f2",
+    "tools/f0/access/run.rb": "0a058848f7bf2f005027f6037971a315254d14b41d95c57ca00f439eedba8fe8",
+    "tools/f0/access/session_cookie.rb": "c525b91dda78897f05891184e967e48efe82af0cb1a40d4cb40ef07e1445db65",
+    "tools/f0/access/mcp_evidence.rb": "b7c58ccf1b81f1ce3836bf24a594234c2437c03a2cb021351c8f1a341b2452fb",
+    "tools/f0/access/web_socket.rb": "3cd43e15e4165c4f178cbbd4e32f4c7a01567d2686dc0e3db45c7f7cf443b920"
+  }
+}

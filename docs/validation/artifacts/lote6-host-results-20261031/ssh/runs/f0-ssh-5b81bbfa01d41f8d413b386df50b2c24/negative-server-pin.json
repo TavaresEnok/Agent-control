@@ -1,0 +1,6 @@
+{
+  "exit_code": 255,
+  "stdout": "",
+  "stderr": "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\nSomeone could be eavesdropping on you right now (man-in-the-middle attack)!\r\nIt is also possible that a host key has just been changed.\r\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:rCD9mwxa+pSjdZAWJFD2iPiqdrlcXn6aFO91xYjbxPM.\r\nPlease contact your system administrator.\r\nAdd correct host key in /lab/wrong_hosts to get rid of this message.\r\nOffending ED25519 key in /lab/wrong_hosts:1\r\n  remove with:\r\n  ssh-keygen -f '/lab/wrong_hosts' -R 'f0-lab-pinned'\r\nHost key for f0-lab-pinned has changed and you have requested strict checking.\r\nHost key verification failed.\r\n",
+  "truncated": false
+}

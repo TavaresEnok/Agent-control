@@ -1,0 +1,61 @@
+{
+  "status": "FAIL",
+  "fixture": "7c5d66ab594c97c09a1ea8d6",
+  "images": [
+    "sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242",
+    "sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222",
+    "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
+  ],
+  "subnet": "172.28.96.0/28",
+  "seccomp": "unconfined",
+  "stage": "web-wait",
+  "diagnostic": {
+    "stage": "pg-readiness",
+    "error_class": "CalledProcessError",
+    "exit_code": 2,
+    "stderr_bytes": 0,
+    "stderr_categories": []
+  },
+  "exit_code": 1,
+  "artifact_errors": {},
+  "resources": [
+    {
+      "kind": "network",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6",
+      "id": "4fa925a5165933a61dfa470a9db90d42bcb7fec9db6f7643f8df393c9a2ff354"
+    },
+    {
+      "kind": "volume",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6",
+      "id": "f0-access-7c5d66ab594c97c09a1ea8d6"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6-pg",
+      "id": "f4a67eb1051f6a237350077fcbfe9b0131a914a32a343cb40b1699f794f7e155"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6-terminal",
+      "id": "89e92414d2cd9c55f905081aba5716ddf7864126b4f50a4510ee779a637e71c8"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6-web",
+      "id": "33df5d45d4b79d4b8ee2abd8e7d76d53ab4daf884b8f6a4287a834b0a2a66614"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6-gateway",
+      "id": "f9cc4761dd292b5e57ab238788e6dbf4b1d43bfad777ef0cfd2aec6f5ad1b2e1"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-7c5d66ab594c97c09a1ea8d6-collector",
+      "id": "932551df7d800067d8c3ed2c0e29a7a3bc39110ab3a17ead9dac1fb4f8c39d78"
+    }
+  ],
+  "cleanup_status": "PASS",
+  "cleanup_failures": [],
+  "gate_status": "FAIL"
+}

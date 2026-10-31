@@ -1,0 +1,95 @@
+---
+http:
+  middlewares:
+    terminal-auth:
+      forwardAuth:
+        address: http://web:4000/api/v1/internal/ws_auth
+        authResponseHeadersRegex: "^(X-.*|Cookie|Authorization)$"
+        addAuthCookiesToResponse:
+        - aixle_container
+    terminal-cors:
+      headers:
+        accessControlAllowOriginList:
+        - http://localhost:4000
+        - http://localhost
+        accessControlAllowMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+        accessControlAllowHeaders:
+        - Content-Type
+        - Authorization
+        - X-Requested-With
+        - Cookie
+        accessControlAllowCredentials: true
+    lab-tty-strip:
+      stripPrefix:
+        prefixes:
+        - "/t/02b4a8401ad5d60d309a2ebd6f884c90/tty"
+    lab-fs-strip:
+      stripPrefix:
+        prefixes:
+        - "/t/02b4a8401ad5d60d309a2ebd6f884c90/fs"
+    lab-view-strip:
+      stripPrefix:
+        prefixes:
+        - "/t/02b4a8401ad5d60d309a2ebd6f884c90/view"
+    lab-upload-strip:
+      stripPrefix:
+        prefixes:
+        - "/t/02b4a8401ad5d60d309a2ebd6f884c90/upload"
+  routers:
+    lab-tty:
+      rule: PathPrefix(`/t/02b4a8401ad5d60d309a2ebd6f884c90/tty`)
+      middlewares:
+      - terminal-auth@file
+      - lab-tty-strip
+      service: lab-tty
+    lab-fs:
+      rule: PathPrefix(`/t/02b4a8401ad5d60d309a2ebd6f884c90/fs`)
+      middlewares:
+      - terminal-cors@file
+      - terminal-auth@file
+      - lab-fs-strip
+      service: lab-fs
+    lab-ide:
+      rule: PathPrefix(`/t/02b4a8401ad5d60d309a2ebd6f884c90/ide`)
+      middlewares:
+      - terminal-auth@file
+      service: lab-ide
+    lab-view:
+      rule: PathPrefix(`/t/02b4a8401ad5d60d309a2ebd6f884c90/view`)
+      middlewares:
+      - terminal-auth@file
+      - lab-view-strip
+      service: lab-view
+    lab-upload:
+      rule: PathPrefix(`/t/02b4a8401ad5d60d309a2ebd6f884c90/upload`)
+      middlewares:
+      - terminal-cors@file
+      - terminal-auth@file
+      - lab-upload-strip
+      service: lab-upload
+  services:
+    lab-tty:
+      loadBalancer:
+        servers:
+        - url: http://terminal:7681
+    lab-fs:
+      loadBalancer:
+        servers:
+        - url: http://terminal:4040
+    lab-ide:
+      loadBalancer:
+        servers:
+        - url: http://terminal:8443
+    lab-view:
+      loadBalancer:
+        servers:
+        - url: http://terminal:7682
+    lab-upload:
+      loadBalancer:
+        servers:
+        - url: http://terminal:4041

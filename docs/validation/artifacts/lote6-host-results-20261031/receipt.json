@@ -1,0 +1,24 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T20:47:41.847194+00:00",
+  "candidate_commit": "da30f2b0e2ccd207d46ccf3d1ddc6d1516505b95",
+  "ssh": {
+    "physical": "PASS",
+    "execution_count": 1,
+    "job_id": "86638eaf657a",
+    "central_sha": "c7455f7f0c4d833a9b788f0c46d5ae37db5f130f",
+    "remote_observed_sha": "c7455f7f0c4d833a9b788f0c46d5ae37db5f130f",
+    "artifact_sha256": "307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610",
+    "pin_negative_and_synthetic_no_secret": "PASS per physical scenario",
+    "cleanup": "PASS",
+    "limits": "Standalone Settings, real SshRunner/OpenSSH/journal; no CoderPrepareRepo/MCP/SQL/AI auth; forced channel drop NOT RUN"
+  },
+  "access": {
+    "status": "FAIL_OR_NOTRUN",
+    "progress": "Final PG and complete Rails schema loaded; three SQL identities/cookies real roundtrip PASS; gateway/collector started and collection+cleanupPASS",
+    "block": "Net::OpenTimeout during initial gateway readiness before HTTP/WS/MCP matrix",
+    "timing_evidence": "Gateway started20:43:38.502, web ended20:43:39.262; request timeout2s may have begun before gateway/DNS readiness; startup retry currently excludes Net::OpenTimeout",
+    "limits": "No PASS of access protection; no authorization vulnerability claimed from timeout"
+  },
+  "gate": "G0 PENDENTE"
+}

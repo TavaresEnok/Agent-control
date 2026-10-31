@@ -1,0 +1,8 @@
+{
+  "host": "target",
+  "user": "lab",
+  "identity_file": "/lab/client_key",
+  "known_hosts_file": "/lab/known_hosts",
+  "fingerprint": "SHA256:rCD9mwxa+pSjdZAWJFD2iPiqdrlcXn6aFO91xYjbxPM",
+  "lab_opt_in": true
+}

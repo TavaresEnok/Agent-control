@@ -1,0 +1,5 @@
+ARG BASE=debian:bookworm-slim
+FROM ${BASE}
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server git coreutils util-linux && rm -rf /var/lib/apt/lists/* && rm -f /etc/ssh/ssh_host_* && useradd -m -d /lab/home -s /bin/sh lab && passwd -d lab
+COPY tools/f0/ssh/target.sh /fixture.sh
+ENTRYPOINT ["/bin/sh", "/fixture.sh"]

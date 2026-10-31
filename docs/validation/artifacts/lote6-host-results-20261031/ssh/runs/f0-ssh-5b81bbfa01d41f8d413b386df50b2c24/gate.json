@@ -1,0 +1,26 @@
+{
+  "exit_code": 0,
+  "token": "5b81bbfa01d41f8d413b386df50b2c24",
+  "physical": "PASS",
+  "scenario": "started",
+  "forced_channel_drop": "NOT RUN",
+  "subnet": "172.28.96.16/28",
+  "seccomp": "unconfined",
+  "resources": [
+    {
+      "kind": "network",
+      "name": "f0-ssh-5b81bbfa01d41f8d413b386df50b2c24",
+      "id": "b1a1f3ab4704b430b05fc1947777e4aca731cf67e6750db2360cf56da9571373"
+    },
+    {
+      "kind": "container",
+      "name": "f0-ssh-5b81bbfa01d41f8d413b386df50b2c24-central",
+      "id": "2d7b7a65956fd8e4124289e3a24351332a1cf484785a301b9f7e5af5bdbb0ac6"
+    },
+    {
+      "kind": "container",
+      "name": "f0-ssh-5b81bbfa01d41f8d413b386df50b2c24-target",
+      "id": "baecf1056744a576146d9178e526d8d0054de35e1cd7f76f1676db6780e467c4"
+    }
+  ]
+}
