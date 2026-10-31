@@ -1,0 +1,229 @@
+[
+    {
+        "Id": "sha256:51e6a0811e25f8987d80eaab3fcec28c8c1c11fbaa07995830eca22cb3a5e116",
+        "RepoTags": [
+            "agent-control-f0-admission-ruby:4.0.9"
+        ],
+        "RepoDigests": [],
+        "Parent": "sha256:a391f5a7b1730813c738dda322e3e3c658d8fd2d88c4bf54d1a08a55ec11c555",
+        "Comment": "",
+        "Created": "2026-10-31T15:22:14.171268164Z",
+        "Container": "e569f82ec7df62f6885e30c65f8fa6b3a3b1ada935cb45394b583175a29e94f1",
+        "ContainerConfig": {
+            "Hostname": "pnetlab",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "BUNDLE_GEMFILE=/opt/admission/Gemfile",
+                "PATH=/usr/local/bundle/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=C.UTF-8",
+                "RUBY_VERSION=4.0.9",
+                "RUBY_DOWNLOAD_URL=https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.9.tar.xz",
+                "RUBY_DOWNLOAD_SHA256=a8057adb39f51ad6dc3106237504c93dd792bb515837b4fe7817ae21ed7e51f4",
+                "GEM_HOME=/usr/local/bundle",
+                "BUNDLE_SILENCE_ROOT_WARNING=1",
+                "BUNDLE_APP_CONFIG=/usr/local/bundle"
+            ],
+            "Cmd": [
+                "sh",
+                "-ec",
+                "mkdir -p /opt/admission\ncp /input/Gemfile /opt/admission/Gemfile\napt-get update > /opt/admission/build.log 2>&1\napt-get install -y --no-install-recommends build-essential pkg-config libssl-dev zlib1g-dev libyaml-dev libffi-dev >> /opt/admission/build.log 2>&1\nbundle install --jobs 2 >> /opt/admission/build.log 2>&1\nruby --version\nbundle check"
+            ],
+            "Image": "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df",
+            "Volumes": null,
+            "WorkingDir": "/work",
+            "Entrypoint": null,
+            "OnBuild": null,
+            "Labels": {}
+        },
+        "DockerVersion": "20.10.9",
+        "Author": "",
+        "Config": {
+            "Hostname": "pnetlab",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "BUNDLE_GEMFILE=/opt/admission/Gemfile",
+                "PATH=/usr/local/bundle/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=C.UTF-8",
+                "RUBY_VERSION=4.0.9",
+                "RUBY_DOWNLOAD_URL=https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.9.tar.xz",
+                "RUBY_DOWNLOAD_SHA256=a8057adb39f51ad6dc3106237504c93dd792bb515837b4fe7817ae21ed7e51f4",
+                "GEM_HOME=/usr/local/bundle",
+                "BUNDLE_SILENCE_ROOT_WARNING=1",
+                "BUNDLE_APP_CONFIG=/usr/local/bundle"
+            ],
+            "Cmd": [
+                "sh",
+                "-ec",
+                "mkdir -p /opt/admission\ncp /input/Gemfile /opt/admission/Gemfile\napt-get update > /opt/admission/build.log 2>&1\napt-get install -y --no-install-recommends build-essential pkg-config libssl-dev zlib1g-dev libyaml-dev libffi-dev >> /opt/admission/build.log 2>&1\nbundle install --jobs 2 >> /opt/admission/build.log 2>&1\nruby --version\nbundle check"
+            ],
+            "Image": "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df",
+            "Volumes": null,
+            "WorkingDir": "/work",
+            "Entrypoint": null,
+            "OnBuild": null,
+            "Labels": {}
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 825307876,
+        "VirtualSize": 825307876,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/557854c9d8081fac688406d86c418096e50d46cf6d4ae9aa34986414e41b0f11/diff:/var/lib/docker/overlay2/2f128c564eddb37305b1d8b9b636c9d31e25b6d5f7dac342d81c13ab64a68eb7/diff:/var/lib/docker/overlay2/85f43a9271d82d9370b0c56b35ed66b57cc1bd7da227e78b1b762261bc0a017b/diff:/var/lib/docker/overlay2/43e335f2e84bce20c652637c2849f3163bf77f5a41ab6d3a35c934eab3d7f3ab/diff:/var/lib/docker/overlay2/7f99a9148f337f3206a5380876bba52891560d9b3407dd6baa822f4782a385b5/diff",
+                "MergedDir": "/var/lib/docker/overlay2/29b26965850724660960806665b7a7f8f5e2d28db414dc06f74bef4eb6a3f61d/merged",
+                "UpperDir": "/var/lib/docker/overlay2/29b26965850724660960806665b7a7f8f5e2d28db414dc06f74bef4eb6a3f61d/diff",
+                "WorkDir": "/var/lib/docker/overlay2/29b26965850724660960806665b7a7f8f5e2d28db414dc06f74bef4eb6a3f61d/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:a5d6d345f6afa08d7c31272055746d60a838b290bfcc82c0a23e8e984d61a933",
+                "sha256:730d3193bcea3b84bddbd72fd395f600e288cd320a0186a2aeccaf5ffbe032ba",
+                "sha256:6ebb6554068e62698c89141851d045b9708616f14f1e9762bf9a5473623cebce",
+                "sha256:d91a2fabd8df38678c3511aee1900e0b899fe55738142b6e1cb8428184f0348f",
+                "sha256:367c0650c78f470651140e8704ef717c85bf3d5f26fed77b8428aee07d303346",
+                "sha256:65bc44e82b6311bbd3e16be391840ad2f8b778b19406f6859bad6a22d86576ba"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-10-31T15:22:15.251682788Z"
+        }
+    },
+    {
+        "Id": "sha256:049a8e6cb3b4607b01e9ec97ba6b0555d6e6671d12b3802021e0ec0a34f93db3",
+        "RepoTags": [
+            "postgres:15.3-alpine"
+        ],
+        "RepoDigests": [
+            "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
+        ],
+        "Parent": "",
+        "Comment": "",
+        "Created": "2023-08-09T02:35:31.46648229Z",
+        "Container": "61113d02ffe9ca11b6af35d7732e0b9b7f415e9275d299e89ea8b1a079bc0b87",
+        "ContainerConfig": {
+            "Hostname": "61113d02ffe9",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "ExposedPorts": {
+                "5432/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=en_US.utf8",
+                "PG_MAJOR=15",
+                "PG_VERSION=15.3",
+                "PG_SHA256=ffc7d4891f00ffbf5c3f4eab7fbbced8460b8c0ee63c5a5167133b9e6599d932",
+                "DOCKER_PG_LLVM_DEPS=llvm15-dev \t\tclang15",
+                "PGDATA=/var/lib/postgresql/data"
+            ],
+            "Cmd": [
+                "/bin/sh",
+                "-c",
+                "#(nop) ",
+                "CMD [\"postgres\"]"
+            ],
+            "Image": "sha256:3ce0015549c00330ec29fc7ebccb6a7d6eb9da0d1b834cd4ed3b503f4afb7c4e",
+            "Volumes": {
+                "/var/lib/postgresql/data": {}
+            },
+            "WorkingDir": "",
+            "Entrypoint": [
+                "docker-entrypoint.sh"
+            ],
+            "OnBuild": null,
+            "Labels": {},
+            "StopSignal": "SIGINT"
+        },
+        "DockerVersion": "20.10.23",
+        "Author": "",
+        "Config": {
+            "Hostname": "",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "ExposedPorts": {
+                "5432/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=en_US.utf8",
+                "PG_MAJOR=15",
+                "PG_VERSION=15.3",
+                "PG_SHA256=ffc7d4891f00ffbf5c3f4eab7fbbced8460b8c0ee63c5a5167133b9e6599d932",
+                "DOCKER_PG_LLVM_DEPS=llvm15-dev \t\tclang15",
+                "PGDATA=/var/lib/postgresql/data"
+            ],
+            "Cmd": [
+                "postgres"
+            ],
+            "Image": "sha256:3ce0015549c00330ec29fc7ebccb6a7d6eb9da0d1b834cd4ed3b503f4afb7c4e",
+            "Volumes": {
+                "/var/lib/postgresql/data": {}
+            },
+            "WorkingDir": "",
+            "Entrypoint": [
+                "docker-entrypoint.sh"
+            ],
+            "OnBuild": null,
+            "Labels": null,
+            "StopSignal": "SIGINT"
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 236748661,
+        "VirtualSize": 236748661,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/730ba98264df0e515040a518ff77e1d4112afc98a3661f8ee164d5524e3733d4/diff:/var/lib/docker/overlay2/fc5e7a9ea7534efe91f8f909ab2966fcca7e9769cfd275f27aa87bb4a5afec59/diff:/var/lib/docker/overlay2/0ebbb2a563931aa2ee210287cad15855a4d1058a4bc72618a0fed0750c7922d8/diff:/var/lib/docker/overlay2/bcb8c9a1c02d5dd93fe829f9649e6cdb2fb33ddb9b5c63e99a0d81a5547a1e18/diff:/var/lib/docker/overlay2/15f5c00ecefd636cf834f1b0bd9c62aec71e031d7314cbf9be2a45d9e17bf59a/diff:/var/lib/docker/overlay2/6695ea330cf0bcd399056bb164ed189ad0af792aaddc8d0e5c92a010afe16a1c/diff:/var/lib/docker/overlay2/f7ffdce6d3cc46d2527df3d3cb2d3ee95df75d86eea9f121a9d531497888b660/diff",
+                "MergedDir": "/var/lib/docker/overlay2/8601c3c000a1df212ee4af7e972631477ecb75cddfb2bb7c7bdee273f409fdcd/merged",
+                "UpperDir": "/var/lib/docker/overlay2/8601c3c000a1df212ee4af7e972631477ecb75cddfb2bb7c7bdee273f409fdcd/diff",
+                "WorkDir": "/var/lib/docker/overlay2/8601c3c000a1df212ee4af7e972631477ecb75cddfb2bb7c7bdee273f409fdcd/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:4693057ce2364720d39e57e85a5b8e0bd9ac3573716237736d6470ec5b7b7230",
+                "sha256:50df5bf6a7731c1f1b78b469a80e11f4a56bbd6d19b217e0a565abb8b11367a9",
+                "sha256:0129a3a7da15e43a01355d3a949c685434362c1a42f7a669b18d859e11f34ef7",
+                "sha256:218fb144c356bab67c6fbe30fc8e6ae76e72bb93694a8f22e3bfaf71ad7b0c2f",
+                "sha256:ca63ee69c63fcc7fab03d28f53c85952d65f8034a0cd6631abc02cde122d0d81",
+                "sha256:af98cea1e658f788d9a4da585c360218d150743657ba3d04e27e933734254aa3",
+                "sha256:1985fc280a07c0af003a166d0f2b7ad4411f7be0ccde3306226d2aef2b0cc729",
+                "sha256:02923eb72309725fd3a6b94cc291d065a0bbab4ad7675006b2fe717a1fc04d9c"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+        }
+    }
+]

@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "gate": "G0 PENDENTE",
+  "physical_execution": "attempted",
+  "errors": [],
+  "cleanup_status": "completed"
+}

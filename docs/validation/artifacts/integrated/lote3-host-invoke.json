@@ -1,0 +1,10 @@
+{
+  "command": [
+    "bash",
+    "tools/f0/integrated/host-run.sh",
+    "712217694cac9f786a72d4b6c876cd15f3dcf1bf31434d9fed6af25242a327a0"
+  ],
+  "cwd": "/home/enok/srv_projetos/runtime/agent-control/g0-integrated-20261031",
+  "exit_code": 0,
+  "finished_at": "2026-10-31T15:51:23.297033+00:00"
+}

@@ -1,0 +1,41 @@
+{
+  "admission": {
+    "id": 1,
+    "terminal_session_id": 1,
+    "session_admission_pool_id": 1,
+    "permit_token": "0692311d-3e52-4c14-82d8-560fec2577d6",
+    "admitted_at": "2026-10-31 15:51:18 UTC",
+    "released_at": null,
+    "stop_requested_at": null,
+    "launch_state": "acknowledged",
+    "claimed_at": "2026-10-31 15:51:22 UTC",
+    "claim_token": "765c790c-e4db-49f8-8d8e-95b2990db7f2",
+    "runtime_id": null,
+    "runtime_kind": null,
+    "phase_state": {},
+    "wait_reason": "dispatch_pending",
+    "last_error": null,
+    "created_at": "2026-10-31 15:51:18 UTC",
+    "updated_at": "2026-10-31 15:51:22 UTC",
+    "launch_attempts": 2
+  },
+  "session": {
+    "id": 1,
+    "user_id": 1,
+    "project_id": 1,
+    "state": "queued",
+    "temporal_workflow_id": "f0-integrated-4d35bb1b9691f1e5cc90c2ed111962bd-session-1",
+    "temporal_run_id": "01a192a8-84fb-7a4e-98e8-004ef787c7a3",
+    "container_id": null,
+    "error_message": null,
+    "started_at": null,
+    "finished_at": null,
+    "finishing_at": null,
+    "ready_at": null,
+    "created_at": "2026-10-31 15:51:18 UTC",
+    "updated_at": "2026-10-31 15:51:22 UTC",
+    "queued_at": null
+  },
+  "occupied": 1,
+  "ledger": []
+}

@@ -1,0 +1,22 @@
+{
+  "observer": "manager_host",
+  "candidate_commit": "17f79b6122ab666fb6c68cd9c5f72e57026c4355",
+  "reviewed_task_commit": "1cfa37ae20d029d9b18c0d7c03674e5b82b0ed89",
+  "at": "2026-10-31T15:53:54.719748+00:00",
+  "host_exit_code": 0,
+  "boot_regression": {
+    "runs": 4,
+    "assertions": 16,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0
+  },
+  "integrated_status": "PASS",
+  "receipt_verifier_exit": 0,
+  "verified_sha256_files": 21,
+  "raw_lab": "/home/enok/srv_projetos/runtime/agent-control/g0-integrated-20261031",
+  "run_directory": "run-20261031T155115-8575a74a1f549eba",
+  "host_directory": "host-003ff04f07abd0f2d06414128a5da7c2",
+  "scope": "Real PostgreSQL+SessionLaunchRelay+TemporalService+SDK/server; physical relay exit86 after accepted start before ack; healthy lease no start, SQL-aged lease real AlreadyStarted with same run ID; exactly one execution; real cancel; own resources cleaned",
+  "limits": "Synthetic peripheral models/auth/registry, inert workflow, no runtime cleanup/release, no real agents or credentials, not all entrypoints; G0 PENDENTE"
+}

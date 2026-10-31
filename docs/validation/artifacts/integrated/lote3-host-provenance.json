@@ -1,0 +1,10 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T15:51:05.661131+00:00",
+  "candidate_commit": "17f79b6122ab666fb6c68cd9c5f72e57026c4355",
+  "reviewed_task_commit": "1cfa37ae20d029d9b18c0d7c03674e5b82b0ed89",
+  "cli_alias": "/home/enok/.local/bin/temporal1.9.1",
+  "cli_target": "/home/enok/.local/bin/temporal",
+  "cli_sha256": "712217694cac9f786a72d4b6c876cd15f3dcf1bf31434d9fed6af25242a327a0",
+  "scope": "Reviewed integrated SQL-relay-Temporal lab, no real accounts or other projects"
+}

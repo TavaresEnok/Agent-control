@@ -1,0 +1,10 @@
+{"event":"dispatch","mode":"die","pid":30}
+{"event":"sdk_call","workflow_id":"f0-integrated-4d35bb1b9691f1e5cc90c2ed111962bd-session-1","reject_duplicate":true,"pid":30}
+{"event":"sdk_response","run_id":"01a192a8-84fb-7a4e-98e8-004ef787c7a3","pid":30}
+{"event":"death_after_service_response","run_id":"01a192a8-84fb-7a4e-98e8-004ef787c7a3","pid":30}
+{"event":"dispatch","mode":"healthy","pid":45}
+{"event":"dispatch_returned","mode":"healthy","pid":45}
+{"event":"dispatch","mode":"retry","pid":51}
+{"event":"sdk_call","workflow_id":"f0-integrated-4d35bb1b9691f1e5cc90c2ed111962bd-session-1","reject_duplicate":true,"pid":51}
+{"event":"sdk_already_started","run_id":"01a192a8-84fb-7a4e-98e8-004ef787c7a3","pid":51}
+{"event":"dispatch_returned","mode":"retry","pid":51}
