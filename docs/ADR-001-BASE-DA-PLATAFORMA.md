@@ -58,7 +58,8 @@ nova execução HOST positiva bidirecional, preservando a falha anterior, sem
 provar isolamento integrado. EV-13/14 preservam o snapshot inicial FAIL/SQL
 pendente. EV-16 acrescenta execução da gerência: Temporal corrigido cinco
 cenários PASS e PG real 9 testes/67 assertions/0skip, guard 2/16 e preflights
-PASS. São fatias isoladas; execução física da costura permanece pendente.
+PASS. Eram fatias isoladas naquele marco; EV-19 acrescenta costura física
+PG+relay+Temporal PASS pela gerência no escopo restrito abaixo, sem fechar E3 global.
 
 1. **Isolamento concorrente de contas com segredos sintéticos (`EV-06` — `T24` parcial):**
    - **Executado:** dois ambientes de conta simulados (`acct_a` e `acct_b`) sob o mesmo UID no Linux `5.17.15`.
@@ -79,17 +80,17 @@ PASS. São fatias isoladas; execução física da costura permanece pendente.
    - Ambos os candidatos aceitam ou injetam variáveis de chave de API (no Kandev, `RequiredEnv: []string{"OPENAI_API_KEY"}` em `codex_acp.go:134` e `codex_app_server.go:74`).
    - Consequência: deve ser bloqueado por política antes de qualquer lançamento para impedir cobrança por uso acidental.
 
-### 2.4 Consolidação das três provas novas e lacunas reais
+### 2.4 Consolidação das provas e lacunas reais — lote4
 
 | Critério G0 | Origem da prova | Estado da integração / custo remanescente |
 |---|---|---|
 | E1 CLIs/assinaturas | EV-03 histórico, EV-09 RF-55 atualizado | **NOT RUN** real. Guard só aceita o caminho Codex local privado avaliado; modo privado hospedado/remoto `requires_clarification`. Titular/plano/versão/entitlement ainda não demonstrados; perfis históricos não são fallback ativo desta fatia |
 | E2 duas contas | EV-05/06/09 histórico; EV-12 recibo HOST | HOME vazou; namespaces bloquearam cinco ataques bidirecionais com leitura própria mantida. **Parcial sintético**, contas reais/isolamento Aixle NOT RUN; unicidade de conta exige adaptação. Falha unshare do trabalhador preservada |
-| E3 autoridade/durabilidade | EV-13/14 históricos; EV-16 físico; EV-18 costura | FAIL inicial nil preservado; correção revisada executada pela gerência: Temporal5 PASS, PG9/67/0skip e guard2/16/preflights PASS. Duas fatias isoladas. Costura PG+relay+Temporal implementada/revisada conforme contrato, execução física PENDENTE, sem segundo motor |
-| E4 acesso/isolamento | EV-09 auditoria de 18 arquivos fixos | T36 **NOT RUN**. ttyd direto é bypass condicional; MITM/CA/proxy, RBAC/gateway/rede e acesso worker à central ainda por fechar/provar. Guard não integrado globalmente |
-| E5 móvel | EV-10 histórico; EV-17 pacote novo retido | Quatro checks parciais, transporte/dados sintéticos; seis hashes de bytes novos conferidos. Perfil conta/modelo, criação de tarefa, persistência/deduplicação e grafo/estado real **NOT RUN**. Reuso da árvore/timeline viável, shell completo ainda por exercer |
+| E3 autoridade/durabilidade | EV-13/14/18 históricos; EV-16 isolado; EV-19 integrado real | Costura física PG+relay+Temporal **PASS pela gerência**: exit86 após start/antes ack, lease saudável sem envio, lease envelhecido em SQL, AlreadyStarted real/mesmo runID/uma execução, cancel/cleanup. Workflow inerte, ledger vazio, reserva ocupada, sem runtime cleanup/modelos periféricos reais ou E3/T28 global; FAIL inicial preservado |
+| E4 acesso/isolamento | EV-09 histórico; EV-20 laboratório Rails | Implementado/revisado conforme controlador; físico **NOT RUN**. Build/testes cookie/MCP e matriz HOST pendentes; ttyd direto na topologia compartilhada só emite FAIL/NOTRUN. Fechamento/contraprova, percursos IDE/files/preview completos e ausência global MITM/CA/proxy pendentes |
+| E5 móvel | EV-10 histórico; EV-17/19 bytes retidos | Quatro checks parciais, transporte/dados sintéticos; seis arquivos/7.858.710 bytes e hashes reconferidos. Perfil conta/modelo, criação de tarefa, persistência/deduplicação e grafo/estado real **NOT RUN**, sem shell autenticado |
 | E6 licença | EV-02/05 documental | **Concluído documentalmente**: Apache-2.0 e operação privada; preservar avisos/licença |
-| E7 SSH | EV-07 execução histórica loopback | **Parcial**; adapter/destino dedicado Aixle **NOT RUN**. Generalizar `coder ssh` para OpenSSH com fingerprint sem mover IA/credencial ao destino |
+| E7 SSH | EV-07 loopback histórico; EV-21 transporte OpenSSH | Implementado/revisado conforme controlador, reutiliza runner/journal/status Aixle sem segundo dispatcher. Físico **NOT RUN**, sem recibo HOST novo; pin/bundle/SHA/teste/um efeito/marcador central e cleanup precisam execução. Queda forçada e testes Rails não provados |
 | AD1 elegibilidade | EV-03 e EV-09 fontes + guard standalone | 24 recusas/um positivo sintético; T39 global **NOT RUN**. Não autoriza MITM/cópia/refresh nem modo hospedado por presunção |
 | AD2 capacidade comum | EV-11 procedimento sem contas | Preservado por não realizar chamadas; T28 real **NOT RUN**. Controlador ativo não comprova admissão/refresh comuns com Aixle |
 | COMP comparação | EV-02/04/05, §3 desta ADR | **Concluída documentalmente**: notas estáticas preservadas, sem compensar eliminatórios |
@@ -106,7 +107,9 @@ O lote 2 acrescenta `4f7e477` (recibo Temporal), `85e9a5d` (política/host) e
 `dca0e31` (harness SQL), incorporados ao clone. Hashes completos e limites em
 EV-12–15 e [F0-LOTE2](validation/F0-LOTE2.md). Ambos os lotes DONE/quatro revisões
 PASS cada conforme contrato; EV-16–18/[F0-LOTE3](validation/F0-LOTE3.md) registram
-os marcos posteriores e seus recibos. Integração Git sozinha não certifica
+os marcos posteriores; EV-19–21/[F0-LOTE4](validation/F0-LOTE4.md) acrescentam
+costura física integrada e candidatas E4/E7. Revisões pertencem ao controlador;
+recibos com review pending são snapshots da implementação. Integração Git sozinha não certifica
 revisão ou execução. Esta consolidação exige revisão independente posterior.
 As notas comparativas permanecem estáticas, sem homologação operacional.
 
@@ -191,16 +194,17 @@ A cadeia global não a substitui. Fonte: contrato do controlador, sem inspeção
 de configuração de host por este executor. Zed terminou conforme usuário;
 outros planos seguem pausados. Isso não homologa perfis/contas da futura Aixle.
 
-Próximo bloco: revisão independente desta consolidação e uma execução física
-da costura candidata revisada pela gerência, conforme comando único/aceite de
-[F0-LOTE3](validation/F0-LOTE3.md). Não repetir Temporal5/PG9 já verdes: seus
-recibos físicos foram conferidos offline em EV-16, sem promover duas fatias a
-integração única. O FAIL inicial continua preservado; preparação descartada por
-ownership antes do snapshot completo não é falha de candidata. Nenhum comando
-administrativo foi executado pelo trabalhador nesta consolidação.
+Próximo menor gate: revisão independente desta consolidação e build E4 com
+testes dirigidos cookie/MCP, seguido da matriz Rails com IDs imutáveis, pela
+gerência. Gate E7 pode avançar em frente independente; comandos e critérios em
+[F0-LOTE4](validation/F0-LOTE4.md). Sem recibos HOST novos, E4/E7 físicos
+permanecem PENDENTES. Não repetir Temporal5/PG9/costura/browser já verdes:
+21 hashes integrados, seis móveis e verifier foram conferidos offline aqui.
+O FAIL inicial e aborto administrativo por ownership continuam preservados;
+nenhum comando administrativo foi executado pelo trabalhador nesta consolidação.
 
-Em seguida fechar fronteira OS/rede/T36 e contrato de admissão/outbox da base,
-percurso móvel integrado e SSH de laboratório. Modo/plano RF-55 e coordenação
+Em seguida corrigir bypass e contraprovar fronteira OS/rede/T36, fechar autoridade
+global/liberação runtime da base e percurso móvel integrado. Modo/plano RF-55 e coordenação
 T28/contas não sobrepostas precedem qualquer etapa própria de conta real. São
 lacunas de ambiente/implementação/elegibilidade, sem evidência de bloqueio por
 quota ou transporte nesta consolidação. **Não iniciar F1 nem promover G0**
