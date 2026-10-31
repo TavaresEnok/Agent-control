@@ -10,11 +10,14 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from lab_network import Ownership, preflight, runtime
 BASE = "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df"
 PG = "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
 
@@ -64,36 +67,44 @@ def build():
         command(["docker", "image", "inspect", "--format", "{{.Id}}", "f0-access-candidate"])
 
 
-def run(image, gateway):
+def run(image, gateway, subnet, seccomp_compat=False):
+    def call(*args):
+        return command(list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode()
+
+    subnet = preflight(subnet, call)
     image, gateway, pg = map(immutable, (image, gateway, PG))
     token = secrets.token_hex(12)
     prefix = "f0-access-" + token
     out = ROOT / "docs/validation/artifacts/access" / prefix
     out.mkdir(parents=True, mode=0o700)
     owned = []
-    network = volume = False
-    result = {"status": "NOTRUN", "fixture": token, "images": [image, gateway, pg]}
+    ownership = Ownership(call, token)
+    result = {"status": "NOTRUN", "fixture": token, "images": [image, gateway, pg],
+              "subnet": subnet, "seccomp": "unconfined" if seccomp_compat else "docker-default"}
 
     def docker(*args):
         return command(["docker", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode()
 
     def start(suffix, img, args=(), env=(), mounts=()):
         name = prefix + "-" + suffix
-        # Only ever delete successfully created, uniquely named resources.
+        # Ownership is confirmed separately by label and resource ID.
         argv = ["create", "--pull=never", "--name", name, "--label", f"agent-control.fixture={token}",
                 "--network", prefix, "--network-alias", suffix, "--memory", "2g" if suffix == "web" else "512m",
                 "--cpus", "2" if suffix == "web" else "1", "--pids-limit", "256", "--cap-drop=ALL",
                 "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,nosuid"]
+        if seccomp_compat:
+            argv += ["--security-opt", "seccomp=unconfined"]
         for entry in env:
             argv += ["-e", entry]
         for mount in mounts:
             argv += ["--mount", mount]
         if suffix == "pg":
             argv += ["--user", "postgres"]
-        docker(*argv, img, *args)
+        ownership.create("container", name, *argv, img, *args)
+        ownership.require("container", name)
         owned.append(name)
         # A failed start still leaves a container: retain and remove it in finally.
-        # A failed create (including a name collision) never establishes ownership.
+        # Failed create is retained only when its unique ownership label confirms it.
         docker("start", name)
         return name
 
@@ -105,10 +116,11 @@ def run(image, gateway):
                 pass
             else:
                 raise RuntimeError("Preexisting resource refused")
-        docker("network", "create", "--internal", "--label", f"agent-control.fixture={token}", prefix)
-        network = True
-        docker("volume", "create", "--label", f"agent-control.fixture={token}", prefix)
-        volume = True
+        ownership.create("network", prefix, "network", "create", "--internal", "--subnet", subnet,
+                         "--label", f"agent-control.fixture={token}", prefix)
+        ownership.require("network", prefix)
+        ownership.create("volume", prefix, "volume", "create", "--label", f"agent-control.fixture={token}", prefix)
+        ownership.require("volume", prefix)
         state = f"type=volume,source={prefix},target=/lab-state"
         pg_name = start("pg", pg, env=("POSTGRES_USER=f0_access_lab", "POSTGRES_DB=postgres",
                         "POSTGRES_HOST_AUTH_METHOD=trust", "PGDATA=/tmp/pgdata"))
@@ -155,6 +167,8 @@ def run(image, gateway):
         # Never serialize subprocess arguments (may contain synthetic signing keys).
         result.update(status="NOTRUN", error_class=type(error).__name__)
     finally:
+        owned = [name for kind, name in ownership.resources if kind == "container"]
+        result["resources"] = ownership.receipt()
         # Logs contain no request bodies/cookies: Rails logger is disabled in harness.
         for name in owned:
             try:
@@ -168,24 +182,29 @@ def run(image, gateway):
                             result["missing_" + artifact] = True
                 inspect = json.loads(docker("inspect", name))[0]
                 # Do not retain Config.Env (signing key). Topology/effective limits only.
-                safe = {k: inspect[k] for k in ("NetworkSettings", "State")}
-                safe["limits"] = {k: inspect["HostConfig"][k] for k in ("Memory", "NanoCpus", "PidsLimit", "PortBindings")}
+                safe = runtime(inspect)
                 (out / (name.removeprefix(prefix + "-") + "-runtime.json")).write_text(json.dumps(safe, indent=2))
             except Exception:
                 result["retention_error"] = True
+        # Persist identities/CIDR and the requested profile before any removal.
+        # If this write fails, leave the confirmed resources for recovery rather
+        # than destroy their only retained ownership evidence.
+        result["cleanup_status"] = "PENDING"
+        (out / "receipt.json").write_text(json.dumps(result, indent=2) + "\n")
         failures = []
         for name in reversed(owned):
             try:
-                docker("rm", "-f", name)
+                ownership.remove("container", name)
             except Exception:
                 failures.append(name)
-        for kind, created in (("volume", volume), ("network", network)):
-            if created:
+        for kind in ("volume", "network"):
+            if (kind, prefix) in ownership.resources:
                 try:
-                    docker(kind, "rm", prefix)
+                    ownership.remove(kind, prefix)
                 except Exception:
                     failures.append(kind + ":" + prefix)
         result["cleanup_failures"] = failures
+        result["cleanup_status"] = "FAIL" if failures else "PASS"
         (out / "receipt.json").write_text(json.dumps(result, indent=2) + "\n")
         hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.iterdir()) if p.is_file()}
         (out / "sha256.json").write_text(json.dumps(hashes, indent=2) + "\n")
@@ -198,10 +217,12 @@ if __name__ == "__main__":
     parser.add_argument("phase", choices=("build", "run"))
     parser.add_argument("--image")
     parser.add_argument("--gateway")
+    parser.add_argument("--subnet", help="Explicit RFC1918 IPv4 laboratory CIDR (/24..28)")
+    parser.add_argument("--seccomp-compat", action="store_true", help="Laboratory containers only: seccomp=unconfined")
     args = parser.parse_args()
     if args.phase == "build":
         build()
     else:
-        if not args.image or not args.gateway:
-            parser.error("run requires --image and --gateway immutable local IDs")
-        raise SystemExit(run(args.image, args.gateway))
+        if not args.image or not args.gateway or not args.subnet:
+            parser.error("run requires --image, --gateway immutable local IDs and --subnet")
+        raise SystemExit(run(args.image, args.gateway, args.subnet, args.seccomp_compat))
