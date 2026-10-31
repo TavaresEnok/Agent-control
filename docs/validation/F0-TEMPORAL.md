@@ -1,8 +1,92 @@
 # F0 — fatia Temporal/Aixle (EV-03/G0-E3)
 
-Data: 2026-10-31. **G0 PENDENTE. Integração real: NOT RUN neste host.**
-A implementação abaixo aguarda execução e revisão independente; não é prova de
-aprovação do gate. A matriz de elegibilidade EV-03 continua separada desta prova.
+Data: 2026-10-31. **G0 PENDENTE. Primeira integração real no laboratório: FAIL.
+Correção do recibo: runtime NOT RUN neste executor.** A candidata aguarda revisão
+independente e execução física pela gerência; não é prova de aprovação do gate.
+A matriz de elegibilidade EV-03 continua separada desta prova.
+
+## Correção do recibo SDK 1.10 — lote 2
+
+Evidência inicial preservada integralmente em
+`artifacts/temporal-host-initial-20261031/`: recibo, manifest, results,
+host-provenance, worker log e lock resolvido. O recibo registra sintaxe Ruby de
+11 arquivos, ProcessProbe unit, LaunchEvidence unit e preflight com saída 0;
+`run.sh` saiu 1 no primeiro start, antes de concluir qualquer cenário.
+`ok: true` e workflow ID válido vieram acompanhados de `run_id: nil`.
+O handle tinha `result_run_id` e `first_execution_run_id` com UUID.
+Esse FAIL continua sendo a evidência real disponível; não foi reclassificado.
+
+A [API oficial do WorkflowHandle no SDK 1.10.0](https://github.com/temporalio/sdk-ruby/blob/v1.10.0/temporalio/lib/temporalio/client/workflow_handle.rb)
+documenta que `start_workflow` não preenche `run_id`, enquanto `result_run_id`
+contém o run ID retornado pelo start. A
+[implementação oficial do start](https://github.com/temporalio/sdk-ruby/blob/v1.10.0/temporalio/lib/temporalio/internal/client/implementation.rb)
+atribui `resp.run_id` a `result_run_id` e `first_execution_run_id`.
+`TemporalService.start_workflow` passa a devolver `handle.result_run_id` no
+recibo. Não faz describe, não inventa identidade nem tenta outro campo.
+O handle original é devolvido sem mutação; signals, result, cancel e
+ContinueAsNew continuam sob a semântica do SDK. ID explícito, timeout,
+REJECT_DUPLICATE e respostas de erro/disabled/duplicate permanecem iguais.
+Nenhuma alteração em SessionAdmission, Relay ou nas assertions do ensaio.
+
+O mock Rails deixou de simular `run_id` preenchido e exige `result_run_id`.
+`test/f0/temporal/start_receipt_test.rb` usa um WorkflowHandle real do SDK com
+`run_id: nil` e os dois IDs de start preenchidos. Verifica recibo, identidade do
+handle, opções exatas e uma única chamada de start, duplicação com/sem rejeição,
+erro Temporal, ID ausente e retorno disabled. O cliente de teste só implementa
+start; RPC adicional falha. É unidade com SDK, não prova de integração.
+
+`tools/f0/temporal/Gemfile.lock` incorpora byte a byte o lock isolado resolvido
+no laboratório, incluindo checksums e Bundler 4.0.20. Gemfile e lock da raiz não
+foram alterados. Não resolver novamente nem atualizar dependências nesta rodada.
+
+### Comando para a gerência após revisão independente
+
+Usar o laboratório Docker já preparado (Ruby 4.0.9, SDK 1.10.0, Bundler 4.0.20,
+CLI 1.9.1/server 1.32.0; sem rede de execução), com a candidata revisada e seu
+lock isolado disponíveis. Não executar a cópia antiga de código. O digest de
+Ruby e a proveniência estão no recibo inicial; não supor que esse digest base
+identifique a imagem derivada com gems. O container precisa manter as gems
+isoladas acessíveis em `BUNDLE_PATH`, CLI no PATH e raiz candidata como cwd.
+Se o laboratório já injeta HOME/TMPDIR/BUNDLE_* isolados, executar exatamente:
+
+```sh
+set -euo pipefail
+export BUNDLE_GEMFILE="$PWD/tools/f0/temporal/Gemfile"
+export BUNDLE_FROZEN=true
+export G0_CLEAN_ENV=1
+bundle check
+bundle exec ruby -c app/services/temporal_service.rb
+bundle exec ruby -c test/services/temporal_service_test.rb
+bundle exec ruby -c test/f0/temporal/start_receipt_test.rb
+bundle exec ruby test/f0/temporal/start_receipt_test.rb
+bash tools/f0/temporal/run.sh --preflight
+bash tools/f0/temporal/run.sh
+```
+
+Executar sequencialmente e parar ao primeiro exit não zero. `G0_CLEAN_ENV=1`
+somente reaproveita o ambiente já isolado pelo laboratório, como na primeira
+execução; não usar em shell com credenciais. Fora desse ambiente, `run.sh` deve
+continuar limpando o ambiente por padrão. Fazer uma única execução física da
+candidata revisada. A suite Rails permanece NOT RUN e não faz parte deste
+comando, pois esta tarefa proíbe Rails boot.
+
+Arquivar em diretório novo, sem sobrescrever o inicial: comando/cwd, commit e
+diff/hash da candidata (incluindo serviço e lock), digest da imagem derivada,
+rede e mount paths, versões Ruby/Bundler/SDK/CLI, SHA256 do CLI, saída e exit de
+cada check. Preservar todo `artifacts/g0-UUID` gerado: manifest com hashes dos
+imports, results, SQLite, históricos, logs de worker/server, intenções/attempts,
+handles e evidências de retry/conclusão/cancelamento. Manter a assertion de run
+ID, retry e cancelamento intacta; falha ou cenário incompleto continua FAIL.
+PASS de unidade não aprova runtime nem G0.
+
+### Checks desta candidata no executor
+
+Ruby, Bundler, CLI Temporal e Docker ausentes no PATH. Teste dirigido SDK,
+`ruby -c`, suite Rails e execução Temporal: **NOT RUN**. Os checks disponíveis
+são `bash -n`, gramática tree-sitter e `git diff --check`; seus resultados finais
+constam em `.paseo-result.json`. O lock foi comparado com o recibo inicial.
+As seções de preparação abaixo preservam o histórico do lote 1; não exigem
+reconstruir o laboratório pronto nem repetir checks verdes sem mudança.
 
 ## Fronteira e versões
 
@@ -39,8 +123,8 @@ CLI proposta: **1.9.1**, servidor dev embutido nessa distribuição. O runner
 registra `temporal --version`, SHA256 do executável, versões carregadas das gems,
 origem e hashes dos três arquivos importados em `manifest.json`. Mudança de
 versão exige nova evidência; o runner usa exclusivamente o CLI local fornecido,
-sem download automático do SDK. O lock isolado só poderá ser resolvido/validado
-quando Ruby estiver disponível; não foi fabricado nesta entrega.
+sem download automático do SDK. No lote 1 o lock isolado ainda não estava
+resolvido; no lote 2 foi incorporado o lock real do laboratório, conforme acima.
 
 ## O que o roteiro faz
 
@@ -87,7 +171,7 @@ não bastam: sem conclusão no servidor a espera expira e o ensaio falha.
 o histórico exportado permite conferi-los. O registro de tentativa isolado não
 comprova conclusão nem integração real.
 
-## Preflight executado e operação requerida ao gerente
+## Histórico do lote 1 — preflight e preparação então requerida
 
 Neste host, `ruby`, `bundle`, `temporal`, `docker` e `make` não estão no PATH.
 Tentativa autorizada de preparar Ruby isolado: fonte 4.0.9 baixada e configure

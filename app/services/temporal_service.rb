@@ -127,7 +127,11 @@ class TemporalService
 
       Rails.logger.info("[Temporal] ✅ Workflow #{id} queued: #{handle.id}")
 
-      { ok: true, workflow_id: handle.id, run_id: handle.run_id, handle: handle }
+      # SDK start handles leave run_id unset so signals can follow the chain.
+      # result_run_id is the run returned by this start, without a describe RPC.
+      # Keep the original handle: its result/cancel/ContinueAsNew semantics belong
+      # to the SDK, independently of the execution identity in this receipt.
+      { ok: true, workflow_id: handle.id, run_id: handle.result_run_id, handle: handle }
     rescue Temporalio::Error::WorkflowAlreadyStartedError => e
       return { ok: true, workflow_id: id, run_id: e.run_id } if options[:reject_duplicate]
       { ok: false, error: e.message }
