@@ -1,6 +1,6 @@
 # STATUS — Agent Control
 
-**Atualização:** 2026-10-31. **Fase: F0 CONCLUÍDA; Gate G0 APROVADO. F1 LIBERADA.**
+**Atualização:** 2026-10-31. **Fases F0, F1 e F2 CONCLUÍDAS; Gates G0, G1 e G2 APROVADOS. F3 LIBERADA.**
 **Base do Projeto:** Aixle Flow (`e6ec5a286120aed3a036d85871e796b2f6c97d70`) formalmente aprovado per ADR-001 e comprovação de todos os critérios eliminatórios do G0.
 
 ---
@@ -67,10 +67,42 @@ Em conformidade com a autorização autônoma, a fundação de domínio do Agent
 
 ---
 
-## 5. Próximos Passos (F2 — Orquestração Temporal e Execução de Tarefas)
+## 5. Fase 2 (F2 — Execução Durável via Temporal e Gate G2): CONCLUÍDA
 
-Avançar para a **Fase 2 (F2 — Orquestração e Execução)**:
-1. Workflows duráveis do Temporal mapeando o ciclo de vida do `AcPlan` e `AcTask` (`AcTaskExecutionWorkflow`);
-2. Atividades Temporal para reserva atômica de capacidade, invocação de runner/CLI isolada e coleta de evidências;
-3. Reconciliação de estados e heartbeat de tarefas.
+Em conformidade com o Plano Mestre v1.1 (§10, §11, §12, §19.2 F2), a execução durável e as garantias de idempotência e autoridade do Gate G2 foram implementadas e formalmente aprovadas:
+1. **Lote F2-A — Modelo e Tabela de Execução (`AcExecution`):**
+   - Tabela `ac_executions` com `operation_id` (índice único para idempotência estrita per RF-45), controle de épocas (`epoch`), `process_handle` externo estável do supervisor (§11.3.1), token de escritor único de worktree (`worktree_lease_token`) e timestamps de progresso/heartbeat;
+   - Métodos transacionais para aquisição e revogação de lease, registro de início de supervisor, tratamento de estado `uncertain` (sem lançamento duplicado cego per §11.3.1) e reconciliação com validação estrita de época contra stale results.
+2. **Lote F2-B — Serviço de Admissão Unificada e Isolamento de Worktree:**
+   - `AcAdmissionService`: ponto único de admissão para todas as origens habilitadas (UI, chat, API, relay, cron), garantindo reserva atômica de capacidade antes de iniciar processos e bloqueio absoluto de qualquer tentativa de bypass (§10.2.1);
+   - `AcWorktreeManagerService`: escritor único autorizado por worktree (RF-48), neutralização de leases antigas inativas e quarentena com divergência de caminho caso o escritor anterior não possa ser neutralizado (§11.3.2).
+3. **Lote F2-C — Atividades Temporal (`Activities::AgentControl::*`):**
+   - `AcAdmitTaskActivity`: admissão atômica e idempotente da tarefa;
+   - `AcAcquireWorktreeActivity`: isolamento de worktree e alocação de escritor único;
+   - `AcDispatchExecutionActivity`: despacho com handle estável e validação de autoridade;
+   - `AcReconcileExecutionActivity`: reconciliação de término de processo com rejeição de épocas stale;
+   - `AcReleaseCapacityActivity`: liberação garantida de capacidade atômica e lease de worktree.
+4. **Lote F2-D — Workflow Temporal (`Workflows::AcTaskExecutionWorkflow`):**
+   - Workflow durável registrado em `app/temporal/workflows.yml` e `TemporalWorkflowRegistry`;
+   - Orquestração completa com suporte a sinais (`cancel_execution`, `pause_execution`, `resume_execution`), short-circuit em retentativas com execuções já terminadas (§11.3) e bloco `ensure` para nunca deixar capacidade presa.
+5. **Lote F2-E — Bateria de Testes e Provas Formais do Gate G2:**
+   - **G2-E1:** Execução ponta a ponta via Temporal concluída com sucesso e liberação atômica de capacidade;
+   - **G2-E2:** Reinício com o mesmo `operation_id` é estritamente idempotente e não duplica execução ou concessão (RF-45, §11.3);
+   - **G2-E3:** Falha intermediária entre intenção e processo recupera o mesmo handle sem processo duplo (§11.3.1);
+   - **G2-E4:** Rejeição comprovada de resultado com época divergente/stale (§11.3);
+   - **G2-E5:** Bloqueio comprovado de tentativa de bypass de admissão sem concessão (§10.2.1);
+   - **G2-E6:** Cancelamento ordenado via sinal com neutralização imediata e liberação de capacidade.
+
+**Resultado do Gate G2:** **APROVADO (PASS)**.
+**Suíte de Testes AC:** 78/78 testes novos aprovados (100% PASS), 322 asserções, 0 falhas, 0 erros, 0 skips. Regressão zero nos testes existentes do Aixle Flow e F0.
+
+---
+
+## 6. Próximos Passos (F3 — Equipe, Plano/DAG e Qualidade)
+
+Avançar para a **Fase 3 (F3 — Equipe, Orquestração de Planos e Qualidade)** conforme §19.2:
+1. Plano como grafo acíclico dirigido (DAG) de tarefas com dependências explícitas (`AcPlan` / `AcTask` dependencies);
+2. Gerente único ativo por contexto de trabalho coordenando o avanço das tarefas;
+3. Orquestração de paralelismo respeitando limites de capacidade e concorrência;
+4. Ciclo de qualidade e pareceres independentes (QA/Review) com reprovação, orçamento de correção e invalidação de artefato alterado (Gate G3).
 

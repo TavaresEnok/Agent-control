@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_31_140000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "citext"
   enable_extension "pg_catalog.plpgsql"
@@ -43,12 +43,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["company_id", "state"], name: "index_ac_capacity_grants_on_company_id_and_state"
     t.index ["company_id"], name: "index_ac_capacity_grants_on_company_id"
     t.index ["epoch"], name: "index_ac_capacity_grants_on_epoch"
-    t.index ["expires_at"], name: "index_ac_capacity_grants_on_expires_at", where: "((state)::text = ANY ((ARRAY['granted'::character varying, 'active'::character varying])::text[]))"
+    t.index ["expires_at"], name: "index_ac_capacity_grants_on_expires_at", where: "((state)::text = ANY (ARRAY[('granted'::character varying)::text, ('active'::character varying)::text]))"
     t.index ["operation_id"], name: "index_ac_capacity_grants_on_operation_id", unique: true
     t.index ["state"], name: "index_ac_capacity_grants_on_state"
     t.check_constraint "quantity > 0", name: "ac_capacity_grants_positive_qty"
-    t.check_constraint "resource_type::text = ANY (ARRAY['inference_slot'::character varying, 'worktree'::character varying, 'disk_mb'::character varying, 'process'::character varying]::text[])", name: "ac_capacity_grants_valid_resource"
-    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'granted'::character varying, 'active'::character varying, 'released'::character varying, 'expired'::character varying, 'revoked'::character varying]::text[])", name: "ac_capacity_grants_valid_state"
+    t.check_constraint "resource_type::text = ANY (ARRAY['inference_slot'::character varying::text, 'worktree'::character varying::text, 'disk_mb'::character varying::text, 'process'::character varying::text])", name: "ac_capacity_grants_valid_resource"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying::text, 'granted'::character varying::text, 'active'::character varying::text, 'released'::character varying::text, 'expired'::character varying::text, 'revoked'::character varying::text])", name: "ac_capacity_grants_valid_state"
   end
 
   create_table "ac_decision_audit_events", force: :cascade do |t|
@@ -81,8 +81,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["event_type"], name: "index_ac_decision_audit_events_on_event_type"
     t.index ["occurred_at"], name: "index_ac_decision_audit_events_on_occurred_at"
     t.index ["project_id"], name: "index_ac_decision_audit_events_on_project_id"
-    t.check_constraint "actor_type::text = ANY (ARRAY['human'::character varying, 'manager_agent'::character varying, 'policy_service'::character varying, 'system'::character varying]::text[])", name: "ac_audit_events_valid_actor"
-    t.check_constraint "event_type::text = ANY (ARRAY['profile_selected'::character varying, 'profile_rejected'::character varying, 'capacity_granted'::character varying, 'capacity_denied'::character varying, 'capacity_revoked'::character varying, 'policy_published'::character varying, 'policy_revoked'::character varying, 'quota_state_changed'::character varying, 'task_state_changed'::character varying, 'human_intervention'::character varying, 'profile_substitution'::character varying]::text[])", name: "ac_audit_events_valid_type"
+    t.check_constraint "actor_type::text = ANY (ARRAY['human'::character varying::text, 'manager_agent'::character varying::text, 'policy_service'::character varying::text, 'system'::character varying::text])", name: "ac_audit_events_valid_actor"
+    t.check_constraint "event_type::text = ANY (ARRAY['profile_selected'::character varying::text, 'profile_rejected'::character varying::text, 'capacity_granted'::character varying::text, 'capacity_denied'::character varying::text, 'capacity_revoked'::character varying::text, 'policy_published'::character varying::text, 'policy_revoked'::character varying::text, 'quota_state_changed'::character varying::text, 'task_state_changed'::character varying::text, 'human_intervention'::character varying::text, 'profile_substitution'::character varying::text])", name: "ac_audit_events_valid_type"
   end
 
   create_table "ac_execution_profiles", force: :cascade do |t|
@@ -112,11 +112,48 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["role", "chain_position"], name: "index_ac_execution_profiles_on_role_and_chain_position"
     t.index ["state"], name: "index_ac_execution_profiles_on_state"
     t.check_constraint "chain_position > 0", name: "ac_exec_profiles_positive_chain"
-    t.check_constraint "cli_adapter::text = ANY (ARRAY['codex_cli'::character varying, 'claude_code'::character varying, 'grok_cli'::character varying, 'antigravity_cli'::character varying]::text[])", name: "ac_exec_profiles_valid_cli"
-    t.check_constraint "effort_level::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying]::text[])", name: "ac_exec_profiles_valid_effort"
-    t.check_constraint "permanence_rule::text = ANY (ARRAY['permanent'::character varying, 'return_to_principal'::character varying, 'conclude_and_yield'::character varying]::text[])", name: "ac_exec_profiles_valid_permanence"
-    t.check_constraint "role::text = ANY (ARRAY['manager'::character varying, 'programmer'::character varying, 'reviewer'::character varying, 'qa'::character varying, 'specialist'::character varying, 'integrator'::character varying]::text[])", name: "ac_exec_profiles_valid_role"
-    t.check_constraint "state::text = ANY (ARRAY['active'::character varying, 'disabled'::character varying, 'deprecated'::character varying]::text[])", name: "ac_exec_profiles_valid_state"
+    t.check_constraint "cli_adapter::text = ANY (ARRAY['codex_cli'::character varying::text, 'claude_code'::character varying::text, 'grok_cli'::character varying::text, 'antigravity_cli'::character varying::text])", name: "ac_exec_profiles_valid_cli"
+    t.check_constraint "effort_level::text = ANY (ARRAY['low'::character varying::text, 'medium'::character varying::text, 'high'::character varying::text])", name: "ac_exec_profiles_valid_effort"
+    t.check_constraint "permanence_rule::text = ANY (ARRAY['permanent'::character varying::text, 'return_to_principal'::character varying::text, 'conclude_and_yield'::character varying::text])", name: "ac_exec_profiles_valid_permanence"
+    t.check_constraint "role::text = ANY (ARRAY['manager'::character varying::text, 'programmer'::character varying::text, 'reviewer'::character varying::text, 'qa'::character varying::text, 'specialist'::character varying::text, 'integrator'::character varying::text])", name: "ac_exec_profiles_valid_role"
+    t.check_constraint "state::text = ANY (ARRAY['active'::character varying::text, 'disabled'::character varying::text, 'deprecated'::character varying::text])", name: "ac_exec_profiles_valid_state"
+  end
+
+  create_table "ac_executions", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "ac_task_id", null: false
+    t.bigint "ac_work_context_id", null: false
+    t.bigint "ac_execution_profile_id"
+    t.bigint "ac_capacity_grant_id"
+    t.string "operation_id", null: false
+    t.string "epoch", null: false
+    t.string "state", default: "pending", null: false
+    t.string "process_handle"
+    t.string "worktree_lease_token"
+    t.string "worktree_path"
+    t.string "temporal_workflow_id"
+    t.string "temporal_run_id"
+    t.datetime "heartbeat_at"
+    t.datetime "started_at"
+    t.datetime "finished_at"
+    t.integer "exit_code"
+    t.jsonb "output_payload", default: {}, null: false
+    t.jsonb "error_details", default: {}, null: false
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_capacity_grant_id"], name: "index_ac_executions_on_ac_capacity_grant_id"
+    t.index ["ac_execution_profile_id"], name: "index_ac_executions_on_ac_execution_profile_id"
+    t.index ["ac_task_id", "state"], name: "index_ac_executions_on_ac_task_id_and_state"
+    t.index ["ac_task_id"], name: "index_ac_executions_on_ac_task_id"
+    t.index ["ac_work_context_id"], name: "index_ac_executions_on_ac_work_context_id"
+    t.index ["company_id", "state"], name: "index_ac_executions_on_company_id_and_state"
+    t.index ["company_id"], name: "index_ac_executions_on_company_id"
+    t.index ["epoch"], name: "index_ac_executions_on_epoch"
+    t.index ["operation_id"], name: "index_ac_executions_on_operation_id", unique: true
+    t.index ["process_handle"], name: "index_ac_executions_on_process_handle"
+    t.index ["worktree_lease_token"], name: "index_ac_executions_on_worktree_lease_token"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'granted'::character varying, 'preparing'::character varying, 'running'::character varying, 'paused'::character varying, 'completed'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'uncertain'::character varying]::text[])", name: "ac_executions_valid_state"
   end
 
   create_table "ac_plans", force: :cascade do |t|
@@ -144,8 +181,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["plan_key", "version"], name: "index_ac_plans_on_plan_key_and_version", unique: true
     t.index ["project_id"], name: "index_ac_plans_on_project_id"
     t.index ["state"], name: "index_ac_plans_on_state"
-    t.check_constraint "created_by_type::text = ANY (ARRAY['human'::character varying, 'manager_agent'::character varying, 'import'::character varying]::text[])", name: "ac_plans_valid_creator_type"
-    t.check_constraint "state::text = ANY (ARRAY['draft'::character varying, 'active'::character varying, 'completed'::character varying, 'abandoned'::character varying, 'superseded'::character varying]::text[])", name: "ac_plans_valid_state"
+    t.check_constraint "created_by_type::text = ANY (ARRAY['human'::character varying::text, 'manager_agent'::character varying::text, 'import'::character varying::text])", name: "ac_plans_valid_creator_type"
+    t.check_constraint "state::text = ANY (ARRAY['draft'::character varying::text, 'active'::character varying::text, 'completed'::character varying::text, 'abandoned'::character varying::text, 'superseded'::character varying::text])", name: "ac_plans_valid_state"
     t.check_constraint "version > 0", name: "ac_plans_positive_version"
   end
 
@@ -172,9 +209,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["content_hash"], name: "index_ac_policy_revisions_on_content_hash", unique: true
     t.index ["predecessor_id"], name: "index_ac_policy_revisions_on_predecessor_id"
     t.index ["state"], name: "index_ac_policy_revisions_on_state"
-    t.check_constraint "apply_mode::text = ANY (ARRAY['next_attempts'::character varying, 'drain_and_switch'::character varying, 'immediate_revoke'::character varying]::text[])", name: "ac_policy_revisions_valid_apply_mode"
+    t.check_constraint "apply_mode::text = ANY (ARRAY['next_attempts'::character varying::text, 'drain_and_switch'::character varying::text, 'immediate_revoke'::character varying::text])", name: "ac_policy_revisions_valid_apply_mode"
     t.check_constraint "revision_number > 0", name: "ac_policy_revisions_positive_revision"
-    t.check_constraint "state::text = ANY (ARRAY['draft'::character varying, 'published'::character varying, 'superseded'::character varying, 'revoked'::character varying]::text[])", name: "ac_policy_revisions_valid_state"
+    t.check_constraint "state::text = ANY (ARRAY['draft'::character varying::text, 'published'::character varying::text, 'superseded'::character varying::text, 'revoked'::character varying::text])", name: "ac_policy_revisions_valid_state"
   end
 
   create_table "ac_quota_observations", force: :cascade do |t|
@@ -202,10 +239,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["company_id"], name: "index_ac_quota_observations_on_company_id"
     t.index ["observed_at"], name: "index_ac_quota_observations_on_observed_at"
     t.index ["valid_until"], name: "index_ac_quota_observations_on_valid_until", where: "(valid_until IS NOT NULL)"
-    t.check_constraint "cli_adapter::text = ANY (ARRAY['codex_cli'::character varying, 'claude_code'::character varying, 'grok_cli'::character varying, 'antigravity_cli'::character varying]::text[])", name: "ac_quota_observations_valid_cli"
-    t.check_constraint "confidence_level::text = ANY (ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'snapshot_only'::character varying]::text[])", name: "ac_quota_observations_valid_confidence"
-    t.check_constraint "origin::text = ANY (ARRAY['cli_output'::character varying, 'api_header'::character varying, 'synthetic_probe'::character varying, 'manual_import'::character varying]::text[])", name: "ac_quota_observations_valid_origin"
-    t.check_constraint "quota_state::text = ANY (ARRAY['exhausted'::character varying, 'rate_limited'::character varying, 'auth_error'::character varying, 'network_error'::character varying, 'unknown'::character varying, 'available'::character varying]::text[])", name: "ac_quota_observations_valid_state"
+    t.check_constraint "cli_adapter::text = ANY (ARRAY['codex_cli'::character varying::text, 'claude_code'::character varying::text, 'grok_cli'::character varying::text, 'antigravity_cli'::character varying::text])", name: "ac_quota_observations_valid_cli"
+    t.check_constraint "confidence_level::text = ANY (ARRAY['high'::character varying::text, 'medium'::character varying::text, 'low'::character varying::text, 'snapshot_only'::character varying::text])", name: "ac_quota_observations_valid_confidence"
+    t.check_constraint "origin::text = ANY (ARRAY['cli_output'::character varying::text, 'api_header'::character varying::text, 'synthetic_probe'::character varying::text, 'manual_import'::character varying::text])", name: "ac_quota_observations_valid_origin"
+    t.check_constraint "quota_state::text = ANY (ARRAY['exhausted'::character varying::text, 'rate_limited'::character varying::text, 'auth_error'::character varying::text, 'network_error'::character varying::text, 'unknown'::character varying::text, 'available'::character varying::text])", name: "ac_quota_observations_valid_state"
   end
 
   create_table "ac_tasks", force: :cascade do |t|
@@ -238,10 +275,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["company_id"], name: "index_ac_tasks_on_company_id"
     t.index ["project_id"], name: "index_ac_tasks_on_project_id"
     t.index ["state"], name: "index_ac_tasks_on_state"
-    t.check_constraint "assigned_role::text = ANY (ARRAY['programmer'::character varying, 'manager'::character varying, 'qa'::character varying, 'reviewer'::character varying, 'specialist'::character varying, 'integrator'::character varying]::text[])", name: "ac_tasks_valid_role"
+    t.check_constraint "assigned_role::text = ANY (ARRAY['programmer'::character varying::text, 'manager'::character varying::text, 'qa'::character varying::text, 'reviewer'::character varying::text, 'specialist'::character varying::text, 'integrator'::character varying::text])", name: "ac_tasks_valid_role"
     t.check_constraint "attempt_count >= 0", name: "ac_tasks_nonneg_attempts"
-    t.check_constraint "risk_class::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying]::text[])", name: "ac_tasks_valid_risk_class"
-    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'queued'::character varying, 'running'::character varying, 'review'::character varying, 'approved'::character varying, 'integrated'::character varying, 'failed'::character varying, 'cancelled'::character varying]::text[])", name: "ac_tasks_valid_state"
+    t.check_constraint "risk_class::text = ANY (ARRAY['low'::character varying::text, 'medium'::character varying::text, 'high'::character varying::text, 'critical'::character varying::text])", name: "ac_tasks_valid_risk_class"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying::text, 'queued'::character varying::text, 'running'::character varying::text, 'review'::character varying::text, 'approved'::character varying::text, 'integrated'::character varying::text, 'failed'::character varying::text, 'cancelled'::character varying::text])", name: "ac_tasks_valid_state"
   end
 
   create_table "ac_work_contexts", force: :cascade do |t|
@@ -264,8 +301,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
     t.index ["policy_revision_id"], name: "index_ac_work_contexts_on_policy_revision_id"
     t.index ["project_id"], name: "index_ac_work_contexts_on_project_id"
     t.index ["state"], name: "index_ac_work_contexts_on_state"
-    t.check_constraint "origin::text = ANY (ARRAY['new'::character varying, 'paseo_import'::character varying, 'migration'::character varying]::text[])", name: "ac_work_contexts_valid_origin"
-    t.check_constraint "state::text = ANY (ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying, 'suspended'::character varying]::text[])", name: "ac_work_contexts_valid_state"
+    t.check_constraint "origin::text = ANY (ARRAY['new'::character varying::text, 'paseo_import'::character varying::text, 'migration'::character varying::text])", name: "ac_work_contexts_valid_origin"
+    t.check_constraint "state::text = ANY (ARRAY['active'::character varying::text, 'paused'::character varying::text, 'archived'::character varying::text, 'suspended'::character varying::text])", name: "ac_work_contexts_valid_state"
   end
 
   create_table "agent_credentials", force: :cascade do |t|
@@ -2478,6 +2515,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
   add_foreign_key "ac_decision_audit_events", "projects"
   add_foreign_key "ac_execution_profiles", "ac_policy_revisions"
   add_foreign_key "ac_execution_profiles", "companies"
+  add_foreign_key "ac_executions", "ac_capacity_grants"
+  add_foreign_key "ac_executions", "ac_execution_profiles"
+  add_foreign_key "ac_executions", "ac_tasks"
+  add_foreign_key "ac_executions", "ac_work_contexts"
+  add_foreign_key "ac_executions", "companies"
   add_foreign_key "ac_plans", "ac_work_contexts"
   add_foreign_key "ac_plans", "companies"
   add_foreign_key "ac_plans", "projects"

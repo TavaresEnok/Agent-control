@@ -225,3 +225,17 @@ workflows:
 
       - name: workflow_step_session_status_activity
         task_queue: aixle_ruby
+
+  - name: ac_task_execution_workflow
+    owner: aixle_ruby
+    activities:
+      - name: ac_admit_task_activity
+        task_queue: aixle_ruby
+      - name: ac_acquire_worktree_activity
+        task_queue: aixle_ruby
+      - name: ac_dispatch_execution_activity
+        task_queue: aixle_ruby
+      - name: ac_reconcile_execution_activity
+        task_queue: aixle_ruby
+      - name: ac_release_capacity_activity
+        task_queue: aixle_ruby
