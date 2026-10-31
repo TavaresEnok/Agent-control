@@ -1,0 +1,37 @@
+{
+  "observer": "isolated_programmer_worktree",
+  "date": "2026-10-31",
+  "scope": "F0/G0 admission SQL harness implementation only",
+  "checks": [
+    {
+      "command": "tools/f0/admission/.venv/bin/python test/f0/admission/check_syntax.py",
+      "status": "passed",
+      "ruby_grammar_files": 8,
+      "limitation": "Tree-sitter grammar only; no Ruby runtime, PostgreSQL or Temporal execution"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --no-index --check /dev/null <each new implementation file>",
+      "status": "passed",
+      "files_checked": 12,
+      "note": "Exit 1 with empty diagnostics is the expected no-index diff result; no whitespace diagnostics"
+    },
+    {
+      "command": "type ruby docker bundle",
+      "status": "unavailable",
+      "note": "All three commands absent in worker PATH; no Ruby build attempted"
+    }
+  ],
+  "physical_execution": {
+    "guard_unit": "pending_manager",
+    "postgresql_preflight": "pending_manager",
+    "nine_sql_scenarios": "pending_manager",
+    "real_temporal_integrated_scenario": "not_implemented_in_sql_slice; future integrated gate required"
+  },
+  "gate": "G0 PENDENTE",
+  "policy": "Exclusive agent-control project policy supplied by controller preserved; host configuration not inspected or modified",
+  "independent_review": "next_controller_phase"
+}
