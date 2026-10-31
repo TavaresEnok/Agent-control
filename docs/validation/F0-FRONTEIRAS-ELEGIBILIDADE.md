@@ -27,6 +27,8 @@ substitui essa regra. Procedência, valores exatos e limites da conferência em
 | Perfil/caminho | Política de execução F0 | RF-55 para o modo exato | Evidência que falta |
 |---|---|---|---|
 | Codex oficial com OAuth gerenciado pelo próprio Codex, aplicação local privada, sem MITM/API paga | Único candidato à habilitação após avaliação confiável | `documented_supported` apenas para o caminho documental delimitado | Plano/titular/permissões/versão da CLI escolhida e isolamento real; nenhum login feito |
+| CLI oficial própria em servidor privado remoto, login/cache/refresh pela CLI, `exec` direto serializado, sem UI própria nem tokens externos | Candidato documental; não habilitado | `documented_supported` no escopo de CLI remota e automação privada das fontes S1–S3 do complemento | Plano/titular/versão/entitlement, E4 e RF46/T28 não verificados; nenhum login |
+| Mesmo caminho nativo comandado por UI móvel privada hospedada Aixle, exclusiva do titular | Proposta, sem implementação | `requires_clarification` somente para enquadramento dessa UI; não se transfere a restrição app-server automaticamente à CLI | Pergunta específica ao provedor e experimento sintético definidos no complemento; nenhum envio externo |
 | Aplicação privada hospedada/remota com assinatura via app-server | Bloqueado | `requires_clarification` | Ser privada não prova ser local nem autorizada pelo provedor |
 | Aixle upstream com cópia/refresh de OAuth, MITM ou chave API | Bloqueado nesta fatia | `requires_clarification` para o desenho composto; `unsupported_for_mode` para MITM/API paga sob o contrato F0 | Remover interceptação, provar autenticação oficial e fronteira na base escolhida |
 | SIWC com cliente e consentimento próprios | Não implementado/ativado | `requires_clarification` para esta instalação | Distribuição/topologia, registro e permissão de uso do plano; não importar tokens |
@@ -36,6 +38,21 @@ substitui essa regra. Procedência, valores exatos e limites da conferência em
 
 Autorização do proprietário permite trabalhar no projeto; não concede direitos
 do provedor. Os perfis históricos não compõem uma cadeia de fallback ativa.
+
+### Complemento delimitado — CLI nativa própria, 2026-10-31
+
+[F0-CODEX-NATIVO-ELEGIBILIDADE](F0-CODEX-NATIVO-ELEGIBILIDADE.md) distingue CLI
+pessoal remota de app-server/SIWC e do adaptador composto atual. As fontes oficiais
+[Authentication](https://learn.chatgpt.com/docs/auth),
+[Non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode) e
+[CI/CD auth avançado](https://learn.chatgpt.com/docs/auth/ci-cd-auth), consultadas
+nesta data, documentam o núcleo nativo; o complemento delimita condições e lacuna
+da UI. A cópia de cache tem fallback oficial específico: não se afirma proibição
+geral de cópia nem autorização para extração/refresh/MITM da Aixle. Fontes e
+decisões anteriores abaixo ficam preservadas como histórico do modo que avaliaram.
+Nenhuma mudança no guard `local_private`, política ou produto foi feita; essa
+classificação documental não admite automaticamente modo remoto no guard.
+RF46/T28 e E4 continuam separados. G0 PENDENTE; sem conta real/inferência.
 
 ## Fontes primárias oficiais consultadas
 
