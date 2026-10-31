@@ -113,8 +113,10 @@ module Coder
     # is recorded instead.
     KILL_SETTLE_SECONDS = 5
 
-    def initialize(integration)
+    # Transport is a trusted, code-only laboratory seam; never a tool/UI input.
+    def initialize(integration, transport: nil)
       @integration = integration
+      @transport = transport
     end
 
     def exec(workspace_name:, command:, timeout: DEFAULT_TIMEOUT, max_bytes: DEFAULT_RESPONSE_BYTES, stdin_data: nil)
@@ -126,7 +128,7 @@ module Coder
       stderr = "".dup
       status = nil
 
-      env = {
+      env = @transport ? @transport.environment : {
         "CODER_URL"           => vetted_coder_url,
         "CODER_SESSION_TOKEN" => session_token
       }
@@ -148,10 +150,11 @@ module Coder
       # caller-supplied shell command, and it is passed as one argv element that
       # never reaches a local shell.
       remote_command = HOME_PREFIX + command.to_s
-      argv = [ "coder", "ssh", workspace_name.to_s, "--", remote_command ]
+      argv = @transport ? @transport.argv(remote_command) : [ "coder", "ssh", workspace_name.to_s, "--", remote_command ]
+      spawn_options = @transport ? @transport.spawn_options : {}
 
       begin
-        Open3.popen3(env, *argv, pgroup: true) do |stdin, sout, serr, wait_thr|
+        Open3.popen3(env, *argv, **spawn_options, pgroup: true) do |stdin, sout, serr, wait_thr|
           stdin.write(stdin_data) if stdin_data
           stdin.close
 
@@ -175,7 +178,7 @@ module Coder
         return {
           exit_code: 127,
           stdout:    "",
-          stderr:    "coder ssh: command not found (the coder CLI is missing from the Rails image)",
+          stderr:    @transport ? "SSH transport executable missing" : "coder ssh: command not found (the coder CLI is missing from the Rails image)",
           truncated: false
         }
       end
@@ -205,6 +208,7 @@ module Coder
     # ends, visible in `ps` on the worker and on the workspace.
     def exec_detached(workspace_name:, command:, job_id: nil, env: {})
       raise CommandError, "command must be a non-empty string" if command.to_s.strip.empty?
+      @transport.validate_job_env!(env) if @transport
 
       job_id = (job_id.presence || SecureRandom.hex(6)).to_s
       raise CommandError, "job_id must be alphanumeric" unless job_id.match?(/\A[A-Za-z0-9_-]{1,64}\z/)
@@ -1078,6 +1082,7 @@ module Coder
     end
 
     def session_token
+      return "" if @transport && @integration.nil?
       @integration.credentials_data["session_token"].to_s
     end
 
