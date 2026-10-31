@@ -1,0 +1,73 @@
+{
+  "phase": "implementation-only",
+  "status": "completed",
+  "physical_gate": "NOT RUN",
+  "independent_review": "PENDING",
+  "G0": "PENDENTE",
+  "runtime": {
+    "ruby": null,
+    "bundle": null,
+    "ssh": null,
+    "sshd": null,
+    "docker": null
+  },
+  "sha256": {
+    "app/services/coder/ssh_runner.rb": "7ce2198f5071122e410c7d373852cb1bf18a85926a1b08a95ae5239838cad470",
+    "app/services/agent_control/open_ssh_transport.rb": "58be644525dfe47bc8d144f4e375cbcf9d7bb02dcdec7fe191e2b31f7700e797",
+    "test/services/coder/ssh_runner_test.rb": "37acb1a99b4ca2878ca6c168ac0a1e08929448856d0839824c6c4383e136aee4",
+    "test/services/agent_control/open_ssh_transport_test.rb": "8f186bab4e91f1c95435079d24a11a354f459ebb2675dd129f4c2e3365764035",
+    "docs/validation/F0-SSH-INTEGRADO.md": "5a06a939fa4296a9b28b4be1c0b54364192fcd62a47fdcfa64d78765a34969e6",
+    "tools/f0/ssh/Dockerfile.central": "fa750c6e95471a126abe643ab0f8383344f8144069c554ee6e7aeb883cc91b46",
+    "tools/f0/ssh/Dockerfile.target": "078d17d3edacfef40c3e646283f6208c2ec76da4c8621ed240c763dcbaab71cd",
+    "tools/f0/ssh/boot.rb": "1b3bc4aa62050e7ccfe000fc68ac7e1e2b7839ed53e4d1e8902e1cd79487ca1d",
+    "tools/f0/ssh/host-run.py": "e8cf0d4c491fbfc1b790c083e0b44170ee4ed0e7931ee5430b817b682f61fb20",
+    "tools/f0/ssh/scenario.rb": "eae1fbd90157ca89e9a5204fc044da5011227ea5bca86c82a3f8b9a2b2eda122",
+    "tools/f0/ssh/target.sh": "cc77687804972a5ee31d8029efb432b5852f80bb52424c91a90a9fb533ac9fff",
+    "test/f0/ssh/check_syntax.py": "d1cc3896b63f22f0d855ba6aad9171877cd2d2a700f68fe2295f47a23866e9d8",
+    "test/f0/ssh/host_run_test.py": "9baf8c15514639597710a720bd608c3a1f2367bf59fff650b9faf32b6cb2af20",
+    "test/f0/ssh/runner_test.rb": "edcd78a2211dc4466b886e66952aada82ef199f3791e4884257b4d8c85169370",
+    "test/f0/ssh/secret_absence_test.py": "8be8a6270c62819cc23d8faa21752304db00559befff35661d61e4fc03ec2597"
+  },
+  "checks": [
+    {
+      "command": "ruby test/services/agent_control/open_ssh_transport_test.rb",
+      "status": "NOT RUN",
+      "detail": "SSH-REVIEW-002 corrigido: path! recusa $ além de %. Regressão cria arquivos literais existentes sob ${LANG} para identidade e known_hosts e exige ArgumentError no construtor, antes de argv/spawn. Ruby ausente no worker; execução cabe ao gate físico. Checks Python, bash e diff repetidos nesta correção; gramática Ruby não repetida."
+    },
+    {
+      "command": "python3 test/f0/ssh/secret_absence_test.py",
+      "status": "PASS",
+      "detail": "SSH-REVIEW-001: comando exato do cenário executado em shell local; ambiente limpo passa, cada variável isolada e ambas presentes falham (4 entradas). Não prova SSH físico."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "command": "PYTHONPATH=tools/f0/ssh/.syntax-deps python3 test/f0/ssh/check_syntax.py",
+      "status": "PASS",
+      "detail": "Evidência da tentativa anterior, antes da correção SSH-REVIEW-001; não repetida nesta tentativa. 7 arquivos; gramática somente; tree-sitter 0.25.2/tree-sitter-ruby 0.23.1 isolados removidos após check"
+    },
+    {
+      "command": "python3 test/f0/ssh/host_run_test.py",
+      "status": "PASS",
+      "detail": "1 teste/4 entradas recusadas antes de recursos; sem Docker"
+    },
+    {
+      "command": "python3 -m py_compile tools/f0/ssh/host-run.py test/f0/ssh/check_syntax.py test/f0/ssh/host_run_test.py test/f0/ssh/secret_absence_test.py",
+      "status": "PASS"
+    },
+    {
+      "command": "bash -n tools/f0/ssh/target.sh",
+      "status": "PASS"
+    },
+    {
+      "command": "ruby test/services/agent_control/open_ssh_transport_test.rb; ruby test/f0/ssh/runner_test.rb; Rails SshRunnerTest; gate físico host-run.py",
+      "status": "NOT RUN",
+      "detail": "Ruby/bundle/OpenSSH/Docker indisponíveis no worker. Comando HOST e receitas isoladas em docs/validation/F0-SSH-INTEGRADO.md."
+    }
+  ],
+  "host_command": "python3 tools/f0/ssh/host-run.py sha256:<CENTRAL_IMAGE_ID_64_HEX> sha256:<TARGET_IMAGE_ID_64_HEX>",
+  "limits": "Exclusive internal Docker network; random 128-bit resource names/labels; 1 CPU/1 GiB/256 pids per container; tmpfs lab; no published ports; no real HOME or Docker socket mount; no private-key export.",
+  "boundary": "Real product runner/journal/job_status when host gate runs; standalone Settings, synthetic CLI shim/URL check only for default regression; no CoderPrepareRepo/MCP/SQL/AI authentication. No physical SHAs/job/result fabricated."
+}

@@ -68,6 +68,25 @@ module Coder
       assert_not_includes captured_args, @token
     end
 
+    test "trusted optional transport keeps runner redaction and process group handling" do
+      transport = Object.new
+      transport.define_singleton_method(:environment) { { "PATH" => "/usr/bin:/bin" } }
+      transport.define_singleton_method(:spawn_options) { { unsetenv_others: true } }
+      transport.define_singleton_method(:argv) { |command| [ "/usr/bin/ssh", "--", "lab@fixture", command ] }
+      captured = nil
+      stub = lambda { |env, *argv, **opts, &block|
+        captured = [ env, argv, opts ]
+        block.call(StringIO.new, StringIO.new(@token), StringIO.new(""), StubWaitThr.new(exitstatus: 0))
+      }
+      result = Open3.stub(:popen3, stub) do
+        Coder::SshRunner.new(@integration, transport: transport).exec(workspace_name: "fixture", command: "echo 'a b'")
+      end
+      assert_equal "[REDACTED]", result[:stdout]
+      assert_equal({ "PATH" => "/usr/bin:/bin" }, captured[0])
+      assert_equal Coder::SshRunner::HOME_PREFIX + "echo 'a b'", captured[1].last
+      assert_equal({ unsetenv_others: true, pgroup: true }, captured[2])
+    end
+
     test "refuses to run the CLI once the Coder host resolves to an internal address" do
       UrlSafetyValidator.stubs(:resolved_addresses).with("coder.example.com").returns([ IPAddr.new("10.0.0.5") ])
       ran = false
