@@ -7,24 +7,24 @@ está pronta para revisão independente; isso não conclui os eliminatórios.
 
 ## Continuidade e preservação
 
-- Worktree exclusiva desta entrega: `/home/enok/srv_projetos/worktrees/14v3rrig/task-a9c3be73bab4-g0-lote2-status`; HEAD inicial `533e08cc68e03e00c3328f1f7a462c44acaab261`, árvore inicial limpa. Clone identificado por `UPSTREAM.json`; lote 1 `e59f2072f8f4` DONE/quatro revisões PASS preservado conforme contrato. Entregas do lote 2 incorporadas e rastreadas em EV-12–15 e [F0-LOTE2](validation/F0-LOTE2.md).
+- Worktree exclusiva desta entrega: `/home/enok/srv_projetos/worktrees/14v3rrig/task-88f319957cc4-g0-lote3-status`; HEAD inicial `772dc68`, árvore inicial limpa. Clone identificado por `UPSTREAM.json`; lotes `e59f2072f8f4` e `a9c3be73bab4` DONE/quatro entregas e revisões independentes PASS cada, conforme contrato. Histórico em EV-12–15/[F0-LOTE2](validation/F0-LOTE2.md); atualização vigente em EV-16–18/[F0-LOTE3](validation/F0-LOTE3.md).
 - Origem e entregas Zed em `/home/enok/Documentos/projetos/agent-control` preservadas, sem acesso ou cópia de produto à origem. Zed terminou conforme usuário; isso não comprova saúde de serviços.
 - Controlador ativo para este fluxo conforme delegação e histórico das tarefas; não foi consultada saúde do serviço nem iniciado/reiniciado daemon. Aixle não recebeu autoridade sobre planos ativos.
 - `Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat` e demais projetos permanecem pausados. Nenhum serviço, credencial real, API paga, produção, migração, deploy/push/merge ou commit nesta entrega.
-- `.paseo-context.md` ausente. Contrato atual, Plano v1.1, Adendo, baseline e os três relatórios/diffs forneceram contexto suficiente. Somente documentação autorizada alterada.
+- Contexto autocontido do contrato, documentos de referência, recibos versionados e commits das duas entregas fornecem a procedência desta consolidação; sem depender do transporte de `.paseo-context`. Somente documentação autorizada e metadado de resultado alterados.
 
 ## Matriz de continuidade G0
 
 Esta síntese remete à matriz normativa completa em [F0-CHECKLIST](F0-CHECKLIST.md)
-e às origens exatas em [F0-EVIDENCIAS](F0-EVIDENCIAS.md), EV-01–15.
+e às origens exatas em [F0-EVIDENCIAS](F0-EVIDENCIAS.md), EV-01–18.
 
 | Critério | Estado e prova | Lacuna eliminatória / próxima evidência |
 |---|---|---|
 | E1 CLIs/assinaturas | NOT RUN real; EV-03/09 documental e guard sintético | Modo/plano/CLI/entitlement elegíveis e execução controlada em etapa própria |
 | E2 duas contas/isolamento | Parcial sintético HOST: HOME vazou; namespaces bloquearam cinco ataques nas duas direções; EV-12 | Isolamento integrado Aixle e duas contas reais identificáveis continuam NOT RUN |
-| E3 autoridade/durabilidade | Temporal inicial FAIL; correção SDK e harness SQL implementados, execução física candidata pendente; EV-13/14 | Rodar candidata revisada no laboratório pronto; SQL e costura PostgreSQL + Temporal reais ainda sem PASS |
+| E3 autoridade/durabilidade | Temporal inicial FAIL preservado; gerência executou correção revisada: cinco cenários reais PASS; PG real 9 testes/67 assertions/0skip, guard 2/16 e preflights PASS; EV-16 | Duas fatias isoladas. Costura PG + relay + Temporal implementada/revisada conforme contrato; execução física integrada PENDENTE, EV-18 |
 | E4 UI/API/WS/terminal/MCP | Auditoria fixa; execução T36 NOT RUN; EV-09 | Laboratório de gateway/rede com testes negativos inclusive acesso direto; retirar MITM/CA/proxy e fechar bypass |
-| E5 móvel | Execução parcial de componentes com transporte/dados sintéticos; EV-10 | Perfil conta/modelo, criação de tarefa, reenvio com efeito único, reconexão e estado/grafo reais no shell autenticado |
+| E5 móvel | Execução parcial de componentes; novo pacote móvel retido e hashes conferidos, EV-17; transporte/dados sintéticos | Perfil conta/modelo, criação de tarefa, reenvio com efeito único, reconexão e estado/grafo reais no shell autenticado |
 | E6 licença | Documental concluído; Apache-2.0, EV-02/05 | Preservar licença/avisos e estratégia privada no fork |
 | E7 SSH | Execução histórica loopback/segredo sintético, EV-07 | Destino dedicado de teste e transporte Aixle/OpenSSH com hostkey, artefato/teste e IA central; NOT RUN integrado |
 | AD1 RF-55/T39 | Documental + 24 recusas standalone, EV-09 | Codex hospedado/remoto requires_clarification; guard global na base NOT RUN |
@@ -44,16 +44,14 @@ A cadeia global não substitui essa regra. Fonte: contrato do controlador, sem
 inspeção de configuração do host pelo executor; detalhes em EV-15 e
 [F0-POLITICA-EVIDENCIA](validation/F0-POLITICA-EVIDENCIA.md).
 
-Próximo bloco mínimo: revisão independente desta consolidação; gerência executa
-a candidata revisada no laboratório Docker já pronto (Ruby 4.0.9/SDK 1.10.0/CLI
-1.9.1), usando os comandos exatos de [F0-TEMPORAL](validation/F0-TEMPORAL.md).
-Depois prepara o PG descartável e executa guard/preflight/nove cenários de
-[F0-ADMISSAO-SQL](validation/F0-ADMISSAO-SQL.md), sem interpretar transporte
-simulado como integração Temporal. Critérios da costura real e de E4/E5,
-RF-55/T28/E1/E2 em [F0-LOTE2](validation/F0-LOTE2.md). Não repetir mobile/guard
-verdes sem mudança ou evidência faltante que justifique. Os artefatos móveis
-report/trace/capturas não estão nesta worktree: obter e conferir hashes da entrega
-produtora antes de usá-los como evidência direta.
+Próximo bloco mínimo: revisão independente desta consolidação; gerência faz
+uma execução física da costura candidata revisada, com comando e aceite em
+[F0-LOTE3](validation/F0-LOTE3.md). Não duplicar workers nem repetir os verdes
+isolados do lote2: os 46 hashes Temporal, 11 SQL e seis móveis foram conferidos
+por leitura dos bytes nesta entrega. O pacote móvel é uma recuperação por nova
+execução deliberada, não o trace histórico perdido. Depois: E4/T36 real sem
+contas, E5 no shell real, RF-55/T28 antes de E1/E2 e SSH integrado. Nenhuma conta
+real é autorizada neste bloco; G0 permanece pendente.
 
 Não há prova de esgotamento de quota ou falha de transporte nesta consolidação.
 `Operation not permitted` em namespaces e falta de make/headers foram limites
