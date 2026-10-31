@@ -1,0 +1,173 @@
+diff --git a/docs/F0-CHECKLIST.md b/docs/F0-CHECKLIST.md
+index b41e5c1..095b6a0 100644
+--- a/docs/F0-CHECKLIST.md
++++ b/docs/F0-CHECKLIST.md
+@@ -25,10 +25,10 @@
+ | **G0-E1** | Executar CLIs necessárias com assinatura correta, sem API paga ou substituição silenciosa | Plano v1.1 §3.4 item 1, §19.3 B, T01/T02 | Elegibilidade por modo/plano + CLI real | **NOT RUN** real. Codex é o único candidato da costura F0, condicionado ao modo/plano; perfis históricos não são fallback ativo. Binários de EV-01 são inventário histórico, não diagnóstico atual. Sem login real nesta continuação | EV-01/03/05 (histórico), EV-09/11 |
+ | **G0-E2** | Duas contas simultâneas do mesmo provedor, identidade verificável e leitura cruzada bloqueada | Plano v1.1 §3.4 item 2, §13.2, §19.3 B, T01/T24, C03 | Fronteira sintética + integração com contas reais | **PARCIAL sintético HOST; integrado NOT RUN**. EV-12: HOME vazou; namespace bloqueou cinco ataques em ambas as direções, leitura própria mantida. EV-09 negado preservado; não prova sandbox completo, duas identidades reais ou isolamento Aixle | EV-05/06/09 (histórico), EV-12 |
+ | **G0-E3** | Inventariar entradas e provar autoridade única de admissão/start/retomada/conclusão/cancel/reconciliação | Plano v1.1 §3.4 item 3, §10.2.1/11.3.1, §19.3 A/C, T07/T08, C02 | Código + fatia real na base | **PARCIAL; costura física integrada PASS pela gerência**. PG+relay+Temporal: morte exit86 após start/antes ack; lease saudável sem envio; envelhecimento explícito SQL e AlreadyStarted real com mesmo runID/uma execução; cancel/cleanup PASS. Workflow inerte, ledger vazio, reserva ocupada; sem runtime cleanup/modelos periféricos reais/autoridade global. FAIL inicial preservado | EV-04/05/08/13/14/16/18/19 |
+-| **G0-E4** | Proteger UI/API/WS/terminal/MCP e impedir contorno direto antes de logins reais | Plano v1.1 §3.4 item 4, §17.2/17.4, §19.3 B, T15/T23/T36, C04 | Auditoria + negação em execução na base | **PARCIAL físico**. Unidades EV-22 PASS preservadas. IPAM/seccomp funcionaram; tentativas lote5 NOTRUN por EACCES administrativo e parada PG pré-web após ownership corrigido. Correções TCP/IO incorporadas/revisadas conforme controlador, físico pendente. Matriz, fechamento de bypass ttyd, IDE/files/preview e ausência global MITM/CA/proxy pendentes | EV-04/05/06/09/20/22/23/25/26 |
++| **G0-E4** | Proteger UI/API/WS/terminal/MCP e impedir contorno direto antes de logins reais | Plano v1.1 §3.4 item 4, §17.2/17.4, §19.3 B, T15/T23/T36, C04 | Auditoria + negação em execução na base | **PARCIAL físico; matriz NOTRUN**. Lote6: PG final/schema Rails e três identidades SQL/cookies PASS, parada Net::OpenTimeout startup antes da matriz; coleta/cleanup PASS. Nenhuma recusa/política aprovada. Correção de prontidão implementada/revisada conforme controlador; overlay e físico gerencial pendentes. Bypass ttyd/WS e limites IDE/files/preview/MITM/CA/proxy preservados | EV-04/05/06/09/20/22/23/25/26/27/28 |
+ | **G0-E5** | Percurso móvel com perfil/tarefa, reconexão/reenvio e etapas/grafo | Plano v1.1 §3.4 item 5, §16.2.1/16.5, §19.3 D, T16/T27/T35, C11/C12 | Percurso na base, efeito deduplicado e estado real | **PARCIAL sintético; integrado NOT RUN**. Quatro checks de componentes em Chromium emulado; pacote versionado 7.858.710 bytes/seis hashes reconferidos. Persona não é perfil conta/modelo; tarefa é fixture; dois payloads iguais não provam efeito único. Aparelho físico, shell autenticado e grafo Temporal não executados | EV-04/05/10/17/19 |
+ | **G0-E6** | Ter licença e estratégia de distribuição compatíveis com o uso aprovado (operação pessoal central e manutenção de fork privado) | Plano v1.1 §3.4 item 6, §19.3 Pacote A, §22.3, §26.2 | Inspeção dos arquivos `LICENSE` nos commits fixados | **COMPROVADO POR CÓDIGO/DOCUMENTAÇÃO** (Kandev: `AGPL-3.0`; Aixle Flow: `Apache-2.0`) | EV-02, EV-04, EV-05 |
+-| **G0-E7** | Git/teste SSH com fingerprint, repositório só no destino e IA central | Plano v1.1 §3.4 item 7, §14.2.1, §19.3 E, T25, C05 | SSH + integração do transporte escolhido | **PARCIAL físico**. Unidades EV-22 PASS somente compat; ThreadError EPERM padrão preservado. IPAM/seccomp funcionaram; lote5 FAIL setup docker cp/tmpfs, SSH remoto NOTRUN. Probe exec/stdin prova somente IO administrativo. Correção incorporada/revisada conforme controlador, físico pendente. Hostkey/bundle/SHA/teste remoto/efeito único e queda forçada de canal NOT RUN; loopback EV-07 não substitui gate | EV-04/05/07/11/21/22/23/25/26 |
++| **G0-E7** | Git/teste SSH com fingerprint, repositório só no destino e IA central | Plano v1.1 §3.4 item 7, §14.2.1, §19.3 E, T25, C05 | SSH + integração do transporte escolhido | **SSH físico PASS no escopo standalone Settings**, pela gerência: pin negativo, repo apenas destino, SHA central=observado, bundle/teste remoto, uma execução/polls em conexões novas, segredo sintético ausente, journal e cleanup PASS. Sem CoderPrepareRepo/MCP/SQL/IA autenticada; queda forçada NOT RUN. Não promove F4 completo/E1/E2/G0; sem repetir verde. Negativos anteriores preservados | EV-04/05/07/11/21/22/23/25/26/27 |
+ | **G0-AD1** | Elegibilidade por provedor/plano/titular/CLI/transporte antes do efeito | Adendo §4/6, RF-55/T39 | Fontes + bloqueio no fluxo gerenciado | **PARCIAL documental/sintético**. 24 recusas standalone; T39 global **NOT RUN**. CLI oficial pessoal remota direta `documented_supported` no escopo documental; UI privada Aixle `requires_clarification` só na fronteira hospedada. Não estender suporte da CLI a app-server/SIWC ou ao adaptador atual; plano/titular/entitlement não verificados. Matriz por modo em F0-LOTE5/EV-24 | EV-03/04/05/09/24 |
+ | **G0-AD2** | Capacidade/refresh comuns desde a primeira chamada compartilhada | Adendo §5/6; Plano §21.5, RF-46/T28 | Coordenação real ou contas autorizadas não sobrepostas | **PRESERVAÇÃO PROCEDIMENTAL**: ensaios sem contas reais; T28 real **NOT RUN**. Controlador ativo não prova admissão comum entre Paseo e Aixle | EV-01 (histórico), EV-08/09/10/11 |
+ | **G0-COMP** | Comparar custo de adaptação entre Kandev e Aixle Flow com pesos da seção 3.4 e recomendar a base em `ADR-001` | Plano v1.1 §3.4, §19.3, §27.2 C01; Adendo §1, §7 | Matriz comparativa fundamentada no código inspecionado nos commits fixados | **CONCLUÍDO** (documentado em `ADR-001-BASE-DA-PLATAFORMA.md`) | EV-02, EV-04, EV-05 |
+@@ -39,10 +39,10 @@
+ 
+ - **Concluídos documentalmente:** `G0-E6` e `G0-COMP`; comparação mantém notas estáticas, sem homologação operacional.
+ - **Parciais ou NOT RUN:** `G0-E1`–`G0-E5`, `G0-E7`, `G0-AD1`; `G0-AD2` respeitado por não usar contas, sem comprovar T28 integrado.
+-- Aixle candidato e instalação isolada já autorizados; costura física PG+relay+Temporal PASS no escopo EV-19. Faltam execução/fechamento E4/T36, shell móvel E5, elegibilidade da UI RF-55, T28 e arranjo seguro E1/E2, além do gate SSH. EV-22 comprova somente build/testes dirigidos e preparo de rede; EV-25 registra tentativas físicas posteriores negativas, EV-26 corrige preparo sem novo físico. Mobile: bytes retidos e conferidos (EV-17/19); isso não fecha E5.
++- Aixle candidato e instalação isolada já autorizados; costura física PG+relay+Temporal PASS no escopo EV-19 e SSH físico PASS limitado em EV-27, sem repetição. Faltam matriz/fechamento E4/T36, shell móvel E5, elegibilidade da UI RF-55, T28 e arranjo seguro E1/E2. EV-25/26 preservam negativos e correções anteriores; EV-27/28 registram startup negativo de acesso e correção ainda sem físico. Mobile EV-17/19 não fecha E5.
+ - **Decisão resultante para o Gate G0:** **PENDENTE** (proibido declarar aprovado enquanto houver critério obrigatório de execução pendente).
+ 
+-Atualização lote6 dos critérios **G0-E4/G0-E7** (EV-25–26): o IPAM/seccomp
++Registro histórico lote6 dos critérios **G0-E4/G0-E7** (EV-25–26): o IPAM/seccomp
+ funcionou fisicamente nas novas tentativas; as paradas seguintes são de setup,
+ sem PASS de acesso ou SSH remoto. E4: EACCES administrativo de montagem corrigido
+ na imagem `439b8d`, depois NOTRUN pré-web com apenas PG; prontidão TCP final e
+@@ -53,8 +53,12 @@ com remoção. Não reclassificar esse recibo. Correções incorporadas/revisada
+ conforme controlador, físico ainda pendente. RF55 (EV-24), E4 e
+ RF46/T28 permanecem gates separados, sem contas reais.
+ 
+-Estado vigente, política exclusiva efetiva, comandos e critérios restantes:
+-[`validation/F0-LOTE6.md`](validation/F0-LOTE6.md), EV-25–26; lote5 preservado
++Estado vigente lote7: **SSH físico PASS limitado; acesso matriz NOTRUN**,
++sem aprovação por cookies ou serviço iniciado. Próximo gate: overlay identificado
++da prontidão revisada e uma prova física gerencial, com negativos ttyd/WS visíveis.
++Política exclusiva efetiva, comandos e critérios restantes:
++[`validation/F0-LOTE7.md`](validation/F0-LOTE7.md), EV-27–28; lote6 preservado
++em EV-25–26/[F0-LOTE6](validation/F0-LOTE6.md); lote5 preservado
+ em EV-22–24/[F0-LOTE5](validation/F0-LOTE5.md); lote4 preservado
+ em EV-19–21/[F0-LOTE4](validation/F0-LOTE4.md); lote3 preservado
+ em EV-16–18/[F0-LOTE3](validation/F0-LOTE3.md); lote2 preservado
+diff --git a/docs/F0-EVIDENCIAS.md b/docs/F0-EVIDENCIAS.md
+index f9e0959..d9fe8d8 100644
+--- a/docs/F0-EVIDENCIAS.md
++++ b/docs/F0-EVIDENCIAS.md
+@@ -631,3 +631,65 @@ conforme controlador. Worktree `task-271a4475560c-g0-lote6-status`, HEAD inicial
+   suportada no escopo EV-24; UI hospedada requires_clarification. RF46/T28 e E4
+   independentes; sem login/inferência/contas reais. Plano1.1/Adendo, base/ADR,
+   negativos, IDs, recibos, política exclusiva EV-15, pausas e Zed preservados.
++
++## EV-27 — Lote6 físico gerencial: SSH PASS limitado; matriz de acesso NOTRUN
++
++- **Comprovado por execução da gerência**, observer `manager_host`,
++  `2026-10-31T20:47:41.847194+00:00`, candidata
++  `da30f2b0e2ccd207d46ccf3d1ddc6d1516505b95`; artefatos incorporados em `8e378a5`.
++  [Recibo](validation/artifacts/lote6-host-results-20261031/receipt.json) e
++  [manifesto](validation/artifacts/lote6-host-results-20261031/sha256.json)
++  consultados de forma dirigida, sem reler logs inteiros, reconferência integral
++  de hashes ou repetição dos verdes. Lote6 `271a4475560c` DONE/revisado conforme
++  controlador; esta consolidação requer sua própria revisão independente.
++- SSH run `f0-ssh-5b81bbfa01d41f8d413b386df50b2c24`: [result](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/result.json),
++  [status](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/status.json)
++  e gate PASS; job `86638eaf657a`, detached, exit0, **uma execução**.
++  Repo somente no destino, alteração/commit central e teste remoto; SHA central
++  e observado `c7455f7f0c4d833a9b788f0c46d5ae37db5f130f` iguais; bundle SHA-256
++  `307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610`.
++  Pin negativo local e servidor (exit255), pin positivo, polls em conexões novas
++  e segredo sintético ausente comprovados pelo cenário físico retido.
++- [Journal](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/journal.json)
++  PASS: 20.480 bytes, SHA-256 `7c88d598b60ab013135266edbc6ffc1c74f5a635efa62450069911fc723fec32`;
++  tar retido. Captura e [cleanup](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/cleanup.json)
++  PASS separados. **Standalone Settings + SshRunner/OpenSSH/journal**;
++  sem CoderPrepareRepo/MCP/SQL/IA autenticada, queda forçada de canal NOT RUN.
++  Não fecha F4 completo, E1/E2 ou G0. Não repetir esse verde.
++- Acesso run `f0-access-7c5d66ab594c97c09a1ea8d6`:
++  [report](validation/artifacts/lote6-host-results-20261031/access/runs/f0-access-7c5d66ab594c97c09a1ea8d6/report.json)
++  `FAIL_OR_NOTRUN`: PG final/schema Rails carregados e três identidades SQL
++  com cookies reais do laboratório (session/CSRF recuperados) PASS; não são
++  contas reais de provedor. `boot-or-scenario` NOTRUN/`Net::OpenTimeout` antes
++  da matriz HTTP/WS/MCP. Nenhuma recusa/política de acesso aprovada, nem
++  vulnerabilidade de autorização demonstrada pelo timeout.
++- [Receipt de acesso](validation/artifacts/lote6-host-results-20261031/access/runs/f0-access-7c5d66ab594c97c09a1ea8d6/receipt.json)
++  FAIL/exit1, coleta sem erros e cleanup PASS. Diagnóstico `pg-readiness`/
++  CalledProcessError retido nesse receipt é residual; o report comprova avanço
++  posterior até cookies/startup. Gateway iniciado 20:43:38.502, web terminado
++  20:43:39.262: corrida de startup é diagnóstico compatível com o timeout;
++  não atribuir recusa à política nem provar causa de rede definitiva.
++
++## EV-28 — Prontidão de acesso corrigida; overlay e prova física pendentes
++
++- **Comprovado por código/documentação:** `9e6392911f75d02422f043115220ea62898c184d`,
++  incorporado por `9f28ff9`; implementado/revisado conforme controlador.
++  [F0-ACESSO-PRONTIDAO](validation/F0-ACESSO-PRONTIDAO.md) retém o marco de
++  implementação e a receita; não inventar recibo de revisão ou execução.
++- Duas fases GET limitadas a 40s monotônicos: backend Rails `/up` e rota real
++  do gateway/ttyd com cookie sintético owner. Retry transitório inclui
++  Net::OpenTimeout/ReadTimeout, DNS e conexão; resposta inesperada FAIL,
++  prazo/erro não transitório NOTRUN. Sem retry de mutações/sessões; auth, CSRF,
++  cookies, revogação e oráculos negativos preservados. Readiness PASS é preparo.
++- A imagem antiga `439b8d` contém snapshot aplicativo `c9a2c3b` e ownership
++  normalizado; executar host.py novo com essa imagem intacta usa run.rb antigo.
++  Exigir overlay mínimo dos quatro arquivos da receita, imagem derivada por ID
++  imutável, hashes/commit/CMD e apenas sintaxe/teste novo antes do físico.
++  Novo ID ainda inexistente nos recibos; não inventado nem construído aqui.
++- Próximo gate gerencial em [F0-LOTE7](validation/F0-LOTE7.md): uma matriz da
++  candidata correta, mantendo observações negativas ttyd/WS, report e cleanup.
++  Sem repetir SSH/SQL/Temporal/mobile/unidades anteriores. RF55 por modo EV-24:
++  CLI própria remota `documented_supported` no escopo documental; UI hospedada
++  `requires_clarification`. RF46/T28 real e contas reais não ativados.
++  Plano1.1/Adendo, IDs/recibos/falhas, base/ADR, política exclusiva EV-15,
++  origem/Zed e pausas preservados. **G0 PENDENTE; F1 não iniciada.**
+diff --git a/docs/STATUS.md b/docs/STATUS.md
+index 7bd2cfb..112dd04 100644
+--- a/docs/STATUS.md
++++ b/docs/STATUS.md
+@@ -7,7 +7,7 @@ está pronta para revisão independente; isso não conclui os eliminatórios.
+ 
+ ## Continuidade e preservação
+ 
+-- Worktree exclusiva desta entrega: `/home/enok/srv_projetos/worktrees/14v3rrig/task-271a4475560c-g0-lote6-status`; HEAD inicial `f236c591352df51d1fabbb22d9643b9ff53463fb`, árvore inicial limpa. Clone identificado por `UPSTREAM.json`; lotes1–4 DONE/revisões independentes PASS e lote5 `9add58f6088a` DONE/revisado conforme controlador, incluindo histórico de `BUNDLE_FROZEN`. Histórico em EV-12–24/[F0-LOTE5](validation/F0-LOTE5.md); estado vigente em EV-25–26/[F0-LOTE6](validation/F0-LOTE6.md).
++- Worktree exclusiva desta entrega: `/home/enok/srv_projetos/worktrees/14v3rrig/task-7807ea5f00cd-g0-lote7-status`; HEAD inicial `9f28ff9`, árvore inicial limpa. Clone identificado por `UPSTREAM.json`; lotes1–4 DONE/revisões independentes PASS, lote5 `9add58f6088a` e lote6 `271a4475560c` DONE/revisados conforme controlador, incluindo histórico de `BUNDLE_FROZEN`. Histórico em EV-12–26/F0-LOTE5–6; estado vigente em EV-27–28/[F0-LOTE7](validation/F0-LOTE7.md).
+ - Origem e entregas Zed em `/home/enok/Documentos/projetos/agent-control` preservadas, sem acesso ou cópia de produto à origem. Zed terminou conforme usuário; isso não comprova saúde de serviços.
+ - Controlador ativo para este fluxo conforme delegação e histórico das tarefas; não foi consultada saúde do serviço nem iniciado/reiniciado daemon. Aixle não recebeu autoridade sobre planos ativos.
+ - `Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat` e demais projetos permanecem pausados. Nenhum serviço, credencial real, API paga, produção, migração, deploy/push/merge ou commit nesta entrega.
+@@ -16,17 +16,17 @@ está pronta para revisão independente; isso não conclui os eliminatórios.
+ ## Matriz de continuidade G0
+ 
+ Esta síntese remete à matriz normativa completa em [F0-CHECKLIST](F0-CHECKLIST.md)
+-e às origens exatas em [F0-EVIDENCIAS](F0-EVIDENCIAS.md), EV-01–26.
++e às origens exatas em [F0-EVIDENCIAS](F0-EVIDENCIAS.md), EV-01–28.
+ 
+ | Critério | Estado e prova | Lacuna eliminatória / próxima evidência |
+ |---|---|---|
+ | E1 CLIs/assinaturas | NOT RUN real; EV-03/09 documental e guard sintético | Modo/plano/CLI/entitlement elegíveis e execução controlada em etapa própria |
+ | E2 duas contas/isolamento | Parcial sintético HOST: HOME vazou; namespaces bloquearam cinco ataques nas duas direções; EV-12 | Isolamento integrado Aixle e duas contas reais identificáveis continuam NOT RUN |
+ | E3 autoridade/durabilidade | Costura PG+relay+Temporal física PASS pela gerência; exit86, lease saudável sem envio, lease envelhecido em SQL, AlreadyStarted/mesmo runID/uma execução, cancel e cleanup; EV-19 | Fatia inerte, ledger vazio e reserva ocupada; sem liberação/runtime cleanup/modelos periféricos reais, sem autoridade global ou T28 global |
+-| E4 UI/API/WS/terminal/MCP | Unidades EV-22 preservadas; tentativas lote5 NOTRUN: EACCES administrativo e, após ownership corrigido, parada pré-web com PG apenas; cleanup PASS, EV-25 | Correções TCP final/IO de volume incorporadas, sem novo físico; executar comando de F0-LOTE6. Matriz e fechamento de bypass, IDE/files/preview e ausência global MITM/CA/proxy pendentes |
++| E4 UI/API/WS/terminal/MCP | Lote6 físico: PG final/schema Rails e três identidades SQL/cookies PASS; matriz NOTRUN por Net::OpenTimeout no startup, coleta/cleanup PASS, EV-27 | Correção de prontidão implementada/revisada conforme controlador, EV-28; overlay da imagem e prova física gerencial pendentes. Cookies/start não aprovam acesso; preservar negativos ttyd/WS |
+ | E5 móvel | Execução parcial de componentes; novo pacote móvel retido e hashes conferidos, EV-17; transporte/dados sintéticos | Perfil conta/modelo, criação de tarefa, reenvio com efeito único, reconexão e estado/grafo reais no shell autenticado |
+ | E6 licença | Documental concluído; Apache-2.0, EV-02/05 | Preservar licença/avisos e estratégia privada no fork |
+-| E7 SSH | Unidades EV-22 preservadas; lote5 FAIL setup por docker cp/tmpfs, transporte remoto NOTRUN. Exec/stdin positivo apenas administrativo; recursos próprios removidos, retenção antiga falhou, EV-25 | IO corrigido e captura separada da remoção, sem novo físico; hostkey negativa/positiva, bundle/SHA/teste remoto, efeito único e marcador central ausente pendentes |
++| E7 SSH | SSH físico PASS pela gerência: pin negativo, repo só no destino, bundle/SHA/teste remoto, uma execução, polls em conexões novas, marcador sintético ausente, journal/cleanup PASS, EV-27 | Consolidado sem repetição; standalone Settings, sem CoderPrepareRepo/MCP/SQL/IA autenticada e sem queda forçada de canal. Não fecha F4 completo, E1/E2 ou G0 |
+ | AD1 RF-55/T39 | Documental + 24 recusas standalone, EV-09/24; CLI oficial pessoal remota direta `documented_supported` no escopo das fontes | UI privada Aixle `requires_clarification` na fronteira hospedada; conta/plano/entitlement não verificados, guard global NOT RUN |
+ | AD2 RF-46/T28 | Preservação sem contas reais, EV-11 | T28 real NOT RUN; autoridade comum ou contas explicitamente não sobrepostas antes de chamada |
+ | COMP | Comparação estática concluída, ADR-001/EV-02/04/05 | Notas 3,40 Aixle / 2,25 Kandev não anulam eliminatórios |
+@@ -44,14 +44,15 @@ A cadeia global não substitui essa regra. Fonte: contrato do controlador, sem
+ inspeção de configuração do host pelo executor; detalhes em EV-15 e
+ [F0-POLITICA-EVIDENCIA](validation/F0-POLITICA-EVIDENCIA.md).
+ 
+-Próximo bloco mínimo: revisão independente desta consolidação e confirmação dos
+-pareceres das correções lote6; gerência executa os comandos de
+-[F0-LOTE6](validation/F0-LOTE6.md), com imagem de acesso corrigida `439b8d`,
+-subnet revalidada e `--seccomp-compat` explícito. Correções de acesso `99c3198`
+-e SSH `4ca779c` incorporadas em `f236c59`; implementadas/revisadas conforme
+-controlador, aguardam execução física gerencial. Documentos das frentes ainda
+-registram revisão pendente no marco de implementação; não são recibos de parecer.
+-Não repetir build/testes Ruby, Temporal/SQL/costura/browser verdes por rotina.
++Próximo bloco mínimo: revisão independente desta consolidação; gerência prepara
++o overlay offline da correção `9e6392911f75d02422f043115220ea62898c184d`
++(incorporada em `9f28ff9`, revisada conforme controlador), registra ID imutável
++e hashes, executa apenas sintaxe/teste novo de prontidão e uma matriz de acesso
++conforme [F0-LOTE7](validation/F0-LOTE7.md). A imagem antiga `439b8d` sozinha
++não contém a correção. Revalidar subnet e manter `--seccomp-compat` explícito.
++Documentos das frentes preservam revisão pendente no marco de implementação;
++não são recibos de parecer. Não repetir SSH físico PASS, unidades Ruby anteriores,
++Temporal/SQL/costura/mobile verdes por rotina.
+ A conferência dos 21 hashes do preflight lote4 pertence ao lote5, sem nova
+ conferência aqui. O pacote móvel EV-17/19 continua parcial sintético.
+ Depois: fechar bypass E4 com contraprova, E5 no shell real e RF-55/T28 antes de
