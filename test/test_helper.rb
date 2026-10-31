@@ -70,7 +70,7 @@ class ActiveSupport::TestCase
   # system suite stay serial. Make-driven suite runs remain flock-serialized (see
   # the Makefile TEST_LOCK) so concurrent invocations never fight over the shared
   # per-worker databases — the collision vector that previously made this unsafe.
-  parallelize(workers: :number_of_processors)
+  parallelize(workers: ENV["PARALLEL_WORKERS"] ? ENV["PARALLEL_WORKERS"].to_i : :number_of_processors)
 
   # SimpleCov runs inside each forked worker: give each a distinct command_name so
   # results don't clobber one another, then flush each worker's result at teardown.

@@ -10,10 +10,263 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_30_140000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_31_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "citext"
   enable_extension "pg_catalog.plpgsql"
+
+  create_table "ac_capacity_grants", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "ac_task_id", null: false
+    t.bigint "ac_execution_profile_id", null: false
+    t.bigint "agent_credential_id", null: false
+    t.string "operation_id", null: false
+    t.string "epoch", null: false
+    t.string "state", default: "pending", null: false
+    t.integer "quantity", default: 1, null: false
+    t.string "resource_type", default: "inference_slot", null: false
+    t.bigint "policy_revision_id", null: false
+    t.integer "policy_revision_number", null: false
+    t.datetime "granted_at"
+    t.datetime "expires_at"
+    t.datetime "released_at"
+    t.string "revoke_reason"
+    t.string "external_process_id"
+    t.jsonb "reconciliation_data", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_execution_profile_id"], name: "index_ac_capacity_grants_on_ac_execution_profile_id"
+    t.index ["ac_task_id", "state"], name: "index_ac_capacity_grants_on_ac_task_id_and_state"
+    t.index ["ac_task_id"], name: "index_ac_capacity_grants_on_ac_task_id"
+    t.index ["agent_credential_id", "state"], name: "index_ac_capacity_grants_on_agent_credential_id_and_state"
+    t.index ["agent_credential_id"], name: "index_ac_capacity_grants_on_agent_credential_id"
+    t.index ["company_id", "state"], name: "index_ac_capacity_grants_on_company_id_and_state"
+    t.index ["company_id"], name: "index_ac_capacity_grants_on_company_id"
+    t.index ["epoch"], name: "index_ac_capacity_grants_on_epoch"
+    t.index ["expires_at"], name: "index_ac_capacity_grants_on_expires_at", where: "((state)::text = ANY ((ARRAY['granted'::character varying, 'active'::character varying])::text[]))"
+    t.index ["operation_id"], name: "index_ac_capacity_grants_on_operation_id", unique: true
+    t.index ["state"], name: "index_ac_capacity_grants_on_state"
+    t.check_constraint "quantity > 0", name: "ac_capacity_grants_positive_qty"
+    t.check_constraint "resource_type::text = ANY (ARRAY['inference_slot'::character varying, 'worktree'::character varying, 'disk_mb'::character varying, 'process'::character varying]::text[])", name: "ac_capacity_grants_valid_resource"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'granted'::character varying, 'active'::character varying, 'released'::character varying, 'expired'::character varying, 'revoked'::character varying]::text[])", name: "ac_capacity_grants_valid_state"
+  end
+
+  create_table "ac_decision_audit_events", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.string "event_type", null: false
+    t.bigint "ac_work_context_id"
+    t.bigint "ac_plan_id"
+    t.bigint "ac_task_id"
+    t.bigint "ac_execution_profile_id"
+    t.bigint "ac_capacity_grant_id"
+    t.bigint "ac_policy_revision_id"
+    t.bigint "agent_credential_id"
+    t.string "actor_type", null: false
+    t.bigint "actor_user_id"
+    t.jsonb "decision_details", default: {}, null: false
+    t.string "previous_state"
+    t.string "new_state"
+    t.text "reason"
+    t.datetime "occurred_at", null: false
+    t.string "execution_epoch"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.index ["ac_task_id", "occurred_at"], name: "index_ac_decision_audit_events_on_ac_task_id_and_occurred_at", where: "(ac_task_id IS NOT NULL)"
+    t.index ["ac_work_context_id", "occurred_at"], name: "idx_on_ac_work_context_id_occurred_at_18a3dac39d", where: "(ac_work_context_id IS NOT NULL)"
+    t.index ["actor_type"], name: "index_ac_decision_audit_events_on_actor_type"
+    t.index ["agent_credential_id"], name: "index_ac_decision_audit_events_on_agent_credential_id", where: "(agent_credential_id IS NOT NULL)"
+    t.index ["company_id", "occurred_at"], name: "index_ac_decision_audit_events_on_company_id_and_occurred_at"
+    t.index ["company_id"], name: "index_ac_decision_audit_events_on_company_id"
+    t.index ["event_type"], name: "index_ac_decision_audit_events_on_event_type"
+    t.index ["occurred_at"], name: "index_ac_decision_audit_events_on_occurred_at"
+    t.index ["project_id"], name: "index_ac_decision_audit_events_on_project_id"
+    t.check_constraint "actor_type::text = ANY (ARRAY['human'::character varying, 'manager_agent'::character varying, 'policy_service'::character varying, 'system'::character varying]::text[])", name: "ac_audit_events_valid_actor"
+    t.check_constraint "event_type::text = ANY (ARRAY['profile_selected'::character varying, 'profile_rejected'::character varying, 'capacity_granted'::character varying, 'capacity_denied'::character varying, 'capacity_revoked'::character varying, 'policy_published'::character varying, 'policy_revoked'::character varying, 'quota_state_changed'::character varying, 'task_state_changed'::character varying, 'human_intervention'::character varying, 'profile_substitution'::character varying]::text[])", name: "ac_audit_events_valid_type"
+  end
+
+  create_table "ac_execution_profiles", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "ac_policy_revision_id", null: false
+    t.string "profile_key", null: false
+    t.string "role", null: false
+    t.string "cli_adapter", null: false
+    t.string "model_id", null: false
+    t.string "effort_level", default: "medium", null: false
+    t.bigint "agent_credential_id"
+    t.integer "chain_position", default: 1, null: false
+    t.string "permanence_rule", default: "permanent", null: false
+    t.string "state", default: "active", null: false
+    t.string "ineligibility_reason"
+    t.jsonb "permissions", default: {}, null: false
+    t.jsonb "limits", default: {}, null: false
+    t.jsonb "selection_criteria", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_policy_revision_id", "profile_key"], name: "idx_ac_exec_profiles_revision_key", unique: true
+    t.index ["ac_policy_revision_id"], name: "index_ac_execution_profiles_on_ac_policy_revision_id"
+    t.index ["agent_credential_id"], name: "index_ac_execution_profiles_on_agent_credential_id", where: "(agent_credential_id IS NOT NULL)"
+    t.index ["company_id", "cli_adapter", "state"], name: "idx_on_company_id_cli_adapter_state_eacf3ea1ee"
+    t.index ["company_id", "role", "state"], name: "index_ac_execution_profiles_on_company_id_and_role_and_state"
+    t.index ["company_id"], name: "index_ac_execution_profiles_on_company_id"
+    t.index ["role", "chain_position"], name: "index_ac_execution_profiles_on_role_and_chain_position"
+    t.index ["state"], name: "index_ac_execution_profiles_on_state"
+    t.check_constraint "chain_position > 0", name: "ac_exec_profiles_positive_chain"
+    t.check_constraint "cli_adapter::text = ANY (ARRAY['codex_cli'::character varying, 'claude_code'::character varying, 'grok_cli'::character varying, 'antigravity_cli'::character varying]::text[])", name: "ac_exec_profiles_valid_cli"
+    t.check_constraint "effort_level::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying]::text[])", name: "ac_exec_profiles_valid_effort"
+    t.check_constraint "permanence_rule::text = ANY (ARRAY['permanent'::character varying, 'return_to_principal'::character varying, 'conclude_and_yield'::character varying]::text[])", name: "ac_exec_profiles_valid_permanence"
+    t.check_constraint "role::text = ANY (ARRAY['manager'::character varying, 'programmer'::character varying, 'reviewer'::character varying, 'qa'::character varying, 'specialist'::character varying, 'integrator'::character varying]::text[])", name: "ac_exec_profiles_valid_role"
+    t.check_constraint "state::text = ANY (ARRAY['active'::character varying, 'disabled'::character varying, 'deprecated'::character varying]::text[])", name: "ac_exec_profiles_valid_state"
+  end
+
+  create_table "ac_plans", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.bigint "ac_work_context_id", null: false
+    t.string "plan_key", null: false
+    t.integer "version", default: 1, null: false
+    t.string "title", null: false
+    t.text "objective"
+    t.string "state", default: "draft", null: false
+    t.string "content_hash"
+    t.datetime "published_at"
+    t.string "created_by_type", default: "human", null: false
+    t.bigint "created_by_user_id"
+    t.bigint "policy_revision_id"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_work_context_id", "state"], name: "index_ac_plans_on_ac_work_context_id_and_state"
+    t.index ["ac_work_context_id"], name: "index_ac_plans_on_ac_work_context_id"
+    t.index ["company_id", "project_id"], name: "index_ac_plans_on_company_id_and_project_id"
+    t.index ["company_id"], name: "index_ac_plans_on_company_id"
+    t.index ["content_hash"], name: "index_ac_plans_on_content_hash", where: "(content_hash IS NOT NULL)"
+    t.index ["plan_key", "version"], name: "index_ac_plans_on_plan_key_and_version", unique: true
+    t.index ["project_id"], name: "index_ac_plans_on_project_id"
+    t.index ["state"], name: "index_ac_plans_on_state"
+    t.check_constraint "created_by_type::text = ANY (ARRAY['human'::character varying, 'manager_agent'::character varying, 'import'::character varying]::text[])", name: "ac_plans_valid_creator_type"
+    t.check_constraint "state::text = ANY (ARRAY['draft'::character varying, 'active'::character varying, 'completed'::character varying, 'abandoned'::character varying, 'superseded'::character varying]::text[])", name: "ac_plans_valid_state"
+    t.check_constraint "version > 0", name: "ac_plans_positive_version"
+  end
+
+  create_table "ac_policy_revisions", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "predecessor_id"
+    t.integer "revision_number", default: 1, null: false
+    t.string "state", default: "draft", null: false
+    t.jsonb "diff", default: {}, null: false
+    t.jsonb "content", default: {}, null: false
+    t.string "content_hash", null: false
+    t.jsonb "validation_result", default: {}, null: false
+    t.string "apply_mode", default: "next_attempts", null: false
+    t.bigint "published_by_user_id"
+    t.datetime "published_at"
+    t.string "revoked_reason"
+    t.datetime "revoked_at"
+    t.bigint "revoked_by_user_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["company_id", "revision_number"], name: "index_ac_policy_revisions_on_company_id_and_revision_number", unique: true
+    t.index ["company_id", "state"], name: "index_ac_policy_revisions_on_company_id_and_state"
+    t.index ["company_id"], name: "index_ac_policy_revisions_on_company_id"
+    t.index ["content_hash"], name: "index_ac_policy_revisions_on_content_hash", unique: true
+    t.index ["predecessor_id"], name: "index_ac_policy_revisions_on_predecessor_id"
+    t.index ["state"], name: "index_ac_policy_revisions_on_state"
+    t.check_constraint "apply_mode::text = ANY (ARRAY['next_attempts'::character varying, 'drain_and_switch'::character varying, 'immediate_revoke'::character varying]::text[])", name: "ac_policy_revisions_valid_apply_mode"
+    t.check_constraint "revision_number > 0", name: "ac_policy_revisions_positive_revision"
+    t.check_constraint "state::text = ANY (ARRAY['draft'::character varying, 'published'::character varying, 'superseded'::character varying, 'revoked'::character varying]::text[])", name: "ac_policy_revisions_valid_state"
+  end
+
+  create_table "ac_quota_observations", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "agent_credential_id", null: false
+    t.string "cli_adapter", null: false
+    t.string "model_scope", null: false
+    t.datetime "window_start"
+    t.datetime "window_end"
+    t.string "quota_state", null: false
+    t.jsonb "quota_data", default: {}, null: false
+    t.datetime "observed_at", null: false
+    t.datetime "valid_until"
+    t.string "confidence_level", default: "medium", null: false
+    t.string "origin", default: "cli_output", null: false
+    t.text "redacted_evidence"
+    t.bigint "ac_task_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_task_id"], name: "index_ac_quota_observations_on_ac_task_id", where: "(ac_task_id IS NOT NULL)"
+    t.index ["agent_credential_id", "observed_at"], name: "idx_on_agent_credential_id_observed_at_3b91565229"
+    t.index ["agent_credential_id", "quota_state"], name: "idx_on_agent_credential_id_quota_state_195faf3798"
+    t.index ["agent_credential_id"], name: "index_ac_quota_observations_on_agent_credential_id"
+    t.index ["company_id", "quota_state"], name: "index_ac_quota_observations_on_company_id_and_quota_state"
+    t.index ["company_id"], name: "index_ac_quota_observations_on_company_id"
+    t.index ["observed_at"], name: "index_ac_quota_observations_on_observed_at"
+    t.index ["valid_until"], name: "index_ac_quota_observations_on_valid_until", where: "(valid_until IS NOT NULL)"
+    t.check_constraint "cli_adapter::text = ANY (ARRAY['codex_cli'::character varying, 'claude_code'::character varying, 'grok_cli'::character varying, 'antigravity_cli'::character varying]::text[])", name: "ac_quota_observations_valid_cli"
+    t.check_constraint "confidence_level::text = ANY (ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'snapshot_only'::character varying]::text[])", name: "ac_quota_observations_valid_confidence"
+    t.check_constraint "origin::text = ANY (ARRAY['cli_output'::character varying, 'api_header'::character varying, 'synthetic_probe'::character varying, 'manual_import'::character varying]::text[])", name: "ac_quota_observations_valid_origin"
+    t.check_constraint "quota_state::text = ANY (ARRAY['exhausted'::character varying, 'rate_limited'::character varying, 'auth_error'::character varying, 'network_error'::character varying, 'unknown'::character varying, 'available'::character varying]::text[])", name: "ac_quota_observations_valid_state"
+  end
+
+  create_table "ac_tasks", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.bigint "ac_plan_id", null: false
+    t.string "task_key", null: false
+    t.string "title", null: false
+    t.text "scope"
+    t.jsonb "inputs", default: {}, null: false
+    t.jsonb "outputs", default: {}, null: false
+    t.text "acceptance_criteria"
+    t.string "risk_class", default: "medium", null: false
+    t.string "assigned_role", default: "programmer", null: false
+    t.string "depends_on", default: [], null: false, array: true
+    t.string "state", default: "pending", null: false
+    t.integer "position", default: 0, null: false
+    t.string "approved_commit_sha"
+    t.string "approved_artifact_hash"
+    t.integer "attempt_count", default: 0, null: false
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_plan_id", "position"], name: "index_ac_tasks_on_ac_plan_id_and_position"
+    t.index ["ac_plan_id", "task_key"], name: "index_ac_tasks_on_ac_plan_id_and_task_key", unique: true
+    t.index ["ac_plan_id"], name: "index_ac_tasks_on_ac_plan_id"
+    t.index ["approved_commit_sha"], name: "index_ac_tasks_on_approved_commit_sha", where: "(approved_commit_sha IS NOT NULL)"
+    t.index ["assigned_role"], name: "index_ac_tasks_on_assigned_role"
+    t.index ["company_id", "project_id", "state"], name: "index_ac_tasks_on_company_id_and_project_id_and_state"
+    t.index ["company_id"], name: "index_ac_tasks_on_company_id"
+    t.index ["project_id"], name: "index_ac_tasks_on_project_id"
+    t.index ["state"], name: "index_ac_tasks_on_state"
+    t.check_constraint "assigned_role::text = ANY (ARRAY['programmer'::character varying, 'manager'::character varying, 'qa'::character varying, 'reviewer'::character varying, 'specialist'::character varying, 'integrator'::character varying]::text[])", name: "ac_tasks_valid_role"
+    t.check_constraint "attempt_count >= 0", name: "ac_tasks_nonneg_attempts"
+    t.check_constraint "risk_class::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying]::text[])", name: "ac_tasks_valid_risk_class"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'queued'::character varying, 'running'::character varying, 'review'::character varying, 'approved'::character varying, 'integrated'::character varying, 'failed'::character varying, 'cancelled'::character varying]::text[])", name: "ac_tasks_valid_state"
+  end
+
+  create_table "ac_work_contexts", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.string "external_id", null: false
+    t.string "title", null: false
+    t.string "state", default: "active", null: false
+    t.string "pause_reason"
+    t.text "objective_summary"
+    t.jsonb "metadata", default: {}, null: false
+    t.string "origin", default: "new", null: false
+    t.bigint "policy_revision_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["company_id", "project_id"], name: "index_ac_work_contexts_on_company_id_and_project_id"
+    t.index ["company_id"], name: "index_ac_work_contexts_on_company_id"
+    t.index ["created_at"], name: "index_ac_work_contexts_on_created_at"
+    t.index ["external_id"], name: "index_ac_work_contexts_on_external_id", unique: true
+    t.index ["policy_revision_id"], name: "index_ac_work_contexts_on_policy_revision_id"
+    t.index ["project_id"], name: "index_ac_work_contexts_on_project_id"
+    t.index ["state"], name: "index_ac_work_contexts_on_state"
+    t.check_constraint "origin::text = ANY (ARRAY['new'::character varying, 'paseo_import'::character varying, 'migration'::character varying]::text[])", name: "ac_work_contexts_valid_origin"
+    t.check_constraint "state::text = ANY (ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying, 'suspended'::character varying]::text[])", name: "ac_work_contexts_valid_state"
+  end
 
   create_table "agent_credentials", force: :cascade do |t|
     t.string "agent_type", null: false
@@ -2217,6 +2470,25 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_30_140000) do
     t.index ["user_id"], name: "index_youtrack_pairings_on_user_id"
   end
 
+  add_foreign_key "ac_capacity_grants", "ac_execution_profiles"
+  add_foreign_key "ac_capacity_grants", "ac_tasks"
+  add_foreign_key "ac_capacity_grants", "agent_credentials"
+  add_foreign_key "ac_capacity_grants", "companies"
+  add_foreign_key "ac_decision_audit_events", "companies"
+  add_foreign_key "ac_decision_audit_events", "projects"
+  add_foreign_key "ac_execution_profiles", "ac_policy_revisions"
+  add_foreign_key "ac_execution_profiles", "companies"
+  add_foreign_key "ac_plans", "ac_work_contexts"
+  add_foreign_key "ac_plans", "companies"
+  add_foreign_key "ac_plans", "projects"
+  add_foreign_key "ac_policy_revisions", "companies"
+  add_foreign_key "ac_quota_observations", "agent_credentials"
+  add_foreign_key "ac_quota_observations", "companies"
+  add_foreign_key "ac_tasks", "ac_plans"
+  add_foreign_key "ac_tasks", "companies"
+  add_foreign_key "ac_tasks", "projects"
+  add_foreign_key "ac_work_contexts", "companies"
+  add_foreign_key "ac_work_contexts", "projects"
   add_foreign_key "agent_credentials", "companies"
   add_foreign_key "agent_credentials", "users"
   add_foreign_key "agents", "companies", on_delete: :cascade, validate: false
