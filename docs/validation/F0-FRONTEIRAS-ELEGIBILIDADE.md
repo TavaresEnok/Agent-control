@@ -17,6 +17,13 @@ sintéticas abaixo exercitam separação; não representam duas contas autentica
 Quando houver T01 real, distinguir conta original do gerente da conta isolada dos
 trabalhadores, preservando a coordenação de capacidade do Adendo §5.
 
+Esta é a **política efetiva exclusiva do projeto**, confirmada pelo contrato
+desta tarefa: `project_role_policies` id `agent-control` em `model-limits.json`,
+aplicável às raízes `/home/enok/Documentos/projetos/agent-control` e
+`/home/enok/srv_projetos/workspace/agent-control`. A cadeia global geral não
+substitui essa regra. Procedência, valores exatos e limites da conferência em
+[F0-POLITICA-EVIDENCIA](F0-POLITICA-EVIDENCIA.md); nenhuma configuração foi alterada.
+
 | Perfil/caminho | Política de execução F0 | RF-55 para o modo exato | Evidência que falta |
 |---|---|---|---|
 | Codex oficial com OAuth gerenciado pelo próprio Codex, aplicação local privada, sem MITM/API paga | Único candidato à habilitação após avaliação confiável | `documented_supported` apenas para o caminho documental delimitado | Plano/titular/permissões/versão da CLI escolhida e isolamento real; nenhum login feito |
@@ -75,7 +82,7 @@ symlink e `/proc/PID/{root,fd,environ}`. Saem somente classificações, nunca co
 dos marcadores. Os filhos recebem ambiente mínimo, HOME/CODEX_HOME próprios e
 o cleanup encerra os processos e remove fixtures.
 
-| Modalidade executada neste ambiente | Resultado observado | O que comprova |
+| Modalidade da tentativa anterior do trabalhador | Resultado observado | O que comprova |
 |---|---|---|
 | Mesmo UID 1000, HOME/CODEX_HOME distintos | **LEAKED nos cinco ataques, nas duas direções**; leitura própria funcionou | HOME distinto e chmod 0600 não são fronteira entre processos do mesmo UID |
 | User/mount/PID/network namespaces, proc próprio e tmpfs ocultando o peer | **NOT RUN** em ambas as direções; `unshare: unshare failed: Operation not permitted`, exit 1 | Nenhuma proteção OS foi executada nesta sessão |
@@ -89,8 +96,9 @@ oculta apenas as fixtures e os processos externos, não confina todo o filesyste
 mesmo seu sucesso não seria um sandbox de produto. EV-06 permanece histórico:
 o resultado antigo não foi reproduzido e não é herdado como PASS.
 
-Necessidade administrativa devolvida ao gerente: disponibilizar **ambiente de
-teste descartável sem credenciais** que permita user/mount/PID/network namespaces.
+Na tentativa anterior, a necessidade administrativa devolvida ao gerente era
+disponibilizar **ambiente de teste descartável sem credenciais** que permita
+user/mount/PID/network namespaces.
 Diagnóstico e reexecução concretos nesse ambiente:
 
 ```sh
@@ -102,6 +110,29 @@ Se o primeiro comando falhar, revisar a restrição de container/seccomp/userns 
 ambiente descartável. Não alterar sysctls globais, montar diretórios reais ou
 usar sudo na worktree do trabalhador. O gerente deve escolher a fronteira real
 (UIDs separados/VM/sandbox) e repetir ataques em executores da Aixle antes do login.
+
+### Recibo HOST posterior — conferência documental em 2026-10-31
+
+O recibo [F0-HOST-BOUNDARY-20261031.json](artifacts/F0-HOST-BOUNDARY-20261031.json)
+foi recebido do gerente e já estava versionado. Nesta tarefa foram conferidos
+os **1.782 bytes**, o JSON e o SHA-256
+`c1a16005d3d8a4daa71830d042638a0c5ccff13794e144d311877fb7634afb91`.
+O observador registrado é `manager_host_execution_of_reviewed_harness`, no
+código revisado `5d22773c97d17101e4263678aad3077cb96a5331`, às
+`2026-10-31T14:56:52.293514+00:00`. O executor desta tarefa **não executou** o probe.
+
+| Execução HOST da gerência | Resultado no recibo | Limite |
+|---|---|---|
+| Dois holders sintéticos concorrentes, UID 1000, HOME separado | Leitura própria funcionou; `absolute`, `symlink`, `process_root`, `process_fd`, `process_environ` deram `LEAKED` nas duas direções | HOME separado continua insuficiente |
+| Namespace nas duas direções | `namespace_executed: true`, leitura própria funcionou; os mesmos cinco ataques deram `BLOCKED`, status `CROSS_READ_BLOCKED` em ambos os registros | Prova sintética HOST do harness; não isolamento integrado dos executores Aixle |
+| Comando `python3 tools/f0/boundary/isolation_probe.py` | Exit 0, stderr vazio, `synthetic_only: true`, `real_codex: NOT RUN` | Não comprova T01 real, T24 integrado Aixle, T36 ou G0 |
+
+Este recibo acrescenta execução namespace onde a tentativa anterior não tinha
+permissão; não apaga o resultado anterior nem altera EV-06. O pedido de laboratório
+acima foi atendido para o **probe sintético HOST**. A escolha e integração da
+fronteira real na Aixle, com os mesmos ataques antes de login, continuam pendentes.
+O confinamento do harness limita-se às fixtures e processos descritos, sem provar
+sandbox completo do produto. Não há motivo para repetir a suíte nesta tarefa.
 
 ## Guard RF-55 / T39 antes do efeito
 
@@ -171,10 +202,10 @@ interceptação TLS nem prova elegibilidade do transporte. Não foram lidos logs
 | Critério | Evidência entregue | Estado de integração real |
 |---|---|---|
 | RF-55/T39 | Guard e spy executados; fontes atuais e matriz delimitada | T39 na costura F0 PASS; T39 global Aixle **NOT RUN** |
-| T24 | Vazamento HOME demonstrado; roteiro OS e cinco ataques bidirecionais | Namespace **NOT RUN** por restrição do ambiente; isolamento integrado pendente |
+| T24 | Tentativa anterior: HOME vazou, namespace NOT RUN; recibo posterior da gerência: namespace HOST executado e cinco ataques bloqueados nas duas direções | Prova sintética HOST conferida; **T24 integrado Aixle pendente** |
 | T01 | Preparação e identificação da lacuna de múltiplas contas | **NOT RUN**, sem login real/entitlement e sem admissão comum exercitada |
 | T36 | Auditoria fixa e bypass direto de terminal identificado como condicional | **NOT RUN**, sem stack/gateway/segregação de rede efêmeros disponíveis |
-| G0 | Resultado negativo preservado; necessidades administrativas concretas | **PENDENTE**, sem promoção |
+| G0 | Resultado anterior preservado e recibo sintético HOST posterior atribuído à gerência | **PENDENTE**, sem promoção |
 
 Próxima execução T36 deve usar stack descartável e identidades sintéticas:
 sem cookie, com viewer de outra conta, principal de worker e sessão revogada,

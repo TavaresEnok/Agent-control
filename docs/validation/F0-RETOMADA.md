@@ -5,25 +5,32 @@ sem nova implementação, execução de integração ou autorização de promoç
 
 ## Fonte e precedência operacional
 
-O pedido atual autoriza consolidação dos relatórios Temporal, Fronteiras e Mobile
-e EV-01–07, somente nos cinco documentos contratados. Aixle Flow `e6ec5a28` é
+O pedido da consolidação anterior autorizava os relatórios Temporal, Fronteiras e
+Mobile e EV-01–07, somente nos cinco documentos então contratados. A atualização
+atual é documental e restrita a F0-FRONTEIRAS-ELEGIBILIDADE, F0-RETOMADA e
+F0-POLITICA-EVIDENCIA, na worktree
+`/home/enok/srv_projetos/worktrees/14v3rrig/task-a9c3be73bab4-g0-policy-host-evidence`.
+Aixle Flow `e6ec5a28` é
 candidato aprovado e dependências isoladas sem sudo estão autorizadas. A espera
 por continuação em `PASEO-CONTINUACAO.md` descreve a transferência anterior; o
 pedido explícito atual autoriza esta worktree de desenvolvimento, sem autorizar
 concorrência na origem Zed. Não é necessário perguntar novamente por candidato
 ou instalação local. Requisitos do Plano v1.1/Adendo não foram relaxados.
 
-A política exclusiva registrada em PASEO-CONTINUACAO e nos relatórios é histórica:
-gerente Codex antigo Sol Alto, programador/revisor Codex novo Sol Médio em sessões
-independentes, sem fallback. A atualização administrativa de sessão
-`paseo_runtime_policy version=3` **substitui expressamente** regras históricas de
-modelos/esforços/contas/substituição. Para o despacho do controlador, ela define
-gerente Sol Médio (Alto adaptativo), cadeia de programação Grok → Codex isolado
-Sol Médio → conta antigravity2 habilitada (Gemini e Sonnet) → Sol Médio original
-somente na exceção prevista; revisor principal Sonnet Alto, depois Codex, depois
-Grok Alto nas condições da política. Astra permanece proibido. Não se deve
-apresentar a exclusiva histórica como política global vigente nem a cadeia de
-despacho como elegibilidade RF-55 da futura plataforma Aixle.
+A política exclusiva é **efetiva para este projeto**, não apenas histórica.
+Conforme o contrato atual fornecido pelo controlador, `model-limits.json` contém
+a regra `project_role_policies` id `agent-control` para as raízes
+`/home/enok/Documentos/projetos/agent-control` e
+`/home/enok/srv_projetos/workspace/agent-control`: gerente Codex antigo
+`codex/gpt-6.1-sol` **high**; programador e revisor Codex novo
+`codex-programmer/gpt-6.1-sol` **medium**, em sessões independentes;
+`automatic_fallback: false`;
+`quota_behavior: wait_for_same_account_positive_evidence`.
+A política global geral tem cadeia própria, mas **não substitui a regra exclusiva
+do projeto**. Corrige-se aqui a afirmação anterior em sentido contrário. A fonte
+desta confirmação é o contrato, sem leitura ou alteração da configuração externa;
+ver [F0-POLITICA-EVIDENCIA](F0-POLITICA-EVIDENCIA.md). Política de despacho não
+comprova elegibilidade RF-55 da futura plataforma Aixle.
 
 Este executor já delegado permanece no escopo Codex programador admitido,
 sem criação de agentes, troca de conta/modelo ou fallback. Próxima revisão cabe
@@ -32,15 +39,27 @@ emitido pelo implementador. Exaustão requer recuperação confirmada; transport
 e autenticação não são quota. Nesta consolidação não houve qualquer desses
 eventos. Nenhuma política da instalação ou configuração de modelos foi alterada.
 
-Worktree: `/home/enok/srv_projetos/worktrees/14v3rrig/task-e59f2072f8f4-g0-consolidar`.
+Worktree da consolidação anterior: `/home/enok/srv_projetos/worktrees/14v3rrig/task-e59f2072f8f4-g0-consolidar`.
 HEAD inicial `50d3387f21778dacd7f2e9c6147fbcaf650bbe99`; origem do clone em
 `UPSTREAM.json`. Origem documental/Zed `/home/enok/Documentos/projetos/agent-control`
 preservada e não acessada nesta entrega. `.paseo-context.md` não existe aqui.
-Controlador ativo no fluxo por delegação e histórico integrado das três tarefas;
-saúde do daemon não foi sondada. Não iniciar/reiniciar serviço por instrução
+O usuário informou que **Zed terminou e o controlador foi ativado**. O contrato
+registra lote 1 `e59f2072f8f4` **DONE**, quatro entregas com revisões PASS;
+Temporal exigiu correções R1/R2 e nova revisão PASS. Esses registros não demonstram
+saúde atual do daemon, que não foi sondada. Não iniciar/reiniciar serviço por instrução
 histórica. Outros projetos continuam pausados, inclusive NexoISP/Webchat.
 
 ## Evidência disponível para revisão
+
+A tabela abaixo preserva o estado da consolidação anterior (EV-08–10), não o
+estado mais recente do laboratório. Atualização do lote 2 pelo contrato: gerente
+preparou Ruby 4.0.9, gems e CLI 1.9.1 em Docker isolado; sintaxe de 11 arquivos,
+unitários e preflight PASS. O ensaio real iniciou workflow, mas **falhou no recibo
+`run_id` nil com Temporal SDK 1.10**, antes de concluir o cenário. Isso não é PASS
+de runtime e não foi executado por este trabalhador. A correção do recibo e a
+prova SQL dos contratos existentes de admissão/relay pertencem às outras fatias
+do lote 2; esta entrega apenas reconcilia documentação. EV-01–11 e recibos
+anteriores permanecem preservados, sem modificar evidências consolidadas.
 
 | Entrega | Commit e fonte | Limite obrigatório |
 |---|---|---|
@@ -54,11 +73,21 @@ aprovação independente. O JSON de fronteira está versionado e foi lido. Mobil
 `report.json`, `trace.zip` e capturas não foram transportados pelo Git e estão
 ausentes aqui; hashes e horário exatos constam de EV-10/F0-MOBILE. O controlador
 deve disponibilizar os bytes da worktree produtora para conferência pelo revisor.
-Temporal não produziu históricos/resultados de servidor: não há artefatos a
-promover. Revisor deve consultar artefatos completos se resumo insuficiente;
+Naquela consolidação, Temporal não havia produzido históricos/resultados de
+servidor; o ensaio posterior com falha não deve ser apagado por essa descrição
+histórica. O recibo HOST posterior está versionado e foi conferido nesta tarefa:
+namespace sintético bloqueou cinco ataques em ambas as direções; detalhes e hash
+em [F0-POLITICA-EVIDENCIA](F0-POLITICA-EVIDENCIA.md). Revisor deve consultar artefatos completos se resumo insuficiente;
 ausência de artefato não equivale a PASS. Não repetir verde por rotina.
 
-## Próximo bloco mínimo: obter a primeira execução Temporal
+## Roteiro anterior: obter a primeira execução Temporal
+
+**Roteiro histórico de encaminhamento.** A preparação isolada e a primeira
+tentativa real já ocorreram na gerência, com a falha de recibo descrita acima.
+Não repetir instalação, preflight ou checks verdes por esta documentação.
+O próximo passo Temporal é corrigir o recibo SDK 1.10 e submeter a execução física
+corrigida ao gerente; provas SQL permanecem exigidas. Os comandos abaixo ficam
+como registro, sem execução nesta tarefa e sem nova necessidade administrativa.
 
 1. Revisar independentemente documentação, harness e fronteiras do ensaio. Manter G0 pendente.
 2. Gerente disponibiliza toolchain/headers no ambiente correto ou Ruby 4.0.9 pronto isolado. Os comandos de host abaixo foram devolvidos, **não executados** pelo trabalhador. A instalação isolada já está autorizada; necessidade de host é encaminhamento técnico, não nova pergunta genérica ao proprietário.
@@ -101,7 +130,7 @@ nunca `pkill`, prune ou limpeza global. Checks não executados continuam NOT RUN
 
 | Lacuna | Ação mínima executável / aceite | Natureza |
 |---|---|---|
-| Namespace T24 | Gerente fornece laboratório descartável sem credenciais; executar `unshare --user --map-root-user --mount --pid --fork --mount-proc --net /bin/true`, então `python3 tools/f0/boundary/isolation_probe.py` nesse laboratório | Permissão de ambiente; não é quota, login ou falta de autorização para instalação isolada. Não alterar sysctl/privilegiar produção por tentativa |
+| Namespace T24 | Recibo HOST da gerência já prova o probe sintético bidirecional; integrar a fronteira nos executores Aixle e exercitar os mesmos ataques antes de login | Não repetir o probe aqui; T24 integrado continua pendente. Não alterar sysctl/privilegiar produção por tentativa |
 | E3 admissão/outbox/relay | Exercer serviços existentes da Aixle e inventariar entradas habilitadas UI/workflow/MCP/recovery; falhar entre intenção/processo/handle, confirmar ausência de segundo lançamento e cancel/reconciliação | Integração ainda ausente da prova; futuro PASS do harness não substitui SQL/leases |
 | T36 / MITM / guard global | Projetar stack efêmera com portas/volumes/redes exclusivos e identidades sintéticas; testar sem cookie, viewer alheio, worker e sessão revogada via gateway e acesso direto UI/API/WS/terminal/MCP/preview; WS handshake e ação; negar antes de efeito e impedir worker de administrar central | Implementação/topologia e execução. Sem URL de laboratório, não há curl seguro contra instalação ativa; não inventar teste executado |
 | E5 / T27 / T35 | No shell real isolado, criar perfil conta/modelo e tarefa, reenvio com chave estável e efeito persistido único; reconectar após transição real, conferir etapas/grafo e estado backend | Percurso integrado não executado; reaproveitar componentes. Persona e fixture não fecham perfil/tarefa |
