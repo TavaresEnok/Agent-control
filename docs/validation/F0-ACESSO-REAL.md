@@ -1,5 +1,14 @@
 # F0 E4/T36 — laboratório real de acesso, candidato para execução HOST
 
+Atualização lote5: os comandos de runtime e preparo para Docker 20.10 vigentes
+estão em [F0-LAB-HOST-RECUPERACAO.md](F0-LAB-HOST-RECUPERACAO.md). Exigem
+`--subnet` explícito e, neste host, `--seccomp-compat` opt-in. Usar as imagens já
+preparadas; não reinstalar dependências ou repetir os testes Ruby verdes.
+O histórico abaixo registra a preparação anterior; placeholders de imagens e
+worktree antigos foram substituídos pelos comandos exatos do lote5.
+O recibo físico lote4 confirma MCP 6/42 e cookie 2/9 PASS; a matriz completa E4
+continua **PENDENTE**, assim como G0. Nenhum oráculo foi alterado neste lote.
+
 G0 **PENDENTE**. Implementação nesta worktree, sem execução física Rails/PG/ttyd
 pelo programador: Ruby e Docker ausentes no PATH. A revisão independente e a
 execução pelo gerente são fases posteriores. Os recibos integrados dos lotes
@@ -160,14 +169,18 @@ Antes de remover recursos próprios, o administrador retém em
 gateway.yml efetivo, logs sem corpos/cookies, limites/topologia dos contêineres,
 receipt e manifesto SHA256. Não retém tokens, signing key, dumps, binários ou
 node_modules. O helper confiável gera a signing key só na configuração do
-contêiner efêmero; ela não é incluída nos inspects retidos. O cleanup remove
-somente nomes que este processo conseguiu criar; falhas são registradas.
+contêiner efêmero; ela não é incluída nos inspects retidos. O cleanup exige label
+exclusiva e identidade confirmadas e revalida ambas antes de remover por ID;
+falhas são registradas. O recibo retém CIDR, IDs e perfil seccomp; os inspects
+sanitizados retêm SecurityOpt/CapDrop.
 
 Correção R2: cada contêiner usa `docker create`, registro de ownership após
 criação confirmada e só então `docker start`. Se o start falhar, o contêiner já
 entra na retenção de logs/inspect e na remoção, antes do volume e da rede. Falha
-de create não estabelece ownership: o nome não é adotado nem removido, inclusive
-em colisão posterior ao preflight. A recusa de recursos preexistentes permanece.
+de create não estabelece ownership pelo nome: uma resposta perdida só permite
+retenção/cleanup se o inspect confirmar a label aleatória desta invocação e o ID.
+Colisões com labels estrangeiras não são adotadas. A recusa de recursos
+preexistentes permanece.
 
 Em falha de boot, consultar `web.log` e a linha `boot-or-scenario` com classe e
 localização sanitizadas no report, quando disponível. Menor operação do gerente:

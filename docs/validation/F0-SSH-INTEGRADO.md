@@ -1,5 +1,15 @@
 # F0/G0 — fatia SSH E7 descartável
 
+Atualização lote5: usar os comandos exatos e a alternativa Docker 20.10 de
+[F0-LAB-HOST-RECUPERACAO.md](F0-LAB-HOST-RECUPERACAO.md), com `--subnet`
+obrigatório e `--seccomp-compat` opt-in neste host. As receitas/placeholders
+abaixo são histórico da preparação. Transporte 6/48 e runner 2/12 passaram
+fisicamente no lote4 com compatibilidade explícita; o ensaio completo parou no
+IPAM antes dos contêineres. Matriz E7 e G0 permanecem **PENDENTES**.
+O runtime agora usa `--pull=never`, retém CIDR/IDs/perfil e inspect sanitizado sem
+Config.Env. A remoção revalida label e ID; respostas de criação perdidas só
+permitem cleanup com ownership comprovado, nunca por nome coincidente.
+
 Implementação candidata; revisão independente e gate físico pendentes. G0 permanece
 PENDENTE. Nenhuma execução Ruby/OpenSSH/Docker foi feita pelo executor: estes
 binários estão ausentes nesta sessão. Os checks estáticos não homologam transporte.

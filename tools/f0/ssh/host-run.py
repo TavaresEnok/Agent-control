@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Manager-only physical gate after independent review. No daemon changes/pulls."""
 import base64
+import argparse
 import hashlib
 import json
 import os
@@ -13,18 +14,29 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from lab_network import Ownership, preflight, runtime
 
 
-def main():
-    if len(sys.argv) != 3 or not all(re.fullmatch(r"sha256:[a-f0-9]{64}", x) for x in sys.argv[1:]):
-        raise SystemExit("Usage: python3 tools/f0/ssh/host-run.py CENTRAL_IMAGE_ID TARGET_IMAGE_ID")
+def main(argv=None):
+    parser = argparse.ArgumentParser(usage="Usage: %(prog)s CENTRAL_IMAGE_ID TARGET_IMAGE_ID --subnet CIDR [--seccomp-compat]")
+    parser.add_argument("central")
+    parser.add_argument("target")
+    parser.add_argument("--subnet", required=True)
+    parser.add_argument("--seccomp-compat", action="store_true")
+    options = parser.parse_args(argv)
+    images = (options.central, options.target)
+    if not all(re.fullmatch(r"sha256:[a-f0-9]{64}", x) for x in images):
+        parser.error("immutable local image IDs required")
+    def read(*args):
+        return subprocess.run(args, capture_output=True, check=True, timeout=30).stdout.decode()
+    subnet = preflight(options.subnet, read)
     token = secrets.token_hex(16)
     name = "f0-ssh-" + token
     evidence = ROOT / "docs/validation/artifacts/ssh" / name
     evidence.mkdir(parents=True, mode=0o700)
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C"}
     containers = []
-    network = False
     commands = []
     cleanup_errors = []
     code = 1
@@ -35,26 +47,32 @@ def main():
     def call(*args, timeout=30):
         commands.append(list(args))
         result = subprocess.run(args, env=env, cwd=ROOT, capture_output=True, timeout=timeout)
-        with (evidence / "operations.log").open("ab") as log:
-            log.write(result.stdout + result.stderr)
+        # Inspect is parsed in memory only: Config.Env must never enter evidence.
+        if "inspect" not in args:
+            with (evidence / "operations.log").open("ab") as log:
+                log.write(result.stdout + result.stderr)
         result.check_returncode()
         return result.stdout.decode().strip()
 
+    ownership = Ownership(call, token)
     try:
-        for image in sys.argv[1:]:
+        for image in images:
             call("docker", "image", "inspect", image)
-        for path in [ROOT / "app/services/coder/ssh_runner.rb", ROOT / "app/services/agent_control/open_ssh_transport.rb", *sorted((ROOT / "tools/f0/ssh").glob("*")), *sorted((ROOT / "test/f0/ssh").glob("*")), ROOT / "test/services/agent_control/open_ssh_transport_test.rb", ROOT / "test/services/coder/ssh_runner_test.rb", ROOT / "docs/validation/F0-SSH-INTEGRADO.md"]:
+        for path in [ROOT / "app/services/coder/ssh_runner.rb", ROOT / "app/services/agent_control/open_ssh_transport.rb", ROOT / "tools/f0/lab_network.py", *sorted((ROOT / "tools/f0/ssh").glob("*")), *sorted((ROOT / "test/f0/ssh").glob("*")), ROOT / "test/services/agent_control/open_ssh_transport_test.rb", ROOT / "test/services/coder/ssh_runner_test.rb", ROOT / "docs/validation/F0-SSH-INTEGRADO.md"]:
             if path.is_file():
                 target = evidence / "code" / path.relative_to(ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(path.read_bytes())
-        call("docker", "network", "create", "--internal", "--label", "agent-control.fixture=" + token, name)
-        network = True
-        for role, image in zip(("central", "target"), sys.argv[1:]):
+        ownership.create("network", name, "network", "create", "--internal", "--subnet", subnet,
+                         "--label", "agent-control.fixture=" + token, name)
+        ownership.require("network", name)
+        for role, image in zip(("central", "target"), images):
             container = name + "-" + role
-            args = ["docker", "create", "--name", container, "--label", "agent-control.fixture=" + token,
+            args = ["create", "--pull=never", "--name", container, "--label", "agent-control.fixture=" + token,
                     "--network", name, "--network-alias", role, "--memory", "1g", "--cpus", "1", "--pids-limit", "256",
                     "--tmpfs", "/lab:rw,mode=0755", "--security-opt", "no-new-privileges:true"]
+            if options.seccomp_compat:
+                args += ["--security-opt", "seccomp=unconfined"]
             if role == "central":
                 args += ["--mount", f"type=bind,source={ROOT},target=/work,readonly",
                          "--mount", f"type=bind,source={evidence},target=/evidence", "--workdir", "/work",
@@ -62,7 +80,8 @@ def main():
             args += [image]
             if role == "central":
                 args += ["sleep", "infinity"]
-            call(*args)
+            ownership.create("container", container, *args)
+            ownership.require("container", container)
             containers.append(container)
             call("docker", "start", container)
         central, target = containers
@@ -105,26 +124,36 @@ def main():
             (evidence / (Path(script).stem + ".log")).write_text(output + "\n")
         code = 0
     finally:
+        containers = [resource for kind, resource in ownership.resources if kind == "container"]
         # Capture logs/inspect/job journal before removing exclusive resources.
-        write("gate.json", dict(exit_code=code, token=token, physical="PASS" if code == 0 else "FAIL", forced_channel_drop="NOT RUN"))
+        write("gate.json", dict(exit_code=code, token=token, physical="PASS" if code == 0 else "FAIL", forced_channel_drop="NOT RUN",
+                                subnet=subnet, seccomp="unconfined" if options.seccomp_compat else "docker-default",
+                                resources=ownership.receipt()))
         for container in reversed(containers):
-            for command in [("docker", "logs", container), ("docker", "inspect", container)]:
+            for command in [("docker", "logs", container)]:
                 try:
                     call(*command)
                 except Exception as exc:
                     cleanup_errors.append(str(exc))
+            try:
+                data = json.loads(call("docker", "container", "inspect", container))[0]
+                write(container + "-runtime.json", runtime(data))
+            except Exception as exc:
+                cleanup_errors.append(type(exc).__name__)
             if container.endswith("-target"):
                 try:
                     call("docker", "cp", container + ":/tmp/aixle-jobs", str(evidence / "journal"))
                 except Exception as exc:
                     cleanup_errors.append(str(exc))
+        # Retain every container's effective profile before the first removal.
+        for container in reversed(containers):
             try:
-                call("docker", "rm", "-f", container)
+                ownership.remove("container", container)
             except Exception as exc:
                 cleanup_errors.append(str(exc))
-        if network:
+        if ("network", name) in ownership.resources:
             try:
-                call("docker", "network", "rm", name)
+                ownership.remove("network", name)
             except Exception as exc:
                 cleanup_errors.append(str(exc))
         write("cleanup.json", dict(errors=cleanup_errors, passed=not cleanup_errors))
