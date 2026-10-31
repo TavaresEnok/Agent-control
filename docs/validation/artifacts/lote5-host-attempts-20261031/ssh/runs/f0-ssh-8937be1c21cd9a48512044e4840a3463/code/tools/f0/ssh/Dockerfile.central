@@ -1,0 +1,6 @@
+ARG BASE=sha256:51e6a0811e25f8987d80eaab3fcec28c8c1c11fbaa07995830eca22cb3a5e116
+FROM ${BASE}
+# Manager builds this isolated dependency image before the offline gate.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client git && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT []
+CMD ["sleep", "infinity"]

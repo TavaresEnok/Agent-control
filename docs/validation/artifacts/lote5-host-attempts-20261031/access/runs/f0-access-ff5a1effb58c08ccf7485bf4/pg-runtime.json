@@ -1,0 +1,68 @@
+{
+  "id": "2b3ef537cb275a59d6f9012533b32e17c6df46ac2c92551f36c675eadb60a5de",
+  "NetworkSettings": {
+    "Bridge": "",
+    "SandboxID": "f61b46a3bbc33097ca1822f99992839cac42accd70e7b98d450154063854e5a9",
+    "HairpinMode": false,
+    "LinkLocalIPv6Address": "",
+    "LinkLocalIPv6PrefixLen": 0,
+    "Ports": {},
+    "SandboxKey": "/var/run/docker/netns/f61b46a3bbc3",
+    "SecondaryIPAddresses": null,
+    "SecondaryIPv6Addresses": null,
+    "EndpointID": "",
+    "Gateway": "",
+    "GlobalIPv6Address": "",
+    "GlobalIPv6PrefixLen": 0,
+    "IPAddress": "",
+    "IPPrefixLen": 0,
+    "IPv6Gateway": "",
+    "MacAddress": "",
+    "Networks": {
+      "f0-access-ff5a1effb58c08ccf7485bf4": {
+        "IPAMConfig": null,
+        "Links": null,
+        "Aliases": [
+          "pg",
+          "2b3ef537cb27"
+        ],
+        "NetworkID": "cc64e53c801e53df4c8ff99d10fc26aee24f688f8350aad53dbc728b93d433fa",
+        "EndpointID": "fadc8ea82db06f2c104cd2e028170d60762e1695188a3baf35aaa56824373ebe",
+        "Gateway": "172.28.96.1",
+        "IPAddress": "172.28.96.2",
+        "IPPrefixLen": 28,
+        "IPv6Gateway": "",
+        "GlobalIPv6Address": "",
+        "GlobalIPv6PrefixLen": 0,
+        "MacAddress": "02:42:ac:1c:60:02",
+        "DriverOpts": null
+      }
+    }
+  },
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 3530316,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-10-31T20:23:41.230944027Z",
+    "FinishedAt": "0001-01-01T00:00:00Z"
+  },
+  "limits": {
+    "Memory": 536870912,
+    "NanoCpus": 1000000000,
+    "PidsLimit": 256,
+    "PortBindings": {},
+    "SecurityOpt": [
+      "no-new-privileges",
+      "seccomp=unconfined"
+    ],
+    "CapDrop": [
+      "ALL"
+    ]
+  }
+}

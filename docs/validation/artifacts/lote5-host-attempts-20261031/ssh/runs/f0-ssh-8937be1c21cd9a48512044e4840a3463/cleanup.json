@@ -1,0 +1,6 @@
+{
+  "errors": [
+    "Command '('docker', 'cp', 'f0-ssh-8937be1c21cd9a48512044e4840a3463-target:/tmp/aixle-jobs', '/home/enok/srv_projetos/runtime/agent-control/g0-ssh-lote5-20261031/docs/validation/artifacts/ssh/f0-ssh-8937be1c21cd9a48512044e4840a3463/journal')' returned non-zero exit status 1."
+  ],
+  "passed": false
+}

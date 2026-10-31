@@ -1,0 +1,11 @@
+{
+  "scope": "Administrative public fixture transfer probe only; no SSH connection, private key export or provider credential",
+  "container": "agent-control-tmpfs-probe-e110a0897da3",
+  "exec_read_public_bytes": 99,
+  "exec_read_public_sha256": "5db4e4b8bb392744a4ad0ef2d804c6142dee3bd0ad9a282060235d0f346b5aa7",
+  "docker_cp_exit": 1,
+  "docker_cp_stderr": "Error: No such container:path: agent-control-tmpfs-probe-e110a0897da3:/lab/host_key.pub\n",
+  "exec_write_exit": 0,
+  "exec_roundtrip_same": true,
+  "cleanup_exit": 0
+}

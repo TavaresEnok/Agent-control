@@ -1,0 +1,31 @@
+{
+  "status": "NOTRUN",
+  "fixture": "e890e3a32b9099067ef127b9",
+  "images": [
+    "sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242",
+    "sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222",
+    "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
+  ],
+  "subnet": "172.28.96.0/28",
+  "seccomp": "unconfined",
+  "error_class": "CalledProcessError",
+  "resources": [
+    {
+      "kind": "network",
+      "name": "f0-access-e890e3a32b9099067ef127b9",
+      "id": "3c97bfbd12494dc16a2011650f2ef623d7decd9c359237a08e8ecd07f9f34091"
+    },
+    {
+      "kind": "volume",
+      "name": "f0-access-e890e3a32b9099067ef127b9",
+      "id": "f0-access-e890e3a32b9099067ef127b9"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-e890e3a32b9099067ef127b9-pg",
+      "id": "5283e46a46e70367fdcfe98c03b9d50945a053d8e35b734da584ee0fa982fdca"
+    }
+  ],
+  "cleanup_status": "PASS",
+  "cleanup_failures": []
+}

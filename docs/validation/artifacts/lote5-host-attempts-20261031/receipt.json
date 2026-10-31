@@ -1,0 +1,21 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T20:29:46.367005+00:00",
+  "candidate_commit": "660e6bddc5e5516181f357976fc50cf81fed0748",
+  "network_seccomp": "Explicit internal subnets and opt-in compatibility worked; no global changes",
+  "access": {
+    "initial_run": "NOTRUN source Gemfile.lock unreadable due administrative docker cp UID1000/mode600 under cap-dropALL",
+    "administrative_fix": "Only /work ownership normalized0:0 to match DockerCOPY semantics; code/auth/modes unchanged",
+    "corrected_image": "sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242",
+    "second_run": "NOTRUN pre-web CalledProcessError with only PG created; cleanupPASS",
+    "diagnosis": "PG log shows temporary Unix-socket bootstrap then shutdown then final TCP server; current Unix pg_isready can observe temporary server. Need final TCP readiness and sanitized phase/stderr evidence; not an authorization result."
+  },
+  "ssh": {
+    "status": "FAIL setup, remote transport NOTRUN",
+    "cause": "docker cp cannot read /lab/host_key.pub on target tmpfs although docker exec test/cat can",
+    "public_transfer_probe": "exec read99bytes, stdin write and same-byte readback exit0; docker cp failed1; own probe cleanup0",
+    "cleanup": "owned network/containers removed; journal retention error because no job existed yet, currently conflated with cleanupfailure"
+  },
+  "required_next": "Delegate fixture IO/readiness corrections and independent review, then physical run; no gate promotion",
+  "gate": "G0 PENDENTE"
+}

@@ -1,0 +1,25 @@
+{
+  "exit_code": 1,
+  "token": "8937be1c21cd9a48512044e4840a3463",
+  "physical": "FAIL",
+  "forced_channel_drop": "NOT RUN",
+  "subnet": "172.28.96.16/28",
+  "seccomp": "unconfined",
+  "resources": [
+    {
+      "kind": "network",
+      "name": "f0-ssh-8937be1c21cd9a48512044e4840a3463",
+      "id": "586a85026e4372e3482a8e73ce6fd5319cc87af85e2805a7a464a5a18a1ddb7f"
+    },
+    {
+      "kind": "container",
+      "name": "f0-ssh-8937be1c21cd9a48512044e4840a3463-central",
+      "id": "3f95de8ceb1dc6f97425bcf18fbddc3f178f22b83cce75f0a7afbfff507fd00f"
+    },
+    {
+      "kind": "container",
+      "name": "f0-ssh-8937be1c21cd9a48512044e4840a3463-target",
+      "id": "cd16b1af311ddc70b5809840222bb17788db7226ceabb32fb22301866a00f042"
+    }
+  ]
+}

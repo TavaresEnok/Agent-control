@@ -1,0 +1,43 @@
+{
+  "status": "NOTRUN",
+  "fixture": "ff5a1effb58c08ccf7485bf4",
+  "images": [
+    "sha256:77b44cec68ac9029e10f15f7b1c497502f9e05796985becec070f4910b8b0b9b",
+    "sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222",
+    "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
+  ],
+  "subnet": "172.28.96.0/28",
+  "seccomp": "unconfined",
+  "error_class": "RuntimeError",
+  "resources": [
+    {
+      "kind": "network",
+      "name": "f0-access-ff5a1effb58c08ccf7485bf4",
+      "id": "cc64e53c801e53df4c8ff99d10fc26aee24f688f8350aad53dbc728b93d433fa"
+    },
+    {
+      "kind": "volume",
+      "name": "f0-access-ff5a1effb58c08ccf7485bf4",
+      "id": "f0-access-ff5a1effb58c08ccf7485bf4"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-ff5a1effb58c08ccf7485bf4-pg",
+      "id": "2b3ef537cb275a59d6f9012533b32e17c6df46ac2c92551f36c675eadb60a5de"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-ff5a1effb58c08ccf7485bf4-terminal",
+      "id": "bf1e786f9cdcfcf423fdc8a5ad4277f49138af0a2a5c256ac9f09adc1a6a1f18"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-ff5a1effb58c08ccf7485bf4-web",
+      "id": "834da8e8691f2461fb0f9edbdb1479ad4cf86eba5bc3409270a8f60e873a7072"
+    }
+  ],
+  "missing_report.json": true,
+  "missing_gateway.yml": true,
+  "cleanup_status": "PASS",
+  "cleanup_failures": []
+}

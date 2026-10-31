@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/enok/srv_projetos/runtime/agent-control/g0-ssh-lote5-20261031/tools/f0/ssh/host-run.py", line 166, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/enok/srv_projetos/runtime/agent-control/g0-ssh-lote5-20261031/tools/f0/ssh/host-run.py", line 105, in main
+    call("docker", "cp", container + ":" + source, str(temp / filename))
+  File "/home/enok/srv_projetos/runtime/agent-control/g0-ssh-lote5-20261031/tools/f0/ssh/host-run.py", line 54, in call
+    result.check_returncode()
+  File "/home/enok/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/subprocess.py", line 502, in check_returncode
+    raise CalledProcessError(self.returncode, self.args, self.stdout,
+subprocess.CalledProcessError: Command '('docker', 'cp', 'f0-ssh-8937be1c21cd9a48512044e4840a3463-target:/lab/host_key.pub', '/tmp/f0-ssh-8937be1c21cd9a48512044e4840a3463wdo7f453/host.pub')' returned non-zero exit status 1.
