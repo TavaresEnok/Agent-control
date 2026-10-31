@@ -11,6 +11,14 @@
 
 Nenhuma credencial real, token ou dado sensível foi lido, copiado ou incluído neste relatório. Nenhum serviço existente ou instância do Paseo foi alterado, reiniciado ou consultado com chamadas de IA.
 
+**Atualização lote 2:** EV-01–11 são preservados abaixo sem reclassificação
+retroativa. O estado vigente é complementado por EV-12–15: namespace HOST
+sintético positivo, Temporal inicial FAIL, correção/SQL ainda sem execução
+física da candidata e política exclusiva efetiva. Menções anteriores à exclusiva
+como apenas histórica são retificadas por EV-15. Worktree atual
+`task-a9c3be73bab4-g0-lote2-status`, HEAD inicial
+`533e08cc68e03e00c3328f1f7a462c44acaab261`.
+
 ---
 
 ## EV-01 — Ambiente local e ferramentas instaladas
@@ -214,3 +222,101 @@ Nenhuma credencial real, token ou dado sensível foi lido, copiado ou incluído 
 - **Política:** a exclusiva histórica (gerente Codex antigo Sol Alto; Codex novo Sol Médio para implementação/revisão separadas, sem fallback) fica registrada como origem dos relatórios. A atualização administrativa v3 declara substituir regras históricas de modelo/esforço/conta/substituição; o controlador deve aplicar a política vigente ao despacho seguinte, preservando sessão independente de revisão e proibição de Astra. Este executor já delegado permanece no escopo Codex programador, sem criar agentes/trocar conta/modelo ou fallback. Não alterar a cadeia de produto por interpretação desta documentação. Ver detalhamento em F0-RETOMADA.
 - **Pausas:** demais projetos (`Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat`) continuam pausados; nenhuma autorização de retomada inferida. Nenhum serviço/produção/credencial real acessado, nenhum deploy/push/merge/commit efetuado pelo executor.
 - **Check desta entrega:** `git diff --check` obrigatório; resultado final registrado em `.paseo-result.json` (metadado não deve ser commitado). Não repetidas suítes verdes; leituras/diffs não equivalem a revisão independente. G0 **PENDENTE**, implementação documental encaminhada à revisão independente pelo controlador.
+
+## EV-12 — T24 sintético HOST: namespaces positivos, HOME insuficiente
+
+- **Execução recebida da gerência**, não executada por este trabalhador:
+  [recibo HOST](validation/artifacts/F0-HOST-BOUNDARY-20261031.json), incorporado
+  em `884f2187ba8224309b381b994c44a971981fbb8f`; observador
+  `manager_host_execution_of_reviewed_harness`, código
+  `5d22773c97d17101e4263678aad3077cb96a5331`, instante
+  `2026-10-31T14:56:52.293514+00:00`, comando
+  `python3 tools/f0/boundary/isolation_probe.py`, exit 0, stderr vazio.
+- **Conferência documental local:** SHA-256
+  `c1a16005d3d8a4daa71830d042638a0c5ccff13794e144d311877fb7634afb91`.
+  Dois holders sintéticos concorrentes, UID 1000, kernel
+  `5.17.15-pnetlab-uksm-2`. Leitura própria true nas duas direções;
+  `absolute/symlink/process_root/process_fd/process_environ`: HOME todos
+  LEAKED, namespaces todos BLOCKED, `namespace_executed:true`.
+- **Limites:** complementa EV-09 (`Operation not permitted`), sem apagar essa
+  falha. `synthetic_only:true`, `real_codex:NOT RUN`; não prova sandbox completo,
+  T01, duas contas autenticadas, isolamento integrado Aixle ou T36.
+  Hash identifica bytes recebidos, não atesta independentemente o host.
+
+## EV-13 — Temporal real inicial FAIL e correção SDK 1.10 implementada
+
+- **Execução da gerência preservada** no commit
+  `2471a89fe4fbdb4b9f439ac37fcd23593baed018`, diretório
+  [temporal-host-initial-20261031](validation/artifacts/temporal-host-initial-20261031/receipt.json):
+  receipt, manifest, results, host-provenance, worker-log e lock resolvido.
+  Proveniência em `2026-10-31T14:57:43.124255+00:00`, código `5d22773c…`,
+  Ruby 4.0.9/SDK 1.10.0/CLI 1.9.1, execução Docker sem rede. Sintaxe de 11
+  arquivos, ProcessProbe unit, LaunchEvidence unit e preflight: exit 0.
+  Integração: exit 1, `status:FAIL`, `scenarios:[]`. Start aceito, mas recibo
+  `run_id:nil`; handle tinha `result_run_id`/`first_execution_run_id` preenchidos.
+  **Nenhum cenário passou.** SHA-256 receipt
+  `2f01ecd540f9130a175079f16e76780f6b9fd03a8733e6a41b916e984c71866f`;
+  results `e1ffe0b531044971d625c09a053b35b54144543865d5638c356046cd9edd54fd`.
+- **Código/documentação:** entrega
+  `4f7e477042646e66ae8c1a918ca71cbe37851bd0` usa
+  `handle.result_run_id` no recibo de `TemporalService.start_workflow`, conforme
+  semântica SDK 1.10, sem describe/fallback/mutação do handle. Teste dirigido usa
+  WorkflowHandle SDK com `run_id:nil`; mock Rails corrigido; lock isolado do
+  laboratório incorporado. Assertions do ensaio preservadas.
+- **Runtime corrigido NOT RUN no executor.** Checks sintáticos disponíveis
+  relatados na entrega não substituem Ruby/SDK real; teste dirigido SDK e suíte
+  Rails não executados. Laboratório pronto não é PASS da candidata.
+  Comando exato pós-revisão e retenção em
+  [F0-TEMPORAL](validation/F0-TEMPORAL.md); gerar recibo novo, sem sobrescrever
+  o FAIL. Imagem Ruby base registrada não identifica por si a imagem derivada.
+
+## EV-14 — Harness SQL dos contratos existentes: implementado, físico pendente
+
+- **Código/documentação:** entrega
+  `dca0e310a433bec04130dcb1472e55a7c0395a13`,
+  [F0-ADMISSAO-SQL](validation/F0-ADMISSAO-SQL.md),
+  `tools/f0/admission/` e `test/f0/admission/`. Importa serviços/models reais de
+  admissão, budget, relay, reconciler, ledger e activity, cinco migrations com
+  índices/FKs; schema mínimo aleatório em PG descartável identificado. Sem
+  Rails boot, dispatcher paralelo ou alteração de produto.
+- Nove cenários previstos: concorrência/FIFO/teto dois; retry com mesmo
+  permit/ledger único; exec incerto sem replay; claim saudável; lease expirado;
+  start aceito/ack perdido; cancelamento com reserva até ausência contínua;
+  transporte desconhecido; execução fechada/claim parado. `session_admissions`
+  é fila durável de lançamento; `session_runtime_operations` é ledger de
+  fencing/resultado, **não outbox genérico**.
+- **Limites:** sessões/domínio periférico mínimos; preflight/manifest/registry,
+  transporte Temporal e observação de runtime simulados. Não prova deduplicação
+  real do workflow, containers, limites SaaS/companhia ou todos os tenants.
+- [worker-checks](validation/artifacts/admission/worker-checks.json), SHA-256
+  `1f5a44e7bf6b18e843e7f7b79c79d4eed3cbb1ed756f41e559e2b65224032ce2`:
+  gramática de oito arquivos e whitespace PASS relatados; Ruby/bundle/Docker
+  ausentes. Guard unit, preflight PG e nove cenários SQL **pendentes da gerência**,
+  sem recibo físico PASS. Costura PG+Temporal real não implementada nesta fatia;
+  critérios concretos e sequência em [F0-LOTE2](validation/F0-LOTE2.md).
+
+## EV-15 — Política efetiva, continuidade e consolidação do lote 2
+
+- Fonte: contrato autocontido do controlador e entrega documental
+  `85e9a5d69570a08e9976fb6c4d5bafe485c95474`,
+  [F0-POLITICA-EVIDENCIA](validation/F0-POLITICA-EVIDENCIA.md). Não houve inspeção
+  nem alteração de configuração do host. `project_role_policies` id
+  `agent-control` em `model-limits.json` cobre
+  `/home/enok/Documentos/projetos/agent-control` e
+  `/home/enok/srv_projetos/workspace/agent-control`: manager
+  `codex/gpt-6.1-sol high`, programmer/reviewer
+  `codex-programmer/gpt-6.1-sol medium`, sessões independentes;
+  `automatic_fallback:false`,
+  `quota_behavior:wait_for_same_account_positive_evidence`. A cadeia global
+  **não substitui** a regra exclusiva efetiva, que não é obsoleta.
+- Lote 1 `e59f2072f8f4` DONE/quatro revisões PASS conforme contrato; histórico
+  Temporal R1/R2 e nova revisão PASS preservado. Não há IDs de revisão do lote 2
+  neste recibo documental: incorporação Git não é certificação de revisão.
+  Controlador verifica revisões das fatias e encaminha esta consolidação para
+  revisão independente posterior, sem confundir implementação com gate.
+- Zed terminou conforme usuário; origem preservada, sem cópia de produto para
+  lá. Outros planos seguem pausados. Sem agentes, sudo, serviços, contas reais,
+  produção, migração, API paga, deploy, push, merge ou commit nesta tarefa.
+  Somente cinco documentos autorizados e `.paseo-result.json` de encaminhamento.
+  Check obrigatório `git diff --check` registrado no resultado; nenhuma suíte
+  repetida, nenhum runtime novo alegado. G0 **PENDENTE**, F1 não iniciada.
