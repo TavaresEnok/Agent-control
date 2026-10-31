@@ -1,0 +1,32 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T21:30:42.136898+00:00",
+  "source": "/home/enok/srv_projetos/config/model-limits.json",
+  "project_role_policy": {
+    "id": "agent-control",
+    "roots": [
+      "/home/enok/Documentos/projetos/agent-control",
+      "/home/enok/srv_projetos/workspace/agent-control"
+    ],
+    "roles": {
+      "manager": {
+        "model": "codex/gpt-6.1-sol",
+        "thinking": "high"
+      },
+      "programmer": {
+        "model": "codex/gpt-6.1-terra",
+        "thinking": "medium"
+      },
+      "reviewer": {
+        "model": "codex/gpt-6.1-sol",
+        "thinking": "medium"
+      }
+    },
+    "quota_behavior": "wait_for_same_account_positive_evidence",
+    "automatic_fallback": false,
+    "temporary_reason": "User: dedicated Codex exhausted; original account temporarily covers all three roles. Explicit hold; no inference or development authorized."
+  },
+  "session_developer_policy": "manager codex/gpt-6.1-sol high; programmer codex/gpt-6.1-terra medium; reviewer codex/gpt-6.1-sol medium; no substitutes; independent sessions; quota waits for same account positive evidence",
+  "owner_latest_instruction": "pronto, termine esses ultimos trabalhos faltante e pare! vou colocar outra ia para terminar tudo, então apenas faça o que já estava terminando de fazer!",
+  "scope": "Finish only current documentation/review, retain evidence, persist pause and stop controller; no next batch or security implementation."
+}
