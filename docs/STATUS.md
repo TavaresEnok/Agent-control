@@ -1,3 +1,25 @@
+# Encerramento operacional vigente — 2026-10-31
+
+O proprietário mandou fechar apenas o lote em curso e parar para outra IA.
+Plano `7807ea5f00cd` DONE, duas entregas integradas, revisão independente PASS.
+Controlador `paseo-flow.service` parado; pausa global persistente ativa;
+zero tarefas ativas na fila. Outros projetos continuam pausados. Nenhum próximo lote iniciado.
+
+Prontidão física: 7 testes/77 asserções PASS. Matriz de acesso: 81 PASS,
+4 FAIL, 1 NOTRUN; cleanup PASS. G0 PENDENTE, F1 não iniciada.
+Falhas e limites completos em [PASEO-ENCERRAMENTO](PASEO-ENCERRAMENTO.md).
+
+Política operacional ATUAL, observada pela gerência em `model-limits.json`
+e retida no clone no commit `ae1d432`: gerente `codex/gpt-6.1-sol high`,
+programador `codex/gpt-6.1-terra medium`, revisor `codex/gpt-6.1-sol medium`,
+sessões independentes, sem substitutos; cota aguarda recuperação confirmada
+da mesma conta. Este registro posterior substitui afirmações de vigência
+baseadas no contrato histórico preservado abaixo. Novo comando humano explícito
+é necessário para qualquer retomada, inclusive após evento automático ou recuperação de cota.
+
+---
+## Registro anterior preservado
+
 # STATUS — Agent Control
 
 **Atualização:** 2026-10-31. **Fase: F0 em fechamento de provas; G0 PENDENTE. F1 não iniciada.**

@@ -1,0 +1,140 @@
+{
+  "id": "7807ea5f00cd",
+  "objective": "Agent Control F0/G0 lote7: remover a corrida de prontidão do gateway que ainda impede a matriz real de acesso, preservando auth/CSRF/oráculos; consolidar SSH físico PASS sem repetir. Sem F1/contas reais, outros projetos pausados e revisão independente obrigatória.",
+  "state": "done",
+  "branch": "orchestration/7807ea5f00cd",
+  "plan_hash": "f1e3e2177c78846a704c51159c3eb4494cd5dff4df9e7a12d7719caa2e7a5ffd",
+  "tasks": [
+    {
+      "id": "e5fca72c9242",
+      "task": "g0-access-gateway-readiness",
+      "state": "done",
+      "attempt": 2,
+      "model": "codex-programmer/gpt-6.1-sol",
+      "review_model": "codex-programmer/gpt-6.1-sol",
+      "agent_id": "69df4ffd-d975-4a3b-9014-a9645838304a",
+      "branch": "task/7807ea5f00cd/g0-access-gateway-readiness",
+      "commit": "9e6392911f75d02422f043115220ea62898c184d",
+      "selection_reason": "project_exclusive_role",
+      "summary": "Implementação candidata de prontidão preservada; corrigido R1 do procedimento offline: build sem RUN Ruby, sintaxe e teste novo em contêiner separado por ID imutável com rede none e seccomp/no-new-privileges explícitos, retenção de comandos/IDs/hashes/saída/exit/cleanup e gate antes da matriz. Sem commit, Docker, SSH ou execução física. Revisão independente e G0 permanecem pendentes.",
+      "review": {
+        "decision": "pass",
+        "issues": [],
+        "summary": "Revisão independente do diff completo, dos três arquivos novos e do contexto relevante concluída sem problema bloqueante identificado. Prontidão usa deadline monotônico, orçamento restante e limite da resposta inteira; retenta somente transporte em GETs seguros, exige controles positivos de backend e rota real do gateway e registra falhas sanitizadas. Matrizes, auth/CSRF, topologia e negativos ttyd/WS preservados. Host separa tentativas recuperadas de diagnóstico final e retém resumo de startup. Procedimento offline enumera overlay, ownership 0:0, base existente, CMD, hashes/ID, teste separado com compatibilidade explícita, retenção e gate antes da matriz. Verificação nesta revisão: python3 -B test/f0/access/host_test.py PASS (23 testes); git diff --check PASS; bash -n do bloco shell documentado PASS. bundle exec ruby test/f0/access/readiness_test.rb NOTRUN (exit 127, bundle ausente; ruby também ausente no PATH). A aprovação é da implementação e do procedimento; sintaxe/testes Ruby no contêiner candidato e uma matriz física pela gerência continuam obrigatórios, na sequência documentada. Docker/SSH não executados, implementação não modificada e G0 permanece PENDENTE."
+      },
+      "tests": [
+        {
+          "command": [
+            "python3",
+            "-B",
+            "test/f0/access/host_test.py"
+          ],
+          "exit_code": 0,
+          "seconds": 1.4721062183380127
+        },
+        {
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "exit_code": 0,
+          "seconds": 0.6069715023040771
+        }
+      ],
+      "error": ""
+    },
+    {
+      "id": "0a9379d71eb9",
+      "task": "g0-lote7-status",
+      "state": "done",
+      "attempt": 3,
+      "model": "codex/gpt-6.1-terra",
+      "review_model": "codex/gpt-6.1-sol",
+      "agent_id": "3dab3463-8c27-4a16-860d-9ac8d4b89054",
+      "branch": "task/7807ea5f00cd/g0-lote7-status",
+      "commit": "17277994a7a5fd0cd6c53cf596e86409ff0c0abb",
+      "selection_reason": "project_exclusive_role",
+      "summary": "Consolidação documental do SSH físico limitado e da matriz de acesso, preservando evidência posterior, pausas e política exclusiva do contrato. Revisão independente permanece para o controlador.",
+      "review": {
+        "decision": "pass",
+        "issues": [],
+        "summary": "Revisão independente dos quatro documentos, incluindo F0-LOTE7 novo, diff completo e resultado do executor. Recibos dirigidos do lote6 confirmam SSH físico PASS limitado, SHA central/observado, bundle/job/uma execução, pin negativo, segredo sintético ausente, journal e cleanup; acesso anterior permanece NOTRUN por OpenTimeout. Evidência posterior consultada no commit 3e0b77f confirma candidata e overlay identificados, readiness PASS, matriz 81 PASS/4 FAIL/1 NOTRUN e cleanup PASS, sem ocultar ttyd/WS nem presumir aprovação de acesso. Contexto de readiness e receita conferidos. G0 pendente, F1 não iniciada, RF55/RF46/T28, limites, histórico e parada para handoff preservados. git diff --check PASS (exit 0). Nenhum código de implementação alterado ou teste físico/verde anterior repetido. Parecer aprova somente esta consolidação documental, não os gates operacionais."
+      },
+      "tests": [
+        {
+          "command": [
+            "python3",
+            "-B",
+            "test/f0/access/host_test.py"
+          ],
+          "exit_code": 0,
+          "seconds": 1.7579717636108398
+        },
+        {
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "exit_code": 0,
+          "seconds": 0.6748213768005371
+        }
+      ],
+      "error": ""
+    }
+  ],
+  "omitted_tasks": 0,
+  "task_counts": {
+    "done": 2
+  },
+  "event_counts": {
+    "plan_submitted": 1,
+    "plan_approved": 1,
+    "model_selected": 11,
+    "agent_started": 11,
+    "validation_running": 7,
+    "tests_executed": 5,
+    "worker_archived": 11,
+    "independent_review_requested": 5,
+    "correction_requested": 3,
+    "integration_prepared": 2,
+    "integration_tests_executed": 2,
+    "task_integrated": 2,
+    "reviewer_quota_noted": 1,
+    "model_availability_wait": 19,
+    "job_paused": 1,
+    "job_resumed": 1,
+    "job_completed": 1,
+    "completed_workspace_archived": 2,
+    "notification_batch_sent": 1
+  },
+  "decisions": [
+    {
+      "kind": "correction_requested",
+      "data": {
+        "attempt": 1,
+        "error": "Revisão reprovou: {\"decision\": \"fail\", \"issues\": [{\"details\": \"O Dockerfile proposto executa bundle exec ruby test/f0/access/readiness_test.rb em RUN, mas docker build na linha 94 não oferece o perfil de compatibilidade. F0-LAB-HOST-RECUPERACAO.md registra ThreadError EPERM com Ruby4/glibc2.41 sob seccomp padrão do Docker20 e informa que esse host rejeita docker build --security-opt. O teste novo usa minitest/autorun e Timeout, portanto depende de threads. O --seccomp-compat do host.py somente atua no runtime posterior e não corrige o RUN. A sequência entregue pode parar antes de produzir a candidata/teste exigidos, repetindo uma incompatibilidade já conhecida.\", \"file\": \"docs/validation/F0-ACESSO-PRONTIDAO.md\", \"id\": \"R1\", \"line\": 88, \"priority\": \"P1\", \"requested_change\": \"Documentar uma sequência offline compatível: construir a derivada somente com COPY/CMD, sem RUN Ruby, e executar sintaxe e apenas o teste novo em contêiner separado da imagem candidata, com rede none, base/ID local imutável e seccomp=unconfined/no-new-privileges explícitos. Reter comando, ID, hashes, saída e exit do teste; somente após sucesso executar uma matriz revisada. Preservar ownership 0:0, CMD, recibos e cleanup. Não reinstalar gems nem repetir os testes verdes anteriores.\", \"summary\": \"O preparo offline executa Ruby sob o seccomp de build incompatível com o host conhecido.\", \"validation\": \"Conferência das instruções novas contra F0-LAB-HOST-RECUPERACAO.md, especialmente as seções de compatibilidade e preparo no Docker20. Execução física não realizada nesta revisão.\"}], \"summary\": \"Revisão independente de todos os quatro arquivos rastreados alterados, três arquivos novos, contexto relevante de run.rb/host.py, rotas/configuração e evidência física lote6. A implementação usa deadline monotônico, GETs seguros, evidência positiva, diagnóstico por fase e histórico administrativo; o diff preserva auth/CSRF/oráculos/topologia negativa. Reprovado pelo procedimento offline incompatível com o host conhecido (R1). python3 -B test/f0/access/host_test.py: PASS, 23 testes. git diff --check: PASS. bundle exec ruby test/f0/access/readiness_test.rb: NOTRUN, exit 127, bundle ausente; ruby também ausente no PATH. Nenhum código de implementação modificado; nenhum Docker, SSH ou matriz física executado. G0 permanece PENDENTE.\"}",
+        "synthetic_fault_excluded_from_quality_history": false
+      }
+    },
+    {
+      "kind": "correction_requested",
+      "data": {
+        "attempt": 1,
+        "error": "Revisão reprovou: {\"decision\": \"fail\", \"issues\": [{\"description\": \"O estado vigente ainda apresenta matriz NOTRUN e overlay/físico pendentes. Isso era correto no snapshot inicial, mas foi superado pela evidência gerencial do commit 3e0b77f: candidata 9f28ff913d1cdea14ac6af9afbecc35bd8e10b88, imagem sha256:6ec3bd403729c92004a29e696916b2c17b1668061255d9f570b64784fadc89d6, unit 7 testes/77 assertions/0 falhas/0 erros/0 skips PASS; readiness backend e gateway PASS; matriz 81 PASS/4 FAIL/1 NOTRUN, cleanup PASS. O fechamento atual omite as falhas físicas conhecidas.\", \"file\": \"docs/STATUS.md\", \"id\": \"R1\", \"line\": 26, \"priority\": \"high\", \"requested_change\": \"Atualizar os quatro documentos autorizados com referência verificável aos recibos de lote7 em 3e0b77f, preservando EV-27 como histórico anterior. Registrar shell anônimo por ttyd direto e subscription cross-tenant confirmados; manter MCP worker -32602 com SQL inalterado e revogação WS FAIL com observed vazio como falhas que requerem diagnóstico, sem inventar causa. Manter IDE/files/preview NOTRUN, limites SSH, G0 pendente e F1 não iniciada. Não repetir testes físicos. Substituir a alegação de ID inexistente e preparo pendente pelo resultado efetivamente retido.\"}, {\"description\": \"A política antiga de programmer/reviewer codex-programmer/gpt-6.1-sol medium é afirmada como efetiva. A atualização factual recebida nesta revisão informa política atual manager codex/gpt-6.1-sol high, programmer codex/gpt-6.1-terra medium e reviewer codex/gpt-6.1-sol medium, em sessões independentes e sem substitutos.\", \"file\": \"docs/validation/F0-LOTE7.md\", \"id\": \"R2\", \"line\": 102, \"priority\": \"high\", \"requested_change\": \"Corrigir as afirmações de política vigente em STATUS e F0-LOTE7 e as remissões de vigência em CHECKLIST/EVIDENCIAS. Preservar EV-15 e a regra anterior como histórico, distinguindo explicitamente a atualização atual; não reescrever os recibos antigos.\"}, {\"description\": \"O próximo bloco ainda determina preparar overlay/executar matriz e depois fechar bypasses/E5/RF55/T28. A instrução atual do proprietário, transmitida pela gerência durante esta revisão e corroborada pelo scope do receipt de 3e0b77f, limita o trabalho ao fechamento em curso e parada para outra IA; não autoriza próximo lote nem correções novas de segurança.\", \"file\": \"docs/STATUS.md\", \"id\": \"R3\", \"line\": 47, \"priority\": \"high\", \"requested_change\": \"Registrar a parada persistente após consolidação e revisão deste fechamento nos documentos de continuidade. Tratar a receita de execução e os gates restantes como histórico/backlog sem autorização de execução, removendo a instrução ativa de repetir a matriz ou iniciar correções. Encaminhar os negativos e lacunas ao handoff, sem mudar código/auth ou retomar outras frentes.\"}], \"summary\": \"Revisão independente documental: fail por atualização necessária após nova evidência física e mudança de política/ordem de parada comunicadas durante a revisão. Diff completo, arquivo novo, resultado, recibos lote6, helper/código de prontidão e receita examinados; recibos/report/proveniência/unit do commit 3e0b77f consultados por git show, sem sair da worktree. git diff --check PASS. Nenhuma alteração de implementação e nenhuma repetição física. O snapshot anterior consolida corretamente SSH limitado e timeout, mas não constitui fechamento preciso do estado atual. Ajustes exclusivamente documentais devem voltar ao programador e depois à revisão independente.\"}",
+        "synthetic_fault_excluded_from_quality_history": false
+      }
+    },
+    {
+      "kind": "correction_requested",
+      "data": {
+        "attempt": 2,
+        "error": "Revisão reprovou: {\"decision\": \"fail\", \"issues\": [{\"details\": \"O contrato autocontido exige preservar gerente codex/gpt-6.1-sol high e programmer/reviewer codex-programmer/gpt-6.1-sol medium em sessões distintas, sem fallback e com recuperação confirmada na mesma conta. STATUS, EV-29 e F0-LOTE7 passam a declarar programmer codex-programmer/gpt-6.1-terra medium e reviewer codex/gpt-6.1-sol medium como política atual informada pelo controlador, e rebaixam a regra anterior a histórica. Os recibos físicos consultados sustentam resultados e parada para handoff, mas não essa alteração da política exclusiva do projeto. Isso viola o critério explícito de preservação da política.\", \"file\": \"docs/STATUS.md\", \"id\": \"R1\", \"line\": 38, \"priority\": \"medium\", \"related_files\": [\"docs/F0-EVIDENCIAS.md\", \"docs/validation/F0-LOTE7.md\"], \"requested_change\": \"Preservar nos três documentos a política exclusiva especificada no contrato, incluindo comportamento de quota/mesma conta, ou fornecer uma atualização específica e verificável do controlador que a substitua; distinguir a política de runtime da sessão da política exclusiva documentada do projeto.\", \"summary\": \"A política exclusiva do contrato foi substituída por outra configuração sem fonte específica que sustente a mudança.\"}], \"summary\": \"Revisão independente do diff completo e do arquivo novo concluída. SSH físico PASS limitado e matriz posterior 81 PASS/4 FAIL/1 NOTRUN conferem com os recibos; negativos ttyd/WS, limites, parada, G0 pendente e F1 não iniciada foram preservados. git diff --check PASS (exit 0). Nenhuma execução física ou teste verde anterior repetido. Reprovado pela alteração sem suporte da política exclusiva exigida no contrato; implementação não modificada.\"}",
+        "synthetic_fault_excluded_from_quality_history": false
+      }
+    }
+  ],
+  "generated_at": 1793482431.0776596,
+  "full_evidence": "/home/enok/srv_projetos/orchestration/reports/7807ea5f00cd.json"
+}

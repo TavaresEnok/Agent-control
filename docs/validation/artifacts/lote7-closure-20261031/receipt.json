@@ -1,0 +1,40 @@
+{
+  "at": "2026-10-31T21:33:51.141057+00:00",
+  "observer": "manager_host",
+  "job": "7807ea5f00cd",
+  "state": "done",
+  "task_counts": {
+    "done": 2
+  },
+  "documentation_commit": "17277994a7a5fd0cd6c53cf596e86409ff0c0abb",
+  "integrated_head_before_closure_metadata": "c6e3304c6f99d9751c14b53d2054d847c7c06148",
+  "independent_review": "PASS",
+  "operator_hold": {
+    "active": true,
+    "reason": "Pausa global explícita do usuário",
+    "at": 1793482347.7716742
+  },
+  "controller_service": "inactive",
+  "controller_active_tasks": [],
+  "other_paused_jobs": [
+    {
+      "id": "aadeed33aebd",
+      "repo": "/home/enok/srv_projetos/workspace/NexoISP",
+      "state": "paused"
+    },
+    {
+      "id": "6df7983ca125",
+      "repo": "/home/enok/srv_projetos/workspace/chat-isp",
+      "state": "paused"
+    },
+    {
+      "id": "5160ece54301",
+      "repo": "/home/enok/srv_projetos/workspace/chat-isp",
+      "state": "paused"
+    }
+  ],
+  "next_batch_started": false,
+  "g0": "PENDENTE",
+  "f1": "NOT_STARTED",
+  "policy_source": "../lote7-handoff-policy-20261031.json"
+}
