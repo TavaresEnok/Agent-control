@@ -1,0 +1,14 @@
+/* Shell spacing only. Production component styles are imported unchanged. */
+body { margin: 0; background: white; color: #202020; }
+main { padding: 12px; }
+h1 { font-size: 22px; }
+h2 { font-size: 17px; }
+[role="note"] { border: 2px solid #b76c00; padding: 8px; }
+section { margin: 20px 0; }
+:root {
+  --app-text-primary: #202020; --app-text-secondary: #444; --app-text-tertiary: #666;
+  --app-border-default: #ddd; --app-border-strong: #bbb;
+  --app-bg-elevated: #fff; --app-bg-paper: #fafafa;
+  --app-success-fg: #127437; --app-warning-fg: #805500; --app-danger-fg: #b22;
+  --text-1: #202020; --text-2: #444; --accent-text: #2455aa;
+}
