@@ -1,0 +1,70 @@
+{
+  "at": "2026-10-31T14:56:52.293514+00:00",
+  "observer": "manager_host_execution_of_reviewed_harness",
+  "commit": "5d22773c97d17101e4263678aad3077cb96a5331",
+  "command": [
+    "python3",
+    "tools/f0/boundary/isolation_probe.py"
+  ],
+  "exit_code": 0,
+  "stderr": "",
+  "result": {
+    "synthetic_only": true,
+    "real_codex": "NOT RUN",
+    "uid": 1000,
+    "concurrent_synthetic_holders": 2,
+    "kernel": "5.17.15-pnetlab-uksm-2",
+    "home_only": [
+      {
+        "own_read": true,
+        "attacks": {
+          "absolute": "LEAKED",
+          "symlink": "LEAKED",
+          "process_root": "LEAKED",
+          "process_fd": "LEAKED",
+          "process_environ": "LEAKED"
+        },
+        "namespace_executed": false,
+        "status": "LEAK_OBSERVED"
+      },
+      {
+        "own_read": true,
+        "attacks": {
+          "absolute": "LEAKED",
+          "symlink": "LEAKED",
+          "process_root": "LEAKED",
+          "process_fd": "LEAKED",
+          "process_environ": "LEAKED"
+        },
+        "namespace_executed": false,
+        "status": "LEAK_OBSERVED"
+      }
+    ],
+    "namespace": [
+      {
+        "own_read": true,
+        "attacks": {
+          "absolute": "BLOCKED",
+          "symlink": "BLOCKED",
+          "process_root": "BLOCKED",
+          "process_fd": "BLOCKED",
+          "process_environ": "BLOCKED"
+        },
+        "namespace_executed": true,
+        "status": "CROSS_READ_BLOCKED"
+      },
+      {
+        "own_read": true,
+        "attacks": {
+          "absolute": "BLOCKED",
+          "symlink": "BLOCKED",
+          "process_root": "BLOCKED",
+          "process_fd": "BLOCKED",
+          "process_environ": "BLOCKED"
+        },
+        "namespace_executed": true,
+        "status": "CROSS_READ_BLOCKED"
+      }
+    ]
+  }
+}
