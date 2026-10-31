@@ -12,10 +12,13 @@ process.env.PLAYWRIGHT_BROWSERS_PATH = resolve(here, '.runtime/browsers');
 process.env.TMPDIR = resolve(here, '.runtime/tmp');
 const require = createRequire(resolve(here, 'package.json'));
 const { chromium } = require('playwright');
-const artifacts = resolve(here, 'artifacts');
+const startedAt = new Date().toISOString();
+const artifacts = resolve(here, 'artifacts', startedAt.replaceAll(':', '').replaceAll('.', '-'));
 await mkdir(artifacts, { recursive: true });
 const report = {
-  startedAt: new Date().toISOString(), node: process.version,
+  startedAt, node: process.version,
+  command: 'python3 tools/f0/mobile/run.py',
+  browserCommand: 'node test/f0/mobile/browser.mjs (isolated Node)',
   tree: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   upstream: JSON.parse(await readFile(resolve(root, 'UPSTREAM.json'))),
   classification: 'PARTIAL: real source components; synthetic HTTP/ActionCable transport and task data',
@@ -78,7 +81,13 @@ try {
     return route.fulfill({ json: { state: snapshot, synthetic: true } });
   });
   const sockets = [];
-  await page.routeWebSocket('**/cable', socket => {
+  await context.routeWebSocket('**/*', socket => {
+    const target = new URL(socket.url());
+    if (target.origin !== report.url.replace('http:', 'ws:')) {
+      blocked.push(target.origin);
+      return socket.close();
+    }
+    if (target.pathname !== '/cable') return socket.connectToServer();
     sockets.push(socket);
     socket.send(JSON.stringify({ type: 'welcome' }));
     const heartbeat = setInterval(() => socket.send(JSON.stringify({ type: 'ping', message: Date.now() / 1000 })), 1000);
@@ -151,6 +160,8 @@ try {
   }
   assert.deepEqual(report.errors, []);
   assert.deepEqual(blocked, []);
+  assert.equal(report.layout.length, 2);
+  assert.ok(report.layout.every(item => !item.overflow), 'horizontal overflow in mobile viewport');
   report.externalOriginsBlocked = blocked;
   report.status = 'completed';
 } catch (error) {
@@ -160,8 +171,10 @@ try {
   process.exitCode = 1;
 } finally {
   heartbeats.forEach(clearInterval);
+  // Seal and export evidence while the browser and harness are still alive.
+  // Cleanup must also happen if evidence validation/export fails.
+  try {
   if (context) await context.tracing.stop({ path: resolve(artifacts, 'trace.zip') });
-  if (browser) await browser.close();
   if (server) {
     report.sourceInputs = {};
     for (const path of server.moduleGraph.idToModuleMap.keys()) {
@@ -170,19 +183,32 @@ try {
         report.sourceInputs[file.slice(root.length + 1)] = sha(await readFile(file));
       }
     }
-    await server.close();
   }
   report.finishedAt = new Date().toISOString();
-  for (const name of ['harness.tsx', 'harness.css', 'server.mjs', 'package-lock.json']) {
+  for (const name of ['harness.tsx', 'harness.css', 'server.mjs', 'package.json', 'package-lock.json',
+    'run.py', 'setup.py', 'preflight.py', 'browser-libs.py', 'evidence.py', 'index.html',
+    'fonts.conf', 'apt-isolated.conf', 'debian.sources.list']) {
     report.inputs ??= {};
     report.inputs[name] = sha(await readFile(resolve(here, name)));
   }
+  report.inputs['test/f0/mobile/browser.mjs'] = sha(await readFile(fileURLToPath(import.meta.url)));
+  const lock = JSON.parse(await readFile(resolve(here, 'package-lock.json')));
+  report.dependencyVersions = Object.fromEntries(Object.entries(lock.packages)
+    .filter(([name]) => name).map(([name, value]) => [name, value.version]));
+  report.exitCode = process.exitCode || 0;
+  report.sourceModuleCount = Object.keys(report.sourceInputs || {}).length;
+  report.scenarios = report.checks;
   report.dependencyArchives = {};
   const archives = resolve(here, '.runtime/apt/downloads');
   for (const name of await readdir(archives).catch(() => [])) {
     if (name.endsWith('.deb')) report.dependencyArchives[name] = sha(await readFile(resolve(archives, name)));
   }
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify(report, null, 2) + '\n');
+  execFileSync('python3', [resolve(here, 'evidence.py'), 'export', artifacts], { cwd: root, stdio: 'inherit' });
   console.log(JSON.stringify({ status: report.status, checks: report.checks,
     failure: report.failure, layout: report.layout, report: resolve(artifacts, 'report.json') }, null, 2));
+  } finally {
+    if (browser) await browser.close();
+    if (server) await server.close();
+  }
 }

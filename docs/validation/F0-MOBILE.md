@@ -51,13 +51,21 @@ Roteiro automático executável em `test/f0/mobile/browser.mjs`:
 
 ## Execução e limites de aceite
 
-O relatório dirigido é `tools/f0/mobile/artifacts/report.json`; capturas e `trace.zip` ficam ao lado, ignorados pelo Git. Ele registra horários, Node/browser, árvore/base, checks, payloads sintéticos, contagens de reconexão, larguras, hashes dos componentes carregados e dependências. Falhas geram exit code não zero e causa explícita. PASS de componente é sempre identificado como parcial.
+O runner agora usa uma pasta exclusiva por execução em `tools/f0/mobile/artifacts/` e exporta os bytes para `docs/validation/artifacts/mobile/<startedAt>/` **antes de fechar browser e harness**. O destino é versionável e sobrevive ao cleanup quando integrado pelo controlador. Não basta conservar a cópia ignorada. Cada pacote contém `report.json`, `trace.zip`, quatro capturas essenciais e `manifest-sha256.json`; em falha, retém os artefatos disponíveis sem promover o resultado a PASS. Não se misturam bytes de execuções anteriores.
+
+O relatório registra comando, exit code, commit base (o código de trabalho é identificado pelos hashes), versões Node/browser/dependências do lockfile, cenários, hashes dos 19 módulos reais e dos scripts/configurações do ensaio, payloads sintéticos, reconexão e medidas. O exportador verifica JSON, integridade ZIP, presença de eventos do trace, assinaturas PNG, hashes das capturas e, para resultado completo, quatro checks parciais, 19 módulos, zero pageerrors e ausência de overflow em 390/360. Falhas geram exit code não zero. HTTP e WebSocket externos são bloqueados; usam-se somente identidades sintéticas. Não se exportam env, runtime, Chromium ou node_modules. Caminhos absolutos da worktree são substituídos por `/worktree` no relatório e nas entradas textuais do trace; os hashes novos se referem aos bytes exportados.
+
+Conferência independente do pacote retido, sem browser, rede ou dependências externas:
+
+```sh
+python3 tools/f0/mobile/evidence.py verify docs/validation/artifacts/mobile/<startedAt>
+```
 
 Execução final: **2026-10-31 14:40:17–14:40:43 UTC**, Node `v22.16.0`, Chromium `149.0.7827.55`, exit code **0**, quatro checks parciais PASS e zero erros JavaScript capturados. Observados: dois envios idênticos do formulário; duas conexões WebSocket; uma leitura de snapshot após reconexão; cartão `Running` → `Succeeded`. A largura do documento foi respectivamente 390 e 360 px, sem overflow horizontal nas duas medições finais. Isso não inclui medição de teclado virtual ou de todas as telas.
 
 O preflight inicial encontrou Node e Ruby ausentes no PATH. A primeira transferência do navegador excedeu o `/tmp` de 128 MB; o bootstrap passou a usar `.runtime/tmp`. O primeiro launch acusou bibliotecas compartilhadas ausentes; a extração local resolveu o preflight (`missing_browser_libraries: []`). Esses eram impedimentos de ambiente, não cota de provedor. A instalação permaneceu dentro da worktree.
 
-Hashes SHA-256 da execução final (artefatos locais, não versionados):
+Hashes SHA-256 históricos do lote1 (**bytes perdidos no cleanup, indisponíveis**; não identificam o novo pacote):
 
 | Artefato em `tools/f0/mobile/artifacts/` | SHA-256 |
 |---|---|
@@ -68,7 +76,32 @@ Hashes SHA-256 da execução final (artefatos locais, não versionados):
 | `390-reconnected-completed.png` | `39c666e01b6a57fb31873be1b5ac8f219b43079386584e4eb19f6458d14c06f7` |
 | `360-components.png` | `bec13fe73f6983e1a67280626852d60b1dc57f3e07968870422ae1c634c06fbf` |
 
-O relatório contém ainda hashes de 19 módulos carregados da base e dos 112 arquivos Debian extraídos (dependências transitivas/alternativas incluídas). Nova execução regenera horários, porta e trace; o hash anterior identifica somente esta execução. Checks estáticos essenciais: `git diff --check`, compilação sintática dos quatro scripts Python e `node --check` dos dois scripts JavaScript, todos com exit code 0.
+O relatório histórico continha ainda hashes de 19 módulos carregados da base e dos 112 arquivos Debian extraídos (dependências transitivas/alternativas incluídas). Nova execução regenera horários, porta e trace; os hashes históricos acima não são usados como recibo da recuperação. Checks estáticos históricos essenciais: `git diff --check`, compilação sintática dos quatro scripts Python e `node --check` dos dois scripts JavaScript, todos com exit code 0.
+
+### Recuperação dos bytes — lote3
+
+Uma única reexecução do percurso existente: **2026-10-31 15:28:34.181–15:29:12.367 UTC**, comando `python3 tools/f0/mobile/run.py`, base `d49a2bc5704d71a5d4a10b07460470f1ea6a8828`, Node `v22.16.0`, Chromium `149.0.7827.55`, exit **0**. Quatro checks **PASS parcial**, 19 módulos reais identificados por hash, dois payloads sintéticos iguais, duas conexões ActionCable e uma leitura de snapshot; `errors: []`, largura 390/360 igual aos viewports, sem overflow. Não houve segunda matriz ou reexecução SQL/Temporal.
+
+Pacote retido: [2026-10-31T152834-181Z](artifacts/mobile/2026-10-31T152834-181Z/) (~7,6 MB). O [manifesto SHA-256](artifacts/mobile/2026-10-31T152834-181Z/manifest-sha256.json) enumera todos os bytes. As capturas foram inspecionadas visualmente. Alguns PNGs são idênticos aos históricos por renderização determinística; isso não recupera os bytes perdidos nem reaproveita o recibo antigo.
+
+| Novo artefato | SHA-256 |
+|---|---|
+| `report.json` | `52063c8f155a70d6aab68bc28bef3866f7ce8389a1b89719aeb424d9e1e7b697` |
+| `trace.zip` | `af21d1dff07cd4320a766a79c1459ca86bcf872d4c6faaf2423803cdd4f2647f` |
+| `390-agent-lost-ack.png` | `d82fd36ddc08505e7c04ab1efee507f0ffac1f6cf6f06cdbf88fa01dd83174a3` |
+| `390-running-dependencies.png` | `ad426cd58adf22d8c69a103a8b9292d84659ada5f379e1c1ce4a1d529e459a15` |
+| `390-reconnected-completed.png` | `39c666e01b6a57fb31873be1b5ac8f219b43079386584e4eb19f6458d14c06f7` |
+| `360-components.png` | `bec13fe73f6983e1a67280626852d60b1dc57f3e07968870422ae1c634c06fbf` |
+
+O trace inclui o WebSocket de HMR do próprio Vite, na mesma origem efêmera isolada, além do `/cable` sintético. O parâmetro de HMR é gerado por esse harness local; não é token de sessão de conta real. A auditoria dirigida verifica origem/porta HTTP/WS e ausência de cookies, Authorization e CSRF nas requisições gravadas, caminhos sanitizados, hashes do código executado e rejeição de relatório adulterado. Para repetir somente a auditoria dos bytes, sem novo browser:
+
+```sh
+python3 tools/f0/mobile/evidence.py verify docs/validation/artifacts/mobile/2026-10-31T152834-181Z
+python3 test/f0/mobile/retention_test.py
+git diff --check
+```
+
+O pacote está em caminho não ignorado e precisa ser incluído na integração pelo controlador antes da remoção desta worktree. Nenhum commit foi feito pelo executor. **G0 segue PENDENTE; revisão independente segue como próxima fase.**
 
 | Critério | Resultado desta entrega |
 |---|---|
