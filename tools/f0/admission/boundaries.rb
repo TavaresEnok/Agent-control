@@ -60,11 +60,17 @@ class SessionService
     raise "Transport boundary must be explicitly stubbed"
   end
 end
-class TemporalService
-  def self.start_workflow(*) = raise("Real Temporal transport is not configured by this SQL harness")
-  def self.enabled? = raise("Explicit transport stub required")
-  def self.client = raise("Explicit transport stub required")
-  def self.cancel_workflow(*) = raise("Explicit transport stub required")
+if defined?(AdmissionLab::REAL_TEMPORAL) && AdmissionLab::REAL_TEMPORAL == true
+  # Only the integrated entrypoint opts in before importing this file. The SQL
+  # suite retains its closed transport and all nine original tests unchanged.
+  require File.join(AdmissionLab::ROOT, "app/services/temporal_service")
+else
+  class TemporalService
+    def self.start_workflow(*) = raise("Real Temporal transport is not configured by this SQL harness")
+    def self.enabled? = raise("Explicit transport stub required")
+    def self.client = raise("Explicit transport stub required")
+    def self.cancel_workflow(*) = raise("Explicit transport stub required")
+  end
 end
 class TemporalWorkflowRegistry
   def self.container_workflow_v2 = "LabContainerWorkflowV2"

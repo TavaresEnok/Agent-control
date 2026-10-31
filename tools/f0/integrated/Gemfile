@@ -1,0 +1,12 @@
+source "https://rubygems.org"
+
+ruby "4.0.9"
+gem "activerecord", "8.1.4"
+gem "activesupport", "8.1.4"
+gem "pg", "1.7.0"
+gem "temporalio", "1.10.0"
+gem "hashie", "5.2.0"
+gem "minitest", "6.0.6"
+gem "mocha", "3.1.0"
+gem "logger", "1.7.0"
+gem "ostruct", "0.6.3"
