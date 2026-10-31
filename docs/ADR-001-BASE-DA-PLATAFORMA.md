@@ -1,0 +1,148 @@
+# ADR-001 — Escolha da base da plataforma e avaliação do Gate G0
+
+- **Data:** 2026-10-31
+- **Status da ADR:** Proposta para deliberação do proprietário (F0 concluída até o limite estático e sintético autorizado)
+- **Status do Gate G0:** **PENDENTE** (há critérios eliminatórios de execução bloqueados por pré-requisitos externos e de conformidade; proibido declarar aprovado sem essas evidências)
+- **Candidatos avaliados nos commits fixados:**
+  - **Kandev:** `kdlbs/kandev` — commit `997bc54fae4da15702c91da5c5d120bfe651edc1` (`main`), licença `AGPL-3.0`
+  - **Aixle Flow:** `AixleHQ/flow` — commit `e6ec5a286120aed3a036d85871e796b2f6c97d70` (`develop`), licença `Apache-2.0`
+- **Referências normativas:** `docs/PLANO_MESTRE_PLATAFORMA_AUTONOMA_v1.1_2026-10-31.md` (§1.2, §3.4, §19.3, §27.2) e `docs/ADENDO_FINAL_PLANO_v1.1_G0_2026-10-31.md` (§1, §4, §5, §7).
+
+---
+
+## 1. Resumo executivo e recomendação
+
+### 1.1 Constatação central da F0
+A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutural decisiva entre os dois candidatos exatamente na condição de reversão definida em **D-02** do Plano Mestre v1.1 (§1.2):
+
+> *"D-02 — Alternativa estrutural: Aixle Flow. A integração existente entre workflows, Temporal e containers é um argumento técnico forte. Se o Kandev não permitir que Temporal controle os workflows autônomos sem duplicar lançamento/retomada, ou exigir reescrever a maior parte do runtime, o Gate G0 deve recomendar Aixle Flow antes de investir em personalização extensa."*
+
+1. **No Kandev (`997bc54f`):**
+   - **Não existe integração com Temporal** (zero referências a `go.temporal.io` nos `go.mod` ou na árvore `apps/`).
+   - O ciclo de vida de execução possui um coordenador próprio em Go (`internal/office/runtime/handoff.go`, `internal/office/service/scheduler_integration.go`, `internal/agent/runtime/durable_delivery.go`, `delivery_recovery.go`) e permite lançamentos legados sem proprietário/concessão (`LaunchSpec.Owner` e `OwnerAdmission` são opcionais em `runtime.go:157-161`).
+   - Os pontos de disparo estão espalhados por pelo menos **9 superfícies distintas** (`backendapp/main.go`, `canvas_routes.go`, `turn_adapters.go`, `handoff_wiring.go`, `office/runtime/handoff.go`, `office/service/scheduler_integration.go`, `automation/handlers.go`, `mcp/handlers/handlers.go`, `mcp/handlers/spawn_session.go`).
+   - A fronteira de segurança padrão vem com autenticação desabilitada (`opt-in`), bind em `0.0.0.0`, MCP externo sem autenticação e ausência de sessão de operador separada para mutações de perfil (`docs/public/security.md:10,28,84-94,183`).
+   - O executor SSH nativo sobe `agentctl` no destino e copia arquivos de credenciais (`.codex/auth.json`, `.grok/auth.json`) para o servidor remoto (`codex_acp.go:157-168`), exatamente o oposto do requisito de manter CLIs e credenciais apenas na central.
+
+2. **No Aixle Flow (`e6ec5a28`):**
+   - **Já implementa nativamente o núcleo mais difícil e propenso a incidentes do Plano v1.1:**
+     - Orquestração via **Temporal** (`TemporalWorkflowRegistry`).
+     - Autoridade única de admissão (`SessionAdmissionService`) com tratamento explícito de `StalePermit` e `UncertainOperation`.
+     - **Transactional Outbox** (`OutboxRelay` com `FOR UPDATE SKIP LOCKED`) para evitar perda ou duplicação quando o processo falha entre o commit no banco e o início do workflow no Temporal (requisito exato da seção 11.3.1 / `T07`).
+     - **Reconciliador com lease de reivindicação** (`SessionAdmissionReconciler` + `SessionLaunchRelay::CLAIM_LEASE`) que resolve exatamente a falha entre intenção, pré-voo e registro da execução no Temporal (`T08`).
+     - Coleta de janelas de cota com cache/throttling (`SubscriptionUsageService`) e ferramentas SSH centralizadas com execução destacada (`detach: true` + `job_id` em `CoderSshExec` / `CoderPrepareRepo` / `CoderJobStatus`).
+   - Suas lacunas são **localizadas e cirúrgicas**:
+     - Remover a restrição `validates :agent_type, uniqueness: { scope: %i[user_id company_id] }` em `AgentCredential` para suportar múltiplas contas do mesmo provedor (ex.: duas contas Codex).
+     - Desativar o proxy MITM nos containers (`MITM_DISABLED=true` / remoção da interceptação TLS em `docker/base/logger/`) e usar coordenação de credencial sem interceptação de tráfego para cumprir **RF-55** (Adendo §4.2).
+     - Desacoplar `CoderSshExec` da CLI `coder` para usar OpenSSH padrão com hostkey fixado.
+     - Reforçar a interface móvel (percursos compactos e grafo de leitura mobile-first na P0).
+
+### 1.2 Recomendação
+- **Recomendação técnica de engenharia (aplicando o gatilho D-02 do Plano v1.1):** adotar **Aixle Flow (`e6ec5a28`)** como base da plataforma, pois já entrega prontos e testados em produção os mecanismos de **Temporal, admissão atômica, transactional outbox, leases de reconciliação e jobs SSH destacados**, exigindo menor volume e menor risco de código novo no núcleo de consistência.
+- **Caminho alternativo caso o proprietário priorize a stack Go + UI móvel imediata (D-01):** manter **Kandev (`997bc54f`)** somente se o proprietário aceitar o custo alto de escrever do zero tutta a camada Temporal + Outbox + Reconciliação + Serviço de Contas/Cotas e fechar os 9 pontos de entrada legados e as brechas de autenticação/MCP antes de qualquer login real.
+- **Situação do Gate G0:** **PENDENTE** para ambas as bases até a conclusão das provas de execução bloqueadas (Seção 5).
+
+---
+
+## 2. Distinção obrigatória das constatações (Adendo §7)
+
+### 2.1 Evidência documental e de código concluída
+1. **Commits e licenças verificados (`EV-02`):** Kandev em `997bc54fae4da15702c91da5c5d120bfe651edc1` (`AGPL-3.0`); Aixle Flow em `e6ec5a286120aed3a036d85871e796b2f6c97d70` (`Apache-2.0`).
+2. **Inventário das fronteiras críticas (`EV-04`, `EV-05`):** mapeados todos os adaptadores de CLI, modelos de credencial, pontos de entrada de execução, mecanismos de recuperação/Temporal, configuração de segurança e executores SSH nos dois repositórios.
+3. **Auditoria de elegibilidade contratual RF-55 (`EV-03`):** classificados os modos de autenticação e transporte de Codex, Claude Code, Grok e Antigravity frente às fontes primárias do Adendo §4.2.
+
+### 2.2 Provas técnicas executadas e seus resultados
+1. **Isolamento concorrente de contas com segredos sintéticos (`EV-06` — `T24` parcial):**
+   - **Executado:** dois ambientes de conta simulados (`acct_a` e `acct_b`) sob o mesmo UID no Linux `5.17.15`.
+   - **Resultado:** comprovado que separar apenas `HOME` e `CODEX_HOME` **permite vazamento imediato** da credencial da outra conta via symlink/leitura direta (`probe1_home_only_cross_read_blocked: false`). Em seguida, comprovado que o uso de `unshare -Umr` (user + mount namespace) com ocultação via `tmpfs` **bloqueia 100% da leitura cruzada** mantendo o acesso à própria credencial (`probe2_namespace_isolation_cross_read_blocked: true`).
+2. **Fronteira SSH centralizada sem IA no destino (`EV-07` — `T25` parcial):**
+   - **Executado:** instância `sshd` efêmera em loopback com chave host ED25519 fixada (`SHA256:ZD44FSXCR++iNTi8OBoJ+WqDO1w+N4rT3waKL8IYnn0`), repositório Git bare existente inicialmente apenas no lado remoto, clone/commit/push pela central (`4ae6d60fbeadb739fbbb0a41675ad54f3e0778e5`) e execução de teste via SSH no destino.
+   - **Resultado:** artefato exato verificado e testado remotamente (`calc.mul(6, 7) == 42`) com confirmação de que o segredo de IA da central (`CENTRAL_AI_SECRET`) **não atravessou a fronteira SSH** (`ai_secret_present=False`).
+
+### 2.3 Integrações não elegíveis para o plano/modo atual (RF-55)
+1. **Antigravity (perfis Gemini e Sonnet) em plano de consumidor encapsulado por plataforma de terceiros:**
+   - Classificação: **`unsupported_for_mode`** (Adendo §4.2 `[A1]`, `[A2]`).
+   - Afeta tanto o adaptador `antigravity-acp` do Kandev quanto o `antigravity_cli_adapter.rb` do Aixle Flow (que ainda realiza refresh de token no servidor usando `client_id`/`client_secret` do `agy`).
+   - Consequência: **não pode ser ativado nem testado com conta real** na nova plataforma até que o proprietário defina um caminho oficial autorizado (ou recalcule a cadeia de substituição sem depender do Antigravity consumidor).
+2. **Interceptação TLS via proxy MITM dentro dos containers de agentes (Aixle Flow):**
+   - Classificação: **`unsupported_for_mode`** frente às restrições de não intermediar requisições/credenciais do Claude Code e demais CLIs (Adendo §4.2 `[A6]`).
+   - Consequência: o mecanismo `docker/base/logger/start-mitm.sh` + `refresh_broker.py` do Aixle deve ser desativado (`MITM_DISABLED=true`) e substituído por controle de concorrência/renovação fora do caminho TLS antes de logins reais.
+3. **Injeção automática de chaves de API pagas (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`):**
+   - Ambos os candidatos aceitam ou injetam variáveis de chave de API (no Kandev, `RequiredEnv: []string{"OPENAI_API_KEY"}` em `codex_acp.go:134` e `codex_app_server.go:74`).
+   - Consequência: deve ser bloqueado por política antes de qualquer lançamento para impedir cobrança por uso acidental.
+
+### 2.4 Provas pendentes por capacidade, autenticação, permissão ou ambiente
+1. **Execução real das CLIs com assinaturas (`G0-E1` / `T01`):**
+   - Os binários `codex`, `claude`, `grok` e `agy_acp_server.par` não estão instalados no `PATH` deste host (`EV-01`).
+   - Além disso, o Adendo §5 proíbe chamadas reais com contas compartilhadas com os Paseos ativos sem que a autoridade comum de admissão e refresh (`RF-46` / `T28`) esteja ativa ou que sejam fornecidas contas não sobrepostas autorizadas.
+2. **Grok por CLI oficial (`@xai-official/grok`):**
+   - Permanece **`not_assessed`** documentalmente (Adendo §4.2) até verificação dos termos aplicáveis da xAI para o plano do proprietário.
+3. **Execução da fatia mínima com servidor Temporal (`G0-E3` / Pacote C) e percurso móvel integrado (`G0-E5` / Pacote D):**
+   - O binário `temporal` não está instalado no host local e nenhum serviço ou container adicional foi subido nesta F0 para preservar estritamente o ambiente e aguardar a decisão da base em `ADR-001`.
+
+---
+
+## 3. Comparação detalhada das fronteiras críticas e custo de adaptação
+
+### 3.1 Matriz de fronteiras e classificação de reuso (Pacote A — Plano v1.1 §19.3)
+
+| Fronteira / Componente | Kandev (`997bc54f`) | Custo em Kandev | Aixle Flow (`e6ec5a28`) | Custo em Aixle Flow |
+|---|---|---|---|---|
+| **Orquestração durável (Temporal) e reconciliação de falhas (`T07`/`T08`)** | **Não possui Temporal.** Possui `office` experimental e `runtime.LaunchSpec` onde `Owner` e `OwnerAdmission` são opcionais em lançamentos legados (`runtime.go:157`). **Classificação:** *Substituir / Construir do zero*. | **Muito Alto** (introduzir Temporal Go SDK, criar Outbox, interceptar 9 pontos de entrada e desativar retries concorrentes do `office`). | **Possui Temporal nativo** (`TemporalWorkflowRegistry`), `OutboxRelay` (`FOR UPDATE SKIP LOCKED`), `SessionAdmissionService` (`StalePermit`, `UncertainOperation`) e `SessionAdmissionReconciler` com lease (`CLAIM_LEASE`). **Classificação:** *Reutilizar com adaptação leve*. | **Baixo** (ajustar regras da cadeia de perfis e estados específicos do plano). |
+| **Contas múltiplas do mesmo provedor e isolamento (`T01`/`T24`)** | Credenciais resolvidas por nome de env var (`OPENAI_API_KEY`); executor `Worktree` compartilha UID/filesystem; `RemoteAuth` copia arquivos. **Classificação:** *Substituir modelo de contas + adaptar runtime*. | **Alto** (criar entidade de conta OAuth multi-instância e forçar namespace/container isolado por tentativa). | Possui `AgentCredential` criptografada, `SubscriptionUsageService` e containers por sessão, mas trava 1 credencial por `agent_type`/`user_id`/`company_id` (`agent_credential.rb:33`) e usa proxy MITM. **Classificação:** *Adaptar*. | **Médio** (remover constraint de unicidade por `agent_type`, adicionar `account_key`/`profile_id` e desligar MITM). |
+| **Catálogo de CLIs e proteção contra API paga (`RF-08`/`RF-55`)** | Usa bridges ACP de terceiros para Claude e Codex (`@agentclientprotocol/*`), exige `agy_acp_server.par` e declara `OPENAI_API_KEY` em `RequiredEnv`. **Classificação:** *Adaptar / Substituir adaptadores*. | **Médio-Alto** (trocar para invocação direta/oficial onde exigido por `RF-55` e bloquear injeção de API keys). | Invoca CLIs diretamente (`claude`, `codex`, `grok`, `agy`), lê `account_id` do JWT do ChatGPT (`codex_adapter.rb:107`), mas `gemini_cli_adapter` só aceita API key e há MITM. **Classificação:** *Adaptar*. | **Médio** (bloquear chaves de API pagas, remover MITM e aplicar bloqueio `T39` para perfis `unsupported_for_mode`). |
+| **Fronteira de segurança (UI, API, WS, Terminal, MCP) (`T15`/`T23`/`T36`)** | Bind padrão `0.0.0.0`, auth `opt-in` desabilitada por padrão, External MCP sem auth (`security.md:183`) e agente consegue alcançar a API HTTP para mutar perfis (`security.md:84-94`). **Classificação:** *Adaptar profundamente*. | **Alto** (fechar bind/auth por padrão, autenticar MCP externo e isolar API administrativa do alcance dos agentes). | Autenticação de usuários/empresas ativa no Rails, sessões isoladas em containers e tokens de sincronização por sessão (`SessionKey`). **Classificação:** *Reutilizar com endurecimento*. | **Baixo-Médio** (revisar escopo das `InternalTools` expostas ao container e desativar CA MITM). |
+| **Execução remota via SSH com IA central (`T14`/`T25`)** | Executor SSH sobe `agentctl` no host remoto e copia credenciais de IA (`.codex/auth.json`) para o destino (`executor_ssh_credentials.go`). **Classificação:** *Não utilizar / Substituir*. | **Alto** (construir executor de jobs SSH remotos que mantenha o agente na central). | Possui `CoderSshExec`, `CoderPrepareRepo` e `CoderJobStatus` rodando comandos e clones remotos a partir do processo Rails com `detach: true` e `job_id`. **Classificação:** *Adaptar*. | **Baixo-Médio** (trocar transporte `coder ssh` por `ssh` padrão com fingerprint fixado, mantendo a estrutura de `job_id`). |
+| **Experiência Web e Mobile (`T16`/`T27`/`T35`)** | UI React/TS madura, folhas móveis dedicadas (`mobile-remote-access.md`), gestão visual de tarefas e worktrees. Falta deduplicação por `command_id` no Temporal e grafo P0 ligado ao Temporal. **Classificação:** *Reutilizar e adaptar*. | **Baixo-Médio** (conectar comandos ao Temporal com `command_id` idempotente). | UI React + Inertia.js com telas de workflows, triggers, gates e credenciais, mas responsividade móvel apenas básica (32 arquivos com media queries). **Classificação:** *Adaptar / Expandir UI móvel*. | **Médio-Alto** (construir/refinar navegação mobile-first para Android, confirmação compacta e grafo de leitura responsivo). |
+| **Licença e manutenção de fork (`G0-E6`)** | `AGPL-3.0`. Uso interno privado é permitido; distribuição ou exposição de serviço em rede a terceiros aciona copyleft. | **Baixo** (para uso exclusivamente pessoal). | `Apache-2.0`. Licença permissiva sem restrições de copyleft de rede. | **Muito Baixo**. |
+
+---
+
+### 3.2 Pontuação comparativa ponderada (Plano v1.1 §3.4)
+
+Critério de notas (0 a 5, fundamentado apenas no código inspecionado nos commits fixados):
+- `0` = inexistente ou incompatível; exige construção completa.
+- `1` = muito distante do contrato; exige reescrita pesada.
+- `2` = parcial com defeitos/acoplamentos importantes.
+- `3` = base funcional que exige adaptação moderada e localizada.
+- `4` = atende à maior parte do contrato com ajustes pequenos.
+- `5` = atende integralmente sem alterações invasivas.
+
+| Dimensão (Plano v1.1 §3.4) | Peso | Nota Kandev (`997bc54f`) | Justificativa verificável (Kandev) | Nota Aixle Flow (`e6ec5a28`) | Justificativa verificável (Aixle Flow) |
+|---|---:|---:|---|---:|---|
+| **1. Contas e CLIs** | **20%** | **2.0 / 5** | Tem adaptadores para as 4 famílias, mas usa bridges ACP terceiros, exige `OPENAI_API_KEY` em `RequiredEnv` e não modela múltiplas contas OAuth do mesmo provedor nem janelas de cota. | **3.0 / 5** | Tem adaptadores diretos para `codex` (com leitura de `account_id` do ChatGPT), `claude`, `grok` e `agy` + `SubscriptionUsageService`, mas exige remover a constraint `uniqueness` de `agent_type` e desligar o MITM. |
+| **2. Durabilidade e consistência** | **25%** | **1.0 / 5** | Não usa Temporal; possui 9 pontos de entrada de lançamento e `OwnerAdmission` opcional em caminhos legados (`runtime.go:157`). Exige reescrever o núcleo de coordenação (gatilho **D-02**). | **4.5 / 5** | Já possui Temporal, `SessionAdmissionService` (`StalePermit`, `UncertainOperation`), `OutboxRelay` (`FOR UPDATE SKIP LOCKED`) e `SessionAdmissionReconciler` com lease (`CLAIM_LEASE`). |
+| **3. Produto e mobile** | **25%** | **4.0 / 5** | Forte superfície React/TS, percursos móveis documentados e desenhados (`mobile-remote-access.md`), quadros, chat e worktrees prontos. | **2.5 / 5** | Possui UI de workflows, gates e sessões em React/Inertia, mas requer adaptação relevante para experiência mobile-first completa no Android. |
+| **4. Extensibilidade e manutenção** | **15%** | **2.5 / 5** | Go + React bem estruturados, porém sob `AGPL-3.0` e com grande superfície experimental (`office`) que precisaria ser contornada ou removida para não competir com o Temporal. | **3.5 / 5** | Rails + React sob `Apache-2.0`, código conciso e focado exatamente em workflows Temporal + containers de agentes, reduzindo conflitos de merge em updates. |
+| **5. Execução remota e isolamento** | **15%** | **1.5 / 5** | Executor padrão (`Worktree`) não isola credenciais no host; executor SSH move o agente e copia credenciais para o destino; API HTTP e External MCP têm brechas documentadas em `security.md`. | **3.5 / 5** | Isola sessões em containers e já possui `CoderSshExec` / `CoderPrepareRepo` / `CoderJobStatus` com `detach: true` na central; requer apenas trocar `coder ssh` por OpenSSH e desativar o MITM. |
+| **Média Ponderada Final** | **100%** | **2.25 / 5.00** | Custo concentrado em **reescrever o motor durável (Temporal/Outbox/Admissão), o isolamento/segurança e o SSH**. | **3.40 / 5.00** | Custo concentrado em **adaptar multi-conta no banco, desligar o MITM, generalizar o SSH e melhorar a UI mobile**. |
+
+---
+
+## 4. Estimativa relativa do trabalho de adaptação nas fases seguintes (F1–F5)
+
+| Pacote de adaptação | Se a base for **Aixle Flow (`e6ec5a28`)** (Recomendado) | Se a base for **Kandev (`997bc54f`)** |
+|---|---|---|
+| **F1 — Domínio, contas e políticas (`E02`–`E05`)** | **Pequeno/Médio:** migração SQL removendo índice único `(user_id, company_id, agent_type)` em `agent_credentials`, adição de `profile_key`/regras de substituição e guarda `RF-55` (`T39`). | **Alto:** modelar tabelas de contas OAuth, estados de cota (`available`, `exhausted`, `unknown`, etc.), probes serializados e bloquear `RequiredEnv` de API paga. |
+| **F2 — Execução durável Temporal (`E06`–`E07`)** | **Pequeno:** estender workflows Temporal existentes, `SessionAdmissionService` e `OutboxRelay` já prontos. | **Muito Alto:** introduzir Temporal Go SDK do zero, implementar Outbox, leases e refatorar 9 pontos de entrada + desativar `office` scheduler. |
+| **F3 — Equipe, QA, revisão e worktrees (`E08`–`E11`)** | **Médio:** ajustar steps do workflow para gerente único, QA (`RF-57` / `not_required`) e revisão independente com `git update-ref` atômico. | **Médio/Alto:** integrar steps de revisão/QA do `office` ao novo motor Temporal e isolar escritores de worktree. |
+| **F4 — SSH centralizado (`E12`)** | **Pequeno:** adaptar `CoderSshExec` / `CoderPrepareRepo` / `CoderJobStatus` para chamar `ssh` com fingerprint fixado em vez de `coder ssh`. | **Alto:** criar executor de comandos/testes remotos por SSH sem subir `agentctl` nem copiar credenciais ao destino. |
+| **F5 — Produto e Mobile (`E13`–`E14`)** | **Médio/Alto:** adaptar telas React/Inertia para operação móvel fluida (bottom sheets, grafo de leitura responsivo e `command_id` idempotente). | **Pequeno/Médio:** aproveitar UI móvel existente, adicionando o grafo de leitura P0 ligado ao Temporal e `command_id`. |
+
+---
+
+## 5. Situação do Gate G0 e decisões necessárias do proprietário
+
+### 5.1 Declaração formal do Gate G0
+**Gate G0: PENDENTE.**  
+Em cumprimento estrito às instruções da F0 (*"Não declare aprovação enquanto houver critério obrigatório sem evidência. Quando o critério exigir execução, documentação sozinha não o satisfaz"*), o G0 **não está aprovado** nesta data.
+
+### 5.2 Pendências obrigatórias para fechar o G0 (após decisão sobre esta ADR)
+1. **Decisão 1 — Escolha da base (D-01 vs. D-02):**
+   - Confirmar se adotamos **Aixle Flow (`e6ec5a28`)** conforme a condição de reversão **D-02** e a menor carga de adaptação (pontuação **3,40 vs. 2,25**), ou se o proprietário prefere manter **Kandev (`997bc54f`)** assumindo a construção completa da camada Temporal, de segurança e de SSH centralizado.
+2. **Decisão 2 — Cadeia de modelos diante da inelegibilidade do Antigravity consumidor (`RF-55`):**
+   - Como o Antigravity em plano de consumidor encapsulado por aplicação de terceiros é classificado como `unsupported_for_mode` pelo Adendo §4.2 (afetando Gemini e Sonnet via Antigravity), o proprietário precisa decidir se:
+     - **(a)** mantém Gemini/Sonnet Antigravity desabilitados na nova plataforma (`unsupported_for_mode`) e opera a cadeia de programação apenas com os perfis elegíveis (Codex, Claude Code oficial e, após verificação dos termos xAI, Grok); ou
+     - **(b)** indica outro método/contrato oficialmente autorizado pelo provedor para esses modelos.
+3. **Decisão 3 — Ambiente e autorização para as provas de execução restantes do G0:**
+   - Autorizar a instalação isolada (em container ou ambiente dedicado da F0) do servidor `temporal` e das CLIs elegíveis (`codex`, `claude`, `grok`) e definir se as provas de duas contas simultâneas (`T01`/`G0-E1`/`G0-E2`) serão feitas com contas de teste não sobrepostas ou após ativar o coordenador de capacidade compartilhada com o Paseo (`Adendo §5`).
