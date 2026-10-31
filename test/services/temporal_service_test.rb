@@ -103,7 +103,10 @@ class TemporalServiceTest < ActiveSupport::TestCase
 
   test "start_workflow uses custom id and timeout" do
     workflow = OpenStruct.new(name: "TestWorkflow", owner: "test-queue")
-    mock_handle = OpenStruct.new(id: "custom-id", run_id: "run-123")
+    mock_handle = mock("SDK start handle")
+    mock_handle.expects(:id).at_least_once.returns("custom-id")
+    mock_handle.expects(:result_run_id).returns("run-123")
+    mock_handle.expects(:run_id).never
 
     mock_client = mock("client")
     mock_client.expects(:start_workflow).with(
