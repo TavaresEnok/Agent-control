@@ -1,0 +1,19 @@
+{
+  "status": "implemented_physical_execution_pending",
+  "gate": "G0 PENDENTE",
+  "independent_review": "pending",
+  "physical_execution": "not_run_by_worker",
+  "review_fix": "Preserve inherited BUNDLE_FROZEN in the shared subprocess environment filter; absent/false values remain refused by the unchanged boot guard",
+  "subprocess_boot_validation": "PENDING: Ruby/image unavailable in worker; host-run now requires subprocess_boot_test.rb before creating services and retains subprocess-boot.log",
+  "regression_test": "test/f0/integrated/subprocess_boot_test.rb: filtered environment in real child, real worker/relay entrypoint boots stopped before service operations, and unfrozen boot rejection",
+  "available_checks": [
+    "python3 -B test/f0/integrated/receipts_test.py: 8 tests PASS (synthetic evidence rejection only)",
+    "bash -n tools/f0/integrated/host-run.sh: PASS",
+    "cmp integrated lock with captured physical SQL lock: PASS",
+    "git diff --check: PASS"
+  ],
+  "runtime_limitations": ["Ruby, Bundler and Docker unavailable", "tree_sitter Ruby parser unavailable"],
+  "manager_command": "bash tools/f0/integrated/host-run.sh 712217694cac9f786a72d4b6c876cd15f3dcf1bf31434d9fed6af25242a327a0",
+  "prior_green_receipts": "preserved; not rerun",
+  "not_proven": ["G0 approval", "all enabled inputs", "real agents/containers", "T28 real", "RF55/security/mobile"]
+}
