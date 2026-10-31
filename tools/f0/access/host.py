@@ -104,7 +104,8 @@ def source_paths():
     # Never send .env, credentials, .git, artifacts, existing auth, or node_modules.
     names = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
     names += [str(p.relative_to(ROOT)) for p in (ROOT / "tools/f0/access").glob("*") if p.is_file()]
-    build_tests = {"test/f0/access/mcp_evidence_test.rb", "test/f0/access/session_cookie_test.rb"}
+    build_tests = {"test/f0/access/mcp_evidence_test.rb", "test/f0/access/session_cookie_test.rb",
+                   "test/f0/access/readiness_test.rb"}
     names += sorted(build_tests)
     roots = {"app", "config", "lib", "db", "public", "bin"}
     for name in sorted(set(names)):
@@ -166,7 +167,13 @@ def run(image, gateway, subnet, seccomp_compat=False):
     def administrative(stage, *args, **kwargs):
         result["stage"] = stage
         try:
-            return docker(*args, **kwargs)
+            value = docker(*args, **kwargs)
+            for attempt in result.get("administrative_attempt_errors", []):
+                if attempt["stage"] == stage:
+                    attempt["outcome"] = "recovered"
+            if result.get("diagnostic", {}).get("stage") == stage:
+                result.pop("diagnostic")
+            return value
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             # Never persist argv or free-form stderr: either may contain keys.
             raw = error.stderr or b""
@@ -180,6 +187,8 @@ def run(image, gateway, subnet, seccomp_compat=False):
                                         (b"Connection refused", "connection-refused"),
                                         (b"permission denied", "permission-denied"),
                                         (b"syntax error", "sql-syntax")) if marker in raw[:4096]]}
+            result.setdefault("administrative_attempt_errors", []).append(
+                dict(result["diagnostic"], outcome="attempt-failed"))
             raise
 
     def start(suffix, img, args=(), env=(), mounts=()):
@@ -244,7 +253,8 @@ def run(image, gateway, subnet, seccomp_compat=False):
         start("gateway", gateway, args=("--entrypoints.web.address=:8080",
               "--providers.file.filename=/lab-state/gateway.yml", "--log.level=ERROR"), mounts=(state + ",readonly",))
         exit_code = int(administrative("web-wait", "wait", web).strip())
-        result.update(status="PASS" if exit_code == 0 else "FAIL", exit_code=exit_code)
+        result.update(status="PASS" if exit_code == 0 else "FAIL", exit_code=exit_code,
+                      stage="web-completed")
     except Exception as error:
         # Never serialize subprocess arguments (may contain synthetic signing keys).
         result.update(status="NOTRUN", error_class=type(error).__name__)
@@ -269,6 +279,14 @@ def run(image, gateway, subnet, seccomp_compat=False):
                 if docker("inspect", "--format", "{{.State.ExitCode}}", name).strip() != "0":
                     raise RuntimeError("Collector failed")
                 result["artifact_errors"] = retain_artifacts(payload, out)
+                if "report.json" not in result["artifact_errors"]:
+                    report = json.loads((out / "report.json").read_text())
+                    # Fixed fields only, never bodies, headers, URLs or report text.
+                    result["startup"] = [
+                        {key: row[key] for key in ("name", "status", "phase", "endpoint", "attempts",
+                                                  "http", "reason", "last_error_class") if key in row}
+                        for row in report.get("rows", [])
+                        if row.get("name") in {"readiness/backend", "readiness/gateway"}]
                 if result["artifact_errors"]:
                     result["retention_error"] = True
                 elif result["status"] == "PASS" and json.loads((out / "report.json").read_text())["status"] != "PASS":

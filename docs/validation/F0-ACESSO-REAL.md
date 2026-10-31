@@ -1,5 +1,12 @@
 # F0 E4/T36 — laboratório real de acesso, candidato para execução HOST
 
+Atualização lote7: procedimento vigente em
+[F0-ACESSO-PRONTIDAO.md](F0-ACESSO-PRONTIDAO.md). A candidata exige overlay
+offline dos arquivos ali enumerados sobre a imagem frozen439, com ownership
+0:0, teste Ruby novo e registro de hashes/novo ID antes de uma matriz revisada.
+Não executar a imagem antiga como se contivesse esta correção. G0 PENDENTE;
+SSH físico PASS consolidado, sem repetição. Prontidão não altera os oráculos.
+
 Atualização lote6: os comandos de runtime e preparo para Docker 20.10 vigentes
 estão em [F0-LAB-HOST-RECUPERACAO.md](F0-LAB-HOST-RECUPERACAO.md). Exigem
 `--subnet` explícito e, neste host, `--seccomp-compat` opt-in. Usar as imagens já
@@ -24,8 +31,9 @@ Não inicia Codex nem outro agente, Temporal, mail worker ou dispatcher.
 
 ## Operação administrativa exata, após revisão independente
 
-Para o próximo ensaio administrativo após revisão independente, usar a imagem
-corrigida já preparada, sem rebuild ou repetição dos testes Ruby verdes:
+O comando abaixo é histórico do lote6, preservado como referência. Para o
+próximo ensaio usar exclusivamente a sequência offline do documento lote7 acima,
+sem reinstalar gems nem repetir testes Ruby anteriormente verdes:
 
 ```sh
 cd /home/enok/srv_projetos/worktrees/14v3rrig/task-271a4475560c-g0-access-startup-retention
