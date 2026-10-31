@@ -1,0 +1,409 @@
+[
+  {
+    "eventId": "1",
+    "eventTime": "2026-10-31T15:21:45.898609554Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+    "taskId": "2097413",
+    "workflowExecutionStartedEventAttributes": {
+      "workflowType": {
+        "name": "g0_probe_workflow"
+      },
+      "taskQueue": {
+        "name": "agent-control-g0-905b9f76f16375d65adcfebd64877a92",
+        "kind": "TASK_QUEUE_KIND_NORMAL"
+      },
+      "input": {
+        "payloads": [
+          {
+            "metadata": {
+              "encoding": "anNvbi9wbGFpbg=="
+            },
+            "data": "eyJyb290IjoiL3dvcmsvdG9vbHMvZjAvdGVtcG9yYWwvYXJ0aWZhY3RzL2cwLTkwNWI5Zjc2ZjE2Mzc1ZDY1YWRjZmViZDY0ODc3YTkyIiwib3BlcmF0aW9uIjoiZzAtZTRiMTMxZmFkYTBjOWE2ZGI2MmRiZTYyOGRiMGExYjMiLCJzY2VuYXJpbyI6InVuY2VydGFpbiJ9"
+          }
+        ]
+      },
+      "workflowExecutionTimeout": "180s",
+      "workflowRunTimeout": "180s",
+      "workflowTaskTimeout": "10s",
+      "originalExecutionRunId": "01a1928d-72aa-7945-9689-2185e1a82335",
+      "identity": "1@d006a67c8b4f",
+      "firstExecutionRunId": "01a1928d-72aa-7945-9689-2185e1a82335",
+      "attempt": 1,
+      "workflowExecutionExpirationTime": "2026-10-31T15:24:45.898Z",
+      "firstWorkflowTaskBackoff": "0s",
+      "workflowId": "g0-e4b131fada0c9a6db62dbe628db0a1b3"
+    }
+  },
+  {
+    "eventId": "2",
+    "eventTime": "2026-10-31T15:21:45.898747728Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+    "taskId": "2097414",
+    "workflowTaskScheduledEventAttributes": {
+      "taskQueue": {
+        "name": "agent-control-g0-905b9f76f16375d65adcfebd64877a92",
+        "kind": "TASK_QUEUE_KIND_NORMAL"
+      },
+      "startToCloseTimeout": "10s",
+      "attempt": 1
+    }
+  },
+  {
+    "eventId": "3",
+    "eventTime": "2026-10-31T15:21:45.928881811Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+    "taskId": "2097420",
+    "workflowTaskStartedEventAttributes": {
+      "scheduledEventId": "2",
+      "identity": "136@d006a67c8b4f",
+      "requestId": "1cbf9dd1-bdd9-4f16-908b-904ade99c71f",
+      "historySizeBytes": "545",
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      }
+    }
+  },
+  {
+    "eventId": "4",
+    "eventTime": "2026-10-31T15:21:45.998516713Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+    "taskId": "2097431",
+    "workflowTaskCompletedEventAttributes": {
+      "scheduledEventId": "2",
+      "startedEventId": "3",
+      "identity": "136@d006a67c8b4f",
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      },
+      "sdkMetadata": {
+        "coreUsedFlags": [
+          4,
+          2,
+          1,
+          3
+        ],
+        "sdkName": "temporal-ruby",
+        "sdkVersion": "1.10.0"
+      },
+      "meteringMetadata": {}
+    }
+  },
+  {
+    "eventId": "5",
+    "eventTime": "2026-10-31T15:21:45.998607309Z",
+    "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+    "taskId": "2097432",
+    "activityTaskScheduledEventAttributes": {
+      "activityId": "g0-launch",
+      "activityType": {
+        "name": "g0_probe_activity"
+      },
+      "taskQueue": {
+        "name": "agent-control-g0-905b9f76f16375d65adcfebd64877a92",
+        "kind": "TASK_QUEUE_KIND_NORMAL"
+      },
+      "header": {},
+      "input": {
+        "payloads": [
+          {
+            "metadata": {
+              "encoding": "anNvbi9wbGFpbg=="
+            },
+            "data": "eyJyb290IjoiL3dvcmsvdG9vbHMvZjAvdGVtcG9yYWwvYXJ0aWZhY3RzL2cwLTkwNWI5Zjc2ZjE2Mzc1ZDY1YWRjZmViZDY0ODc3YTkyIiwib3BlcmF0aW9uIjoiZzAtZTRiMTMxZmFkYTBjOWE2ZGI2MmRiZTYyOGRiMGExYjMiLCJzY2VuYXJpbyI6InVuY2VydGFpbiIsImFjdGlvbiI6ImxhdW5jaCJ9"
+          }
+        ]
+      },
+      "scheduleToCloseTimeout": "180s",
+      "scheduleToStartTimeout": "180s",
+      "startToCloseTimeout": "5s",
+      "heartbeatTimeout": "0s",
+      "workflowTaskCompletedEventId": "4",
+      "retryPolicy": {
+        "initialInterval": "1s",
+        "backoffCoefficient": 2,
+        "maximumInterval": "100s",
+        "maximumAttempts": 3
+      },
+      "useWorkflowBuildId": true
+    }
+  },
+  {
+    "eventId": "6",
+    "eventTime": "2026-10-31T15:21:52.004958333Z",
+    "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+    "taskId": "2097441",
+    "activityTaskStartedEventAttributes": {
+      "scheduledEventId": "5",
+      "identity": "146@d006a67c8b4f",
+      "requestId": "c2e95213-bae5-45db-8e92-892cc9645e74",
+      "attempt": 2,
+      "lastFailure": {
+        "message": "activity StartToClose timeout",
+        "source": "Server",
+        "timeoutFailureInfo": {
+          "timeoutType": "TIMEOUT_TYPE_START_TO_CLOSE"
+        }
+      },
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      }
+    }
+  },
+  {
+    "eventId": "7",
+    "eventTime": "2026-10-31T15:21:52.044870297Z",
+    "eventType": "EVENT_TYPE_ACTIVITY_TASK_FAILED",
+    "taskId": "2097442",
+    "activityTaskFailedEventAttributes": {
+      "failure": {
+        "message": "spawn attempted but no labeled process: no blind relaunch",
+        "stackTrace": "/work/tools/f0/temporal/definitions.rb:16:in 'G0ProbeActivity#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/activity/definition.rb:214:in 'block in Temporalio::Activity::Definition::Info.from_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:444:in 'Temporalio::Internal::Worker::ActivityWorker::InboundImplementation#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:283:in 'Temporalio::Internal::Worker::ActivityWorker#run_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:243:in 'Temporalio::Internal::Worker::ActivityWorker#execute_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:114:in 'block in Temporalio::Internal::Worker::ActivityWorker#handle_start_task'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:200:in 'block (3 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'Kernel#loop'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'block (2 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'Kernel#catch'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'block in Temporalio::Worker::ThreadPool::Worker#initialize'",
+        "cause": {
+          "message": "spawn attempted but no labeled process: no blind relaunch",
+          "stackTrace": "/work/tools/f0/temporal/process_probe.rb:61:in 'block in ProcessProbe#launch'\n/work/tools/f0/temporal/process_probe.rb:56:in 'IO.open'\n/work/tools/f0/temporal/process_probe.rb:56:in 'ProcessProbe#launch'\n/work/tools/f0/temporal/definitions.rb:11:in 'G0ProbeActivity#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/activity/definition.rb:214:in 'block in Temporalio::Activity::Definition::Info.from_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:444:in 'Temporalio::Internal::Worker::ActivityWorker::InboundImplementation#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:283:in 'Temporalio::Internal::Worker::ActivityWorker#run_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:243:in 'Temporalio::Internal::Worker::ActivityWorker#execute_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:114:in 'block in Temporalio::Internal::Worker::ActivityWorker#handle_start_task'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:200:in 'block (3 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'Kernel#loop'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'block (2 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'Kernel#catch'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'block in Temporalio::Worker::ThreadPool::Worker#initialize'",
+          "applicationFailureInfo": {
+            "type": "Uncertain"
+          }
+        },
+        "applicationFailureInfo": {
+          "nonRetryable": true,
+          "details": {}
+        }
+      },
+      "scheduledEventId": "5",
+      "startedEventId": "6",
+      "identity": "146@d006a67c8b4f",
+      "retryState": "RETRY_STATE_NON_RETRYABLE_FAILURE"
+    }
+  },
+  {
+    "eventId": "8",
+    "eventTime": "2026-10-31T15:21:52.045050390Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+    "taskId": "2097443",
+    "workflowTaskScheduledEventAttributes": {
+      "taskQueue": {
+        "name": "136@d006a67c8b4f-ccc3ec33fe3145da9db008565b2894da",
+        "kind": "TASK_QUEUE_KIND_STICKY",
+        "normalName": "agent-control-g0-905b9f76f16375d65adcfebd64877a92"
+      },
+      "startToCloseTimeout": "10s",
+      "attempt": 1
+    }
+  },
+  {
+    "eventId": "9",
+    "eventTime": "2026-10-31T15:22:02.048179769Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT",
+    "taskId": "2097447",
+    "workflowTaskTimedOutEventAttributes": {
+      "scheduledEventId": "8",
+      "timeoutType": "TIMEOUT_TYPE_SCHEDULE_TO_START"
+    }
+  },
+  {
+    "eventId": "10",
+    "eventTime": "2026-10-31T15:22:02.048230870Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+    "taskId": "2097448",
+    "workflowTaskScheduledEventAttributes": {
+      "taskQueue": {
+        "name": "agent-control-g0-905b9f76f16375d65adcfebd64877a92",
+        "kind": "TASK_QUEUE_KIND_NORMAL"
+      },
+      "startToCloseTimeout": "10s",
+      "attempt": 1
+    }
+  },
+  {
+    "eventId": "11",
+    "eventTime": "2026-10-31T15:22:02.089888861Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+    "taskId": "2097451",
+    "workflowTaskStartedEventAttributes": {
+      "scheduledEventId": "10",
+      "identity": "146@d006a67c8b4f",
+      "requestId": "fcdddcf7-684e-4d8a-92dd-e091e078696b",
+      "historySizeBytes": "5996",
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      }
+    }
+  },
+  {
+    "eventId": "12",
+    "eventTime": "2026-10-31T15:22:02.148141319Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+    "taskId": "2097456",
+    "workflowTaskCompletedEventAttributes": {
+      "scheduledEventId": "10",
+      "startedEventId": "11",
+      "identity": "146@d006a67c8b4f",
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      },
+      "sdkMetadata": {},
+      "meteringMetadata": {}
+    }
+  },
+  {
+    "eventId": "13",
+    "eventTime": "2026-10-31T15:22:02.148307499Z",
+    "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+    "taskId": "2097457",
+    "activityTaskScheduledEventAttributes": {
+      "activityId": "2",
+      "activityType": {
+        "name": "g0_probe_activity"
+      },
+      "taskQueue": {
+        "name": "agent-control-g0-905b9f76f16375d65adcfebd64877a92",
+        "kind": "TASK_QUEUE_KIND_NORMAL"
+      },
+      "header": {},
+      "input": {
+        "payloads": [
+          {
+            "metadata": {
+              "encoding": "anNvbi9wbGFpbg=="
+            },
+            "data": "eyJyb290IjoiL3dvcmsvdG9vbHMvZjAvdGVtcG9yYWwvYXJ0aWZhY3RzL2cwLTkwNWI5Zjc2ZjE2Mzc1ZDY1YWRjZmViZDY0ODc3YTkyIiwib3BlcmF0aW9uIjoiZzAtZTRiMTMxZmFkYTBjOWE2ZGI2MmRiZTYyOGRiMGExYjMiLCJzY2VuYXJpbyI6InVuY2VydGFpbiIsImFjdGlvbiI6InN0b3AifQ=="
+          }
+        ]
+      },
+      "scheduleToCloseTimeout": "180s",
+      "scheduleToStartTimeout": "180s",
+      "startToCloseTimeout": "5s",
+      "heartbeatTimeout": "0s",
+      "workflowTaskCompletedEventId": "12",
+      "retryPolicy": {
+        "initialInterval": "1s",
+        "backoffCoefficient": 2,
+        "maximumInterval": "100s",
+        "maximumAttempts": 3
+      },
+      "useWorkflowBuildId": true
+    }
+  },
+  {
+    "eventId": "14",
+    "eventTime": "2026-10-31T15:22:02.148426402Z",
+    "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+    "taskId": "2097460",
+    "activityTaskStartedEventAttributes": {
+      "scheduledEventId": "13",
+      "identity": "146@d006a67c8b4f",
+      "requestId": "e514fb4f-ec50-4e28-bf38-58fbeea9409a",
+      "attempt": 1,
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      }
+    }
+  },
+  {
+    "eventId": "15",
+    "eventTime": "2026-10-31T15:22:02.190029297Z",
+    "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+    "taskId": "2097461",
+    "activityTaskCompletedEventAttributes": {
+      "result": {
+        "payloads": [
+          {
+            "metadata": {
+              "encoding": "anNvbi9wbGFpbg=="
+            },
+            "data": "eyJzdG9wcGVkIjp0cnVlfQ=="
+          }
+        ]
+      },
+      "scheduledEventId": "13",
+      "startedEventId": "14",
+      "identity": "146@d006a67c8b4f"
+    }
+  },
+  {
+    "eventId": "16",
+    "eventTime": "2026-10-31T15:22:02.190075275Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+    "taskId": "2097462",
+    "workflowTaskScheduledEventAttributes": {
+      "taskQueue": {
+        "name": "146@d006a67c8b4f-2bef9ffed6f545b38cce5392e353e007",
+        "kind": "TASK_QUEUE_KIND_STICKY",
+        "normalName": "agent-control-g0-905b9f76f16375d65adcfebd64877a92"
+      },
+      "startToCloseTimeout": "10s",
+      "attempt": 1
+    }
+  },
+  {
+    "eventId": "17",
+    "eventTime": "2026-10-31T15:22:02.219790515Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+    "taskId": "2097466",
+    "workflowTaskStartedEventAttributes": {
+      "scheduledEventId": "16",
+      "identity": "146@d006a67c8b4f",
+      "requestId": "6be301f4-1f7a-4af3-a281-6dc438f09c85",
+      "historySizeBytes": "6916",
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      }
+    }
+  },
+  {
+    "eventId": "18",
+    "eventTime": "2026-10-31T15:22:02.252890718Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+    "taskId": "2097470",
+    "workflowTaskCompletedEventAttributes": {
+      "scheduledEventId": "16",
+      "startedEventId": "17",
+      "identity": "146@d006a67c8b4f",
+      "workerVersion": {
+        "buildId": "1449bdf18b42800b444c9226b5fab2b7"
+      },
+      "sdkMetadata": {},
+      "meteringMetadata": {}
+    }
+  },
+  {
+    "eventId": "19",
+    "eventTime": "2026-10-31T15:22:02.253121720Z",
+    "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_FAILED",
+    "taskId": "2097471",
+    "workflowExecutionFailedEventAttributes": {
+      "failure": {
+        "message": "Activity task failed",
+        "cause": {
+          "message": "spawn attempted but no labeled process: no blind relaunch",
+          "stackTrace": "/work/tools/f0/temporal/definitions.rb:16:in 'G0ProbeActivity#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/activity/definition.rb:214:in 'block in Temporalio::Activity::Definition::Info.from_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:444:in 'Temporalio::Internal::Worker::ActivityWorker::InboundImplementation#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:283:in 'Temporalio::Internal::Worker::ActivityWorker#run_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:243:in 'Temporalio::Internal::Worker::ActivityWorker#execute_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:114:in 'block in Temporalio::Internal::Worker::ActivityWorker#handle_start_task'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:200:in 'block (3 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'Kernel#loop'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'block (2 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'Kernel#catch'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'block in Temporalio::Worker::ThreadPool::Worker#initialize'",
+          "cause": {
+            "message": "spawn attempted but no labeled process: no blind relaunch",
+            "stackTrace": "/work/tools/f0/temporal/process_probe.rb:61:in 'block in ProcessProbe#launch'\n/work/tools/f0/temporal/process_probe.rb:56:in 'IO.open'\n/work/tools/f0/temporal/process_probe.rb:56:in 'ProcessProbe#launch'\n/work/tools/f0/temporal/definitions.rb:11:in 'G0ProbeActivity#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/activity/definition.rb:214:in 'block in Temporalio::Activity::Definition::Info.from_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:444:in 'Temporalio::Internal::Worker::ActivityWorker::InboundImplementation#execute'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:283:in 'Temporalio::Internal::Worker::ActivityWorker#run_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:243:in 'Temporalio::Internal::Worker::ActivityWorker#execute_activity'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/internal/worker/activity_worker.rb:114:in 'block in Temporalio::Internal::Worker::ActivityWorker#handle_start_task'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:200:in 'block (3 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'Kernel#loop'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:193:in 'block (2 levels) in Temporalio::Worker::ThreadPool::Worker#initialize'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'Kernel#catch'\n/work/tools/f0/temporal/.runtime/bundle/ruby/4.0.0/gems/temporalio-1.10.0-x86_64-linux/lib/temporalio/worker/thread_pool.rb:192:in 'block in Temporalio::Worker::ThreadPool::Worker#initialize'",
+            "applicationFailureInfo": {
+              "type": "Uncertain",
+              "details": {}
+            }
+          },
+          "applicationFailureInfo": {
+            "nonRetryable": true,
+            "details": {}
+          }
+        },
+        "activityFailureInfo": {
+          "scheduledEventId": "5",
+          "startedEventId": "6",
+          "identity": "146@d006a67c8b4f",
+          "activityType": {
+            "name": "g0_probe_activity"
+          },
+          "activityId": "g0-launch",
+          "retryState": "RETRY_STATE_NON_RETRYABLE_FAILURE"
+        }
+      },
+      "retryState": "RETRY_STATE_RETRY_POLICY_NOT_SET",
+      "workflowTaskCompletedEventId": "18"
+    }
+  }
+]

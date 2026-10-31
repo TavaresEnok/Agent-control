@@ -1,0 +1,11 @@
+{
+  "commit": "7535efeb34aee06abb6733ec0b5d75f9fba892c9",
+  "at": "2026-10-31T15:21:57.040596+00:00",
+  "ruby_image": "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df",
+  "postgres_image": "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a",
+  "db": "f0_admission_sql",
+  "role": "f0_admission_lab",
+  "network": "none",
+  "transport": "unix socket only",
+  "scope": "SQL proof with explicit synthetic boundaries; no agents or credentials"
+}

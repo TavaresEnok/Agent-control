@@ -1,0 +1,9 @@
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+W, [2026-10-31T15:22:20.287419 #1]  WARN -- : [SessionLaunchRelay] Admission 1: lab lost start receipt
+W, [2026-10-31T15:22:20.437885 #1]  WARN -- : [SessionAdmission] admission 1: releasing a pinned reservation after 10 minute(s) of proven absence
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+W, [2026-10-31T15:22:20.961888 #1]  WARN -- : [SessionAdmission] admission 1: 0 operation(s) stranded by a closed workflow
+W, [2026-10-31T15:22:21.009691 #1]  WARN -- : [SessionAdmission] admission 1: releasing a pinned reservation after 10 minute(s) of proven absence

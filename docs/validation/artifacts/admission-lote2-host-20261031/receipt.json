@@ -1,0 +1,33 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T15:23:26.200573+00:00",
+  "candidate_commit": "7535efeb34aee06abb6733ec0b5d75f9fba892c9",
+  "network": "none",
+  "gate": "G0 PENDENTE",
+  "reviewed_task": "dca0e310a433bec04130dcb1472e55a7c0395a13",
+  "runtime_image": "sha256:51e6a0811e25f8987d80eaab3fcec28c8c1c11fbaa07995830eca22cb3a5e116",
+  "postgres_version": "postgres (PostgreSQL) 15.3",
+  "postgres_image": "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a",
+  "guard": {
+    "tests": 2,
+    "assertions": 16,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "exit": 0
+  },
+  "preflight_exit": 0,
+  "sql": {
+    "tests": 9,
+    "assertions": 67,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "exit": 0
+  },
+  "socket": "Unix only; database+role+COMMENT verified",
+  "cleanup": "own PG container/socket volume removed after capture",
+  "build_note": "Docker rejects security-opt on build; dependencies installed in isolated temporary container and committed; no product code changed",
+  "limits": "Real SQL with mocked Temporal/runtime; no full Rails or real agents",
+  "external_raw_artifacts": "/home/enok/srv_projetos/runtime/agent-control/g0-admission-20261031"
+}

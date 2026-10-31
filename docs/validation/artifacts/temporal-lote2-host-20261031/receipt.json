@@ -1,0 +1,21 @@
+{
+  "observer": "manager_host",
+  "at": "2026-10-31T15:23:26.153892+00:00",
+  "candidate_commit": "7535efeb34aee06abb6733ec0b5d75f9fba892c9",
+  "network": "none",
+  "gate": "G0 PENDENTE",
+  "reviewed_task": "4f7e477042646e66ae8c1a918ca71cbe37851bd0",
+  "exit_code": 0,
+  "unit_start_receipt": "PASS",
+  "preflight": "PASS",
+  "real_temporal": "PASS five scenarios normal/after_intent/after_process/after_handle/uncertain",
+  "runtime_image": "ruby@sha256:32fdd19c0a001077d1711f1afa6d8a0ac9d497c4eac20e47ae7e1c7f7a8c49df",
+  "bundle_lock_sha256": "9d8ab3b0f1d3aeef20d16547b970e732b63ee0d8d33bb5e4f42d03961e320de2",
+  "external_raw_artifacts": "/home/enok/srv_projetos/runtime/agent-control/g0-temporal-20261031/tools/f0/temporal/artifacts/g0-905b9f76f16375d65adcfebd64877a92",
+  "aborted_preparation_run": {
+    "id": "g0-b54c6de378e492385d2c63b8ac4bf179",
+    "reason": "manager stopped after generated root-owned lock interrupted extraction; repaired ownership then fully extracted reviewed snapshot before accepted run",
+    "not_a_gate_result": true
+  },
+  "limits": "No SQL admission/relay; synthetic external child"
+}

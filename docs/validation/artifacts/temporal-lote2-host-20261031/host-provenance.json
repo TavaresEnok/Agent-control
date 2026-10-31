@@ -1,0 +1,8 @@
+{
+  "commit": "7535efeb34aee06abb6733ec0b5d75f9fba892c9",
+  "at": "2026-10-31T15:20:43.416487+00:00",
+  "reviewed_task": "4f7e477042646e66ae8c1a918ca71cbe37851bd0",
+  "dependency_bundle": "reused unchanged isolated baseline",
+  "network": "none",
+  "preparation_correction": "Prior extraction hit root-owned generated lock; lab run stopped and ownership repaired before complete extraction; aborted run retained separately."
+}

@@ -1,0 +1,63 @@
+{
+  "status": "PASS",
+  "scenarios": [
+    {
+      "scenario": "normal",
+      "result": "PASS",
+      "workflow_id": "g0-4ed350c71a64718b86fd08b6f7d67350",
+      "run_id": "01a1928c-9d18-7d9e-87c2-820a1534b265",
+      "launch_completed_event_id": 7,
+      "launch_retry": null
+    },
+    {
+      "scenario": "after_intent",
+      "result": "PASS",
+      "workflow_id": "g0-60ba6a9a8864069bc0bf256b7667dfa8",
+      "run_id": "01a1928c-b161-7641-9825-864802645f2e",
+      "launch_completed_event_id": 7,
+      "launch_retry": {
+        "attempt": 2,
+        "saved_handle": null
+      }
+    },
+    {
+      "scenario": "after_process",
+      "result": "PASS",
+      "workflow_id": "g0-11da36e91a870f685ac6ae2a838ac235",
+      "run_id": "01a1928c-f1e3-7d6e-b1a3-ca1115647e3b",
+      "launch_completed_event_id": 7,
+      "launch_retry": {
+        "attempt": 2,
+        "saved_handle": null
+      }
+    },
+    {
+      "scenario": "after_handle",
+      "result": "PASS",
+      "workflow_id": "g0-198664c8aef834cd5e8340d9d6abb4a6",
+      "run_id": "01a1928d-3241-737f-8e68-b69e002513b8",
+      "launch_completed_event_id": 7,
+      "launch_retry": {
+        "attempt": 2,
+        "saved_handle": {
+          "pid": 133,
+          "ticks": "34053503",
+          "boot": "e4152b5b-8170-4a37-aa82-c080f2089e0d"
+        }
+      }
+    },
+    {
+      "scenario": "uncertain",
+      "result": "PASS",
+      "workflow_id": "g0-e4b131fada0c9a6db62dbe628db0a1b3",
+      "run_id": "01a1928d-72aa-7945-9689-2185e1a82335",
+      "launch_completed_event_id": null,
+      "launch_retry": {
+        "attempt": 2,
+        "saved_handle": null
+      }
+    }
+  ],
+  "error": null,
+  "gate": "G0 PENDENTE"
+}
