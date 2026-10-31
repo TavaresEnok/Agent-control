@@ -1,7 +1,7 @@
 # ADR-001 — Escolha da base da plataforma e avaliação do Gate G0
 
 - **Data:** 2026-10-31
-- **Status da ADR:** Proposta para deliberação do proprietário (F0 concluída até o limite estático e sintético autorizado)
+- **Status da ADR:** Aixle Flow aprovado como candidato de desenvolvimento pelo pedido de continuação; decisão técnica e comparação preservadas, adoção definitiva condicionada ao G0. Consolidação encaminhada à revisão independente.
 - **Status do Gate G0:** **PENDENTE** (há critérios eliminatórios de execução bloqueados por pré-requisitos externos e de conformidade; proibido declarar aprovado sem essas evidências)
 - **Candidatos avaliados nos commits fixados:**
   - **Kandev:** `kdlbs/kandev` — commit `997bc54fae4da15702c91da5c5d120bfe651edc1` (`main`), licença `AGPL-3.0`
@@ -25,7 +25,7 @@ A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutu
    - O executor SSH nativo sobe `agentctl` no destino e copia arquivos de credenciais (`.codex/auth.json`, `.grok/auth.json`) para o servidor remoto (`codex_acp.go:157-168`), exatamente o oposto do requisito de manter CLIs e credenciais apenas na central.
 
 2. **No Aixle Flow (`e6ec5a28`):**
-   - **Já implementa nativamente o núcleo mais difícil e propenso a incidentes do Plano v1.1:**
+   - **Possui na fonte os mecanismos centrais candidatos ao reuso (EV-05; operação não homologada nesta F0):**
      - Orquestração via **Temporal** (`TemporalWorkflowRegistry`).
      - Autoridade única de admissão (`SessionAdmissionService`) com tratamento explícito de `StalePermit` e `UncertainOperation`.
      - **Transactional Outbox** (`OutboxRelay` com `FOR UPDATE SKIP LOCKED`) para evitar perda ou duplicação quando o processo falha entre o commit no banco e o início do workflow no Temporal (requisito exato da seção 11.3.1 / `T07`).
@@ -38,7 +38,7 @@ A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutu
      - Reforçar a interface móvel (percursos compactos e grafo de leitura mobile-first na P0).
 
 ### 1.2 Recomendação
-- **Recomendação técnica de engenharia (aplicando o gatilho D-02 do Plano v1.1):** adotar **Aixle Flow (`e6ec5a28`)** como base da plataforma, pois já entrega prontos e testados em produção os mecanismos de **Temporal, admissão atômica, transactional outbox, leases de reconciliação e jobs SSH destacados**, exigindo menor volume e menor risco de código novo no núcleo de consistência.
+- **Recomendação técnica de engenharia (gatilho D-02 do Plano v1.1), aceita como candidato:** trabalhar sobre **Aixle Flow (`e6ec5a28`)**, pois a fonte contém **Temporal, admissão, transactional outbox, leases de reconciliação e jobs SSH destacados**, com menor custo estimado de adaptação. A inspeção estática não comprova funcionamento em produção nem cumprimento desses contratos na integração escolhida.
 - **Caminho alternativo caso o proprietário priorize a stack Go + UI móvel imediata (D-01):** manter **Kandev (`997bc54f`)** somente se o proprietário aceitar o custo alto de escrever do zero tutta a camada Temporal + Outbox + Reconciliação + Serviço de Contas/Cotas e fechar os 9 pontos de entrada legados e as brechas de autenticação/MCP antes de qualquer login real.
 - **Situação do Gate G0:** **PENDENTE** para ambas as bases até a conclusão das provas de execução bloqueadas (Seção 5).
 
@@ -52,9 +52,14 @@ A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutu
 3. **Auditoria de elegibilidade contratual RF-55 (`EV-03`):** classificados os modos de autenticação e transporte de Codex, Claude Code, Grok e Antigravity frente às fontes primárias do Adendo §4.2.
 
 ### 2.2 Provas técnicas executadas e seus resultados
+Os itens EV-06/07 abaixo são registros históricos preservados. EV-09 não
+reproduziu o namespace positivo: o ambiente negou `unshare`. Não herdar PASS
+histórico como prova de isolamento atual. EV-08–10 e a matriz vigente no
+F0-CHECKLIST qualificam o estado atual de cada critério.
+
 1. **Isolamento concorrente de contas com segredos sintéticos (`EV-06` — `T24` parcial):**
    - **Executado:** dois ambientes de conta simulados (`acct_a` e `acct_b`) sob o mesmo UID no Linux `5.17.15`.
-   - **Resultado:** comprovado que separar apenas `HOME` e `CODEX_HOME` **permite vazamento imediato** da credencial da outra conta via symlink/leitura direta (`probe1_home_only_cross_read_blocked: false`). Em seguida, comprovado que o uso de `unshare -Umr` (user + mount namespace) com ocultação via `tmpfs` **bloqueia 100% da leitura cruzada** mantendo o acesso à própria credencial (`probe2_namespace_isolation_cross_read_blocked: true`).
+   - **Resultado histórico:** HOME/CODEX_HOME permitiram leitura da fixture alheia via symlink; `unshare -Umr` com tmpfs bloqueou aquela tentativa mantendo leitura própria (`probe2_namespace_isolation_cross_read_blocked: true`). Esse teste limitado não prova bloqueio de todos os ataques de processo/filesystem. EV-09 ampliou os ataques e não conseguiu executar namespaces no ambiente da continuação.
 2. **Fronteira SSH centralizada sem IA no destino (`EV-07` — `T25` parcial):**
    - **Executado:** instância `sshd` efêmera em loopback com chave host ED25519 fixada (`SHA256:ZD44FSXCR++iNTi8OBoJ+WqDO1w+N4rT3waKL8IYnn0`), repositório Git bare existente inicialmente apenas no lado remoto, clone/commit/push pela central (`4ae6d60fbeadb739fbbb0a41675ad54f3e0778e5`) e execução de teste via SSH no destino.
    - **Resultado:** artefato exato verificado e testado remotamente (`calc.mul(6, 7) == 42`) com confirmação de que o segredo de IA da central (`CENTRAL_AI_SECRET`) **não atravessou a fronteira SSH** (`ai_secret_present=False`).
@@ -63,7 +68,7 @@ A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutu
 1. **Antigravity (perfis Gemini e Sonnet) em plano de consumidor encapsulado por plataforma de terceiros:**
    - Classificação: **`unsupported_for_mode`** (Adendo §4.2 `[A1]`, `[A2]`).
    - Afeta tanto o adaptador `antigravity-acp` do Kandev quanto o `antigravity_cli_adapter.rb` do Aixle Flow (que ainda realiza refresh de token no servidor usando `client_id`/`client_secret` do `agy`).
-   - Consequência: **não pode ser ativado nem testado com conta real** na nova plataforma até que o proprietário defina um caminho oficial autorizado (ou recalcule a cadeia de substituição sem depender do Antigravity consumidor).
+   - Consequência: **não ativar nem testar com conta real** esse modo na nova plataforma. Perfis históricos ficam desabilitados nesta costura F0; não há pedido pendente de habilitá-los para concluir esta consolidação. Eventual ativação futura exige caminho oficial avaliado e etapa própria, sem confundir despacho do controlador com RF-55.
 2. **Interceptação TLS via proxy MITM dentro dos containers de agentes (Aixle Flow):**
    - Classificação: **`unsupported_for_mode`** frente às restrições de não intermediar requisições/credenciais do Claude Code e demais CLIs (Adendo §4.2 `[A6]`).
    - Consequência: o mecanismo `docker/base/logger/start-mitm.sh` + `refresh_broker.py` do Aixle deve ser desativado (`MITM_DISABLED=true`) e substituído por controle de concorrência/renovação fora do caminho TLS antes de logins reais.
@@ -71,14 +76,32 @@ A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutu
    - Ambos os candidatos aceitam ou injetam variáveis de chave de API (no Kandev, `RequiredEnv: []string{"OPENAI_API_KEY"}` em `codex_acp.go:134` e `codex_app_server.go:74`).
    - Consequência: deve ser bloqueado por política antes de qualquer lançamento para impedir cobrança por uso acidental.
 
-### 2.4 Provas pendentes por capacidade, autenticação, permissão ou ambiente
-1. **Execução real das CLIs com assinaturas (`G0-E1` / `T01`):**
-   - Os binários `codex`, `claude`, `grok` e `agy_acp_server.par` não estão instalados no `PATH` deste host (`EV-01`).
-   - Além disso, o Adendo §5 proíbe chamadas reais com contas compartilhadas com os Paseos ativos sem que a autoridade comum de admissão e refresh (`RF-46` / `T28`) esteja ativa ou que sejam fornecidas contas não sobrepostas autorizadas.
-2. **Grok por CLI oficial (`@xai-official/grok`):**
-   - Permanece **`not_assessed`** documentalmente (Adendo §4.2) até verificação dos termos aplicáveis da xAI para o plano do proprietário.
-3. **Execução da fatia mínima com servidor Temporal (`G0-E3` / Pacote C) e percurso móvel integrado (`G0-E5` / Pacote D):**
-   - O binário `temporal` não está instalado no host local e nenhum serviço ou container adicional foi subido nesta F0 para preservar estritamente o ambiente e aguardar a decisão da base em `ADR-001`.
+### 2.4 Consolidação das três provas novas e lacunas reais
+
+| Critério G0 | Origem da prova | Estado da integração / custo remanescente |
+|---|---|---|
+| E1 CLIs/assinaturas | EV-03 histórico, EV-09 RF-55 atualizado | **NOT RUN** real. Guard só aceita o caminho Codex local privado avaliado; modo privado hospedado/remoto `requires_clarification`. Titular/plano/versão/entitlement ainda não demonstrados; perfis históricos não são fallback ativo desta fatia |
+| E2 duas contas | EV-05/06 histórico, EV-09 execução sintética negativa | HOME vazou em cinco ataques bidirecionais; namespace **NOT RUN** por `Operation not permitted`; contas reais **NOT RUN**. Constraint de conta única ainda exige adaptação; nenhuma identidade autenticada provada |
+| E3 autoridade/durabilidade | EV-05 código; EV-08 harness e sintaxe | Temporal real/testes Ruby **NOT RUN**: make/headers e runtime ausentes. Reusa três classes, mas não admissão/relay/outbox SQL. Primeiro executar harness; depois provar a fatia pelo contrato real, sem motor paralelo |
+| E4 acesso/isolamento | EV-09 auditoria de 18 arquivos fixos | T36 **NOT RUN**. ttyd direto é bypass condicional; MITM/CA/proxy, RBAC/gateway/rede e acesso worker à central ainda por fechar/provar. Guard não integrado globalmente |
+| E5 móvel | EV-10 componentes reais em browser emulado | Quatro checks parciais relatados, transporte/dados sintéticos. Perfil conta/modelo, criação de tarefa, persistência/deduplicação e grafo/estado real **NOT RUN**. Reuso da árvore/timeline viável, shell completo ainda por exercer |
+| E6 licença | EV-02/05 documental | **Concluído documentalmente**: Apache-2.0 e operação privada; preservar avisos/licença |
+| E7 SSH | EV-07 execução histórica loopback | **Parcial**; adapter/destino dedicado Aixle **NOT RUN**. Generalizar `coder ssh` para OpenSSH com fingerprint sem mover IA/credencial ao destino |
+| AD1 elegibilidade | EV-03 e EV-09 fontes + guard standalone | 24 recusas/um positivo sintético; T39 global **NOT RUN**. Não autoriza MITM/cópia/refresh nem modo hospedado por presunção |
+| AD2 capacidade comum | EV-11 procedimento sem contas | Preservado por não realizar chamadas; T28 real **NOT RUN**. Controlador ativo não comprova admissão/refresh comuns com Aixle |
+| COMP comparação | EV-02/04/05, §3 desta ADR | **Concluída documentalmente**: notas estáticas preservadas, sem compensar eliminatórios |
+
+Os relatórios e diffs de `g0-temporal` (`73ec58e`), `g0-boundary` (`744b19e`)
+e `g0-mobile` (`6878e8c`) foram consultados. EV-08–11 registram commits completos,
+causas e artefatos. JSON de fronteira disponível; report/trace/capturas móveis
+ausentes desta worktree, hashes somente transcritos do relatório. Obter bytes
+da entrega produtora para revisão antes de tratá-los como prova direta. Não houve
+nova execução de suítes verdes nesta consolidação.
+
+O custo comparativo da §3 permanece uma estimativa pelo snapshot, não afirmação
+de que basta remover uma constraint ou definir `MITM_DISABLED=true`: é necessário
+provar identidade/admissão de contas, ausência de interceptação e bypass e o
+percurso real. Notas não foram recalculadas sem nova execução/material técnico.
 
 ---
 
@@ -137,12 +160,31 @@ Critério de notas (0 a 5, fundamentado apenas no código inspecionado nos commi
 **Gate G0: PENDENTE.**  
 Em cumprimento estrito às instruções da F0 (*"Não declare aprovação enquanto houver critério obrigatório sem evidência. Quando o critério exigir execução, documentação sozinha não o satisfaz"*), o G0 **não está aprovado** nesta data.
 
-### 5.2 Pendências obrigatórias para fechar o G0 (após decisão sobre esta ADR)
-1. **Decisão 1 — Escolha da base (D-01 vs. D-02):**
-   - Confirmar se adotamos **Aixle Flow (`e6ec5a28`)** conforme a condição de reversão **D-02** e a menor carga de adaptação (pontuação **3,40 vs. 2,25**), ou se o proprietário prefere manter **Kandev (`997bc54f`)** assumindo a construção completa da camada Temporal, de segurança e de SSH centralizado.
-2. **Decisão 2 — Cadeia de modelos diante da inelegibilidade do Antigravity consumidor (`RF-55`):**
-   - Como o Antigravity em plano de consumidor encapsulado por aplicação de terceiros é classificado como `unsupported_for_mode` pelo Adendo §4.2 (afetando Gemini e Sonnet via Antigravity), o proprietário precisa decidir se:
-     - **(a)** mantém Gemini/Sonnet Antigravity desabilitados na nova plataforma (`unsupported_for_mode`) e opera a cadeia de programação apenas com os perfis elegíveis (Codex, Claude Code oficial e, após verificação dos termos xAI, Grok); ou
-     - **(b)** indica outro método/contrato oficialmente autorizado pelo provedor para esses modelos.
-3. **Decisão 3 — Ambiente e autorização para as provas de execução restantes do G0:**
-   - Autorizar a instalação isolada (em container ou ambiente dedicado da F0) do servidor `temporal` e das CLIs elegíveis (`codex`, `claude`, `grok`) e definir se as provas de duas contas simultâneas (`T01`/`G0-E1`/`G0-E2`) serão feitas com contas de teste não sobrepostas ou após ativar o coordenador de capacidade compartilhada com o Paseo (`Adendo §5`).
+### 5.2 Autorizações resolvidas e encaminhamento técnico
+
+Aixle candidato e instalação isolada já autorizados pelo pedido atual e por
+PASEO-CONTINUACAO; não pedir novamente escolha D-01/D-02 ou permissão genérica
+para dependências. A autorização não homologa G0, não concede direitos do
+provedor nem autoriza contas reais nesta entrega documental.
+
+Clone de desenvolvimento e worktree desta consolidação identificados em STATUS
+e EV-11; origem/Zed preservada. Controlador ativo para o fluxo de tarefas, sem
+probe/reinício de serviço nesta entrega; demais projetos continuam pausados.
+A exclusiva histórica permanece rastreada, mas a atualização administrativa v3
+substitui regras históricas de modelo/conta/despacho. Executor já delegado Codex,
+sem fallback ou subagentes nesta tarefa; controlador encaminha revisão em sessão
+independente pela política vigente. Isso não altera perfis/contas da futura Aixle.
+
+Próximo bloco mínimo concreto: revisão independente; gerente disponibiliza
+toolchain/headers ou Ruby 4.0.9 isolado; executar preflight, testes Ruby essenciais
+e harness Temporal existente, anexando históricos/manifest/resultados. Comandos
+de host devolvidos e receita de execução em
+[`validation/F0-RETOMADA.md`](validation/F0-RETOMADA.md), com origem completa em
+F0-TEMPORAL. Nenhum comando administrativo foi executado pelo trabalhador.
+
+Em seguida fechar fronteira OS/rede/T36 e contrato de admissão/outbox da base,
+percurso móvel integrado e SSH de laboratório. Modo/plano RF-55 e coordenação
+T28/contas não sobrepostas precedem qualquer etapa própria de conta real. São
+lacunas de ambiente/implementação/elegibilidade, sem evidência de bloqueio por
+quota ou transporte nesta consolidação. **Não iniciar F1 nem promover G0**
+enquanto faltar eliminatório; revisão independente continua obrigatória.

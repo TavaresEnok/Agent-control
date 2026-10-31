@@ -1,41 +1,59 @@
 # STATUS — Agent Control
 
-**Última atualização:** 2026-10-31  
-**Fase atual:** **F0 concluída (análise estática, matriz de elegibilidade e provas locais sintéticas/SSH)** — aguardando revisão do proprietário e deliberação sobre o **Gate G0 (`PENDENTE`)**.  
-**Próxima fase prevista:** Fechamento das provas de execução dependentes de autorização/CLIs no G0 ou início da F1 (somente após aprovação explícita do proprietário).
+**Atualização:** 2026-10-31. **Fase: F0 em fechamento de provas; G0 PENDENTE. F1 não iniciada.**
+Aixle Flow `e6ec5a286120aed3a036d85871e796b2f6c97d70` é candidato aprovado
+para desenvolvimento, sem homologação definitiva. A consolidação documental
+está pronta para revisão independente; isso não conclui os eliminatórios.
 
----
+## Continuidade e preservação
 
-## 1. Entregas da F0 produzidas
+- Worktree exclusiva desta entrega: `/home/enok/srv_projetos/worktrees/14v3rrig/task-e59f2072f8f4-g0-consolidar`; HEAD inicial `50d3387f21778dacd7f2e9c6147fbcaf650bbe99`, árvore inicial limpa. Clone de desenvolvimento identificado por `UPSTREAM.json`, com as entregas de fronteiras, mobile e Temporal incorporadas.
+- Origem e entregas Zed em `/home/enok/Documentos/projetos/agent-control` preservadas; não acessadas nem alteradas nesta consolidação. A continuação explícita autoriza esta worktree, sem assumir que Zed terminou na origem.
+- Controlador ativo para este fluxo conforme delegação e histórico das tarefas; não foi consultada saúde do serviço nem iniciado/reiniciado daemon. Aixle não recebeu autoridade sobre planos ativos.
+- `Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat` e demais projetos permanecem pausados. Nenhum serviço, credencial real, API paga, produção, migração, deploy/push/merge ou commit nesta entrega.
+- `.paseo-context.md` ausente. Contrato atual, Plano v1.1, Adendo, baseline e os três relatórios/diffs forneceram contexto suficiente. Somente documentação autorizada alterada.
 
-| Arquivo | Estado | Resumo |
+## Matriz de continuidade G0
+
+Esta síntese remete à matriz normativa completa em [F0-CHECKLIST](F0-CHECKLIST.md)
+e às origens exatas em [F0-EVIDENCIAS](F0-EVIDENCIAS.md), EV-01–11.
+
+| Critério | Estado e prova | Lacuna eliminatória / próxima evidência |
 |---|---|---|
-| `docs/F0-CHECKLIST.md` | Concluído | Checklist rastreável dos critérios obrigatórios de F0/G0 com origem no Plano v1.1 e no Adendo Final. |
-| `docs/F0-EVIDENCIAS.md` | Concluído | Registro de `EV-01` a `EV-07` separando o que foi comprovado por execução, comprovado por código/documentação e impedimentos. |
-| `docs/ADR-001-BASE-DA-PLATAFORMA.md` | Concluído | Comparação técnica e de custo de adaptação entre Kandev (`997bc54f`) e Aixle Flow (`e6ec5a28`), recomendação pelo gatilho D-02 e declaração do G0 como **PENDENTE**. |
-| `docs/STATUS.md` | Concluído | Este arquivo de estado para continuidade sem necessidade de reler o histórico do chat. |
+| E1 CLIs/assinaturas | NOT RUN real; EV-03/09 documental e guard sintético | Modo/plano/CLI/entitlement elegíveis e execução controlada em etapa própria |
+| E2 duas contas/isolamento | Parcial negativo; HOME vazou, namespace NOT RUN; EV-06 histórico e EV-09 atual | Ambiente OS permitido, isolamento na base e duas contas reais identificáveis |
+| E3 autoridade/durabilidade | Código/harness; integração Temporal NOT RUN; EV-05/08 | Ruby/SDK/CLI; executar harness e depois contrato real de admissão/relay/outbox da base |
+| E4 UI/API/WS/terminal/MCP | Auditoria fixa; execução T36 NOT RUN; EV-09 | Laboratório de gateway/rede com testes negativos inclusive acesso direto; retirar MITM/CA/proxy e fechar bypass |
+| E5 móvel | Execução parcial de componentes com transporte/dados sintéticos; EV-10 | Perfil conta/modelo, criação de tarefa, reenvio com efeito único, reconexão e estado/grafo reais no shell autenticado |
+| E6 licença | Documental concluído; Apache-2.0, EV-02/05 | Preservar licença/avisos e estratégia privada no fork |
+| E7 SSH | Execução histórica loopback/segredo sintético, EV-07 | Destino dedicado de teste e transporte Aixle/OpenSSH com hostkey, artefato/teste e IA central; NOT RUN integrado |
+| AD1 RF-55/T39 | Documental + 24 recusas standalone, EV-09 | Codex hospedado/remoto requires_clarification; guard global na base NOT RUN |
+| AD2 RF-46/T28 | Preservação sem contas reais, EV-11 | T28 real NOT RUN; autoridade comum ou contas explicitamente não sobrepostas antes de chamada |
+| COMP | Comparação estática concluída, ADR-001/EV-02/04/05 | Notas 3,40 Aixle / 2,25 Kandev não anulam eliminatórios |
 
----
+## Autorizações, política e próximo bloco
 
-## 2. Estado do ambiente e preservação operacional
+A escolha do candidato e instalação isolada já foram autorizadas. As pendências
+antigas de nova autorização genérica estão encerradas; ambiente, elegibilidade,
+contas em etapa própria e gates continuam exigidos. A política exclusiva histórica
+é origem documental dos relatórios; a política administrativa v3 recebida nesta
+sessão substitui as regras históricas de modelos/contas. Esta entrega continua
+no executor Codex já delegado, sem agentes ou fallback. O controlador aplica a
+política vigente na próxima revisão independente. Detalhes de precedência e
+restrições em [F0-RETOMADA](validation/F0-RETOMADA.md).
 
-- **Repositório Git local:** inicializado em `/home/enok/Documentos/projetos/agent-control` (`.gitignore` configurado para ignorar `.f0/`).
-- **Snapshots dos candidatos clonados isoladamente em `.f0/candidates/`:**
-  - Kandev: `997bc54fae4da15702c91da5c5d120bfe651edc1` (`main`, `AGPL-3.0`)
-  - Aixle Flow: `e6ec5a286120aed3a036d85871e796b2f6c97d70` (`develop`, `Apache-2.0`)
-- **Preservação dos sistemas existentes:**
-  - Nenhuma instância ativa do Paseo, banco de dados, fila, projeto (`Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat`) ou serviço existente foi tocado, reiniciado ou reconfigurado.
-  - Nenhuma credencial real foi lida, copiada ou versionada.
-  - Nenhuma chamada paga de IA ou login em provedor foi executada.
+Próximo bloco mínimo: revisão independente desta consolidação e das evidências
+insuficientemente resumidas; gerente disponibiliza toolchain/headers ou Ruby
+4.0.9 isolado; executor executa preflight, testes Ruby essenciais e harness
+Temporal existente, preservando históricos/manifest/resultados. Receita e comandos
+administrativos em [F0-RETOMADA](validation/F0-RETOMADA.md). Não repetir mobile/guard
+verdes sem mudança ou evidência faltante que justifique. Os artefatos móveis
+report/trace/capturas não estão nesta worktree: obter e conferir hashes da entrega
+produtora antes de usá-los como evidência direta.
 
----
-
-## 3. Resumo das decisões e pendências para o proprietário
-
-1. **Recomendação da ADR-001:** adotar **Aixle Flow (`e6ec5a28`)** pelo gatilho da condição de reversão **D-02** do Plano v1.1 (pontuação ponderada **3,40 / 5,00** contra **2,25 / 5,00** do Kandev), pois já traz **Temporal, transactional outbox (`OutboxRelay`), admissão com lease (`SessionAdmissionService` / `SessionAdmissionReconciler`) e jobs SSH destacados (`CoderSshExec`)**, enquanto o Kandev não possui Temporal, espalha o lançamento por 9 pontos de entrada, vem com autenticação desabilitada por padrão e copia credenciais de IA para o host SSH.
-2. **Situação do Gate G0:** **PENDENTE**.
-   - **Já comprovado por execução local:** isolamento de credenciais via user/mount namespace (`unshare -Umr`) contra falha de simples troca de `HOME` (`EV-06`), e fluxo Git + teste via SSH com fingerprint fixado e sem envio de segredo de IA ao destino (`EV-07`).
-   - **Pendente de decisão/autorização:**
-     1. Escolha entre **Aixle Flow** (recomendado por D-02) e **Kandev** (D-01).
-     2. Definição sobre a cadeia de modelos sem o **Antigravity consumidor encapsulado** (`unsupported_for_mode` conforme `RF-55` / Adendo §4.2) e verificação dos termos xAI para o **Grok CLI** (`not_assessed`).
-     3. Autorização para instalar os binários ausentes (`temporal`, `codex`, `claude`, `grok`) em ambiente isolado e realizar a fatia mínima integrada na base escolhida respeitando a coordenação de capacidade compartilhada (`Adendo §5`).
+Não há prova de esgotamento de quota ou falha de transporte nesta consolidação.
+`Operation not permitted` em namespaces e falta de make/headers são ambiente;
+RF-55 hospedado é elegibilidade; guard não integrado e percurso móvel incompleto
+são lacunas técnicas. Nenhuma delas se resolve marcando sintético como integração.
+`git diff --check` é o check desta entrega documental, registrado no resultado do
+executor; a revisão independente e a deliberação do gate continuam próximas fases.
