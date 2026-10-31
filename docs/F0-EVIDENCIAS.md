@@ -39,6 +39,13 @@ scripts novos ainda pendente. Worktree `task-9add58f6088a-g0-lote5-status`, HEAD
 inicial `25298dc`. Os NOT RUN de EV-20/21 descrevem seus snapshots históricos.
 G0 PENDENTE, F1 não iniciada; política exclusiva EV-15, pausas e Zed preservados.
 
+**Atualização lote6:** EV-25–26 complementam os marcos anteriores: recibos
+físicos negativos lote5, correção administrativa de ownership e novas correções
+TCP/IO incorporadas, sem PASS das matrizes. Lote5 `9add58f6088a` DONE/revisado
+conforme controlador. Worktree `task-271a4475560c-g0-lote6-status`, HEAD inicial
+`f236c591352df51d1fabbb22d9643b9ff53463fb`. Comandos/aceite em
+[F0-LOTE6](validation/F0-LOTE6.md); G0 PENDENTE/F1 não iniciada.
+
 ---
 
 ## EV-01 — Ambiente local e ferramentas instaladas
@@ -572,3 +579,55 @@ G0 PENDENTE, F1 não iniciada; política exclusiva EV-15, pausas e Zed preservad
   Antes de login: substituições revisadas, prova E4, RF46/T28 e resposta da UI.
   Próximo experimento é launcher **sintético proposto/NOT RUN**, sem conta;
   nenhuma autenticação/inferência ou implantação ocorreu. ADR da base inalterado.
+
+## EV-25 — Tentativas físicas lote5: setup negativo, nenhum PASS E4/E7
+
+- **Comprovado por execução da gerência**, observer `manager_host`,
+  `2026-10-31T20:29:46.367005+00:00`, candidata
+  `660e6bddc5e5516181f357976fc50cf81fed0748`; pacote incorporado por `08ab9dd`.
+  [Recibo](validation/artifacts/lote5-host-attempts-20261031/receipt.json),
+  [manifesto](validation/artifacts/lote5-host-attempts-20261031/sha256.json),
+  runs/bytes preservados; consulta dirigida sem reler logs completos nem
+  repetir suítes. Rede interna CIDR explícito e seccomp opt-in funcionaram,
+  sem mudanças globais. Isso não é prova de autorização/pin.
+- Acesso `ff5a1effb58c08ccf7485bf4`: NOTRUN por EACCES em
+  `/work/Gemfile.lock`, UID1000/mode600 introduzidos por docker cp sob cap-drop
+  ALL. Erro administrativo de montagem/preparo gerencial, não negação de acesso
+  pela aplicação. [Correção](validation/artifacts/lote5-host-attempts-20261031/access/ownership-repair.json)
+  normalizou somente owner `/work` para 0:0, preservando código/modos/auth,
+  produzindo imagem `sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242`.
+  Nova tentativa `e890e3a32b9099067ef127b9`: NOTRUN/CalledProcessError pré-web,
+  somente PG criado; ambas com cleanup PASS. Bootstrap PG temporário por socket,
+  shutdown e servidor TCP final motivam diagnóstico de prontidão; recibo antigo
+  não identifica o subprocesso exato, portanto não afirmar causa final comprovada.
+- SSH `8937be1c21cd9a48512044e4840a3463`: FAIL setup ao copiar
+  `/lab/host_key.pub` de tmpfs; transporte remoto NOTRUN. O
+  [probe](validation/artifacts/lote5-host-attempts-20261031/ssh/tmpfs-transfer-probe.json)
+  leu 99 bytes por exec, escreveu por stdin e confirmou bytes iguais exit0;
+  docker cp exit1, cleanup do probe exit0. Não houve conexão SSH nesse probe.
+  Operations registra remoção da rede/contêineres próprios; `cleanup.json`
+  negativo preservado relata captura impossível de `/tmp/aixle-jobs` antes de
+  existir job, misturando retenção e remoção. Não converter o recibo em PASS.
+
+## EV-26 — Correções lote6 incorporadas; matrizes físicas pendentes
+
+- **Comprovado por código/documentação:** acesso
+  `99c3198c2cf0f2d187000a4f7c391225cd5e2d8e`, incorporação `e482664`;
+  SSH `4ca779c83dfa60632ccf2c6d94e5818d213d1125`, incorporação `f236c59`.
+  Implementadas/revisadas conforme controlador; IDs de parecer não fornecidos
+  nesta consolidação. Relatórios das frentes preservam seu marco de revisão
+  pendente; esta documentação exige revisão independente própria.
+- Acesso espera PG TCP final e identidade SQL exata antes de CREATE/COMMENT;
+  registra fases e categorias sanitizadas de erro. Helper efêmero com volume
+  readonly retém report/gateway sem docker cp nem dependência do web vivo.
+  [Detalhes](validation/F0-LAB-HOST-RECUPERACAO.md).
+- SSH usa exec/stdin administrativo limitado e validado para chaves públicas e
+  fixtures, sem exportar privadas. Journal ausente antes do cenário é NOTRUN;
+  após entrada exige tar validado. Captura e cleanup por ownership separados;
+  cenário/captura/remoção sem erros exigidos para sucesso.
+  [Detalhes](validation/F0-SSH-TMPFS-IO.md).
+- Nenhum runtime novo nesta entrega; comandos imutáveis e critérios em
+  [F0-LOTE6](validation/F0-LOTE6.md). RF55 CLI própria remota documentalmente
+  suportada no escopo EV-24; UI hospedada requires_clarification. RF46/T28 e E4
+  independentes; sem login/inferência/contas reais. Plano1.1/Adendo, base/ADR,
+  negativos, IDs, recibos, política exclusiva EV-15, pausas e Zed preservados.
