@@ -53,9 +53,10 @@ A inspeção do código-fonte nos commits fixados revelou uma assimetria estrutu
 
 ### 2.2 Provas técnicas executadas e seus resultados
 Os itens EV-06/07 abaixo são registros históricos preservados. EV-09 não
-reproduziu o namespace positivo: o ambiente negou `unshare`. Não herdar PASS
-histórico como prova de isolamento atual. EV-08–10 e a matriz vigente no
-F0-CHECKLIST qualificam o estado atual de cada critério.
+reproduziu o namespace positivo: o ambiente negou `unshare`. EV-12 acrescenta
+nova execução HOST positiva bidirecional, preservando a falha anterior, sem
+provar isolamento integrado. EV-13 registra Temporal inicial FAIL e EV-14
+harness SQL sem execução física. Não herdar PASS histórico como prova atual.
 
 1. **Isolamento concorrente de contas com segredos sintéticos (`EV-06` — `T24` parcial):**
    - **Executado:** dois ambientes de conta simulados (`acct_a` e `acct_b`) sob o mesmo UID no Linux `5.17.15`.
@@ -81,8 +82,8 @@ F0-CHECKLIST qualificam o estado atual de cada critério.
 | Critério G0 | Origem da prova | Estado da integração / custo remanescente |
 |---|---|---|
 | E1 CLIs/assinaturas | EV-03 histórico, EV-09 RF-55 atualizado | **NOT RUN** real. Guard só aceita o caminho Codex local privado avaliado; modo privado hospedado/remoto `requires_clarification`. Titular/plano/versão/entitlement ainda não demonstrados; perfis históricos não são fallback ativo desta fatia |
-| E2 duas contas | EV-05/06 histórico, EV-09 execução sintética negativa | HOME vazou em cinco ataques bidirecionais; namespace **NOT RUN** por `Operation not permitted`; contas reais **NOT RUN**. Constraint de conta única ainda exige adaptação; nenhuma identidade autenticada provada |
-| E3 autoridade/durabilidade | EV-05 código; EV-08 harness e sintaxe | Temporal real/testes Ruby **NOT RUN**: make/headers e runtime ausentes. Reusa três classes, mas não admissão/relay/outbox SQL. Primeiro executar harness; depois provar a fatia pelo contrato real, sem motor paralelo |
+| E2 duas contas | EV-05/06/09 histórico; EV-12 recibo HOST | HOME vazou; namespaces bloquearam cinco ataques bidirecionais com leitura própria mantida. **Parcial sintético**, contas reais/isolamento Aixle NOT RUN; unicidade de conta exige adaptação. Falha unshare do trabalhador preservada |
+| E3 autoridade/durabilidade | EV-08 histórico; EV-13 FAIL real/correção; EV-14 SQL | Laboratório Ruby/SDK/CLI pronto; sintaxe11/unitários/preflight iniciais PASS, integração FAIL por recibo nil sem cenário concluído. Correção result_run_id implementada; execução corrigida pendente. Harness SQL importa contratos existentes, mas PG NOT RUN e transporte simulado. Costura PG+Temporal real necessária, sem segundo motor |
 | E4 acesso/isolamento | EV-09 auditoria de 18 arquivos fixos | T36 **NOT RUN**. ttyd direto é bypass condicional; MITM/CA/proxy, RBAC/gateway/rede e acesso worker à central ainda por fechar/provar. Guard não integrado globalmente |
 | E5 móvel | EV-10 componentes reais em browser emulado | Quatro checks parciais relatados, transporte/dados sintéticos. Perfil conta/modelo, criação de tarefa, persistência/deduplicação e grafo/estado real **NOT RUN**. Reuso da árvore/timeline viável, shell completo ainda por exercer |
 | E6 licença | EV-02/05 documental | **Concluído documentalmente**: Apache-2.0 e operação privada; preservar avisos/licença |
@@ -97,6 +98,13 @@ causas e artefatos. JSON de fronteira disponível; report/trace/capturas móveis
 ausentes desta worktree, hashes somente transcritos do relatório. Obter bytes
 da entrega produtora para revisão antes de tratá-los como prova direta. Não houve
 nova execução de suítes verdes nesta consolidação.
+
+O lote 2 acrescenta `4f7e477` (recibo Temporal), `85e9a5d` (política/host) e
+`dca0e31` (harness SQL), incorporados ao clone. Hashes completos e limites em
+EV-12–15 e [F0-LOTE2](validation/F0-LOTE2.md). Lote 1 DONE/quatro revisões PASS
+é histórico informado pelo controlador; integração Git do lote 2 não certifica
+revisão ou execução. Esta consolidação exige revisão independente posterior.
+As notas comparativas permanecem estáticas, sem homologação operacional.
 
 O custo comparativo da §3 permanece uma estimativa pelo snapshot, não afirmação
 de que basta remover uma constraint ou definir `MITM_DISABLED=true`: é necessário
@@ -168,19 +176,25 @@ para dependências. A autorização não homologa G0, não concede direitos do
 provedor nem autoriza contas reais nesta entrega documental.
 
 Clone de desenvolvimento e worktree desta consolidação identificados em STATUS
-e EV-11; origem/Zed preservada. Controlador ativo para o fluxo de tarefas, sem
+e EV-15; origem/Zed preservada. Controlador ativo para o fluxo de tarefas, sem
 probe/reinício de serviço nesta entrega; demais projetos continuam pausados.
-A exclusiva histórica permanece rastreada, mas a atualização administrativa v3
-substitui regras históricas de modelo/conta/despacho. Executor já delegado Codex,
-sem fallback ou subagentes nesta tarefa; controlador encaminha revisão em sessão
-independente pela política vigente. Isso não altera perfis/contas da futura Aixle.
+A exclusiva é a política EFETIVA `project_role_policies` id `agent-control`
+em `model-limits.json`, para as raízes de origem/workspace de EV-15: manager
+`codex/gpt-6.1-sol high`; programmer/reviewer
+`codex-programmer/gpt-6.1-sol medium`, sessões independentes;
+`automatic_fallback:false`, `quota_behavior:wait_for_same_account_positive_evidence`.
+A cadeia global não a substitui. Fonte: contrato do controlador, sem inspeção
+de configuração de host por este executor. Zed terminou conforme usuário;
+outros planos seguem pausados. Isso não homologa perfis/contas da futura Aixle.
 
-Próximo bloco mínimo concreto: revisão independente; gerente disponibiliza
-toolchain/headers ou Ruby 4.0.9 isolado; executar preflight, testes Ruby essenciais
-e harness Temporal existente, anexando históricos/manifest/resultados. Comandos
-de host devolvidos e receita de execução em
-[`validation/F0-RETOMADA.md`](validation/F0-RETOMADA.md), com origem completa em
-F0-TEMPORAL. Nenhum comando administrativo foi executado pelo trabalhador.
+Próximo bloco: revisão independente e execução da candidata revisada pela
+gerência no laboratório Docker pronto, conforme comando exato pós-revisão de
+[F0-TEMPORAL](validation/F0-TEMPORAL.md), com recibo novo e históricos;
+o recibo inicial continua FAIL. Depois preparar PG descartável e executar guard,
+preflight e nove cenários de [F0-ADMISSAO-SQL](validation/F0-ADMISSAO-SQL.md).
+Mesmo eventual PASS isolado de ambos não prova a costura real descrita em
+[F0-LOTE2](validation/F0-LOTE2.md). Nenhum comando administrativo foi executado
+pelo trabalhador; sintaxe não substitui recibos reais pendentes.
 
 Em seguida fechar fronteira OS/rede/T36 e contrato de admissão/outbox da base,
 percurso móvel integrado e SSH de laboratório. Modo/plano RF-55 e coordenação
