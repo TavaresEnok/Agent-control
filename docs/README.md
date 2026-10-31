@@ -25,3 +25,7 @@ Registrar o que foi comprovado, hipóteses, pendências e impedimentos. Não dec
 Preservar os projetos existentes e os Paseos pausados. Chamadas de IA, alterações em serviços e retomada de filas dependem de autorização própria; copiar estes documentos não inicia execução.
 
 Os documentos históricos e o plano v1.0 não são necessários para começar; os dois arquivos acima constituem a referência vigente.
+
+## Continuação pelo celular
+
+Antes de retomar, leia [PASEO-CONTINUACAO.md](PASEO-CONTINUACAO.md), com a política operacional e as autorizações mais recentes.
