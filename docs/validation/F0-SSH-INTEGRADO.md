@@ -10,6 +10,12 @@ O runtime agora usa `--pull=never`, retém CIDR/IDs/perfil e inspect sanitizado 
 Config.Env. A remoção revalida label e ID; respostas de criação perdidas só
 permitem cleanup com ownership comprovado, nunca por nome coincidente.
 
+Atualização lote6: o IO de tmpfs usa `docker exec -i` com stdin binário,
+paths fixos, limites, readback e permissões verificadas. O journal usa tar bruto
+validado, sem extração; captura e remoção têm recibos separados. Comando com os
+IDs locais atuais e contrato de retenção em [F0-SSH-TMPFS-IO.md](F0-SSH-TMPFS-IO.md).
+E7 continua **PENDENTE**, sem PASS de transporte remoto nesta entrega.
+
 Implementação candidata; revisão independente e gate físico pendentes. G0 permanece
 PENDENTE. Nenhuma execução Ruby/OpenSSH/Docker foi feita pelo executor: estes
 binários estão ausentes nesta sessão. Os checks estáticos não homologam transporte.
@@ -51,7 +57,7 @@ e reter os comandos de build junto dos recibos do gate.
 docker build --pull=false -f tools/f0/ssh/Dockerfile.central -t f0-ssh-central .
 docker build --pull=false --build-arg BASE=ID_OU_DIGEST_DEBIAN_LOCAL -f tools/f0/ssh/Dockerfile.target -t f0-ssh-target .
 docker image inspect --format '{{.Id}}' f0-ssh-central f0-ssh-target
-python3 tools/f0/ssh/host-run.py sha256:ID_CENTRAL_DE_64_HEX sha256:ID_DESTINO_DE_64_HEX
+python3 tools/f0/ssh/host-run.py sha256:ID_CENTRAL_DE_64_HEX sha256:ID_DESTINO_DE_64_HEX --subnet CIDR_LIVRE
 ```
 
 O último comando é a entrada exata, substituindo os dois IDs pelos valores do
@@ -64,7 +70,7 @@ dois contêineres limitados a 1 CPU/1 GiB/256 pids e tmpfs `/lab`. Só a central
 montagens da worktree somente leitura e do diretório de evidência exclusivo. Nenhum
 HOME real, socket Docker ou segredo existente é montado. Não há AI autenticada em
 nenhum lado. O servidor usa usuário lab, sem senha/PAM/forwardings. Chaves efêmeras
-ficam nos tmpfs; só chaves públicas saem via `docker cp` administrativo. A chave do
+ficam nos tmpfs; só chaves públicas saem via `docker exec` administrativo. A chave do
 servidor nasce no destino **antes** de qualquer conexão SSH; fingerprint/known_hosts
 são derivados dessa chave pública pelo canal administrativo fora do SSH testado.
 Não existe `ssh-keyscan`, accept-new ou autoridade obtida pelo canal em teste.
@@ -106,8 +112,11 @@ e contêineres, código candidato, hostkey pública, known_hosts/config de pin, 
 bundles, SHA inicial/central/remoto, job handle/status e journal. A função finally
 captura gate/logs/inspect/journal **antes** de remover exclusivamente os recursos
 criados por este processo, registra cleanup e hashes de todos os arquivos retidos.
-Não exporta chave privada, HOME ou env real. Erros produzem gate FAIL e cleanup
-com erros explícitos. Conferir ambos; exit zero exige cenário e cleanup sem erros.
+Não exporta chave privada, HOME ou env real. `journal.json` registra NOTRUN antes
+da entrada no cenário, ou exige um tar válido quando o cenário foi iniciado.
+`capture.json` separa erros de retenção dos erros de remoção em `cleanup.json`.
+Conferir ambos; exit zero exige cenário, captura e cleanup sem erros. E7 somente
+pode receber PASS após execução física revisada pela gerência.
 
 Checks do executor: `git diff --check`, compilação Python, `bash -n` e gramática Ruby
 via tree-sitter isolado (quando instalado). Gramática não executa Ruby. Para repetir:
