@@ -1,0 +1,60 @@
+{
+  "phase": "implementation",
+  "observer": "delegated_programmer_in_isolated_worktree",
+  "date": "2026-10-31",
+  "review_corrections": [
+    "R3-1: real ActionDispatch::Cookies wraps CookieStore, using the app env_config and session_options; trusted identity preparation requires Set-Cookie and exact round-trip of user/session/company/CSRF before network use",
+    "R3-1: two directed tests boot actual Aixle without test_helper or SQL, assert cookie emission/round-trip and missing/tampered rejection; mandatory in isolated Docker build, NOTRUN locally",
+    "R2: separate docker create and start; record ownership after confirmed create and before start so failed start retains logs/inspect and removes the owned container before volume/network",
+    "R2: regression injects CalledProcessError(125) on first start after create and requires diagnostic files, manifest entries and cleanup ordering; failed create never adopts/removes an unowned name",
+    "R1: MCP authentication denial is distinct from valid-identity authorization; exact viewer policy/foreign lookup refusal and authenticated catalogs required, generic internal/protocol errors rejected",
+    "R1: worker must omit update_project_settings from the real catalog and return the specific tool-not-found response; owner must publish and execute the same operation with SQL mutation; sanitized category/code and SQL snapshots retained",
+    "R1: added six directed Ruby classifier tests, mandatory in the isolated build; NOTRUN locally because Ruby is absent",
+    "Direct ttyd anonymous shell marker is FAIL; accepted upgrade without marker and failed upgrade without direct health control are NOTRUN, never PASS",
+    "Tampered WS cookie is checked before revocation, requiring the original cookie welcome and live SQL session; revoked cookie remains a separate case",
+    "Viewer owns a separate finished session: positive read control, DELETE with valid CSRF requires 403 Not authorized and unchanged protected SQL; foreign-owner target and owner DELETE positive retained"
+  ],
+  "checks": [
+    {
+      "command": ["python3", "-B", "test/f0/access/host_test.py"],
+      "exit_code": 0,
+      "tests": 6,
+      "meaning": "Offline context filtering and administrative lifecycle, including boot failure, start failure after create with retained logs/inspect before cleanup, and failed create without ownership; Docker simulated"
+    },
+    {
+      "command": ["git", "diff", "--check"],
+      "exit_code": 0
+    },
+    {
+      "command": ["git", "diff", "--no-index", "--check", "--", "/dev/null", "EACH_NEW_SCOPE_FILE"],
+      "status": "PASS",
+      "meaning": "No whitespace diagnostics for any new scope file; no-index exit 1 denotes added content, not a runtime security result"
+    },
+    {
+      "command": ["env", "RAILS_ENV=test", "bundle", "exec", "ruby", "test/f0/access/session_cookie_test.rb"],
+      "status": "NOTRUN",
+      "tests_defined": 2,
+      "meaning": "Ruby/Bundler absent locally; actual Rails application boot and real Cookies/CookieStore verifier required by isolated build; SQL target fixed to nonexistent synthetic socket"
+    },
+    {
+      "command": ["bundle", "exec", "ruby", "test/f0/access/mcp_evidence_test.rb"],
+      "status": "NOTRUN",
+      "tests_defined": 6,
+      "meaning": "Ruby absent locally; isolated build now requires these directed oracle regression tests before runtime"
+    }
+  ],
+  "physical_runtime": {
+    "status": "NOTRUN",
+    "reason": "Ruby and Docker are not available in this worker PATH; no service or dependency installed on host",
+    "ruby_syntax_and_bundle": "NOTRUN locally; required by the separate Docker build",
+    "rails_pg_gateway_ttyd_http_ws_mcp": "NOTRUN",
+    "manager_commands": "docs/validation/F0-ACESSO-REAL.md"
+  },
+  "known_limits": [
+    "Shared client/terminal network intentionally exposes a direct ttyd probe; shell output is FAIL and lack of conclusive output is NOTRUN; no isolation PASS is claimed",
+    "IDE/files/preview processes are not started; real ForwardAuth decisions alone do not constitute full end-to-end proof",
+    "Cable async adapter tests one process, not Redis distributed revocation",
+    "Independent review is a subsequent phase"
+  ],
+  "g0": "PENDENTE"
+}
