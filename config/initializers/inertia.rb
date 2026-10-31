@@ -19,3 +19,7 @@ InertiaRails.configure do |config|
     DeepKeyCamelizer.call(props)
   }
 end
+
+Rails.application.config.to_prepare do
+  require_relative "../../app/channels/inertia_cable/stream_channel"
+end

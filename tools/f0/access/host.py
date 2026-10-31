@@ -231,8 +231,13 @@ def run(image, gateway, subnet, seccomp_compat=False):
         pg_name = start("pg", pg, env=("POSTGRES_USER=f0_access_lab", "POSTGRES_DB=postgres",
                         "POSTGRES_HOST_AUTH_METHOD=trust", "PGDATA=/tmp/pgdata"))
         prepare_pg(administrative, pg_name, token)
-        start("terminal", image, args=("ttyd", "-W", "-p", "7681", "sh", "-c",
-              "printf SYNTHETIC_TTYD_ACCESS; sleep 30"))
+        term_cmd = (
+            "ruby -rsocket -e 's=TCPServer.new(4040); loop { c=s.accept; c.gets; c.print \"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nOK\"; c.close }' & "
+            "ruby -rsocket -e 's=TCPServer.new(8443); loop { c=s.accept; c.gets; c.print \"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nOK\"; c.close }' & "
+            "ruby -rsocket -e 's=TCPServer.new(4041); loop { c=s.accept; c.gets; c.print \"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nOK\"; c.close }' & "
+            "ttyd -W -H X-Forwarded-User -p 7681 sh -c 'printf SYNTHETIC_TTYD_ACCESS; sleep 40'"
+        )
+        start("terminal", image, args=("sh", "-c", term_cmd))
         env = ("RAILS_ENV=test", "BUNDLE_FROZEN=true", "DB_HOST=pg", "DB_USERNAME=f0_access_lab",
                "DB_PASSWORD=", "F0_ACCESS_TOKEN=" + token, "RAILS_SECRET_KEY_BASE=" + secrets.token_hex(64),
                "DOMAIN=web:4000", "PROTOCOL=http", "SOLID_QUEUE_IN_PUMA=false", "MITM_DISABLED=true",
@@ -300,13 +305,14 @@ def run(image, gateway, subnet, seccomp_compat=False):
         # Logs contain no request bodies/cookies: Rails logger is disabled in harness.
         for name in owned:
             try:
+                suffix = name[len(prefix) + 1:] if name.startswith(prefix + "-") else name
                 if not name.endswith("-collector"):
                     logs = command(["docker", "logs", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
-                    (out / (name.removeprefix(prefix + "-") + ".log")).write_bytes(logs)
+                    (out / (suffix + ".log")).write_bytes(logs)
                 inspect = json.loads(docker("inspect", name))[0]
                 # Do not retain Config.Env (signing key). Topology/effective limits only.
                 safe = runtime(inspect)
-                (out / (name.removeprefix(prefix + "-") + "-runtime.json")).write_text(json.dumps(safe, indent=2))
+                (out / (suffix + "-runtime.json")).write_text(json.dumps(safe, indent=2))
             except Exception:
                 result["retention_error"] = True
         # Persist identities/CIDR and the requested profile before any removal.

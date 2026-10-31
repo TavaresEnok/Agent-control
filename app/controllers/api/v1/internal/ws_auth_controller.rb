@@ -75,9 +75,9 @@ module Api
             return head :forbidden
           end
 
-          # Pass user info to downstream (optional)
           response.set_header("X-User-Id", viewer.id.to_s)
           response.set_header("X-Session-Id", terminal_session.id.to_s)
+          response.set_header("X-Forwarded-User", viewer.id.to_s)
           forward_container_cookies
           issue_sandbox_cookie(viewer, terminal_session) if @ticket_from_url
 

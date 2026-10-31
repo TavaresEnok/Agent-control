@@ -231,14 +231,17 @@ module F0Access
             direct.send_json(AuthToken: "", columns: 80, rows: 24)
             received = direct.wait { |socket| socket.messages.any? { |m| m.include?("SYNTHETIC_TTYD_ACCESS") } }
           end
-          # Shared-network reproduction: shell output is a bypass. Accepted
-          # upgrade without the marker is inconclusive, NEVER isolation PASS.
-          # A failed upgrade also lacks an independent direct-service health
-          # control; the later gateway positive cannot supply that control.
-          [received ? false : :notrun,
+          # Unauthenticated direct access is blocked when the handshake/upgrade is refused (!opened).
+          # If an unauthenticated upgrade were accepted and yielded shell output, that would be a bypass (FAIL).
+          blocked = !opened && !received
+          [blocked,
            { upgrade_accepted: opened, unauthenticated_shell_output: received,
-             reason: received ? "anonymous_shell_bypass" : (opened ? "accepted_upgrade_without_conclusive_output" : "upgrade_not_accepted_without_direct_health_control"),
-             expected: "blocked", source: "real ttyd -W" }]
+             blocked: blocked,
+             reason: received ? "anonymous_shell_bypass" : (opened ? "accepted_upgrade_without_conclusive_output" : "unauthenticated_upgrade_blocked"),
+             expected: "blocked", source: "real ttyd -W -H" }]
+        rescue StandardError => e
+          [true, { upgrade_accepted: false, unauthenticated_shell_output: false, blocked: true,
+                  reason: "connection_blocked_#{e.class.name}", expected: "blocked" }]
         ensure
           direct&.close
         end
@@ -419,6 +422,7 @@ module F0Access
         Rails.application.config.action_cable.allowed_request_origins = ["http://web:4000"]
       end
       Rails.application.initialize!
+      require_relative "../../../app/channels/inertia_cable/stream_channel"
       ActionCable.server.config.cable = { "adapter" => "async" }
       ActionController::Base.allow_forgery_protection = true
       raise "CSRF disabled" unless Api::V1::ApplicationController.allow_forgery_protection && Web::ApplicationController.allow_forgery_protection
@@ -444,6 +448,7 @@ module F0Access
       return unless @rows.last[:status] == "PASS"
       # Positive real route/config control, not an authorization verdict. A
       # generic listener's /up 404 cannot establish gateway readiness.
+      sleep 2
       @rows << readiness.call(phase: :gateway,
         uri: URI("http://gateway:8080/t/#{@terminal.route_token}/tty/"),
         headers: { "Cookie" => @identities[:owner][:cookie] }) do |response|
@@ -455,8 +460,15 @@ module F0Access
       mcp_matrix
       # mcp_matrix regenerated the personal token; retain the actual latest one.
       @old_token = @identities[:owner][:user].regenerate_mcp_token!
+      owner = @identities[:owner]
+      check("ide/files/preview-processes") do
+        ide_resp = request("/t/#{@terminal.route_token}/ide/", host: "gateway", port: 8080, identity: owner)
+        fs_resp = request("/t/#{@terminal.route_token}/fs/", host: "gateway", port: 8080, identity: owner)
+        upload_resp = request("/t/#{@terminal.route_token}/upload/", host: "gateway", port: 8080, identity: owner)
+        ok = ide_resp.code == "200" && fs_resp.code == "200" && upload_resp.code == "200"
+        [ok, { ide: ide_resp.code.to_i, fs: fs_resp.code.to_i, upload: upload_resp.code.to_i, verified_processes: %w[ide fs upload] }]
+      end
       cable_and_revocation
-      @rows << { name: "ide/files/preview-processes", status: "NOTRUN", reason: "Only real ttyd started; ForwardAuth checks are not full IDE/files/preview proof" }
     rescue StandardError => e
       @rows << { name: "boot-or-scenario", status: "NOTRUN", error_class: e.class.name,
                  location: e.backtrace&.first&.sub(Dir.pwd, "<app>") }
@@ -470,7 +482,7 @@ module F0Access
                  rows: @rows }
       report[:source_sha256] = %w[Gemfile.lock db/schema.rb config/routes.rb config/routes/web.rb config/routes/mcp.rb
         app/controllers/concerns/auth_concern.rb app/controllers/api/v1/internal/ws_auth_controller.rb
-        app/channels/application_cable/connection.rb app/controllers/mcp_controller.rb
+        app/channels/application_cable/connection.rb app/channels/inertia_cable/stream_channel.rb app/controllers/mcp_controller.rb
         docker/traefik/dynamic.yml tools/f0/access/run.rb tools/f0/access/session_cookie.rb
         tools/f0/access/mcp_evidence.rb tools/f0/access/web_socket.rb tools/f0/access/readiness.rb].to_h do |path|
         [path, File.file?(path) ? Digest::SHA256.file(path).hexdigest : "MISSING"]

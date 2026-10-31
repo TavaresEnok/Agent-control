@@ -3,8 +3,7 @@
 module ApplicationCable
   class Connection < ActionCable::Connection::Base
     identified_by :current_user
-    identified_by :current_company
-    identified_by :session_id
+    attr_accessor :current_company, :session_id
 
     def connect
       self.current_user = find_verified_user || reject_unauthorized_connection

@@ -50,6 +50,13 @@ class MCPEvidenceTest < Minitest::Test
     ok, evidence = E.classify(response(payload), expected: "administrative_tool_not_published")
     assert ok
     assert_equal({ denial_category: "administrative_tool_not_published", rpc_code: -32602 }, evidence)
+
+    # Official Ruby MCP SDK error format: message is "Invalid params" and detail is in "data"
+    sdk_payload = { "error" => { "code" => -32602, "message" => "Invalid params", "data" => "Tool not found: update_project_settings" } }
+    ok_sdk, evidence_sdk = E.classify(response(sdk_payload), expected: "administrative_tool_not_published")
+    assert ok_sdk
+    assert_equal({ denial_category: "administrative_tool_not_published", rpc_code: -32602 }, evidence_sdk)
+
     refute E.classify(response(payload, status: "400"), expected: "administrative_tool_not_published").first
     payload["error"]["code"] = -32603
     refute E.classify(response(payload), expected: "administrative_tool_not_published").first

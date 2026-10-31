@@ -33,7 +33,8 @@ module F0Access
           # SDK tool lookup refusal only; invalid envelopes/arguments, unknown
           # methods, HTTP errors and generic server errors cannot satisfy this.
           code = error["code"] if error["code"].is_a?(Integer)
-          if code == -32602 && error["message"] == "Tool not found: update_project_settings"
+          detail = (error["data"].is_a?(String) && !error["data"].empty?) ? error["data"] : error["message"]
+          if code == -32602 && detail == "Tool not found: update_project_settings"
             category = "administrative_tool_not_published"
           else
             category = "unexpected_protocol_error"
