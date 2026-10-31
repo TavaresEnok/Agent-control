@@ -1,0 +1,72 @@
+{
+  "observer": "manager_host",
+  "retained_at": "2026-10-31T21:25:51.804952+00:00",
+  "candidate_commit": "9f28ff913d1cdea14ac6af9afbecc35bd8e10b88",
+  "reviewed_commit": "9e6392911f75d02422f043115220ea62898c184d",
+  "raw_lab": "/home/enok/srv_projetos/runtime/agent-control/g0-access-lote7-20261031",
+  "unit": {
+    "status": "PASS",
+    "tests": 7,
+    "assertions": 77,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "cleanup_exit": 0
+  },
+  "matrix": {
+    "status": "FAIL",
+    "rows": 86,
+    "counts": {
+      "PASS": 81,
+      "FAIL": 4,
+      "NOTRUN": 1
+    },
+    "non_pass": [
+      {
+        "name": "topology/direct-ttyd/unauthenticated-upgrade",
+        "status": "FAIL",
+        "observed": {
+          "upgrade_accepted": true,
+          "unauthenticated_shell_output": true,
+          "reason": "anonymous_shell_bypass",
+          "expected": "blocked",
+          "source": "real ttyd -W"
+        }
+      },
+      {
+        "name": "mcp/worker/administrative-call",
+        "status": "FAIL",
+        "observed": {
+          "http": 200,
+          "protected_sql_unchanged": true,
+          "denial_category": "unexpected_protocol_error",
+          "rpc_code": -32602,
+          "identity_catalog_control": true,
+          "administrative_positive_control": true
+        }
+      },
+      {
+        "name": "ws/foreign/leaked-stream-denied",
+        "status": "FAIL",
+        "observed": {
+          "cross_tenant_subscription_confirmed": true
+        }
+      },
+      {
+        "name": "ws/live/revocation",
+        "status": "FAIL",
+        "observed": {}
+      },
+      {
+        "name": "ide/files/preview-processes",
+        "status": "NOTRUN",
+        "reason": "Only real ttyd started; ForwardAuth checks are not full IDE/files/preview proof"
+      }
+    ],
+    "cleanup_status": "PASS"
+  },
+  "g0": "PENDENTE",
+  "f1": "NOT_STARTED",
+  "independent_review": "code_readiness_PASS; managerial physical evidence is not an independent approval",
+  "scope": "Close existing lot only; no security fixes or next backlog lot; stop for owner handoff."
+}

@@ -1,0 +1,721 @@
+{
+  "status": "FAIL_OR_NOTRUN",
+  "g0": "PENDENTE",
+  "db": {
+    "db": "aixle_test",
+    "role": "f0_access_lab",
+    "comment": "agent-control:access:disposable:e21f0553898cc65e7479a975"
+  },
+  "csrf": "explicitly enabled; positive and negative network mutations required",
+  "versions": {
+    "ruby": "4.0.9",
+    "rails": "8.1.4"
+  },
+  "cable_adapter": "async: single process laboratory, not production Redis",
+  "ai_mode": "No provider CLI/MITM/broker launched; no claim of RF55 global or T28",
+  "rows": [
+    {
+      "name": "session-cookie/1/round-trip",
+      "status": "PASS",
+      "observed": {
+        "set_cookie": true,
+        "real_verifier": true,
+        "session_and_csrf_recovered": true
+      }
+    },
+    {
+      "name": "session-cookie/2/round-trip",
+      "status": "PASS",
+      "observed": {
+        "set_cookie": true,
+        "real_verifier": true,
+        "session_and_csrf_recovered": true
+      }
+    },
+    {
+      "name": "session-cookie/3/round-trip",
+      "status": "PASS",
+      "observed": {
+        "set_cookie": true,
+        "real_verifier": true,
+        "session_and_csrf_recovered": true
+      }
+    },
+    {
+      "name": "readiness/backend",
+      "status": "PASS",
+      "phase": "backend",
+      "endpoint": "backend/up",
+      "attempts": 1,
+      "http": 200,
+      "reason": "expected_service",
+      "last_error_class": null
+    },
+    {
+      "name": "readiness/gateway",
+      "status": "PASS",
+      "phase": "gateway",
+      "endpoint": "gateway/terminal/tty",
+      "attempts": 2,
+      "http": 200,
+      "reason": "expected_service",
+      "last_error_class": "Net::OpenTimeout"
+    },
+    {
+      "name": "api/owner/read",
+      "status": "PASS",
+      "observed": {
+        "http": 200
+      }
+    },
+    {
+      "name": "api/anonymous/read-authorization",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/anonymous/delete",
+      "status": "PASS",
+      "observed": {
+        "http": 422,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/tampered/read-authorization",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/tampered/delete",
+      "status": "PASS",
+      "observed": {
+        "http": 422,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/foreign/read-authorization",
+      "status": "PASS",
+      "observed": {
+        "http": 404,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/foreign/delete",
+      "status": "PASS",
+      "observed": {
+        "http": 404,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/viewer/read-authorization",
+      "status": "PASS",
+      "observed": {
+        "http": 404,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/viewer/delete",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/viewer/own-read-positive",
+      "status": "PASS",
+      "observed": {
+        "http": 200
+      }
+    },
+    {
+      "name": "api/viewer/own-delete-role-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "csrf/owner/missing",
+      "status": "PASS",
+      "observed": {
+        "http": 422,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "csrf/owner/wrong",
+      "status": "PASS",
+      "observed": {
+        "http": 422,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "api/owner/delete-positive",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "sql_row_deleted": true
+      }
+    },
+    {
+      "name": "ui/owner/projects",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "target_project_present": true
+      }
+    },
+    {
+      "name": "ui/anonymous/projects",
+      "status": "PASS",
+      "observed": {
+        "http": 302,
+        "target_project_present": false
+      }
+    },
+    {
+      "name": "ui/tampered/projects",
+      "status": "PASS",
+      "observed": {
+        "http": 302,
+        "target_project_present": false
+      }
+    },
+    {
+      "name": "ui/foreign/projects",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "target_project_present": false
+      }
+    },
+    {
+      "name": "forward-auth/tty/owner",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/tty/anonymous",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/tty/tampered",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/tty/foreign",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/ide/owner",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/ide/anonymous",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/ide/tampered",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/ide/foreign",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/fs/owner",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/fs/anonymous",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/fs/tampered",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/fs/foreign",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/view/owner",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/view/anonymous",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/view/tampered",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/view/foreign",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/upload/owner",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/upload/anonymous",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/upload/tampered",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/upload/foreign",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/preview/owner",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/preview/anonymous",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/preview/tampered",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/preview/foreign",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/tty/viewer",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/ide/viewer",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "forward-auth/upload/viewer",
+      "status": "PASS",
+      "observed": {
+        "http": 403,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "topology/direct-ttyd/unauthenticated-upgrade",
+      "status": "FAIL",
+      "observed": {
+        "upgrade_accepted": true,
+        "unauthenticated_shell_output": true,
+        "reason": "anonymous_shell_bypass",
+        "expected": "blocked",
+        "source": "real ttyd -W"
+      }
+    },
+    {
+      "name": "gateway/owner/ttyd-upgrade",
+      "status": "PASS",
+      "observed": {
+        "shell_output": true
+      }
+    },
+    {
+      "name": "gateway/anonymous/ttyd-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 401
+      }
+    },
+    {
+      "name": "gateway/tampered/ttyd-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 401
+      }
+    },
+    {
+      "name": "gateway/foreign/ttyd-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 403
+      }
+    },
+    {
+      "name": "gateway/viewer/ttyd-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 403
+      }
+    },
+    {
+      "name": "mcp/owner/tools-list",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "create_agent_published": true
+      }
+    },
+    {
+      "name": "mcp/anonymous/tools-list",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "denial_category": "authentication_denied",
+        "rpc_code": -32000
+      }
+    },
+    {
+      "name": "mcp/anonymous/create-agent-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true,
+        "denial_category": "authentication_denied",
+        "rpc_code": -32000,
+        "identity_catalog_control": true
+      }
+    },
+    {
+      "name": "mcp/tampered/tools-list",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "denial_category": "authentication_denied",
+        "rpc_code": -32000
+      }
+    },
+    {
+      "name": "mcp/tampered/create-agent-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true,
+        "denial_category": "authentication_denied",
+        "rpc_code": -32000,
+        "identity_catalog_control": true
+      }
+    },
+    {
+      "name": "mcp/viewer/tools-list",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "create_agent_published": true
+      }
+    },
+    {
+      "name": "mcp/viewer/create-agent-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true,
+        "denial_category": "create_policy_denied",
+        "rpc_code": null,
+        "identity_catalog_control": true
+      }
+    },
+    {
+      "name": "mcp/foreign/tools-list",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "create_agent_published": true
+      }
+    },
+    {
+      "name": "mcp/foreign/create-agent-denied",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true,
+        "denial_category": "project_lookup_denied",
+        "rpc_code": null,
+        "identity_catalog_control": true
+      }
+    },
+    {
+      "name": "mcp/owner/create-agent-positive",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "sql_insert": true
+      }
+    },
+    {
+      "name": "mcp/owner/administrative-call-positive",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "sql_update": true
+      }
+    },
+    {
+      "name": "mcp/worker/tools-list",
+      "status": "PASS",
+      "observed": {
+        "http": 200,
+        "administrative_tool_absent": true
+      }
+    },
+    {
+      "name": "mcp/worker/administrative-call",
+      "status": "FAIL",
+      "observed": {
+        "http": 200,
+        "protected_sql_unchanged": true,
+        "denial_category": "unexpected_protocol_error",
+        "rpc_code": -32602,
+        "identity_catalog_control": true,
+        "administrative_positive_control": true
+      }
+    },
+    {
+      "name": "ws/owner/handshake",
+      "status": "PASS",
+      "observed": {}
+    },
+    {
+      "name": "ws/anonymous/handshake-denied",
+      "status": "PASS",
+      "observed": {
+        "welcome": false,
+        "owner_session_live": true
+      }
+    },
+    {
+      "name": "ws/tampered/handshake-denied",
+      "status": "PASS",
+      "observed": {
+        "welcome": false,
+        "owner_session_live": true
+      }
+    },
+    {
+      "name": "ws/owner/subscription",
+      "status": "PASS",
+      "observed": {}
+    },
+    {
+      "name": "ws/owner/broadcast-delivery",
+      "status": "PASS",
+      "observed": {
+        "trusted_probe_delivered": true
+      }
+    },
+    {
+      "name": "ws/tampered-stream/rejected",
+      "status": "PASS",
+      "observed": {}
+    },
+    {
+      "name": "ws/foreign/handshake-positive",
+      "status": "PASS",
+      "observed": {}
+    },
+    {
+      "name": "ws/foreign/leaked-stream-denied",
+      "status": "FAIL",
+      "observed": {
+        "cross_tenant_subscription_confirmed": true
+      }
+    },
+    {
+      "name": "ws/live/revocation",
+      "status": "FAIL",
+      "observed": {}
+    },
+    {
+      "name": "ws/revoked/handshake-denied",
+      "status": "PASS",
+      "observed": {
+        "welcome": false
+      }
+    },
+    {
+      "name": "api/revoked/delete",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "mcp/revoked/personal-token",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "mcp/revoked/call-before-effect",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "ui/revoked/projects",
+      "status": "PASS",
+      "observed": {
+        "http": 302
+      }
+    },
+    {
+      "name": "gateway/revoked/ttyd",
+      "status": "PASS",
+      "observed": {
+        "http": 401
+      }
+    },
+    {
+      "name": "forward-auth/revoked/tty",
+      "status": "PASS",
+      "observed": {
+        "http": 401,
+        "protected_sql_unchanged": true
+      }
+    },
+    {
+      "name": "ide/files/preview-processes",
+      "status": "NOTRUN",
+      "reason": "Only real ttyd started; ForwardAuth checks are not full IDE/files/preview proof"
+    }
+  ],
+  "source_sha256": {
+    "Gemfile.lock": "a1e786288bd8bb83f40d89aa0aaf1f9cdda063d0efe261027e8fa12de08848d8",
+    "db/schema.rb": "7d2b196423adad3362a7519a92151162af537a6298955bf2eff265a4304e299c",
+    "config/routes.rb": "2e9ed79f6d9b9883c70518b1521c2996349d30c14caf8c87ea79d7fef0ee36dd",
+    "config/routes/web.rb": "a9dd39f39c34b189197f5370fb323fdea5775b3ad30acfa67986a6a7b80b0014",
+    "config/routes/mcp.rb": "fcccc35030dc1f071b16db35d8553d829b67d1196edfa4b0b609f94437a96a2b",
+    "app/controllers/concerns/auth_concern.rb": "a7822a84ce1b2e48d326ccaa8865fce137c3b258cb618c52100e0c28ea682a86",
+    "app/controllers/api/v1/internal/ws_auth_controller.rb": "f358fd94ba6a9f11d3223b18c94cf48b3086e70b3858e412fbca7347d596ddb9",
+    "app/channels/application_cable/connection.rb": "6c789f1e5c39151ecd0b829bed6f6ec07023cb266b8d305e7658cbb6624466c8",
+    "app/controllers/mcp_controller.rb": "83271ae1e895e869353eded3cc55145b2f86e7d1596920faf58bb6a099033157",
+    "docker/traefik/dynamic.yml": "cdbe309d17fb2b9fedb946de8703b60a9fc3f6b7a6317f6cc53b0909b0c6a6f2",
+    "tools/f0/access/run.rb": "05b222fb56440210cdf2756eb4a5335587b5241f563e2c2c07a8966428d2d31d",
+    "tools/f0/access/session_cookie.rb": "c525b91dda78897f05891184e967e48efe82af0cb1a40d4cb40ef07e1445db65",
+    "tools/f0/access/mcp_evidence.rb": "b7c58ccf1b81f1ce3836bf24a594234c2437c03a2cb021351c8f1a341b2452fb",
+    "tools/f0/access/web_socket.rb": "3cd43e15e4165c4f178cbbd4e32f4c7a01567d2686dc0e3db45c7f7cf443b920",
+    "tools/f0/access/readiness.rb": "46f63a03d1c4f3c14c9537b02ca4529fbfc8f195b93aca3bedd4cdda207bf8e9"
+  }
+}

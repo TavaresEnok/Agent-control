@@ -1,0 +1,12 @@
+Syntax OK
+Syntax OK
+Syntax OK
+Run options: --seed 10391
+
+# Running:
+
+.......
+
+Finished in 0.006177s, 1133.1604 runs/s, 12464.7648 assertions/s.
+
+7 runs, 77 assertions, 0 failures, 0 errors, 0 skips

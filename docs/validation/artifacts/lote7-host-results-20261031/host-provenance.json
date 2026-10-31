@@ -1,0 +1,12 @@
+{
+  "candidate_commit": "9f28ff913d1cdea14ac6af9afbecc35bd8e10b88",
+  "reviewed_commit": "9e6392911f75d02422f043115220ea62898c184d",
+  "at": "2026-10-31T21:14:51.402045+00:00",
+  "overlay_sha256": {
+    "tools/f0/access/run.rb": "05b222fb56440210cdf2756eb4a5335587b5241f563e2c2c07a8966428d2d31d",
+    "tools/f0/access/readiness.rb": "46f63a03d1c4f3c14c9537b02ca4529fbfc8f195b93aca3bedd4cdda207bf8e9",
+    "tools/f0/access/host.py": "1d3670657ab04756f27d1f03225fa0e2eecc370b3c71c7d3239aad15ea7dc5cc",
+    "test/f0/access/readiness_test.rb": "3e10bd2ec1edaf95daa047fe4dcaeb8b33b4e7ba694011aaa16136419c7cbc96"
+  },
+  "dockerfile_sha256": "fd25f6a22a04fd4b57fa8d9924c02a4391a077a3ff6b1a5191941dc90e02076f"
+}

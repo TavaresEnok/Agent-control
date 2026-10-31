@@ -1,0 +1,17 @@
+Sending build context to Docker daemon  60.93kB
+
+Step 1/5 : FROM sha256:439b8d946672298113bc4334f310006b4d8f6c299a47d141c529412789e48242
+ ---> 439b8d946672
+Step 2/5 : WORKDIR /work
+ ---> Running in 207b9c377ad7
+Removing intermediate container 207b9c377ad7
+ ---> f2ac01670336
+Step 3/5 : COPY --chown=0:0 tools/f0/access/run.rb tools/f0/access/readiness.rb tools/f0/access/host.py /work/tools/f0/access/
+ ---> 386cc4306426
+Step 4/5 : COPY --chown=0:0 test/f0/access/readiness_test.rb /work/test/f0/access/readiness_test.rb
+ ---> 4ab9d753f0e9
+Step 5/5 : CMD ["bundle", "exec", "ruby", "tools/f0/access/run.rb"]
+ ---> Running in d4c1481891da
+Removing intermediate container d4c1481891da
+ ---> 6ec3bd403729
+Successfully built 6ec3bd403729

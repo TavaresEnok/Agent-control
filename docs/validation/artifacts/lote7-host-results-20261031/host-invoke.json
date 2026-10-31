@@ -1,0 +1,17 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "tools/f0/access/host.py",
+    "run",
+    "--image",
+    "sha256:6ec3bd403729c92004a29e696916b2c17b1668061255d9f570b64784fadc89d6",
+    "--gateway",
+    "sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222",
+    "--subnet",
+    "172.28.96.0/28",
+    "--seccomp-compat"
+  ],
+  "exit_code": 1,
+  "finished_at": "2026-10-31T21:15:31.511863+00:00"
+}

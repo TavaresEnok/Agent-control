@@ -1,0 +1,29 @@
+{
+  "command": [
+    "docker",
+    "create",
+    "--pull=never",
+    "--name",
+    "agent-control-readiness-unit-211452",
+    "--label",
+    "agent-control.fixture=lote7-readiness-unit",
+    "--network=none",
+    "--cap-drop=ALL",
+    "--user=0:0",
+    "--security-opt",
+    "seccomp=unconfined",
+    "--security-opt",
+    "no-new-privileges",
+    "--workdir",
+    "/work",
+    "--entrypoint",
+    "/bin/sh",
+    "sha256:6ec3bd403729c92004a29e696916b2c17b1668061255d9f570b64784fadc89d6",
+    "-c",
+    "ruby -c tools/f0/access/run.rb && ruby -c tools/f0/access/readiness.rb && ruby -c test/f0/access/readiness_test.rb && bundle exec ruby test/f0/access/readiness_test.rb"
+  ],
+  "image": "sha256:6ec3bd403729c92004a29e696916b2c17b1668061255d9f570b64784fadc89d6",
+  "start_exit": 0,
+  "test_exit": 0,
+  "cleanup_exit": 0
+}
