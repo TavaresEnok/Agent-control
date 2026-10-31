@@ -25,6 +25,13 @@ com execução física pendente. Os NOT RUN de EV-08/13/14 e a ausência de byte
 em EV-10 descrevem seus marcos históricos; não são o estado atual das candidatas.
 Worktree `task-88f319957cc4-g0-lote3-status`, HEAD inicial `772dc68`.
 
+**Atualização lote4:** EV-19–21 complementam os marcos anteriores sem apagar
+FAIL/aborto administrativo/history ou reclassificar snapshots. Costura integrada
+física PASS pela gerência; E4 Rails e E7 OpenSSH implementados/revisados conforme
+controlador, ainda sem recibos físicos novos. Worktree
+`task-b15c348c94b6-g0-lote4-status`, HEAD inicial `c78bd74`.
+Política exclusiva EV-15, pausas e origem/Zed preservadas; G0 PENDENTE, sem F1.
+
 ---
 
 ## EV-01 — Ambiente local e ferramentas instaladas
@@ -383,7 +390,7 @@ Worktree `task-88f319957cc4-g0-lote3-status`, HEAD inicial `772dc68`.
   conta/modelo, tarefa persistida, efeito único backend, shell autenticado,
   aparelho físico ou grafo/estado Rails/Temporal real. E5 continua parcial.
 
-## EV-18 — Costura lote3 implementada/revisada; físico integrado pendente
+## EV-18 — Costura lote3 implementada/revisada; físico pendente naquele marco
 
 - **Comprovado por código/documentação:** entrega
   `1cfa37ae20d029d9b18c0d7c03674e5b82b0ed89`, incorporada por `772dc68`;
@@ -408,3 +415,82 @@ Worktree `task-88f319957cc4-g0-lote3-status`, HEAD inicial `772dc68`.
   comando único e critérios em [F0-LOTE3](validation/F0-LOTE3.md). Sem nova
   execução nesta entrega, G0 PENDENTE/F1 não iniciada. Política exclusiva de
   EV-15, pausas, origem e trabalho Zed preservados.
+
+## EV-19 — Costura física PG+relay+Temporal PASS, escopo restrito
+
+- **Comprovado por execução da gerência**, sem nova execução de serviços nesta
+  consolidação. [Recibo HOST](validation/artifacts/integrated/host-lote3-receipt.json)
+  de 2026-10-31T15:53:54.719748Z: candidato
+  `17f79b6122ab666fb6c68cd9c5f72e57026c4355`, entrega revisada
+  `1cfa37ae20d029d9b18c0d7c03674e5b82b0ed89`; inclui correção BUNDLE_FROZEN
+  e nova revisão PASS conforme controlador. Incorporado com recibos em `1f6e51a`.
+- Exit0; regressão de boot 4 testes/16 assertions/0 failures/errors/skips;
+  cenário e cleanup PASS. [Run retido](validation/artifacts/integrated/run-20261031T155115-8575a74a1f549eba/result.json)
+  e [manifesto HOST](validation/artifacts/integrated/host-003ff04f07abd0f2d06414128a5da7c2/sha256.txt)
+  preservam procedência, imagens, invocação, SQL e history. **21/21 hashes do
+  `sha256.json` do run reconferidos** e verifier offline PASS nesta entrega;
+  não foram repetidos Temporal5, SQL9, costura ou browser.
+- PostgreSQL, SessionLaunchRelay, TemporalService e SDK/servidor reais: relay
+  termina exit86 após start aceito/antes ack; lease saudável não inicia novamente;
+  `claimed_at` é envelhecido explicitamente em SQL (não espera real do lease).
+  Retry recebe AlreadyStarted real, mesmo runID/permit, ack SQL durável e uma
+  execução no listing/history; cancelamento real confirmado. O verifier consulta
+  calls, snapshots SQL e history e mantém `G0 PENDENTE`.
+- **Limites:** workflow inerte, autenticação/registry/modelos periféricos
+  sintéticos, ledger vazio, reserva ocupada e released_at ausente após cancel.
+  Não prova liberação/runtime cleanup, agentes/contas reais, todos os pontos de
+  entrada E3, T28 global ou G0. EV-13 FAIL inicial e preparação abortada por
+  ownership permanecem históricos válidos; EV-18 era o marco pré-execução.
+- **Móvel reconferido:** pacote EV-17 contém seis arquivos versionados, total
+  **7.858.710 bytes**, seis hashes PASS por leitura dos bytes nesta entrega.
+  Report/trace/quatro PNGs são da nova execução deliberada; componente real com
+  transporte sintético, sem shell autenticado. EV-10/17 e perda original
+  preservados; E5 não promovido.
+
+## EV-20 — E4 Rails/T36 implementado e revisado; físico NOT RUN
+
+- **Comprovado por código/documentação:** entrega `879164b576ff0a12ba81cb0526a9b354564f9042`,
+  incorporada por `c78bd74`; [F0-ACESSO-REAL](validation/F0-ACESSO-REAL.md) e
+  [checks de implementação](validation/artifacts/access/implementation-checks.json).
+  Revisão independente concluída conforme contrato do controlador; o snapshot
+  de implementação ainda diz revisão posterior. Não é recibo de revisão ou
+  execução. Pareceres/sessões ficam no controlador, sem IDs inventados aqui.
+- Laboratório candidato importa Rails/schema/rotas/controllers/Pundit/cookies,
+  UserSession, MCP e InertiaCable reais com identidades SQL sintéticas. Prevê
+  positivos e negativos UI/API/CSRF/ForwardAuth/WS/terminal/MCP, snapshots SQL,
+  revogação, outro tenant e worker sem ferramenta administrativa.
+- Correções R1/R2/R3-1 registradas: oráculo MCP exige recusa específica com
+  controle positivo; ownership após create antes de start com retenção/cleanup;
+  wrapper Cookies/CookieStore com round-trip e dois testes dirigidos no build.
+  Seis testes Python administrativos PASS relatados, Docker simulado; **Ruby,
+  bundle, testes cookie/MCP, boot Rails e matriz física NOT RUN** no worker.
+- Sem recibo HOST novo em `artifacts/access`: **execução gerencial PENDENTE**.
+  O probe ttyd direto na rede compartilhada registra shell anônimo como FAIL;
+  resultado inconclusivo é NOTRUN, nunca PASS. Fechamento de topologia e
+  contraprova são próximo bloco revisado, não correção já executada.
+- IDE/files/preview completos e ausência global MITM/CA/proxy em executores IA
+  continuam NOTRUN; Cable async em um processo não prova revogação Redis.
+  Não equivale a E4/T36 completo, shell móvel ou RF-55/T28 global.
+
+## EV-21 — E7 OpenSSH implementado e revisado; físico NOT RUN
+
+- **Comprovado por código/documentação:** entrega `75ebeaed9ec84c5b358cdc96bc36fd5ccf0e83be`,
+  incorporada por `00068d8`; [F0-SSH-INTEGRADO](validation/F0-SSH-INTEGRADO.md) e
+  [recibo de implementação](validation/artifacts/ssh/implementation-receipt.json).
+  Revisão independente concluída conforme controlador, após correções
+  SSH-REVIEW-001/002; `independent_review:PENDING` no recibo é snapshot anterior,
+  não novo parecer. Esta consolidação tem revisão independente própria pendente.
+- Transporte opt-in confiável reutiliza Coder::SshRunner/journal/job_status,
+  com hostkey ed25519 pinada, env mínimo e sem forwarding/TOFU; caminhos com
+  `$`/`%` recusados. Sem novo dispatcher, seletor UI/MCP ou credencial real.
+- Checks Python/bash/diff PASS relatados; gramática Ruby é evidência anterior
+  à última correção, não execução Ruby. Regressão local de ausência do marcador
+  testa quatro entradas em shell, não SSH. **Ruby, testes Rails, OpenSSH e gate
+  Docker NOT RUN**; nenhum recibo HOST físico novo em `artifacts/ssh`.
+- Gate previsto: pin errado falha sem efeito, repo nasce só no destino, bundle
+  e SHA conferidos, teste via detach/polls com um efeito e marcador sintético
+  central ausente no destino, cleanup próprio. Queda de canal forçada permanece
+  NOT RUN; sem CoderPrepareRepo/MCP/SQL/autenticação IA. EV-07 loopback preservado.
+- Próximos comandos/aceite e demais eliminatórios em
+  [F0-LOTE4](validation/F0-LOTE4.md). Implementação concluída não aprova execução,
+  revisão documental ou G0; nenhuma operação de serviço nesta entrega.
