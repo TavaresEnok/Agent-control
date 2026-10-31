@@ -43,9 +43,34 @@ Permanecem ativas e inalteradas as seguintes diretrizes de segurança:
 
 ---
 
-## 4. Próximos Passos (Transição para F1)
+## 4. Fase 1 (F1 — Fundação de Domínio e Políticas): CONCLUÍDA
 
-Com o Gate G0 aprovado, o desenvolvimento autônomo avança para a **Fase 1 (F1 — Fundação de Domínio e Workflows)**, conforme o cronograma do Plano Mestre v1.1:
-1. **Domínio e Modelagem Central:** Estruturação dos modelos de agentes, perfis, capacidades e admissão;
-2. **Workflows Temporal Base:** Implementação das definições de workflows de orquestração no Temporal;
-3. **Integração de Workers:** Adaptação dos workers isolados para consumo de tarefas via Temporal.
+Em conformidade com a autorização autônoma, a fundação de domínio do Agent Control foi implementada e validada:
+1. **Lote F1-A — Entidades de Domínio do Plano (RF-15, RF-18, RF-21):**
+   - `AcWorkContext` (`ac_work_contexts`): contexto de trabalho persistente com gerente lógico, sobrevivendo a trocas de modelo/conta (RF-03);
+   - `AcPlan` (`ac_plans`): planos versionados e imutáveis após publicação com hash SHA-256 (RF-15, RF-42);
+   - `AcTask` (`ac_tasks`): tarefas desacopladas de provedores, com classe de risco, gates de QA e limite de tentativas (RF-18, RF-21).
+2. **Lote F1-B — Perfis de Execução e Políticas (RF-08, RF-09, ADR-002):**
+   - `AcPolicyRevision` (`ac_policy_revisions`): documentos de política imutáveis com validação estrutural e modo de aplicação;
+   - `AcExecutionProfile` (`ac_execution_profiles`): perfis elegíveis por papel, CLI suportada, modelo e esforço (≤ Alto);
+   - `AcPolicyEngineService`: motor de seleção e substituição com verificação de cotas e auditoria completa.
+3. **Lote F1-C — Observação de Cota e Reservas Atômicas (RF-10, RF-13, RF-47):**
+   - `AcQuotaObservation` (`ac_quota_observations`): evidências com origem, janela e distinção de estados (exhausted, rate_limited, auth_error, network_error, unknown);
+   - `AcCapacityGrant` (`ac_capacity_grants`): reserva atômica via `SELECT FOR UPDATE`, idempotência por `operation_id` e verificação de época (§11.3);
+   - `AcCapacityService` e `AcQuotaService`: ciclo de vida de capacidade e redação de credenciais (RNF-08).
+4. **Lote F1-D — Auditoria de Domínio Append-Only (RF-31, Critério G1):**
+   - `AcDecisionAuditEvent` (`ac_decision_audit_events`): auditoria imutável (bloqueio de UPDATE/DELETE) explicando seleções, recusas e concessões.
+5. **Lote F1-E — Importação Somente de Leitura dos Paseos (RF-33):**
+   - `AcPaseoImportService`: preservação histórica de planos, contextos e evidências anteriores em modo read-only arquivado.
+
+**Bateria de Testes:** 51/51 testes unitários novos aprovados (100% PASS), 239 asserções, 0 falhas, 0 erros, 0 skips. Regressão zero nos testes existentes do Aixle Flow e F0. Commit `03c7b11`.
+
+---
+
+## 5. Próximos Passos (F2 — Orquestração Temporal e Execução de Tarefas)
+
+Avançar para a **Fase 2 (F2 — Orquestração e Execução)**:
+1. Workflows duráveis do Temporal mapeando o ciclo de vida do `AcPlan` e `AcTask` (`AcTaskExecutionWorkflow`);
+2. Atividades Temporal para reserva atômica de capacidade, invocação de runner/CLI isolada e coleta de evidências;
+3. Reconciliação de estados e heartbeat de tarefas.
+
