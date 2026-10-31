@@ -14,8 +14,8 @@ Nenhuma credencial real, token ou dado sensível foi lido, copiado ou incluído 
 **Atualização lote 2:** EV-01–11 são preservados abaixo sem reclassificação
 retroativa. O estado vigente é complementado por EV-12–15: namespace HOST
 sintético positivo, Temporal inicial FAIL, correção/SQL ainda sem execução
-física da candidata e política exclusiva efetiva. Menções anteriores à exclusiva
-como apenas histórica são retificadas por EV-15. Worktree atual
+física da candidata e política então efetiva. EV-15 preserva essa regra;
+EV-29 registra a política exclusiva do contrato atual. Worktree daquele lote
 `task-a9c3be73bab4-g0-lote2-status`, HEAD inicial
 `533e08cc68e03e00c3328f1f7a462c44acaab261`.
 
@@ -30,14 +30,14 @@ FAIL/aborto administrativo/history ou reclassificar snapshots. Costura integrada
 física PASS pela gerência; E4 Rails e E7 OpenSSH implementados/revisados conforme
 controlador, ainda sem recibos físicos novos. Worktree
 `task-b15c348c94b6-g0-lote4-status`, HEAD inicial `c78bd74`.
-Política exclusiva EV-15, pausas e origem/Zed preservadas; G0 PENDENTE, sem F1.
+Política então vigente em EV-15, pausas e origem/Zed preservadas; G0 PENDENTE, sem F1.
 
 **Atualização lote5:** EV-22–24 consolidam o recibo físico de preflight lote4,
 o preparo IPAM/seccomp e a distinção RF55 por modo. Lotes1–4 DONE/revisões PASS
 e duas entregas lote5 implementadas/revisadas conforme controlador; execução dos
 scripts novos ainda pendente. Worktree `task-9add58f6088a-g0-lote5-status`, HEAD
 inicial `25298dc`. Os NOT RUN de EV-20/21 descrevem seus snapshots históricos.
-G0 PENDENTE, F1 não iniciada; política exclusiva EV-15, pausas e Zed preservados.
+G0 PENDENTE, F1 não iniciada; política então vigente EV-15, pausas e Zed preservados.
 
 **Atualização lote6:** EV-25–26 complementam os marcos anteriores: recibos
 físicos negativos lote5, correção administrativa de ownership e novas correções
@@ -246,7 +246,7 @@ conforme controlador. Worktree `task-271a4475560c-g0-lote6-status`, HEAD inicial
 - **Autorização resolvida:** Aixle Flow `e6ec5a28` é candidato aprovado; dependências isoladas sem sudo já autorizadas. Não permanecem pendências de escolher candidato ou pedir novamente instalação isolada. Aprovação de candidato não aprova G0 nem modo/plano do provedor. F1, produção, migração, contas reais e API paga fora desta entrega.
 - **Clone/desenvolvimento e origem:** esta worktree `/home/enok/srv_projetos/worktrees/14v3rrig/task-e59f2072f8f4-g0-consolidar`, HEAD inicial `50d3387f21778dacd7f2e9c6147fbcaf650bbe99`, incorpora as três entregas acima; `UPSTREAM.json` fixa Aixle. Origem documental/Zed `/home/enok/Documentos/projetos/agent-control` preservada, sem leitura/escrita fora da worktree nem afirmação de que Zed encerrou seu trabalho. Árvore inicial limpa. Somente cinco documentos autorizados e metadado de resultado alterados nesta entrega; código/testes preservados.
 - **Controlador:** ativo no fluxo de desenvolvimento por contrato/delegação e histórico de integração das três tarefas. Isto não é probe de saúde de `paseo-flow.service` nem evidência de autoridade comum Paseo/Aixle. A ordem antiga de aguardar continuação em PASEO-CONTINUACAO foi superada pelo pedido atual nesta worktree; não iniciar/reiniciar daemon nem retomar filas antigas.
-- **Política:** a exclusiva histórica (gerente Codex antigo Sol Alto; Codex novo Sol Médio para implementação/revisão separadas, sem fallback) fica registrada como origem dos relatórios. A atualização administrativa v3 declara substituir regras históricas de modelo/esforço/conta/substituição; o controlador deve aplicar a política vigente ao despacho seguinte, preservando sessão independente de revisão e proibição de Astra. Este executor já delegado permanece no escopo Codex programador, sem criar agentes/trocar conta/modelo ou fallback. Não alterar a cadeia de produto por interpretação desta documentação. Ver detalhamento em F0-RETOMADA.
+- **Política:** registro da interpretação administrativa daquele momento; a política exclusiva do contrato desta entrega está explicitada em EV-29. Este executor já delegado permanece no escopo de programação, sem criar agentes, trocar conta/modelo ou usar fallback. Não alterar a cadeia de produto por interpretação desta documentação. Ver detalhamento histórico em F0-RETOMADA.
 - **Pausas:** demais projetos (`Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat`) continuam pausados; nenhuma autorização de retomada inferida. Nenhum serviço/produção/credencial real acessado, nenhum deploy/push/merge/commit efetuado pelo executor.
 - **Check desta entrega:** `git diff --check` obrigatório; resultado final registrado em `.paseo-result.json` (metadado não deve ser commitado). Não repetidas suítes verdes; leituras/diffs não equivalem a revisão independente. G0 **PENDENTE**, implementação documental encaminhada à revisão independente pelo controlador.
 
@@ -630,4 +630,89 @@ conforme controlador. Worktree `task-271a4475560c-g0-lote6-status`, HEAD inicial
   [F0-LOTE6](validation/F0-LOTE6.md). RF55 CLI própria remota documentalmente
   suportada no escopo EV-24; UI hospedada requires_clarification. RF46/T28 e E4
   independentes; sem login/inferência/contas reais. Plano1.1/Adendo, base/ADR,
-  negativos, IDs, recibos, política exclusiva EV-15, pausas e Zed preservados.
+  negativos, IDs, recibos, política então vigente EV-15, pausas e Zed preservados.
+
+## EV-27 — Lote6 físico gerencial: SSH PASS limitado; matriz de acesso NOTRUN
+
+- **Comprovado por execução da gerência**, observer `manager_host`,
+  `2026-10-31T20:47:41.847194+00:00`, candidata
+  `da30f2b0e2ccd207d46ccf3d1ddc6d1516505b95`; artefatos incorporados em `8e378a5`.
+  [Recibo](validation/artifacts/lote6-host-results-20261031/receipt.json) e
+  [manifesto](validation/artifacts/lote6-host-results-20261031/sha256.json)
+  consultados de forma dirigida, sem reler logs inteiros, reconferência integral
+  de hashes ou repetição dos verdes. Lote6 `271a4475560c` DONE/revisado conforme
+  controlador; esta consolidação requer sua própria revisão independente.
+- SSH run `f0-ssh-5b81bbfa01d41f8d413b386df50b2c24`: [result](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/result.json),
+  [status](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/status.json)
+  e gate PASS; job `86638eaf657a`, detached, exit0, **uma execução**.
+  Repo somente no destino, alteração/commit central e teste remoto; SHA central
+  e observado `c7455f7f0c4d833a9b788f0c46d5ae37db5f130f` iguais; bundle SHA-256
+  `307a8ea7869186d5c808d6bb2664513296d1930291ea9643014bf289e5099610`.
+  Pin negativo local e servidor (exit255), pin positivo, polls em conexões novas
+  e segredo sintético ausente comprovados pelo cenário físico retido.
+- [Journal](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/journal.json)
+  PASS: 20.480 bytes, SHA-256 `7c88d598b60ab013135266edbc6ffc1c74f5a635efa62450069911fc723fec32`;
+  tar retido. Captura e [cleanup](validation/artifacts/lote6-host-results-20261031/ssh/runs/f0-ssh-5b81bbfa01d41f8d413b386df50b2c24/cleanup.json)
+  PASS separados. **Standalone Settings + SshRunner/OpenSSH/journal**;
+  sem CoderPrepareRepo/MCP/SQL/IA autenticada, queda forçada de canal NOT RUN.
+  Não fecha F4 completo, E1/E2 ou G0. Não repetir esse verde.
+- Acesso run `f0-access-7c5d66ab594c97c09a1ea8d6`:
+  [report](validation/artifacts/lote6-host-results-20261031/access/runs/f0-access-7c5d66ab594c97c09a1ea8d6/report.json)
+  `FAIL_OR_NOTRUN`: PG final/schema Rails carregados e três identidades SQL
+  com cookies reais do laboratório (session/CSRF recuperados) PASS; não são
+  contas reais de provedor. `boot-or-scenario` NOTRUN/`Net::OpenTimeout` antes
+  da matriz HTTP/WS/MCP. Nenhuma recusa/política de acesso aprovada, nem
+  vulnerabilidade de autorização demonstrada pelo timeout.
+- [Receipt de acesso](validation/artifacts/lote6-host-results-20261031/access/runs/f0-access-7c5d66ab594c97c09a1ea8d6/receipt.json)
+  FAIL/exit1, coleta sem erros e cleanup PASS. Diagnóstico `pg-readiness`/
+  CalledProcessError retido nesse receipt é residual; o report comprova avanço
+  posterior até cookies/startup. Gateway iniciado 20:43:38.502, web terminado
+  20:43:39.262: corrida de startup é diagnóstico compatível com o timeout;
+  não atribuir recusa à política nem provar causa de rede definitiva.
+
+## EV-28 — Prontidão de acesso corrigida; snapshot anterior à prova física
+
+- **Comprovado por código/documentação:** `9e6392911f75d02422f043115220ea62898c184d`,
+  incorporado por `9f28ff9`; implementado/revisado conforme controlador.
+  [F0-ACESSO-PRONTIDAO](validation/F0-ACESSO-PRONTIDAO.md) retém o marco de
+  implementação e a receita; não inventar recibo de revisão ou execução.
+- Duas fases GET limitadas a 40s monotônicos: backend Rails `/up` e rota real
+  do gateway/ttyd com cookie sintético owner. Retry transitório inclui
+  Net::OpenTimeout/ReadTimeout, DNS e conexão; resposta inesperada FAIL,
+  prazo/erro não transitório NOTRUN. Sem retry de mutações/sessões; auth, CSRF,
+  cookies, revogação e oráculos negativos preservados. Readiness PASS é preparo.
+- A imagem antiga `439b8d` contém snapshot aplicativo `c9a2c3b` e ownership
+  normalizado; executar host.py novo com essa imagem intacta usa run.rb antigo.
+  Exigir overlay mínimo dos quatro arquivos da receita, imagem derivada por ID
+  imutável, hashes/commit/CMD e apenas sintaxe/teste novo antes do físico.
+  Neste marco, novo ID ainda não constava dos recibos; EV-29 registra o posterior.
+- Gate gerencial posteriormente executado: ver EV-29 e
+  [F0-LOTE7](validation/F0-LOTE7.md), inclusive negativos ttyd/WS e cleanup.
+  Sem repetir SSH/SQL/Temporal/mobile/unidades anteriores. RF55 por modo EV-24:
+  CLI própria remota `documented_supported` no escopo documental; UI hospedada
+  `requires_clarification`. RF46/T28 real e contas reais não ativados.
+  Plano1.1/Adendo, IDs/recibos/falhas, base/ADR, política EV-15,
+  origem/Zed e pausas preservados. **G0 PENDENTE; F1 não iniciada.**
+
+## EV-29 — Lote7 físico e parada para handoff
+
+- **Comprovado por execução gerencial**, recibos retidos no commit `3e0b77f`:
+  `git show 3e0b77f:docs/validation/artifacts/lote7-host-results-20261031/receipt.json`;
+  `access/receipt.json`, `access/report.json`, `host-provenance.json`,
+  `unit-receipt.json` e `sha256.json` no mesmo diretório registram detalhes.
+  Candidata `9f28ff913d1cdea14ac6af9afbecc35bd8e10b88`; imagem
+  `sha256:6ec3bd403729c92004a29e696916b2c17b1668061255d9f570b64784fadc89d6`.
+  Unidade: 7 testes/77 assertions, zero falhas/erros/skips; readiness backend e
+  gateway PASS. Matriz **81 PASS/4 FAIL/1 NOTRUN**, cleanup PASS.
+- Shell anônimo por ttyd direto e subscription cross-tenant confirmados.
+  MCP worker FAIL `-32602`, SQL protegido inalterado; revogação WS FAIL com
+  `observed` vazio. Estas duas falhas requerem diagnóstico, sem causa presumida.
+  IDE/files/preview NOTRUN. Não há aprovação E4 nem G0; F1 não iniciada.
+- Política exclusiva do contrato: gerente `codex/gpt-6.1-sol high`, programador
+  e revisor `codex-programmer/gpt-6.1-sol medium`, em sessões distintas, sem
+  fallback; sem cota, aguardar recuperação confirmada na mesma conta. A política
+  administrativa de runtime da sessão é distinta e não altera esta regra do
+  projeto. EV-15 e recibos antigos permanecem preservados. Após revisão deste fechamento, parada
+  persistente para handoff a outra IA; gates e correções são backlog sem
+  autorização de execução. RF55 UI `requires_clarification`; RF46/T28 e contas
+  reais não ativados. Sem repetir provas físicas ou reabrir tarefas DONE.
