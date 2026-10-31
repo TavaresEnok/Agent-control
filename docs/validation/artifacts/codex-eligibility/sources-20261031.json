@@ -1,0 +1,55 @@
+{
+  "consulted_on": "2026-10-31",
+  "kind": "official_documentation_short_excerpt_register",
+  "publication_date": "not established; live documentation",
+  "local_base_commit": "929259f471a140aeecfdd3734eec40f9516edda4",
+  "retrieval": "Official HTML pages opened and relevant sections read; .md retrieval failed with unsupported text/markdown content-type. No full-page snapshot retained.",
+  "sources": [
+    {
+      "id": "S1",
+      "url": "https://learn.chatgpt.com/docs/auth",
+      "section": "Fallback: Forward the localhost callback over SSH",
+      "excerpt": "In that SSH session, run `codex login` and follow the printed address on your local machine."
+    },
+    {
+      "id": "S2",
+      "url": "https://learn.chatgpt.com/docs/non-interactive-mode",
+      "section": "Authenticate in automation",
+      "excerpt": "`codex exec` reuses saved CLI authentication by default."
+    },
+    {
+      "id": "S3",
+      "url": "https://learn.chatgpt.com/docs/auth/ci-cd-auth",
+      "section": "Operational rules that matter",
+      "excerpt": "Do not share the same file across concurrent jobs or multiple machines."
+    },
+    {
+      "id": "S4",
+      "url": "https://learn.chatgpt.com/docs/app-server",
+      "section": "Auth endpoints",
+      "excerpt": "App-server authentication has never been permitted for commercial or hosted services."
+    },
+    {
+      "id": "S5",
+      "url": "https://developers.openai.com/siwc/token-sharing-open-source",
+      "section": "Introduction",
+      "excerpt": "These docs explain ChatGPT plan usage for open-source and locally hosted apps."
+    },
+    {
+      "id": "S6",
+      "url": "https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server",
+      "section": "Using Codex app-server",
+      "excerpt": "Your app should read its own token file and supply the access token to the child process."
+    }
+  ],
+  "decision": {
+    "native_owner_cli_remote": "documented_supported within documented CLI scope, not account verification",
+    "exact_aixle_mobile_private_ui": "requires_clarification limited to hosted UI classification",
+    "current_adapter_composite": "requires_clarification; excluded from proposed F0 native mode",
+    "next_experiment": "synthetic launcher and isolation only; proposed, NOT RUN",
+    "real_account_use": "NOT RUN",
+    "inference": "NOT RUN",
+    "provider_contact": "NOT SENT",
+    "gate": "G0 PENDENTE"
+  }
+}
