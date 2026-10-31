@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-31",
+  "scope": "F0 synthetic boundary and eligibility only",
+  "g0": "PENDENTE",
+  "upstream_commit": "e6ec5a286120aed3a036d85871e796b2f6c97d70",
+  "isolation": {
+    "command": "python3 tools/f0/boundary/isolation_probe.py",
+    "exit": 0,
+    "synthetic_only": true,
+    "uid": 1000,
+    "kernel": "5.17.15-pnetlab-uksm-2",
+    "concurrent_synthetic_holders": 2,
+    "home_only": {
+      "directions": ["a_to_b", "b_to_a"],
+      "own_read_both": true,
+      "absolute_both": "LEAKED",
+      "symlink_both": "LEAKED",
+      "process_root_both": "LEAKED",
+      "process_fd_both": "LEAKED",
+      "process_environ_both": "LEAKED"
+    },
+    "namespace": {
+      "status_both": "NOT RUN",
+      "namespace_executed_both": false,
+      "exit_both": 1,
+      "cause_both": "unshare: unshare failed: Operation not permitted"
+    },
+    "real_codex_accounts": "NOT RUN"
+  },
+  "guard": {
+    "command": "python3 tools/f0/boundary/run_guard.py",
+    "exit": 0,
+    "ruby": "3.1.2p20 x86_64-linux-gnu (temporary extracted Debian packages)",
+    "negative_profiles_before_spy": 24,
+    "negative_executor_calls": 0,
+    "positive_executor_calls": 1,
+    "executor_error_propagated": true,
+    "synthetic_quota_unchanged": true,
+    "real_cli": "NOT RUN"
+  },
+  "audit": {
+    "command": "python3 tools/f0/boundary/audit_upstream.py",
+    "exit": 0,
+    "files_fetched": 18,
+    "all_worktree_sources_equal_to_fixed_commit": true,
+    "classification": "static source; no service requests",
+    "sha256": {
+      "app/controllers/application_controller.rb": "1560d191e01d08ee64852cfd5ebf2666defa28c712436f6c85ae3645c1cbf1f9",
+      "app/controllers/concerns/auth_concern.rb": "a7822a84ce1b2e48d326ccaa8865fce137c3b258cb618c52100e0c28ea682a86",
+      "app/controllers/api/v1/terminal_sessions_controller.rb": "07b0c3eed4b9f1d3c170a3dd3c6f01cdd25f4f9db77847765349ba7d032bc977",
+      "app/controllers/api/v1/internal/ws_auth_controller.rb": "f358fd94ba6a9f11d3223b18c94cf48b3086e70b3858e412fbca7347d596ddb9",
+      "app/channels/application_cable/connection.rb": "6c789f1e5c39151ecd0b829bed6f6ec07023cb266b8d305e7658cbb6624466c8",
+      "app/controllers/mcp_controller.rb": "83271ae1e895e869353eded3cc55145b2f86e7d1596920faf58bb6a099033157",
+      "app/models/agent_credential.rb": "4180830770562445956702289792d1fdb297ab2b329e654b1bb4753aa4a62468",
+      "app/services/agents/codex_adapter.rb": "34d8b11f83478b467c694286dbc6a4d8000556d5ce3365c9f34476c515509cd3",
+      "docker/base/logger/start-mitm.sh": "3f27843a340aab95152dab85c88e6f4825b36f5724f2f3cb869f10c3374a5603",
+      "docker/base/logger/mitm_logger.py": "7bb327c398cd453dcef003775b36b4015af030c7ccbfdca436bd31e24fd4f1c4",
+      "docker/base/logger/refresh_broker.py": "0a327f2ba861116961d892f8b3d0a5e12ae400876397acc1a8f6740725bf06e2",
+      "config/routes/mcp.rb": "fcccc35030dc1f071b16db35d8553d829b67d1196edfa4b0b609f94437a96a2b",
+      "config/routes.rb": "2e9ed79f6d9b9883c70518b1521c2996349d30c14caf8c87ea79d7fef0ee36dd",
+      "app/controllers/api/v1/application_controller.rb": "d1f3323a28800bb3ce127904790ad9984ad81faaf21666edaf5763f9006c9157",
+      "app/controllers/web/application_controller.rb": "6dd2f643cb1b3f7f0eaff9c8f701e8340f733aed4874c07e06fd7a4e0cd9693c",
+      "docker/traefik/dynamic.yml": "cdbe309d17fb2b9fedb946de8703b60a9fc3f6b7a6317f6cc53b0909b0c6a6f2",
+      "app/services/container_strategies/agent_base_strategy.rb": "eb3e05fffc5af4042254ba6c2e29cae8af9e973b39abf4320723f9e8ebf121bf",
+      "docker/base/entrypoint.sh": "035e4623f44086011d83eb8857bda5cc8729920411626b1019e6e956bf75125f"
+    }
+  }
+}
