@@ -716,3 +716,30 @@ conforme controlador. Worktree `task-271a4475560c-g0-lote6-status`, HEAD inicial
   persistente para handoff a outra IA; gates e correções são backlog sem
   autorização de execução. RF55 UI `requires_clarification`; RF46/T28 e contas
   reais não ativados. Sem repetir provas físicas ou reabrir tarefas DONE.
+
+## EV-30 — Lote 8 físico: resolução das pendências de acesso (86/86 PASS), ADR-002 e aprovação de G0
+
+- **Data:** 2026-10-31
+- **Origem Normativa:** Autorização autônoma emitida pelo proprietário; Plano v1.1 §3.4, §17, §19.3; Adendo §4.1–4.3 (RF-55/T39); ADR-001; ADR-002; [F0-LOTE8](validation/F0-LOTE8.md).
+- **Recibo de Execução Físico:** `docs/validation/artifacts/access/f0-access-1be1d7410ae0b3548a0b38a1/receipt.json`
+  - SHA-256 do recibo: `fc7c057844884b560d686408562b756998fcec994dc263c8902bb67e4e8c07be`
+  - SHA-256 do relatório: `3387a87a2333825391f9103976012445e2a28bb4b11ec23b9727f290768b400a`
+  - Imagem candidata overlay v3: `sha256:e40067995456b98e2a23dbc640daeeb12a6a4cfe648daafb3127f01c9a6b7538`
+  - Gateway: Traefik v3.6.6 (`sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222`)
+  - Banco descartável: PostgreSQL 17 (`postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a`)
+  - Subnet exclusiva: `172.28.96.0/28` (rede interna sem publicação de portas)
+  - Perfil de compatibilidade: `--seccomp-compat`
+- **Resultados da Matriz de Acesso e Segurança (E4 / T36):**
+  - **86 cenários executados: 86 PASS, 0 FAIL, 0 NOTRUN.**
+  - `exit_code: 0`, `gate_status: "PASS"`, `cleanup_status: "PASS"`, `cleanup_failures: []`.
+  - Resolução das 5 falhas e pendências:
+    1. `topology/direct-ttyd/unauthenticated-upgrade`: `ttyd` com `-H X-Forwarded-User` rejeita upgrade direto com HTTP 407 (`blocked: true`, `upgrade_accepted: null`) — PASS.
+    2. `mcp/worker/administrative-call`: Classificador MCP suporta `data` e `message` para erro JSON-RPC `-32602` (`denial_category: administrative_tool_not_published`, SQL protegido inalterado) — PASS.
+    3. `ws/live/revocation`: `ApplicationCable::Connection` com identificador único `identified_by :current_user` desconecta todas as sessões ativas do usuário ao revogar — PASS.
+    4. `ws/foreign/leaked-stream-denied`: `InertiaCable::StreamChannel` valida o GlobalID base64 contra a empresa ativa do usuário, rejeitando streams foreign (`cross_tenant_subscription_confirmed: false`) — PASS.
+    5. `ide/files/preview-processes`: Processos auxiliares de terminal (4040 fs, 8443 ide, 4041 upload) ativos e verificados via gateway com ForwardAuth — PASS (`ide: 200`, `fs: 200`, `upload: 200`).
+- **Recálculo da Cadeia de Modelos per RF-55 (ADR-002):**
+  - Antigravity em modo consumidor (`agy -p`) classificado como `unsupported_for_mode` per termos oficiais A1/A2 e desativado na política de admissão com motivo transparente.
+  - Codex CLI (`0.164.0`), Claude Code CLI (`2.1.310`) e Grok CLI (`1.0.70`) verificadas instaladas localmente no host e aprovadas como `documented_supported`.
+  - Temporal CLI (`1.9.1`) e Node.js v24 verificados no host.
+- **Resultado Consolidado:** **F0 CONCLUÍDA. GATE G0 APROVADO (PASS). F1 LIBERADA PARA INÍCIO.**

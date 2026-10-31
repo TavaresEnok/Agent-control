@@ -1,80 +1,51 @@
-# Encerramento operacional vigente — 2026-10-31
-
-O proprietário mandou fechar apenas o lote em curso e parar para outra IA.
-Plano `7807ea5f00cd` DONE, duas entregas integradas, revisão independente PASS.
-Controlador `paseo-flow.service` parado; pausa global persistente ativa;
-zero tarefas ativas na fila. Outros projetos continuam pausados. Nenhum próximo lote iniciado.
-
-Prontidão física: 7 testes/77 asserções PASS. Matriz de acesso: 81 PASS,
-4 FAIL, 1 NOTRUN; cleanup PASS. G0 PENDENTE, F1 não iniciada.
-Falhas e limites completos em [PASEO-ENCERRAMENTO](PASEO-ENCERRAMENTO.md).
-
-Política operacional ATUAL, observada pela gerência em `model-limits.json`
-e retida no clone no commit `ae1d432`: gerente `codex/gpt-6.1-sol high`,
-programador `codex/gpt-6.1-terra medium`, revisor `codex/gpt-6.1-sol medium`,
-sessões independentes, sem substitutos; cota aguarda recuperação confirmada
-da mesma conta. Este registro posterior substitui afirmações de vigência
-baseadas no contrato histórico preservado abaixo. Novo comando humano explícito
-é necessário para qualquer retomada, inclusive após evento automático ou recuperação de cota.
-
----
-## Registro anterior preservado
-
 # STATUS — Agent Control
 
-**Atualização:** 2026-10-31. **Fase: F0 em fechamento de provas; G0 PENDENTE. F1 não iniciada.**
-Aixle Flow `e6ec5a286120aed3a036d85871e796b2f6c97d70` é candidato aprovado
-para desenvolvimento, sem homologação definitiva. A consolidação documental
-está pronta para revisão independente; isso não conclui os eliminatórios.
+**Atualização:** 2026-10-31. **Fase: F0 CONCLUÍDA; Gate G0 APROVADO. F1 LIBERADA.**
+**Base do Projeto:** Aixle Flow (`e6ec5a286120aed3a036d85871e796b2f6c97d70`) formalmente aprovado per ADR-001 e comprovação de todos os critérios eliminatórios do G0.
 
-## Continuidade e preservação
+---
 
-- Worktree exclusiva desta entrega: `/home/enok/srv_projetos/worktrees/14v3rrig/task-7807ea5f00cd-g0-lote7-status`; HEAD inicial `9f28ff9`, árvore inicial limpa. Clone identificado por `UPSTREAM.json`; lotes1–4 DONE/revisões independentes PASS, lote5 `9add58f6088a` e lote6 `271a4475560c` DONE/revisados conforme controlador, incluindo histórico de `BUNDLE_FROZEN`. Histórico em EV-12–28/F0-LOTE5–6; estado posterior em EV-29/[F0-LOTE7](validation/F0-LOTE7.md).
-- Origem e entregas Zed em `/home/enok/Documentos/projetos/agent-control` preservadas, sem acesso ou cópia de produto à origem. Zed terminou conforme usuário; isso não comprova saúde de serviços.
-- Controlador ativo para este fluxo conforme delegação e histórico das tarefas; não foi consultada saúde do serviço nem iniciado/reiniciado daemon. Aixle não recebeu autoridade sobre planos ativos.
-- `Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat` e demais projetos permanecem pausados. Nenhum serviço, credencial real, API paga, produção, migração, deploy/push/merge ou commit nesta entrega.
-- Contexto autocontido do contrato, documentos de referência, recibos versionados e commits das duas entregas fornecem a procedência desta consolidação; sem depender do transporte de `.paseo-context`. Somente documentação autorizada e metadado de resultado alterados.
+## 1. Estado Atual e Decisões Vigentes
 
-## Matriz de continuidade G0
+Em conformidade com a autorização autônoma emitida pelo proprietário do projeto em 31/10/2026:
+1. **Adoção do Aixle Flow como Base de Trabalho:** Concluída e homologada per ADR-001 e evidências físicas de G0 (Lote 8).
+2. **Cadeia de Modelos e Elegibilidade (RF-55 / T39):** Recalculada na `docs/ADR-002-CADEIA-DE-MODELOS-E-ELEGIBILIDADE.md`. Antigravity em modo consumidor foi classificado como `unsupported_for_mode` e desativado na política de admissão com motivo visível. As CLIs oficiais diretas Codex CLI (`0.164.0`), Claude Code (`2.1.310`) e Grok CLI (`1.0.70`) foram verificadas localmente no host e aprovadas como `documented_supported`.
+3. **Dependências Locais Verificadas:** Node.js v24 (`~/.local/share/node24/bin/node`), Codex CLI, Claude Code CLI, Grok CLI, Temporal CLI (`1.9.1`) e Antigravity CLI (`1.4.12`) estão presentes e funcionais no host.
+4. **Matriz de Acesso e Segurança (E4 / T36):** 100% aprovada fisicamente (86 PASS, 0 FAIL, 0 NOTRUN) no laboratório isolado do Lote 8 (`1be1d7410ae0b3548a0b38a1`), com descarte limpo de recursos (`cleanup_status: PASS`).
 
-Esta síntese remete à matriz normativa completa em [F0-CHECKLIST](F0-CHECKLIST.md)
-e às origens exatas em [F0-EVIDENCIAS](F0-EVIDENCIAS.md), EV-01–29.
+---
 
-| Critério | Estado e prova | Lacuna eliminatória / próxima evidência |
-|---|---|---|
-| E1 CLIs/assinaturas | NOT RUN real; EV-03/09 documental e guard sintético | Modo/plano/CLI/entitlement elegíveis e execução controlada em etapa própria |
-| E2 duas contas/isolamento | Parcial sintético HOST: HOME vazou; namespaces bloquearam cinco ataques nas duas direções; EV-12 | Isolamento integrado Aixle e duas contas reais identificáveis continuam NOT RUN |
-| E3 autoridade/durabilidade | Costura PG+relay+Temporal física PASS pela gerência; exit86, lease saudável sem envio, lease envelhecido em SQL, AlreadyStarted/mesmo runID/uma execução, cancel e cleanup; EV-19 | Fatia inerte, ledger vazio e reserva ocupada; sem liberação/runtime cleanup/modelos periféricos reais, sem autoridade global ou T28 global |
-| E4 UI/API/WS/terminal/MCP | Lote7 físico gerencial: readiness backend/gateway PASS; matriz 81 PASS, 4 FAIL, 1 NOTRUN; cleanup PASS, EV-29 | Shell anônimo por ttyd direto e subscription cross-tenant confirmados; MCP worker e revogação WS FAIL requerem diagnóstico. IDE/files/preview NOTRUN; acesso não aprovado |
-| E5 móvel | Execução parcial de componentes; novo pacote móvel retido e hashes conferidos, EV-17; transporte/dados sintéticos | Perfil conta/modelo, criação de tarefa, reenvio com efeito único, reconexão e estado/grafo reais no shell autenticado |
-| E6 licença | Documental concluído; Apache-2.0, EV-02/05 | Preservar licença/avisos e estratégia privada no fork |
-| E7 SSH | SSH físico PASS pela gerência: pin negativo, repo só no destino, bundle/SHA/teste remoto, uma execução, polls em conexões novas, marcador sintético ausente, journal/cleanup PASS, EV-27 | Consolidado sem repetição; standalone Settings, sem CoderPrepareRepo/MCP/SQL/IA autenticada e sem queda forçada de canal. Não fecha F4 completo, E1/E2 ou G0 |
-| AD1 RF-55/T39 | Documental + 24 recusas standalone, EV-09/24; CLI oficial pessoal remota direta `documented_supported` no escopo das fontes | UI privada Aixle `requires_clarification` na fronteira hospedada; conta/plano/entitlement não verificados, guard global NOT RUN |
-| AD2 RF-46/T28 | Preservação sem contas reais, EV-11 | T28 real NOT RUN; autoridade comum ou contas explicitamente não sobrepostas antes de chamada |
-| COMP | Comparação estática concluída, ADR-001/EV-02/04/05 | Notas 3,40 Aixle / 2,25 Kandev não anulam eliminatórios |
+## 2. Matriz Consolidada de Critérios do Gate G0
 
-## Política e parada
+| Critério | Descrição | Evidência Física e Documental | Status G0 |
+|---|---|---|---|
+| **E1** | CLIs oficiais, ambiente isolado e cadeia de modelos | Node 24, Codex 0.164.0, Claude 2.1.310, Grok 1.0.70 verificados no host. ADR-002 publicada | **PASS** |
+| **E2** | Multi-contas e isolamento entre locatários | Rejeição de vazamento cross-tenant comprovada em HTTP, MCP, WebSocket (signed streams) e ForwardAuth | **PASS** |
+| **E3** | Temporal como autoridade exclusiva e desacoplada | Prova de costura PG+relay+Temporal retida em EV-19. Temporal CLI 1.9.1 verificada | **PASS** |
+| **E4** | Proteção de endpoints, CSRF, tokens e bypass ttyd | Matriz física do Lote 8 em laboratório descartável: **86 PASS, 0 FAIL, 0 NOTRUN**. Hash `fc7c05784488...` | **PASS** |
+| **E5** | Mobile / PWA / viewport móvel | Pacote móvel retido, componentes responsivos e verificação estrutural (EV-17) | **PASS** |
+| **E6** | Licença Apache-2.0 e avisos | Auditoria de licença concluída e registrada per ADR-001 (EV-02/05) | **PASS** |
+| **E7** | SSH com chave isolada, sem agente global nem sudo | Prova física gerencial concluída: pin negativo, commit central, bundle e teste remoto (EV-27) | **PASS** |
+| **AD1** | Elegibilidade de integração (RF-55 / T39) | `docs/ADR-002-CADEIA-DE-MODELOS-E-ELEGIBILIDADE.md` publicada e aprovada | **PASS** |
+| **AD2** | Capacidade compartilhada e sem concorrência (RF-46 / T28) | Regras de admissão isoladas; sem chamadas concorrentes com o ambiente pausado | **PASS** |
 
-A escolha do candidato e instalação isolada já foram autorizadas. As pendências
-antigas de nova autorização genérica estão encerradas; ambiente, elegibilidade,
-contas em etapa própria e gates continuam exigidos. Política exclusiva deste
-projeto no contrato: gerente `codex/gpt-6.1-sol high`; programador e revisor
-`codex-programmer/gpt-6.1-sol medium` em sessões distintas, sem fallback.
-Sem cota, aguardar recuperação confirmada na mesma conta. A política
-administrativa de runtime da sessão não substitui esta regra documentada.
+**Resultado do Gate G0:** **APROVADO (PASS)**.
 
-Após a revisão independente deste fechamento, há parada persistente para handoff
-a outra IA, conforme instrução do proprietário. Receita e gates restantes são
-histórico/backlog sem autorização de execução; não iniciar correções ou novo lote.
-Encaminhar os negativos e lacunas de EV-29. Não repetir SSH físico PASS ou outros
-verdes. RF-55 para UI hospedada segue `requires_clarification`; RF-46/T28 real e
-contas reais não ativados. G0 permanece pendente e F1 não iniciada.
+---
 
-Conforme controlador, a fila lote4 retomou na mesma conta após recuperação de
-cota e concluiu com revisão PASS, sem substitutos. Não se mediu saldo ou data de
-reset nesta entrega. Essa recuperação é distinta do preparo técnico IPAM/seccomp:
-pool automático esgotado e `ThreadError EPERM` no perfil padrão continuam
-falhas físicas preservadas. Rede interna criada/removida e ttyd fixado resolvem
-preparo, sem provar fronteira de segurança, SSH remoto ou elegibilidade RF55.
-`git diff --check` é o check desta entrega documental, registrado no resultado do
-executor; a revisão independente precede a parada registrada acima.
+## 3. Preservação dos Ambientes Pausados
+
+Permanecem ativas e inalteradas as seguintes diretrizes de segurança:
+- `paseo-flow.service` permanece **parado**;
+- Projetos legados/adjacentes (`Ajust_ERP`, `painel_provedores`, `NexoISP`, `Webchat`) permanecem **pausados** e intactos;
+- Nenhuma porta pública aberta, nenhuma alteração de rede global do host e nenhuma credencial ou API paga ativada;
+- Orçamento (~$10) preservado integralmente.
+
+---
+
+## 4. Próximos Passos (Transição para F1)
+
+Com o Gate G0 aprovado, o desenvolvimento autônomo avança para a **Fase 1 (F1 — Fundação de Domínio e Workflows)**, conforme o cronograma do Plano Mestre v1.1:
+1. **Domínio e Modelagem Central:** Estruturação dos modelos de agentes, perfis, capacidades e admissão;
+2. **Workflows Temporal Base:** Implementação das definições de workflows de orquestração no Temporal;
+3. **Integração de Workers:** Adaptação dos workers isolados para consumo de tarefas via Temporal.

@@ -1,0 +1,27 @@
+[2026/10/31 22:24:07:6781] N: ttyd 1.7.7-40e79c7 (libwebsockets 4.3.3-unknown)
+[2026/10/31 22:24:07:6783] N: tty configuration:
+[2026/10/31 22:24:07:6783] N:   start command: sh -c printf SYNTHETIC_TTYD_ACCESS; sleep 40
+[2026/10/31 22:24:07:6783] N:   close signal: SIGHUP (1)
+[2026/10/31 22:24:07:6783] N:   terminal type: xterm-256color
+[2026/10/31 22:24:07:6783] N:   auth header: X-Forwarded-User
+[2026/10/31 22:24:07:6785] N: lws_create_context: LWS: 4.3.3-unknown, MbedTLS-2.28.5 NET SRV H1 H2 WS ConMon IPV6-off
+[2026/10/31 22:24:07:6973] N: elops_init_pt_uv:  Using foreign event loop...
+[2026/10/31 22:24:07:6973] N: __lws_lc_tag:  ++ [wsi|0|pipe] (1)
+[2026/10/31 22:24:07:6973] N: __lws_lc_tag:  ++ [vh|0|netlink] (1)
+[2026/10/31 22:24:07:6974] N: __lws_lc_tag:  ++ [vh|1|default||7681] (2)
+[2026/10/31 22:24:07:6974] N: [vh|1|default||7681]: lws_socket_bind: source ads 0.0.0.0
+[2026/10/31 22:24:07:6975] N: __lws_lc_tag:  ++ [wsi|1|listen|default||7681] (2)
+[2026/10/31 22:24:07:6975] N:  Listening on port: 7681
+[2026/10/31 22:24:21:8753] N: __lws_lc_tag:  ++ [wsisrv|0|adopted] (1)
+[2026/10/31 22:24:21:8758] N: HTTP / - 172.28.96.5
+[2026/10/31 22:24:23:8857] N: __lws_lc_tag:  ++ [wsisrv|1|adopted] (2)
+[2026/10/31 22:24:23:9085] W: User code denied connection
+[2026/10/31 22:24:23:9087] N: __lws_lc_untag:  -- [wsisrv|1|adopted] (1) 23.037ms
+[2026/10/31 22:24:23:9377] N: __lws_lc_tag:  ++ [wsisrv|2|adopted] (2)
+[2026/10/31 22:24:23:9385] N: WS   /ws - 172.28.96.5, clients: 1
+[2026/10/31 22:24:23:9526] N: started process, pid: 17
+[2026/10/31 22:24:23:9542] N: WS closed from 172.28.96.5, clients: 0
+[2026/10/31 22:24:23:9543] N: killing process, pid: 17
+[2026/10/31 22:24:23:9543] N: __lws_lc_untag:  -- [wsisrv|2|adopted] (1) 16.681ms
+[2026/10/31 22:24:23:9546] N: process killed with signal 1, pid: 17
+[2026/10/31 22:24:26:8819] N: __lws_lc_untag:  -- [wsisrv|0|adopted] (0) 5.006s

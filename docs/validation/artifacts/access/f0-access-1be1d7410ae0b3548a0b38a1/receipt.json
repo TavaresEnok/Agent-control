@@ -1,0 +1,94 @@
+{
+  "status": "PASS",
+  "fixture": "1be1d7410ae0b3548a0b38a1",
+  "images": [
+    "sha256:e40067995456b98e2a23dbc640daeeb12a6a4cfe648daafb3127f01c9a6b7538",
+    "sha256:f174a52e1993a764172bba2c07106a766f2895b2b069a19c7d3bb6f69a18d222",
+    "postgres@sha256:4ca65a9209f164bdb30f715ac2ed9182cc0737d0f0a549031b3c1b0b7e652f3a"
+  ],
+  "subnet": "172.28.96.0/28",
+  "seccomp": "unconfined",
+  "stage": "web-completed",
+  "administrative_attempt_errors": [
+    {
+      "stage": "pg-readiness",
+      "error_class": "CalledProcessError",
+      "exit_code": 2,
+      "stderr_bytes": 0,
+      "stderr_categories": [],
+      "outcome": "recovered"
+    },
+    {
+      "stage": "pg-readiness",
+      "error_class": "CalledProcessError",
+      "exit_code": 2,
+      "stderr_bytes": 0,
+      "stderr_categories": [],
+      "outcome": "recovered"
+    }
+  ],
+  "exit_code": 0,
+  "artifact_errors": {},
+  "startup": [
+    {
+      "name": "readiness/backend",
+      "status": "PASS",
+      "phase": "backend",
+      "endpoint": "backend/up",
+      "attempts": 1,
+      "http": 200,
+      "reason": "expected_service",
+      "last_error_class": null
+    },
+    {
+      "name": "readiness/gateway",
+      "status": "PASS",
+      "phase": "gateway",
+      "endpoint": "gateway/terminal/tty",
+      "attempts": 1,
+      "http": 200,
+      "reason": "expected_service",
+      "last_error_class": null
+    }
+  ],
+  "resources": [
+    {
+      "kind": "network",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1",
+      "id": "1aa48cfdee6db6275460e3b8ce38ced9026a207728fde659174645ee899adc3b"
+    },
+    {
+      "kind": "volume",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1",
+      "id": "f0-access-1be1d7410ae0b3548a0b38a1"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1-pg",
+      "id": "87ed09477b5a9587cb0e1f884256ce6b6cd5ebe2d81068e151e1ec3b4c2727c8"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1-terminal",
+      "id": "28918e34408edf350ca77017a713a93d14aaafc88e3588d563fb0e01412f76d3"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1-web",
+      "id": "efd06c4dd5333d4dc46faa2604651e1e71b244d5d67e5c023eccdc5b78521d07"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1-gateway",
+      "id": "72a018e86c23c09fdfe7d7e95aa4e315bce20d743f9b01b367212b798d7c3114"
+    },
+    {
+      "kind": "container",
+      "name": "f0-access-1be1d7410ae0b3548a0b38a1-collector",
+      "id": "0b4ff58c0fb8e400e0e1a20acc5704023e6f8df5273ec40d6e256a164431e1b4"
+    }
+  ],
+  "cleanup_status": "PASS",
+  "cleanup_failures": [],
+  "gate_status": "PASS"
+}
