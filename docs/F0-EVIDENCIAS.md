@@ -19,6 +19,12 @@ como apenas histórica são retificadas por EV-15. Worktree atual
 `task-a9c3be73bab4-g0-lote2-status`, HEAD inicial
 `533e08cc68e03e00c3328f1f7a462c44acaab261`.
 
+**Atualização lote3:** EV-16–18 são o estado posterior ao snapshot acima:
+recibos físicos lote2 verificados, novo pacote móvel durável e costura revisada
+com execução física pendente. Os NOT RUN de EV-08/13/14 e a ausência de bytes
+em EV-10 descrevem seus marcos históricos; não são o estado atual das candidatas.
+Worktree `task-88f319957cc4-g0-lote3-status`, HEAD inicial `772dc68`.
+
 ---
 
 ## EV-01 — Ambiente local e ferramentas instaladas
@@ -185,7 +191,7 @@ como apenas histórica são retificadas por EV-15. Worktree atual
 
 ---
 
-## EV-08 — Durabilidade: harness Temporal entregue; execução real NOT RUN
+## EV-08 — Durabilidade: harness Temporal entregue; execução real NOT RUN no marco lote1
 
 - **Origem rastreável:** commit `73ec58ed14cf2a49e7774538c5d481212fbc577c`, relatório [`validation/F0-TEMPORAL.md`](validation/F0-TEMPORAL.md), integralmente consultado com seu diff; base `e6ec5a286120aed3a036d85871e796b2f6c97d70` (`UPSTREAM.json`). Critério G0-E3; T07/T08 parciais.
 - **Documental/código:** `tools/f0/temporal/run.sh`, `run.rb`, `definitions.rb`, `process_probe.rb`, `launch_evidence.rb`, `boot.rb` e testes `test/f0/temporal/`. Importa `TemporalService`, `Workflows::Base`, `TemporalInput`. Prevê servidor dev real SQLite, processo Ruby sintético sem IA, falhas após intenção/processo/handle, incerteza sem relançamento cego, reinício de worker/servidor e cancelamento. A conclusão do launch deve existir no histórico real e corresponder ao handle; arquivo antigo sozinho não basta.
@@ -210,7 +216,7 @@ como apenas histórica são retificadas por EV-15. Worktree atual
 - **Execução relatada em 2026-10-31 14:40:17–14:40:43 UTC:** Node v22.16.0, Chromium 149.0.7827.55, exit 0, quatro checks parciais PASS, zero erros JS. Viewports 390×844 e 360×844 sem overflow nas medições finais. Formulário real preservou dados após falha e enviou dois payloads iguais; duas conexões WS e uma leitura de snapshot levaram cartão Running → Succeeded. Cliente/hook reais, servidor/HTTP/snapshot fornecidos por Playwright.
 - **Precisão do aceite:** formulário é agente/persona, não perfil conta/modelo; tarefa e quatro etapas são fixtures. Árvore de dependências real em leitura não é grafo ligado a histórico Temporal. Dois envios iguais não comprovam efeito persistido único. Hook de reconexão não prova servidor ActionCable, autenticação, RBAC ou backend durável.
 - **NOT RUN:** criar tarefa no Board/API; persistência de perfil/tarefa; deduplicação backend; shell autenticado completo, aparelho físico/teclado virtual e navegação sem desktop; estados/grafo reais Rails/Temporal. O índice de idempotência de workflows inspecionado não certifica criação de tarefa/agente nem o chamador web.
-- **Artefatos:** relatório original `tools/f0/mobile/artifacts/report.json`, SHA-256 `e81f03674ac7690e061552d9056c470f89a85e448e9c206d4d99555516e76438`; `trace.zip`, SHA-256 `8f74c6719b2ad4c283491e13bea3646ab6304b1e938a8286335485caa5139060`; hashes de quatro capturas e inputs no relatório versionado. **Report/trace/capturas ignorados pelo Git e ausentes nesta worktree**: hashes aqui transcritos da documentação, bytes não reconferidos. Obter do controlador os artefatos da worktree produtora para revisão; não fabricar nem repetir suíte verde só para reconstruir histórico. Se indisponíveis e indispensáveis ao aceite, registrar perda e reexecutar deliberadamente com novos hashes.
+- **Artefatos no marco lote1:** relatório original `tools/f0/mobile/artifacts/report.json`, SHA-256 `e81f03674ac7690e061552d9056c470f89a85e448e9c206d4d99555516e76438`; `trace.zip`, SHA-256 `8f74c6719b2ad4c283491e13bea3646ab6304b1e938a8286335485caa5139060`; hashes de quatro capturas e inputs no relatório versionado. **Report/trace/capturas ignorados pelo Git e ausentes naquele snapshot**: hashes transcritos da documentação, bytes não reconferidos então. EV-17 registra a perda e uma nova execução deliberada com novos bytes/hashes, sem reconstruir retroativamente o recibo histórico.
 - **Ambiente:** bootstrap Node/browser e bibliotecas Debian extraídas localmente resolveram a falta de bibliotecas e `/tmp` pequeno. Não requer instalação de serviços. Não foi iniciado compose da aplicação. Checks sintáticos e diff relatados PASS; não repetidos nesta consolidação.
 
 ## EV-11 — Autorização, preservação e resultado desta consolidação
@@ -243,7 +249,7 @@ como apenas histórica são retificadas por EV-15. Worktree atual
   T01, duas contas autenticadas, isolamento integrado Aixle ou T36.
   Hash identifica bytes recebidos, não atesta independentemente o host.
 
-## EV-13 — Temporal real inicial FAIL e correção SDK 1.10 implementada
+## EV-13 — Temporal real inicial FAIL e correção SDK 1.10 implementada (marco lote2)
 
 - **Execução da gerência preservada** no commit
   `2471a89fe4fbdb4b9f439ac37fcd23593baed018`, diretório
@@ -270,7 +276,7 @@ como apenas histórica são retificadas por EV-15. Worktree atual
   [F0-TEMPORAL](validation/F0-TEMPORAL.md); gerar recibo novo, sem sobrescrever
   o FAIL. Imagem Ruby base registrada não identifica por si a imagem derivada.
 
-## EV-14 — Harness SQL dos contratos existentes: implementado, físico pendente
+## EV-14 — Harness SQL dos contratos existentes: implementado, físico pendente no snapshot lote2
 
 - **Código/documentação:** entrega
   `dca0e310a433bec04130dcb1472e55a7c0395a13`,
@@ -320,3 +326,85 @@ como apenas histórica são retificadas por EV-15. Worktree atual
   Somente cinco documentos autorizados e `.paseo-result.json` de encaminhamento.
   Check obrigatório `git diff --check` registrado no resultado; nenhuma suíte
   repetida, nenhum runtime novo alegado. G0 **PENDENTE**, F1 não iniciada.
+
+## EV-16 — Recibos físicos lote2: Temporal e SQL isolados PASS
+
+- **Comprovado por execução da gerência**, observer `manager_host`; recibos
+  incorporados em `d49a2bc5704d71a5d4a10b07460470f1ea6a8828`, candidata
+  `7535efeb34aee06abb6733ec0b5d75f9fba892c9`. Correção Temporal
+  `4f7e477042646e66ae8c1a918ca71cbe37851bd0` e SQL
+  `dca0e310a433bec04130dcb1472e55a7c0395a13` revisados antes da execução,
+  conforme contrato e campos `reviewed_task`. Lotes `e59f2072f8f4` e
+  `a9c3be73bab4`: DONE/quatro entregas, revisão independente PASS cada,
+  conforme controlador. Não reabrir as tarefas DONE.
+- [Temporal receipt](validation/artifacts/temporal-lote2-host-20261031/receipt.json),
+  `2026-10-31T15:23:26.153892+00:00`, SHA-256
+  `57122e72cf8ec28ca43835781c27b1908b832186a5b643bc092673717198077e`.
+  Teste dirigido SDK e preflight PASS; [results](validation/artifacts/temporal-lote2-host-20261031/run/results.json)
+  `a871f4d3a728742678d63674992b6c8159686082114bdfeff8a14955ee9ec5b9`:
+  `normal/after_intent/after_process/after_handle/uncertain` PASS, cinco run IDs
+  não vazios. Históricos e attempts conferidos pontualmente: normal tentativa1;
+  demais retry tentativa2, after_handle conserva handle; quatro históricos
+  terminam CANCELED, uncertain termina FAILED como recusa conservadora esperada,
+  não sucesso de lançamento. Isso não inclui admissão/relay SQL; filho externo
+  sintético. FAIL inicial `run_id:nil` de EV-13 continua válido como histórico.
+- A preparação `g0-b54c6de378e492385d2c63b8ac4bf179` foi abortada pela gerência:
+  lock root-owned interrompeu extração antes do snapshot completo; ownership
+  corrigido e snapshot revisado extraído antes da execução aceita. Tentativa
+  administrativa descartada, `not_a_gate_result:true`; não é falha da candidata.
+- [SQL receipt](validation/artifacts/admission-lote2-host-20261031/receipt.json),
+  `2026-10-31T15:23:26.200573+00:00`, SHA-256
+  `630bf2b0615c0285b158467402b363ab04f35f712b3f1b1e633e9951693398a3`.
+  PG 15.3 real, Unix socket, role/DB/COMMENT verificados; guard 2 testes/16
+  assertions e SQL 9/67, ambos 0 failures/0 errors/0 skips; preflight exit0.
+  stdout, host-checks e recibo SQL retidos; Temporal/runtime simulados, sem
+  Rails completo/agentes reais. Cleanup exclusivo após captura. Imagem derivada
+  `sha256:51e6a0811e25f8987d80eaab3fcec28c8c1c11fbaa07995830eca22cb3a5e116`.
+- **Conferência nesta entrega:** leitura offline de todos os bytes listados:
+  46/46 hashes Temporal e 11/11 SQL iguais aos manifests `sha256.json` locais;
+  cinco histories consultados sem ler logs completos. Não houve reexecução.
+  As duas fatias PASS não compõem automaticamente uma integração única.
+
+## EV-17 — Recuperação móvel com bytes novos e retenção durável
+
+- **Execução parcial de componentes**, entrega
+  `01f1becfab38c182b3d13e30f1783b0e3ac6a60c`, incorporada por `6cccb67`;
+  revisão independente informada pelo contrato. [F0-MOBILE](validation/F0-MOBILE.md)
+  registra uma reexecução deliberada por perda dos bytes originais no cleanup,
+  em 15:28:34.181–15:29:12.367 UTC sobre `d49a2bc`, exit0/quatro checks PASS
+  parcial. Não recuperar retroativamente o trace antigo de EV-10.
+- [Pacote novo](validation/artifacts/mobile/2026-10-31T152834-181Z/manifest-sha256.json):
+  report, trace ZIP e quatro PNGs presentes; **6/6 SHA-256 conferidos nesta
+  entrega**, inclusive report `52063c8f155a70d6aab68bc28bef3866f7ce8389a1b89719aeb424d9e1e7b697`
+  e trace `af21d1dff07cd4320a766a79c1459ca86bcf872d4c6faaf2423803cdd4f2647f`.
+  Exportador retém antes do cleanup, valida JSON/ZIP/hashes e recusa adulteração.
+  Não houve novo browser nesta consolidação; inspeção visual pertence à entrega
+  produtora. Dados/transporte sintéticos, Chromium emulado: não prova perfil
+  conta/modelo, tarefa persistida, efeito único backend, shell autenticado,
+  aparelho físico ou grafo/estado Rails/Temporal real. E5 continua parcial.
+
+## EV-18 — Costura lote3 implementada/revisada; físico integrado pendente
+
+- **Comprovado por código/documentação:** entrega
+  `1cfa37ae20d029d9b18c0d7c03674e5b82b0ed89`, incorporada por `772dc68`;
+  [F0-RELAY-TEMPORAL-INTEGRADO](validation/F0-RELAY-TEMPORAL-INTEGRADO.md).
+  Costura usa admissão/relay/TemporalService existentes e workflow inerte,
+  PG+SDK/servidor reais previstos, sem segundo dispatcher ou contas reais.
+  Instrumentação mata relay após start aceito/antes do ack; lease saudável
+  impede reenvio, fixture envelhece claimed_at e exige AlreadyStarted com mesmo
+  runID/permit, ack durável e uma única execução/histórico. Envelhecer fixture
+  não prova espera real do lease; ledger vazio esperado, reserva retida após
+  cancelamento não prova liberação/runtime completo.
+- **Revisão independente concluída conforme contrato do controlador**; inclui
+  correção de propagação de `BUNDLE_FROZEN`. O metadado versionado
+  `artifacts/integrated/implementation-status.json` ainda diz revisão pending:
+  é snapshot da implementação anterior ao retorno da revisão, não recibo novo
+  de revisão. IDs de sessão/parecer não fornecidos aqui; controlador os preserva
+  no fluxo, sem inventar identificadores. Esta consolidação ainda requer sua
+  própria revisão independente posterior.
+- Oito checks Python sintéticos/`bash -n`/lock igual relatados pelo implementador
+  não provam boot Ruby nem cenário real. **Execução física integrada PENDENTE**:
+  não há run integrado real novo nos artefatos recebidos. Plano gerencial,
+  comando único e critérios em [F0-LOTE3](validation/F0-LOTE3.md). Sem nova
+  execução nesta entrega, G0 PENDENTE/F1 não iniciada. Política exclusiva de
+  EV-15, pausas, origem e trabalho Zed preservados.
