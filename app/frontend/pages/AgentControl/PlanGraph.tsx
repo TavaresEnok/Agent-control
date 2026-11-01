@@ -202,6 +202,45 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
       <section className={classes.graphArea}>
         <Title order={4} size="h4">Tarefas e Dependências (RF-50)</Title>
 
+        {/* Visualizador de Arestas e Fluxo de Dependências DAG (BUG-P2-03) */}
+        {graph.edges && graph.edges.length > 0 && (
+          <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(0, 0, 0, 0.03)', borderRadius: '8px' }}>
+            <Text size="xs" fw={700} c="dimmed" style={{ marginBottom: '0.5rem', textTransform: 'uppercase' }}>
+              Grafo Visual de Conexões e Dependências
+            </Text>
+            <svg style={{ width: '100%', height: '80px', overflow: 'visible' }}>
+              <defs>
+                <marker id="arrow-fulfilled" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#12b886" />
+                </marker>
+                <marker id="arrow-pending" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#fa5252" />
+                </marker>
+              </defs>
+              {graph.edges.map((edge, idx) => {
+                const total = graph.edges.length;
+                const x1 = ((idx + 0.5) / (total + 1)) * 100;
+                const x2 = ((idx + 1.2) / (total + 1)) * 100;
+                return (
+                  <g key={edge.id || `${edge.source_key}-${edge.target_key}`}>
+                    <path
+                      d={`M ${x1}% 20 Q ${(x1 + x2) / 2}% 50 ${x2}% 20`}
+                      fill="none"
+                      stroke={edge.fulfilled ? '#12b886' : '#fa5252'}
+                      strokeWidth="2"
+                      strokeDasharray={edge.fulfilled ? 'none' : '4'}
+                      markerEnd={edge.fulfilled ? 'url(#arrow-fulfilled)' : 'url(#arrow-pending)'}
+                    />
+                    <text x={`${(x1 + x2) / 2}%`} y="65" fontSize="10" textAnchor="middle" fill="#666">
+                      {edge.source_key} → {edge.target_key} ({edge.fulfilled ? 'Atendida' : 'Bloqueando'})
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        )}
+
         {graph.nodes.map((node) => (
           <div
             key={node.id}

@@ -17,7 +17,10 @@ class AcWorktreeManagerService
   class GitError < StandardError; end
 
   class << self
-    def acquire_lease!(execution:, base_path: "/tmp/ac_worktrees", repo_path: nil)
+    def acquire_lease!(execution:, base_path: nil, repo_path: nil)
+      base_path ||= Rails.application.config.try(:ac_worktree_base_dir) ||
+                    ENV["AC_WORKTREE_BASE_DIR"] ||
+                    "/tmp/ac_worktrees"
       repo_path ||= resolve_repo_path(execution)
       target_path = execution.worktree_path.presence || File.join(base_path, execution.ac_task_id.to_s, execution.operation_id)
 

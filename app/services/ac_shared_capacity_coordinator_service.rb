@@ -25,33 +25,42 @@ class AcSharedCapacityCoordinatorService
       external_active_slots = external_broker_snapshot["active_slots"].to_i
       max_global_slots = external_broker_snapshot["max_slots"].to_i
 
-      # 2. Contabilização atômica de slots locais no Agent Control
-      local_active_slots = AcCapacityGrant.active_or_granted.where(company: company).count
+      # 2. Contabilização atômica de slots locais no Agent Control com lock pessimista (BUG-P2-02)
+      AcCapacityGrant.transaction do
+        grants_scope = AcCapacityGrant.active_or_granted
+                                      .where(company: company)
+                                      .lock("FOR UPDATE")
 
-      total_requested = local_active_slots + external_active_slots + requested_slots.to_i
+        # Se houver concessões vinculadas à conta específica, filtra por account_key
+        account_grants = grants_scope.where("reconciliation_data->>'account_key' = ?", account_key)
+        locked_records = account_grants.exists? ? account_grants.to_a : grants_scope.to_a
+        local_active_slots = locked_records.size
 
-      if total_requested > max_global_slots
-        raise SharedCapacityExceededError,
-              "Capacidade compartilhada excedida para #{account_key}: local=#{local_active_slots}, " \
-              "legado=#{external_active_slots}, pedido=#{requested_slots}, teto=#{max_global_slots} (T28)"
+        total_requested = local_active_slots + external_active_slots + requested_slots.to_i
+
+        if total_requested > max_global_slots
+          raise SharedCapacityExceededError,
+                "Capacidade compartilhada excedida para #{account_key}: local=#{local_active_slots}, " \
+                "legado=#{external_active_slots}, pedido=#{requested_slots}, teto=#{max_global_slots} (T28)"
+        end
+
+        # 3. Emite concessão coordenada com autoridade única
+        reservation_token = "coord_#{account_key}_#{SecureRandom.hex(8)}"
+
+        {
+          authorized: true,
+          account_key: account_key,
+          reservation_token: reservation_token,
+          allocated_slots: requested_slots,
+          global_usage: {
+            local_active_slots: local_active_slots,
+            external_active_slots: external_active_slots,
+            max_global_slots: max_global_slots,
+            remaining_slots: max_global_slots - total_requested
+          },
+          coordinated_at: Time.current.iso8601
+        }
       end
-
-      # 3. Emite concessão coordenada com autoridade única
-      reservation_token = "coord_#{account_key}_#{SecureRandom.hex(8)}"
-
-      {
-        authorized: true,
-        account_key: account_key,
-        reservation_token: reservation_token,
-        allocated_slots: requested_slots,
-        global_usage: {
-          local_active_slots: local_active_slots,
-          external_active_slots: external_active_slots,
-          max_global_slots: max_global_slots,
-          remaining_slots: max_global_slots - total_requested
-        },
-        coordinated_at: Time.current.iso8601
-      }
     end
 
     private
