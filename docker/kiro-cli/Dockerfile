@@ -70,6 +70,7 @@ WORKDIR /opt/watcher
 COPY base/watcher/package.json ./
 RUN npm install --production && npm cache clean --force
 COPY base/watcher/index.js ./
+COPY base/watcher/connection-lease.js base/watcher/ide-proxy.js ./
 
 COPY base/auth-check/index.js /opt/auth-check/index.js
 COPY base/logger/ /opt/mitm/

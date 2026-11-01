@@ -1,5 +1,7 @@
 # Agent Control — planejamento aprovado
 
+Estado da implementação e da remediação: consulte [STATUS](STATUS.md) e a [matriz dos 36 grupos](validation/REMEDIACAO_2026-11-01.md). A aprovação do planejamento não aprova produção nem migração.
+
 Este diretório contém os documentos de referência aprovados após a revisão das três IAs.
 
 ## Ordem de leitura

@@ -15,6 +15,14 @@ class UsageStatisticsService
     payload = parse_json(@raw_body)
     return Result.new(status: :bad_request, error: "Invalid JSON payload") unless payload
 
+    return Result.new(status: :bad_request, error: "Invalid JSON payload") unless payload.is_a?(Hash)
+    batch_id = payload["batchId"]
+    if batch_id && (!batch_id.is_a?(String) || !batch_id.match?(/\A[A-Za-z0-9_.:-]{1,128}\z/))
+      return Result.new(status: :bad_request, error: "Invalid batch ID")
+    end
+    digest = Digest::SHA256.hexdigest(JSON.generate(canonicalize(payload)))
+    batch_key = batch_id ? Digest::SHA256.hexdigest("id:#{batch_id}") : digest
+
     tokens = extract_terminal_session_tokens(payload)
     return Result.new(status: :accepted) if tokens.empty?
 
@@ -26,8 +34,19 @@ class UsageStatisticsService
 
     persisted = false
     sessions.each_value do |terminal_session|
-      adapter = adapter_for(terminal_session)
-      result = adapter.ingest_usage(payload, terminal_session)
+      result = TerminalSession.transaction do
+        receipt = UsageStatisticsBatchReceipt.insert_all(
+          [ { terminal_session_id: terminal_session.id, batch_key: batch_key, payload_digest: digest, created_at: Time.current, updated_at: Time.current } ],
+          unique_by: :index_usage_batch_receipts_on_session_and_digest
+        )
+        if receipt.rows.empty?
+          existing = UsageStatisticsBatchReceipt.find_by!(terminal_session: terminal_session, batch_key: batch_key)
+          raise ArgumentError, "Batch ID reused with different payload" unless existing.payload_digest == digest
+          next :accepted
+        end
+
+        adapter_for(terminal_session).ingest_usage(payload, terminal_session)
+      end
       persisted ||= (result == :ok)
     end
 
@@ -35,11 +54,22 @@ class UsageStatisticsService
   rescue ArgumentError => e
     Result.new(status: :bad_request, error: e.message)
   rescue StandardError => e
-    Rails.logger.error("UsageStatisticsService error: #{e.message}")
+    Rails.logger.error("UsageStatisticsService error: #{e.class}")
     Result.new(status: :error, error: "Failed to persist usage")
   end
 
   private
+
+  def canonicalize(value)
+    case value
+    when Hash
+      value.keys.sort.to_h { |key| [ key, canonicalize(value[key]) ] }
+    when Array
+      value.map { |item| canonicalize(item) }
+    else
+      value
+    end
+  end
 
   def parse_json(raw_body)
     body = raw_body.to_s

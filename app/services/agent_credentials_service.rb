@@ -76,11 +76,15 @@ class AgentCredentialsService
   #   credentials are per company so vendor spend is billed to the right tenant
   # @param container_id [String] Docker container ID
   # @return [AgentCredential]
-  def save_credentials_from_container(user, company, container_id)
+  def save_credentials_from_container(user, company, container_id, account_slug: nil)
     credentials = extract_from_container(container_id)
     raise "No credentials found in container" if credentials.blank?
 
-    AgentCredential.from_artifacts(user.id, company&.id, agent_type, credentials)
+    candidates = AgentCredential.where(user_id: user.id, company_id: company&.id, agent_type: agent_type).limit(2).to_a
+    raise "Credential selection required" if account_slug.blank? && candidates.size > 1
+
+    slug = account_slug.presence || candidates.first&.account_slug || "default"
+    AgentCredential.from_artifacts(user.id, company&.id, agent_type, credentials, account_slug: slug)
   end
 
   # Load credentials from database and write to container
@@ -89,8 +93,12 @@ class AgentCredentialsService
   #   per company, so the container must never receive another tenant's tokens
   # @param container_id [String] Docker container ID
   # @param workflow_config [Hash] optional workflow-specific settings
-  def load_credentials_to_container(user, company, container_id, workflow_config = {})
-    credential = AgentCredential.find_by(user_id: user.id, company_id: company&.id, agent_type: agent_type)
+  def load_credentials_to_container(user, company, container_id, workflow_config = {}, credential_id: nil)
+    scope = AgentCredential.where(user_id: user.id, company_id: company&.id, agent_type: agent_type)
+    candidates = credential_id.present? ? scope.where(id: credential_id).limit(2).to_a : scope.limit(2).to_a
+    raise "Credential selection required" if candidates.size > 1
+
+    credential = candidates.first
     raise "No credentials found for #{agent_type}" unless credential
 
     write_to_container(container_id, credential.config_data, workflow_config)

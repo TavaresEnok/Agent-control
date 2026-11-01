@@ -1,151 +1,52 @@
 # frozen_string_literal: true
 
-# AcCutoverManagerService — Acompanhamento de Cutover e Atualização de Rastreabilidade (Gate G7, §17.4, §19.2 F7)
-#
-# Critério Gate G7: Substituição autorizada, sem perda de entregas/histórico e com responsáveis claros.
-#
-# Responsabilidades:
-# 1. Execução formal do Cutover com autorização explícita registrada;
-# 2. Atualização e redirecionamento de links de rastreabilidade (dashboards, webhooks, integrações);
-# 3. Consulta de status e relatório de substituição para auditoria;
-# 4. Mecanismo seguro de reversão para rollback de emergência se necessário.
 class AcCutoverManagerService
   class CutoverError < StandardError; end
   class UnauthorizedCutoverError < CutoverError; end
   class ProjectNotMigratedError < CutoverError; end
+  class AuthorityUnavailableError < CutoverError; end
 
   class << self
     def execute_cutover!(project:, approved_by:, cutoff_ticket: nil, redirect_links: {})
       raise ArgumentError, "project é obrigatório" if project.blank?
-      if approved_by.to_s.strip.empty?
-        raise UnauthorizedCutoverError, "Cutover exige autorização explícita com identificador do aprovador (Gate G7)"
-      end
 
-      # 1. Verifica se a migração prévia de autoridade foi realizada
-      authority_mode = project.settings&.dig("authority_mode")
-      unless authority_mode == "agent_control_exclusive"
-        raise ProjectNotMigratedError, "Projeto deve ter autoridade exclusiva migrada antes do cutover final"
-      end
-
-      # 2. Registra o cutover e atualiza os links de rastreabilidade
-      project.settings ||= {}
-      project.settings["cutover_status"] = "completed"
-      project.settings["cutover_approved_by"] = approved_by
-      project.settings["cutoff_ticket"] = cutoff_ticket || "CUTOVER-#{project.id}-#{Time.current.to_i}"
-      project.settings["redirect_links"] = (redirect_links || {}).to_h
-      project.settings["cutover_at"] = Time.current.iso8601
-
-      project.save!
-
-      # 3. Emite evento de auditoria formal (Gate G7, [BUG-P1-05])
-      approved_user = project.company.users.find_by(email: approved_by) ||
-                      project.company.users.find_by(id: approved_by) ||
-                      project.owner
-
-      if approved_user.present?
-        AcDecisionAuditEvent.record_human_intervention!(
-          company: project.company,
-          project: project,
-          user: approved_user,
-          action: "cutover_completed",
-          reason: "Cutover formal executado e autorizado por #{approved_by} (ticket: #{project.settings['cutoff_ticket']})",
-          metadata: {
-            cutoff_ticket: project.settings["cutoff_ticket"],
-            redirect_links: project.settings["redirect_links"],
-            authority_mode: authority_mode
-          }
-        )
-      else
-        AcDecisionAuditEvent.create!(
-          company: project.company,
-          project: project,
-          actor_type: "system",
-          event_type: "human_intervention",
-          occurred_at: Time.current,
-          reason: "Cutover formal executado e autorizado por #{approved_by} (ticket: #{project.settings['cutoff_ticket']})",
-          decision_details: {
-            action: "cutover_completed",
-            approved_by: approved_by,
-            cutoff_ticket: project.settings["cutoff_ticket"],
-            redirect_links: project.settings["redirect_links"],
-            authority_mode: authority_mode
-          }
-        )
-      end
-
-      # 4. Retorna ata formal de cutover (evidência do Gate G7)
-      {
-        project_id: project.id,
-        status: "cutover_completed",
-        approved_by: approved_by,
-        cutoff_ticket: project.settings["cutoff_ticket"],
-        redirect_links: project.settings["redirect_links"],
-        cutover_at: project.settings["cutover_at"],
-        authority_mode: authority_mode
-      }
+      authorized_user!(project, approved_by)
+      AcMigrationService.verify_migration_integrity!(project: project)
+      raise AuthorityUnavailableError, "Cutover requer adaptador externo e recibo verificável de autoridade e bloqueio legado"
     end
 
     def cutover_status(project:)
       raise ArgumentError, "project é obrigatório" if project.blank?
 
-      settings = project.settings || {}
-      {
-        project_id: project.id,
-        cutover_completed: settings["cutover_status"] == "completed",
-        approved_by: settings["cutover_approved_by"],
-        cutoff_ticket: settings["cutoff_ticket"],
-        redirect_links: settings["redirect_links"] || {},
-        cutover_at: settings["cutover_at"],
-        authority_mode: settings["authority_mode"] || "legacy"
-      }
+      # Stored settings are not proof that a remote authority was transferred.
+      { project_id: project.id, cutover_completed: false, authority_mode: "unverified" }
     end
 
     def revert_cutover!(project:, reason:, reverted_by:)
       raise ArgumentError, "project é obrigatório" if project.blank?
-      raise ArgumentError, "reason e reverted_by são obrigatórios" if reason.to_s.strip.empty? || reverted_by.to_s.strip.empty?
+      raise ArgumentError, "reason é obrigatório" if reason.to_s.strip.empty?
 
-      project.settings ||= {}
-      project.settings["cutover_status"] = "reverted"
-      project.settings["cutover_reverted_at"] = Time.current.iso8601
-      project.settings["cutover_reverted_by"] = reverted_by
-      project.settings["cutover_revert_reason"] = reason
-      project.settings["authority_mode"] = "coexistence_read_only"
+      authorized_user!(project, reverted_by)
+      raise AuthorityUnavailableError, "Reversão requer adaptador externo e recibo verificável de autoridade"
+    end
 
-      project.save!
+    private
 
-      # Emite evento de auditoria formal para reversão de emergência
-      revert_user = project.company.users.find_by(email: reverted_by) ||
-                    project.company.users.find_by(id: reverted_by) ||
-                    project.owner
-
-      if revert_user.present?
-        AcDecisionAuditEvent.record_human_intervention!(
-          company: project.company,
-          project: project,
-          user: revert_user,
-          action: "cutover_reverted",
-          reason: "Reversão de cutover para contingência executada por #{reverted_by}: #{reason}",
-          metadata: { reason: reason, reverted_by: reverted_by }
-        )
+    def authorized_user!(project, identifier)
+      scope = User.authenticatable
+      user = if identifier.is_a?(User)
+        scope.find_by(id: identifier.id)
+      elsif identifier.to_s.match?(/\A\d+\z/)
+        scope.find_by(id: identifier.to_s)
       else
-        AcDecisionAuditEvent.create!(
-          company: project.company,
-          project: project,
-          actor_type: "system",
-          event_type: "human_intervention",
-          occurred_at: Time.current,
-          reason: "Reversão de cutover para contingência executada por #{reverted_by}: #{reason}",
-          decision_details: { action: "cutover_reverted", reason: reason, reverted_by: reverted_by }
-        )
+        scope.find_by(email: identifier.to_s)
+      end
+      membership = user && CompanyMembership.active.find_by(user_id: user.id, company_id: project.company_id)
+      unless membership && (membership.admin? || project.owner_id == user.id) && project.accessible_by?(user)
+        raise UnauthorizedCutoverError, "Aprovador não autorizado para este projeto"
       end
 
-      {
-        project_id: project.id,
-        status: "cutover_reverted",
-        reverted_at: project.settings["cutover_reverted_at"],
-        reverted_by: reverted_by,
-        reason: reason
-      }
+      user
     end
   end
 end

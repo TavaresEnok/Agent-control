@@ -6,7 +6,7 @@ class AcClientCommand < ApplicationRecord
   belongs_to :company
   belongs_to :user, optional: true
 
-  validates :intent_id, presence: true, uniqueness: true
+  validates :intent_id, presence: true
   validates :command_type, presence: true
   validates :state, inclusion: { in: STATES }
 

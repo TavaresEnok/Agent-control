@@ -122,6 +122,9 @@ module ContainerRuntime
     end
 
     def create_container(spec)
+      if Array(spec[:env_vars]).any? { |entry| entry.to_s.start_with?("TTYD_ORIGIN_CREDENTIAL=") }
+        raise ArgumentError, "Kubernetes terminal origin authentication is not configured"
+      end
       handle = build_handle(spec)
       ensure_runtime_namespace_resources(handle, spec[:namespace_context])
       pod = build_pod(spec, handle)

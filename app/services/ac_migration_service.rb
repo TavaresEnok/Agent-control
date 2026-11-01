@@ -2,133 +2,133 @@
 
 require "digest"
 
-# AcMigrationService — Migração Gradual e Transferência de Autoridade Exclusiva (Gate G7, §17.4, §19.2 F7)
-#
-# Critério Gate G7: Substituição autorizada, sem perda de entregas/histórico e com responsáveis claros.
-#
-# Responsabilidades:
-# 1. Definição explícita de autoridade por projeto (authority_mode: agent_control_exclusive);
-# 2. Travamento de concorrência com o sistema legado (legacy_locked: true);
-# 3. Mapeamento de responsáveis claros (assigned_owner, manager_identity);
-# 4. Prova criptográfica de preservação integral de entregas e histórico pré-existentes (zero data loss).
 class AcMigrationService
   class MigrationError < StandardError; end
   class ProjectLockedError < MigrationError; end
   class IntegrityMismatchError < MigrationError; end
+  class AuthorityUnavailableError < MigrationError; end
 
   class << self
     def migrate_project!(project:, company:, target_authority: "agent_control_exclusive", assigned_owner:)
       raise ArgumentError, "project e company são obrigatórios" if project.blank? || company.blank?
-      raise ArgumentError, "assigned_owner é obrigatório e deve pertencer à empresa" if assigned_owner.blank? || !assigned_owner.companies.where(id: company.id).exists?
-
-      # 1. Realiza inventário criptográfico pré-migração (§19.2 F7)
-      inventory = build_project_inventory(project)
-
-      # 2. Aplica autoridade exclusiva no projeto
-      project.settings ||= {}
-      project.settings["authority_mode"] = target_authority.to_s
-      project.settings["migration_status"] = "migrated"
-      project.settings["assigned_owner_id"] = assigned_owner.id
-      project.settings["assigned_owner_email"] = assigned_owner.email
-      project.settings["pre_migration_inventory"] = inventory
-      project.settings["migrated_at"] = Time.current.iso8601
-
-      project.save!
-
-      # 3. Bloqueia concorrência em todos os contextos de trabalho associados
-      contexts = AcWorkContext.where(project: project)
-      contexts.each do |ctx|
-        ctx.metadata ||= {}
-        ctx.metadata["authority_mode"] = target_authority.to_s
-        ctx.metadata["legacy_locked"] = true
-        ctx.metadata["migration_timestamp"] = Time.current.iso8601
-        ctx.origin = "migration"
-        ctx.save!
+      raise ArgumentError, "empresa não corresponde ao projeto" unless project.company_id == company.id
+      membership = assigned_owner && CompanyMembership.active.find_by(user_id: assigned_owner.id, company_id: company.id)
+      unless membership && !membership.viewer? && project.accessible_by?(assigned_owner)
+        raise ArgumentError, "assigned_owner deve ter acesso ao projeto e permissão de escrita"
       end
 
-      # 4. Retorna recibo estruturado da migração de autoridade
-      {
-        project_id: project.id,
-        authority_mode: target_authority.to_s,
-        assigned_owner: assigned_owner.email,
-        inventory_digest: inventory["inventory_digest"],
-        migrated_contexts_count: contexts.count,
-        migrated_at: project.settings["migrated_at"],
-        status: "authority_transferred"
-      }
+      project.with_lock do
+        settings = project.settings || {}
+        raise MigrationError, "inventário de migração já existe" if settings["pre_migration_inventory"].present?
+
+        inventory = build_project_inventory(project)
+        project.update!(settings: settings.merge(
+          "pre_migration_inventory" => inventory,
+          "migration_status" => "prepared",
+          "migration_target_authority" => target_authority.to_s,
+          "assigned_owner_id" => assigned_owner.id
+        ))
+        { project_id: project.id, status: "prepared", inventory_digest: inventory["inventory_digest"] }
+      end
     end
 
     def verify_migration_integrity!(project:)
       raise ArgumentError, "project é obrigatório" if project.blank?
 
-      pre_inv = project.settings&.dig("pre_migration_inventory")
-      raise MigrationError, "Projeto não possui inventário pré-migração registrado" if pre_inv.blank?
-
-      current_inv = build_project_inventory(project)
-
-      # Validação de integridade: nenhuma tarefa, plano ou entrega integrada pode ter sido perdida
-      tasks_preserved = current_inv["tasks_count"] >= pre_inv["tasks_count"]
-      plans_preserved = current_inv["plans_count"] >= pre_inv["plans_count"]
-      integrated_preserved = current_inv["integrated_tasks_count"] >= pre_inv["integrated_tasks_count"]
-
-      unless tasks_preserved && plans_preserved && integrated_preserved
-        raise IntegrityMismatchError, "Inconsistência detectada: perda de histórico pós-migração!"
+      project.with_lock do
+        previous = project.settings&.dig("pre_migration_inventory")
+        unless previous.is_a?(Hash) && previous["version"] == 2 && previous["records"].is_a?(Hash) &&
+               previous["inventory_digest"] == digest(previous["records"])
+          raise MigrationError, "Inventário verificável não encontrado"
+        end
+        current = build_project_inventory(project)
+        previous["records"].each do |kind, entries|
+          unless entries.is_a?(Hash) && entries.all? { |id, signature| current["records"].fetch(kind, {})[id] == signature }
+            raise IntegrityMismatchError, "Histórico ou conteúdo inventariado foi alterado: #{kind}"
+          end
+        end
+        { integrity_verified: true, project_id: project.id, scope: "inventoried_database_records",
+          inventory_digest: current["inventory_digest"] }
       end
-
-      {
-        integrity_verified: true,
-        zero_loss: true,
-        project_id: project.id,
-        preserved_tasks: current_inv["tasks_count"],
-        preserved_integrated_deliveries: current_inv["integrated_tasks_count"],
-        inventory_digest: current_inv["inventory_digest"]
-      }
     end
 
-    def transfer_plan_authority!(plan:, new_manager_identity:, authority_mode: "agent_control_exclusive")
+    # No authority adapter is configured yet. A database flag cannot fence the legacy writer.
+    def transfer_plan_authority!(plan:, new_manager_identity:, authority_mode: "agent_control_exclusive", expected_epoch: nil)
       raise ArgumentError, "plan é obrigatório" if plan.blank?
-      raise ArgumentError, "new_manager_identity é obrigatório" if new_manager_identity.to_s.strip.empty?
+      raise ArgumentError, "new_manager_identity é obrigatório" if new_manager_identity.blank?
 
-      plan.metadata ||= {}
-      plan.metadata["authority_mode"] = authority_mode.to_s
-      plan.metadata["manager_identity"] = new_manager_identity
-      plan.metadata["authority_transferred_at"] = Time.current.iso8601
-      plan.save!
+      raise AuthorityUnavailableError, "Transferência requer adaptador externo de autoridade e recibo verificável"
+    end
 
-      # Atualiza o gerente ativo no contexto associado
-      plan.ac_work_context.assign_active_manager!(identity: new_manager_identity)
+    def assign_plan_manager!(plan:, new_manager_identity:, expected_epoch:)
+      raise ArgumentError, "plan é obrigatório" if plan.blank?
+      raise ArgumentError, "expected_epoch é obrigatório" if expected_epoch.nil?
 
-      {
-        plan_id: plan.id,
-        plan_key: plan.plan_key,
-        authority_mode: authority_mode.to_s,
-        manager_identity: new_manager_identity,
-        transferred_at: plan.metadata["authority_transferred_at"]
-      }
+      context = plan.ac_work_context
+      context.with_lock do
+        plan.with_lock do
+          current = (context.metadata || {}).fetch("manager_epoch", 0).to_i
+          raise ActiveRecord::StaleObjectError, "Época de gerente divergente" unless expected_epoch == current
+
+          if context.active_manager_identity.present? && context.active_manager_identity != new_manager_identity.to_s
+            raise AuthorityUnavailableError, "Transferência de gerente requer reconciliação externa"
+          end
+          if AcPlan.where(ac_work_context_id: context.id).where.not(id: plan.id)
+                   .where("metadata ->> 'manager_identity' = ?", new_manager_identity.to_s).exists?
+            raise AuthorityUnavailableError, "Gerente já está vinculado a outro plano"
+          end
+          epoch = context.assign_active_manager!(identity: new_manager_identity, expected_epoch: expected_epoch)
+          if context.metadata["manager_plan_id"].present? && context.metadata["manager_plan_id"].to_i != plan.id
+            raise AuthorityUnavailableError, "Gerente já está vinculado a outro plano"
+          end
+          context.update!(metadata: context.metadata.merge("manager_plan_id" => plan.id))
+          plan.update!(metadata: (plan.metadata || {}).merge("manager_identity" => new_manager_identity, "manager_epoch" => epoch))
+          { plan_id: plan.id, manager_identity: new_manager_identity, manager_epoch: epoch }
+        end
+      end
     end
 
     private
 
     def build_project_inventory(project)
-      contexts = AcWorkContext.where(project: project).order(:id)
-      plans = AcPlan.where(project: project).order(:id)
-      tasks = AcTask.where(project: project).order(:id)
-
-      task_signatures = tasks.map do |t|
-        "#{t.id}:#{t.task_key}:#{t.state}:#{t.approved_commit_sha}"
-      end
-
-      digest_payload = "project:#{project.id}|contexts:#{contexts.count}|plans:#{plans.count}|tasks:#{task_signatures.join(';')}"
-      digest = Digest::SHA256.hexdigest(digest_payload)
-
-      {
-        "contexts_count" => contexts.count,
-        "plans_count" => plans.count,
-        "tasks_count" => tasks.count,
-        "integrated_tasks_count" => tasks.count { |t| t.state == "integrated" },
-        "inventory_digest" => digest,
-        "inventoried_at" => Time.current.iso8601
+      tasks = AcTask.where(company_id: project.company_id, project_id: project.id)
+      task_ids = tasks.select(:id)
+      records = {
+        "contexts" => signatures(AcWorkContext.where(company_id: project.company_id, project_id: project.id),
+          %w[id company_id project_id external_id]),
+        "plans" => signatures(AcPlan.where(company_id: project.company_id, project_id: project.id),
+          %w[id company_id project_id ac_work_context_id plan_key version title objective content_hash]),
+        "tasks" => signatures(tasks, %w[id company_id project_id ac_plan_id task_key title scope acceptance_criteria
+          approved_commit_sha approved_artifact_hash]),
+        "executions" => signatures(AcExecution.where(company_id: project.company_id, ac_task_id: task_ids),
+          %w[id company_id ac_task_id ac_work_context_id ac_execution_profile_id ac_capacity_grant_id operation_id epoch
+          exit_code output_payload error_details]),
+        "verdicts" => signatures(AcReviewVerdict.where(company_id: project.company_id, project_id: project.id),
+          %w[id company_id project_id ac_task_id ac_execution_id reviewer_role verdict artifact_hash base_commit_hash
+          candidate_commit_sha findings evaluator_identity policy_revision_number]),
+        "remote_artifacts" => signatures(AcRemoteOperation.where(company_id: project.company_id, project_id: project.id),
+          %w[id company_id project_id ac_task_id ac_execution_id operation_id artifact_hash])
       }
+      { "version" => 2, "records" => records, "inventory_digest" => digest(records), "inventoried_at" => Time.current.iso8601 }
+    end
+
+    def signatures(scope, fields)
+      scope.order(:id).each_with_object({}) do |record, result|
+        attributes = record.attributes.slice(*fields)
+        result[record.id.to_s] = digest(attributes)
+      end
+    end
+
+    def digest(value)
+      Digest::SHA256.hexdigest(JSON.generate(canonical(value)))
+    end
+
+    def canonical(value)
+      case value
+      when Hash then value.keys.sort.to_h { |key| [ key, canonical(value[key]) ] }
+      when Array then value.map { |item| canonical(item) }
+      else value
+      end
     end
   end
 end

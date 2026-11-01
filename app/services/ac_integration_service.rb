@@ -1,14 +1,8 @@
 # frozen_string_literal: true
 
 require "open3"
+require "digest"
 
-# F3 — Serviço de Integração Condicional Protegida (AC Domain)
-#
-# Implementa as regras de integração segura do Plano Mestre (§15.3, §15.3.1):
-# - RF-48: Atualização atômica da branch e escritor único
-# - §15.3: Um parecer aprova uma combinação identificável: commit/árvore e base
-# - §15.3.1: Compare-and-swap na referência da branch a partir da base esperada
-# - §15.3.1: Evidências atestadas por executor identificado, sem autoafirmação
 class AcIntegrationService
   class IntegrationError < StandardError; end
   class TaskNotApprovedError < IntegrationError; end
@@ -17,116 +11,97 @@ class AcIntegrationService
   class InvalidVerificationEvidenceError < IntegrationError; end
 
   class << self
-    def integrate_task!(
-      task:,
-      expected_base_commit:,
-      candidate_commit:,
-      current_branch_head:,
-      artifact_hash:,
-      verification_evidence: {},
-      repo_path: nil
-    )
-      raise ArgumentError, "task é obrigatório" if task.blank?
-      raise ArgumentError, "expected_base_commit é obrigatório" if expected_base_commit.blank?
-      raise ArgumentError, "candidate_commit é obrigatório" if candidate_commit.blank?
-      raise ArgumentError, "artifact_hash é obrigatório" if artifact_hash.blank?
-
-      # 1. Tarefa precisa estar formalmente aprovada
-      unless task.approved?
-        raise TaskNotApprovedError, "Tarefa #{task.id} não está aprovada para integração (estado atual: #{task.state})"
+    def integrate_task!(task:, expected_base_commit:, candidate_commit:, current_branch_head: nil,
+                        artifact_hash:, verification_evidence: {}, repo_path: nil, manager_identity: nil, manager_epoch: nil, require_manager: false)
+      raise ArgumentError, "Tarefa obrigatória" unless task
+      if AcIntegrationOperation.connection_pool.with_connection(&:transaction_open?)
+        raise IntegrationError, "Integração deve iniciar fora de transação SQL para persistir a intenção antes do Git"
       end
 
-      # 2. O artefato aprovado deve coincidir exatamente com o artefato examinado (§15.3)
-      if task.approved_artifact_hash != artifact_hash
-        raise StaleArtifactError, "Divergência de artefato: aprovado (#{task.approved_artifact_hash}) != candidato (#{artifact_hash})"
+      AcAdmissionService.validate_manager!(plan: task.ac_plan, identity: manager_identity, epoch: manager_epoch, required: require_manager)
+      repo_path ||= task.ac_plan.ac_work_context.metadata["git_repo_path"] || task.project.custom_fields&.dig("git_repo_path")
+      raise IntegrationError, "Repositório físico obrigatório" if repo_path.blank?
+
+      branch = task.metadata["target_branch"].presence || "main"
+      ref = branch.start_with?("refs/heads/") ? branch : "refs/heads/#{branch}"
+      identity = Digest::SHA256.hexdigest([ task.id, ref, expected_base_commit, candidate_commit, artifact_hash ].join(":"))
+      # The intent commits before Git: a database rollback cannot erase the only
+      # evidence that an external compare-and-swap may already have happened.
+      operation = AcIntegrationOperation.create_or_find_by!(identity: identity) do |record|
+        record.assign_attributes(ac_task: task, branch_ref: ref, base_commit: expected_base_commit,
+          candidate_commit: candidate_commit, artifact_hash: artifact_hash)
       end
-
-      # 3. Valida se existem pareceres válidos e não invalidados para este artefato exato
-      valid_approvals = task.ac_review_verdicts
-                            .where(state: :valid, verdict: :approved, artifact_hash: artifact_hash)
-      if valid_approvals.empty?
-        raise StaleArtifactError, "Nenhum parecer de aprovação válido encontrado para o artefato #{artifact_hash}"
-      end
-
-      # 4. Compare-and-swap atômico de branch (§15.3.1):
-      # Se a base da branch avançou concorrentemente, rejeita e invalida a candidatura
-      if current_branch_head.to_s != expected_base_commit.to_s
-        raise ConcurrentBranchModificationError,
-              "Corrida de branch detectada: base atual (#{current_branch_head}) diverge da base esperada (#{expected_base_commit}). Reconciliação necessária (§15.3.1)"
-      end
-
-      # CAS físico no Git quando houver repositório configurado no disco (§15.3.1)
-      repo_path ||= (task.project&.respond_to?(:custom_fields) ? task.project.custom_fields&.dig("git_repo_path") : nil) ||
-                    task.ac_plan&.ac_work_context&.metadata&.dig("git_repo_path")
-
-      if repo_path.present? && Dir.exist?(File.join(repo_path, ".git"))
-        branch_name = (task.respond_to?(:target_branch) ? task.target_branch.presence : nil) ||
-                      task.metadata&.dig("target_branch") ||
-                      "main"
-        branch_ref = branch_name.start_with?("refs/") ? branch_name : "refs/heads/#{branch_name}"
-
-        stdout, stderr, status = Open3.capture3(
-          "git", "-C", repo_path, "update-ref", branch_ref, candidate_commit, expected_base_commit
-        )
-        unless status.success?
-          raise ConcurrentBranchModificationError,
-                "Git CAS update-ref falhou (ref: #{branch_ref}): #{stderr.presence || stdout}"
-        end
-      end
-
-      # 5. Evidência de testes atestada por executor confiável (§15.3.1)
-      validate_verification_evidence!(verification_evidence)
-
-      # 6. Efetiva a integração
       AcTask.transaction do
-        task.update!(
-          state: :integrated,
-          approved_commit_sha: candidate_commit
-        )
+        task.ac_plan.policy_revision&.lock!
+        task.ac_plan.ac_work_context.lock!
+        task.ac_plan.lock!
+        task.lock!
+        task.project.lock!
+        task.reload
+        AcAdmissionService.ensure_plan_authorized!(task.ac_plan)
+        AcAdmissionService.validate_manager!(plan: task.ac_plan, identity: manager_identity, epoch: manager_epoch, required: require_manager)
+        branch = task.metadata["target_branch"].presence || "main"
+        ref = branch.start_with?("refs/heads/") ? branch : "refs/heads/#{branch}"
+        git!(repo_path, "check-ref-format", ref)
+        implementation = task.ac_executions.joins(:ac_execution_profile).where(state: "completed", ac_execution_profiles: { role: "programmer" }).order(:id).last
+        source = implementation&.worktree_path
+        raise StaleArtifactError, "Repositório da implementação ausente" if source.blank?
+        actual_hash = AcArtifactIdentity.digest(repo: source, commit: candidate_commit, base: expected_base_commit)
+        unless actual_hash == artifact_hash && task.approved_artifact_hash == actual_hash && task.approved_commit_sha == candidate_commit
+          raise StaleArtifactError, "Candidato não corresponde ao artefato aprovado"
+        end
+        valid = task.ac_review_verdicts.where(state: :valid, verdict: :approved, reviewer_role: :reviewer,
+          artifact_hash: actual_hash, candidate_commit_sha: candidate_commit, base_commit_hash: expected_base_commit).last
+        raise StaleArtifactError, "Parecer vinculado à base/candidato ausente" unless valid&.ac_execution
 
-        # 7. Registra auditoria imutável da integração
-        AcDecisionAuditEvent.create!(
-          company: task.company,
-          project: task.project,
-          ac_task: task,
-          ac_plan_id: task.ac_plan_id,
-          ac_work_context_id: task.ac_plan&.ac_work_context_id,
-          event_type: "task_state_changed",
-          actor_type: "system",
-          occurred_at: Time.current,
-          reason: "Integração condicional concluída com sucesso no commit #{candidate_commit}",
-          decision_details: {
-            integrated_commit: candidate_commit,
-            expected_base: expected_base_commit,
-            artifact_hash: artifact_hash,
-            verified_by: verification_evidence[:executor_identity]
-          }
-        )
-
-        # 8. Avança o DAG do plano desbloqueando dependentes
-        unblocked_tasks = task.ac_plan&.advance_dag! || []
-
-        {
-          integrated: true,
-          candidate_commit: candidate_commit,
-          new_branch_head: candidate_commit,
-          unblocked_tasks: unblocked_tasks.map(&:task_key)
-        }
+        AcReviewService.verify_execution!(task: task, execution: valid.ac_execution, role: "reviewer",
+          artifact_hash: actual_hash, candidate_commit_sha: candidate_commit, base_commit_hash: expected_base_commit)
+        proof = validate_verification_evidence!(task, verification_evidence, actual_hash, candidate_commit, expected_base_commit)
+        raise TaskNotApprovedError, "Tarefa não aprovada" unless task.approved? || (task.integrated? && operation.reload.state == "completed")
+        git!(source, "merge-base", "--is-ancestor", expected_base_commit, candidate_commit)
+        AcSafeGit.with_repository(source) do |safe_source|
+          git!(repo_path, "fetch", "--no-tags", "--no-write-fetch-head", "--", safe_source, candidate_commit)
+        end
+        operation.update!(evidence: proof)
+        AcAdmissionService.ensure_plan_authorized!(task.ac_plan)
+        head = git!(repo_path, "rev-parse", "--verify", ref).strip
+        if head == expected_base_commit
+          git!(repo_path, "update-ref", ref, candidate_commit, expected_base_commit)
+        elsif head != candidate_commit
+          operation.update!(state: "uncertain")
+          raise ConcurrentBranchModificationError, "Base avançou; preservar branch e reconciliar"
+        end
+        operation.update!(state: "git_applied")
+        AcTask.transaction do
+          task.update!(state: :integrated)
+          operation.update!(state: "completed")
+        end
+        { integrated: true, candidate_commit: candidate_commit, new_branch_head: candidate_commit,
+          unblocked_tasks: task.ac_plan.advance_dag!.map(&:task_key) }
       end
     end
 
     private
 
-    def validate_verification_evidence!(evidence)
-      return if evidence.blank? # Tarefas sem suíte de CI podem não exigir evidence explícita
+    def git!(repo, *args)
+      out, err, status = AcSafeGit.capture("-C", repo, *args)
+      raise IntegrationError, "Falha Git: #{err}" unless status.success?
 
-      if evidence[:exit_code].present? && evidence[:exit_code] != 0
-        raise InvalidVerificationEvidenceError, "Evidência de verificação com falha: exit_code #{evidence[:exit_code]}"
-      end
+      out
+    end
 
-      if evidence[:executor_identity].blank?
-        raise InvalidVerificationEvidenceError, "Executor de verificação não identificado (§15.3.1)"
+    def validate_verification_evidence!(task, evidence, hash, candidate, base)
+      evidence = evidence.to_h.stringify_keys
+      execution = task.ac_executions.find_by(id: evidence["execution_id"])
+      raise InvalidVerificationEvidenceError, "Execução independente de verificação ausente" unless execution
+
+      unless task.ac_review_verdicts.where(ac_execution: execution, reviewer_role: :qa, verdict: :approved, state: :valid,
+        artifact_hash: hash, candidate_commit_sha: candidate, base_commit_hash: base).exists?
+        raise InvalidVerificationEvidenceError, "Parecer QA aprovado para esta execução/artefato ausente"
       end
+      receipt = AcReviewService.verify_execution!(task: task, execution: execution, role: "qa", artifact_hash: hash,
+        candidate_commit_sha: candidate, base_commit_hash: base)
+      { "execution_id" => execution.id, "runtime_id" => receipt["runtime_id"], "artifact_hash" => hash }
     end
   end
 end

@@ -28,13 +28,34 @@ class AcReviewService
       raise ArgumentError, "artifact_hash é obrigatório" if artifact_hash.blank?
       raise ArgumentError, "evaluator_identity é obrigatório" if evaluator_identity.blank?
 
-      # Validação de autoaprovação (§15.2):
-      # O implementador não pode ser o mesmo avaliador independente para aprovar ou dispensar a entrega
-      if %w[approved waived].include?(verdict.to_s) && execution&.process_handle.present? && execution.process_handle == evaluator_identity
-        raise SelfApprovalViolationError, "Autoaprovação ou autodispensa proibida: o mesmo processo implementador não pode aprovar ou dispensar a entrega (§15.2)"
+      unless %w[approved rejected needs_changes].include?(verdict.to_s)
+        raise InvalidVerdictError, "Dispensa de QA é decisão de política, não parecer do executor"
+      end
+      receipt = verify_execution!(task: task, execution: execution, role: reviewer_role.to_s,
+        artifact_hash: artifact_hash, candidate_commit_sha: candidate_commit_sha, base_commit_hash: base_commit_hash)
+      assessment = receipt.fetch("output", {}).fetch("review", {})
+      unless evaluator_identity == execution.process_handle && assessment["verdict"] == verdict.to_s &&
+             assessment["artifact_hash"] == artifact_hash && assessment["candidate_commit_sha"] == candidate_commit_sha &&
+             assessment["base_commit_hash"] == base_commit_hash
+        raise InvalidVerdictError, "Parecer não corresponde ao recibo independente"
       end
 
-      AcReviewVerdict.transaction do
+      AcExecutionFence.synchronize(execution, validate: false) do
+        task.reload
+        AcAdmissionService.ensure_task_authorized!(task)
+        existing = task.ac_review_verdicts.find_by(ac_execution: execution, reviewer_role: reviewer_role,
+          artifact_hash: artifact_hash, candidate_commit_sha: candidate_commit_sha, base_commit_hash: base_commit_hash, state: :valid)
+        next existing if existing && existing.verdict.to_s == verdict.to_s
+        unless %w[review approved].include?(task.state.to_s)
+          raise InvalidVerdictError, "Tarefa não está na etapa de revisão"
+        end
+        implementation = task.ac_executions.joins(:ac_execution_profile).where(state: "completed",
+          ac_execution_profiles: { role: "programmer" }).order(:id).last
+        current = implementation&.output_payload || {}
+        unless current["artifact_hash"] == artifact_hash && current["commit_sha"] == candidate_commit_sha &&
+               current["base_commit_sha"] == base_commit_hash && !execution.ac_execution_profile.ac_policy_revision.revoked?
+          raise InvalidVerdictError, "Parecer não corresponde à implementação atual"
+        end
         # 1. Registra o parecer estruturado
         record = AcReviewVerdict.create!(
           company: task.company,
@@ -62,7 +83,7 @@ class AcReviewService
           if meets_approval_requirements?(task, artifact_hash)
             commit_to_approve = candidate_commit_sha.presence ||
                                 task.ac_review_verdicts.where(state: :valid, reviewer_role: :reviewer, artifact_hash: artifact_hash).pluck(:candidate_commit_sha).compact.first.presence ||
-                                artifact_hash
+                                raise(InvalidVerdictError, "Commit do parecer obrigatório")
             task.approve!(
               commit_sha: commit_to_approve,
               artifact_hash: artifact_hash
@@ -100,6 +121,25 @@ class AcReviewService
       stale_count
     end
 
+    def verify_execution!(task:, execution:, role:, artifact_hash:, candidate_commit_sha:, base_commit_hash:)
+      AcAdmissionService.ensure_task_authorized!(task)
+      unless execution && !execution.ac_execution_profile&.ac_policy_revision&.revoked? && execution.ac_task_id == task.id && execution.company_id == task.company_id &&
+             execution.state_completed? && execution.ac_execution_profile&.role.to_s == role && execution.exit_code == 0
+        raise InvalidVerdictError, "Execução independente concluída obrigatória"
+      end
+      implementations = task.ac_executions.joins(:ac_execution_profile).where(ac_execution_profiles: { role: "programmer" })
+      if implementations.where(process_handle: execution.process_handle).exists?
+        raise SelfApprovalViolationError, "Sessão implementadora não pode validar a si mesma"
+      end
+      receipt = AcRuntimeSupervisorService.status!(execution: execution)
+      output = receipt["output"] || {}
+      unless receipt["state"] == "completed" && receipt["exit_code"] == 0 && output["artifact_hash"] == artifact_hash &&
+             output["commit_sha"] == candidate_commit_sha && output["base_commit_sha"] == base_commit_hash
+        raise InvalidVerdictError, "Artefato/base não correspondem à execução verificada"
+      end
+      receipt
+    end
+
     private
 
     def meets_approval_requirements?(task, artifact_hash)
@@ -114,7 +154,7 @@ class AcReviewService
       if task.requires_qa?
         qa_satisfied = task.ac_review_verdicts
                            .where(state: :valid, reviewer_role: :qa, artifact_hash: artifact_hash)
-                           .where(verdict: %w[approved waived])
+                           .where(verdict: "approved")
                            .exists?
         return false unless qa_satisfied
       end

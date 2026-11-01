@@ -32,13 +32,13 @@ class AcPolicyEngineServiceTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_engine_pol",
       content: {
-        "model_chain" => ["claude-sonnet-4.6", "gpt-5.2"],
+        "model_chain" => [ "claude-sonnet-4.6", "gpt-5.2" ],
         "effort_limits" => { "max" => "high" },
         "active_accounts" => [],
         "chain_rules" => []
       },
       validation_result: {},
-      state: :published,
+      state: :draft,
       apply_mode: :next_attempts
     )
     @task = AcTask.create!(
@@ -79,6 +79,7 @@ class AcPolicyEngineServiceTest < ActiveSupport::TestCase
   end
 
   test "selects first eligible profile in substitution chain and audits decision" do
+    publish_engine_policy!
     result = AcPolicyEngineService.select_profile_for_task(task: @task)
 
     assert result.success?
@@ -105,6 +106,7 @@ class AcPolicyEngineServiceTest < ActiveSupport::TestCase
       valid_until: 1.hour.from_now
     )
 
+    publish_engine_policy!
     result = AcPolicyEngineService.select_profile_for_task(task: @task)
 
     assert result.success?
@@ -128,11 +130,27 @@ class AcPolicyEngineServiceTest < ActiveSupport::TestCase
     @prof2.update!(effort_level: :low)
     @task.update!(risk_class: :high)
 
+    publish_engine_policy!
     result = AcPolicyEngineService.select_profile_for_task(task: @task)
 
     assert_not result.success?
     assert_nil result.profile
     assert_equal 2, result.rejected_profiles.length
     assert_includes result.rejected_profiles.first[:reason], "exige esforço superior a 'low'"
+  end
+  private
+
+  def publish_engine_policy!
+    [ @prof1, @prof2 ].each do |profile|
+      profile.update!(selection_criteria: { "eligibility" => { "status" => "documented_supported",
+        "model_id" => profile.model_id, "cli_adapter" => profile.cli_adapter.to_s,
+        "efforts" => [ profile.effort_level.to_s ], "valid_until" => 1.hour.from_now.iso8601 } })
+      next if AcQuotaObservation.where(agent_credential: profile.agent_credential, quota_state: "exhausted").exists?
+
+      AcQuotaObservation.create!(company: @company, agent_credential: profile.agent_credential,
+        cli_adapter: profile.cli_adapter, model_scope: profile.model_id, quota_state: :available,
+        confidence_level: :high, origin: :manual_import, observed_at: Time.current, valid_until: 1.hour.from_now)
+    end
+    raise "Policy publication failed" unless @policy.publish!(by_user: @user)
   end
 end

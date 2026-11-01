@@ -113,8 +113,7 @@ class AcWorkContextTest < ActiveSupport::TestCase
       plan_key: "feature-auth",
       version: 1,
       title: "Auth v1",
-      state: :completed,
-      content_hash: "hash1"
+      state: :draft
     )
 
     plan_v2 = AcPlan.create!(
@@ -124,10 +123,12 @@ class AcWorkContextTest < ActiveSupport::TestCase
       plan_key: "feature-auth",
       version: 2,
       title: "Auth v2",
-      state: :active,
-      content_hash: "hash2"
+      state: :draft
     )
 
+    assert plan_v1.publish!
+    plan_v1.update!(state: :completed)
+    assert plan_v2.publish!
     assert_equal plan_v2, ctx.active_plan
   end
 end

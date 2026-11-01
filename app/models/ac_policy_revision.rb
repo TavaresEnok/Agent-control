@@ -54,11 +54,13 @@ class AcPolicyRevision < ApplicationRecord
   validates :content_hash, presence: true, uniqueness: true
   validates :content, presence: true
   validate :validation_result_is_hash
+  validate :new_revision_starts_as_draft, on: :create
   validates :state, presence: true
   validates :apply_mode, presence: true
 
   validate :content_structure_valid, if: -> { new_record? || will_save_change_to_content? }
   validate :immutable_when_published, on: :update
+  validate :publication_uses_validated_path, on: :update
 
   # ── Escopos ─────────────────────────────────────────────────────────────
   scope :for_company, ->(company) { where(company: company) }
@@ -66,35 +68,41 @@ class AcPolicyRevision < ApplicationRecord
 
   # ── Publicação ───────────────────────────────────────────────────────────
   def publish!(by_user:)
-    return false unless draft?
+    company.with_lock do
+      reload
+      next false unless draft?
 
-    errors_found = validate_content_for_publication
-    if errors_found.any?
-      update!(validation_result: { errors: errors_found, valid: false })
-      return false
+      errors_found = valid? ? [] : errors.full_messages
+      errors_found.concat(validate_content_for_publication)
+      errors_found << "Publicador sem associação ativa à empresa" unless by_user && company.company_memberships.active.exists?(user: by_user)
+      if errors_found.any?
+        update!(validation_result: { errors: errors_found, valid: false })
+        next false
+      end
+
+      supersede_current_published!
+      begin
+        @publishing = true
+        update!(state: :published, published_at: Time.current, published_by_user: by_user,
+                validation_result: { valid: true, errors: [] })
+        true
+      ensure
+        @publishing = false
+      end
     end
-
-    supersede_current_published!
-
-    update!(
-      state: :published,
-      published_at: Time.current,
-      published_by_user: by_user,
-      validation_result: { valid: true, errors: [] }
-    )
-    true
   end
 
   # Revogação de emergência (immediate_revoke — §11.4)
   def revoke!(by_user:, reason:)
     return false if revoked?
 
-    update!(
-      state: :revoked,
-      revoked_at: Time.current,
-      revoked_by_user: by_user,
-      revoked_reason: reason
-    )
+    with_lock do
+      update!(state: :revoked, revoked_at: Time.current, revoked_by_user: by_user, revoked_reason: reason)
+      AcExecution.joins(:ac_capacity_grant).where(ac_capacity_grants: { policy_revision_id: id }).where(state: %w[granted preparing running paused]).find_each do |execution|
+        execution.mark_uncertain!(reason: "Revogação emergencial: término físico pendente")
+      end
+      true
+    end
   end
 
   # Cria nova revisão a partir desta (RF-42)
@@ -119,6 +127,10 @@ class AcPolicyRevision < ApplicationRecord
 
   def content_structure_valid
     return if content.blank?
+    unless content.is_a?(Hash)
+      errors.add(:content, "deve ser um objeto")
+      return
+    end
 
     REQUIRED_CONTENT_KEYS.each do |key|
       unless content.key?(key)
@@ -128,7 +140,7 @@ class AcPolicyRevision < ApplicationRecord
 
     # Bloquear modelos proibidos (ADR-002, §9.1)
     all_models = []
-    (content["model_chain"] || []).each do |entry|
+    Array(content["model_chain"]).each do |entry|
       if entry.is_a?(Hash)
         all_models << entry["model_id"]
         all_models << entry["effort"]
@@ -136,7 +148,7 @@ class AcPolicyRevision < ApplicationRecord
         all_models << entry.to_s
       end
     end
-    (content["active_accounts"] || []).each do |acc|
+    Array(content["active_accounts"]).each do |acc|
       if acc.is_a?(Hash)
         all_models << acc["model_id"]
         all_models << acc["effort"]
@@ -156,9 +168,28 @@ class AcPolicyRevision < ApplicationRecord
     end
   end
 
+  def new_revision_starts_as_draft
+    return if state.to_s == "draft" && published_at.nil?
+
+    errors.add(:state, "revisões novas devem começar em rascunho")
+  end
+
+  def publication_uses_validated_path
+    return if @publishing
+
+    if state_was.to_s == "draft" && %w[published superseded].include?(state.to_s)
+      errors.add(:state, "deve ser publicada pelo fluxo de validação")
+    end
+    if published_at_was.nil? && published_at.present?
+      errors.add(:published_at, "deve ser publicada pelo fluxo de validação")
+    end
+  end
+
   def immutable_when_published
     return unless %w[published superseded revoked].include?(state_was.to_s)
-    return if (changes.keys - %w[state revoked_at revoked_reason revoked_by_user_id updated_at]).empty?
+    transitions = { "published" => %w[published superseded revoked], "superseded" => %w[superseded revoked], "revoked" => %w[revoked] }
+    allowed_state = transitions.fetch(state_was.to_s).include?(state.to_s)
+    return if allowed_state && (changes.keys - %w[state revoked_at revoked_reason revoked_by_user_id updated_at]).empty?
 
     errors.add(:base, "Política publicada é imutável (RF-42). Crie uma nova revisão.")
   end
@@ -172,9 +203,27 @@ class AcPolicyRevision < ApplicationRecord
   end
 
   def validate_content_for_publication
-    errs = []
-    REQUIRED_CONTENT_KEYS.each do |key|
-      errs << "Chave obrigatória '#{key}' ausente" unless content.key?(key)
+    return [ "Conteúdo deve ser um objeto" ] unless content.is_a?(Hash)
+
+    errs = REQUIRED_CONTENT_KEYS.filter_map { |key| "Chave obrigatória '#{key}' ausente" unless content.key?(key) }
+    chain = content["model_chain"]
+    unless chain.is_a?(Array) && chain.any? && chain.all? { |item| item.is_a?(String) && item.present? }
+      errs << "Cadeia de modelos inválida"
+      return errs
+    end
+    errs << "Limites de esforço inválidos" unless content["effort_limits"].is_a?(Hash) &&
+      content["effort_limits"].values.all? { |effort| AcExecutionProfile::ALLOWED_EFFORT_LEVELS.include?(effort.to_s) }
+    errs << "Contas ou regras inválidas" unless content["active_accounts"].is_a?(Array) && content["chain_rules"].is_a?(Array)
+    profiles = ac_execution_profiles.where(state: "active").to_a
+    profiles.each do |profile|
+      unless chain.include?(profile.model_id) && profile.valid? && profile.catalog_attested? && profile.company_id == company_id
+        errs << "Perfil #{profile.profile_key} inválido ou sem atestado vigente"
+      end
+    end
+    chain.each do |model|
+      unless profiles.any? { |profile| profile.model_id == model && profile.catalog_attested? && profile.company_id == company_id }
+        errs << "Modelo #{model} sem perfil com atestado de catálogo vigente"
+      end
     end
     errs
   end

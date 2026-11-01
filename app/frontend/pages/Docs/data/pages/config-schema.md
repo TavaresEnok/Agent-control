@@ -28,6 +28,20 @@ code from reading the environment behind this file's back.
 | `CSP_ENFORCE`           | no         | `false`          | `true` enforces the full Content-Security-Policy; otherwise it is sent report-only (violations go to Sentry's security endpoint when `SENTRY_FRONTEND_DSN` is set). `base-uri`, `object-src` and `frame-ancestors` are enforced either way. |
 | `ALLOWED_HOSTS`         | no         | unset            | Comma-separated `Host` header allowlist (DNS rebinding and Host header protection). Unset leaves it off. Name every host the app is dialed on: `DOMAIN` and its `www.`, a separate webhook host, and the in-cluster service names agent containers (`INTERNAL_BASE_URL`) and Traefik's ForwardAuth use — anything missing gets a 403. `/up` is always allowed. |
 
+## Terminal origin authentication
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `TTYD_ORIGIN_KEY` | yes for terminal creation | unset | A unique 256-bit lowercase hexadecimal key used to derive per-session, per-surface ttyd credentials. Provide it to web and worker processes, never to browsers. |
+| `TERMINAL_PROXY_PROOF` | yes for terminal access | unset | A distinct 256-bit lowercase hexadecimal secret shared by the web process and trusted Traefik proof middleware. Traefik must overwrite client-supplied proof headers. |
+
+Generate each independently with `openssl rand -hex 32` and inject them via the
+deployment secret manager. Missing, malformed, or equal keys fail closed. Protect
+Traefik configuration access, internal proxy-to-web traffic and container
+inspection; rebuild agent images and replace existing terminal sessions before
+using this protection. Kubernetes terminal creation remains blocked until a
+protected proof-injection mechanism is available.
+
 ## Process and boot
 
 Read straight from the environment, before or outside the settings files.
@@ -494,3 +508,12 @@ files and CI build args:
   now read through the Rails cache with a fixed 10-second TTL, and an admin
   change drops the cached values at once. Left set, they are reported at boot
   as `FEATURE_*` variables no flag declares.
+
+## Agent Control
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `AC_BACKUP_ENCRYPTION_KEY` | for restorable backups | unset | Dedicated 32-byte key encoded in Base64; supply outside the repository and preserve it securely. |
+| `AC_BACKUP_KEY_ID` | for restorable backups | unset | Identifier of the configured backup key; never use a provider token as encryption key. |
+| `AC_WORKTREE_BASE_DIR` | no | `/tmp/ac_worktrees` | Canonical root for isolated clones. Provision storage and retention separately; released slots never delete artifacts. |
+| `AC_EVIDENCE_BASE_DIR` | no | `/var/lib/agent-control/evidence` | Persistent runtime receipts. The control process and Docker daemon must resolve the same host directory. |

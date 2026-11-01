@@ -20,7 +20,7 @@ class AcQuotaService
   RATE_LIMIT_PATTERNS = [
     /rate limit exceeded/i,
     /too many requests/i,
-    /429/i,
+    /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status(?: code)?[\s:=]+)429\b/i,
     /please try again in/i,
     /rate_limit/i
   ].freeze
@@ -31,9 +31,9 @@ class AcQuotaService
     /authentication failed/i,
     /invalid_token/i,
     /token expired/i,
-    /401/i,
+    /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status(?: code)?[\s:=]+)401\b/i,
     /forbidden/i,
-    /403/i
+    /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status(?: code)?[\s:=]+)403\b/i
   ].freeze
 
   NETWORK_ERROR_PATTERNS = [
@@ -46,10 +46,10 @@ class AcQuotaService
   ].freeze
 
   SECRET_MASKS = [
-    [/(eyJ[A-Za-z0-9_\-]{10,})/, "[REDACTED_JWT]"],
-    [/(sk-[A-Za-z0-9_\-]{15,})/, "[REDACTED_KEY]"],
-    [/(Bearer\s+)(\S+)/i, "[REDACTED_BEARER_AUTH]"],
-    [/([a-f0-9]{32,64})/i, "[REDACTED_HEX]"]
+    [ /(eyJ[A-Za-z0-9_\-]{10,})/, "[REDACTED_JWT]" ],
+    [ /(sk-[A-Za-z0-9_\-]{15,})/, "[REDACTED_KEY]" ],
+    [ /(Bearer\s+)(\S+)/i, "[REDACTED_BEARER_AUTH]" ],
+    [ /([a-f0-9]{32,64})/i, "[REDACTED_HEX]" ]
   ].freeze
 
   def self.record_from_output!(
@@ -105,19 +105,17 @@ class AcQuotaService
     )
   end
 
-  def classify(text, exit_code = nil)
+  def classify(text, _exit_code = nil)
     if EXHAUSTED_PATTERNS.any? { |p| text.match?(p) }
-      [:exhausted, :high, 4.hours]
+      [ :exhausted, :high, 4.hours ]
     elsif RATE_LIMIT_PATTERNS.any? { |p| text.match?(p) }
-      [:rate_limited, :high, 10.minutes]
+      [ :rate_limited, :high, 10.minutes ]
     elsif AUTH_ERROR_PATTERNS.any? { |p| text.match?(p) }
-      [:auth_error, :high, 24.hours]
+      [ :auth_error, :high, 24.hours ]
     elsif NETWORK_ERROR_PATTERNS.any? { |p| text.match?(p) }
-      [:network_error, :medium, 5.minutes]
-    elsif exit_code == 0
-      [:available, :high, 1.hour]
+      [ :network_error, :medium, 5.minutes ]
     else
-      [:unknown, :low, 15.minutes]
+      [ :unknown, :low, 15.minutes ]
     end
   end
 

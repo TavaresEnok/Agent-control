@@ -11,17 +11,18 @@
 class AcPolicyEngineService
   Result = Struct.new(:success?, :profile, :policy_revision, :reason, :rejected_profiles, keyword_init: true)
 
-  def self.select_profile_for_task(task:, actor_type: "policy_service", actor_user: nil)
-    new(company: task.company, project: task.project, task: task).select_profile(
+  def self.select_profile_for_task(task:, role: nil, actor_type: "policy_service", actor_user: nil)
+    new(company: task.company, project: task.project, task: task, role: role).select_profile(
       actor_type: actor_type,
       actor_user: actor_user
     )
   end
 
-  def initialize(company:, project:, task:)
+  def initialize(company:, project:, task:, role: nil)
     @company = company
     @project = project
     @task = task
+    @role = role
   end
 
   def select_profile(actor_type: "policy_service", actor_user: nil)
@@ -36,7 +37,7 @@ class AcPolicyEngineService
       )
     end
 
-    role = @task.assigned_role.to_s
+    role = (@role || @task.assigned_role).to_s
     candidates = policy_revision.ac_execution_profiles.for_role(role).order(:chain_position)
 
     if candidates.empty?
@@ -52,6 +53,9 @@ class AcPolicyEngineService
     rejected = []
     selected = nil
 
+    context = @task.ac_plan.ac_work_context
+    preserved_id = context.metadata&.dig("regular_profiles", role)
+    candidates = candidates.to_a.sort_by { |p| [ p.id == preserved_id ? 0 : 1, p.chain_position ] }
     candidates.each do |candidate|
       rejection_reason = evaluate_candidate(candidate)
       if rejection_reason
@@ -74,6 +78,10 @@ class AcPolicyEngineService
     end
 
     if selected
+      context.with_lock do
+        regular = (context.metadata["regular_profiles"] || {}).merge(role => selected.id)
+        context.update!(metadata: context.metadata.merge("regular_profiles" => regular))
+      end
       AcDecisionAuditEvent.record_profile_selection!(
         company: @company,
         project: @project,
@@ -124,8 +132,8 @@ class AcPolicyEngineService
         model_scope: profile.model_id
       )
 
-      if blocking_obs&.blocking?
-        return "Cota indisponível: #{blocking_obs.state_description}"
+      unless blocking_obs&.available? && blocking_obs.confidence_level.to_s == "high" && blocking_obs.valid_until.present? && blocking_obs.valid_until > Time.current
+        return "Cota indisponível ou desconhecida: aguardar confirmação para a conta/modelo"
       end
     end
 

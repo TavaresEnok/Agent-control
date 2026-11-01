@@ -22,20 +22,22 @@ class AcClientCommandTest < ActiveSupport::TestCase
 
     %i[intent_id command_type state].each do |field|
       bad = AcClientCommand.new(@valid_attributes.merge(field => nil))
-      refute bad.valid?, "Expected #{field} to be required"
+      refute_predicate bad, :valid?, "Expected #{field} to be required"
     end
   end
 
   test "enforces intent_id uniqueness" do
     AcClientCommand.create!(@valid_attributes)
-    dup = AcClientCommand.new(@valid_attributes)
-    refute dup.valid?
-    assert_includes dup.errors[:intent_id], "has already been taken"
+    assert_raises(ActiveRecord::RecordNotUnique) do
+      AcClientCommand.transaction(requires_new: true) { AcClientCommand.create!(@valid_attributes) }
+    end
+    other = create(:company)
+    assert AcClientCommand.create!(@valid_attributes.merge(company: other)).persisted?
   end
 
   test "transitions through lifecycle states" do
     cmd = AcClientCommand.create!(@valid_attributes)
-    refute cmd.processed?
+    refute_predicate cmd, :processed?
 
     cmd.mark_processing!
     assert_equal "processing", cmd.state

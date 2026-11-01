@@ -3,46 +3,30 @@
 require "test_helper"
 
 class AcWorktreeManagerServiceTest < ActiveSupport::TestCase
+  include AcSafetyFixtures
+
   setup do
-    @company = create(:company)
-    @user = create(:user, company: @company)
-    @project = create(:project, company: @company, owner: @user)
-    @context = AcWorkContext.create!(
-      company: @company,
-      project: @project,
-      title: "Context Worktree",
-      external_id: "ctx-wt-#{SecureRandom.hex(4)}"
-    )
-    @plan = AcPlan.create!(
-      company: @company,
-      project: @project,
-      ac_work_context: @context,
-      plan_key: "wt-plan-#{SecureRandom.hex(4)}",
-      title: "Plan WT",
-      objective: "Worktree isolation test",
-      version: 1
-    )
-    @task = AcTask.create!(
-      company: @company,
-      project: @project,
-      ac_plan: @plan,
-      task_key: "task-wt-#{SecureRandom.hex(4)}",
-      title: "Task WT",
-      scope: "WT scope",
-      position: 1,
-      risk_class: :low
-    )
-    @execution = AcExecution.create!(
-      company: @company,
-      ac_work_context: @context,
-      ac_task: @task,
-      operation_id: "op-wt-1-#{SecureRandom.hex(4)}",
-      epoch: "1"
-    )
+    @test_dir = Dir.mktmpdir("ac-worktree-test")
+    @repo = File.join(@test_dir, "repo")
+    FileUtils.mkdir_p(@repo)
+    git!("init", @repo)
+    File.write(File.join(@repo, "file.txt"), "first")
+    git!("-C", @repo, "add", "file.txt")
+    git!("-C", @repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "first")
+    @first_commit = git!("-C", @repo, "rev-parse", "HEAD").strip
+    File.write(File.join(@repo, "file.txt"), "second")
+    git!("-C", @repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-am", "second")
+    @second_commit = git!("-C", @repo, "rev-parse", "HEAD").strip
+    @execution = AcAdmissionService.admit_execution!(task: @task, operation_id: SecureRandom.uuid,
+      requested_by: "test", execution_profile: @profiles.fetch("programmer"))[:execution]
+  end
+
+  teardown do
+    FileUtils.remove_entry(@test_dir) if @test_dir && Dir.exist?(@test_dir)
   end
 
   test "acquires lease for solitary execution" do
-    token = AcWorktreeManagerService.acquire_lease!(execution: @execution)
+    token = AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: @test_dir, repo_path: @repo)
 
     assert token.present?
     @execution.reload
@@ -50,52 +34,84 @@ class AcWorktreeManagerServiceTest < ActiveSupport::TestCase
     assert_equal "preparing", @execution.state
   end
 
-  test "neutralizes inactive/cancelled previous writer (§11.3.2)" do
-    # Escritor antigo cancelado segurando token
-    old_execution = AcExecution.create!(
-      company: @company,
-      ac_work_context: @context,
-      ac_task: @task,
-      operation_id: "op-old-writer-#{SecureRandom.hex(4)}",
-      epoch: "1",
-      state: :cancelled,
-      worktree_lease_token: "old-lease-token"
-    )
+  test "preserves an unverified writer and isolates the next worktree" do
+    old_execution = AcExecution.create!(company: @company, ac_work_context: @context, ac_task: @task,
+      operation_id: "old-#{SecureRandom.hex(4)}", epoch: "1", state: :cancelled,
+      worktree_lease_token: "old-lease")
 
-    new_token = AcWorktreeManagerService.acquire_lease!(execution: @execution)
+    AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: @test_dir, repo_path: @repo)
 
-    old_execution.reload
-    assert_nil old_execution.worktree_lease_token, "Escritor anterior deve ter sua lease neutralizada"
-    assert_equal new_token, @execution.reload.worktree_lease_token
+    assert_equal "old-lease", old_execution.reload.worktree_lease_token
+    assert_not_nil @execution.reload.worktree_lease_token
   end
 
-  test "quarantines worktree when active writer cannot be neutralized (§11.3.2)" do
-    # Escritor anterior ativo com heartbeat recente
-    active_execution = AcExecution.create!(
-      company: @company,
-      ac_work_context: @context,
-      ac_task: @task,
-      operation_id: "op-active-writer-#{SecureRandom.hex(4)}",
-      epoch: "1",
-      state: :running,
-      worktree_path: "/tmp/ac_worktrees/#{@task.id}/main",
-      worktree_lease_token: "active-lease-token",
-      heartbeat_at: 1.minute.ago
-    )
-
-    token = AcWorktreeManagerService.acquire_lease!(execution: @execution)
-
-    assert token.present?
-    @execution.reload
-    assert_includes @execution.worktree_path, "quarantine"
-    assert_equal "active-lease-token", active_execution.reload.worktree_lease_token
+  test "operation identifier cannot escape the worktree root" do
+    Dir.mktmpdir do |root|
+      @execution.update!(operation_id: "../../outside-#{SecureRandom.hex(4)}")
+      AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: root, repo_path: @repo)
+      assert @execution.reload.worktree_path.start_with?("#{File.realpath(root)}/")
+      assert Dir.exist?(@execution.worktree_path)
+    end
   end
 
-  test "releases lease safely" do
-    token = AcWorktreeManagerService.acquire_lease!(execution: @execution)
-    assert @execution.reload.worktree_lease_token.present?
+  test "release refuses an unverified writer and retains its artifacts" do
+    Dir.mktmpdir do |root|
+      AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: root, repo_path: @repo)
+      path = @execution.reload.worktree_path
+      File.write(File.join(path, "result.txt"), "result")
+      previous = Rails.application.config.try(:ac_runtime_supervisor)
+      Rails.application.config.ac_runtime_supervisor = FakeAcRuntimeSupervisor.new
+      begin
+        assert_raises(AcRuntimeSupervisorService::UnverifiedReceiptError) do
+          AcWorktreeManagerService.release_lease!(execution: @execution)
+        end
+        assert_equal "result", File.read(File.join(path, "result.txt"))
+        assert_not_nil @execution.reload.worktree_lease_token
+      ensure
+        Rails.application.config.ac_runtime_supervisor = previous
+      end
+    end
+  end
+  test "clone has independent Git storage and checks out the requested commit" do
+    @execution.update!(metadata: { "base_commit_sha" => @first_commit })
+    AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: @test_dir, repo_path: @repo)
+    clone = @execution.reload.worktree_path
+    assert Dir.exist?(File.join(clone, ".git"))
+    assert_not File.exist?(File.join(clone, ".git", "objects", "info", "alternates"))
+    assert_equal "first", File.read(File.join(clone, "file.txt"))
+    assert_equal @first_commit, @execution.metadata["base_commit_sha"]
+    assert_equal @first_commit, git!("-C", clone, "rev-parse", "HEAD").strip
+    git!("-C", clone, "update-ref", "refs/heads/clone-only", @first_commit)
+    assert_equal @second_commit, git!("-C", @repo, "rev-parse", "HEAD").strip
+    _out, _err, status = Open3.capture3("git", "-C", @repo, "show-ref", "--verify", "--quiet", "refs/heads/clone-only")
+    assert_not status.success?
+  end
 
-    AcWorktreeManagerService.release_lease!(execution: @execution)
+  test "reviewer checks out the exact implementation artifact" do
+    @execution.update!(state: :completed, exit_code: 0, worktree_path: @repo,
+      output_payload: { "artifact_hash" => AcArtifactIdentity.digest(repo: @repo, commit: @first_commit, base: @first_commit),
+                        "commit_sha" => @first_commit, "base_commit_sha" => @first_commit })
+    @execution.ac_capacity_grant.update!(state: :released)
+    @task.update!(state: :review)
+    @execution = AcAdmissionService.admit_execution!(task: @task, operation_id: SecureRandom.uuid,
+      requested_by: "test", role: "reviewer", execution_profile: @profiles.fetch("reviewer"))[:execution]
+    AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: @test_dir, repo_path: @repo)
+    assert_equal @first_commit, git!("-C", @execution.reload.worktree_path, "rev-parse", "HEAD").strip
+    assert_equal @first_commit, @execution.metadata["base_commit_sha"]
+  end
+
+  test "rejects a missing repository before starting a writer" do
+    assert_raises(AcWorktreeManagerService::GitError) do
+      AcWorktreeManagerService.acquire_lease!(execution: @execution, base_path: @test_dir, repo_path: File.join(@test_dir, "missing"))
+    end
     assert_nil @execution.reload.worktree_lease_token
+  end
+
+  private
+
+  def git!(*args)
+    out, err, status = Open3.capture3("git", *args)
+    raise "git failed: #{err}" unless status.success?
+    out
   end
 end

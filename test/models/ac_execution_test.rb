@@ -37,13 +37,13 @@ class AcExecutionTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_rev_1",
       content: {
-        "model_chain" => ["gpt-5.2"],
+        "model_chain" => [ "gpt-5.2" ],
         "effort_limits" => { "max" => "high" },
         "active_accounts" => [],
         "chain_rules" => []
       },
       validation_result: { "valid" => true, "errors" => [] },
-      state: :published,
+      state: :draft,
       apply_mode: :next_attempts
     )
     @credential = create(:agent_credential, user: @user, company: @company, agent_type: "codex")

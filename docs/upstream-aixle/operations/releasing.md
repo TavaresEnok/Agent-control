@@ -76,3 +76,71 @@ Deploy the previous version's images. Two things decide whether that is safe:
 - **Temporal histories.** Workflows started on the newer release replay on the older
   code. A workflow change guarded with `patched` replays safely in both directions;
   see [architecture/temporal-versioning.md](../architecture/temporal-versioning.md).
+
+### Decision audit database protection
+
+`ac_decision_audit_events` is append-only. Its migration installs PostgreSQL
+triggers rejecting SQL UPDATE, DELETE, and TRUNCATE, including through cascades.
+Inserts remain available to the application and backup restoration. These
+triggers are not represented in Rails' Ruby schema dump: after `db:schema:load`,
+run `bin/rails ac:audit:install_protection` as the separate migration owner
+before admitting application traffic. Do not run that installation as the app
+role. Check `GET /ready/audit` using the application's actual connection; a 503
+means the triggers are missing or the connection has an unsafe role. Configure
+deployment readiness and worker startup to enforce this check; `/up` is only a
+liveness probe. The check requires PostgreSQL's `has_parameter_privilege`.
+
+The app login must not own the database, audit table, schema, or trigger function,
+be a superuser, have CREATEROLE, replication or BYPASSRLS, or be able to assume
+any role with those powers or SET on `session_replication_role`. Use separate
+credentials for migrations and application processes; do not give ordinary app
+processes or users the migration-owner credentials or role membership. Database
+owners and superusers can remove protections; securing those credentials and
+independent backup retention remain operational requirements. A schema reload or
+restore must be followed by trigger installation and a successful readiness check
+before service resumes. Audit foreign keys also prevent deleting referenced
+projects/companies while their audit history remains.
+
+### Local capacity account identities
+
+Agent Control's local capacity authority requires a configured canonical identity
+for every credential that can hold capacity. Configure
+`Rails.application.config.ac_capacity_authority_id` with a stable nonempty name
+for the single local authority; set `ac_capacity_account_identities` by credential
+id, each with `account_key`, `authority_id`, and `ownership` equal to
+`exclusive_local`. The key must be `sha256:` followed by 64 lowercase hex
+characters. Map all aliases of the same vendor account to the same key, and set
+`ac_local_capacity_accounts[key]` to a finite positive `limit` and `mode: local`.
+Use an operator-attested stable vendor account identity or a keyed fingerprint of
+it; do not use token material, email alone, or account slugs as account identity.
+All credentials participating in live grants must be mapped; changing a live
+grant's identity or encountering an old grant without an identity blocks further
+reservations until the grant is reconciled.
+
+The local lock coordinates processes sharing this database; the configured
+exclusive ownership is an operator attestation, not a discovery or proof that a
+vendor account is unused elsewhere. An account used on another installation or
+host with a separate database must use a shared broker with an authoritative
+cross-host reservation instead of this local authority. Do not mark it
+`exclusive_local` on either installation. Unknown active legacy session identity
+is conservatively charged to each account while admission is decided.
+
+### Remote execution and shared capacity gates
+
+The remote gateway requires an admitted execution and an authorized directory;
+without a configured durable remote supervisor it refuses dispatch and reports
+existing operations as uncertain. SSH key pinning and a successful connection do
+not prove durable execution or safe retry. Shared-account capacity likewise
+requires a common reservation authority; a timestamped usage snapshot alone is
+not a reservation. Real SSH dispatch and shared-broker operation remain rollout
+gates until an independently verifiable supervisor/broker contract and
+end-to-end tests establish durable identity, receipts, fencing and recovery.
+Do not configure a placeholder adapter as evidence of these properties.
+
+A remote supervisor must implement dispatch, status and independent receipt
+verification. Its receipts bind the operation, company, environment, task,
+execution, epoch and remote job. A remote intent commits before dispatch and is
+never blindly redispatched after an uncertain result. A shared-capacity adapter
+must verify a granted receipt bound to the operation, account and quantity.
+An uncertain shared reservation requires broker reconciliation: do not retry it
+until the broker's idempotency and status contracts have been established.

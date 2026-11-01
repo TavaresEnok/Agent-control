@@ -3,6 +3,9 @@
 require "test_helper"
 
 class AcAdmissionServiceTest < ActiveSupport::TestCase
+  include AcCapacityIdentityFixture
+  teardown { restore_capacity_identity }
+
   setup do
     @company = create(:company)
     @user = create(:user, company: @company)
@@ -39,16 +42,17 @@ class AcAdmissionServiceTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_adm_1",
       content: {
-        "model_chain" => ["gpt-5.2"],
+        "model_chain" => [ "gpt-5.2" ],
         "effort_limits" => { "max" => "high" },
         "active_accounts" => [],
         "chain_rules" => []
       },
       validation_result: { "valid" => true, "errors" => [] },
-      state: :published,
+      state: :draft,
       apply_mode: :next_attempts
     )
     @credential = create(:agent_credential, user: @user, company: @company, agent_type: "codex")
+    configure_capacity_identity(@credential)
     @profile = AcExecutionProfile.create!(
       company: @company,
       ac_policy_revision: @policy,
@@ -59,8 +63,15 @@ class AcAdmissionServiceTest < ActiveSupport::TestCase
       effort_level: :medium,
       agent_credential: @credential,
       chain_position: 1,
-      state: :active
+      state: :active,
+      selection_criteria: { "eligibility" => { "status" => "documented_supported", "model_id" => "gpt-5.2",
+        "cli_adapter" => "codex_cli", "efforts" => [ "medium" ], "valid_until" => 1.hour.from_now.iso8601 } }
     )
+    raise "Policy publication failed" unless @policy.publish!(by_user: @user)
+    raise "Plan publication failed" unless @plan.publish!(policy_revision: @policy)
+    AcQuotaObservation.create!(company: @company, agent_credential: @credential, cli_adapter: "codex_cli",
+      model_scope: "gpt-5.2", quota_state: :available, confidence_level: :high, origin: :manual_import,
+      observed_at: Time.current, valid_until: 1.hour.from_now)
   end
 
   test "admit_execution! successfully creates execution and capacity grant" do

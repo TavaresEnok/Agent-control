@@ -2,7 +2,7 @@
 
 namespace :ac do
   desc "Import a legacy Paseo into Agent Control in read-only mode (RF-33, BUG-P2-04)"
-  task :import_paseo, [:paseo_number, :project_id, :title] => :environment do |_t, args|
+  task :import_paseo, [ :paseo_number, :project_id, :title ] => :environment do |_t, args|
     paseo_number = args[:paseo_number] || ENV["PASEO_NUMBER"]
     project_id = args[:project_id] || ENV["PROJECT_ID"]
     title = args[:title] || ENV["TITLE"] || "Paseo #{paseo_number} Historic Import"
@@ -14,9 +14,9 @@ namespace :ac do
 
     project = if project_id.present?
                 Project.find(project_id)
-              else
+    else
                 Project.first
-              end
+    end
 
     unless project
       puts "ERRO: Nenhum projeto encontrado para associar o Paseo."
@@ -50,6 +50,20 @@ namespace :ac do
     else
       puts "FALHA ao importar Paseo: #{result.error}"
       exit 1
+    end
+  end
+end
+
+namespace :ac do
+  namespace :audit do
+    desc "Install audit triggers after a schema load (run only as the database migration owner)"
+    task install_protection: :environment do
+      require Rails.root.join("db/migrate/20261101130104_protect_ac_decision_audit_events")
+      connection = ActiveRecord::Base.connection
+      connection.transaction do
+        ProtectAcDecisionAuditEvents.install(connection, schema: connection.select_value("SELECT current_schema()"),
+          table: "ac_decision_audit_events")
+      end
     end
   end
 end

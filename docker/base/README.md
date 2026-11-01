@@ -167,3 +167,31 @@ View visibility (Outline, Timeline panels) is stored in the **browser's IndexedD
 ```bash
 docker build -t aixle/agent-base-core:latest -f docker/base/Dockerfile docker/base
 ```
+
+Terminal WebSockets are reauthorized on reconnect. The ttyd processes restart
+every five minutes, closing existing terminal connections; tmux keeps the
+session and the client reconnects. Revocation of an already open terminal can
+therefore take up to five minutes. IDE and file-watcher connections have the
+same absolute five-minute bound; they must reconnect through the authorization
+proxy. Deployments must also restrict access to terminal ports at the network
+boundary, even when origin authentication is enabled.
+
+Terminal origin authentication requires `TTYD_ORIGIN_KEY` and
+`TERMINAL_PROXY_PROOF`, each a different 64-character lowercase hexadecimal
+secret generated with `openssl rand -hex 32`. Supply both to web and worker,
+and the proof to Traefik through its protected environment. Traefik must use
+the file middleware before ForwardAuth, overwrite incoming proof headers, and
+not expose its configuration API or debug configuration logs. Restrict access
+to container process environments and Docker inspection. The proof travels on
+the internal proxy-to-web connection; that network must be trusted or protected
+by authenticated encryption. Rebuild agent images and replace old sessions:
+old ttyd instances have no origin credential. Rotating keys also requires
+replacing running sessions. Kubernetes terminal creation is deliberately blocked
+until an equivalent protected proof-injection mechanism is provisioned and
+verified; do not interpret an existing Kubernetes session as protected.
+
+The IDE listener on `127.0.0.1:8444` retains its connection token. A fixed TCP
+proxy listens on port 8443 and closes both sides of each connection after five
+minutes without restarting the editor. The watcher terminates each WebSocket
+after the same absolute lifetime, regardless of activity. Existing deployments
+need rebuilt agent images and replacement sessions for these bounds to apply.

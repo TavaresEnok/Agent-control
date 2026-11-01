@@ -58,7 +58,7 @@ class AgentCredentialSyncController < ActionController::API
     # would resurrect exactly the stale blocks it exists to drop.
     return head :conflict if @session.session_type == "auth_setup"
 
-    @credential = SessionCompany.agent_credentials_for(@session).find_by(agent_type: @session.agent_type)
+    @credential = SessionCompany.credential_for(@session, agent_type: @session.agent_type)
     head :not_found if @credential.nil?
   end
 
@@ -109,7 +109,7 @@ class AgentCredentialSyncController < ActionController::API
         merged = credential.adapter.merge_container_credentials(current, credential.without_retired_grants(captured))
         next false if merged == current
 
-        AgentCredential.from_artifacts(credential.user_id, credential.company_id, credential.agent_type, merged)
+        AgentCredential.from_artifacts(credential.user_id, credential.company_id, credential.agent_type, merged, account_slug: credential.account_slug)
         true
       end
     end

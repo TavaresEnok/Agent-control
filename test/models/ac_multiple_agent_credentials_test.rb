@@ -40,13 +40,13 @@ class AcMultipleAgentCredentialsTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_multi_cred_1",
       content: {
-        "model_chain" => ["gpt-5.2"],
+        "model_chain" => [ "gpt-5.2" ],
         "effort_limits" => { "max" => "high" },
-        "active_accounts" => ["codex-manager", "codex-programmer"],
+        "active_accounts" => [ "codex-manager", "codex-programmer" ],
         "chain_rules" => []
       },
       validation_result: { "valid" => true, "errors" => [] },
-      state: :published,
+      state: :draft,
       apply_mode: :next_attempts
     )
 

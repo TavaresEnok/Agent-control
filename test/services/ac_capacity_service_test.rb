@@ -3,11 +3,15 @@
 require "test_helper"
 
 class AcCapacityServiceTest < ActiveSupport::TestCase
+  include AcCapacityIdentityFixture
+  teardown { restore_capacity_identity }
+
   def setup
     @company = create(:company)
     @user = create(:user, company: @company)
     @project = create(:project, company: @company, owner: @user)
     @credential = create(:agent_credential, company: @company, user: @user, agent_type: "codex")
+    configure_capacity_identity(@credential)
     @context = AcWorkContext.create!(
       company: @company,
       project: @project,
@@ -40,13 +44,13 @@ class AcCapacityServiceTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_cap_pol",
       content: {
-        "model_chain" => ["gpt-5.2"],
+        "model_chain" => [ "gpt-5.2" ],
         "effort_limits" => { "max" => "high" },
         "active_accounts" => [],
         "chain_rules" => []
       },
       validation_result: {},
-      state: :published,
+      state: :draft,
       apply_mode: :next_attempts
     )
     @profile = AcExecutionProfile.create!(
@@ -80,9 +84,8 @@ class AcCapacityServiceTest < ActiveSupport::TestCase
     assert_not_nil audit
     assert_equal 1, audit.decision_details["quantity"]
 
-    # Liberar capacidade
-    assert AcCapacityService.release!(grant: result.grant)
-    assert result.grant.reload.released?
+    assert_raises(AcRuntimeSupervisorService::UnverifiedReceiptError) { AcCapacityService.release!(grant: result.grant) }
+    assert result.grant.reload.granted?
   end
 
   test "reaps expired capacity grants" do
@@ -103,9 +106,7 @@ class AcCapacityServiceTest < ActiveSupport::TestCase
     )
 
     svc = AcCapacityService.new(company: @company, project: @project)
-    reaped = svc.reap_expired!
-
-    assert_equal 1, reaped
-    assert grant.reload.expired?
+    assert_raises(AcRuntimeSupervisorService::UnverifiedReceiptError) { svc.reap_expired! }
+    assert grant.reload.granted?
   end
 end

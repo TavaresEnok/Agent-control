@@ -58,8 +58,8 @@ module F0Access
       # SQL values, not HTTP status or a spy: detects inserts, updates, deletes in
       # the protected domain, including an accidental session launch/admission.
       %w[terminal_sessions session_admissions agents projects company_memberships tools].to_h do |table|
-        sql = "SELECT md5(COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id)::text, '[]')) FROM #{table} t"
-        [table, ActiveRecord::Base.connection.select_value(sql)]
+        sql = "SELECT md5(COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id)::text, '[]')) FROM #{ActiveRecord::Base.connection.quote_table_name(table)} t"
+        [ table, ActiveRecord::Base.connection.select_value(sql) ]
       end
     end
 
@@ -68,7 +68,7 @@ module F0Access
       check(name) do
         response, allowed, evidence = yield
         same = before == effect_snapshot
-        [allowed && same, { http: response.code.to_i, protected_sql_unchanged: same }.merge(evidence || {})]
+        [ allowed && same, { http: response.code.to_i, protected_sql_unchanged: same }.merge(evidence || {}) ]
       end
     end
 
@@ -95,7 +95,7 @@ module F0Access
       other = Company.create!(name: "Synthetic Access B", email_domain: "access-b.invalid",
                              billing_state: "active", domain_verified_at: Time.current)
       @identities = {}
-      { owner: [@company, "admin"], viewer: [@company, "viewer"], foreign: [other, "admin"] }.each do |name, (company, role)|
+      { owner: [ @company, "admin" ], viewer: [ @company, "viewer" ], foreign: [ other, "admin" ] }.each do |name, (company, role)|
         user = User.create!(name: "Synthetic #{name}", email: "#{name}@#{company.email_domain}",
                             password: "SyntheticPassword123!", password_confirmation: "SyntheticPassword123!")
         CompanyMembership.create!(user: user, company: company, role: role, state: "active",
@@ -131,7 +131,7 @@ module F0Access
         parts = key.delete_prefix("traefik.http.").split(".")
         if parts[0] == "services"
           http["services"] ||= {}
-          http["services"][parts[1]] = { "loadBalancer" => { "servers" => [{ "url" => "http://terminal:#{value}" }] } }
+          http["services"][parts[1]] = { "loadBalancer" => { "servers" => [ { "url" => "http://terminal:#{value}" } ] } }
         else
           value = value.split(",") if %w[middlewares prefixes].include?(parts.last)
           parts[-2] = "stripPrefix" if parts[-2] == "stripprefix"
@@ -148,19 +148,19 @@ module F0Access
       altered = owner.merge(cookie: tampered_cookie(owner[:cookie]))
       principals = { anonymous: nil, tampered: altered, foreign: foreign, viewer: viewer }
       api = "/api/v1/terminal_sessions/#{@deletable.id}"
-      check("api/owner/read") { r = request(api, identity: owner); [r.code == "200" && JSON.parse(r.body).to_s.include?(@deletable.id.to_s), { http: r.code.to_i }] }
+      check("api/owner/read") { r = request(api, identity: owner); [ r.code == "200" && JSON.parse(r.body).to_s.include?(@deletable.id.to_s), { http: r.code.to_i } ] }
       principals.each do |name, who|
         unchanged("api/#{name}/read-authorization") do
           r = request(api, identity: who)
           expected = %i[anonymous tampered].include?(name) ? %w[401] : %w[403 404]
-          [r, expected.include?(r.code)]
+          [ r, expected.include?(r.code) ]
         end
         unchanged("api/#{name}/delete") do
           r = request(api, identity: who, method: :delete)
           # Missing/invalid identity may meet CSRF first. Valid principals MUST
           # reach authorization; a 422 cannot masquerade as viewer/tenant denial.
           expected = %i[anonymous tampered].include?(name) ? %w[401 422] : %w[403 404]
-          [r, expected.include?(r.code)]
+          [ r, expected.include?(r.code) ]
         end
       end
       # The foreign-owner target above proves ownership isolation, not the
@@ -171,28 +171,28 @@ module F0Access
       check("api/viewer/own-read-positive") do
         r = request(viewer_api, identity: viewer)
         viewer_readable = r.code == "200" && JSON.parse(r.body)["id"].to_s == @viewer_deletable.id.to_s
-        [viewer_readable, { http: r.code.to_i }]
+        [ viewer_readable, { http: r.code.to_i } ]
       end
       unchanged("api/viewer/own-delete-role-denied") do
         raise "viewer read control failed" unless viewer_readable
         r = request(viewer_api, identity: viewer, method: :delete)
         # Valid CSRF is sent by request. Neither CSRF failure (422), ownership
         # lookup (404), nor an unrelated step-up gate (403) proves this boundary.
-        [r, r.code == "403" && JSON.parse(r.body)["error"] == "Not authorized"]
+        [ r, r.code == "403" && JSON.parse(r.body)["error"] == "Not authorized" ]
       end
       unchanged("csrf/owner/missing") do
         r = request(api, identity: owner, method: :delete, csrf: false)
-        [r, r.code == "422"]
+        [ r, r.code == "422" ]
       end
       unchanged("csrf/owner/wrong") do
         r = request(api, identity: owner.merge(csrf: Base64.strict_encode64("x" * 32)), method: :delete)
-        [r, r.code == "422"]
+        [ r, r.code == "422" ]
       end
       # Positive real mutation proves the DELETE route and valid CSRF reach SQL.
       check("api/owner/delete-positive") do
         r = request(api, identity: owner, method: :delete)
         gone = !TerminalSession.exists?(@deletable.id)
-        [r.code == "200" && gone, { http: r.code.to_i, sql_row_deleted: gone }]
+        [ r.code == "200" && gone, { http: r.code.to_i, sql_row_deleted: gone } ]
       end
       # UI controller without requiring a compiled browser bundle: Inertia JSON.
       { owner: owner, anonymous: nil, tampered: altered, foreign: foreign }.each do |name, who|
@@ -201,7 +201,7 @@ module F0Access
           payload = JSON.parse(r.body) rescue {}
           has_project = payload.dig("props", "projects").to_s.include?(@project.name)
           ok = name == :owner ? r.code == "200" && has_project : !has_project && (name == :foreign ? r.code == "200" : %w[302 303 401].include?(r.code))
-          [ok, { http: r.code.to_i, target_project_present: has_project }]
+          [ ok, { http: r.code.to_i, target_project_present: has_project } ]
         end
       end
       %w[tty ide fs view upload preview].each do |surface|
@@ -209,7 +209,7 @@ module F0Access
           unchanged("forward-auth/#{surface}/#{name}") do
             r = request("/api/v1/internal/ws_auth", identity: who,
                         headers: { "X-Forwarded-Uri" => "/t/#{@terminal.route_token}/#{surface}/" })
-            [r, name == :owner ? r.code == "200" : %w[401 403].include?(r.code)]
+            [ r, name == :owner ? r.code == "200" : %w[401 403].include?(r.code) ]
           end
         end
       end
@@ -217,7 +217,7 @@ module F0Access
         unchanged("forward-auth/#{surface}/viewer") do
           r = request("/api/v1/internal/ws_auth", identity: viewer,
               headers: { "X-Forwarded-Uri" => "/t/#{@terminal.route_token}/#{surface}/" })
-          [r, r.code == "403"]
+          [ r, r.code == "403" ]
         end
       end
       # Same effective client network reaches web directly and the real ttyd.
@@ -234,14 +234,14 @@ module F0Access
           # Unauthenticated direct access is blocked when the handshake/upgrade is refused (!opened).
           # If an unauthenticated upgrade were accepted and yielded shell output, that would be a bypass (FAIL).
           blocked = !opened && !received
-          [blocked,
+          [ blocked,
            { upgrade_accepted: opened, unauthenticated_shell_output: received,
              blocked: blocked,
              reason: received ? "anonymous_shell_bypass" : (opened ? "accepted_upgrade_without_conclusive_output" : "unauthenticated_upgrade_blocked"),
-             expected: "blocked", source: "real ttyd -W -H" }]
+             expected: "blocked", source: "real ttyd -W -H" } ]
         rescue StandardError => e
-          [true, { upgrade_accepted: false, unauthenticated_shell_output: false, blocked: true,
-                  reason: "connection_blocked_#{e.class.name}", expected: "blocked" }]
+          [ true, { upgrade_accepted: false, unauthenticated_shell_output: false, blocked: true,
+                  reason: "connection_blocked_#{e.class.name}", expected: "blocked" } ]
         ensure
           direct&.close
         end
@@ -252,7 +252,7 @@ module F0Access
         ws.send_json(AuthToken: "", columns: 80, rows: 24)
         received = ws.wait { |socket| socket.messages.any? { |m| m.include?("SYNTHETIC_TTYD_ACCESS") } }
         ws.close
-        [received, { shell_output: received }]
+        [ received, { shell_output: received } ]
       end
       principals.each do |name, who|
         check("gateway/#{name}/ttyd-denied") do
@@ -274,10 +274,10 @@ module F0Access
           valid = %i[owner viewer foreign].include?(name)
           if valid
             catalogs[name] = MCPEvidence.tool_names(r)
-            [catalogs[name]&.include?("create_agent"), { http: r.code.to_i, create_agent_published: catalogs[name]&.include?("create_agent") }]
+            [ catalogs[name]&.include?("create_agent"), { http: r.code.to_i, create_agent_published: catalogs[name]&.include?("create_agent") } ]
           else
             ok, evidence = MCPEvidence.classify(r, expected: "authentication_denied")
-            [ok, { http: r.code.to_i }.merge(evidence)]
+            [ ok, { http: r.code.to_i }.merge(evidence) ]
           end
         end
         next if name == :owner
@@ -286,34 +286,34 @@ module F0Access
           expected = { viewer: "create_policy_denied", foreign: "project_lookup_denied" }.fetch(name, "authentication_denied")
           ok, evidence = MCPEvidence.classify(r, expected: expected, project_id: @project.id)
           valid_control = %i[anonymous tampered].include?(name) || catalogs[name]&.include?("create_agent")
-          [r, ok && valid_control, evidence.merge(identity_catalog_control: !!valid_control)]
+          [ r, ok && valid_control, evidence.merge(identity_catalog_control: !!valid_control) ]
         end
       end
       check("mcp/owner/create-agent-positive") do
         before = @project.agents.count
         r = rpc("tools/call", token: token, name: "create_agent", arguments: args)
         changed = @project.agents.count == before + 1
-        [MCPEvidence.success?(r) && changed, { http: r.code.to_i, sql_insert: changed }]
+        [ MCPEvidence.success?(r) && changed, { http: r.code.to_i, sql_insert: changed } ]
       end
       administrative_control = false
       check("mcp/owner/administrative-call-positive") do
         r = rpc("tools/call", token: token, name: "update_project_settings", arguments: { project_id: @project.id, name: "Synthetic Admin Control" })
         changed = @project.reload.name == "Synthetic Admin Control"
         administrative_control = catalogs[:owner]&.include?("update_project_settings") && MCPEvidence.success?(r) && changed
-        [administrative_control, { http: r.code.to_i, sql_update: changed }]
+        [ administrative_control, { http: r.code.to_i, sql_update: changed } ]
       end
       worker_catalog_control = false
       check("mcp/worker/tools-list") do
         r = rpc("tools/list", worker: @terminal.mcp_key)
         names = MCPEvidence.tool_names(r)
         worker_catalog_control = !names.nil? && !names.include?("update_project_settings")
-        [worker_catalog_control, { http: r.code.to_i, administrative_tool_absent: worker_catalog_control }]
+        [ worker_catalog_control, { http: r.code.to_i, administrative_tool_absent: worker_catalog_control } ]
       end
       unchanged("mcp/worker/administrative-call") do
         r = rpc("tools/call", worker: @terminal.mcp_key, name: "update_project_settings", arguments: { project_id: @project.id, name: "forbidden" })
         ok, evidence = MCPEvidence.classify(r, expected: "administrative_tool_not_published")
-        [r, ok && worker_catalog_control && administrative_control,
-         evidence.merge(identity_catalog_control: worker_catalog_control, administrative_positive_control: !!administrative_control)]
+        [ r, ok && worker_catalog_control && administrative_control,
+         evidence.merge(identity_catalog_control: worker_catalog_control, administrative_positive_control: !!administrative_control) ]
       end
     end
 
@@ -322,7 +322,7 @@ module F0Access
       sockets = []
       ws = WebSocket.new("ws://web:4000/cable", cookie: owner[:cookie])
       sockets << ws
-      check("ws/owner/handshake") { [ws.wait { |s| s.event?("welcome") }, {}] }
+      check("ws/owner/handshake") { [ ws.wait { |s| s.event?("welcome") }, {} ] }
       # Tampering must be tested while the original SQL session and cookie are
       # live. Revoking first would let an ignored modification pass this probe.
       { anonymous: nil, tampered: tampered_cookie(owner[:cookie]) }.each do |name, cookie|
@@ -331,7 +331,7 @@ module F0Access
           s = WebSocket.new("ws://web:4000/cable", cookie: cookie)
           sockets << s
           welcome = s.wait { |client| client.event?("welcome") }
-          [!welcome && (s.closed? || s.event?("disconnect")), { welcome: welcome, owner_session_live: owner[:row].reload.revoked_at.nil? }]
+          [ !welcome && (s.closed? || s.event?("disconnect")), { welcome: welcome, owner_session_live: owner[:row].reload.revoked_at.nil? } ]
         end
       end
       page = request("/company/sessions", identity: owner, headers: { "X-Inertia" => "true" })
@@ -339,62 +339,62 @@ module F0Access
       signed = JSON.parse(page.body).fetch("props").fetch("cableStream")
       identifier = JSON.generate(channel: "InertiaCable::StreamChannel", signed_stream_name: signed)
       ws.send_json(command: "subscribe", identifier: identifier)
-      check("ws/owner/subscription") { [ws.wait { |s| s.event?("confirm_subscription") }, {}] }
+      check("ws/owner/subscription") { [ ws.wait { |s| s.event?("confirm_subscription") }, {} ] }
       check("ws/owner/broadcast-delivery") do
         stream = InertiaCable.signed_stream_verifier.verified(signed)
         raise "stream signature failed" unless stream
         ActionCable.server.broadcast(stream, { synthetic_access_probe: true })
         received = ws.wait { |s| s.messages.any? { |m| JSON.parse(m).dig("message", "synthetic_access_probe") == true } }
-        [received, { trusted_probe_delivered: received }]
+        [ received, { trusted_probe_delivered: received } ]
       end
       ws.send_json(command: "subscribe", identifier: JSON.generate(channel: "InertiaCable::StreamChannel", signed_stream_name: signed + "tamper"))
-      check("ws/tampered-stream/rejected") { [ws.wait { |s| s.event?("reject_subscription") }, {}] }
+      check("ws/tampered-stream/rejected") { [ ws.wait { |s| s.event?("reject_subscription") }, {} ] }
       # A signed stream is a bearer capability upstream; observe cross-tenant use
       # honestly. Do not replace the gem channel with a lab policy.
       foreign = WebSocket.new("ws://web:4000/cable", cookie: @identities[:foreign][:cookie])
       sockets << foreign
-      check("ws/foreign/handshake-positive") { [foreign.wait { |s| s.event?("welcome") }, {}] }
+      check("ws/foreign/handshake-positive") { [ foreign.wait { |s| s.event?("welcome") }, {} ] }
       foreign.send_json(command: "subscribe", identifier: identifier)
       check("ws/foreign/leaked-stream-denied") do
         confirmed = foreign.wait { |s| s.event?("confirm_subscription") }
-        [!confirmed && foreign.event?("reject_subscription"), { cross_tenant_subscription_confirmed: confirmed }]
+        [ !confirmed && foreign.event?("reject_subscription"), { cross_tenant_subscription_confirmed: confirmed } ]
       end
       UserSession.revoke_all_for!(owner[:user])
-      check("ws/live/revocation") { [ws.wait { |s| s.event?("disconnect") || s.closed? }, {}] }
+      check("ws/live/revocation") { [ ws.wait { |s| s.event?("disconnect") || s.closed? }, {} ] }
       { revoked: owner[:cookie] }.each do |name, cookie|
         s = WebSocket.new("ws://web:4000/cable", cookie: cookie)
         sockets << s
         check("ws/#{name}/handshake-denied") do
           welcome = s.wait { |client| client.event?("welcome") }
-          [!welcome && (s.closed? || s.event?("disconnect")), { welcome: welcome }]
+          [ !welcome && (s.closed? || s.event?("disconnect")), { welcome: welcome } ]
         end
       end
       unchanged("api/revoked/delete") do
         r = request("/api/v1/terminal_sessions/#{@terminal.id}", identity: owner, method: :delete)
-        [r, r.code == "401"]
+        [ r, r.code == "401" ]
       end
       unchanged("mcp/revoked/personal-token") do
         # Revocation clears the digest; do not regenerate after revocation.
         r = rpc("tools/list", token: @old_token)
-        [r, r.code == "401"]
+        [ r, r.code == "401" ]
       end
       unchanged("mcp/revoked/call-before-effect") do
         r = rpc("tools/call", token: @old_token, name: "create_agent",
                 arguments: { project_id: @project.id, name: "revoked", title: "Forbidden", persona: "Synthetic" })
-        [r, r.code == "401"]
+        [ r, r.code == "401" ]
       end
       check("ui/revoked/projects") do
         r = request("/company/projects", identity: owner, headers: { "X-Inertia" => "true" })
-        [%w[302 303 401].include?(r.code), { http: r.code.to_i }]
+        [ %w[302 303 401].include?(r.code), { http: r.code.to_i } ]
       end
       check("gateway/revoked/ttyd") do
         r = request("/t/#{@terminal.route_token}/tty/", host: "gateway", port: 8080, identity: owner)
-        [r.code == "401", { http: r.code.to_i }]
+        [ r.code == "401", { http: r.code.to_i } ]
       end
       unchanged("forward-auth/revoked/tty") do
         r = request("/api/v1/internal/ws_auth", identity: owner,
                     headers: { "X-Forwarded-Uri" => "/t/#{@terminal.route_token}/tty/ws" })
-        [r, r.code == "401"]
+        [ r, r.code == "401" ]
       end
     ensure
       sockets&.each(&:close)
@@ -419,7 +419,7 @@ module F0Access
       Rails.application.config.before_initialize do
         Rails.application.config.action_controller.allow_forgery_protection = true
         Rails.application.config.action_cable.cable = { "adapter" => "async" }
-        Rails.application.config.action_cable.allowed_request_origins = ["http://web:4000"]
+        Rails.application.config.action_cable.allowed_request_origins = [ "http://web:4000" ]
       end
       Rails.application.initialize!
       require_relative "../../../app/channels/inertia_cable/stream_channel"
@@ -466,7 +466,7 @@ module F0Access
         fs_resp = request("/t/#{@terminal.route_token}/fs/", host: "gateway", port: 8080, identity: owner)
         upload_resp = request("/t/#{@terminal.route_token}/upload/", host: "gateway", port: 8080, identity: owner)
         ok = ide_resp.code == "200" && fs_resp.code == "200" && upload_resp.code == "200"
-        [ok, { ide: ide_resp.code.to_i, fs: fs_resp.code.to_i, upload: upload_resp.code.to_i, verified_processes: %w[ide fs upload] }]
+        [ ok, { ide: ide_resp.code.to_i, fs: fs_resp.code.to_i, upload: upload_resp.code.to_i, verified_processes: %w[ide fs upload] } ]
       end
       cable_and_revocation
     rescue StandardError => e
@@ -485,7 +485,7 @@ module F0Access
         app/channels/application_cable/connection.rb app/channels/inertia_cable/stream_channel.rb app/controllers/mcp_controller.rb
         docker/traefik/dynamic.yml tools/f0/access/run.rb tools/f0/access/session_cookie.rb
         tools/f0/access/mcp_evidence.rb tools/f0/access/web_socket.rb tools/f0/access/readiness.rb].to_h do |path|
-        [path, File.file?(path) ? Digest::SHA256.file(path).hexdigest : "MISSING"]
+        [ path, File.file?(path) ? Digest::SHA256.file(path).hexdigest : "MISSING" ]
       end
       File.write("/lab-state/report.json", JSON.pretty_generate(report) + "\n")
     end

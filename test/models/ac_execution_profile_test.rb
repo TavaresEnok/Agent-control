@@ -10,7 +10,7 @@ class AcExecutionProfileTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_rev_1",
       content: {
-        "model_chain" => ["claude-sonnet-4.6", "gpt-5.2"],
+        "model_chain" => [ "claude-sonnet-4.6", "gpt-5.2" ],
         "effort_limits" => { "max" => "high" },
         "active_accounts" => [],
         "chain_rules" => []
@@ -68,29 +68,26 @@ class AcExecutionProfileTest < ActiveSupport::TestCase
   end
 
   test "eligibility_verdict produces explainable verdict" do
-    profile = AcExecutionProfile.create!(
-      company: @company,
-      ac_policy_revision: @policy,
-      profile_key: "prof-verdict-test",
-      role: :programmer,
-      cli_adapter: :claude_code,
-      model_id: "claude-sonnet-4.6",
-      effort_level: :high,
-      chain_position: 1,
-      state: :active
-    )
-
+    user = create(:user, company: @company)
+    credential = create(:agent_credential, company: @company, user: user, agent_type: "claude_code")
+    @policy.update!(content: @policy.content.merge("model_chain" => [ "claude-sonnet-4.6" ]))
+    profile = AcExecutionProfile.create!(company: @company, ac_policy_revision: @policy,
+      profile_key: "prof-verdict-test", role: :programmer, cli_adapter: :claude_code,
+      model_id: "claude-sonnet-4.6", effort_level: :high, chain_position: 1, state: :active,
+      agent_credential: credential, selection_criteria: { "eligibility" => {
+        "status" => "documented_supported", "model_id" => "claude-sonnet-4.6", "cli_adapter" => "claude_code",
+        "efforts" => [ "high" ], "valid_until" => 1.hour.from_now.iso8601 } })
+    assert @policy.publish!(by_user: user)
     verdict = profile.eligibility_verdict
     assert verdict[:eligible]
     assert_empty verdict[:reasons]
     assert_equal "prof-verdict-test", verdict[:profile_key]
     assert_equal 1, verdict[:policy_revision_number]
 
-    # Desabilitar com motivo
     profile.update!(state: :disabled, ineligibility_reason: "Depreciado por política de segurança")
     disabled_verdict = profile.eligibility_verdict
     assert_not disabled_verdict[:eligible]
-    assert_includes disabled_verdict[:reasons].first, "Perfil desabilitado"
+    assert_includes disabled_verdict[:reasons].first, "Perfil não está ativo"
   end
 
   test "substitution_chain orders active profiles by position" do
@@ -118,7 +115,7 @@ class AcExecutionProfileTest < ActiveSupport::TestCase
       state: :active
     )
 
-    chain = AcExecutionProfile.substitution_chain(:programmer)
-    assert_equal [p1, p2], chain.to_a
+    chain = AcExecutionProfile.where(ac_policy_revision: @policy).substitution_chain(:programmer)
+    assert_equal [ p1, p2 ], chain.to_a
   end
 end

@@ -55,9 +55,9 @@ module Workflows
       requested_by = input.requested_by || "temporal"
       origin = input.origin || "temporal"
       profile_id = input.execution_profile_id
-      exit_code = input.exit_code || 0
-      output = input.output || {}
-      error = input.error || {}
+      nil
+      input.output || {}
+      input.error || {}
 
       execution_id = nil
 
@@ -121,16 +121,20 @@ module Workflows
         end
 
         # Etapa 4: Reconciliação do término de processo com validação de época (§11.3)
-        rec_result = execute_activity(
-          activities.ac_reconcile_execution_activity,
-          {
-            execution_id: execution_id,
-            epoch: epoch,
-            exit_code: exit_code,
-            output: output,
-            error: error
-          }
-        )
+        loop do
+          Temporalio::Workflow.wait_condition { !@paused || @cancelled } if @paused
+          if @cancelled
+            handle_early_cancellation(execution_id)
+            return early_cancellation_response(execution_id, operation_id)
+          end
+          rec_result = execute_activity(
+            activities.ac_reconcile_execution_activity,
+            { execution_id: execution_id, epoch: epoch }
+          )
+          break if %w[completed failed cancelled].include?(rec_result["state"])
+
+          Temporalio::Workflow.sleep(5)
+        end
 
         # Etapa 5: Liberação segura de capacidade e worktree lease (RF-47)
         execute_activity(
@@ -156,7 +160,7 @@ module Workflows
               activities.ac_release_capacity_activity,
               { execution_id: execution_id }
             )
-          rescue StandardError => e
+          rescue StandardError
             # Em caso de falha na atividade de release durante ensure, não mascarar o erro original
           end
         end

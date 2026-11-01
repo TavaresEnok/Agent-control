@@ -26,6 +26,10 @@ class SessionAdmissionBudget
     @company_limits = Billing::EffectiveCapacity.for_companies
     @occupied_by_key = occupied.joins(:session_admission_pool)
                                .group("session_admission_pools.key").count
+    AcCapacityGrant.active_or_granted.joins(:ac_task).group("ac_tasks.project_id").sum(:quantity).each do |project_id, count|
+      key = "project:#{project_id}"
+      @occupied_by_key[key] = @occupied_by_key.fetch(key, 0) + count
+    end
     @project_company = resolve_companies(pool_keys)
 
     @company_headroom = {}

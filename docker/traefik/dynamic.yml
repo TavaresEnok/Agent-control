@@ -1,5 +1,9 @@
 http:
   middlewares:
+    terminal-proxy-proof:
+      headers:
+        customRequestHeaders:
+          X-Aixle-Proxy-Proof: '{{ env "TERMINAL_PROXY_PROOF" }}'
     terminal-auth:
       forwardAuth:
         # Traefik renders this file as a Go template; PORT comes from the
@@ -8,6 +12,7 @@ http:
         address: 'http://web:{{ env "PORT" | default "4000" }}/api/v1/internal/ws_auth'
         # Cookie/Authorization are replaced by what ws_auth answers, so the
         # agent container never receives the viewer's Rails session cookie.
+        trustForwardHeader: false
         authResponseHeadersRegex: "^(X-.*|Cookie|Authorization)$"
         # The sandbox host's pass (ContainerTicket), when containers are served
         # from a host of their own.

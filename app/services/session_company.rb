@@ -35,6 +35,26 @@ class SessionCompany
       CompanyMembership.find_by(user_id: session.user_id, company_id: company_id)
     end
 
+    # An explicit identity is authoritative, even when invalid. Legacy sessions may
+    # infer an identity only when exactly one credential of that type exists.
+    def credential_for(session, agent_type: nil)
+      return nil unless session
+
+      type = agent_type || session.agent_type
+      return nil if type.blank? || session.agent_type.to_s != type.to_s
+
+      scope = agent_credentials_for(session).where(agent_type: type)
+      config = session.session_config || {}
+      if config.key?("agent_credential_id")
+        return scope.find_by(id: config["agent_credential_id"]) if config["agent_credential_id"].present?
+
+        return nil
+      end
+
+      candidates = scope.limit(2).to_a
+      candidates.one? ? candidates.first : nil
+    end
+
     # Credentials usable by this session, scoped to its company.
     def agent_credentials_for(session)
       company_id = company_id_for(session)

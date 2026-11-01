@@ -42,6 +42,7 @@ module Api
         OWNER_ONLY_SURFACES = %w[tty ide upload].freeze
 
         def show
+          return head :forbidden unless TerminalOriginAuth.proxy_authorized?(request.headers["X-Aixle-Proxy-Proof"])
           route_token, surface = extract_route
           unless route_token
             Rails.logger.debug("[WsAuth] No route_token found in request")
@@ -75,6 +76,9 @@ module Api
             return head :forbidden
           end
 
+          if surface.in?(%w[tty view])
+            response.set_header("Authorization", TerminalOriginAuth.authorization(terminal_session, surface))
+          end
           response.set_header("X-User-Id", viewer.id.to_s)
           response.set_header("X-Session-Id", terminal_session.id.to_s)
           response.set_header("X-Forwarded-User", viewer.id.to_s)
@@ -82,6 +86,8 @@ module Api
           issue_sandbox_cookie(viewer, terminal_session) if @ticket_from_url
 
           head :ok
+        rescue TerminalOriginAuth::ConfigurationError
+          head :service_unavailable
         end
 
         private

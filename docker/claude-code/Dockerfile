@@ -95,6 +95,7 @@ WORKDIR /opt/watcher
 COPY base/watcher/package.json ./
 RUN npm install --production && npm cache clean --force
 COPY base/watcher/index.js ./
+COPY base/watcher/connection-lease.js base/watcher/ide-proxy.js ./
 
 # AWS SDK credential_process helper — the container's only route to cloud credentials.
 COPY base/cloud/aixle-aws-creds /usr/local/bin/aixle-aws-creds

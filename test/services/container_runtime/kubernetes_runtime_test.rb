@@ -39,6 +39,12 @@ module ContainerRuntime
 
 
 
+    test "refuses terminal creation without protected Kubernetes proxy proof" do
+      assert_raises(ArgumentError) do
+        @runtime.create_container(env_vars: [ "TTYD_ORIGIN_CREDENTIAL=fixture" ])
+      end
+    end
+
     test "pull_image raises when image blank" do
       assert_raises(ArgumentError) { @runtime.pull_image("") }
       assert_raises(ArgumentError) { @runtime.pull_image(nil) }

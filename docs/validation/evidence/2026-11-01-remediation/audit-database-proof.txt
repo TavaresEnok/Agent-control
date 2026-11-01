@@ -1,0 +1,1 @@
+PASS: restricted role ready; UPDATE/DELETE/TRUNCATE blocked; owner role refused

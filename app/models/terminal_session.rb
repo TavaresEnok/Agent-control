@@ -297,7 +297,7 @@ class TerminalSession < ApplicationRecord
   # per company, so an unscoped read hands a container another tenant's tokens (and
   # bills that tenant for the tokens it spends).
   def session_credential
-    SessionCompany.agent_credentials_for(self).find_by(agent_type: agent_type)
+    SessionCompany.credential_for(self)
   end
 
   # The session's entitled tool set: explicitly attached tools, the project

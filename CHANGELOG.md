@@ -13,6 +13,14 @@ governance, community health — carry none.
 
 ## [Unreleased]
 
+### Fixed
+- **Workflows**: Agent Control now requires published plans, explicit eligible accounts,
+  verified runtime outcomes and independent review of the exact Git artifact. Quota
+  failures preserve work without spending quality retries; cancellation fences new starts.
+- **Sessions & Runs**: Account selection fails closed when ambiguous. Terminal origins require
+  proxy authorization and per-session credentials; operators must provision the new keys
+  and rebuild agent images before enabling terminals.
+
 ### Added
 - **Workflows**: a session in the workflow builder has a **Reasoning Effort**
   next to its model, and the new-session form has one too. It appears once a

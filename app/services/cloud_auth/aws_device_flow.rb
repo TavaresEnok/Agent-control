@@ -188,8 +188,11 @@ module CloudAuth
       company_id = state["company_id"]
       raise Error, "this authorization is not bound to a company" if company_id.blank?
 
-      credential = AgentCredential.find_or_initialize_by(
-        user_id: @user.id, company_id: company_id, agent_type: "claude_code"
+      credentials = AgentCredential.where(user_id: @user.id, company_id: company_id, agent_type: "claude_code").limit(2).to_a
+      raise Error, "Choose an account before connecting AWS" if credentials.size > 1
+
+      credential = credentials.first || AgentCredential.new(
+        user_id: @user.id, company_id: company_id, agent_type: "claude_code", account_slug: "default"
       )
       current = credential.persisted? ? credential.config_data : {}
 

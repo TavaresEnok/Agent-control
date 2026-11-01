@@ -9,57 +9,38 @@ class AcSharedCapacityCoordinatorService
   class CoordinatorError < StandardError; end
   class SharedCapacityExceededError < CoordinatorError; end
   class StaleBrokerSnapshotError < CoordinatorError; end
+  class UncertainReservationError < CoordinatorError; end
 
   # Tolerância máxima de idade para snapshot de cota de broker externo (segundos)
   MAX_SNAPSHOT_AGE_SECONDS = 60
 
   class << self
-    def coordinate_shared_reservation!(company:, account_key:, requested_slots: 1, external_broker_snapshot:)
+    def coordinate_shared_reservation!(company:, account_key:, operation_id:, requested_slots: 1, external_broker_snapshot:)
       raise ArgumentError, "company é obrigatório" if company.blank?
       raise ArgumentError, "account_key é obrigatório" if account_key.blank?
+      raise ArgumentError, "operation_id é obrigatório" if operation_id.blank?
+      raise ArgumentError, "requested_slots inválido" unless requested_slots.is_a?(Integer) && requested_slots.positive?
       raise ArgumentError, "external_broker_snapshot é obrigatório" if external_broker_snapshot.blank?
 
-      # 1. Validação de frescor e integridade do snapshot do broker legado (§21.5, T28)
       validate_broker_snapshot!(external_broker_snapshot, account_key)
+      authority = Rails.application.config.try(:ac_capacity_authority)
+      unless authority && authority.respond_to?(:reserve_shared!) && authority.respond_to?(:verify_shared_receipt!)
+        raise CoordinatorError, "Autoridade compartilhada verificável não configurada"
+      end
+      begin
+        receipt = authority.reserve_shared!(company: company, account_key: account_key, operation_id: operation_id,
+          requested_slots: requested_slots, snapshot: external_broker_snapshot)
+        valid = receipt.is_a?(Hash) && receipt["operation_id"] == operation_id &&
+                receipt["account_key"] == account_key && receipt["quantity"] == requested_slots &&
+                receipt["state"] == "granted" &&
+                authority.verify_shared_receipt!(company: company, receipt: receipt) == true
+        raise UncertainReservationError, "Recibo de reserva inválido" unless valid
 
-      external_active_slots = external_broker_snapshot["active_slots"].to_i
-      max_global_slots = external_broker_snapshot["max_slots"].to_i
+        receipt
+      rescue StandardError => e
+        raise e if e.is_a?(UncertainReservationError)
 
-      # 2. Contabilização atômica de slots locais no Agent Control com lock pessimista (BUG-P2-02)
-      AcCapacityGrant.transaction do
-        grants_scope = AcCapacityGrant.active_or_granted
-                                      .where(company: company)
-                                      .lock("FOR UPDATE")
-
-        # Se houver concessões vinculadas à conta específica, filtra por account_key
-        account_grants = grants_scope.where("reconciliation_data->>'account_key' = ?", account_key)
-        locked_records = account_grants.exists? ? account_grants.to_a : grants_scope.to_a
-        local_active_slots = locked_records.size
-
-        total_requested = local_active_slots + external_active_slots + requested_slots.to_i
-
-        if total_requested > max_global_slots
-          raise SharedCapacityExceededError,
-                "Capacidade compartilhada excedida para #{account_key}: local=#{local_active_slots}, " \
-                "legado=#{external_active_slots}, pedido=#{requested_slots}, teto=#{max_global_slots} (T28)"
-        end
-
-        # 3. Emite concessão coordenada com autoridade única
-        reservation_token = "coord_#{account_key}_#{SecureRandom.hex(8)}"
-
-        {
-          authorized: true,
-          account_key: account_key,
-          reservation_token: reservation_token,
-          allocated_slots: requested_slots,
-          global_usage: {
-            local_active_slots: local_active_slots,
-            external_active_slots: external_active_slots,
-            max_global_slots: max_global_slots,
-            remaining_slots: max_global_slots - total_requested
-          },
-          coordinated_at: Time.current.iso8601
-        }
+        raise UncertainReservationError, "Resultado de reserva incerto para operação #{operation_id}; reconciliação necessária"
       end
     end
 
@@ -75,7 +56,7 @@ class AcSharedCapacityCoordinatorService
       end
 
       snapshot_time = Time.zone.parse(snapshot["snapshot_timestamp"].to_s) rescue nil
-      if snapshot_time.nil? || (Time.current - snapshot_time) > MAX_SNAPSHOT_AGE_SECONDS
+      if snapshot_time.nil? || snapshot_time > Time.current || (Time.current - snapshot_time) > MAX_SNAPSHOT_AGE_SECONDS
         raise StaleBrokerSnapshotError, "Snapshot do broker legado expirado ou desatualizado (> #{MAX_SNAPSHOT_AGE_SECONDS}s): recusa por segurança (T28)"
       end
 

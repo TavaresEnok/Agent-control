@@ -49,6 +49,13 @@ module Activities
       # behaviour — is what let a pinned token expire unattempted.
       def refresh_held(credential)
         holders = credential.live_holder_sessions.to_a
+        ambiguous = TerminalSession.active.where(user_id: credential.user_id, company_id: credential.company_id,
+          agent_type: credential.agent_type).where.not("jsonb_exists(session_config, 'agent_credential_id')")
+        if AgentCredential.where(user_id: credential.user_id, company_id: credential.company_id,
+          agent_type: credential.agent_type).limit(2).count > 1 && ambiguous.exists?
+          @skipped_busy += 1
+          return
+        end
         if credential.rotating_refresh? && !holders.all? { |session| parked?(session) }
           @skipped_busy += 1
           log(:info, "credential #{credential.id} (#{credential.agent_type}) left to its container: " \

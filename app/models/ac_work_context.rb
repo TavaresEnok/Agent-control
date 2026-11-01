@@ -73,13 +73,45 @@ class AcWorkContext < ApplicationRecord
     metadata["active_manager_identity"]
   end
 
-  def assign_active_manager!(identity:)
+  def assign_active_manager!(identity:, expected_epoch: nil)
     raise ArgumentError, "Identidade do gerente é obrigatória (RF-04)" if identity.blank?
 
-    update!(metadata: metadata.merge(
-      "active_manager_identity" => identity.to_s,
-      "manager_assigned_at" => Time.current.iso8601
-    ))
+    with_lock do
+      current = metadata.fetch("manager_epoch", 0).to_i
+      return current if active_manager_identity == identity.to_s
+      if active_manager_identity.present?
+        raise ActiveRecord::StaleObjectError, "Troca de gerente requer reconciliação externa"
+      end
+      if expected_epoch.present? && expected_epoch.to_i != current
+        raise ActiveRecord::StaleObjectError, "Época de gerente divergente"
+      end
+      pending_executions = AcExecution.where(ac_work_context_id: id)
+      if pending_executions.where.not(state: %w[completed failed cancelled]).exists? ||
+         pending_executions.where.not(worktree_lease_token: nil).exists? ||
+         AcCapacityGrant.joins(ac_task: :ac_plan).where(ac_plans: { ac_work_context_id: id }, state: %w[granted active]).exists?
+        raise ActiveRecord::StaleObjectError, "Execuções ou recursos anteriores exigem reconciliação"
+      end
+      plan_ids = AcPlan.where(ac_work_context_id: id).pluck(:id).map(&:to_s)
+      previous_launches = TriggerEvent.where(company_id: company_id, source: "agent_control.plan.start")
+      previous_launches = previous_launches.where("data ->> 'plan_id' IN (?)", plan_ids) if plan_ids.any?
+      unreconciled = plan_ids.any? && previous_launches.any? do |event|
+        previous_plan = AcPlan.find_by(id: event.data["plan_id"], ac_work_context_id: id)
+        !previous_plan || !AcPlanLaunchService.terminal_ack?(plan: previous_plan,
+          identity: event.data["manager_identity"], epoch: event.data["manager_epoch"])
+      end
+      raise ActiveRecord::StaleObjectError, "Lançamento anterior exige reconciliação" if unreconciled
+      update!(metadata: metadata.merge("active_manager_identity" => identity.to_s,
+        "manager_epoch" => current + 1, "manager_assigned_at" => Time.current.iso8601))
+      current + 1
+    end
+  end
+
+  def authorize_manager!(identity:, epoch:)
+    unless active? && identity.present? && epoch.present? && active_manager_identity.present? &&
+           identity.to_s == active_manager_identity && epoch.to_s == metadata["manager_epoch"].to_s
+      raise ActiveRecord::StaleObjectError, "Gerente sem autoridade vigente"
+    end
+    true
   end
 
   private

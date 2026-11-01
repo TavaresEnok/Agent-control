@@ -51,13 +51,12 @@ class AcQuotaObservation < ApplicationRecord
   scope :valid_now, -> { where("valid_until IS NULL OR valid_until > ?", Time.current) }
   scope :blocking, -> { where(quota_state: %w[exhausted auth_error]) }
 
-  # Observação mais recente e ainda válida para uma conta/cli/modelo
+  # The newest evidence supersedes older observations even after it expires.
   def self.latest_for(agent_credential:, cli_adapter:, model_scope:)
     where(agent_credential: agent_credential,
           cli_adapter: cli_adapter,
           model_scope: model_scope)
-      .valid_now
-      .order(observed_at: :desc)
+      .order(observed_at: :desc, id: :desc)
       .first
   end
 

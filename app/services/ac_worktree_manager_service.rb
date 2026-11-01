@@ -1,161 +1,102 @@
 # frozen_string_literal: true
 
-require "open3"
+require "digest"
 require "fileutils"
+require "open3"
 require "securerandom"
 
-# F2 — Isolamento de Worktree e Escritor Único (AC Domain)
-#
-# §11.3.2: Autoridade de escrita da worktree:
-# - Uma worktree de implementação tem um escritor autorizado por vez (RF-48).
-# - Antes de entregar a mesma cópia a outra tentativa, neutraliza ou confirma
-#   o término do acesso de escrita anterior.
-# - Se não for possível neutralizar o escritor antigo, mantém a cópia em quarentena
-#   e prepara outra worktree isolada, sem compartilhar diretório gravável.
 class AcWorktreeManagerService
   class ActiveWriterConflictError < StandardError; end
   class GitError < StandardError; end
+  class UnsafePathError < StandardError; end
 
   class << self
     def acquire_lease!(execution:, base_path: nil, repo_path: nil)
-      base_path ||= Rails.application.config.try(:ac_worktree_base_dir) ||
-                    ENV["AC_WORKTREE_BASE_DIR"] ||
-                    "/tmp/ac_worktrees"
+      base_path ||= Rails.application.config.try(:ac_worktree_base_dir) || Settings.agent_control.worktree_base_dir
       repo_path ||= resolve_repo_path(execution)
-      target_path = execution.worktree_path.presence || File.join(base_path, execution.ac_task_id.to_s, execution.operation_id)
+      raise UnsafePathError, "operation_id ausente" if execution.operation_id.blank?
 
-      AcExecution.transaction do
-        # Verifica se há outro escritor ativo no mesmo caminho ou tarefa
-        conflicting_writer = AcExecution
-          .where(ac_task_id: execution.ac_task_id)
-          .where.not(id: execution.id)
-          .where.not(worktree_lease_token: nil)
-          .lock("FOR UPDATE")
-          .first
+      AcExecutionFence.synchronize(execution) do
+        next execution.worktree_lease_token if execution.worktree_lease_token.present?
+        raise ActiveWriterConflictError, "Worktree anterior deve ser preservada" if execution.worktree_path.present?
 
-        if conflicting_writer.present?
-          # Tenta neutralizar o escritor antigo (§11.3.2)
-          if neutralizable?(conflicting_writer)
-            neutralize_writer!(conflicting_writer, repo_path: repo_path)
-          else
-            # Não é possível neutralizar: coloca diretório em quarentena e cria novo caminho isolado
-            target_path = quarantine_and_diverge!(conflicting_writer, target_path)
-          end
+        root = File.expand_path(base_path)
+        FileUtils.mkdir_p(root)
+        root = File.realpath(root)
+        task_dir = File.join(root, execution.ac_task_id.to_s)
+        raise UnsafePathError, "Diretório de tarefa é symlink" if File.symlink?(task_dir)
+        FileUtils.mkdir_p(task_dir)
+        raise UnsafePathError, "Diretório fora da raiz" unless File.realpath(task_dir).start_with?("#{root}/")
+
+        name = Digest::SHA256.hexdigest("#{execution.id}:#{execution.operation_id}:#{SecureRandom.hex(16)}")
+        target = File.join(task_dir, name)
+        raise GitError, "Repositório local obrigatório" unless repo_path.present? && Dir.exist?(repo_path)
+
+        repo = File.realpath(repo_path)
+        requested = requested_commit(execution)
+        commit = git!("-C", repo, "rev-parse", "--verify", "--end-of-options", "#{requested}^{commit}").strip
+        raise GitError, "Identidade de commit inválida" unless commit.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
+
+        AcSafeGit.with_repository(repo) do |safe_source|
+          git!("clone", "--no-hardlinks", "--no-local", "--no-checkout", "--", safe_source, target)
         end
+        # A detached commit may not be reachable from any advertised branch.
+        AcSafeGit.with_repository(repo) do |safe_source|
+          git!("-C", target, "fetch", "--no-tags", "--no-write-fetch-head", "--", safe_source, commit)
+        end
+        git!("-C", target, "-c", "core.hooksPath=/dev/null", "checkout", "--detach", commit, "--")
+        actual = git!("-C", target, "rev-parse", "--verify", "HEAD^{commit}").strip
+        raise GitError, "Commit do clone divergente" unless actual == commit
+        execution.metadata = (execution.metadata || {}).merge("base_commit_sha" => commit)
 
         token = SecureRandom.hex(16)
-
-        # Criação física de worktree Git caso exista repositório configurado no disco
-        if repo_path.present? && Dir.exist?(File.join(repo_path, ".git"))
-          FileUtils.mkdir_p(File.dirname(target_path))
-          if Dir.exist?(target_path)
-            Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", target_path)
-            FileUtils.rm_rf(target_path)
-          end
-
-          base_commit = execution.ac_task&.metadata&.dig("base_commit_sha") ||
-                        execution.ac_task&.inputs&.dig("base_commit") ||
-                        "HEAD"
-          _out, err, status = Open3.capture3("git", "-C", repo_path, "worktree", "add", "--detach", target_path, base_commit)
-          unless status.success?
-            raise GitError, "Falha física ao alocar git worktree no caminho #{target_path}: #{err}"
-          end
-        else
-          FileUtils.mkdir_p(target_path)
-        end
-
-        execution.acquire_worktree_lease!(token, path: target_path)
+        execution.acquire_worktree_lease!(token, path: target)
         token
       end
     end
 
+    # Caller must independently prove that the writer has stopped. Artifacts stay
+    # in place; retention and deletion require a separate ownership-aware policy.
     def release_lease!(execution:, repo_path: nil)
-      repo_path ||= resolve_repo_path(execution)
-      target_path = execution.worktree_path
+      return if execution.worktree_lease_token.blank?
 
-      # Finaliza qualquer subprocesso ainda ativo antes de manipular o diretório (§11.3.2, DEF-01)
-      terminate_active_process!(execution)
-
-      if repo_path.present? && Dir.exist?(File.join(repo_path, ".git")) && target_path.present?
-        Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", target_path)
-        Open3.capture3("git", "-C", repo_path, "worktree", "prune")
+      receipt = AcRuntimeSupervisorService.status!(execution: execution)
+      unless %w[completed failed not_started].include?(receipt["state"])
+        raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Término do escritor não comprovado"
       end
-
-      FileUtils.rm_rf(target_path) if target_path.present? && Dir.exist?(target_path)
       execution.revoke_worktree_lease!
     end
 
     private
 
-    def terminate_active_process!(execution)
-      pid = execution.metadata&.dig("pid")&.to_i
-      return unless pid.present? && pid > 0
-
-      begin
-        Process.kill(0, pid)
-        begin
-          Process.kill("-TERM", pid)
-        rescue Errno::ESRCH, Errno::EPERM
-          Process.kill("TERM", pid) rescue nil
+    def requested_commit(execution)
+      role = execution.ac_execution_profile&.role.to_s
+      artifact = execution.metadata&.dig("source_artifact", "commit_sha")
+      if %w[reviewer qa].include?(role)
+        unless artifact.to_s.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
+          raise GitError, "Commit do artefato de revisão ausente ou inválido"
         end
-
-        sleep 0.05
-
-        begin
-          Process.kill(0, pid)
-          begin
-            Process.kill("-KILL", pid)
-          rescue Errno::ESRCH, Errno::EPERM
-            Process.kill("KILL", pid) rescue nil
-          end
-        rescue Errno::ESRCH
-          # Finalizado com sucesso
-        end
-      rescue Errno::ESRCH, Errno::EPERM
-        # Já não existe ou sem permissão
+        return artifact
       end
+      value = execution.metadata&.dig("base_commit_sha") || execution.ac_task&.metadata&.dig("base_commit_sha") ||
+              execution.ac_task&.inputs&.dig("base_commit") || "HEAD"
+      raise GitError, "Referência de commit inválida" if value.to_s.blank? || value.to_s.start_with?("-") || value.to_s.include?("\0")
+      value.to_s
+    end
+
+    def git!(*args)
+      out, err, status = AcSafeGit.capture(*args)
+      raise GitError, "Git falhou: #{err.to_s.truncate(500)}" unless status.success?
+
+      out
     end
 
     def resolve_repo_path(execution)
-      (execution.ac_task&.project&.respond_to?(:custom_fields) ? execution.ac_task.project.custom_fields&.dig("git_repo_path") : nil) ||
-        execution.ac_work_context&.metadata&.dig("git_repo_path")
-    end
-
-    def neutralizable?(conflicting_writer)
-      # Se o processo antigo falhou, expirou ou foi cancelado, podemos neutralizar a lease
-      return true if conflicting_writer.state_cancelled? || conflicting_writer.state_failed?
-
-      # Se o processo não envia heartbeat há mais de 10 minutos, consideramos neutralizável
-      return true if conflicting_writer.heartbeat_at.present? && conflicting_writer.heartbeat_at < 10.minutes.ago
-
-      false
-    end
-
-    def neutralize_writer!(writer, repo_path: nil)
-      # Finaliza o processo ativo do escritor antigo antes de limpar diretório (§11.3.2, DEF-01)
-      terminate_active_process!(writer)
-
-      if repo_path.present? && Dir.exist?(File.join(repo_path, ".git")) && writer.worktree_path.present?
-        Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", writer.worktree_path)
-        Open3.capture3("git", "-C", repo_path, "worktree", "prune")
+      if %w[reviewer qa].include?(execution.ac_execution_profile&.role.to_s)
+        return execution.metadata["source_repository"]
       end
-      FileUtils.rm_rf(writer.worktree_path) if writer.worktree_path.present? && Dir.exist?(writer.worktree_path)
-
-      writer.update!(
-        worktree_lease_token: nil,
-        state: :cancelled,
-        finished_at: Time.current,
-        error_details: writer.error_details.merge(
-          "neutralized_at" => Time.current.iso8601,
-          "neutralized_by" => "AcWorktreeManagerService — preempted by newer execution"
-        )
-      )
-    end
-
-    def quarantine_and_diverge!(conflicting_writer, original_path)
-      # Gera um caminho isolado em quarentena para a nova tentativa (§11.3.2)
-      quarantine_suffix = "quarantine-#{SecureRandom.hex(4)}"
-      "#{original_path}-#{quarantine_suffix}"
+      (execution.ac_task&.project.respond_to?(:custom_fields) ? execution.ac_task.project.custom_fields&.dig("git_repo_path") : nil) ||
+        execution.ac_work_context&.metadata&.dig("git_repo_path")
     end
   end
 end

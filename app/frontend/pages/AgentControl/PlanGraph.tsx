@@ -1,7 +1,9 @@
 import { Head } from '@inertiajs/react';
 import { Badge, Button, Group, Modal, Stack, Text, Title } from '@mantine/core';
 import { IconPlayerPlay, IconPlayerPause, IconPlayerStop, IconRefresh } from '@tabler/icons-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+
+import { apiFetch } from 'shared/lib/apiFetch';
 
 import classes from './PlanGraph.module.css';
 
@@ -10,7 +12,8 @@ export interface GraphNode {
   task_key: string;
   title: string;
   scope: string;
-  state: 'pending' | 'running' | 'review' | 'integrated' | 'waiting_dependencies' | 'needs_changes' | 'failed' | 'cancelled';
+  state:
+    'pending' | 'running' | 'review' | 'integrated' | 'waiting_dependencies' | 'needs_changes' | 'failed' | 'cancelled';
   assigned_role: string;
   risk_class: string;
   position: number;
@@ -68,10 +71,26 @@ export interface GraphData {
 interface PlanGraphProps {
   plan: GraphData['plan'];
   initialGraph: GraphData;
+  companyId: number;
 }
 
-export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
-  const [graph, setGraph] = useState<GraphData>(initialGraph);
+function snakeKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snakeKeys);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+        snakeKeys(item),
+      ]),
+    );
+  }
+  return value;
+}
+
+export default function PlanGraph({ plan: initialPlan, initialGraph, companyId }: PlanGraphProps) {
+  const plan = snakeKeys(initialPlan) as GraphData['plan'];
+  const [graph, setGraph] = useState<GraphData>(() => snakeKeys(initialGraph) as GraphData);
+  const pendingIntents = useRef<Record<string, string>>({});
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
@@ -79,7 +98,9 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
   const fetchLatestGraph = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/v1/agent_control/dag_graphs/${plan.id}`);
+      const res = await apiFetch(`/api/v1/agent_control/dag_graphs/${plan.id}`, {
+        headers: { 'X-Company-Id': String(companyId) },
+      });
       if (res.ok) {
         const data = await res.json();
         setGraph(data);
@@ -91,23 +112,29 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
     }
   };
 
-  const executePlanCommand = async (commandType: 'advance_dag' | 'pause_plan' | 'resume_plan' | 'cancel_plan', reason?: string) => {
+  const executePlanCommand = async (
+    commandType: 'advance_dag' | 'pause_plan' | 'resume_plan' | 'cancel_plan',
+    reason?: string,
+  ) => {
     setLoading(true);
     setCommandFeedback(null);
-    const intentId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const intentKey = JSON.stringify([commandType, plan.id, reason]);
+    const intentId = (pendingIntents.current[intentKey] ||= crypto.randomUUID());
 
     try {
-      const res = await fetch('/api/v1/agent_control/client_commands', {
+      const res = await apiFetch('/api/v1/agent_control/client_commands', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          company_id: companyId,
           intent_id: intentId,
           command_type: commandType,
-          payload: { plan_id: plan.id, reason }
-        })
+          payload: { plan_id: plan.id, reason },
+        }),
       });
 
       const data = await res.json();
+      if (res.status < 500) delete pendingIntents.current[intentKey];
       if (res.ok) {
         let msg = 'Comando processado com sucesso!';
         if (commandType === 'pause_plan') msg = 'Plano pausado com sucesso!';
@@ -119,7 +146,7 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
       } else {
         setCommandFeedback(`Erro: ${data.error || 'Falha ao processar'}`);
       }
-    } catch (err) {
+    } catch {
       setCommandFeedback('Erro de conexão ao enviar comando operacional');
     } finally {
       setLoading(false);
@@ -128,12 +155,18 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
 
   const getStateBadgeClass = (state: GraphNode['state']) => {
     switch (state) {
-      case 'integrated': return classes.badgeIntegrated;
-      case 'running': return classes.badgeRunning;
-      case 'review': return classes.badgeReview;
-      case 'needs_changes': return classes.badgeNeedsChanges;
-      case 'waiting_dependencies': return classes.badgeWaiting;
-      default: return classes.badgePending;
+      case 'integrated':
+        return classes.badgeIntegrated;
+      case 'running':
+        return classes.badgeRunning;
+      case 'review':
+        return classes.badgeReview;
+      case 'needs_changes':
+        return classes.badgeNeedsChanges;
+      case 'waiting_dependencies':
+        return classes.badgeWaiting;
+      default:
+        return classes.badgePending;
     }
   };
 
@@ -148,12 +181,28 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
             <Group gap="xs" align="center">
-              <Title order={2} size="h3">{plan.title}</Title>
-              {isPlanPaused && <Badge color="orange" variant="filled">Pausado</Badge>}
-              {isPlanCancelled && <Badge color="red" variant="filled">Cancelado</Badge>}
-              {!isPlanPaused && !isPlanCancelled && <Badge color="teal" variant="light">Ativo</Badge>}
+              <Title order={2} size="h3">
+                {plan.title}
+              </Title>
+              {isPlanPaused && (
+                <Badge color="orange" variant="filled">
+                  Pausado
+                </Badge>
+              )}
+              {isPlanCancelled && (
+                <Badge color="red" variant="filled">
+                  Cancelado
+                </Badge>
+              )}
+              {!isPlanPaused && !isPlanCancelled && (
+                <Badge color="teal" variant="light">
+                  Ativo
+                </Badge>
+              )}
             </Group>
-            <Text size="sm" c="dimmed">Chave: {plan.plan_key} • Versão {plan.version}</Text>
+            <Text size="sm" c="dimmed">
+              Chave: {plan.plan_key} • Versão {plan.version}
+            </Text>
           </div>
           <Group gap="xs">
             <Button
@@ -209,7 +258,9 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
                 leftSection={<IconPlayerStop size={14} />}
                 loading={loading}
                 onClick={() => {
-                  if (confirm('Tem certeza que deseja cancelar o plano operacional? Tarefas pendentes serão canceladas.')) {
+                  if (
+                    confirm('Tem certeza que deseja cancelar o plano operacional? Tarefas pendentes serão canceladas.')
+                  ) {
                     executePlanCommand('cancel_plan', 'Cancelamento confirmado pelo operador');
                   }
                 }}
@@ -259,21 +310,45 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
       </header>
 
       <section className={classes.graphArea}>
-        <Title order={4} size="h4">Tarefas e Dependências (RF-50)</Title>
+        <Title order={4} size="h4">
+          Tarefas e Dependências (RF-50)
+        </Title>
 
         {/* Visualizador de Arestas e Fluxo de Dependências DAG (BUG-P2-03) */}
         {graph.edges && graph.edges.length > 0 && (
-          <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(0, 0, 0, 0.03)', borderRadius: '8px' }}>
+          <div
+            style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(0, 0, 0, 0.03)', borderRadius: '8px' }}
+          >
             <Text size="xs" fw={700} c="dimmed" style={{ marginBottom: '0.5rem', textTransform: 'uppercase' }}>
               Grafo Visual de Conexões e Dependências
             </Text>
-            <svg style={{ width: '100%', height: '80px', overflow: 'visible' }}>
+            <svg
+              viewBox="0 0 100 80"
+              preserveAspectRatio="none"
+              style={{ width: '100%', height: '80px', overflow: 'visible' }}
+            >
               <defs>
-                <marker id="arrow-fulfilled" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#12b886" />
+                <marker
+                  id="arrow-fulfilled"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--app-success-fg)" />
                 </marker>
-                <marker id="arrow-pending" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#fa5252" />
+                <marker
+                  id="arrow-pending"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--app-danger-fg)" />
                 </marker>
               </defs>
               {graph.edges.map((edge, idx) => {
@@ -283,14 +358,20 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
                 return (
                   <g key={edge.id || `${edge.source_key}-${edge.target_key}`}>
                     <path
-                      d={`M ${x1}% 20 Q ${(x1 + x2) / 2}% 50 ${x2}% 20`}
+                      d={`M ${x1} 20 Q ${(x1 + x2) / 2} 50 ${x2} 20`}
                       fill="none"
-                      stroke={edge.fulfilled ? '#12b886' : '#fa5252'}
+                      stroke={edge.fulfilled ? 'var(--app-success-fg)' : 'var(--app-danger-fg)'}
                       strokeWidth="2"
                       strokeDasharray={edge.fulfilled ? 'none' : '4'}
                       markerEnd={edge.fulfilled ? 'url(#arrow-fulfilled)' : 'url(#arrow-pending)'}
                     />
-                    <text x={`${(x1 + x2) / 2}%`} y="65" fontSize="10" textAnchor="middle" fill="#666">
+                    <text
+                      x={`${(x1 + x2) / 2}%`}
+                      y="65"
+                      fontSize="10"
+                      textAnchor="middle"
+                      fill="var(--app-text-secondary)"
+                    >
                       {edge.source_key} → {edge.target_key} ({edge.fulfilled ? 'Atendida' : 'Bloqueando'})
                     </text>
                   </g>
@@ -307,17 +388,24 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
             onClick={() => setSelectedNode(node)}
             role="button"
             tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setSelectedNode(node);
+              }
+            }}
           >
             <div className={classes.nodeHeader}>
               <span className={classes.nodeTitle}>{node.title}</span>
               <span className={classes.nodeKey}>{node.task_key}</span>
-              <span className={`${classes.badge} ${getStateBadgeClass(node.state)}`}>
-                {node.state}
-              </span>
+              <span className={`${classes.badge} ${getStateBadgeClass(node.state)}`}>{node.state}</span>
             </div>
 
             <div className={classes.nodeDetails}>
-              <Text size="xs" c="dimmed">Papel: {node.assigned_role} • Risco: {node.risk_class} • Tentativas: {node.attempt_count}/{node.max_attempts}</Text>
+              <Text size="xs" c="dimmed">
+                Papel: {node.assigned_role} • Risco: {node.risk_class} • Tentativas: {node.attempt_count}/
+                {node.max_attempts}
+              </Text>
             </div>
 
             {node.depends_on.length > 0 && (
@@ -344,36 +432,56 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
         {selectedNode && (
           <Stack gap="sm">
             <Group justify="space-between">
-              <Text size="sm" fw={600}>Chave da Tarefa:</Text>
-              <Text size="sm" ff="monospace">{selectedNode.task_key}</Text>
+              <Text size="sm" fw={600}>
+                Chave da Tarefa:
+              </Text>
+              <Text size="sm" ff="monospace">
+                {selectedNode.task_key}
+              </Text>
             </Group>
             <Group justify="space-between">
-              <Text size="sm" fw={600}>Estado:</Text>
-              <span className={`${classes.badge} ${getStateBadgeClass(selectedNode.state)}`}>
-                {selectedNode.state}
-              </span>
+              <Text size="sm" fw={600}>
+                Estado:
+              </Text>
+              <span className={`${classes.badge} ${getStateBadgeClass(selectedNode.state)}`}>{selectedNode.state}</span>
             </Group>
             <Group justify="space-between">
-              <Text size="sm" fw={600}>Papel Atribuído:</Text>
+              <Text size="sm" fw={600}>
+                Papel Atribuído:
+              </Text>
               <Text size="sm">{selectedNode.assigned_role}</Text>
             </Group>
             <Group justify="space-between">
-              <Text size="sm" fw={600}>Classe de Risco:</Text>
+              <Text size="sm" fw={600}>
+                Classe de Risco:
+              </Text>
               <Text size="sm">{selectedNode.risk_class}</Text>
             </Group>
             <Group justify="space-between">
-              <Text size="sm" fw={600}>Tentativas:</Text>
-              <Text size="sm">{selectedNode.attempts_count} de {selectedNode.max_attempts}</Text>
+              <Text size="sm" fw={600}>
+                Tentativas:
+              </Text>
+              <Text size="sm">
+                {selectedNode.attempt_count} de {selectedNode.max_attempts}
+              </Text>
             </Group>
             {selectedNode.approved_commit_sha && (
               <Group justify="space-between">
-                <Text size="sm" fw={600}>Commit Aprovado:</Text>
-                <Text size="sm" ff="monospace">{selectedNode.approved_commit_sha}</Text>
+                <Text size="sm" fw={600}>
+                  Commit Aprovado:
+                </Text>
+                <Text size="sm" ff="monospace">
+                  {selectedNode.approved_commit_sha}
+                </Text>
               </Group>
             )}
             <div>
-              <Text size="sm" fw={600}>Escopo:</Text>
-              <Text size="xs" c="dimmed">{selectedNode.scope}</Text>
+              <Text size="sm" fw={600}>
+                Escopo:
+              </Text>
+              <Text size="xs" c="dimmed">
+                {selectedNode.scope}
+              </Text>
             </div>
           </Stack>
         )}

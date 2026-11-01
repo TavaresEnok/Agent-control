@@ -186,13 +186,17 @@ namespace :api, defaults: { format: :json } do
     end
 
     namespace :agent_control do
-      resources :client_commands, only: [:create]
-      resources :plans, only: [:show] do
+      resources :client_commands, only: [ :create ]
+      resources :templates, only: %i[index show create update destroy]
+      resources :notifications, only: %i[index create] do
+        member { patch :read }
+      end
+      resources :plans, only: [ :show ] do
         member do
           get :graph, to: "dag_graphs#show"
         end
       end
-      resources :dag_graphs, only: [:show]
+      resources :dag_graphs, only: [ :show ]
     end
 
     namespace :internal do

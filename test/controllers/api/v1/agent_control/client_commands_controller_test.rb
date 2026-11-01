@@ -25,6 +25,21 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
     sign_in_as @user
   end
 
+  test "cookie-authenticated commands require a CSRF token" do
+    controller = Api::V1::AgentControl::ClientCommandsController
+    previous = controller.allow_forgery_protection
+    controller.allow_forgery_protection = true
+    assert_no_difference -> { AcClientCommand.count } do
+      post "/api/v1/agent_control/client_commands", params: {
+        company_id: @company.id, intent_id: SecureRandom.uuid, command_type: "create_task", payload: { plan_id: @plan.id }
+      }, as: :json
+    end
+    assert_response :unprocessable_entity
+    assert_equal "Invalid or missing CSRF token", response.parsed_body["error"]
+  ensure
+    controller.allow_forgery_protection = previous
+  end
+
   test "SEC-01: unauthenticated requests are rejected with 401 unauthorized" do
     reset!
     post "/api/v1/agent_control/client_commands", params: {
@@ -63,7 +78,7 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
 
     assert_response :success
     data1 = JSON.parse(response.body)
-    assert_equal false, data1["deduplicated"]
+    refute data1["deduplicated"]
     assert_equal "processed", data1["status"]
     assert data1["result"]["task_id"].present?
 
@@ -76,14 +91,14 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
       command_type: "create_task",
       payload: {
         plan_id: @plan.id,
-        title: "Tarefa Via API (Retry)",
+        title: "Tarefa Via API",
         task_key: "task-http-1"
       }
     }, as: :json
 
     assert_response :success
     data2 = JSON.parse(response.body)
-    assert_equal true, data2["deduplicated"]
+    assert data2["deduplicated"]
     assert_equal data1["result"]["task_id"], data2["result"]["task_id"]
 
     # Não deve criar segunda tarefa no banco
@@ -118,7 +133,40 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
     assert_equal "active", created_context.state
 
     created_plan = AcPlan.find(res["result"]["plan_id"])
-    assert_equal "active", created_plan.state
+    assert_equal "draft", created_plan.state
+    assert_nil created_plan.published_at
+    assert_nil created_plan.content_hash
+  end
+
+  test "draft plans require validated publication and a published policy before launch" do
+    AcTask.create!(company: @company, project: @project, ac_plan: @plan, task_key: "first", title: "First")
+    post "/api/v1/agent_control/client_commands", params: {
+      company_id: @company.id, intent_id: "start-draft", command_type: "start_plan", payload: { plan_id: @plan.id }
+    }, as: :json
+    assert_response :unprocessable_entity
+    assert_nil @plan.reload.published_at
+
+    credential = create(:agent_credential, company: @company, user: @user, agent_type: "claude_code")
+    policy = AcPolicyRevision.create!(company: @company, revision_number: 1, content_hash: SecureRandom.hex(32),
+      state: :draft, content: { "model_chain" => [ "test-model" ], "active_accounts" => [], "chain_rules" => [], "effort_limits" => {} })
+    AcExecutionProfile.create!(company: @company, ac_policy_revision: policy, agent_credential: credential,
+      profile_key: "test", role: :programmer, cli_adapter: :claude_code, model_id: "test-model", effort_level: :medium,
+      chain_position: 1, selection_criteria: { "eligibility" => { "status" => "documented_supported", "model_id" => "test-model",
+        "cli_adapter" => "claude_code", "efforts" => [ "medium" ], "valid_until" => 1.hour.from_now.iso8601 } })
+    assert policy.publish!(by_user: @user)
+    post "/api/v1/agent_control/client_commands", params: {
+      company_id: @company.id, intent_id: "publish-plan", command_type: "publish_plan",
+      payload: { plan_id: @plan.id, policy_revision_id: policy.id }
+    }, as: :json
+    assert_response :success
+    assert @plan.reload.published?
+    assert_equal policy.id, @plan.policy_revision_id
+
+    post "/api/v1/agent_control/client_commands", params: {
+      company_id: @company.id, intent_id: "start-published", command_type: "start_plan", payload: { plan_id: @plan.id }
+    }, as: :json
+    assert_response :success
+    assert TriggerEvent.exists?(company: @company, event_type: AcPlanLaunchService::EVENT_TYPE)
   end
 
   test "returns 422 when intent_id or command_type is missing" do
@@ -133,7 +181,7 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
 
   # Prova DEF-07 / RF-24 / RF-44: Pausar plano via comando deduplicado, registrar auditoria e bloquear advance_dag!
   test "DEF-07 / RF-24: pause_plan pauses active plan, records human intervention audit event and blocks advance_dag" do
-    task = AcTask.create!(
+    AcTask.create!(
       company: @company,
       project: @project,
       ac_plan: @plan,
@@ -162,11 +210,11 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
     assert_response :success
     res = JSON.parse(response.body)
     assert_equal "processed", res["status"]
-    assert_equal true, res["result"]["paused"]
+    assert res["result"]["paused"]
     assert_equal "Inspeção operacional urgente", res["result"]["reason"]
 
     @plan.reload
-    assert_equal true, @plan.paused?
+    assert @plan.paused?
 
     # Auditoria de intervenção humana (G1 / RF-24 / RF-31)
     audit = AcDecisionAuditEvent.where(company: @company, project: @project, event_type: "human_intervention").last
@@ -183,7 +231,7 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
   # Prova DEF-07 / RF-24: Retomar plano via comando deduplicado
   test "DEF-07 / RF-24: resume_plan resumes paused plan and records human intervention audit event" do
     @plan.pause!(reason: "Pausa prévia", user: @user)
-    assert_equal true, @plan.paused?
+    assert @plan.paused?
 
     intent_id = "intent-resume-#{SecureRandom.hex(6)}"
 
@@ -199,10 +247,10 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
     assert_response :success
     res = JSON.parse(response.body)
     assert_equal "processed", res["status"]
-    assert_equal false, res["result"]["paused"]
+    refute res["result"]["paused"]
 
     @plan.reload
-    assert_equal false, @plan.paused?
+    refute_predicate @plan, :paused?
 
     # Auditoria de retomada humana
     audit = AcDecisionAuditEvent.where(company: @company, project: @project, event_type: "human_intervention").last
@@ -241,7 +289,7 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
     assert_response :success
     res = JSON.parse(response.body)
     assert_equal "processed", res["status"]
-    assert_equal true, res["result"]["cancelled"]
+    assert res["result"]["cancelled"]
     assert_equal "abandoned", res["result"]["state"]
 
     @plan.reload
@@ -254,5 +302,24 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
     audit = AcDecisionAuditEvent.where(company: @company, project: @project, event_type: "human_intervention").last
     assert_not_nil audit
     assert_equal "cancel_plan", audit.decision_details["action"]
+  end
+  test "unsupported commands do not create a receipt" do
+    assert_no_difference "AcClientCommand.count" do
+      post "/api/v1/agent_control/client_commands", params: {
+        company_id: @company.id, intent_id: "unknown", command_type: "unknown"
+      }, as: :json
+    end
+    assert_response :unprocessable_entity
+    assert_equal "unsupported_command", response.parsed_body["error"]
+  end
+
+  test "viewer cannot issue commands" do
+    @user.company_memberships.find_by!(company: @company).update!(role: "viewer")
+    assert_no_difference "AcClientCommand.count" do
+      post "/api/v1/agent_control/client_commands", params: {
+        company_id: @company.id, intent_id: "viewer", command_type: "create_task"
+      }, as: :json
+    end
+    assert_response :forbidden
   end
 end

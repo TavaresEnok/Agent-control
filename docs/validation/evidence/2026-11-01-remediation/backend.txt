@@ -1,0 +1,25 @@
+
+Run options: --seed 42034
+
+# Running:
+
+................................................................................................................................................................................................................................................................................................time=2026-11-01T06:28:02.894 level=WARN msg="Cluster Id in Cluster Metadata config is not a valid uuid. Generating a new Cluster Id" component=metadata-initializer
+Temporal CLI 1.9.1 (Server 1.32.0, UI 2.54.1)
+
+Temporal Server:      localhost:37335
+Temporal Persistence: in-memory
+Temporal Metrics:     http://localhost:36129/metrics
+.time=2026-11-01T06:28:03.776 level=WARN msg="Cluster Id in Cluster Metadata config is not a valid uuid. Generating a new Cluster Id" component=metadata-initializer
+Temporal CLI 1.9.1 (Server 1.32.0, UI 2.54.1)
+
+Temporal Server:      localhost:42553
+Temporal Persistence: in-memory
+Temporal Metrics:     http://localhost:34749/metrics
+.time=2026-11-01T06:28:04.493 level=WARN msg="Cluster Id in Cluster Metadata config is not a valid uuid. Generating a new Cluster Id" component=metadata-initializer
+.............................................................................................................../usr/local/bundle/gems/activesupport-8.1.4/lib/active_support/json/encoding.rb:198: warning: detected duplicate key "target_branch" in {"effort_level" => "medium", "target_branch" => "main", target_branch: "bypass"}.
+This will raise an error in json 3.0 unless enabled via `allow_duplicate_key: true`
+/usr/local/bundle/gems/activesupport-8.1.4/lib/active_support/json/decoding.rb:28: warning: detected duplicate key "target_branch" in JSON object. This will raise an error in json 3.0 unless enabled via `allow_duplicate_key: true` at line 1 column 1
+..................................................................
+
+Finished in 72.406018s, 6.4497 runs/s, 24.9012 assertions/s.
+467 runs, 1803 assertions, 0 failures, 0 errors, 0 skips

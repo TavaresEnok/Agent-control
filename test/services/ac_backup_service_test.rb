@@ -3,8 +3,29 @@
 require "test_helper"
 
 class AcBackupServiceTest < ActiveSupport::TestCase
+  self.use_transactional_tests = false
+  teardown do
+    AcIntegrationOperation.where(ac_task_id: AcTask.where(company: @company).select(:id)).delete_all
+    AcNotificationReceipt.where(trigger_event_id: TriggerEvent.where(company: @company).select(:id)).delete_all
+    TriggerEvent.where(company: @company).delete_all
+    %w[ac_templates ac_remote_operations ac_remote_environments ac_client_commands ac_decision_audit_events
+       ac_quota_observations ac_review_verdicts ac_executions ac_capacity_grants ac_tasks ac_plans
+       ac_execution_profiles ac_work_contexts ac_policy_revisions].each do |table|
+      ActiveRecord::Base.connection.execute("DELETE FROM #{table} WHERE company_id = #{@company.id}")
+    end
+    AgentCredential.where(company_id: @company.id).delete_all
+    @project.delete
+    @user.company_memberships.delete_all
+    UserIdentity.where(user_id: @user.id).delete_all
+    UserSession.where(user_id: @user.id).delete_all
+    @user.delete
+    CompanyAuthPolicy.where(company_id: @company.id).delete_all
+    IdentityProvider.where(company_id: @company.id).delete_all
+    @company.delete
+  end
+
   setup do
-    @company = create(:company)
+    @company = create(:company, name: "Recovery #{SecureRandom.uuid}", email_domain: "#{SecureRandom.hex(8)}.example")
     @user = create(:user, company: @company)
     @project = create(:project, company: @company, owner: @user)
     @context = AcWorkContext.create!(
@@ -22,7 +43,7 @@ class AcBackupServiceTest < ActiveSupport::TestCase
       title: "Plano Backup",
       objective: "Testar manifestos criptográficos",
       version: 1,
-      state: :active,
+      state: :draft,
       content_hash: Digest::SHA256.hexdigest("plan_backup_1")
     )
     @task = AcTask.create!(
@@ -93,6 +114,28 @@ class AcBackupServiceTest < ActiveSupport::TestCase
     assert counts.key?("ac_capacity_grants"), "Manifesto deve conter concessões de capacidade"
     assert counts.key?("ac_quota_observations"), "Manifesto deve conter observações de cota"
     assert_operator counts["ac_decision_audit_events"], :>=, 1
+    assert AcBackupService.verify_manifest(manifest)
+  end
+  test "rejects a missing required collection even with a matching header" do
+    manifest = AcBackupService.export_manifest(company: @company)
+    manifest["entities"].delete("ac_tasks")
+    assert_not AcBackupService.verify_manifest(manifest)
+  end
+
+  test "manifest contains integration and notification collections and requires them" do
+    manifest = AcBackupService.export_manifest(company: @company)
+    %w[ac_integration_operations trigger_events ac_notification_receipts].each do |name|
+      assert manifest["entities"].key?(name)
+      missing = manifest.deep_dup
+      missing["entities"].delete(name)
+      assert_not AcBackupService.verify_manifest(missing)
+    end
+  end
+
+  test "redacts secrets in exported text" do
+    @task.update!(title: "Bearer synthetic-secret-token")
+    manifest = AcBackupService.export_manifest(company: @company)
+    assert_not_includes manifest.to_json, "synthetic-secret-token"
     assert AcBackupService.verify_manifest(manifest)
   end
 end

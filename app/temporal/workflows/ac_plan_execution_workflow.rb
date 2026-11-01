@@ -10,7 +10,7 @@ module Workflows
   # 4. Trata reprovação (needs_changes) retornando para implementação;
   # 5. Efetiva integração condicional protegida (CAS de ref);
   # 6. Avança o grafo até conclusão terminal ou intervenção.
-  class AcPlanExecutionWorkflow < Workflows::Base
+  class AcPlanExecutionWorkflow < AcPlanExecutionWorkflowLegacy
     workflow_name "ac_plan_execution_workflow"
 
     def init
@@ -45,6 +45,8 @@ module Workflows
     end
 
     def run(input)
+      return super(input) unless Temporalio::Workflow.patched("ac-plan-ready-task-details-v1")
+
       init
       plan_id = input.plan_id
       max_iterations = input.max_iterations || 50

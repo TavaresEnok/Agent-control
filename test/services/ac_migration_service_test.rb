@@ -25,7 +25,7 @@ class AcMigrationServiceTest < ActiveSupport::TestCase
       title: "Plano Legado em Andamento",
       objective: "Migrar para o Agent Control",
       version: 1,
-      state: "active",
+      state: "draft",
       content_hash: Digest::SHA256.hexdigest("plan_leg_1")
     )
 
@@ -54,76 +54,77 @@ class AcMigrationServiceTest < ActiveSupport::TestCase
     )
   end
 
-  # Prova G7-E1: Substituição autorizada com autoridade exclusiva e responsáveis claros (§19.2 F7)
-  test "G7-E1: migrates project to exclusive authority and locks legacy system" do
-    result = AcMigrationService.migrate_project!(
-      project: @project,
-      company: @company,
-      target_authority: "agent_control_exclusive",
-      assigned_owner: @owner
-    )
-
-    assert_equal "authority_transferred", result[:status]
-    assert_equal "agent_control_exclusive", result[:authority_mode]
-    assert_equal @owner.email, result[:assigned_owner]
-    assert_equal 1, result[:migrated_contexts_count]
-
-    @project.reload
-    assert_equal "agent_control_exclusive", @project.settings["authority_mode"]
-    assert_equal @owner.id, @project.settings["assigned_owner_id"]
-
-    @context.reload
-    assert_equal "agent_control_exclusive", @context.metadata["authority_mode"]
-    assert_equal true, @context.metadata["legacy_locked"], "Deve travar modificações concorrentes no legado"
-    assert_equal "migration", @context.origin
+  test "preparation inventories records without asserting external authority" do
+    result = prepare
+    assert_equal "prepared", result[:status]
+    assert_not @project.reload.settings.key?("authority_mode")
+    assert_not @context.reload.metadata.key?("legacy_locked")
+    verification = AcMigrationService.verify_migration_integrity!(project: @project)
+    assert verification[:integrity_verified]
+    assert_not verification.key?(:zero_loss)
   end
 
-  # Prova G7-E2: Prova criptográfica de ZERO perda de entregas e histórico prévio (Gate G7)
-  test "G7-E2: cryptographic proof confirms zero data loss for historic deliveries and plans" do
-    # 1. Executa a migração
-    AcMigrationService.migrate_project!(
-      project: @project,
-      company: @company,
-      assigned_owner: @owner
-    )
-
-    # 2. Valida integridade imediata
-    integrity = AcMigrationService.verify_migration_integrity!(project: @project)
-    assert_equal true, integrity[:integrity_verified]
-    assert_equal true, integrity[:zero_loss]
-    assert_equal 2, integrity[:preserved_tasks]
-    assert_equal 1, integrity[:preserved_integrated_deliveries]
-
-    # 3. Adiciona nova tarefa após migração: integridade continua mantida
-    AcTask.create!(
-      company: @company,
-      project: @project,
-      ac_plan: @plan,
-      task_key: "task-new-3",
-      title: "Nova Tarefa Pós-Migração",
-      position: 3,
-      state: "pending"
-    )
-
-    integrity_after = AcMigrationService.verify_migration_integrity!(project: @project)
-    assert_equal true, integrity_after[:zero_loss]
-    assert_operator integrity_after[:preserved_tasks], :>=, 2
+  test "a new task cannot mask deletion of an inventoried task" do
+    prepare
+    @task2.destroy!
+    AcTask.create!(company: @company, project: @project, ac_plan: @plan,
+      task_key: "replacement", title: "Replacement", position: 3)
+    assert_raises(AcMigrationService::IntegrityMismatchError) do
+      AcMigrationService.verify_migration_integrity!(project: @project)
+    end
   end
 
-  # Prova G7-E3: Transferência atômica de autoridade de plano com responsável inequívoco
-  test "G7-E3: transfers plan authority with clear logical manager identity" do
-    result = AcMigrationService.transfer_plan_authority!(
-      plan: @plan,
-      new_manager_identity: "manager-lead-agent-01"
-    )
+  test "changed approved artifact is detected even when counts are unchanged" do
+    prepare
+    @task1.update_columns(approved_artifact_hash: "other")
+    assert_raises(AcMigrationService::IntegrityMismatchError) do
+      AcMigrationService.verify_migration_integrity!(project: @project)
+    end
+  end
 
-    assert_equal "agent_control_exclusive", result[:authority_mode]
-    assert_equal "manager-lead-agent-01", result[:manager_identity]
+  test "execution and review evidence remains bound to its original identity and content" do
+    execution = AcExecution.create!(company: @company, ac_task: @task1, ac_work_context: @context,
+      operation_id: "execution-original", epoch: "1", state: "completed", output_payload: { "hash" => "output" })
+    verdict = AcReviewVerdict.create!(company: @company, project: @project, ac_task: @task1,
+      ac_execution: execution, reviewer_role: "reviewer", verdict: "approved", artifact_hash: "hash-historic-1",
+      evaluator_identity: "reviewer-one")
+    prepare
+    execution.update_columns(output_payload: { "hash" => "altered" })
+    assert_raises(AcMigrationService::IntegrityMismatchError) do
+      AcMigrationService.verify_migration_integrity!(project: @project)
+    end
+    execution.update_columns(output_payload: { "hash" => "output" })
+    verdict.destroy!
+    assert_raises(AcMigrationService::IntegrityMismatchError) do
+      AcMigrationService.verify_migration_integrity!(project: @project)
+    end
+  end
 
-    @plan.reload
-    assert_equal "manager-lead-agent-01", @plan.metadata["manager_identity"]
+  test "a prepared inventory cannot be overwritten" do
+    prepare
+    assert_raises(AcMigrationService::MigrationError) { prepare }
+  end
 
-    @context.reload
-    assert_equal "manager-lead-agent-01", @context.active_manager_identity
+  test "external authority cannot be transferred without an adapter" do
+    assert_raises(AcMigrationService::AuthorityUnavailableError) do
+      AcMigrationService.transfer_plan_authority!(plan: @plan, new_manager_identity: "manager", expected_epoch: 0)
+    end
+    assert_nil @context.reload.active_manager_identity
+  end
+
+  test "local manager assignment uses epoch fencing and rolls back on stale epoch" do
+    result = AcMigrationService.assign_plan_manager!(plan: @plan, new_manager_identity: "manager-one", expected_epoch: 0)
+    assert_equal 1, result[:manager_epoch]
+    assert_raises(ActiveRecord::StaleObjectError) do
+      AcMigrationService.assign_plan_manager!(plan: @plan, new_manager_identity: "manager-two", expected_epoch: 0)
+    end
+    assert_equal "manager-one", @context.reload.active_manager_identity
+    assert_equal "manager-one", @plan.reload.metadata["manager_identity"]
+  end
+
+  private
+
+  def prepare
+    AcMigrationService.migrate_project!(project: @project, company: @company, assigned_owner: @owner)
   end
 end

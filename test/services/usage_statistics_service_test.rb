@@ -41,6 +41,26 @@ class UsageStatisticsServiceTest < ActiveSupport::TestCase
     assert_equal 165, stat.total_tokens
   end
 
+  test "replaying an authenticated batch does not count it twice" do
+    payload = otlp_payload(keyed_metric(@session, tokens: { input: 7 }, cost_usd: 0.01)).to_json
+
+    assert_equal :ok, UsageStatisticsService.process(payload).status
+    assert_equal :accepted, UsageStatisticsService.process(payload).status
+    assert_equal 7, @session.reload.usage_statistic.input_tokens
+    assert_equal 1, @session.usage_statistic.events_count
+  end
+
+  test "reordered object keys replay the same batch and batch IDs reject changed data" do
+    payload = otlp_payload(keyed_metric(@session, tokens: { input: 7 }, cost_usd: 0.01))
+    payload["batchId"] = "batch-1"
+    reordered = payload.to_a.reverse.to_h
+    assert_equal :ok, UsageStatisticsService.process(payload.to_json).status
+    assert_equal :accepted, UsageStatisticsService.process(reordered.to_json).status
+    payload["extra"] = "changed"
+    assert_equal :bad_request, UsageStatisticsService.process(payload.to_json).status
+    assert_equal 7, @session.reload.usage_statistic.input_tokens
+  end
+
   test "process persists a usage_statistic for every referenced session" do
     other_session = create(:terminal_session, :running, user: @user, project: @project)
 

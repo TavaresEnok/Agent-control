@@ -25,7 +25,7 @@ class AcCommandDeduplicationServiceTest < ActiveSupport::TestCase
       { "task_id" => 42, "status" => "created" }
     end
 
-    assert_equal false, res1[:deduplicated]
+    refute res1[:deduplicated]
     assert_equal "processed", res1[:status]
     assert_equal 42, res1[:result]["task_id"]
     assert_equal 1, execution_counter
@@ -42,7 +42,7 @@ class AcCommandDeduplicationServiceTest < ActiveSupport::TestCase
       { "task_id" => 999, "status" => "should_not_run" }
     end
 
-    assert_equal true, res2[:deduplicated], "Deve marcar como deduplicado"
+    assert res2[:deduplicated], "Deve marcar como deduplicado"
     assert_equal "processed", res2[:status]
     assert_equal 42, res2[:result]["task_id"], "Deve retornar o resultado do primeiro processamento"
     assert_equal 1, execution_counter, "O bloco de lógica NÃO deve ser executado novamente"
@@ -70,22 +70,32 @@ class AcCommandDeduplicationServiceTest < ActiveSupport::TestCase
     end
   end
 
-  test "exception in block records failure and propagates exception" do
-    intent_id = "intent-fail-#{SecureRandom.hex(6)}"
-
+  test "failure rolls back both local effects and the command" do
     assert_raises(RuntimeError) do
-      AcCommandDeduplicationService.execute_idempotent!(
-        intent_id: intent_id,
-        company: @company,
-        command_type: "failing_cmd",
-        user: @user
-      ) do
-        raise "Erro deliberado de execução"
+      AcCommandDeduplicationService.execute_idempotent!(intent_id: "failed", company: @company,
+        command_type: "create", user: @user) do
+        @company.update!(name: "Temporary")
+        raise "failure"
       end
     end
+    assert_not_equal "Temporary", @company.reload.name
+    assert_not AcClientCommand.exists?(company: @company, intent_id: "failed")
+  end
 
-    cmd = AcClientCommand.find_by!(intent_id: intent_id)
-    assert_equal "failed", cmd.state
-    assert_equal "Erro deliberado de execução", cmd.error_message
+  test "intent is scoped by company and rejects changed author or payload" do
+    other = create(:company)
+    AcCommandDeduplicationService.execute_idempotent!(intent_id: "same", company: @company,
+      command_type: "create", payload: { title: "one" }, user: @user) { { id: 1 } }
+    result = AcCommandDeduplicationService.execute_idempotent!(intent_id: "same", company: other,
+      command_type: "create", payload: { title: "one" }, user: @user) { { id: 2 } }
+    assert_equal 2, result[:result]["id"]
+    assert_raises(AcCommandDeduplicationService::IntentMismatchError) do
+      AcCommandDeduplicationService.execute_idempotent!(intent_id: "same", company: @company,
+        command_type: "create", payload: { title: "two" }, user: @user) { flunk }
+    end
+    assert_raises(AcCommandDeduplicationService::IntentMismatchError) do
+      AcCommandDeduplicationService.execute_idempotent!(intent_id: "same", company: @company,
+        command_type: "create", payload: { title: "one" }, user: nil) { flunk }
+    end
   end
 end

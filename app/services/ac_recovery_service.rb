@@ -19,16 +19,16 @@ class AcRecoveryService
 
         # Persistência no PostgreSQL para sobrevivência a reinicializações e Puma cluster ([BUG-P1-04])
         query = AcClientCommand.where(command_type: "recovery_mode_state", state: "processing")
-        query = query.where(company_id: company.id) if company.present?
+        query = query.where("company_id = ? OR payload @> ?::jsonb", company.id, { global: true }.to_json) if company.present?
         query.exists?
       end
     rescue StandardError
-      @recovery_mode_active
+      true
     end
 
     def enter_recovery_mode!(company: nil)
       @recovery_mode_mutex.synchronize do
-        @recovery_mode_active = true
+        @recovery_mode_active = true if company.nil?
         target_company = company || Company.first
         if target_company.present?
           cmd = AcClientCommand.find_or_initialize_by(
@@ -37,7 +37,7 @@ class AcRecoveryService
             command_type: "recovery_mode_state"
           )
           cmd.state = "processing"
-          cmd.payload = { "recovery_mode" => true }
+          cmd.payload = { "recovery_mode" => true, "global" => company.nil? }
           cmd.processed_at = Time.current
           cmd.save!
         end
@@ -70,17 +70,12 @@ class AcRecoveryService
         active_executions.find_each do |execution|
           execution.update!(
             state: :uncertain,
-            finished_at: Time.current,
             metadata: (execution.metadata || {}).merge(
               "reconciled_by" => "AcRecoveryService",
               "reconciled_at" => Time.current.iso8601,
               "reason" => "Host recovery initialization / post-restore reconciliation (T30)"
             )
           )
-
-          # Revoga a concessão de capacidade associada
-          grant = execution.ac_capacity_grant
-          grant&.release! if grant&.state.in?(%w[granted active])
 
           reconciled_count += 1
         end
@@ -91,16 +86,8 @@ class AcRecoveryService
 
     # T34 / §11.3.2: Neutraliza escritores e leases de worktree órfãs
     def neutralize_orphan_leases!(company:)
-      neutralized_count = 0
-
-      AcExecution.where(company: company).where.not(worktree_lease_token: nil).find_each do |execution|
-        if execution.worktree_lease_active?
-          execution.revoke_worktree_lease!
-          neutralized_count += 1
-        end
-      end
-
-      neutralized_count
+      # Leases cannot be revoked until the external writer is confirmed stopped.
+      0
     end
 
     # T30: Preserva estritamente contextos e tarefas que estavam pausadas
@@ -117,13 +104,23 @@ class AcRecoveryService
 
     # Restauração controlada e reidratação física a partir de manifesto autenticado ([BUG-P0-03])
     def restore_from_manifest!(company:, manifest:)
-      unless AcBackupService.verify_manifest(manifest)
+      begin
+        manifest = AcBackupService.decrypt_backup(manifest)
+      rescue AcBackupService::BackupError
+        raise InvalidManifestError, "Backup criptografado inválido"
+      end
+      unless AcBackupService.verify_manifest(manifest) && manifest.dig("header", "redacted") == false
         raise InvalidManifestError, "Manifesto inválido ou digest corrompido: restauração bloqueada"
+      end
+
+      unless manifest.dig("header", "company_id") == company.id
+        raise InvalidManifestError, "Manifesto pertence a outra empresa"
       end
 
       enter_recovery_mode!(company: company)
 
       entities = manifest["entities"] || {}
+      validate_external_references!(company, entities)
       rehydrated = {}
 
       ActiveRecord::Base.transaction do
@@ -133,6 +130,7 @@ class AcRecoveryService
         rehydrate_entity(AcExecutionProfile, entities["ac_execution_profiles"], rehydrated)
         rehydrate_entity(AcPlan, entities["ac_plans"], rehydrated)
         rehydrate_entity(AcTask, entities["ac_tasks"], rehydrated)
+        rehydrate_entity(AcIntegrationOperation, entities["ac_integration_operations"], rehydrated)
         rehydrate_entity(AcCapacityGrant, entities["ac_capacity_grants"], rehydrated)
         rehydrate_entity(AcExecution, entities["ac_executions"], rehydrated)
         rehydrate_entity(AcReviewVerdict, entities["ac_review_verdicts"], rehydrated)
@@ -141,6 +139,9 @@ class AcRecoveryService
         rehydrate_entity(AcClientCommand, entities["ac_client_commands"], rehydrated)
         rehydrate_entity(AcRemoteEnvironment, entities["ac_remote_environments"], rehydrated)
         rehydrate_entity(AcRemoteOperation, entities["ac_remote_operations"], rehydrated)
+        rehydrate_entity(AcTemplate, entities["ac_templates"], rehydrated)
+        rehydrate_entity(TriggerEvent, entities["trigger_events"], rehydrated, quarantine_outbox: true)
+        rehydrate_entity(AcNotificationReceipt, entities["ac_notification_receipts"], rehydrated)
 
         # 2. Neutraliza estado antigo para prevenir concorrência com processos vivos
         reconcile_active_executions!(company: company)
@@ -152,26 +153,56 @@ class AcRecoveryService
           manifest_root_digest: manifest["root_digest"],
           rehydrated_counts: rehydrated,
           reconciliation: {
-            status: "clean_recovery",
+            status: "pending_external_reconciliation",
             timestamp: Time.current.iso8601
           }
         }
       end
+    rescue ActiveRecord::InvalidForeignKey, ActiveRecord::RecordNotUnique => e
+      raise RecoveryError, "Dependência ausente ou conflito de identidade durante a restauração (#{e.class})"
     end
 
     private
 
-    def rehydrate_entity(model_class, records, counter_hash)
+    def validate_external_references!(company, entities)
+      records = entities.values.flatten
+      project_ids = records.filter_map { |record| record["project_id"] }.uniq
+      credential_ids = records.filter_map { |record| record["agent_credential_id"] }.uniq
+      unless Project.where(company: company, id: project_ids).count == project_ids.size &&
+             AgentCredential.where(company: company, id: credential_ids).count == credential_ids.size
+        raise RecoveryError, "Projetos ou credenciais referenciados ausentes ou de outra empresa"
+      end
+      user_ids = records.flat_map do |record|
+        %w[user_id actor_id created_by_user_id published_by_user_id revoked_by_user_id].filter_map { |key| record[key] }
+      end.uniq
+      raise RecoveryError, "Usuários referenciados ausentes" unless User.where(id: user_ids).count == user_ids.size
+    end
+
+    def rehydrate_entity(model_class, records, counter_hash, quarantine_outbox: false)
       return unless records.is_a?(Array) && records.any?
 
       count = 0
       records.each do |attrs|
         record = model_class.find_or_initialize_by(id: attrs["id"])
-        if record.new_record?
-          record.assign_attributes(attrs.except("id", "created_at", "updated_at"))
-          record.save!(validate: false)
-          count += 1
+        if record.persisted?
+          candidate = model_class.new(attrs)
+          unless attrs.keys.all? { |key| record.attributes[key] == candidate.attributes[key] }
+            raise RecoveryError, "Conflito ao restaurar #{model_class.table_name} id=#{attrs['id']}"
+          end
+          next
         end
+
+        restored_attrs = attrs.except("id")
+        if quarantine_outbox && restored_attrs["relay_state"].in?(%w[pending dispatching])
+          restored_attrs = restored_attrs.merge("relay_state" => "failed", "relay_error" => "Recuperação: estado anterior #{restored_attrs['relay_state']}; reconciliação necessária")
+        end
+        if [ AcTask, AcPlan, AcPolicyRevision ].include?(model_class)
+          model_class.insert_all!([ restored_attrs.merge("id" => attrs["id"]) ], record_timestamps: false)
+        else
+          record.assign_attributes(restored_attrs)
+          record.save!(validate: false)
+        end
+        count += 1
       end
 
       # Reset da sequence de chave primária no PostgreSQL para evitar colisão de PKs (DEF-05)

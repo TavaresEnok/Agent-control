@@ -18,13 +18,14 @@ module CloudAuth
     def claude_code(user_id:, company_id:)
       return nil if user_id.blank? || company_id.blank?
 
-      AgentCredential.find_by(user_id: user_id, company_id: company_id, agent_type: AGENT_TYPE)
+      credentials = AgentCredential.where(user_id: user_id, company_id: company_id, agent_type: AGENT_TYPE).limit(2).to_a
+      credentials.one? ? credentials.first : nil
     end
 
     def for_session(session)
       return nil if session.nil?
 
-      SessionCompany.agent_credentials_for(session).find_by(agent_type: AGENT_TYPE)
+      SessionCompany.credential_for(session, agent_type: AGENT_TYPE)
     end
   end
 end

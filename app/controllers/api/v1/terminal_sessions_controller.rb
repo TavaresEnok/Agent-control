@@ -164,7 +164,7 @@ module Api
           :initial_prompt, :requested_model, :reasoning_effort, :auth_kind, :runner_id,
           tool_ids: [], skill_ids: [], mcp_server_ids: [],
           input_asset_ids: [], repository_ids: [], config_item_ids: [],
-          session_config: [ :bmad_enabled, { bmad_modules: [] } ]
+          session_config: [ :bmad_enabled, :agent_credential_id, :account_slug, { bmad_modules: [] } ]
         )
       end
 

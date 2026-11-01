@@ -252,7 +252,7 @@ module Sessions
     end
 
     def session_credential
-      SessionCompany.agent_credentials_for(session).find_by(agent_type: session.agent_type)
+      SessionCompany.credential_for(session, agent_type: session.agent_type)
     end
 
     def adapter

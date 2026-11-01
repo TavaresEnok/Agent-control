@@ -15,7 +15,9 @@ class AcQuotaServiceTest < ActiveSupport::TestCase
     assert_equal :rate_limited, @service.classify("Rate limit exceeded: please try again in 20s (429)").first
     assert_equal :auth_error, @service.classify("HTTP 401 Unauthorized: Invalid API key provided").first
     assert_equal :network_error, @service.classify("Connection refused: could not resolve host api.anthropic.com").first
-    assert_equal :available, @service.classify("Completed with success", 0).first
+    assert_equal :unknown, @service.classify("Completed with success", 0).first
+    assert_equal :unknown, @service.classify("Processed 1429 records", 0).first
+    assert_equal :rate_limited, @service.classify("HTTP 429", 1).first
     assert_equal :unknown, @service.classify("Some random warning", 1).first
   end
 

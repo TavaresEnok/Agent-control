@@ -1,0 +1,10 @@
+Please switch from -n/--name to -i/--include
+
+Run options: -n "/revalidate_admission|create_and_start_admits|agent_credential/" --seed 36708
+
+# Running:
+
+........
+
+Finished in 2.165033s, 3.6951 runs/s, 10.1615 assertions/s.
+8 runs, 22 assertions, 0 failures, 0 errors, 0 skips

@@ -260,6 +260,7 @@ class TriggerEngine
     # other source is matched against the binding registry.
     def route_pending(event)
       case event.event_type
+      when AcPlanLaunchService::EVENT_TYPE then AcPlanLaunchService.dispatch_event(event)
       when COLUMN_EVENT_TYPE then fire_recorded_launch(event, source: "column_workflow_binding")
       when MANUAL_EVENT_TYPE then fire_recorded_launch(event, source: "manual")
       else dispatch(event)

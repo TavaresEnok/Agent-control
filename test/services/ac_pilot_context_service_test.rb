@@ -9,47 +9,39 @@ class AcPilotContextServiceTest < ActiveSupport::TestCase
     @project = create(:project, company: @company, owner: @user)
   end
 
-  # Prova G6-E4: Inicialização, ciclo completo de entrega e reversão segura de contexto piloto (§21.2)
-  test "G6-E4: manages complete pilot context lifecycle with clean rollback" do
-    external_id = "paseo_chat_#{SecureRandom.hex(4)}"
+  test "prepares a draft without claiming integration or authority transfer" do
+    pilot = AcPilotContextService.initialize_pilot!(company: @company, project: @project,
+      external_context_id: SecureRandom.uuid, branch_name: "pilot/isolated")
+    assert pilot[:plan].draft?
+    refute_predicate pilot[:plan], :published?
+    assert_equal "pilot/isolated", pilot[:task].metadata["target_branch"]
+    assert_raises(AcPilotContextService::UnverifiedPilotError) do
+      AcPilotContextService.complete_pilot_cycle!(task: pilot[:task], approved_commit_sha: "invented", artifact_hash: "invented")
+    end
+    assert pilot[:task].reload.pending?
+    result = AcPilotContextService.rollback_pilot!(work_context: pilot[:work_context])
+    assert_equal "pilot_draft_archived", result[:status]
+    refute result[:authority_transferred]
+    assert pilot[:work_context].reload.archived?
+  end
 
-    # 1. Inicializa o piloto controlado
-    pilot = AcPilotContextService.initialize_pilot!(
-      company: @company,
-      project: @project,
-      external_context_id: external_id,
-      branch_name: "pilot/nexo-webchat-fix"
-    )
+  test "rejects a foreign project or a production branch" do
+    other = create(:company)
+    assert_raises(ArgumentError) do
+      AcPilotContextService.initialize_pilot!(company: other, project: @project, external_context_id: "wrong")
+    end
+    assert_raises(ArgumentError) do
+      AcPilotContextService.initialize_pilot!(company: @company, project: @project, external_context_id: "wrong", branch_name: "main")
+    end
+  end
 
-    work_context = pilot[:work_context]
-    plan = pilot[:plan]
-    task = pilot[:task]
-
-    assert_equal "active", work_context.state
-    assert_equal "active", plan.state
-    assert_equal "pending", task.state
-    assert_equal external_id, work_context.metadata["external_context_id"]
-
-    # 2. Executa o ciclo de entrega da tarefa piloto
-    cycle_result = AcPilotContextService.complete_pilot_cycle!(
-      task: task,
-      approved_commit_sha: "commit-sha-pilot-123",
-      artifact_hash: "hash-pilot-123"
-    )
-
-    assert_equal "pilot_cycle_completed", cycle_result[:status]
-    assert_equal "integrated", task.reload.state
-    assert_equal "commit-sha-pilot-123", task.approved_commit_sha
-
-    # 3. Executa a reversão planejada do piloto (rollback)
-    rollback_result = AcPilotContextService.rollback_pilot!(
-      work_context: work_context,
-      reason: "Piloto G6 concluído com sucesso; revertendo autoridade para teste de reversão"
-    )
-
-    assert_equal "pilot_successfully_reverted", rollback_result[:status]
-    assert_equal "archived", work_context.reload.state
-    assert_equal "abandoned", plan.reload.state
-    assert_equal "origin_paseo_read_only", work_context.metadata["reverted_to"]
+  test "cannot discard a pilot with an uncertain writer" do
+    pilot = AcPilotContextService.initialize_pilot!(company: @company, project: @project, external_context_id: SecureRandom.uuid)
+    AcExecution.create!(company: @company, ac_task: pilot[:task], ac_work_context: pilot[:work_context],
+      operation_id: SecureRandom.uuid, epoch: "1", state: :uncertain)
+    assert_raises(AcPilotContextService::UnverifiedPilotError) do
+      AcPilotContextService.rollback_pilot!(work_context: pilot[:work_context])
+    end
+    assert pilot[:work_context].reload.active?
   end
 end

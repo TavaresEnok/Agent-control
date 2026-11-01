@@ -349,6 +349,12 @@ class AgentCredential < ApplicationRecord
   # the session asking (its own container has not been handed anything yet).
   def live_holder_sessions(excluding_session_id: nil)
     scope = TerminalSession.active.where(user_id: user_id, company_id: company_id, agent_type: agent_type)
+    same_type_count = self.class.where(user_id: user_id, company_id: company_id, agent_type: agent_type).limit(2).count
+    scope = if same_type_count == 1
+      scope.where("session_config ->> 'agent_credential_id' = ? OR NOT (jsonb_exists(session_config, 'agent_credential_id'))", id.to_s)
+    else
+      scope.where("session_config ->> 'agent_credential_id' = ?", id.to_s)
+    end
     scope = scope.where.not(id: excluding_session_id) if excluding_session_id
     scope
   end
@@ -357,6 +363,10 @@ class AgentCredential < ApplicationRecord
   # `excluding_session_id` is the session being launched: it is the one asking, and
   # its own container has not been handed anything yet.
   def held_by_live_session?(excluding_session_id: nil)
+    scope = TerminalSession.active.where(user_id: user_id, company_id: company_id, agent_type: agent_type)
+    scope = scope.where.not(id: excluding_session_id) if excluding_session_id
+    return true if scope.where.not("jsonb_exists(session_config, 'agent_credential_id')").exists?
+
     live_holder_sessions(excluding_session_id: excluding_session_id).exists?
   end
 

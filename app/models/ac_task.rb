@@ -38,6 +38,7 @@ class AcTask < ApplicationRecord
 
   # Limite de tentativas (RF-21)
   MAX_ATTEMPT_COUNT = 5
+  CONTRACT_METADATA_KEYS = %w[target_branch execution_profile_id effort_level base_commit_sha].freeze
 
   enumerize :state,
             in: %i[pending waiting_dependencies queued running review needs_changes approved integrated failed cancelled],
@@ -63,6 +64,12 @@ class AcTask < ApplicationRecord
 
   # Artefato aprovado exige ambos hash e commit
   validate :approved_artifact_consistency
+  validate :published_contract_immutable
+  around_save :serialize_plan_write
+  around_destroy :serialize_plan_destruction
+  before_destroy :prevent_published_task_destruction
+  before_update :number_notification_transition
+  after_update :record_notification_transition
 
   # ── Escopos ─────────────────────────────────────────────────────────────
   scope :for_plan, ->(plan) { where(ac_plan: plan) }
@@ -149,6 +156,67 @@ class AcTask < ApplicationRecord
   end
 
   private
+
+  def number_notification_transition
+    previous = metadata_in_database.is_a?(Hash) ? metadata_in_database : {}
+    existing = previous["notification_transition_counter"]
+    next_counter = (will_save_change_to_state? && %w[failed needs_changes approved integrated].include?(state.to_s)) ? existing.to_i + 1 : existing
+    return if (metadata || {})["notification_transition_counter"] == next_counter
+
+    self.metadata = (metadata || {}).merge("notification_transition_counter" => next_counter)
+  end
+
+  def record_notification_transition
+    return unless saved_change_to_state? && %w[failed needs_changes approved integrated].include?(state.to_s)
+
+    AcNotificationService.record_operational!(record: self, kind: "task_#{state}",
+      transition: metadata.fetch("notification_transition_counter"))
+  end
+
+  def published_contract_immutable
+    original_plan_id = persisted? ? ac_plan_id_in_database : ac_plan_id
+    original = AcPlan.find_by(id: original_plan_id)
+    destination = original_plan_id == ac_plan_id ? original : AcPlan.find_by(id: ac_plan_id)
+    if new_record? || original_plan_id != ac_plan_id
+      if destination&.published?
+        errors.add(:base, "Não é possível adicionar tarefa a plano publicado")
+        return
+      end
+    end
+    return unless original&.published?
+
+    protected_columns = %w[task_key title scope inputs outputs depends_on risk_class assigned_role ac_plan_id company_id project_id]
+    before_metadata = metadata_in_database.is_a?(Hash) ? metadata_in_database.deep_stringify_keys : {}
+    after_metadata = metadata.is_a?(Hash) ? metadata.deep_stringify_keys : {}
+    contract_changed = before_metadata.slice(*CONTRACT_METADATA_KEYS) != after_metadata.slice(*CONTRACT_METADATA_KEYS)
+    if (changes.keys & protected_columns).any? || contract_changed
+      errors.add(:base, "Tarefa de plano publicado é imutável; crie nova versão")
+    end
+  end
+
+  def serialize_plan_write
+    ids = [ ac_plan_id, (ac_plan_id_in_database if persisted?) ].compact.uniq.sort
+    AcTask.transaction do
+      AcPlan.where(id: ids).order(:id).lock.load
+      published_contract_immutable
+      raise ActiveRecord::RecordNotSaved.new("Contrato do plano mudou durante a gravação", self) if errors.any?
+      yield
+    end
+  end
+
+  def serialize_plan_destruction
+    AcTask.transaction do
+      AcPlan.where(id: ac_plan_id).lock.load
+      yield
+    end
+  end
+
+  def prevent_published_task_destruction
+    return unless AcPlan.where(id: ac_plan_id).where.not(published_at: nil).exists?
+
+    errors.add(:base, "Não é possível remover tarefa de plano publicado")
+    throw(:abort)
+  end
 
   def approved_artifact_consistency
     return if approved_commit_sha.blank? && approved_artifact_hash.blank?

@@ -48,7 +48,8 @@ WebMock.disable_net_connect!(allow_localhost: true, allow: "localhost")
 # Every Temporal call in the suite goes to a local test server, never a real one.
 require "temporalio/testing/workflow_environment"
 TemporalService.connection = lambda do |&block|
-  Temporalio::Testing::WorkflowEnvironment.start_local(data_converter: TemporalService.data_converter) { |env| block.call(env.client) }
+  Temporalio::Testing::WorkflowEnvironment.start_local(data_converter: TemporalService.data_converter,
+    dev_server_existing_path: ENV["TEMPORAL_TEST_DEV_SERVER_PATH"].presence) { |env| block.call(env.client) }
 end
 
 # Configure gitlab-ruby gem so the default client has a valid endpoint.

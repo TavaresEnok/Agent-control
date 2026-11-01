@@ -6,318 +6,182 @@ require "base64"
 require "digest"
 
 class AcRemoteGatewayServiceTest < ActiveSupport::TestCase
-  # Runner simulado para testes determinísticos de rede e supervisor remoto
-  class MockRunner
-    attr_accessor :executions, :responses, :failure_on_command
+  include AcTemporalFixture
+
+  class RecordingRunner
+    attr_reader :commands
 
     def initialize
-      @executions = []
-      @responses = {}
-      @failure_on_command = {}
+      @commands = []
     end
 
-    def execute(transport, remote_command)
-      @executions << {
-        transport: transport,
-        command: remote_command
-      }
-
-      matched_failure = @failure_on_command[remote_command] ||
-        @failure_on_command.find do |pattern, _|
-          pattern_str = pattern.to_s
-          core = pattern_str.include?("&&") ? pattern_str.split("&&").last.strip : pattern_str
-          remote_command.include?(core)
-        end&.last
-
-      if matched_failure
-        raise AcRemoteGatewayService::RemoteTransportError, matched_failure
-      end
-
-      response = @responses[remote_command] ||
-        @responses.find do |pattern, _|
-          pattern_str = pattern.to_s
-          core = pattern_str.include?("&&") ? pattern_str.split("&&").last.strip : pattern_str
-          remote_command.include?(core)
-        end&.last || {
-        stdout: "MOCK_SUCCESS",
-        stderr: "",
-        exit_code: 0,
-        success: true
-      }
-      response
+    def execute(_transport, command)
+      @commands << command
+      raise "remote execution was not authorized"
     end
   end
 
   setup do
-    @company = create(:company)
-    @user = create(:user, company: @company)
-    @project = create(:project, company: @company, owner: @user)
-
-    @dir = Dir.mktmpdir("ac_remote_gateway_test")
-    @identity_path = File.join(@dir, "id_ed25519")
-    @known_hosts_path = File.join(@dir, "known_hosts")
-    File.write(@identity_path, "synthetic private key")
-
-    key_blob = Base64.strict_encode64("synthetic-ed25519-public-key")
-    File.write(@known_hosts_path, "f0-lab-pinned ssh-ed25519 #{key_blob}\n")
-    @fingerprint = "SHA256:#{Base64.strict_encode64(Digest::SHA256.digest(Base64.decode64(key_blob))).delete_suffix('=')}"
-
-    # Destino 1: NexoISP (§14.2)
-    @env_nexoisp = AcRemoteEnvironment.create!(
-      company: @company,
-      project: @project,
-      name: "NexoISP Remote Target",
-      environment_slug: "nexoisp-target",
-      host: "127.0.0.1",
-      port: 22,
-      user: "deploy",
-      fingerprint: @fingerprint,
-      identity_key_path: @identity_path,
-      known_hosts_path: @known_hosts_path,
-      authorized_directories: ["/home/enok/Documentos/projetos/nexoisp"],
-      state: "active"
-    )
-
-    # Destino 2: Ajust ERP (§14.2)
-    @env_ajust_erp = AcRemoteEnvironment.create!(
-      company: @company,
-      project: @project,
-      name: "Ajust ERP Remote Target",
-      environment_slug: "ajust-erp-target",
-      host: "127.0.0.1",
-      port: 2222,
-      user: "ajust",
-      fingerprint: @fingerprint,
-      identity_key_path: @identity_path,
-      known_hosts_path: @known_hosts_path,
-      authorized_directories: ["/home/enok/Documentos/projetos/ajust_erp"],
-      state: "active"
-    )
-
-    @mock_runner = MockRunner.new
+    setup_ac_temporal_fixture
+    @previous_remote_supervisor = Rails.application.config.try(:ac_remote_supervisor)
+    Rails.application.config.ac_remote_supervisor = nil
+    @dir = Dir.mktmpdir("ac-ssh-fixture-")
+    identity = File.join(@dir, "identity")
+    known_hosts = File.join(@dir, "known_hosts")
+    File.write(identity, "synthetic key fixture")
+    blob = Base64.strict_encode64("synthetic public key fixture")
+    File.write(known_hosts, "f0-lab-pinned ssh-ed25519 #{blob}\n")
+    fingerprint = "SHA256:#{Base64.strict_encode64(Digest::SHA256.digest(Base64.decode64(blob))).delete_suffix('=')}"
+    @environment = AcRemoteEnvironment.create!(company: @company, project: @project, name: "Test environment",
+      environment_slug: "test-target", host: "127.0.0.1", port: 22, user: "worker", fingerprint: fingerprint,
+      identity_key_path: identity, known_hosts_path: known_hosts, authorized_directories: [ "/srv/project" ], state: "active")
+    @runner = RecordingRunner.new
   end
 
   teardown do
+    Rails.application.config.ac_remote_supervisor = @previous_remote_supervisor
+    teardown_ac_temporal_fixture
     FileUtils.remove_entry(@dir) if @dir && Dir.exist?(@dir)
   end
 
-  # Prova G4-E1: Dois destinos autorizados sem credenciais ou CLIs de IA nos destinos (§14.1, §14.2)
-  test "G4-E1: executes in two distinct remote targets without AI credentials on destinations" do
-    # 1. Destino 1: NexoISP
-    op1 = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: "op-nexoisp-#{SecureRandom.hex(4)}",
-      command: "bundle exec rake test:core",
-      working_directory: "/home/enok/Documentos/projetos/nexoisp",
-      artifact_hash: "git-commit-nexoisp-1",
-      runner: @mock_runner
-    )
+  test "transport pins a host key and does not inherit agent credentials" do
+    transport = @environment.build_transport(lab_opt_in: true)
+    assert_equal({ "PATH" => "/usr/bin:/bin", "HOME" => "/nonexistent", "LANG" => "C" }, transport.environment)
+    assert_equal({ unsetenv_others: true }, transport.spawn_options)
+    assert_raises(ArgumentError) { transport.validate_job_env!("OPENAI_API_KEY" => "synthetic") }
+    File.write(@environment.known_hosts_path, "f0-lab-pinned ssh-ed25519 #{Base64.strict_encode64('other fixture')}\n")
+    assert_raises(ArgumentError) { transport.argv("true") }
+  end
 
-    assert_equal "completed", op1.state
-    assert_equal 0, op1.exit_code
-    assert_equal @env_nexoisp.id, op1.ac_remote_environment_id
-
-    # 2. Destino 2: Ajust ERP
-    op2 = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_ajust_erp,
-      operation_id: "op-ajust-#{SecureRandom.hex(4)}",
-      command: "npm test",
-      working_directory: "/home/enok/Documentos/projetos/ajust_erp",
-      artifact_hash: "git-commit-ajust-2",
-      runner: @mock_runner
-    )
-
-    assert_equal "completed", op2.state
-    assert_equal 0, op2.exit_code
-    assert_equal @env_ajust_erp.id, op2.ac_remote_environment_id
-
-    # 3. Verificação de isolamento central: nenhuma credencial de IA é exportada ao destino (§14.1)
-    [ @env_nexoisp, @env_ajust_erp ].each do |env|
-      transport = env.build_transport(lab_opt_in: true)
-      assert_equal({ "PATH" => "/usr/bin:/bin", "HOME" => "/nonexistent", "LANG" => "C" }, transport.environment)
-      assert_equal({ unsetenv_others: true }, transport.spawn_options)
-      assert_raises(ArgumentError) { transport.validate_job_env!("OPENAI_API_KEY" => "leak") }
-      assert_raises(ArgumentError) { transport.validate_job_env!("ANTHROPIC_API_KEY" => "leak") }
+  test "no remote operation is dispatched without an authorized execution" do
+    assert_no_difference "AcRemoteOperation.count" do
+      assert_raises(AcRemoteGatewayService::UnprovableRemoteStateError) { dispatch }
     end
+    assert_empty @runner.commands
   end
 
-  # Prova G4-E2: Desconexão recuperável via remote_job_id sem retry cego (§14.3)
-  test "G4-E2: recoverable disconnect via remote_job_id without duplicate execution" do
-    op_id = "op-disconnect-#{SecureRandom.hex(4)}"
-    cmd = "bundle exec rake long_test"
-    work_dir = "/home/enok/Documentos/projetos/nexoisp"
-    wrapped_cmd = "cd #{work_dir} && #{cmd}"
-
-    # Simula desconexão durante o início do comando remoto
-    @mock_runner.failure_on_command[wrapped_cmd] = "SSH connection dropped (Connection reset by peer)"
-
-    op = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: op_id,
-      command: cmd,
-      working_directory: work_dir,
-      artifact_hash: "commit-persisted-hash",
-      runner: @mock_runner
-    )
-
-    # Permanece registrado com remote_job_id durável
-    assert_equal "running", op.state
-    assert op.remote_job_id.present?
-    remote_job_id = op.remote_job_id
-    assert_includes op.error_log, "Transport error during dispatch"
-
-    # Restaura conexão: supervisor remoto comprova que o job persistente concluiu com sucesso (exit 0)
-    query_cmd = "test -f #{work_dir}/.ac_job_#{remote_job_id}.exit && cat #{work_dir}/.ac_job_#{remote_job_id}.exit || echo RUNNING"
-    @mock_runner.responses[query_cmd] = { stdout: "0\n", stderr: "", exit_code: 0, success: true }
-
-    status = AcRemoteGatewayService.query_operation_status!(operation: op, runner: @mock_runner)
-
-    op.reload
-    assert_equal "completed", op.state
-    assert_equal 0, op.exit_code
-    assert_equal remote_job_id, op.remote_job_id
-    assert_equal true, status[:started]
-    assert_equal false, status[:running]
-    assert_equal 0, status[:result][:exit_code]
-
-    # Verifica que NÃO houve execução duplicada do comando principal
-    main_executions = @mock_runner.executions.select { |e| e[:command].include?(cmd) && !e[:command].include?("test -f") && !e[:command].include?("rm -f") }
-    assert_equal 1, main_executions.count, "Não deve executar cópia cega após desconexão"
+  test "valid admission is insufficient without a durable remote supervisor" do
+    execution = admit_ac_execution
+    assert_no_difference "AcRemoteOperation.count" do
+      assert_raises(AcRemoteGatewayService::UnprovableRemoteStateError) { dispatch(execution: execution) }
+    end
+    assert_empty @runner.commands
   end
 
-  # Prova G4-E3: Idempotência estrita por operation_id (§11.2, §11.3)
-  test "G4-E3: strict idempotency on repeated operation_id returns same operation without re-running" do
-    op_id = "op-idempotent-#{SecureRandom.hex(4)}"
-
-    op_first = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: op_id,
-      command: "echo test",
-      working_directory: "/home/enok/Documentos/projetos/nexoisp",
-      runner: @mock_runner
-    )
-
-    initial_execution_count = @mock_runner.executions.count
-
-    op_second = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: op_id,
-      command: "echo test",
-      working_directory: "/home/enok/Documentos/projetos/nexoisp",
-      runner: @mock_runner
-    )
-
-    assert_equal op_first.id, op_second.id
-    assert_equal initial_execution_count, @mock_runner.executions.count, "Nenhum novo comando deve ser executado no destino"
+  test "an incomplete remote adapter is refused before its dispatch method runs" do
+    execution = admit_ac_execution
+    incomplete = Class.new do
+      attr_reader :called
+      def dispatch_operation!(**)
+        @called = true
+      end
+    end.new
+    Rails.application.config.ac_remote_supervisor = incomplete
+    assert_raises(AcRemoteGatewayService::UnprovableRemoteStateError) { dispatch(execution: execution) }
+    assert_not incomplete.called
+    assert_empty @runner.commands
   end
 
-  # Prova G4-E4: Rejeição estrita de diretório não autorizado (§14.2)
-  test "G4-E4: strict rejection of unauthorized directory outside registered scope" do
-    unauthorized_dirs = [
-      "/etc",
-      "/var/run",
-      "/home/enok/Documentos/projetos/painel_provedores",
-      "/home/enok/Documentos/projetos/nexoisp/../../etc"
-    ]
+  test "an unverifiable or misbound status receipt leaves the operation uncertain" do
+    execution = admit_ac_execution
+    operation = AcRemoteOperation.create!(company: @company, project: @project, ac_remote_environment: @environment,
+      ac_task: @task, ac_execution: execution, operation_id: SecureRandom.uuid,
+      command: "true", working_directory: "/srv/project", state: "running", remote_job_id: "fixture",
+      metadata: { "execution_epoch" => execution.epoch })
+    supervisor = FakeAcRemoteSupervisor.new
+    supervisor.receipt = { "operation_id" => operation.operation_id, "company_id" => @company.id,
+      "environment_id" => @environment.id, "task_id" => @task.id, "execution_id" => execution.id,
+      "epoch" => execution.epoch, "state" => "completed", "remote_job_id" => "fixture", "exit_code" => 0 }
+    Rails.application.config.ac_remote_supervisor = supervisor
+    result = AcRemoteGatewayService.query_operation_status!(operation: operation)
+    assert_equal "uncertain", operation.reload.state
+    assert result[:result][:uncertain]
+    supervisor.verified = true
+    supervisor.receipt["execution_id"] = execution.id + 1
+    AcRemoteGatewayService.query_operation_status!(operation: operation)
+    assert_equal "uncertain", operation.reload.state
+    assert_nil operation.exit_code
+  end
 
-    unauthorized_dirs.each do |unauth_dir|
+  test "the committed intent is revalidated under the fence before the remote call" do
+    execution = admit_ac_execution
+    AcAdmissionService.validate_execution_authority!(execution_id: execution.id,
+      operation_id: execution.operation_id, reported_epoch: execution.epoch)
+    operation = AcRemoteOperation.create!(company: @company, project: @project, ac_remote_environment: @environment,
+      ac_task: @task, ac_execution: execution, operation_id: SecureRandom.uuid, command: "true",
+      working_directory: "/srv/project", state: "pending", metadata: { "execution_epoch" => execution.epoch })
+    execution.ac_capacity_grant.update!(expires_at: 1.minute.ago)
+    supervisor = FakeAcRemoteSupervisor.new
+    called = false
+    assert_raises(AcAdmissionService::UnauthorizedExecutionBypassError) do
+      AcRemoteGatewayService.send(:dispatch_under_fence!, operation: operation, environment: @environment,
+        task: @task, execution: execution, supervisor: supervisor, metadata: {}, runner: @runner) { called = true }
+    end
+    assert_not called
+    assert_equal 0, supervisor.dispatch_calls
+    assert_empty @runner.commands
+  end
+
+  test "later unverified observations do not downgrade a verified terminal result" do
+    execution = admit_ac_execution
+    operation = AcRemoteOperation.create!(company: @company, project: @project, ac_remote_environment: @environment,
+      ac_task: @task, ac_execution: execution, operation_id: SecureRandom.uuid,
+      command: "true", working_directory: "/srv/project", state: "running", remote_job_id: "fixture",
+      metadata: { "execution_epoch" => execution.epoch })
+    supervisor = FakeAcRemoteSupervisor.new
+    supervisor.receipt = { "operation_id" => operation.operation_id, "company_id" => @company.id,
+      "environment_id" => @environment.id, "task_id" => @task.id, "execution_id" => execution.id,
+      "epoch" => execution.epoch, "state" => "completed", "remote_job_id" => "fixture", "exit_code" => 0 }
+    supervisor.verified = true
+    Rails.application.config.ac_remote_supervisor = supervisor
+    AcRemoteGatewayService.query_operation_status!(operation: operation)
+    assert_equal "completed", operation.reload.state
+    assert_equal 0, operation.exit_code
+    finished_at = operation.finished_at
+
+    supervisor.receipt["state"] = "failed"
+    supervisor.receipt["exit_code"] = 1
+    AcRemoteGatewayService.query_operation_status!(operation: operation)
+    assert_equal "completed", operation.reload.state
+    assert_equal 0, operation.exit_code
+    assert_equal finished_at, operation.finished_at
+    assert operation.metadata["last_observation_error"].present?
+
+    Rails.application.config.ac_remote_supervisor = nil
+    AcRemoteGatewayService.query_operation_status!(operation: operation)
+    assert_equal "completed", operation.reload.state
+    assert_equal 0, operation.exit_code
+  end
+
+  test "expired grant or a path outside the allowed directory cannot dispatch" do
+    execution = admit_ac_execution
+    [ "/etc", "/srv/project/../../etc", "/srv/project-other" ].each do |directory|
       assert_raises(AcRemoteGatewayService::UnauthorizedRemoteDirectoryError) do
-        AcRemoteGatewayService.dispatch_operation!(
-          environment: @env_nexoisp,
-          operation_id: "op-unauth-#{SecureRandom.hex(4)}",
-          command: "ls -la",
-          working_directory: unauth_dir,
-          runner: @mock_runner
-        )
+        dispatch(execution: execution, working_directory: directory)
       end
     end
+    execution.ac_capacity_grant.update!(expires_at: 1.minute.ago)
+    assert_raises(AcAdmissionService::UnauthorizedExecutionBypassError) { dispatch(execution: execution) }
+    assert_empty @runner.commands
   end
 
-  # Prova G4-E5: Transição para uncertain quando estado pós-desconexão é indemonstrável (§14.3)
-  test "G4-E5: transitions to uncertain when remote state cannot be proven after disconnect" do
-    op_id = "op-uncertain-#{SecureRandom.hex(4)}"
-    cmd = "bundle exec rake critical_migration"
-    work_dir = "/home/enok/Documentos/projetos/nexoisp"
-    wrapped_cmd = "cd #{work_dir} && #{cmd}"
-
-    @mock_runner.failure_on_command[wrapped_cmd] = "SSH timeout"
-
-    op = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: op_id,
-      command: cmd,
-      working_directory: work_dir,
-      artifact_hash: "migration-hash",
-      runner: @mock_runner
-    )
-
-    assert_equal "running", op.state
-    remote_job_id = op.remote_job_id
-
-    # Consulta de status também falha com desconexão permanente ou resposta desconhecida
-    query_cmd = "test -f #{work_dir}/.ac_job_#{remote_job_id}.exit && cat #{work_dir}/.ac_job_#{remote_job_id}.exit || echo RUNNING"
-    @mock_runner.failure_on_command[query_cmd] = "SSH host unreachable"
-
-    status = AcRemoteGatewayService.query_operation_status!(operation: op, runner: @mock_runner)
-
-    op.reload
-    assert_equal "uncertain", op.state
-    assert_equal true, op.terminal?
-    assert_equal true, status[:result][:uncertain]
-    assert_includes op.error_log, "UNCERTAIN: Desconexão de transporte durante verificação de status"
+  test "a missing supervisor leaves an existing operation uncertain" do
+    execution = admit_ac_execution
+    operation = AcRemoteOperation.create!(company: @company, project: @project, ac_remote_environment: @environment,
+      ac_task: @task, ac_execution: execution, operation_id: SecureRandom.uuid,
+      command: "true", working_directory: "/srv/project", state: "running", remote_job_id: "fixture")
+    result = AcRemoteGatewayService.query_operation_status!(operation: operation, runner: @runner)
+    assert_equal "uncertain", operation.reload.state
+    assert result[:result][:uncertain]
+    assert_not result[:running]
+    assert_empty @runner.commands
   end
 
-  # Teste das 5 perguntas de §14.3
-  test "answers five remote questions precisely (§14.3)" do
-    op_id = "op-5q-#{SecureRandom.hex(4)}"
-    commit_hash = "git-sha-20261101"
+  private
 
-    op = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: op_id,
-      command: "bundle exec rake spec",
-      working_directory: "/home/enok/Documentos/projetos/nexoisp",
-      artifact_hash: commit_hash,
-      metadata: { "repeatable" => true },
-      runner: @mock_runner
-    )
-
-    questions = AcRemoteGatewayService.query_operation_status!(operation: op, runner: @mock_runner)
-
-    # 1. Já iniciou?
-    assert_equal true, questions[:started]
-    # 2. Ainda executa?
-    assert_equal false, questions[:running]
-    # 3. Qual resultado?
-    assert_equal 0, questions[:result][:exit_code]
-    assert_equal true, questions[:result][:terminal]
-    # 4. Qual commit usou?
-    assert_equal commit_hash, questions[:artifact_hash]
-    # 5. Pode ser repetida?
-    assert_equal true, questions[:repeatable]
-  end
-
-  # Prova DEF-06: Escapamento correto de diretórios remotos com espaços e caracteres especiais
-  test "DEF-06: query_operation_status! properly escapes working directory with spaces and special characters" do
-    op_id = "op-escape-#{SecureRandom.hex(4)}"
-    op = AcRemoteGatewayService.dispatch_operation!(
-      environment: @env_nexoisp,
-      operation_id: op_id,
-      command: "bundle exec rake",
-      working_directory: "/home/enok/Documentos/projetos/nexoisp",
-      runner: @mock_runner
-    )
-
-    # Simula diretório com espaços e caracteres especiais
-    op.update!(
-      working_directory: "/home/enok/Documentos/projetos/nexoisp dir with spaces",
-      state: "running"
-    )
-
-    AcRemoteGatewayService.query_operation_status!(operation: op, runner: @mock_runner)
-
-    last_cmd = @mock_runner.executions.last[:command]
-    assert_includes last_cmd, "nexoisp\\ dir\\ with\\ spaces",
-                    "Comando de status deve escapar espaços do working_directory via Shellwords.shellescape"
+  def dispatch(execution: nil, working_directory: "/srv/project")
+    AcRemoteGatewayService.dispatch_operation!(environment: @environment, operation_id: SecureRandom.uuid,
+      command: "true", working_directory: working_directory, task: execution && @task,
+      execution: execution, runner: @runner)
   end
 end

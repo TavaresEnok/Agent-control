@@ -68,6 +68,7 @@ module ContainerRuntime
         "HostConfig" => spec[:host_config] || {}
       }
 
+      config["User"] = spec[:user] if spec[:user]
       config["Cmd"] = spec[:cmd] if spec[:cmd]
       config["WorkingDir"] = spec[:working_dir] if spec[:working_dir]
       config["ExposedPorts"] = spec[:exposed_ports] if spec[:exposed_ports]
@@ -199,7 +200,7 @@ module ContainerRuntime
       return container_id if container_id.is_a?(Docker::Container)
 
       Docker::Container.get(container_id)
-    rescue Docker::Error::NotFoundError, Docker::Error::ClientError
+    rescue Docker::Error::NotFoundError
       nil
     end
 

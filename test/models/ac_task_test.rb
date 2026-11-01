@@ -117,7 +117,7 @@ class AcTaskTest < ActiveSupport::TestCase
     assert task.valid?
   end
 
-  test "reject_back_to_implementation! resets to queued and clears approval (RF-20)" do
+  test "reject_back_to_implementation! requests changes and clears approval (RF-20)" do
     task = AcTask.create!(
       company: @company,
       project: @project,
@@ -132,7 +132,7 @@ class AcTaskTest < ActiveSupport::TestCase
     )
 
     task.reject_back_to_implementation!
-    assert task.queued? || task.state == "needs_changes"
+    assert_equal "needs_changes", task.state
     assert_nil task.approved_commit_sha
     assert_nil task.approved_artifact_hash
   end
@@ -157,7 +157,7 @@ class AcTaskTest < ActiveSupport::TestCase
       title: "Depends on t1",
       position: 2,
       state: :pending,
-      depends_on: ["t1-independent"]
+      depends_on: [ "t1-independent" ]
     )
 
     ready = AcTask.dependencies_met(@plan.id)

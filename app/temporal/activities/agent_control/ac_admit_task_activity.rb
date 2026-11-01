@@ -15,6 +15,7 @@ module Activities
         profile_id = input.execution_profile_id
 
         task = AcTask.find(task_id)
+        return { "cancelled" => true } if task.cancelled? || task.ac_plan.abandoned?
         profile = profile_id.present? ? AcExecutionProfile.find(profile_id) : nil
 
         result = AcAdmissionService.admit_execution!(
@@ -23,7 +24,10 @@ module Activities
           requested_by: requested_by,
           origin: origin,
           execution_profile: profile,
-          epoch: epoch
+          epoch: epoch,
+          role: input.role,
+          manager_identity: input.manager_identity,
+          manager_epoch: input.manager_epoch
         )
 
         {
@@ -35,6 +39,15 @@ module Activities
           "operation_id" => operation_id,
           "epoch" => epoch
         }
+      rescue AcAdmissionService::ProfileNotEligibleError, AcCapacityGrant::LimitExceededError => e
+        task&.update!(metadata: (task.metadata || {}).merge("waiting_reason" => e.message))
+        { "waiting" => true, "reason" => e.message }
+      rescue AcAdmissionService::TaskNotEligibleForAdmissionError => e
+        if task && (task.ac_plan.paused? || !task.ac_plan.ac_work_context.active?)
+          { "waiting" => true, "reason" => e.message }
+        else
+          raise
+        end
       end
     end
   end

@@ -118,6 +118,17 @@ module ContainerStrategies
       assert_includes strategy.build_env_vars, "AUTH_REQUIRED_KEYS=tokens"
     end
 
+    test "origin credentials stay out of labels and differ by terminal surface" do
+      strategy = build_strategy
+      env = strategy.build_env_vars
+      tty = env.find { |entry| entry.start_with?("TTYD_ORIGIN_CREDENTIAL=") }.split("=", 2).last
+      view = env.find { |entry| entry.start_with?("TTYD_VIEW_ORIGIN_CREDENTIAL=") }.split("=", 2).last
+      assert_not_equal tty, view
+      assert_not_includes strategy.build_labels.values.join(" "), tty
+      assert_not_includes strategy.build_labels.values.join(" "), view
+      assert_not_includes strategy.build_labels.values.join(" "), Settings.terminal_origin_auth.proxy_proof
+    end
+
     # == Environment Variables Tests ==
 
     test "builds env vars with session info" do
@@ -230,7 +241,7 @@ module ContainerStrategies
       labels = strategy.build_labels
       router_name = "terminal-#{@session.route_token}"
 
-      assert_equal "terminal-auth@file",
+      assert_equal "terminal-proxy-proof@file,terminal-auth@file",
                    labels["traefik.http.routers.#{router_name}-ide.middlewares"]
     end
 

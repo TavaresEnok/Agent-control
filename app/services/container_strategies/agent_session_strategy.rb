@@ -151,7 +151,7 @@ module ContainerStrategies
       # it (Kiro reads its credit counter, Grok prices models from the catalogue).
       # Collecting first would spend the run's last API call on an expired token.
       persist_refreshed_credentials(container, session, agent_service)
-      persist_credential_metadata(container, SessionCompany.agent_credentials_for(session).find_by(agent_type: input[:agent_type]), agent_service, :session)
+      persist_credential_metadata(container, SessionCompany.credential_for(session, agent_type: input[:agent_type]), agent_service, :session)
       collect_usage(session, agent_service, log_contents)
       IntegrationCleanupService.release_session_locks!(session)
 
@@ -177,7 +177,7 @@ module ContainerStrategies
       # Fall back to the default model chosen on THIS session's company credential. The
       # pin is per credential, and a credential is per company — a model pinned against
       # another company's Bedrock account does not exist here.
-      credential = SessionCompany.agent_credentials_for(session).find_by(agent_type: session.agent_type)
+      credential = SessionCompany.credential_for(session, agent_type: session.agent_type)
       credential&.default_model
     end
 
@@ -454,7 +454,7 @@ module ContainerStrategies
       return if config_data.blank?
 
       # This session's company's credential — the same row the write below targets.
-      credential = SessionCompany.agent_credentials_for(session).find_by(agent_type: input[:agent_type])
+      credential = SessionCompany.credential_for(session, agent_type: input[:agent_type])
       return unless credential
       return if credential.config_data == config_data # cheap pre-check, avoids locking on no-op
 
@@ -469,7 +469,7 @@ module ContainerStrategies
         merged = adapter.merge_container_credentials(current, credential.without_retired_grants(config_data))
         next if merged == current
 
-        AgentCredential.from_artifacts(session.user_id, SessionCompany.company_id_for(session), input[:agent_type], merged)
+        AgentCredential.from_artifacts(session.user_id, SessionCompany.company_id_for(session), input[:agent_type], merged, account_slug: credential.account_slug)
         Rails.logger.info("[AgentSession] Persisted refreshed #{input[:agent_type]} credentials for user #{session.user_id}")
       end
     rescue StandardError => e

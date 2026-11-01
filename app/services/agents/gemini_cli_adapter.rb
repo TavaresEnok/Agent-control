@@ -115,7 +115,7 @@ module Agents
 
       # Inject the API key from the credential of THIS session's company: keys are per
       # company so the vendor bill lands on the company that ran the session.
-      credential = SessionCompany.agent_credentials_for(session).find_by(agent_type: "gemini_cli")
+      credential = SessionCompany.credential_for(session, agent_type: "gemini_cli")
       env["GEMINI_API_KEY"] = credential.config_data["api_key"] if credential&.config_data&.dig("api_key").present?
 
       env.compact

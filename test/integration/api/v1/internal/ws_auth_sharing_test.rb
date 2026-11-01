@@ -120,7 +120,7 @@ module Api
           value = ContainerTicket.issue(user: @member, session: @session, ttl: ContainerTicket::COOKIE_TTL)
 
           get api_v1_internal_ws_auth_path,
-              headers: { "X-Forwarded-Uri" => "/t/#{@session.route_token}/view/ws",
+              headers: { "X-Aixle-Proxy-Proof" => Settings.terminal_origin_auth.proxy_proof, "X-Forwarded-Uri" => "/t/#{@session.route_token}/view/ws",
                          "Cookie" => "#{ContainerTicket::COOKIE}=#{value}" }
 
           assert_response :ok
@@ -133,11 +133,11 @@ module Api
 
           travel ContainerTicket::TICKET_TTL + 1.minute do
             uri = "/t/#{@session.route_token}/view?#{ContainerTicket::PARAM}=#{CGI.escape(ticket)}"
-            get api_v1_internal_ws_auth_path, headers: { "X-Forwarded-Uri" => uri }
+            get api_v1_internal_ws_auth_path, headers: { "X-Aixle-Proxy-Proof" => Settings.terminal_origin_auth.proxy_proof, "X-Forwarded-Uri" => uri }
             assert_response :unauthorized
 
             get api_v1_internal_ws_auth_path,
-                headers: { "X-Forwarded-Uri" => uri, "Cookie" => "#{ContainerTicket::COOKIE}=#{cookie}" }
+                headers: { "X-Aixle-Proxy-Proof" => Settings.terminal_origin_auth.proxy_proof, "X-Forwarded-Uri" => uri, "Cookie" => "#{ContainerTicket::COOKIE}=#{cookie}" }
             assert_response :ok
             assert_equal @member.id.to_s, response.headers["X-User-Id"]
             assert_nil response.headers["Set-Cookie"]
@@ -167,7 +167,7 @@ module Api
 
         def get_ws_auth(session, suffix: "tty/ws")
           get api_v1_internal_ws_auth_path,
-              headers: { "X-Forwarded-Uri" => "/t/#{session.route_token}/#{suffix}" }
+              headers: { "X-Aixle-Proxy-Proof" => Settings.terminal_origin_auth.proxy_proof, "X-Forwarded-Uri" => "/t/#{session.route_token}/#{suffix}" }
         end
       end
     end

@@ -1,3 +1,9 @@
+# Remediação de código — 2026-11-01
+
+O pedido de correção autorizou remediação em cópia isolada. As pausas e o encerramento operacional abaixo continuam preservados. Consulte [STATUS](STATUS.md), [ADR-003](ADR-003-FRONTEIRAS-DE-EXECUCAO-E-REMEDIACAO.md) e [matriz de remediação](validation/REMEDIACAO_2026-11-01.md) antes de usar alegações de gates anteriores. Correção de código não autoriza retomar filas, migrar projetos ou usar provedores reais.
+
+---
+
 # Encerramento operacional vigente — 2026-10-31
 
 O proprietário mandou fechar apenas o lote em curso e parar para outra IA.

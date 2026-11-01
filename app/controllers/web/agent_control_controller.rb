@@ -11,6 +11,7 @@ class Web::AgentControlController < Web::ApplicationController
     graph_data = AcDagGraphService.build_graph(plan: plan)
 
     render inertia: "AgentControl/PlanGraph", props: {
+      companyId: current_company.id,
       plan: graph_data[:plan],
       initialGraph: graph_data
     }

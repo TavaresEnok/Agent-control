@@ -70,42 +70,19 @@ class AcCapacityGrant < ApplicationRecord
     operation_id:, epoch:, policy_revision_id:, policy_revision_number:,
     quantity: 1, resource_type: :inference_slot, expires_in: 30.minutes
   )
-    grant = nil
-    ApplicationRecord.transaction do
-      # Verificar se já existe (idempotência)
-      existing = lock.find_by(operation_id: operation_id)
-      return existing if existing&.granted? || existing&.active?
-
-      # Contar vagas já concedidas para esta company/credential
-      occupied = for_company(company)
-                   .for_credential(agent_credential)
-                   .active_or_granted
-                   .where(resource_type: resource_type)
-                   .lock("FOR UPDATE")
-                   .pluck(:quantity)
-                   .sum
-
-      # Verificar limite da política (buscado no pool de admissão existente)
-      limit = pool_limit_for(company: company, resource_type: resource_type)
-      raise AcCapacityGrant::LimitExceededError, "Limite #{resource_type} atingido: #{occupied}/#{limit}" if limit && occupied + quantity > limit
-
-      grant = create!(
-        company: company,
-        ac_task: ac_task,
-        ac_execution_profile: ac_execution_profile,
-        agent_credential: agent_credential,
-        operation_id: operation_id,
-        epoch: epoch,
-        state: :granted,
-        quantity: quantity,
-        resource_type: resource_type,
-        policy_revision_id: policy_revision_id,
-        policy_revision_number: policy_revision_number,
-        granted_at: Time.current,
-        expires_at: Time.current + expires_in
-      )
+    # All admission paths must share one durable authority. The legacy broker's
+    # snapshot is not a reservation, so it cannot authorize an independent grant.
+    authority = Rails.application.config.try(:ac_capacity_authority) || AcLocalCapacityAuthorityService
+    unless authority && authority.respond_to?(:grant_atomically!)
+      raise LimitExceededError, "Autoridade compartilhada de capacidade não configurada"
     end
-    grant
+
+    authority.grant_atomically!(
+      company: company, ac_task: ac_task, ac_execution_profile: ac_execution_profile,
+      agent_credential: agent_credential, operation_id: operation_id, epoch: epoch,
+      policy_revision_id: policy_revision_id, policy_revision_number: policy_revision_number,
+      quantity: quantity, resource_type: resource_type, expires_in: expires_in
+    )
   end
 
   # ── Transições de estado ─────────────────────────────────────────────────
@@ -117,16 +94,22 @@ class AcCapacityGrant < ApplicationRecord
   # §11.3: Expirar reserva não prova que o processo terminou —
   #        use release! somente após confirmar encerramento ou revogação
   def release!
+    execution = AcExecution.find_by(ac_capacity_grant_id: id)
+    raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Execução não encontrada" unless execution
+    receipt = AcRuntimeSupervisorService.status!(execution: execution)
+    unless %w[completed failed not_started].include?(receipt["state"])
+      raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Término não comprovado"
+    end
     update!(state: :released, released_at: Time.current)
   end
 
   def expire!
-    update!(state: :expired)
+    raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Expiração não comprova término do escritor"
   end
 
   # Revogação explícita (§11.3, §11.4 — bloqueio emergencial)
   def revoke!(reason:)
-    update!(state: :revoked, revoke_reason: reason)
+    raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Revogação não comprova término do escritor"
   end
 
   # §11.3: resultado de processo antigo (epoch diferente) deve ser rejeitado
@@ -149,13 +132,4 @@ class AcCapacityGrant < ApplicationRecord
 
     errors.add(:ac_task, "deve pertencer à mesma company")
   end
-
-  def self.pool_limit_for(company:, resource_type:)
-    # Delega para o pool de admissão existente se resource_type == :inference_slot
-    # Para outros tipos, retorna nil (sem limite configurado ainda em F1)
-    return nil unless resource_type.to_s == "inference_slot"
-
-    SessionAdmissionPool.find_by(key: "company_#{company.id}")&.limit
-  end
-  private_class_method :pool_limit_for
 end

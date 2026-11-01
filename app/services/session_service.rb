@@ -16,7 +16,8 @@ class SessionService
       # this user, instead of starting a session that fails silently at provisioning.
       preflight_oauth!(user, params[:mcp_server_ids])
       preflight_cloud!(user, company || project&.company)
-      preflight_agent_credential!(user, company || project&.company, agent_type, session_type: session_type)
+      preflight_agent_credential!(user, company || project&.company, agent_type, session_type: session_type,
+        credential_id: params[:session_config]&.with_indifferent_access&.dig(:agent_credential_id))
       preflight_url_safety!(params[:mcp_server_ids])
       preflight_company_active!(company || project&.company)
 
@@ -98,7 +99,8 @@ class SessionService
       # replace the broken credential, so gating it on that credential would trap
       # the user behind the queue with no way out.
       preflight_agent_credential!(session.user, SessionCompany.company_for(session), session.agent_type,
-        session_type: session.session_type, excluding_session_id: session.id)
+        session_type: session.session_type, excluding_session_id: session.id,
+        credential_id: session.session_config&.with_indifferent_access&.dig(:agent_credential_id))
       preflight_url_safety!(session.mcp_server_ids)
       refresh_oauth_tokens_for_session(session) if refresh_tokens
     end
@@ -368,12 +370,17 @@ class SessionService
     # `excluding_session_id:` is the session being launched. It is itself an active row,
     # so without it the "is another container holding these tokens?" test would find this
     # session and refuse every launch it was asked to check.
-    def preflight_agent_credential!(user, company, agent_type, session_type: nil, excluding_session_id: nil)
+    def preflight_agent_credential!(user, company, agent_type, session_type: nil, excluding_session_id: nil, credential_id: nil)
       return if session_type == "auth_setup"
       return unless agent_type.present? && company.present?
 
       credentials = AgentCredential.where(user_id: user.id, company_id: company.id)
-      credential = credentials.find_by(agent_type: agent_type)
+      matching = credentials.where(agent_type: agent_type)
+      credential = if credential_id.present?
+        matching.find_by(id: credential_id)
+      elsif matching.limit(2).count == 1
+        matching.first
+      end
       if credential.nil?
         raise AgentCredential::PreflightError.new(agent_type: (agent_type if credentials.exists?))
       end

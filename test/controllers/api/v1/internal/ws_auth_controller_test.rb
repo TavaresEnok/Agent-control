@@ -7,6 +7,7 @@ module Api
     module Internal
       class WsAuthControllerTest < ActionController::TestCase
         setup do
+          request.headers["X-Aixle-Proxy-Proof"] = Settings.terminal_origin_auth.proxy_proof
           @company = create(:company)
           @user = create(:user, company: @company)
           @session = create(:terminal_session, user: @user, state: "ready")
@@ -14,6 +15,24 @@ module Api
           Rails.logger.stubs(:info)
           Rails.logger.stubs(:warn)
           Rails.logger.stubs(:error)
+        end
+
+        test "direct clients cannot obtain the origin credential by forging forwarded headers" do
+          sign_in @user
+          request.headers["X-Aixle-Proxy-Proof"] = "forged"
+          request.headers["X-Forwarded-Uri"] = "/t/#{@session.route_token}/tty/ws"
+          get :show
+          assert_response :forbidden
+          assert_nil response.headers["Authorization"]
+        end
+
+        test "authorized proxy receives a surface-specific origin credential" do
+          sign_in @user
+          request.headers["X-Forwarded-Uri"] = "/t/#{@session.route_token}/tty/ws"
+          get :show
+          assert_response :ok
+          assert_equal TerminalOriginAuth.authorization(@session, "tty"), response.headers["Authorization"]
+          assert_not_equal TerminalOriginAuth.authorization(@session, "view"), response.headers["Authorization"]
         end
 
         # == Route Token Extraction Tests ==

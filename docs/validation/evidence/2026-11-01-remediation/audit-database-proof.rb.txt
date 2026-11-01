@@ -1,0 +1,35 @@
+require Rails.root.join("db/migrate/20261101130104_protect_ac_decision_audit_events")
+connection = ActiveRecord::Base.connection
+connection.transaction do
+  ProtectAcDecisionAuditEvents.install(connection, schema: "public", table: "ac_decision_audit_events")
+  id = connection.select_value("SELECT id FROM ac_decision_audit_events LIMIT 1")
+  unless id
+    require "factory_bot_rails"
+    FactoryBot.find_definitions unless FactoryBot.factories.registered?(:company)
+    company = FactoryBot.create(:company, name: "Audit proof #{SecureRandom.uuid}", email_domain: "#{SecureRandom.hex(8)}.example")
+    user = FactoryBot.create(:user, company: company)
+    project = FactoryBot.create(:project, company: company, owner: user)
+    id = AcDecisionAuditEvent.create!(company: company, project: project, event_type: "policy_published",
+      actor_type: "system", occurred_at: Time.current, reason: "isolated database proof").id
+  end
+  connection.execute("CREATE ROLE ac_remediation_restricted NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS")
+  connection.execute("GRANT USAGE ON SCHEMA public TO ac_remediation_restricted")
+  connection.execute("GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ac_decision_audit_events TO ac_remediation_restricted")
+  connection.execute("SET LOCAL ROLE ac_remediation_restricted")
+  raise "Restricted role readiness rejected" unless AcAuditDatabaseGuard.ready?
+  ["UPDATE ac_decision_audit_events SET reason = reason WHERE id = #{Integer(id)}",
+   "DELETE FROM ac_decision_audit_events WHERE id = #{Integer(id)}",
+   "TRUNCATE ac_decision_audit_events"].each do |sql|
+    blocked = false
+    begin
+      connection.transaction(requires_new: true) { connection.execute(sql) }
+    rescue ActiveRecord::StatementInvalid
+      blocked = true
+    end
+    raise "Audit mutation was not blocked" unless blocked
+  end
+  connection.execute("RESET ROLE")
+  raise "Owner role incorrectly passed readiness" if AcAuditDatabaseGuard.ready?
+  puts "PASS: restricted role ready; UPDATE/DELETE/TRUNCATE blocked; owner role refused"
+  raise ActiveRecord::Rollback
+end

@@ -49,10 +49,8 @@ class AcPaseoImportService
         version: 1,
         title: "Plano Paseo #{paseo_number}: #{title}",
         objective: objective,
-        state: :completed,
+        state: :draft,
         created_by_type: :import,
-        published_at: Time.current,
-        content_hash: Digest::SHA256.hexdigest("#{plan_key}-#{objective}"),
         metadata: { imported_readonly: true, paseo_number: paseo_number }
       )
 
@@ -75,6 +73,9 @@ class AcPaseoImportService
         )
         tasks_count += 1
       end
+
+      raise ArgumentError, plan.errors.full_messages.to_sentence unless plan.publish!
+      plan.update!(state: :completed)
 
       # 4. Auditoria do evento de importação
       AcDecisionAuditEvent.create!(

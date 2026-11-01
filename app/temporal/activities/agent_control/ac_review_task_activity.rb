@@ -2,46 +2,27 @@
 
 module Activities
   module AgentControl
-    # Atividade para submissão de parecer estruturado de revisão/QA (§15)
     class AcReviewTaskActivity < Activities::Base
       activity_name "ac_review_task_activity"
 
       def run(input)
-        task_id = input.task_id
-        artifact_hash = input.artifact_hash
-        verdict = input.verdict
-        reviewer_role = input.reviewer_role || "reviewer"
-        evaluator_identity = input.evaluator_identity
-        findings = input.findings || []
-        candidate_commit_sha = input.candidate_commit_sha
-        base_commit_hash = input.base_commit_hash
-        execution_id = input.execution_id
-
-        task = AcTask.find(task_id)
-        execution = execution_id.present? ? AcExecution.find_by(id: execution_id) : nil
-
-        verdict_record = AcReviewService.submit_verdict!(
-          task: task,
-          artifact_hash: artifact_hash,
-          verdict: verdict,
-          reviewer_role: reviewer_role,
-          evaluator_identity: evaluator_identity,
-          findings: findings,
-          candidate_commit_sha: candidate_commit_sha,
-          base_commit_hash: base_commit_hash,
-          execution: execution
-        )
-
-        task.reload
-
-        {
-          "verdict_id" => verdict_record.id,
-          "verdict" => verdict_record.verdict,
-          "task_id" => task.id,
-          "task_state" => task.state,
-          "approved" => task.approved?,
-          "needs_changes" => (task.state == "needs_changes")
-        }
+        task = AcTask.find(input.task_id)
+        execution = task.ac_executions.find(input.execution_id)
+        AcExecutionFence.synchronize(execution, validate: false) do
+          task.reload
+          AcAdmissionService.validate_manager!(plan: task.ac_plan, identity: input.manager_identity, epoch: input.manager_epoch, required: true)
+          unless execution.metadata["manager_identity"] == input.manager_identity && execution.metadata["manager_epoch"].to_s == input.manager_epoch.to_s
+            raise AcAdmissionService::UnauthorizedExecutionBypassError, "Execução não pertence ao gerente"
+          end
+          receipt = AcRuntimeSupervisorService.status!(execution: execution)
+          assessment = receipt.fetch("output").fetch("review")
+          record = AcReviewService.submit_verdict!(task: task, execution: execution,
+            reviewer_role: execution.ac_execution_profile.role.to_s, evaluator_identity: execution.process_handle,
+            artifact_hash: assessment.fetch("artifact_hash"), verdict: assessment.fetch("verdict"),
+            candidate_commit_sha: assessment.fetch("candidate_commit_sha"), base_commit_hash: assessment.fetch("base_commit_hash"),
+            findings: assessment.fetch("findings", []))
+          { "verdict_id" => record.id, "task_id" => task.id, "task_state" => task.reload.state, "approved" => task.approved? }
+        end
       end
     end
   end

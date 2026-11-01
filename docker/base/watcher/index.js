@@ -33,6 +33,7 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const path = require('path');
+const { limitConnectionLifetime } = require('./connection-lease');
 
 // Loaded on first use so the pure helpers below can be unit-tested without
 // the watcher's npm dependencies installed.
@@ -863,6 +864,10 @@ function handleUpload(req, res) {
   });
 }
 
+function attachWatcherLease(ws, ttlMs) {
+  limitConnectionLifetime(ws, () => ws.terminate(), ttlMs);
+}
+
 /**
  * Main server setup
  */
@@ -938,6 +943,7 @@ function startServer() {
 
   // WebSocket connection handler
   wss.on('connection', (ws, req) => {
+    attachWatcherLease(ws);
     const clientIp = req.socket.remoteAddress;
     log.info(`Client connected: ${clientIp}`);
     clients.add(ws);
@@ -1012,4 +1018,4 @@ if (require.main === module) {
   startCredentialSync();
 }
 
-module.exports = { checkAuthComplete, resolveInside, safePreloadTarget, uploadFileName, vscodeUserSettings };
+module.exports = { attachWatcherLease, checkAuthComplete, resolveInside, safePreloadTarget, uploadFileName, vscodeUserSettings };

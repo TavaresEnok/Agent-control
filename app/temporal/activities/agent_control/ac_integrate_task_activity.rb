@@ -17,7 +17,7 @@ module Activities
         task = AcTask.find(task_id)
 
         result = AcIntegrationService.integrate_task!(
-          task: task,
+          task: task, manager_identity: input.manager_identity, manager_epoch: input.manager_epoch, require_manager: true,
           expected_base_commit: expected_base_commit,
           candidate_commit: candidate_commit,
           current_branch_head: current_branch_head,

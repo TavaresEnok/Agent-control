@@ -437,7 +437,7 @@ module Agents
           # has no expiresAt and would lose to the stored stale one.
           invalidated_blocks.each_key { |k| merged[k] = incoming[k] }
           if merged != fresh
-            AgentCredential.from_artifacts(credential.user_id, credential.company_id, "claude_code", merged)
+            AgentCredential.from_artifacts(credential.user_id, credential.company_id, "claude_code", merged, account_slug: credential.account_slug)
             written = true
           end
         end

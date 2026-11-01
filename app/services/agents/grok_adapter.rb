@@ -208,7 +208,7 @@ module Agents
 
       # Inject the API key from the credential of THIS session's company: keys are per
       # company so the vendor bill lands on the company that ran the session.
-      credential = SessionCompany.agent_credentials_for(session).find_by(agent_type: "grok")
+      credential = SessionCompany.credential_for(session, agent_type: "grok")
       api_key = credential&.config_data&.dig("api_key")
       env["XAI_API_KEY"] = api_key if api_key.present?
 
@@ -542,7 +542,7 @@ module Agents
     # catalogue. Fetched with the session's company credential, because that is the
     # account whose price list applies.
     def price_sheet(terminal_session)
-      credential = SessionCompany.agent_credentials_for(terminal_session).find_by(agent_type: "grok")
+      credential = SessionCompany.credential_for(terminal_session, agent_type: "grok")
       catalog = fetch_model_catalog(credential&.config_data || {})
       return {} if catalog.blank?
 

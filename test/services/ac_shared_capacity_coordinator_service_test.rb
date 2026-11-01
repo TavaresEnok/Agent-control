@@ -5,90 +5,58 @@ require "test_helper"
 class AcSharedCapacityCoordinatorServiceTest < ActiveSupport::TestCase
   setup do
     @company = create(:company)
+    @previous_authority = Rails.application.config.try(:ac_capacity_authority)
+    Rails.application.config.ac_capacity_authority = nil
+    @snapshot = { "account_key" => "fixture-account", "authority_mode" => "shared_coordinated",
+      "active_slots" => 1, "max_slots" => 8, "snapshot_timestamp" => Time.current.iso8601 }
   end
 
-  # Prova G6-E3 (T28): Coexistência autorizada com autoridade comum e cálculo de soma global
-  test "G6-E3: coordinates shared capacity when global usage is within ceiling" do
-    broker_snapshot = {
-      "account_key" => "codex_shared_pool",
-      "authority_mode" => "shared_coordinated",
-      "active_slots" => 3,
-      "max_slots" => 8,
-      "snapshot_timestamp" => Time.current.iso8601
-    }
-
-    result = AcSharedCapacityCoordinatorService.coordinate_shared_reservation!(
-      company: @company,
-      account_key: "codex_shared_pool",
-      requested_slots: 2,
-      external_broker_snapshot: broker_snapshot
-    )
-
-    assert_equal true, result[:authorized]
-    assert_equal "codex_shared_pool", result[:account_key]
-    assert_predicate result[:reservation_token], :present?
-    assert_equal 2, result[:allocated_slots]
-    assert_equal 3, result[:global_usage][:external_active_slots]
-    assert_equal 3, result[:global_usage][:remaining_slots] # 8 - (0 local + 3 external + 2 requested)
+  teardown do
+    Rails.application.config.ac_capacity_authority = @previous_authority
   end
 
-  # Prova G6-E3 (T28): Rejeição estrita quando a soma combinada excede o teto
-  test "G6-E3: raises SharedCapacityExceededError when total exceeds max slots" do
-    broker_snapshot = {
-      "account_key" => "codex_shared_pool",
-      "authority_mode" => "shared_coordinated",
-      "active_slots" => 7,
-      "max_slots" => 8,
-      "snapshot_timestamp" => Time.current.iso8601
-    }
+  test "a fresh snapshot alone cannot authorize a shared reservation" do
+    assert_raises(AcSharedCapacityCoordinatorService::CoordinatorError) { reserve(@snapshot) }
+  end
 
-    # Tenta pedir 2 vagas quando só resta 1 (7 + 2 = 9 > 8)
-    assert_raises(AcSharedCapacityCoordinatorService::SharedCapacityExceededError) do
-      AcSharedCapacityCoordinatorService.coordinate_shared_reservation!(
-        company: @company,
-        account_key: "codex_shared_pool",
-        requested_slots: 2,
-        external_broker_snapshot: broker_snapshot
-      )
+  test "an incomplete authority cannot be called" do
+    incomplete = Class.new do
+      attr_reader :called
+      def reserve_shared!(**)
+        @called = true
+      end
+    end.new
+    Rails.application.config.ac_capacity_authority = incomplete
+    assert_raises(AcSharedCapacityCoordinatorService::CoordinatorError) { reserve(@snapshot) }
+    assert_not incomplete.called
+  end
+
+  test "a reservation requires a verified receipt bound to its identity and quantity" do
+    authority = FakeAcSharedCapacityAuthority.new
+    Rails.application.config.ac_capacity_authority = authority
+    authority.receipt = { "operation_id" => "fixture-operation", "account_key" => "fixture-account",
+      "quantity" => 1, "state" => "granted" }
+    assert_raises(AcSharedCapacityCoordinatorService::UncertainReservationError) { reserve(@snapshot) }
+    authority.verified = true
+    authority.receipt["quantity"] = 2
+    assert_raises(AcSharedCapacityCoordinatorService::UncertainReservationError) { reserve(@snapshot) }
+    authority.receipt["quantity"] = 1
+    assert_equal "granted", reserve(@snapshot)["state"]
+  end
+
+  test "a stale, future or account-mismatched snapshot is rejected" do
+    [ @snapshot.merge("snapshot_timestamp" => 2.minutes.ago.iso8601),
+      @snapshot.merge("snapshot_timestamp" => 2.minutes.from_now.iso8601),
+      @snapshot.merge("account_key" => "other-account"),
+      @snapshot.merge("authority_mode" => "local") ].each do |snapshot|
+      assert_raises(AcSharedCapacityCoordinatorService::StaleBrokerSnapshotError) { reserve(snapshot) }
     end
   end
 
-  # Prova G6-E3 (T28): Rejeição de snapshot do broker legado com carimbo de tempo expirado (stale)
-  test "G6-E3: raises StaleBrokerSnapshotError when snapshot timestamp is older than threshold" do
-    broker_snapshot = {
-      "account_key" => "codex_shared_pool",
-      "authority_mode" => "shared_coordinated",
-      "active_slots" => 2,
-      "max_slots" => 8,
-      "snapshot_timestamp" => 2.minutes.ago.iso8601 # > 60s
-    }
+  private
 
-    assert_raises(AcSharedCapacityCoordinatorService::StaleBrokerSnapshotError) do
-      AcSharedCapacityCoordinatorService.coordinate_shared_reservation!(
-        company: @company,
-        account_key: "codex_shared_pool",
-        requested_slots: 1,
-        external_broker_snapshot: broker_snapshot
-      )
-    end
-  end
-
-  test "G6-E3: raises StaleBrokerSnapshotError on mismatched account_key" do
-    broker_snapshot = {
-      "account_key" => "other_account",
-      "authority_mode" => "shared_coordinated",
-      "active_slots" => 1,
-      "max_slots" => 8,
-      "snapshot_timestamp" => Time.current.iso8601
-    }
-
-    assert_raises(AcSharedCapacityCoordinatorService::StaleBrokerSnapshotError) do
-      AcSharedCapacityCoordinatorService.coordinate_shared_reservation!(
-        company: @company,
-        account_key: "codex_shared_pool",
-        requested_slots: 1,
-        external_broker_snapshot: broker_snapshot
-      )
-    end
+  def reserve(snapshot)
+    AcSharedCapacityCoordinatorService.coordinate_shared_reservation!(company: @company,
+      account_key: "fixture-account", operation_id: "fixture-operation", requested_slots: 1, external_broker_snapshot: snapshot)
   end
 end

@@ -80,6 +80,8 @@ class SessionAdmissionService
             next
           end
 
+          next unless AcLocalCapacityAuthorityService.permit_legacy_session?(admission.terminal_session)
+
           begin
             ensure_run_active!(admission.terminal_session)
           rescue Stopped
@@ -196,7 +198,9 @@ class SessionAdmissionService
       else
         cap = pool.limit
       end
-      [ cap - pool.session_admissions.occupied.count, 0 ].max
+      project_id = /\Aproject:(\d+)\z/.match(pool.key)&.[](1)
+      ac_occupied = project_id ? AcCapacityGrant.active_or_granted.joins(:ac_task).where(ac_tasks: { project_id: project_id }).sum(:quantity) : 0
+      [ cap - pool.session_admissions.occupied.count - ac_occupied, 0 ].max
     end
 
     # Yields the waiting admissions of the pools that still have room, oldest

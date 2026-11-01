@@ -770,3 +770,13 @@ stripe:
   # refused, which is the right default: an unverified webhook is an open door to
   # anyone who can guess the URL.
   webhook_secret: <%= ENV['STRIPE_WEBHOOK_SECRET'] %>
+
+terminal_origin_auth:
+  origin_key: "<%= ENV['TTYD_ORIGIN_KEY'] %>"
+  proxy_proof: "<%= ENV['TERMINAL_PROXY_PROOF'] %>"
+
+agent_control:
+  backup_encryption_key: <%= ENV['AC_BACKUP_ENCRYPTION_KEY'] %>
+  backup_key_id: <%= ENV['AC_BACKUP_KEY_ID'] %>
+  worktree_base_dir: <%= ENV.fetch('AC_WORKTREE_BASE_DIR', '/tmp/ac_worktrees') %>
+  evidence_base_dir: <%= ENV.fetch('AC_EVIDENCE_BASE_DIR', '/var/lib/agent-control/evidence') %>

@@ -338,8 +338,7 @@ module Agents
     # company, never "the user's" — a multi-company user has one per company and the
     # dashboard call must read the account that was actually billed.
     def resolve_access_token(terminal_session)
-      credential = SessionCompany.agent_credentials_for(terminal_session)
-                                 .find_by(agent_type: "cursor_cli")
+      credential = SessionCompany.credential_for(terminal_session, agent_type: "cursor_cli")
       credential&.config_data&.dig("accessToken")
     end
 

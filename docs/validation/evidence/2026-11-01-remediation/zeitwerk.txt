@@ -1,0 +1,11 @@
+Hold on, I am eager loading the application.
+
+WARNING: The following directories will only be checked if you configure
+them to be eager loaded:
+
+  /work/test/mailers/previews
+
+You may verify them manually, or add them to config.eager_load_paths
+in config/application.rb and run zeitwerk:check again.
+
+Otherwise, all is good!

@@ -383,8 +383,7 @@ module Agents
     end
 
     def default_model_for(terminal_session)
-      SessionCompany.agent_credentials_for(terminal_session)
-                    .find_by(agent_type: "antigravity_cli")&.default_model
+      SessionCompany.credential_for(terminal_session, agent_type: "antigravity_cli")&.default_model
     end
 
     def usage_cost_cents(model, input_tokens, output_tokens, cache_read_tokens)

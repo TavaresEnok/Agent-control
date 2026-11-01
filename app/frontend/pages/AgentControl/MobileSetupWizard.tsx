@@ -1,14 +1,16 @@
 import { Head } from '@inertiajs/react';
-import { Button, Select, Stack, Text, TextInput, Title } from '@mantine/core';
-import { IconArrowLeft, IconArrowRight, IconCheck, IconServer, IconSettings, IconShieldCheck } from '@tabler/icons-react';
+import { Button, Select, Stack, Text, TextInput } from '@mantine/core';
+import { IconArrowLeft, IconArrowRight, IconCheck } from '@tabler/icons-react';
 import { useState } from 'react';
+
+import { apiFetch } from 'shared/lib/apiFetch';
 
 import classes from './MobileSetupWizard.module.css';
 
 interface RemoteEnvironmentOption {
   id: number;
   name: string;
-  environment_slug: string;
+  environmentSlug: string;
   state: string;
 }
 
@@ -42,13 +44,17 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
     setFeedback(null);
 
     // Chave de idempotência do cliente (RF-53)
-    const intentId = `mobile-setup-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const intentKey = JSON.stringify([companyId, projectName, contextTitle, selectedEnvId, executionRole, effortLevel]);
+    const storageKey = `agent-control-mobile-setup:${intentKey}`;
+    const intentId = sessionStorage.getItem(storageKey) || crypto.randomUUID();
+    sessionStorage.setItem(storageKey, intentId);
 
     try {
-      const res = await fetch('/api/v1/agent_control/client_commands', {
+      const res = await apiFetch('/api/v1/agent_control/client_commands', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          company_id: companyId,
           intent_id: intentId,
           command_type: 'setup_project_wizard',
           payload: {
@@ -57,9 +63,9 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
             context_title: contextTitle,
             remote_environment_id: selectedEnvId,
             role: executionRole,
-            effort_level: effortLevel
-          }
-        })
+            effort_level: effortLevel,
+          },
+        }),
       });
 
       const data = await res.json();
@@ -68,12 +74,12 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
           type: 'success',
           message: data.deduplicated
             ? 'Configuração já realizada anteriormente (Deduplicada).'
-            : 'Projeto e contexto configurados com sucesso pelo celular!'
+            : 'Projeto e contexto configurados com sucesso pelo celular!',
         });
       } else {
         setFeedback({ type: 'error', message: data.error || 'Falha ao processar configuração.' });
       }
-    } catch (err) {
+    } catch {
       setFeedback({ type: 'error', message: 'Erro de conexão ao enviar configuração.' });
     } finally {
       setLoading(false);
@@ -87,7 +93,9 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
       <div className={classes.wizardCard}>
         <div className={classes.stepIndicator}>
           <span className={classes.stepNumber}>Etapa {step} de 4</span>
-          <Text size="xs" c="dimmed">RF-32 / RNF-04</Text>
+          <Text size="xs" c="dimmed">
+            RF-32 / RNF-04
+          </Text>
         </div>
 
         {step === 1 && (
@@ -122,7 +130,7 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
             <Select
               label="Destino Autorizado"
               placeholder="Selecione o ambiente"
-              data={environments.map((e) => ({ value: e.id.toString(), label: `${e.name} (${e.environment_slug})` }))}
+              data={environments.map((e) => ({ value: e.id.toString(), label: `${e.name} (${e.environmentSlug})` }))}
               value={selectedEnvId}
               onChange={setSelectedEnvId}
               required
@@ -144,7 +152,7 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
               data={[
                 { value: 'programmer', label: 'Programador (Codex / Claude Code)' },
                 { value: 'reviewer', label: 'Revisor Independente' },
-                { value: 'qa', label: 'Especialista de QA' }
+                { value: 'qa', label: 'Especialista de QA' },
               ]}
               value={executionRole}
               onChange={setExecutionRole}
@@ -154,7 +162,7 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
               data={[
                 { value: 'low', label: 'Baixo' },
                 { value: 'medium', label: 'Médio' },
-                { value: 'high', label: 'Alto' }
+                { value: 'high', label: 'Alto' },
               ]}
               value={effortLevel}
               onChange={setEffortLevel}
@@ -169,11 +177,22 @@ export default function MobileSetupWizard({ companyId, environments }: MobileSet
               <div className={classes.stepDesc}>Revise os dados antes do envio atômico com deduplicação.</div>
             </div>
             <Stack gap="xs" style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 8 }}>
-              <Text size="sm"><strong>Projeto:</strong> {projectName || '(não definido)'}</Text>
-              <Text size="sm"><strong>Contexto:</strong> {contextTitle || '(não definido)'}</Text>
-              <Text size="sm"><strong>Ambiente:</strong> {environments.find((e) => e.id.toString() === selectedEnvId)?.name || 'Nenhum'}</Text>
-              <Text size="sm"><strong>Papel:</strong> {executionRole}</Text>
-              <Text size="sm"><strong>Esforço:</strong> {effortLevel}</Text>
+              <Text size="sm">
+                <strong>Projeto:</strong> {projectName || '(não definido)'}
+              </Text>
+              <Text size="sm">
+                <strong>Contexto:</strong> {contextTitle || '(não definido)'}
+              </Text>
+              <Text size="sm">
+                <strong>Ambiente:</strong>{' '}
+                {environments.find((e) => e.id.toString() === selectedEnvId)?.name || 'Nenhum'}
+              </Text>
+              <Text size="sm">
+                <strong>Papel:</strong> {executionRole}
+              </Text>
+              <Text size="sm">
+                <strong>Esforço:</strong> {effortLevel}
+              </Text>
             </Stack>
 
             {feedback && (

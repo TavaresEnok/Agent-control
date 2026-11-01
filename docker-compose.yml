@@ -17,6 +17,7 @@ x-docker-volumes: &docker-volumes
   - ./.docker-cache/home:/home/app
   - ./docker/remote/db_dumps:/db_dumps:cached
   - /var/run/docker.sock:/var/run/docker.sock
+  - ${PWD}/.docker-cache/agent-control:${PWD}/.docker-cache/agent-control
 
 # The socket is root:docker 0660 and the containers run as the host UID with no
 # supplementary group, so they must join the socket's group to open it.
@@ -33,6 +34,12 @@ x-db-environment: &db-environment
 
 x-web-environment: &web-environment
   <<: *db-environment
+  AC_BACKUP_ENCRYPTION_KEY: ${AC_BACKUP_ENCRYPTION_KEY:-}
+  AC_BACKUP_KEY_ID: ${AC_BACKUP_KEY_ID:-}
+  AC_WORKTREE_BASE_DIR: ${PWD}/.docker-cache/agent-control/worktrees
+  AC_EVIDENCE_BASE_DIR: ${PWD}/.docker-cache/agent-control/evidence
+  TTYD_ORIGIN_KEY: ${TTYD_ORIGIN_KEY:-}
+  TERMINAL_PROXY_PROOF: ${TERMINAL_PROXY_PROOF:-}
   APP_VERSION: dev
   HOME: /home/app
   # The container runs as the host's uid, which has no passwd entry inside the
@@ -197,10 +204,7 @@ services:
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_HOST_PORT:-80}:80"
       - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_HOST_PORT:-443}:443"
-      - "${BIND_ADDRESS:-127.0.0.1}:${TRAEFIK_DASHBOARD_HOST_PORT:-8090}:8080"
     command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=${DOCKER_AGENT_NETWORK:-app_agents}"
@@ -208,12 +212,13 @@ services:
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
-      - "--log.level=DEBUG"
+      - "--log.level=WARN"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./docker/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
     environment:
       PORT: ${PORT:-4000}
+      TERMINAL_PROXY_PROOF: ${TERMINAL_PROXY_PROOF:-}
     networks: [ default, agents ]
     attach: false
 

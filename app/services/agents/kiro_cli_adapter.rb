@@ -692,7 +692,7 @@ module Agents
     end
 
     def collect_usage(terminal_session, artifacts = {})
-      credential = SessionCompany.agent_credentials_for(terminal_session).find_by(agent_type: "kiro_cli")
+      credential = SessionCompany.credential_for(terminal_session, agent_type: "kiro_cli")
       usage = credit_usage(credential&.config_data || {})
       previous = credential&.metadata&.dig(LAST_CREDITS_KEY)
 
@@ -1193,7 +1193,7 @@ module Agents
     # (at login, and at every cleanup). A batch that arrives before the first reading
     # still records its credits — it just prices them at zero rather than guessing.
     def credit_rate_for(terminal_session)
-      credential = SessionCompany.agent_credentials_for(terminal_session).find_by(agent_type: "kiro_cli")
+      credential = SessionCompany.credential_for(terminal_session, agent_type: "kiro_cli")
       credential&.metadata&.dig(CREDIT_RATE_KEY).to_f
     rescue StandardError
       0.0

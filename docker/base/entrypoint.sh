@@ -27,6 +27,11 @@ TTYD_PORT="${TTYD_PORT:-7681}"
 WATCHER_PORT="${WATCHER_PORT:-4040}"
 WORKSPACE="${WORKSPACE:-/workspace}"
 AGENT_NAME="${AGENT_NAME:-Agent}"
+: "${TTYD_ORIGIN_CREDENTIAL:?missing terminal origin credential}"
+: "${TTYD_VIEW_ORIGIN_CREDENTIAL:?missing view origin credential}"
+terminal_origin_credential="$TTYD_ORIGIN_CREDENTIAL"
+view_origin_credential="$TTYD_VIEW_ORIGIN_CREDENTIAL"
+unset TTYD_ORIGIN_CREDENTIAL TTYD_VIEW_ORIGIN_CREDENTIAL
 
 # Ensure HOME config directories exist (may be tmpfs mounted)
 mkdir -p "$HOME/.config" 2>/dev/null || true
@@ -79,7 +84,8 @@ fi
 # -----------------------------------------------------------------------------
 # Start OpenVSCode Server
 # -----------------------------------------------------------------------------
-VSCODE_PORT="${VSCODE_PORT:-8443}"
+VSCODE_PORT="8443"
+VSCODE_INTERNAL_PORT="8444"
 SERVER_BASE_PATH="/t/${ROUTE_TOKEN}/ide"
 
 VSCODE_DATA_DIR="$HOME/.openvscode-server/data"
@@ -90,17 +96,19 @@ jq 'del(."workbench.colorTheme")' /opt/openvscode-server/default-settings.json >
 cp /opt/openvscode-server/default-settings.json "$VSCODE_DATA_DIR/User/settings.json"
 
 /opt/openvscode-server/bin/openvscode-server \
-    --port "$VSCODE_PORT" \
-    --host 0.0.0.0 \
+    --port "$VSCODE_INTERNAL_PORT" \
+    --host 127.0.0.1 \
     --server-base-path "$SERVER_BASE_PATH" \
     --connection-token "$VSCODE_TOKEN" \
     --default-folder /workspace \
     --disable-workspace-trust \
     > /dev/null 2>&1 &
 VSCODE_PID=$!
+node /opt/watcher/ide-proxy.js > /dev/null 2>&1 &
+IDE_PROXY_PID=$!
 
 sleep 1
-if kill -0 $VSCODE_PID 2>/dev/null; then
+if kill -0 $VSCODE_PID 2>/dev/null && kill -0 $IDE_PROXY_PID 2>/dev/null; then
     echo -e "${GREEN}✅ OpenVSCode Server ready on port ${VSCODE_PORT}${NC}"
 else
     echo -e "${YELLOW}⚠️  OpenVSCode Server failed to start${NC}"
@@ -143,14 +151,27 @@ if [ -n "$TTYD_CMD" ] && [ "$TTYD_CMD" != "bash" ]; then
 fi
 echo -e "${GREEN}✅ tmux session ready${NC}"
 
-ttyd -W -p "$TTYD_PORT" tmux -u attach -t agent &
+# An upgraded WebSocket bypasses subsequent ForwardAuth checks. Bound each ttyd
+# server lifetime so reconnects pass through authorization again; tmux survives.
+# SIGKILL produces an abnormal WebSocket close, which the client reconnects.
+serve_terminal() {
+    local status
+    while true; do
+        status=0
+        timeout --signal=KILL 300 ttyd "$@" || status=$?
+        if [ "$status" -ne 137 ] && [ "$status" -ne 124 ]; then
+            echo -e "${YELLOW}⚠️  Web terminal exited unexpectedly${NC}"
+            return "$status"
+        fi
+    done
+}
+
+serve_terminal -W -c "$terminal_origin_credential" -p "$TTYD_PORT" tmux -u attach -t agent &
 TTYD_PID=$!
 
-# The terminal everyone but the session's owner is routed to: ttyd refuses
-# input (-R) and the tmux client is read-only (-r), so watching a shell can
-# never become typing into it — the container holds its owner's credentials.
+# The viewer terminal remains read-only at ttyd and tmux.
 VIEW_PORT="${VIEW_PORT:-7682}"
-ttyd -R -p "$VIEW_PORT" tmux -u attach -r -t agent &
+serve_terminal -R -c "$view_origin_credential" -p "$VIEW_PORT" tmux -u attach -r -t agent &
 VIEW_PID=$!
 
 sleep 1
@@ -172,6 +193,7 @@ cleanup() {
     kill $TTYD_PID 2>/dev/null || true
     kill $VIEW_PID 2>/dev/null || true
     kill $VSCODE_PID 2>/dev/null || true
+    kill $IDE_PROXY_PID 2>/dev/null || true
     exit 0
 }
 
@@ -181,6 +203,6 @@ trap cleanup SIGTERM SIGINT
 if [ $# -gt 0 ]; then
     exec "$@"
 else
-    wait -n $WATCHER_PID $TTYD_PID $VSCODE_PID 2>/dev/null || true
+    wait -n $WATCHER_PID $TTYD_PID $VSCODE_PID $IDE_PROXY_PID 2>/dev/null || true
     cleanup
 fi

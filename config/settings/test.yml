@@ -35,3 +35,7 @@ agents:
 # uses stub_feature_env (test/support/feature_flags_helper.rb).
 feature_flags:
   env: ~
+
+terminal_origin_auth:
+  origin_key: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  proxy_proof: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

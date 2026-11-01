@@ -66,9 +66,14 @@ class AcExecutionProfile < ApplicationRecord
 
   # Credencial deve pertencer à mesma company (RF-49)
   validate :credential_belongs_to_company, if: :agent_credential_id?
+  validate :policy_belongs_to_company
 
   # Motivo de inelegibilidade obrigatório quando desabilitado
   validate :ineligibility_reason_required_when_disabled
+  validate :published_profile_immutable
+  around_save :serialize_policy_write
+  around_destroy :serialize_policy_destruction
+  before_destroy :prevent_published_profile_destruction
 
   # ── Escopos ─────────────────────────────────────────────────────────────
   scope :for_role, ->(role) { where(role: role) }
@@ -86,7 +91,12 @@ class AcExecutionProfile < ApplicationRecord
     reasons = []
     reasons << "CLI '#{cli_adapter}' não está na lista de suporte (ADR-002)" unless ELIGIBLE_CLI_ADAPTERS.include?(cli_adapter)
     reasons << "Esforço '#{effort_level}' bloqueado (ADR-002 §9.1)" unless ALLOWED_EFFORT_LEVELS.include?(effort_level)
-    reasons << "Perfil desabilitado: #{ineligibility_reason}" if disabled?
+    reasons << "Perfil não está ativo: #{ineligibility_reason}" unless active?
+    reasons << "Revisão revogada, não publicada ou de outra empresa" unless
+      %w[published superseded].include?(ac_policy_revision&.state.to_s) && ac_policy_revision&.company_id == company_id
+    reasons << "Conta explícita obrigatória" unless agent_credential_id?
+    reasons << "Elegibilidade de modo/modelo/esforço sem atestado vigente" unless catalog_attested?
+    reasons << "Transporte consumidor Antigravity inelegível neste modo" if cli_adapter.to_s == "antigravity_cli"
     reasons << "Credencial inativa ou expirada" if agent_credential_id? && !credential_eligible?
 
     {
@@ -97,11 +107,68 @@ class AcExecutionProfile < ApplicationRecord
     }
   end
 
+  def catalog_attested?
+    evidence = selection_criteria.is_a?(Hash) ? selection_criteria["eligibility"] : nil
+    return false unless evidence.is_a?(Hash)
+
+    expires = Time.iso8601(evidence["valid_until"].to_s)
+    evidence["status"] == "documented_supported" && evidence["model_id"] == model_id &&
+      evidence["cli_adapter"] == cli_adapter.to_s && evidence["efforts"].is_a?(Array) &&
+      evidence["efforts"].include?(effort_level.to_s) && expires > Time.current &&
+      cli_adapter.to_s != "antigravity_cli" && agent_credential_id.present? && credential_eligible? &&
+      { "codex_cli" => "codex", "claude_code" => "claude_code", "grok_cli" => "grok" }[cli_adapter.to_s] == agent_credential.agent_type
+  rescue ArgumentError
+    false
+  end
+
   def eligible?
     eligibility_verdict[:eligible]
   end
 
   private
+
+  def published_profile_immutable
+    revision = AcPolicyRevision.find_by(id: persisted? ? ac_policy_revision_id_in_database : ac_policy_revision_id)
+    destination = AcPolicyRevision.find_by(id: ac_policy_revision_id)
+    if will_save_change_to_ac_policy_revision_id? && destination && %w[published superseded revoked].include?(destination.state.to_s)
+      errors.add(:base, "Não é possível adicionar perfil a uma política publicada")
+      return
+    end
+    return unless revision && %w[published superseded revoked].include?(revision.state.to_s)
+    if new_record?
+      errors.add(:base, "Não é possível adicionar perfil a uma política publicada")
+      return
+    end
+    return if (changes.keys - %w[state ineligibility_reason updated_at]).empty?
+
+    errors.add(:base, "Perfil de política publicada é imutável; crie nova revisão")
+  end
+
+  def serialize_policy_write
+    company.with_lock do
+      published_profile_immutable
+      raise ActiveRecord::RecordNotSaved.new("Perfil alterado durante a publicação", self) if errors.any?
+      yield
+    end
+  end
+
+  def serialize_policy_destruction
+    company.with_lock { yield }
+  end
+
+  def prevent_published_profile_destruction
+    revision = AcPolicyRevision.find_by(id: ac_policy_revision_id)
+    return unless revision && %w[published superseded revoked].include?(revision.state.to_s)
+
+    errors.add(:base, "Perfil de política publicada é imutável; crie nova revisão")
+    throw(:abort)
+  end
+
+  def policy_belongs_to_company
+    return if ac_policy_revision&.company_id == company_id
+
+    errors.add(:ac_policy_revision, "deve pertencer à mesma company")
+  end
 
   def credential_belongs_to_company
     return if agent_credential&.company_id == company_id

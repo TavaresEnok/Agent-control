@@ -260,3 +260,32 @@ workflows:
       - name: ac_reconcile_remote_operation_activity
         task_queue: aixle_ruby
 
+
+  - name: ac_task_execution_workflow_v2
+    owner: aixle_ruby
+    activities:
+      - name: ac_admit_task_activity
+        task_queue: aixle_ruby
+      - name: ac_acquire_worktree_activity
+        task_queue: aixle_ruby
+      - name: ac_dispatch_execution_activity
+        task_queue: aixle_ruby
+      - name: ac_reconcile_execution_activity
+        task_queue: aixle_ruby
+      - name: ac_release_capacity_activity
+        task_queue: aixle_ruby
+      - name: ac_cancel_execution_activity
+        task_queue: aixle_ruby
+
+  - name: ac_plan_execution_workflow_v2
+    owner: aixle_ruby
+    activities:
+      - name: ac_advance_plan_dag_activity
+        task_queue: aixle_ruby
+      - name: ac_review_task_activity
+        task_queue: aixle_ruby
+      - name: ac_integrate_task_activity
+        task_queue: aixle_ruby
+      - name: ac_cancel_plan_activity
+        task_queue: aixle_ruby
+

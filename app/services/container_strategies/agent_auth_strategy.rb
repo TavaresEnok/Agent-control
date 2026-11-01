@@ -136,8 +136,7 @@ module ContainerStrategies
     # can seed it. Scoped by company because the write below is: reading unscoped would
     # seed one tenant's token into another tenant's credential.
     def current_credential_config
-      SessionCompany.agent_credentials_for(current_terminal_session)
-                    .find_by(agent_type: input[:agent_type])&.config_data
+      auth_target(current_terminal_session)&.config_data
     end
 
     def save_credentials(session, auth_files, agent_service)
@@ -148,8 +147,8 @@ module ContainerStrategies
       # Reconcile the scrape against what's already stored for this kind. Default is a
       # full replace; a layering kind (e.g. design) only adds its own block so it never
       # re-captures the base it seeded into the container.
-      current = SessionCompany.agent_credentials_for(session)
-                              .find_by(agent_type: input[:agent_type])&.config_data
+      credential = auth_target(session)
+      current = credential&.config_data
       config_data = adapter.reconcile_captured_credentials(auth_kind, current, captured)
       return nil if config_data.blank?
 
@@ -162,8 +161,32 @@ module ContainerStrategies
         SessionCompany.company_id_for(session),
         input[:agent_type],
         config_data,
+        account_slug: credential&.account_slug || session.session_config&.dig("account_slug").presence || "default",
         new_authorization: auth_kind != Agents::ClaudeCodeAdapter::DESIGN_KIND
       )
+    end
+
+    def auth_target(session)
+      raise ArgumentError, "Missing authentication session" unless session
+
+      config = session.session_config || {}
+      scope = SessionCompany.agent_credentials_for(session).where(agent_type: input[:agent_type])
+      if config.key?("agent_credential_id")
+        credential = SessionCompany.credential_for(session, agent_type: input[:agent_type])
+        raise ArgumentError, "Invalid credential selection" unless credential
+
+        return credential
+      end
+      if config.key?("account_slug")
+        slug = config["account_slug"].to_s
+        raise ArgumentError, "Invalid account slug" if slug.blank?
+
+        return scope.find_by(account_slug: slug)
+      end
+      credentials = scope.limit(2).to_a
+      raise ArgumentError, "Credential selection required" if credentials.size > 1
+
+      credentials.first
     end
   end
 end
