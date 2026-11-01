@@ -132,4 +132,113 @@ class AcReviewServiceTest < ActiveSupport::TestCase
       )
     end
   end
+
+  # RF-57 / T38: Dispensa explícita e fundamentada de QA
+  test "RF-57 / T38: QA waiver allows approval when code reviewer approves high-risk task" do
+    high_task = AcTask.create!(
+      company: @company,
+      project: @project,
+      ac_plan: @plan,
+      task_key: "task-high-qa-#{SecureRandom.hex(4)}",
+      title: "High Risk Task",
+      scope: "Critical scope",
+      position: 10,
+      risk_class: :high,
+      assigned_role: :programmer,
+      state: :review
+    )
+    assert high_task.requires_qa?, "Tarefa de alto risco exige QA"
+
+    art_hash = "hash-high-tested"
+
+    # 1. Revisor aprova primeiro
+    rev_verdict = AcReviewService.submit_verdict!(
+      task: high_task,
+      artifact_hash: art_hash,
+      verdict: :approved,
+      reviewer_role: :reviewer,
+      evaluator_identity: "reviewer-alice",
+      candidate_commit_sha: "commit-high-sha"
+    )
+    assert_equal "approved", rev_verdict.verdict
+    high_task.reload
+    assert_equal "review", high_task.state, "Tarefa não deve estar aprovada ainda sem QA ou dispensa"
+
+    # 2. QA emite dispensa fundamentada (waived) per RF-57 / Adendo Final §3
+    qa_verdict = AcReviewService.submit_verdict!(
+      task: high_task,
+      artifact_hash: art_hash,
+      verdict: :waived,
+      reviewer_role: :qa,
+      evaluator_identity: "qa-lead-bob",
+      findings: [{ "reason" => "Mudança exclusivamente em documentação/configuração sem impacto comportamental" }]
+    )
+    assert_equal "waived", qa_verdict.verdict
+
+    high_task.reload
+    assert_equal "approved", high_task.state, "Tarefa deve transicionar para approved com dispensa de QA válida"
+    assert_equal "commit-high-sha", high_task.approved_commit_sha
+    assert_equal art_hash, high_task.approved_artifact_hash
+  end
+
+  test "RF-57 / T38: QA waiver issued before reviewer approval completes successfully" do
+    high_task = AcTask.create!(
+      company: @company,
+      project: @project,
+      ac_plan: @plan,
+      task_key: "task-high-qa-2-#{SecureRandom.hex(4)}",
+      title: "High Risk Task 2",
+      scope: "Critical scope 2",
+      position: 11,
+      risk_class: :critical,
+      assigned_role: :programmer,
+      state: :review
+    )
+    art_hash = "hash-critical-tested"
+
+    # QA dispensa primeiro
+    AcReviewService.submit_verdict!(
+      task: high_task,
+      artifact_hash: art_hash,
+      verdict: :waived,
+      reviewer_role: :qa,
+      evaluator_identity: "qa-lead"
+    )
+    assert_equal "review", high_task.reload.state
+
+    # Revisor aprova
+    AcReviewService.submit_verdict!(
+      task: high_task,
+      artifact_hash: art_hash,
+      verdict: :approved,
+      reviewer_role: :reviewer,
+      evaluator_identity: "reviewer-bob",
+      candidate_commit_sha: "commit-critical-sha"
+    )
+    high_task.reload
+    assert_equal "approved", high_task.state
+    assert_equal "commit-critical-sha", high_task.approved_commit_sha
+  end
+
+  test "RF-57 / T38: blocks self-waiver by implementer (§15.2)" do
+    execution = AcExecution.create!(
+      company: @company,
+      ac_work_context: @context,
+      ac_task: @task,
+      operation_id: "op-self-waive-#{SecureRandom.hex(4)}",
+      epoch: "1",
+      process_handle: "proc-runner-waive"
+    )
+
+    assert_raises(AcReviewService::SelfApprovalViolationError) do
+      AcReviewService.submit_verdict!(
+        task: @task,
+        artifact_hash: "hash-self-waive",
+        verdict: :waived,
+        reviewer_role: :qa,
+        evaluator_identity: "proc-runner-waive",
+        execution: execution
+      )
+    end
+  end
 end

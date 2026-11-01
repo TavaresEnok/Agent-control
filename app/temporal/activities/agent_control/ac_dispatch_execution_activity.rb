@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "shellwords"
+
 module Activities
   module AgentControl
     # Atividade para despacho idempotente do processo e registro de supervisor (§11.3, §11.3.1)
@@ -27,16 +29,24 @@ module Activities
         cmd = execution.metadata&.dig("command") || task&.inputs&.dig("command")
 
         if cmd.present? && worktree.present? && Dir.exist?(worktree)
-          stdin, stdout, stderr, wait_thr = Open3.popen3(cmd, chdir: worktree)
-          stdin.close
-          pid = wait_thr.pid
+          log_path = File.join(worktree, ".ac_execution.log")
+          exit_path = File.join(worktree, ".ac_execution.exit")
+
+          # Envelopa execução shell para desacoplar streams e capturar código de retorno real
+          # Cria grupo de processos próprio (pgroup: true) para encerramento seguro e isolado
+          wrapped_cmd = "( #{cmd} ) > #{Shellwords.escape(log_path)} 2>&1; echo $? > #{Shellwords.escape(exit_path)}"
+          pid = Process.spawn("bash", "-c", wrapped_cmd, chdir: worktree, pgroup: true)
+          Process.detach(pid)
           handle = "pid-#{pid}"
 
           execution.update!(
             process_handle: handle,
             metadata: (execution.metadata || {}).merge(
               "pid" => pid,
-              "command" => cmd
+              "pgid" => pid,
+              "command" => cmd,
+              "log_path" => log_path,
+              "exit_path" => exit_path
             )
           )
         end

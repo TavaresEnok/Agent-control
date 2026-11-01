@@ -72,28 +72,26 @@ module Workflows
           }
         end
 
-        ready_task_ids = dag_state["ready_task_ids"] || []
-        break if ready_task_ids.empty? # Nenhuma tarefa elegível (ou bloqueado por falha)
+        ready_task_details = dag_state["ready_task_details"] || []
+        break if ready_task_details.empty? # Nenhuma tarefa elegível (ou bloqueado por falha)
 
-        # 2. Processa cada tarefa pronta da rodada atual
-        ready_task_ids.each do |task_id|
+        processed_any = false
+
+        # 2. Processa cada tarefa pronta da rodada atual (§12.1, §15, DEF-02)
+        ready_task_details.each do |t_detail|
           return early_cancelled_response(plan_id) if @cancelled
 
-          # Se houver override explícito de teste ou fluxo guiado para esta tarefa, honra o filtro;
-          # caso contrário, processa autonomamente todas as tarefas prontas (§12.1, [BUG-P1-01])
-          should_process = if input.trigger_review_for_task_id.present?
-                             input.trigger_review_for_task_id == task_id
-                           else
-                             true
-                           end
+          task_id = t_detail["id"]
 
-          if should_process
-            artifact_hash = (input.trigger_review_for_task_id == task_id && input.review_artifact_hash.presence) ||
-                            "hash-default-#{task_id}"
-            verdict = (input.trigger_review_for_task_id == task_id && input.review_verdict.presence) ||
-                      "approved"
-            evaluator = (input.trigger_review_for_task_id == task_id && input.evaluator_identity.presence) ||
-                        "independent-reviewer"
+          # Cenário A: Disparo guiado / override de teste explícito (§12.1)
+          if input.trigger_review_for_task_id.present?
+            next unless input.trigger_review_for_task_id == task_id
+
+            artifact_hash = input.review_artifact_hash
+            next if artifact_hash.blank? # Não fabrica hash fictício (§15.3, DEF-02)
+
+            verdict = input.review_verdict.presence || "approved"
+            evaluator = input.evaluator_identity.presence || "independent-reviewer"
 
             execute_activity(
               activities.ac_review_task_activity,
@@ -117,8 +115,59 @@ module Workflows
                 }
               )
             end
+
+            processed_any = true
+
+          # Cenário B: Tarefa já aprovada com artefato formal prévio -> integra com integridade (§15.3.1)
+          elsif t_detail["approved"] && t_detail["approved_artifact_hash"].present?
+            execute_activity(
+              activities.ac_integrate_task_activity,
+              {
+                task_id: task_id,
+                expected_base_commit: input.expected_base_commit || "main-base",
+                candidate_commit: t_detail["approved_commit_sha"] || input.candidate_commit || "cand-commit-#{task_id}",
+                current_branch_head: input.current_branch_head || input.expected_base_commit || "main-base",
+                artifact_hash: t_detail["approved_artifact_hash"]
+              }
+            )
+            processed_any = true
+
+          # Cenário C: Tarefa possui execução terminada com artefato real disponível -> submete parecer
+          elsif t_detail["has_completed_execution"] && t_detail["execution_artifact_hash"].present?
+            artifact_hash = t_detail["execution_artifact_hash"]
+            cand_commit = t_detail["execution_commit_sha"] || artifact_hash
+
+            execute_activity(
+              activities.ac_review_task_activity,
+              {
+                task_id: task_id,
+                artifact_hash: artifact_hash,
+                verdict: "approved",
+                evaluator_identity: "independent-council",
+                candidate_commit_sha: cand_commit
+              }
+            )
+
+            execute_activity(
+              activities.ac_integrate_task_activity,
+              {
+                task_id: task_id,
+                expected_base_commit: input.expected_base_commit || "main-base",
+                candidate_commit: cand_commit,
+                current_branch_head: input.current_branch_head || "main-base",
+                artifact_hash: artifact_hash
+              }
+            )
+            processed_any = true
+
+          else
+            # Cenário D: Tarefa elegível mas ainda sem execução terminada nem artefato
+            # NÃO fabrica hash nem autoaprova (§15.3, DEF-02). Permanece aguardando trabalhador.
           end
         end
+
+        # Se nenhuma tarefa realizou transição nesta iteração, encerra o ciclo
+        break unless processed_any
       end
 
       # Retorna estado após processamento

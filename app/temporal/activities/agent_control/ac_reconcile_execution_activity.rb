@@ -15,14 +15,59 @@ module Activities
 
         execution = AcExecution.find(execution_id)
 
-        # Se um processo físico foi lançado e nenhum exit_code explícito foi fornecido (§11.3, [BUG-P0-02])
+        # Se um processo físico foi lançado e nenhum exit_code explícito foi fornecido (§11.3, [BUG-P0-02], DEF-01)
         if execution.metadata&.dig("pid").present? && input.exit_code.nil?
           pid = execution.metadata["pid"].to_i
-          begin
-            _, status = Process.wait2(pid, Process::WNOHANG)
-            exit_code = status ? (status.exitstatus || 0) : 0
-          rescue Errno::ECHILD, Errno::ESRCH
-            exit_code = 0
+          exit_path = execution.metadata["exit_path"]
+          log_path = execution.metadata["log_path"]
+          timeout_seconds = (execution.metadata["timeout_seconds"] || 15).to_i
+          deadline = Time.current + timeout_seconds.seconds
+
+          # Aguarda término do subprocesso ou gravação do arquivo de status
+          while Time.current < deadline
+            break if exit_path.present? && File.exist?(exit_path)
+
+            begin
+              Process.kill(0, pid)
+              sleep 0.05
+            rescue Errno::ESRCH
+              break
+            rescue Errno::EPERM
+              sleep 0.05
+            end
+          end
+
+          if exit_path.present? && File.exist?(exit_path)
+            raw_exit = File.read(exit_path).strip
+            exit_code = raw_exit.present? ? raw_exit.to_i : 0
+          else
+            still_alive = begin
+              Process.kill(0, pid)
+              true
+            rescue Errno::ESRCH
+              false
+            rescue Errno::EPERM
+              true
+            end
+
+            if still_alive
+              begin
+                Process.kill("-TERM", pid) rescue (Process.kill("TERM", pid) rescue nil)
+                sleep 0.1
+                Process.kill("-KILL", pid) rescue (Process.kill("KILL", pid) rescue nil)
+              rescue Errno::ESRCH, Errno::EPERM
+                # já finalizado
+              end
+              exit_code = 124
+              error = error.merge("message" => "Execution timed out after #{timeout_seconds}s")
+            else
+              exit_code = 137
+              error = error.merge("message" => "Process terminated abruptly without exit status")
+            end
+          end
+
+          if log_path.present? && File.exist?(log_path)
+            output = output.merge("stdout" => File.read(log_path).last(65536))
           end
         end
 

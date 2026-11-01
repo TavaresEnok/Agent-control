@@ -29,9 +29,9 @@ class AcReviewService
       raise ArgumentError, "evaluator_identity é obrigatório" if evaluator_identity.blank?
 
       # Validação de autoaprovação (§15.2):
-      # O implementador não pode ser o mesmo avaliador independente para aprovar a entrega
-      if verdict.to_s == "approved" && execution&.process_handle.present? && execution.process_handle == evaluator_identity
-        raise SelfApprovalViolationError, "Autoaprovação proibida: o mesmo processo implementador não pode aprovar a entrega (§15.2)"
+      # O implementador não pode ser o mesmo avaliador independente para aprovar ou dispensar a entrega
+      if %w[approved waived].include?(verdict.to_s) && execution&.process_handle.present? && execution.process_handle == evaluator_identity
+        raise SelfApprovalViolationError, "Autoaprovação ou autodispensa proibida: o mesmo processo implementador não pode aprovar ou dispensar a entrega (§15.2)"
       end
 
       AcReviewVerdict.transaction do
@@ -57,11 +57,14 @@ class AcReviewService
           # Reprovação → retorna à implementação com achados (§12.2, §15.2)
           rejection_msg = "Reprovado por #{reviewer_role} (#{evaluator_identity}): #{(findings || []).size} achados registrados"
           task.reject_back_to_implementation!(reason: rejection_msg)
-        elsif verdict.to_s == "approved"
-          # Verifica se todos os critérios de aprovação exigidos por risk_class foram atendidos (§15.3, §15.4)
+        elsif %w[approved waived].include?(verdict.to_s)
+          # Verifica se todos os critérios de aprovação exigidos por risk_class foram atendidos (§15.3, §15.4, RF-57)
           if meets_approval_requirements?(task, artifact_hash)
+            commit_to_approve = candidate_commit_sha.presence ||
+                                task.ac_review_verdicts.where(state: :valid, reviewer_role: :reviewer, artifact_hash: artifact_hash).pluck(:candidate_commit_sha).compact.first.presence ||
+                                artifact_hash
             task.approve!(
-              commit_sha: candidate_commit_sha || artifact_hash,
+              commit_sha: commit_to_approve,
               artifact_hash: artifact_hash
             )
           end
@@ -107,12 +110,13 @@ class AcReviewService
 
       return false unless reviewer_approved
 
-      # Se a tarefa exigir QA por risk_class (RF-18, §15.4), exige parecer de QA aprovado no MESMO artefato
+      # Se a tarefa exigir QA por risk_class (RF-18, §15.4, RF-57), exige parecer de QA aprovado ou dispensado (waived) no MESMO artefato
       if task.requires_qa?
-        qa_approved = task.ac_review_verdicts
-                          .where(state: :valid, verdict: :approved, reviewer_role: :qa, artifact_hash: artifact_hash)
-                          .exists?
-        return false unless qa_approved
+        qa_satisfied = task.ac_review_verdicts
+                           .where(state: :valid, reviewer_role: :qa, artifact_hash: artifact_hash)
+                           .where(verdict: %w[approved waived])
+                           .exists?
+        return false unless qa_satisfied
       end
 
       true

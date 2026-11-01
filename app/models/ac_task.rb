@@ -20,6 +20,9 @@ class AcTask < ApplicationRecord
   # Plano ao qual pertence
   belongs_to :ac_plan
 
+  # Execuções da tarefa (§11)
+  has_many :ac_executions, foreign_key: :ac_task_id, dependent: :destroy, inverse_of: :ac_task
+
   # Reservas de capacidade associadas
   has_many :ac_capacity_grants, foreign_key: :ac_task_id, dependent: :destroy, inverse_of: :ac_task
 

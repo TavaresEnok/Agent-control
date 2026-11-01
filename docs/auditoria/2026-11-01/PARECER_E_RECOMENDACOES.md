@@ -69,6 +69,10 @@ O parecer é apresentado separadamente nas três dimensões obrigatórias:
 - **Condição para Aprovação com Ressalvas (Experimental):**
   Uma vez remediados os dois defeitos P0 (`DEF-01` e `DEF-02`), a plataforma atingirá o nível de **APROVADO COM RESSALVAS PARA USO EXPERIMENTAL ISOLADO**, permitindo ensaios supervisionados em worktrees sintéticas sem risco de vazamento de credenciais ou contaminação externa.
 
+> [!NOTE]
+> **Atualização Pós-Remediação da Onda 1 (2026-11-01):**  
+> Os defeitos críticos [`DEF-01`](file:///home/enok/Documentos/projetos/agent-control/docs/auditoria/2026-11-01/INVENTARIO_ACHADOS.md#def-01) e [`DEF-02`](file:///home/enok/Documentos/projetos/agent-control/docs/auditoria/2026-11-01/INVENTARIO_ACHADOS.md#def-02), juntamente com [`DEF-04`](file:///home/enok/Documentos/projetos/agent-control/docs/auditoria/2026-11-01/INVENTARIO_ACHADOS.md#def-04), foram **remediados com sucesso no código e validados na suíte de testes isolada (167 runs, 747 assertions, 0 falhas)**. A plataforma satisfaz a condição da Dimensão 2 e atinge o estado de **APROVADO COM RESSALVAS PARA USO EXPERIMENTAL ISOLADO** em laboratório. A Dimensão 3 (Operação Real / Substituição dos Paseos) permanece estritamente bloqueada até a conclusão da Onda 2 (DEF-03, DEF-05) e Onda 3 (DEF-07).
+
 ---
 
 ### Dimensão 3: Prontidão para Operação Real (Produção / Substituição dos Paseos)

@@ -73,6 +73,9 @@ class AcWorktreeManagerService
       repo_path ||= resolve_repo_path(execution)
       target_path = execution.worktree_path
 
+      # Finaliza qualquer subprocesso ainda ativo antes de manipular o diretório (§11.3.2, DEF-01)
+      terminate_active_process!(execution)
+
       if repo_path.present? && Dir.exist?(File.join(repo_path, ".git")) && target_path.present?
         Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", target_path)
         Open3.capture3("git", "-C", repo_path, "worktree", "prune")
@@ -83,6 +86,35 @@ class AcWorktreeManagerService
     end
 
     private
+
+    def terminate_active_process!(execution)
+      pid = execution.metadata&.dig("pid")&.to_i
+      return unless pid.present? && pid > 0
+
+      begin
+        Process.kill(0, pid)
+        begin
+          Process.kill("-TERM", pid)
+        rescue Errno::ESRCH, Errno::EPERM
+          Process.kill("TERM", pid) rescue nil
+        end
+
+        sleep 0.05
+
+        begin
+          Process.kill(0, pid)
+          begin
+            Process.kill("-KILL", pid)
+          rescue Errno::ESRCH, Errno::EPERM
+            Process.kill("KILL", pid) rescue nil
+          end
+        rescue Errno::ESRCH
+          # Finalizado com sucesso
+        end
+      rescue Errno::ESRCH, Errno::EPERM
+        # Já não existe ou sem permissão
+      end
+    end
 
     def resolve_repo_path(execution)
       (execution.ac_task&.project&.respond_to?(:custom_fields) ? execution.ac_task.project.custom_fields&.dig("git_repo_path") : nil) ||
@@ -100,6 +132,9 @@ class AcWorktreeManagerService
     end
 
     def neutralize_writer!(writer, repo_path: nil)
+      # Finaliza o processo ativo do escritor antigo antes de limpar diretório (§11.3.2, DEF-01)
+      terminate_active_process!(writer)
+
       if repo_path.present? && Dir.exist?(File.join(repo_path, ".git")) && writer.worktree_path.present?
         Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", writer.worktree_path)
         Open3.capture3("git", "-C", repo_path, "worktree", "prune")

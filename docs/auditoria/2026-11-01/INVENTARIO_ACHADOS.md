@@ -14,13 +14,13 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 
 ## 1. Sumário Executivo dos Achados
 
-| ID | Tipo Normativo | Severidade | Requisito / Garantia Afetada | Componente / Arquivo Principal | Descrição Sucinta |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **DEF-01** | Defeito comprovado | **P0 (Crítico)** | RF-22, RF-23, RF-47, RF-54, RNF-01, T07, T08 | `AcTaskExecutionWorkflow` / `AcReconcileExecutionActivity` | Reconciliação prematura de processos: exit 0 assumido com `Process::WNOHANG` e remoção da worktree enquanto processo roda |
-| **DEF-02** | Defeito comprovado | **P0 (Crítico)** | RF-15, RF-16, RF-18, RF-25, G3-E1 | `AcPlanExecutionWorkflow` | DAG Potemkin: avanço de plano sem invocar trabalhador, gerando hashes fictícios e aprovação automática |
-| **DEF-03** | Requisito ausente na fase | **P1 (Alto)** | RF-05, RNF-03, T01 | `db/schema.rb` (`agent_credentials`) | Bloqueio estrutural de duas contas do mesmo provedor por índice único upstream `(user_id, company_id, agent_type)` |
-| **DEF-04** | Defeito comprovado | **P1 (Alto)** | RF-57, T38 | `AcReviewService#meets_approval_requirements?` | Dispensa de QA (`waived`) não é aceita como condição de aprovação, bloqueando avanço legítimo per Adendo Final §3 |
-| **DEF-05** | Defeito comprovado | **P1 (Alto)** | RF-31, RF-34, RF-52, T18, T30 | `AcBackupService` / `AcRecoveryService` | Omissão de auditoria e concessões no manifesto de backup; colisão de sequences de PK após reidratação no PostgreSQL |
+| ID | Tipo Normativo | Severidade | Requisito / Garantia Afetada | Componente / Arquivo Principal | Status | Descrição Sucinta |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **DEF-01** | Defeito comprovado | **P0 (Crítico)** | RF-22, RF-23, RF-47, RF-54, RNF-01, T07, T08 | `AcTaskExecutionWorkflow` / `AcReconcileExecutionActivity` | **REMEDIADO (Onda 1)** | Reconciliação prematura de processos: desacoplamento com logs físicos, exit code real, espera com timeout e proteção de worktree ativa |
+| **DEF-02** | Defeito comprovado | **P0 (Crítico)** | RF-15, RF-16, RF-18, RF-25, G3-E1 | `AcPlanExecutionWorkflow` | **REMEDIADO (Onda 1)** | DAG Potemkin eliminado: erradicação de hashes forjados e aprovações fictícias; orquestração condicionada a execuções e pareceres legítimos |
+| **DEF-03** | Requisito ausente na fase | **P1 (Alto)** | RF-05, RNF-03, T01 | `db/schema.rb` (`agent_credentials`) | **Aberto (Onda 2)** | Bloqueio estrutural de duas contas do mesmo provedor por índice único upstream `(user_id, company_id, agent_type)` |
+| **DEF-04** | Defeito comprovado | **P1 (Alto)** | RF-57, T38 | `AcReviewService#meets_approval_requirements?` | **REMEDIADO (Onda 1)** | Suporte completo a dispensa fundamentada de QA (`waived`) per Adendo Final §3 e bloqueio de autodispensa |
+| **DEF-05** | Defeito comprovado | **P1 (Alto)** | RF-31, RF-34, RF-52, T18, T30 | `AcBackupService` / `AcRecoveryService` | **Aberto (Onda 2)** | Omissão de auditoria e concessões no manifesto de backup; colisão de sequences de PK após reidratação no PostgreSQL |
 | **DEF-06** | Risco fundamentado | **P2 (Médio)** | RF-26, RF-27, RNF-08 | `AcRemoteGatewayService#query_operation_status!` | Ausência de `Shellwords.shellescape` em `working_directory` durante consulta de status de jobs SSH |
 | **DEF-07** | Requisito ausente na fase | **P1 (Alto)** | RF-07, RF-24, RF-32, RF-44, RNF-04, T16, T27 | `PlanGraph.tsx` / `MobileSetupWizard.tsx` | Ausência de botões e fluxos para pausar, retomar ou cancelar planos na UI web/móvel e sem gestão de políticas/cotas |
 | **DEF-08** | Risco fundamentado | **P2 (Médio)** | RNF-06, RNF-09 | `agent-control-f0-rails-deps:4.0.9` / `ac_physical_git_test.rb` | Imagem Docker base de dependências não inclui o binário `git`, gerando `Errno::ENOENT` se não montado externamente |
@@ -78,6 +78,11 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
   3. Em `AcReconcileExecutionActivity`, somente assumir conclusão quando o processo tiver efetivamente terminado e o exit code real for colhido.
   4. Proibir a liberação da worktree enquanto o processo estiver em estado de execução.
 - **Critério Verificável de Encerramento:** Teste automatizado executando `sleep 3 && touch success.txt`, demonstrando que: (a) o workflow aguarda os 3 segundos; (b) a worktree permanece intacta até o encerramento do processo; (c) o arquivo `success.txt` é validado antes de qualquer liberação de lease.
+- **Status de Remediação:** **REMEDIADO (Onda 1 — 2026-11-01)**.
+  - Implementado desacoplamento completo de streams em `AcDispatchExecutionActivity` utilizando `Process.spawn` com redirecionamento de logs para `.ac_execution.log` e gravação atômica do exit code real em `.ac_execution.exit`.
+  - Reconciliação em `AcReconcileExecutionActivity` substituída por espera supervisionada com timeout de segurança, captura de exit code real sem falso positivo e término de processos excedentes (SIGTERM/SIGKILL) com exit 124.
+  - Adicionada garantia em `AcWorktreeManagerService` (`release_lease!` e `neutralize_writer!`) de finalizar qualquer processo ativo antes de excluir fisicamente o diretório da worktree.
+  - Validado com 9 testes automatizados dedicados em `AcProcessExecutionReconciliationTest` (57 asserções, 0 falhas) cobrindo comandos normais, saídas >64KB, códigos de erro reais (exit 42), timeout (exit 124) e proteção de lease.
 
 ---
 
@@ -121,6 +126,11 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 - **Correção Proposta:**
   Substituir o bloco de geração estática de aprovação pelo despacho de child workflow `AcTaskExecutionWorkflow` para cada tarefa pronta, coletar o `artifact_hash` real gerado pela execução do trabalhador, e somente após isso despachar a atividade de revisão com sessão independente.
 - **Critério Verificável de Encerramento:** Execução de workflow de plano com 2 tarefas encadeadas onde a tarefa 2 só inicia após a tarefa 1 ter sido fisicamente executada por um worker e aprovada com hash criptográfico de um commit real no Git.
+- **Status de Remediação:** **REMEDIADO (Onda 1 — 2026-11-01)**.
+  - Eliminada completamente a fabricação estática de hashes `"hash-default-#{task_id}"` e autoaprovação arbitrária em `AcPlanExecutionWorkflow`.
+  - Enriquecida a atividade `AcAdvancePlanDagActivity` com `ready_task_details` contendo o estado real de aprovação e execuções concluídas de cada tarefa elegível.
+  - O workflow agora somente integra tarefas formalmente aprovadas com commits válidos ou tarefas com execuções reais concluídas e artefato comprovado. Tarefas sem execução e sem parâmetros guiados permanecem preservadas em `pending` aguardando trabalhadores, sem integração fraudulenta.
+  - Validado com 8 testes automatizados em `AcPlanExecutionWorkflowTest` (53 asserções, 0 falhas).
 
 ---
 
@@ -187,6 +197,10 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
   end
   ```
 - **Critério Verificável de Encerramento:** Teste unitário em `AcReviewServiceTest` submetendo parecer de QA com `verdict: :waived` e parecer de revisão de código com `verdict: :approved` para a mesma tarefa, verificando que a tarefa transiciona com sucesso para `approved`.
+- **Status de Remediação:** **REMEDIADO (Onda 1 — 2026-11-01)**.
+  - Atualizado `AcReviewService#meets_approval_requirements?` para aceitar `verdict: %w[approved waived]` para o papel de QA quando a tarefa exigir QA per RF-57 / T38.
+  - Atualizado `AcReviewService.submit_verdict!` para processar a aprovação da tarefa quando pareceres de dispensa válida forem emitidos e para prevenir autodispensa por implementador.
+  - Validado com 10 testes automatizados em `AcReviewServiceTest` (61 asserções, 0 falhas) cobrindo aprovação pós-dispensa, dispensa pós-aprovação e bloqueio de autodispensa.
 
 ---
 

@@ -124,5 +124,29 @@ module Workflows
       @task_b.reload
       assert_equal "pending", @task_b.state
     end
+
+    # Prova DEF-02: Não fabricação estática de hash nem autoaprovação de tarefas sem execução
+    test "DEF-02: does not fabricate artifact hash or auto-approve tasks without real execution" do
+      result = run_workflow(
+        AcPlanExecutionWorkflow,
+        { plan_id: @plan.id },
+        activities: @registered_activities,
+        task_queue: TASK_QUEUE
+      )
+
+      assert_equal "in_progress", result["status"]
+      @task_a.reload
+      @task_b.reload
+
+      # Nenhuma tarefa deve ter sido integrada nem aprovada sem execução
+      assert_not_equal "integrated", @task_a.state
+      assert_not_equal "approved", @task_a.state
+      assert_nil @task_a.approved_artifact_hash
+      assert_nil @task_a.approved_commit_sha
+
+      # Nenhum veredicto fabricado deve existir
+      assert_equal 0, AcReviewVerdict.where(ac_task_id: [@task_a.id, @task_b.id]).count,
+                   "Nenhum parecer de revisão deve ser forjado pelo workflow (DEF-02)"
+    end
   end
 end
