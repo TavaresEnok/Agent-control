@@ -91,6 +91,10 @@ O parecer é apresentado separadamente nas três dimensões obrigatórias:
   - O serviço `paseo-flow.service` deve **permanecer inalterado**.
   - Nenhuma migração de contexto, credencial ativa ou projeto em andamento deve ser realizada até a validação formal das remediações.
 
+> [!NOTE]
+> **Atualização Pós-Remediação da Onda 2 (2026-11-01):**  
+> Os bloqueadores estruturais de persistência e integridade [`DEF-03`](file:///home/enok/Documentos/projetos/agent-control/docs/auditoria/2026-11-01/INVENTARIO_ACHADOS.md#def-03) (suporte a múltiplas credenciais do mesmo provedor via `account_slug`) e [`DEF-05`](file:///home/enok/Documentos/projetos/agent-control/docs/auditoria/2026-11-01/INVENTARIO_ACHADOS.md#def-05) (trilha de auditoria append-only, concessões e cotas no manifesto + sincronização de sequences PostgreSQL via `reset_pk_sequence!`) foram **remediados com sucesso e validados na suíte isolada (171 runs, 766 assertions, 0 falhas)**. Resta apenas a Onda 3 (DEF-06: escape SSH, DEF-07: controles operacionais na UI web/móvel, e DEF-08: git no container) antes da autorização de transição para operação real.
+
 ---
 
 ## 3. Contagens Quantitativas por Estado de Requisito

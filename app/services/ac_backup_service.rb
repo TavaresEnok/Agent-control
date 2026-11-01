@@ -23,16 +23,26 @@ class AcBackupService
       policy_revisions = AcPolicyRevision.where(company: company).order(:id).as_json
       execution_profiles = AcExecutionProfile.where(company: company).order(:id).as_json
       client_commands = AcClientCommand.where(company: company).order(:id).as_json
+      capacity_grants = AcCapacityGrant.where(company: company).order(:id).as_json
+      quota_observations = AcQuotaObservation.where(company: company).order(:id).as_json
+      decision_audit_events = AcDecisionAuditEvent.where(company: company).order(:id).as_json
+      remote_environments = AcRemoteEnvironment.where(company: company).order(:id).as_json
+      remote_operations = AcRemoteOperation.where(company: company).order(:id).as_json
 
       entities = {
         "ac_work_contexts" => contexts,
-        "ac_plans" => plans,
-        "ac_tasks" => tasks,
-        "ac_executions" => executions,
-        "ac_review_verdicts" => verdicts,
         "ac_policy_revisions" => policy_revisions,
         "ac_execution_profiles" => execution_profiles,
-        "ac_client_commands" => client_commands
+        "ac_plans" => plans,
+        "ac_tasks" => tasks,
+        "ac_capacity_grants" => capacity_grants,
+        "ac_executions" => executions,
+        "ac_review_verdicts" => verdicts,
+        "ac_quota_observations" => quota_observations,
+        "ac_decision_audit_events" => decision_audit_events,
+        "ac_client_commands" => client_commands,
+        "ac_remote_environments" => remote_environments,
+        "ac_remote_operations" => remote_operations
       }
 
       checksums = {}

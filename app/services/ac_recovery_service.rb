@@ -127,14 +127,20 @@ class AcRecoveryService
       rehydrated = {}
 
       ActiveRecord::Base.transaction do
-        # 1. Reidratação dos registros no banco respeitando integridade referencial ([BUG-P0-03])
+        # 1. Reidratação dos registros no banco respeitando integridade referencial ([BUG-P0-03], DEF-05)
         rehydrate_entity(AcWorkContext, entities["ac_work_contexts"], rehydrated)
         rehydrate_entity(AcPolicyRevision, entities["ac_policy_revisions"], rehydrated)
         rehydrate_entity(AcExecutionProfile, entities["ac_execution_profiles"], rehydrated)
         rehydrate_entity(AcPlan, entities["ac_plans"], rehydrated)
         rehydrate_entity(AcTask, entities["ac_tasks"], rehydrated)
+        rehydrate_entity(AcCapacityGrant, entities["ac_capacity_grants"], rehydrated)
         rehydrate_entity(AcExecution, entities["ac_executions"], rehydrated)
         rehydrate_entity(AcReviewVerdict, entities["ac_review_verdicts"], rehydrated)
+        rehydrate_entity(AcQuotaObservation, entities["ac_quota_observations"], rehydrated)
+        rehydrate_entity(AcDecisionAuditEvent, entities["ac_decision_audit_events"], rehydrated)
+        rehydrate_entity(AcClientCommand, entities["ac_client_commands"], rehydrated)
+        rehydrate_entity(AcRemoteEnvironment, entities["ac_remote_environments"], rehydrated)
+        rehydrate_entity(AcRemoteOperation, entities["ac_remote_operations"], rehydrated)
 
         # 2. Neutraliza estado antigo para prevenir concorrência com processos vivos
         reconcile_active_executions!(company: company)
@@ -161,9 +167,17 @@ class AcRecoveryService
       count = 0
       records.each do |attrs|
         record = model_class.find_or_initialize_by(id: attrs["id"])
-        record.assign_attributes(attrs.except("id", "created_at", "updated_at"))
-        record.save!(validate: false)
-        count += 1
+        if record.new_record?
+          record.assign_attributes(attrs.except("id", "created_at", "updated_at"))
+          record.save!(validate: false)
+          count += 1
+        end
+      end
+
+      # Reset da sequence de chave primária no PostgreSQL para evitar colisão de PKs (DEF-05)
+      conn = ActiveRecord::Base.connection
+      if conn.respond_to?(:reset_pk_sequence!)
+        conn.reset_pk_sequence!(model_class.table_name)
       end
 
       counter_hash[model_class.table_name] = count

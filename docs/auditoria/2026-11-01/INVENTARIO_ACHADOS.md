@@ -18,9 +18,9 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **DEF-01** | Defeito comprovado | **P0 (Crítico)** | RF-22, RF-23, RF-47, RF-54, RNF-01, T07, T08 | `AcTaskExecutionWorkflow` / `AcReconcileExecutionActivity` | **REMEDIADO (Onda 1)** | Reconciliação prematura de processos: desacoplamento com logs físicos, exit code real, espera com timeout e proteção de worktree ativa |
 | **DEF-02** | Defeito comprovado | **P0 (Crítico)** | RF-15, RF-16, RF-18, RF-25, G3-E1 | `AcPlanExecutionWorkflow` | **REMEDIADO (Onda 1)** | DAG Potemkin eliminado: erradicação de hashes forjados e aprovações fictícias; orquestração condicionada a execuções e pareceres legítimos |
-| **DEF-03** | Requisito ausente na fase | **P1 (Alto)** | RF-05, RNF-03, T01 | `db/schema.rb` (`agent_credentials`) | **Aberto (Onda 2)** | Bloqueio estrutural de duas contas do mesmo provedor por índice único upstream `(user_id, company_id, agent_type)` |
+| **DEF-03** | Requisito ausente na fase | **P1 (Alto)** | RF-05, RNF-03, T01 | `db/schema.rb` (`agent_credentials`) | **REMEDIADO (Onda 2)** | Adicionada coluna `account_slug` e índice único composto, viabilizando múltiplas contas do mesmo provedor sem empresas artificiais |
 | **DEF-04** | Defeito comprovado | **P1 (Alto)** | RF-57, T38 | `AcReviewService#meets_approval_requirements?` | **REMEDIADO (Onda 1)** | Suporte completo a dispensa fundamentada de QA (`waived`) per Adendo Final §3 e bloqueio de autodispensa |
-| **DEF-05** | Defeito comprovado | **P1 (Alto)** | RF-31, RF-34, RF-52, T18, T30 | `AcBackupService` / `AcRecoveryService` | **Aberto (Onda 2)** | Omissão de auditoria e concessões no manifesto de backup; colisão de sequences de PK após reidratação no PostgreSQL |
+| **DEF-05** | Defeito comprovado | **P1 (Alto)** | RF-31, RF-34, RF-52, T18, T30 | `AcBackupService` / `AcRecoveryService` | **REMEDIADO (Onda 2)** | Inclusão de auditoria e concessões no manifesto de backup; reidratação segura e `reset_pk_sequence!` no PostgreSQL |
 | **DEF-06** | Risco fundamentado | **P2 (Médio)** | RF-26, RF-27, RNF-08 | `AcRemoteGatewayService#query_operation_status!` | Ausência de `Shellwords.shellescape` em `working_directory` durante consulta de status de jobs SSH |
 | **DEF-07** | Requisito ausente na fase | **P1 (Alto)** | RF-07, RF-24, RF-32, RF-44, RNF-04, T16, T27 | `PlanGraph.tsx` / `MobileSetupWizard.tsx` | Ausência de botões e fluxos para pausar, retomar ou cancelar planos na UI web/móvel e sem gestão de políticas/cotas |
 | **DEF-08** | Risco fundamentado | **P2 (Médio)** | RNF-06, RNF-09 | `agent-control-f0-rails-deps:4.0.9` / `ac_physical_git_test.rb` | Imagem Docker base de dependências não inclui o binário `git`, gerando `Errno::ENOENT` se não montado externamente |
@@ -160,6 +160,11 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
   2. Remover o índice único `index_agent_credentials_on_user_company_agent`.
   3. Adicionar novo índice único: `add_index :agent_credentials, [:user_id, :company_id, :agent_type, :account_slug], unique: true, name: "index_agent_credentials_on_user_company_agent_slug"`.
 - **Critério Verificável de Encerramento:** Teste criando duas instâncias de `AgentCredential` com `agent_type: "codex"` vinculadas ao mesmo `user` e `company` com slugs `codex-manager` e `codex-programmer`, e vinculação correspondente em dois `AcExecutionProfile` distintos.
+- **Status de Remediação:** **REMEDIADO (Onda 2 — 2026-11-01)**.
+  - Criada migration `20261101120000_add_account_slug_to_agent_credentials.rb` adicionando coluna `account_slug` (string, default: "default", not null) e substituindo o índice único restritivo upstream pelo índice composto `[:user_id, :company_id, :agent_type, :account_slug]`.
+  - Atualizado o modelo `AgentCredential` para validar presença de `account_slug` e escopar a unicidade de `agent_type` por conta, usuário e empresa.
+  - Atualizado `AgentCredential.from_artifacts` para receber e persistir `account_slug`.
+  - Validado com testes unitários em `AcMultipleAgentCredentialsTest` comprovando o provisionamento simultâneo de duas contas Codex (`codex-manager` e `codex-programmer`) para o mesmo usuário e empresa, com vinculação a perfis de execução distintos per RF-05 e T01.
 
 ---
 
@@ -228,6 +233,11 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
   1. Incluir `ac_decision_audit_events`, `ac_capacity_grants` e `ac_quota_observations` no hash de entidades e checksums do manifesto.
   2. Ao final de `rehydrate_entity`, executar `ActiveRecord::Base.connection.reset_pk_sequence!(model_class.table_name)` para sincronizar os ponteiros das sequences.
 - **Critério Verificável de Encerramento:** Teste exportando manifesto de uma company com 5 eventos de auditoria e 2 concessões, restaurando em banco de teste e executando `create!` com sucesso em todas as tabelas afetadas sem erro de sequence.
+- **Status de Remediação:** **REMEDIADO (Onda 2 — 2026-11-01)**.
+  - Atualizado `AcBackupService.export_manifest` para incluir `ac_decision_audit_events`, `ac_capacity_grants`, `ac_quota_observations`, `ac_remote_environments` e `ac_remote_operations` no hash de entidades e checksums do manifesto autenticado.
+  - Atualizado `AcRecoveryService.restore_from_manifest!` para reidratar essas entidades em ordem de integridade referencial, respeitando a imutabilidade append-only de eventos de auditoria.
+  - Implementado `reset_pk_sequence!` no PostgreSQL ao final de `rehydrate_entity` para todas as tabelas restauradas.
+  - Validado com 16 testes automatizados em `AcBackupServiceTest` e `AcRecoveryServiceTest` comprovando a integridade da trilha de auditoria e a criação subsequente de novos registros sem erro de colisão de sequence no PostgreSQL (82 asserções, 0 falhas).
 
 ---
 

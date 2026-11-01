@@ -30,7 +30,11 @@ class AgentCredential < ApplicationRecord
     in: CompanyMembership::AVAILABLE_AGENTS,
     message: "%{value} is not a valid agent type"
   }
-  validates :agent_type, uniqueness: { scope: %i[user_id company_id] }
+  validates :account_slug, presence: true
+  validates :agent_type, uniqueness: {
+    scope: %i[user_id company_id account_slug],
+    message: "já possui credencial com este identificador de conta para este usuário e empresa"
+  }
   validate :owner_is_a_member_of_the_company
   validates :encrypted_config_data, presence: true
 
@@ -238,8 +242,8 @@ class AgentCredential < ApplicationRecord
   # new auth cannot invoke ("There's an issue with the selected model … Run /model").
   # Token REFRESH must not pass this — rotating a token is not a new authorization,
   # and wiping the user's pick on every refresh would be its own bug.
-  def self.from_artifacts(user_id, company_id, agent_type, artifacts_hash, new_authorization: false)
-    credential = find_or_initialize_by(user_id: user_id, company_id: company_id, agent_type: agent_type)
+  def self.from_artifacts(user_id, company_id, agent_type, artifacts_hash, new_authorization: false, account_slug: "default")
+    credential = find_or_initialize_by(user_id: user_id, company_id: company_id, agent_type: agent_type, account_slug: account_slug)
     credential.config_data = artifacts_hash
     credential.status = :active
     credential.refresh_error = nil

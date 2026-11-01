@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_01_110000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "citext"
   enable_extension "pg_catalog.plpgsql"
@@ -423,10 +423,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_110000) do
     t.string "status", default: "active", null: false
     t.datetime "updated_at", null: false
     t.bigint "user_id", null: false
+    t.string "account_slug", default: "default", null: false
     t.index ["agent_type"], name: "index_agent_credentials_on_agent_type"
     t.index ["company_id"], name: "index_agent_credentials_on_company_id"
     t.index ["status", "expires_at"], name: "index_agent_credentials_on_status_and_expires_at"
-    t.index ["user_id", "company_id", "agent_type"], name: "index_agent_credentials_on_user_company_agent", unique: true
+    t.index ["user_id", "company_id", "agent_type", "account_slug"], name: "index_agent_credentials_on_user_co_agent_slug", unique: true
     t.index ["user_id"], name: "index_agent_credentials_on_user_id"
   end
 

@@ -180,4 +180,44 @@ class AcRecoveryServiceTest < ActiveSupport::TestCase
     AcRecoveryService.instance_variable_set(:@recovery_mode_active, false)
     assert_equal false, AcRecoveryService.recovery_mode_active?(company: @company)
   end
+
+  # Prova DEF-05 (RF-31, RF-34, RF-52): Reset de sequence do PostgreSQL e reidratação de auditoria
+  test "DEF-05: primary key sequence is reset after rehydration preventing collision on subsequent creates" do
+    # 1. Cria evento de auditoria imutável antes do backup
+    audit = AcDecisionAuditEvent.create!(
+      company: @company,
+      project: @project,
+      ac_task: @task,
+      event_type: "task_state_changed",
+      actor_type: "system",
+      occurred_at: Time.current,
+      reason: "Capacity available"
+    )
+    audit_id = audit.id
+
+    manifest = AcBackupService.export_manifest(company: @company)
+
+    # 2. Restaura o estado a partir do manifesto
+    result = AcRecoveryService.restore_from_manifest!(company: @company, manifest: manifest)
+    assert result[:restored]
+
+    # Verifica que o evento de auditoria foi preservado/reidratado
+    assert_not_nil AcDecisionAuditEvent.find_by(id: audit_id), "Trilha de auditoria deve ser reidratada (RF-31)"
+
+    # 3. Cria novas entidades subsequentemente. Sem reset_pk_sequence!, falharia por PG::UniqueViolation
+    new_task = AcTask.create!(
+      company: @company,
+      project: @project,
+      ac_plan: @plan,
+      task_key: "task-post-restore-#{SecureRandom.hex(4)}",
+      title: "Tarefa Criada Pós-Restauração",
+      position: 99,
+      state: "pending",
+      risk_class: "low",
+      assigned_role: "programmer"
+    )
+
+    assert new_task.persisted?, "Nova tarefa deve ser persistida sem colisão de sequence (DEF-05)"
+    assert_operator new_task.id, :>, @task.id
+  end
 end

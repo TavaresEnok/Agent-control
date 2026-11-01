@@ -72,4 +72,27 @@ class AcBackupServiceTest < ActiveSupport::TestCase
 
     assert_not AcBackupService.verify_manifest(manifest), "Root digest adulterado deve ser rejeitado"
   end
+
+  # Prova DEF-05 (RF-31, RF-34, RF-52): Inclusão obrigatória de eventos de auditoria e concessões
+  test "DEF-05: export_manifest includes immutable audit trail and capacity grants in manifest" do
+    # Cria evento de auditoria e concessão para a empresa
+    AcDecisionAuditEvent.create!(
+      company: @company,
+      project: @project,
+      ac_task: @task,
+      event_type: "task_state_changed",
+      actor_type: "system",
+      occurred_at: Time.current,
+      reason: "Capacity granted"
+    )
+
+    manifest = AcBackupService.export_manifest(company: @company)
+    counts = manifest["header"]["entity_counts"]
+
+    assert counts.key?("ac_decision_audit_events"), "Manifesto deve conter tabela de auditoria imutável (RF-31)"
+    assert counts.key?("ac_capacity_grants"), "Manifesto deve conter concessões de capacidade"
+    assert counts.key?("ac_quota_observations"), "Manifesto deve conter observações de cota"
+    assert_operator counts["ac_decision_audit_events"], :>=, 1
+    assert AcBackupService.verify_manifest(manifest)
+  end
 end
