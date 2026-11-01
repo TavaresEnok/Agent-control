@@ -25,8 +25,10 @@ class AcBackupService
     def export_encrypted_backup(company:)
       key_id, encryptor = backup_encryptor
       manifest = build_manifest(company: company, redacted: false)
-      { "format" => "ac-encrypted-backup-v1", "key_id" => key_id,
+      envelope = { "format" => "ac-encrypted-backup-v1", "key_id" => key_id,
         "ciphertext" => encryptor.encrypt_and_sign(manifest.to_json, purpose: "agent-control-backup") }
+      AcArtifactStorageService.pin_backup!(company: company, envelope: envelope, backup_id: manifest.fetch("root_digest"))
+      envelope
     end
 
     def decrypt_backup(envelope)

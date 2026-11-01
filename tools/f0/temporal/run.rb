@@ -41,7 +41,7 @@ class G0Integration
     @worker = Process.spawn(env, RbConfig.ruby, File.join(__dir__, "worker.rb"),
       @client.connection.target_host, @namespace, @queue,
       unsetenv_others: true, close_others: true,
-      out: [File.join(@root, "worker.log"), "a"], err: [:child, :out])
+      out: [ File.join(@root, "worker.log"), "a" ], err: [ :child, :out ])
   end
 
   def worker_stop(signal = "TERM")
@@ -134,11 +134,11 @@ class G0Integration
   def run
     manifest = { ruby: RUBY_VERSION, sdk: Temporalio::VERSION,
       gems: Gem.loaded_specs.transform_values { |spec| spec.version.to_s },
-      cli_version: IO.popen([@cli, "--version"], &:read).strip,
+      cli_version: IO.popen([ @cli, "--version" ], &:read).strip,
       cli_sha256: Digest::SHA256.file(@cli).hexdigest,
       upstream: JSON.parse(File.read(File.join(ROOT, "UPSTREAM.json"))),
       sources: %w[app/services/temporal_service.rb app/temporal/workflows/base.rb app/temporal/temporal_input.rb].to_h {
-        |path| [path, Digest::SHA256.file(File.join(ROOT, path)).hexdigest]
+        |path| [ path, Digest::SHA256.file(File.join(ROOT, path)).hexdigest ]
       }, namespace: @namespace, queue: @queue }
     File.write(File.join(@root, "manifest.json"), JSON.pretty_generate(manifest))
     server_start

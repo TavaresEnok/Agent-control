@@ -59,9 +59,9 @@ class CreateAcTasks < ActiveRecord::Migration[8.1]
       t.timestamps
     end
 
-    add_index :ac_tasks, [:ac_plan_id, :task_key], unique: true
-    add_index :ac_tasks, [:ac_plan_id, :position]
-    add_index :ac_tasks, [:company_id, :project_id, :state]
+    add_index :ac_tasks, [ :ac_plan_id, :task_key ], unique: true
+    add_index :ac_tasks, [ :ac_plan_id, :position ]
+    add_index :ac_tasks, [ :company_id, :project_id, :state ]
     add_index :ac_tasks, :state
     add_index :ac_tasks, :assigned_role
     add_index :ac_tasks, :approved_commit_sha, where: "approved_commit_sha IS NOT NULL"

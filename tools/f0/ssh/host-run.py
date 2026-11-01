@@ -207,7 +207,7 @@ def main(argv=None):
     try:
         for image in images:
             call("docker", "image", "inspect", image)
-        for path in [ROOT / "app/services/coder/ssh_runner.rb", ROOT / "app/services/agent_control/open_ssh_transport.rb", ROOT / "tools/f0/lab_network.py", *sorted((ROOT / "tools/f0/ssh").glob("*")), *sorted((ROOT / "test/f0/ssh").glob("*")), ROOT / "test/services/agent_control/open_ssh_transport_test.rb", ROOT / "test/services/coder/ssh_runner_test.rb", ROOT / "docs/validation/F0-SSH-INTEGRADO.md", ROOT / "docs/validation/F0-SSH-TMPFS-IO.md"]:
+        for path in [ROOT / "app/services/coder/ssh_runner.rb", ROOT / "app/services/agent_control/open_ssh_transport.rb", ROOT / "tools/f0/lab_network.py", *sorted((ROOT / "tools/f0/ssh").glob("*")), *sorted((ROOT / "tools/f0/ssh/tests").glob("*.rb")), *sorted((ROOT / "test/f0/ssh").glob("*")), ROOT / "test/services/agent_control/open_ssh_transport_test.rb", ROOT / "test/services/coder/ssh_runner_test.rb", ROOT / "docs/validation/F0-SSH-INTEGRADO.md", ROOT / "docs/validation/F0-SSH-TMPFS-IO.md"]:
             if path.is_file():
                 target = evidence / "code" / path.relative_to(ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -262,7 +262,7 @@ def main(argv=None):
         (evidence / "host-key.pub").write_bytes(host_key)
         if call("docker", "exec", central, "ruby", "-e", "print RUBY_VERSION") != "4.0.9":
             raise RuntimeError("Ruby 4.0.9 required")
-        for script in ["test/services/agent_control/open_ssh_transport_test.rb", "test/f0/ssh/runner_test.rb", "tools/f0/ssh/scenario.rb"]:
+        for script in ["test/services/agent_control/open_ssh_transport_test.rb", "tools/f0/ssh/tests/runner_test.rb", "tools/f0/ssh/scenario.rb"]:
             if script == "tools/f0/ssh/scenario.rb":
                 scenario_started = True
             output = call("docker", "exec", central, "timeout", "--kill-after=10s", "180s", "ruby", script, timeout=200)

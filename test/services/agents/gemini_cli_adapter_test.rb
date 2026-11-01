@@ -237,18 +237,30 @@ module Agents
       assert_equal 2, stat.events_count
     end
 
-    test "default_env_vars injects the API key of the session's company only" do
+    test "default_env_vars injects only the API key of a Gemini session's company" do
+      @session.update!(agent_type: "gemini_cli")
       other_company = create(:company)
       create(:company_membership, user: @user, company: other_company)
       create(:agent_credential, user: @user, company: other_company, agent_type: "gemini_cli",
-                                config_data: { "api_key" => "other-tenant-key" })
+                                config_data: { "api_key" => "theirs" })
 
       assert_nil @adapter.default_env_vars(@session)["GEMINI_API_KEY"]
-
       create(:agent_credential, user: @user, company: @company, agent_type: "gemini_cli",
                                 config_data: { "api_key" => "mine" })
 
-      assert_equal "mine", @adapter.default_env_vars(@session)["GEMINI_API_KEY"]
+      env = @adapter.default_env_vars(@session)
+      assert_equal "mine", env["GEMINI_API_KEY"]
+      assert_not_includes env.values.join("\n"), "theirs"
+    end
+
+    test "default_env_vars does not give a Gemini credential to another agent type" do
+      @session.update!(agent_type: "claude_code")
+      create(:agent_credential, user: @user, company: @company, agent_type: "gemini_cli",
+                                config_data: { "api_key" => "mine" })
+
+      env = @adapter.default_env_vars(@session)
+      %w[GEMINI_API_KEY GOOGLE_API_KEY].each { |key| assert_not env.key?(key) }
+      assert_not_includes env.values.join("\n"), "mine"
     end
 
     test "mcp_config pins the Playwright MCP command to the baked version (task #340)" do

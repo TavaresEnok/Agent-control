@@ -9,7 +9,7 @@ class AddAccountSlugToAgentCredentials < ActiveRecord::Migration[8.0]
 
     # Adiciona índice único escopado por account_slug (RF-05 / T01)
     add_index :agent_credentials,
-              [:user_id, :company_id, :agent_type, :account_slug],
+              [ :user_id, :company_id, :agent_type, :account_slug ],
               unique: true,
               name: "index_agent_credentials_on_user_co_agent_slug"
   end

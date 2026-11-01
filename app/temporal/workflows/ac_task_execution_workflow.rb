@@ -10,7 +10,7 @@ module Workflows
   # 4. Observação e tratamento de sinais de pause/resume/cancel
   # 5. Reconciliação do processo com validação estrita de época (§11.3)
   # 6. Liberação garantida de capacidade e neutralização de lease
-  class AcTaskExecutionWorkflow < Workflows::Base
+  class AcTaskExecutionWorkflow < AcTaskExecutionWorkflowBaselineD9dbbef
     workflow_name "ac_task_execution_workflow"
 
     def init
@@ -48,6 +48,8 @@ module Workflows
     end
 
     def run(input)
+      return super(input) unless Temporalio::Workflow.patched("ac-task-runtime-receipt-poll-v1")
+
       init
       task_id = input.task_id
       operation_id = input.operation_id
@@ -121,6 +123,7 @@ module Workflows
         end
 
         # Etapa 4: Reconciliação do término de processo com validação de época (§11.3)
+        rec_result = nil
         loop do
           Temporalio::Workflow.wait_condition { !@paused || @cancelled } if @paused
           if @cancelled

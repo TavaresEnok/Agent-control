@@ -63,8 +63,8 @@ class CreateAcExecutions < ActiveRecord::Migration[8.1]
     end
 
     add_index :ac_executions, :operation_id, unique: true
-    add_index :ac_executions, [:ac_task_id, :state]
-    add_index :ac_executions, [:company_id, :state]
+    add_index :ac_executions, [ :ac_task_id, :state ]
+    add_index :ac_executions, [ :company_id, :state ]
     add_index :ac_executions, :epoch
     add_index :ac_executions, :process_handle
     add_index :ac_executions, :worktree_lease_token

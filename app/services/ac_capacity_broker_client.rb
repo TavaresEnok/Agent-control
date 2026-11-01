@@ -13,7 +13,11 @@ class AcCapacityBrokerClient
   class UncertainError < Error; end
   class InvalidResponseError < Error; end
 
-  def initialize(endpoint:, bearer_token:, signing_key:, open_timeout: 5, read_timeout: 10)
+  def initialize(endpoint:, bearer_token:, signing_key:, host_id: nil, authority_id: nil, open_timeout: 5, read_timeout: 10)
+    @authority_id = (authority_id || Settings.agent_control.capacity_broker.authority_id).to_s
+    raise ArgumentError, "Identidade da autoridade inválida" unless @authority_id.match?(/\A[a-zA-Z0-9_.:-]{1,100}\z/)
+    @host_id = (host_id || Settings.agent_control.capacity_broker.installation_id).to_s
+    raise ArgumentError, "Identidade do host inválida" unless @host_id.match?(/\A[a-zA-Z0-9_.:-]{1,100}\z/)
     @endpoint = URI.parse(endpoint.to_s)
     unless @endpoint.is_a?(URI::HTTPS) && @endpoint.host.present? && @endpoint.userinfo.nil? &&
            @endpoint.query.nil? && @endpoint.fragment.nil? && bearer_token.present? && signing_key.present?
@@ -25,9 +29,9 @@ class AcCapacityBrokerClient
     @read_timeout = read_timeout
   end
 
-  def reserve!(operation_id:, account_key:, quantity:)
+  def reserve!(operation_id:, account_key:, quantity:, epoch:)
     raise ArgumentError, "Quantidade inválida" unless quantity.is_a?(Integer) && quantity.positive?
-    request!("reserve", operation_id: operation_id, account_key: account_key, extra: { "quantity" => quantity })
+    request!("reserve", operation_id: operation_id, account_key: account_key, extra: { "quantity" => quantity, "epoch" => epoch.to_s })
   end
 
   def get!(operation_id:, account_key:)
@@ -39,8 +43,9 @@ class AcCapacityBrokerClient
     request!("bind", operation_id: operation_id, account_key: account_key, extra: { "grant_id" => grant_id.to_s })
   end
 
-  def release!(operation_id:, account_key:)
-    request!("release", operation_id: operation_id, account_key: account_key)
+  def release!(operation_id:, account_key:, release_proof:)
+    raise ArgumentError, "Prova de término obrigatória" unless release_proof.is_a?(Hash)
+    request!("release", operation_id: operation_id, account_key: account_key, extra: { "release_proof" => release_proof })
   end
 
   private
@@ -49,7 +54,7 @@ class AcCapacityBrokerClient
     raise ArgumentError, "Identidade de operação e conta obrigatórias" if operation_id.blank? || account_key.blank?
 
     payload = { "action" => action, "operation_id" => operation_id.to_s, "account_key" => account_key.to_s,
-                "nonce" => SecureRandom.hex(16) }.merge(extra)
+                "nonce" => SecureRandom.hex(16), "host_id" => @host_id, "authority_id" => @authority_id }.merge(extra)
     body = JSON.generate(payload)
     uri = @endpoint.dup
     uri.path = "#{uri.path.to_s.delete_suffix('/')}/v1/reservations/#{action}"
@@ -77,10 +82,11 @@ class AcCapacityBrokerClient
     result = JSON.parse(body)
     unless result.is_a?(Hash) && result["operation_id"] == payload["operation_id"] &&
            result["account_key"] == payload["account_key"] && result["action"] == payload["action"] &&
-           result["nonce"] == payload["nonce"] && allowed_states(payload["action"]).include?(result["state"])
+           result["nonce"] == payload["nonce"] && result["host_id"] == @host_id && result["authority_id"] == @authority_id && allowed_states(payload["action"]).include?(result["state"])
       raise InvalidResponseError, "Identidade ou estado de reserva divergente"
     end
-    if payload["action"] == "reserve" && %w[reserved bound].include?(result["state"]) && result["quantity"] != payload["quantity"]
+    if payload["action"] == "reserve" && %w[reserved bound].include?(result["state"]) &&
+       (result["quantity"] != payload["quantity"] || result["epoch"] != payload["epoch"])
       raise InvalidResponseError, "Quantidade reservada divergente"
     end
     if payload["action"] == "bind" && result["state"] == "bound" && result["grant_id"].to_s != payload["grant_id"]
@@ -92,7 +98,7 @@ class AcCapacityBrokerClient
   end
 
   def allowed_states(action)
-    { "reserve" => %w[reserved bound denied], "get" => %w[reserved bound released denied],
+    { "reserve" => %w[reserved bound denied], "get" => %w[reserved bound released denied not_found],
       "bind" => %w[bound denied], "release" => %w[released denied] }.fetch(action)
   end
 

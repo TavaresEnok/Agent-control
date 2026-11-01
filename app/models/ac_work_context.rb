@@ -88,6 +88,7 @@ class AcWorkContext < ApplicationRecord
       pending_executions = AcExecution.where(ac_work_context_id: id)
       if pending_executions.where.not(state: %w[completed failed cancelled]).exists? ||
          pending_executions.where.not(worktree_lease_token: nil).exists? ||
+         AcRemoteOperation.where(ac_execution_id: pending_executions.select(:id), state: %w[pending running uncertain]).exists? ||
          AcCapacityGrant.joins(ac_task: :ac_plan).where(ac_plans: { ac_work_context_id: id }, state: %w[granted active]).exists?
         raise ActiveRecord::StaleObjectError, "Execuções ou recursos anteriores exigem reconciliação"
       end

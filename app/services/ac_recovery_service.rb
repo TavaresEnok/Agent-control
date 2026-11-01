@@ -104,6 +104,7 @@ class AcRecoveryService
 
     # Restauração controlada e reidratação física a partir de manifesto autenticado ([BUG-P0-03])
     def restore_from_manifest!(company:, manifest:)
+      encrypted_envelope = manifest
       begin
         manifest = AcBackupService.decrypt_backup(manifest)
       rescue AcBackupService::BackupError
@@ -147,6 +148,7 @@ class AcRecoveryService
         reconcile_active_executions!(company: company)
         neutralize_orphan_leases!(company: company)
         preserve_pauses!(company: company)
+        AcArtifactStorageService.pin_backup!(company: company, envelope: encrypted_envelope, backup_id: manifest.fetch("root_digest"))
 
         {
           restored: true,

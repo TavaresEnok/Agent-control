@@ -44,7 +44,7 @@ class CreateAcWorkContexts < ActiveRecord::Migration[8.1]
     end
 
     add_index :ac_work_contexts, :external_id, unique: true
-    add_index :ac_work_contexts, [:company_id, :project_id]
+    add_index :ac_work_contexts, [ :company_id, :project_id ]
     add_index :ac_work_contexts, :state
     add_index :ac_work_contexts, :policy_revision_id
     add_index :ac_work_contexts, :created_at

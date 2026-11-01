@@ -14,6 +14,8 @@ governance, community health — carry none.
 ## [Unreleased]
 
 ### Fixed
+- **Workflows**: deleting a user now preserves anonymized Agent Control account references without retaining authentication material, and refuses deletion while work or refresh remains unresolved.
+- **Workflows**: shared capacity reservations now require authenticated host reconciliation before release. Remote commands use a durable outbox and supervised SSH jobs; pending remote work holds its execution, manager and lease. Legacy plan/task histories retain their baseline command sequences during replay.
 - **Workflows**: Agent Control now requires published plans, explicit eligible accounts,
   verified runtime outcomes and independent review of the exact Git artifact. Quota
   failures preserve work without spending quality retries; cancellation fences new starts.

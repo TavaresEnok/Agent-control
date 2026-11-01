@@ -33,12 +33,15 @@ class AcWorktreeManagerService
         raise GitError, "Repositório local obrigatório" unless repo_path.present? && Dir.exist?(repo_path)
 
         repo = File.realpath(repo_path)
-        requested = requested_commit(execution)
-        commit = git!("-C", repo, "rev-parse", "--verify", "--end-of-options", "#{requested}^{commit}").strip
-        raise GitError, "Identidade de commit inválida" unless commit.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
+        storage = AcArtifactStorageService.new(root: root)
+        storage.synchronize do
+          storage.preflight!(company: execution.company, source: repo)
+          requested = requested_commit(execution)
+          commit = git!("-C", repo, "rev-parse", "--verify", "--end-of-options", "#{requested}^{commit}").strip
+          raise GitError, "Identidade de commit inválida" unless commit.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
 
-        AcSafeGit.with_repository(repo) do |safe_source|
-          git!("clone", "--no-hardlinks", "--no-local", "--no-checkout", "--", safe_source, target)
+          AcSafeGit.with_repository(repo) do |safe_source|
+            git!("clone", "--no-hardlinks", "--no-local", "--no-checkout", "--", safe_source, target)
         end
         # A detached commit may not be reachable from any advertised branch.
         AcSafeGit.with_repository(repo) do |safe_source|
@@ -51,7 +54,9 @@ class AcWorktreeManagerService
 
         token = SecureRandom.hex(16)
         execution.acquire_worktree_lease!(token, path: target)
+        storage.mark_owned!(execution: execution, path: target)
         token
+        end
       end
     end
 

@@ -41,9 +41,9 @@ module F0Access
           end
         end
       end
-      [category == expected, { denial_category: category, rpc_code: code }]
+      [ category == expected, { denial_category: category, rpc_code: code } ]
     rescue JSON::ParserError, TypeError
-      [false, { denial_category: "invalid_json", rpc_code: nil }]
+      [ false, { denial_category: "invalid_json", rpc_code: nil } ]
     end
 
     def tool_names(response)
@@ -63,7 +63,7 @@ module F0Access
       body = JSON.parse(response.body)
       response.code == "200" && body.is_a?(Hash) && body["jsonrpc"] == "2.0" && body["id"] == 1 &&
         !body.key?("error") && body["result"].is_a?(Hash) &&
-        [nil, false].include?(body["result"]["isError"]) && body["result"]["content"].is_a?(Array)
+        [ nil, false ].include?(body["result"]["isError"]) && body["result"]["content"].is_a?(Array)
     rescue JSON::ParserError, TypeError
       false
     end

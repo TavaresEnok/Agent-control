@@ -31,7 +31,7 @@ class AcRemoteOperationTest < ActiveSupport::TestCase
       fingerprint: @fingerprint,
       identity_key_path: @identity_path,
       known_hosts_path: @known_hosts_path,
-      authorized_directories: ["/home/enok/Documentos/projetos/nexoisp"],
+      authorized_directories: [ "/home/enok/Documentos/projetos/nexoisp" ],
       state: "active"
     )
 
@@ -56,27 +56,27 @@ class AcRemoteOperationTest < ActiveSupport::TestCase
 
     %i[operation_id command working_directory state].each do |field|
       bad_op = AcRemoteOperation.new(@valid_attributes.merge(field => nil))
-      refute bad_op.valid?, "Expected #{field} to be required"
+      refute_predicate bad_op, :valid?, "Expected #{field} to be required"
     end
   end
 
   test "enforces operation_id uniqueness" do
     AcRemoteOperation.create!(@valid_attributes)
     dup = AcRemoteOperation.new(@valid_attributes)
-    refute dup.valid?
+    refute_predicate dup, :valid?
     assert_includes dup.errors[:operation_id], "has already been taken"
   end
 
   test "transitions through execution states and answers terminal status" do
     op = AcRemoteOperation.create!(@valid_attributes)
-    refute op.terminal?
+    refute_predicate op, :terminal?
 
     # 1. Running
     op.mark_running!(remote_job_id: "remote-job-123")
     assert_equal "running", op.state
     assert_equal "remote-job-123", op.remote_job_id
     assert op.started_at.present?
-    refute op.terminal?
+    refute_predicate op, :terminal?
 
     # 2. Completed
     op.mark_completed!(exit_code: 0, output: "All tests passed", error: nil)

@@ -6,6 +6,9 @@
 # ActionCable WebSocket endpoint
 mount ActionCable.server => "/cable"
 
+post "/v1/capacity/status", to: "ac_capacity_broker_status#create"
+post "/v1/reservations/:action_name", to: "ac_capacity_broker#create", constraints: { action_name: /reserve|get|bind|release/ }
+
 # Credential vending for agent containers (Amazon Bedrock and friends). Called by the
 # in-container credential_process helper, authenticated by a derived per-session key
 # rather than a user session — see CloudAuth::SessionKey.
@@ -186,6 +189,7 @@ namespace :api, defaults: { format: :json } do
     end
 
     namespace :agent_control do
+      resource :runtime_readiness, only: [ :show ], controller: "runtime_readiness"
       resources :client_commands, only: [ :create ]
       resources :templates, only: %i[index show create update destroy]
       resources :notifications, only: %i[index create] do

@@ -18,7 +18,7 @@ RUN test "$(ruby -e 'print RUBY_VERSION')" = 4.0.9 \
     && ruby -c tools/f0/access/mcp_evidence.rb \
     && ruby -c tools/f0/access/session_cookie.rb \
     && bundle install && bundle check \
-    && bundle exec ruby test/f0/access/mcp_evidence_test.rb \
-    && RAILS_ENV=test bundle exec ruby test/f0/access/session_cookie_test.rb
+    && bundle exec ruby tools/f0/access/tests/mcp_evidence_test.rb \
+    && RAILS_ENV=test bundle exec ruby tools/f0/access/tests/session_cookie_test.rb
 # No provider CLI, CA injection, MITM entrypoint, broker or worker is installed.
 CMD ["bundle", "exec", "ruby", "tools/f0/access/run.rb"]

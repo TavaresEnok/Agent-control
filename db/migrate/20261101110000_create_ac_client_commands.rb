@@ -17,7 +17,7 @@ class CreateAcClientCommands < ActiveRecord::Migration[7.1]
     end
 
     add_index :ac_client_commands, :intent_id, unique: true
-    add_index :ac_client_commands, [:company_id, :command_type]
+    add_index :ac_client_commands, [ :company_id, :command_type ]
     add_index :ac_client_commands, :state
   end
 end

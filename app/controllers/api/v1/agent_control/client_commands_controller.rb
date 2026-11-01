@@ -4,7 +4,7 @@ module Api
   module V1
     module AgentControl
       class ClientCommandsController < ApplicationController
-        SUPPORTED_COMMANDS = %w[setup_project_wizard create_task publish_plan start_plan advance_dag pause_plan resume_plan cancel_plan].freeze
+        SUPPORTED_COMMANDS = %w[setup_project_wizard create_task publish_plan start_plan advance_dag pause_plan resume_plan cancel_plan execute_remote_operation].freeze
 
         def create
           intent_id = params[:intent_id]
@@ -25,21 +25,21 @@ module Api
             command_type: command_type,
             payload: payload,
             user: current_user
-          ) do |_command|
-            handle_command(command_type, payload)
+          ) do |command|
+            handle_command(command_type, payload, command)
           end
 
           render json: result, status: :ok
         rescue AcCommandDeduplicationService::DuplicateProcessingError, AcCommandDeduplicationService::IntentMismatchError,
                AcAdmissionService::UnauthorizedExecutionBypassError, ActiveRecord::StaleObjectError => e
           render json: { error: e.message }, status: :conflict
-        rescue ArgumentError, AcAdmissionService::TaskNotEligibleForAdmissionError => e
+        rescue ArgumentError, KeyError, AcAdmissionService::TaskNotEligibleForAdmissionError => e
           render json: { error: e.message }, status: :unprocessable_entity
         end
 
         private
 
-        def handle_command(command_type, payload)
+        def handle_command(command_type, payload, command)
           case command_type.to_s
           when "setup_project_wizard"
             role = payload["role"].presence || "programmer"
@@ -132,6 +132,11 @@ module Api
             plan = AcPlan.where(company: current_company).find(payload["plan_id"])
             event = AcPlanLaunchService.record!(plan: plan, actor: current_user)
             { plan_id: plan.id, intent_id: event.id, status: "queued", workflow_version: 2 }
+
+          when "execute_remote_operation"
+            event = AcRemoteLaunchService.record!(company: current_company, actor: current_user,
+              command_record: command, payload: payload)
+            { operation_id: event.data["operation_id"], event_id: event.id, status: "queued", workflow_version: 2 }
 
           when "advance_dag"
             plan = AcPlan.where(company: current_company).find(payload["plan_id"])

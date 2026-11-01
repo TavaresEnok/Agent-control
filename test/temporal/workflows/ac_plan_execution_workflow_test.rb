@@ -4,8 +4,6 @@ require "test_helper"
 
 module Workflows
   class AcPlanExecutionWorkflowTest < ActiveSupport::TestCase
-    TASK_QUEUE = "ac-plan-execution-test"
-
     setup do
       @company = create(:company)
       @user = create(:user, company: @company)
@@ -43,36 +41,29 @@ module Workflows
         title: "Task B (Depends on A)",
         position: 2,
         risk_class: :low,
-        depends_on: ["task-a"],
+        depends_on: [ "task-a" ],
         state: :pending
       )
 
-      # Mapeia activities do workflow para a fila de teste
-      proxy = Object.new
-      proxy.define_singleton_method(:ac_advance_plan_dag_activity) do
-        TemporalWorkflowHelper::ActivityRef.new("ac_advance_plan_dag_activity", TASK_QUEUE)
-      end
-      proxy.define_singleton_method(:ac_review_task_activity) do
-        TemporalWorkflowHelper::ActivityRef.new("ac_review_task_activity", TASK_QUEUE)
-      end
-      proxy.define_singleton_method(:ac_integrate_task_activity) do
-        TemporalWorkflowHelper::ActivityRef.new("ac_integrate_task_activity", TASK_QUEUE)
-      end
-
-      AcPlanExecutionWorkflow.stubs(:_preloaded_activities).returns(proxy)
-
-      @registered_activities = [
-        Activities::AgentControl::AcAdvancePlanDagActivity.new,
-        Activities::AgentControl::AcReviewTaskActivity.new,
-        Activities::AgentControl::AcIntegrateTaskActivity.new
-      ]
+      @credential = create(:agent_credential, user: @user, company: @company, agent_type: "codex")
+      @policy = AcPolicyRevision.create!(company: @company, revision_number: 1,
+        content_hash: SecureRandom.hex(32), state: :draft,
+        content: { "model_chain" => [ "gpt-5.2" ], "effort_limits" => { "max" => "high" },
+          "active_accounts" => [], "chain_rules" => [] })
+      AcExecutionProfile.create!(company: @company, ac_policy_revision: @policy, agent_credential: @credential,
+        profile_key: "programmer", role: "programmer", cli_adapter: "codex_cli", model_id: "gpt-5.2",
+        effort_level: "medium", chain_position: 1, selection_criteria: { "eligibility" => {
+          "status" => "documented_supported", "model_id" => "gpt-5.2", "cli_adapter" => "codex_cli",
+          "efforts" => [ "medium" ], "valid_until" => 1.hour.from_now.iso8601 } })
+      assert @policy.publish!(by_user: @user), @policy.errors.full_messages.to_sentence
+      assert @plan.publish!(policy_revision: @policy), @plan.errors.full_messages.to_sentence
     end
 
     # Prova G3-E3: DAG de dependências — Tarefa B fica em espera e desbloqueia após A
     test "G3-E3: DAG dependency resolution serializes dependent tasks correctly (§12.1)" do
       # Inicialmente, avança o DAG: task-a fica ready/pending, task-b fica waiting_dependencies
       ready = @plan.advance_dag!
-      assert_equal ["task-a"], ready.map(&:task_key)
+      assert_equal [ "task-a" ], ready.map(&:task_key)
       assert_equal "waiting_dependencies", @task_b.reload.state
 
       # Conclusão e integração de task-a
@@ -89,64 +80,62 @@ module Workflows
       @context.assign_active_manager!(identity: "manager-agent-alpha")
       assert_equal "manager-agent-alpha", @context.active_manager_identity
 
-      # Reatribuição do gerente único
-      @context.assign_active_manager!(identity: "manager-agent-beta")
-      assert_equal "manager-agent-beta", @context.active_manager_identity
-
-      assert_raises(ArgumentError) do
-        @context.assign_active_manager!(identity: "")
+      epoch = @context.metadata.fetch("manager_epoch")
+      assert_equal epoch, @context.assign_active_manager!(identity: "manager-agent-alpha")
+      assert_raises(ActiveRecord::StaleObjectError) do
+        @context.assign_active_manager!(identity: "manager-agent-beta", expected_epoch: epoch)
       end
+      assert_equal "manager-agent-alpha", @context.reload.active_manager_identity
+      assert_equal epoch, @context.metadata.fetch("manager_epoch")
+      assert @context.authorize_manager!(identity: "manager-agent-alpha", epoch: epoch)
+      assert_raises(ActiveRecord::StaleObjectError) do
+        @context.authorize_manager!(identity: "manager-agent-beta", epoch: epoch)
+      end
+      assert_raises(ArgumentError) { @context.assign_active_manager!(identity: "") }
     end
 
-    # Prova G3-E6: Execução durável do AcPlanExecutionWorkflow no Temporal
-    test "G3-E6: AcPlanExecutionWorkflow executes DAG rounds end to end via Temporal" do
-      result = run_workflow(
-        AcPlanExecutionWorkflow,
-        {
-          plan_id: @plan.id,
-          trigger_review_for_task_id: @task_a.id,
-          review_artifact_hash: "hash-task-a-approved",
-          review_verdict: "approved",
-          expected_base_commit: "base-0",
-          candidate_commit: "commit-a",
-          current_branch_head: "base-0"
-        },
-        activities: @registered_activities,
-        task_queue: TASK_QUEUE
-      )
-
-      assert_equal "in_progress", result["status"]
-      @task_a.reload
-      assert_equal "integrated", @task_a.state
-      assert_equal "commit-a", @task_a.approved_commit_sha
-
-      # Verifica se task-b foi desbloqueada pelo ciclo do workflow
-      @task_b.reload
-      assert_equal "pending", @task_b.state
+    # V1 histories are covered by replay tests; V2 covers the real execution cycle.
+    # Invalid launch inputs are checked synchronously here, without Temporal's
+    # activity retries or fabricated review/commit results.
+    test "G3-E6: an unpublished plan is refused before a workflow RPC or outbox intent" do
+      draft = AcPlan.create!(company: @company, project: @project, ac_work_context: @context,
+        plan_key: SecureRandom.uuid, title: "Unpublished", version: 1)
+      TemporalService.expects(:start_workflow).never
+      assert_no_difference("TriggerEvent.count") do
+        assert_raises(AcAdmissionService::TaskNotEligibleForAdmissionError) do
+          AcPlanLaunchService.record!(plan: draft, actor: @user)
+        end
+      end
+      assert_nil @context.reload.active_manager_identity
+      assert draft.reload.draft?
     end
 
-    # Prova DEF-02: Não fabricação estática de hash nem autoaprovação de tarefas sem execução
-    test "DEF-02: does not fabricate artifact hash or auto-approve tasks without real execution" do
-      result = run_workflow(
-        AcPlanExecutionWorkflow,
-        { plan_id: @plan.id },
-        activities: @registered_activities,
-        task_queue: TASK_QUEUE
-      )
+    test "G3-E6: a published plan without its manager binding cannot advance through the activity" do
+      TemporalService.expects(:start_workflow).never
+      AcRuntimeSupervisorService.expects(:dispatch!).never
+      input = TemporalInput.wrap(plan_id: @plan.id)
+      assert_raises(ActiveRecord::StaleObjectError) do
+        Activities::AgentControl::AcAdvancePlanDagActivity.new.run(input)
+      end
+      assert_equal "pending", @task_a.reload.state
+      assert_equal "pending", @task_b.reload.state
+      assert_nil @context.reload.active_manager_identity
+    end
 
-      assert_equal "in_progress", result["status"]
-      @task_a.reload
-      @task_b.reload
-
-      # Nenhuma tarefa deve ter sido integrada nem aprovada sem execução
-      assert_not_equal "integrated", @task_a.state
-      assert_not_equal "approved", @task_a.state
+    test "DEF-02: caller supplied approval claims without an independent execution are refused before runtime RPC" do
+      AcRuntimeSupervisorService.expects(:status!).never
+      TemporalService.expects(:start_workflow).never
+      assert_no_difference("AcReviewVerdict.count") do
+        assert_raises(AcReviewService::InvalidVerdictError) do
+          AcReviewService.submit_verdict!(task: @task_a, execution: nil,
+            artifact_hash: "a" * 64, candidate_commit_sha: "b" * 40, base_commit_hash: "c" * 40,
+            verdict: "approved", evaluator_identity: "unverified-caller")
+        end
+      end
+      assert_equal "pending", @task_a.reload.state
       assert_nil @task_a.approved_artifact_hash
       assert_nil @task_a.approved_commit_sha
-
-      # Nenhum veredicto fabricado deve existir
-      assert_equal 0, AcReviewVerdict.where(ac_task_id: [@task_a.id, @task_b.id]).count,
-                   "Nenhum parecer de revisão deve ser forjado pelo workflow (DEF-02)"
+      assert_empty AcExecution.where(ac_task_id: [ @task_a.id, @task_b.id ])
     end
   end
 end

@@ -61,9 +61,9 @@ class CreateAcQuotaObservations < ActiveRecord::Migration[8.1]
       t.timestamps
     end
 
-    add_index :ac_quota_observations, [:agent_credential_id, :observed_at]
-    add_index :ac_quota_observations, [:agent_credential_id, :quota_state]
-    add_index :ac_quota_observations, [:company_id, :quota_state]
+    add_index :ac_quota_observations, [ :agent_credential_id, :observed_at ]
+    add_index :ac_quota_observations, [ :agent_credential_id, :quota_state ]
+    add_index :ac_quota_observations, [ :company_id, :quota_state ]
     add_index :ac_quota_observations, :observed_at
     add_index :ac_quota_observations, :valid_until, where: "valid_until IS NOT NULL"
     add_index :ac_quota_observations, :ac_task_id, where: "ac_task_id IS NOT NULL"

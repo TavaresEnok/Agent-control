@@ -1,0 +1,13 @@
+{
+  "test/f0/access/mcp_evidence_test.rb": "tools/f0/access/tests/mcp_evidence_test.rb",
+  "test/f0/access/readiness_test.rb": "tools/f0/access/tests/readiness_test.rb",
+  "test/f0/access/session_cookie_test.rb": "tools/f0/access/tests/session_cookie_test.rb",
+  "test/f0/admission/guard_test.rb": "tools/f0/admission/tests/guard_test.rb",
+  "test/f0/admission/sql_test.rb": "tools/f0/admission/tests/sql_test.rb",
+  "test/f0/boundary/integration_eligibility_test.rb": "tools/f0/boundary/tests/integration_eligibility_test.rb",
+  "test/f0/integrated/subprocess_boot_test.rb": "tools/f0/integrated/tests/subprocess_boot_test.rb",
+  "test/f0/ssh/runner_test.rb": "tools/f0/ssh/tests/runner_test.rb",
+  "test/f0/temporal/launch_evidence_test.rb": "tools/f0/temporal/tests/launch_evidence_test.rb",
+  "test/f0/temporal/process_probe_test.rb": "tools/f0/temporal/tests/process_probe_test.rb",
+  "test/f0/temporal/start_receipt_test.rb": "tools/f0/temporal/tests/start_receipt_test.rb"
+}

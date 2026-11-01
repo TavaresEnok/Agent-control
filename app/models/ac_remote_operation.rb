@@ -56,7 +56,7 @@ class AcRemoteOperation < ApplicationRecord
   end
 
   def mark_uncertain!(reason:, error: nil)
-    combined_err = [error_log, error, "UNCERTAIN: #{reason}"].compact.reject(&:blank?).join("\n")
+    combined_err = [ error_log, error, "UNCERTAIN: #{reason}" ].compact.reject(&:blank?).join("\n")
     update!(
       state: "uncertain",
       error_log: combined_err,

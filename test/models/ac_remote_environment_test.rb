@@ -31,7 +31,7 @@ class AcRemoteEnvironmentTest < ActiveSupport::TestCase
       fingerprint: @fingerprint,
       identity_key_path: @identity_path,
       known_hosts_path: @known_hosts_path,
-      authorized_directories: ["/home/enok/Documentos/projetos/nexoisp"],
+      authorized_directories: [ "/home/enok/Documentos/projetos/nexoisp" ],
       state: "active"
     }
   end
@@ -46,7 +46,7 @@ class AcRemoteEnvironmentTest < ActiveSupport::TestCase
 
     %i[name environment_slug host user fingerprint identity_key_path known_hosts_path].each do |field|
       bad_env = AcRemoteEnvironment.new(@valid_attributes.merge(field => nil))
-      refute bad_env.valid?, "Expected #{field} to be required"
+      refute_predicate bad_env, :valid?, "Expected #{field} to be required"
     end
   end
 
@@ -54,16 +54,16 @@ class AcRemoteEnvironmentTest < ActiveSupport::TestCase
     assert AcRemoteEnvironment.new(@valid_attributes.merge(port: 22)).valid?
     assert AcRemoteEnvironment.new(@valid_attributes.merge(port: 2222)).valid?
 
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(port: 0)).valid?
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(port: 70000)).valid?
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(port: -1)).valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(port: 0)), :valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(port: 70000)), :valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(port: -1)), :valid?
   end
 
   test "validates environment_slug uniqueness per company and format" do
     AcRemoteEnvironment.create!(@valid_attributes)
 
     dup_env = AcRemoteEnvironment.new(@valid_attributes)
-    refute dup_env.valid?
+    refute_predicate dup_env, :valid?
     assert_includes dup_env.errors[:environment_slug], "has already been taken"
 
     other_company = create(:company)
@@ -73,16 +73,16 @@ class AcRemoteEnvironmentTest < ActiveSupport::TestCase
     assert diff_company_env.valid?
 
     bad_format = AcRemoteEnvironment.new(@valid_attributes.merge(environment_slug: "INVALID SLUG!"))
-    refute bad_format.valid?
+    refute_predicate bad_format, :valid?
   end
 
   test "validates authorized_directories must be an array of absolute paths" do
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: [])).valid?
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: nil)).valid?
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: ["relative/path"])).valid?
-    refute AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: [""])).valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: [])), :valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: nil)), :valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: [ "relative/path" ])), :valid?
+    refute_predicate AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: [ "" ])), :valid?
 
-    assert AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: ["/home/enok/Documentos/projetos/nexoisp", "/var/log/nexoisp"])).valid?
+    assert AcRemoteEnvironment.new(@valid_attributes.merge(authorized_directories: [ "/home/enok/Documentos/projetos/nexoisp", "/var/log/nexoisp" ])).valid?
   end
 
   test "directory_authorized? enforces exact path or subpath containment and rejects traversals" do

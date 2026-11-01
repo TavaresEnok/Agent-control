@@ -776,6 +776,18 @@ terminal_origin_auth:
   proxy_proof: "<%= ENV['TERMINAL_PROXY_PROOF'] %>"
 
 agent_control:
+  runtime_accounts_file: <%= ENV["AC_RUNTIME_ACCOUNTS_FILE"].to_json %>
+  capacity_broker:
+    endpoint: <%= ENV['AC_CAPACITY_BROKER_ENDPOINT'].to_json %>
+    account_identities_json: <%= ENV.fetch('AC_CAPACITY_ACCOUNT_IDENTITIES', '{}').to_json %>
+    account_limits_json: <%= ENV.fetch('AC_CAPACITY_BROKER_ACCOUNT_LIMITS', '{}').to_json %>
+    hosts_json: <%= ENV.fetch('AC_CAPACITY_BROKER_HOSTS', '{}').to_json %>
+    client_bearer_token: <%= ENV['AC_CAPACITY_BROKER_CLIENT_BEARER_TOKEN'].to_json %>
+    client_signing_key: <%= ENV['AC_CAPACITY_BROKER_CLIENT_SIGNING_KEY'].to_json %>
+    authority_id: <%= ENV['AC_CAPACITY_BROKER_AUTHORITY_ID'].to_json %>
+    installation_id: <%= ENV['AC_CAPACITY_BROKER_INSTALLATION_ID'].to_json %>
+    status_bearer_token: <%= ENV['AC_CAPACITY_STATUS_BEARER_TOKEN'].to_json %>
+    status_signing_key: <%= ENV['AC_CAPACITY_STATUS_SIGNING_KEY'].to_json %>
   backup_encryption_key: <%= ENV['AC_BACKUP_ENCRYPTION_KEY'] %>
   backup_key_id: <%= ENV['AC_BACKUP_KEY_ID'] %>
   worktree_base_dir: <%= ENV.fetch('AC_WORKTREE_BASE_DIR', '/tmp/ac_worktrees') %>

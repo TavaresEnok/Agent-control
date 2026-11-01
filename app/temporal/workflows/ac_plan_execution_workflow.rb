@@ -10,7 +10,7 @@ module Workflows
   # 4. Trata reprovação (needs_changes) retornando para implementação;
   # 5. Efetiva integração condicional protegida (CAS de ref);
   # 6. Avança o grafo até conclusão terminal ou intervenção.
-  class AcPlanExecutionWorkflow < AcPlanExecutionWorkflowLegacy
+  class AcPlanExecutionWorkflow < AcPlanExecutionWorkflowBaselineD9dbbef
     workflow_name "ac_plan_execution_workflow"
 
     def init

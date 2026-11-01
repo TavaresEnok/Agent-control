@@ -65,13 +65,13 @@ class CreateAcExecutionProfiles < ActiveRecord::Migration[8.1]
       t.timestamps
     end
 
-    add_index :ac_execution_profiles, [:ac_policy_revision_id, :profile_key], unique: true,
+    add_index :ac_execution_profiles, [ :ac_policy_revision_id, :profile_key ], unique: true,
               name: "idx_ac_exec_profiles_revision_key"
-    add_index :ac_execution_profiles, [:company_id, :role, :state]
-    add_index :ac_execution_profiles, [:company_id, :cli_adapter, :state]
+    add_index :ac_execution_profiles, [ :company_id, :role, :state ]
+    add_index :ac_execution_profiles, [ :company_id, :cli_adapter, :state ]
     add_index :ac_execution_profiles, :agent_credential_id, where: "agent_credential_id IS NOT NULL"
     add_index :ac_execution_profiles, :state
-    add_index :ac_execution_profiles, [:role, :chain_position]
+    add_index :ac_execution_profiles, [ :role, :chain_position ]
 
     add_check_constraint :ac_execution_profiles,
       "role IN ('manager','programmer','reviewer','qa','specialist','integrator')",

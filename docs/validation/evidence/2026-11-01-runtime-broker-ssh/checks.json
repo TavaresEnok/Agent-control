@@ -1,0 +1,89 @@
+{
+  "backend": {
+    "assertions": 32429,
+    "errors": 0,
+    "failures": 0,
+    "skips": 0,
+    "tests": 9886
+  },
+  "checks": {
+    "brakeman": {
+      "exit_code": 0,
+      "log_sha256": "5d593a048541b097409b5042682c66e991a82bb8f9417325205e042603d28bd2",
+      "seconds": 21
+    },
+    "eslint": {
+      "exit_code": 0,
+      "log_sha256": "e30a9ced4843fb5a831b5495e83437017d70c33f10c3ebc5dfc3a48491fc8c2a",
+      "seconds": 40
+    },
+    "fe-test": {
+      "exit_code": 0,
+      "log_sha256": "0b1286ab2aabf309267dca4eae12191edd9fc17c9e825112ad0ea710c71b3084",
+      "seconds": 220
+    },
+    "fsd": {
+      "exit_code": 0,
+      "log_sha256": "ce1a42a6179b931a67a09013646631fe251b2d5b5104a18673c05a9ccd40da85",
+      "seconds": 4
+    },
+    "rails-test": {
+      "exit_code": 0,
+      "log_sha256": "10de18ee3625542e7071fb287b808a67823894aeccd57dfe0e6e21f116294b4e",
+      "seconds": 677
+    },
+    "rubocop": {
+      "exit_code": 0,
+      "log_sha256": "8fce01b7103edf608d6feeea7b68ca60b3eaad1b9da2e2c7e3484d8ebd6ea63a",
+      "seconds": 3
+    },
+    "system-test": {
+      "exit_code": 0,
+      "log_sha256": "f30a6792c1ee060193ee74eb027821d3c04b62391bcae0301637a91f7d654940",
+      "seconds": 707
+    },
+    "typescript": {
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "seconds": 28
+    },
+    "vite-build": {
+      "exit_code": 0,
+      "log_sha256": "fb85d711f13882c04271f195fba8f7f1296b7361affae665fd7ff0935046dbb7",
+      "seconds": 8
+    },
+    "watcher-test": {
+      "exit_code": 0,
+      "log_sha256": "e97f557126d7e7339b06a443209824f1f07442adc1281b91cc3c973cf6d622b8",
+      "seconds": 1
+    },
+    "worker-boot": {
+      "exit_code": 0,
+      "log_sha256": "27f26e0195f0d41fa23cfc87e89c3df7dc12112f31a20bb0a404a23f2c5dfd6a",
+      "seconds": 4
+    },
+    "zeitwerk": {
+      "exit_code": 0,
+      "log_sha256": "0867539b90382f037f32467c92c623801e10a50ac8a24204d126a341f1024143",
+      "seconds": 5
+    }
+  },
+  "command": "PARALLEL_WORKERS=6 make check_all",
+  "coverage_lines": {
+    "backend": 93.35,
+    "frontend": 85.91
+  },
+  "environment": "isolated Docker/PostgreSQL lab; no provider inference",
+  "frontend_result_lines": [
+    "Test Files  207 passed (207)",
+    "Tests  2345 passed (2345)",
+    "Duration  218.48s (tests 64%, import 15%, environment 14%, setup 4%, worker 1%, transform 1%)"
+  ],
+  "system": {
+    "assertions": 70,
+    "errors": 0,
+    "failures": 0,
+    "skips": 0,
+    "tests": 10
+  }
+}

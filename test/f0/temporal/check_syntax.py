@@ -9,7 +9,7 @@ import tree_sitter_ruby
 ROOT = Path(__file__).resolve().parents[3]
 parser = Parser(Language(tree_sitter_ruby.language()))
 files = sorted((ROOT / "tools/f0/temporal").glob("*.rb"))
-files += sorted((ROOT / "test/f0/temporal").glob("*.rb"))
+files += sorted((ROOT / "tools/f0/temporal/tests").glob("*.rb"))
 files += [ROOT / "tools/f0/temporal/Gemfile"]
 for path in files:
     tree = parser.parse(path.read_bytes())

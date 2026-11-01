@@ -62,8 +62,17 @@ class AcExecution < ApplicationRecord
   end
 
   # Neutraliza escritor anterior (§11.3.2)
+  def assert_no_unsettled_remote_operations!
+    if AcRemoteOperation.where(ac_execution_id: id, state: %w[pending running uncertain]).exists?
+      raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Operação remota ainda não terminou"
+    end
+  end
+
   def revoke_worktree_lease!
-    update!(worktree_lease_token: nil)
+    with_lock do
+      assert_no_unsettled_remote_operations!
+      update!(worktree_lease_token: nil)
+    end
   end
 
   # Marca início da execução com handle externo estável (§11.3.1)
@@ -85,18 +94,15 @@ class AcExecution < ApplicationRecord
 
   # §11.3: Reconciliação com validação de época — rejeita resultados de épocas antigas
   def reconcile_outcome!(exit_code:, reported_epoch:, output: {}, error: {})
-    if reported_epoch.to_s != epoch.to_s
-      raise StaleEpochError, "Resultado rejeitado: reported_epoch (#{reported_epoch}) diverge da época atual (#{epoch})"
+    with_lock do
+      if reported_epoch.to_s != epoch.to_s
+        raise StaleEpochError, "Resultado rejeitado: reported_epoch (#{reported_epoch}) diverge da época atual (#{epoch})"
+      end
+      assert_no_unsettled_remote_operations!
+      terminal_state = (exit_code == 0) ? :completed : :failed
+      update!(exit_code: exit_code, finished_at: Time.current, output_payload: output || {},
+        error_details: error || {}, state: terminal_state)
     end
-
-    terminal_state = (exit_code == 0) ? :completed : :failed
-    update!(
-      exit_code: exit_code,
-      finished_at: Time.current,
-      output_payload: output || {},
-      error_details: error || {},
-      state: terminal_state
-    )
   end
 
   # §11.3.1: Quando o supervisor não consegue provar se o processo existe, entra em uncertain
@@ -109,11 +115,11 @@ class AcExecution < ApplicationRecord
 
   # Cancelamento coordenado
   def cancel!(reason: "Cancelado pelo usuário ou workflow")
-    update!(
-      state: :cancelled,
-      finished_at: Time.current,
-      error_details: error_details.merge("cancellation_reason" => reason)
-    )
+    with_lock do
+      assert_no_unsettled_remote_operations!
+      update!(state: :cancelled, finished_at: Time.current,
+        error_details: error_details.merge("cancellation_reason" => reason))
+    end
   end
 
   class StaleEpochError < StandardError; end

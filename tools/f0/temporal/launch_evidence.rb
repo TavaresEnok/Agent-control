@@ -19,7 +19,7 @@ module LaunchEvidence
     raise "launch Activity has not completed in Temporal" unless completion
     values = TemporalService.data_converter.from_payloads(
       completion.activity_task_completed_event_attributes.result)
-    raise "Temporal launch result differs from original handle" unless values == [saved]
+    raise "Temporal launch result differs from original handle" unless values == [ saved ]
     return unless retry_required
 
     retried = probe.read("launch-attempt-2.json")

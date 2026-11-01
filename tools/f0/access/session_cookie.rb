@@ -21,7 +21,7 @@ module F0Access
       writer = lambda do |env|
         session = env.fetch("rack.session")
         values.each { |key, value| session[key] = value }
-        [200, {}, [""]]
+        [ 200, {}, [ "" ] ]
       end
       _, headers, = call(writer)
       header = Array(headers["set-cookie"]).first
@@ -38,8 +38,8 @@ module F0Access
       recovered = nil
       reader = lambda do |env|
         session = env.fetch("rack.session")
-        recovered = keys.to_h { |key| [key, session[key]] }
-        [200, {}, [""]]
+        recovered = keys.to_h { |key| [ key, session[key] ] }
+        [ 200, {}, [ "" ] ]
       end
       call(reader, cookie: cookie)
       recovered

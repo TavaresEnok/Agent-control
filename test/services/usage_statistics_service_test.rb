@@ -42,7 +42,7 @@ class UsageStatisticsServiceTest < ActiveSupport::TestCase
   end
 
   test "replaying an authenticated batch does not count it twice" do
-    payload = otlp_payload(keyed_metric(@session, tokens: { input: 7 }, cost_usd: 0.01)).to_json
+    payload = otlp_payload(keyed_metric(@session, tokens: { input: 7 }, cost_usd: 0.01)).merge("batchId" => "explicit-retry").to_json
 
     assert_equal :ok, UsageStatisticsService.process(payload).status
     assert_equal :accepted, UsageStatisticsService.process(payload).status
@@ -59,6 +59,26 @@ class UsageStatisticsServiceTest < ActiveSupport::TestCase
     payload["extra"] = "changed"
     assert_equal :bad_request, UsageStatisticsService.process(payload.to_json).status
     assert_equal 7, @session.reload.usage_statistic.input_tokens
+  end
+
+  test "fragmented timestamped metrics and overlapping reordered batches accumulate each observation once" do
+    resource = keyed_metric(@session, tokens: { input: 7, output: 9 })
+    points = resource.dig("scopeMetrics", 0, "metrics", 0, "sum", "dataPoints")
+    points.each { |point| point["startTimeUnixNano"] = "1"; point["timeUnixNano"] = "2" }
+    first = resource.deep_dup
+    first.dig("scopeMetrics", 0, "metrics", 0, "sum")["dataPoints"] = [ points.first ]
+    assert_equal :ok, UsageStatisticsService.process(otlp_payload(first).to_json).status
+    assert_equal :ok, UsageStatisticsService.process(otlp_payload(resource).to_json).status
+    resource.dig("scopeMetrics", 0, "metrics", 0, "sum")["dataPoints"].reverse!
+    assert_equal :accepted, UsageStatisticsService.process(otlp_payload(resource).to_json).status
+    assert_equal 7, @session.reload.usage_statistic.input_tokens
+    assert_equal 9, @session.usage_statistic.output_tokens
+  end
+
+  test "identical anonymous observations are legitimate distinct usage" do
+    payload = otlp_payload(keyed_metric(@session, tokens: { input: 7 })).to_json
+    2.times { assert_equal :ok, UsageStatisticsService.process(payload).status }
+    assert_equal 14, @session.reload.usage_statistic.input_tokens
   end
 
   test "process persists a usage_statistic for every referenced session" do

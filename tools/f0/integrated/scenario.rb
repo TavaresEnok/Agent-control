@@ -12,7 +12,7 @@ class IntegratedScenario
       boundaries: "synthetic session/registry/authorization/manifest; inert workflow; no runtime cleanup or mobile proof" }
     IntegratedLab.assert!(File.executable?(@cli), "CLI executable required")
     IntegratedLab.assert!(/\A[a-f0-9]{64}\z/.match?(cli_hash) && Digest::SHA256.file(@cli).hexdigest == cli_hash, "CLI hash mismatch")
-    version = IO.popen([@cli, "--version"], &:read)
+    version = IO.popen([ @cli, "--version" ], &:read)
     IntegratedLab.assert!($?.success? && /\b1\.9\.1\b/.match?(version), "CLI 1.9.1 required")
     IntegratedLab.assert!(Temporalio::VERSION == "1.10.0", "SDK 1.10.0 required")
     IntegratedLab.assert!(File.realpath(@runtime) == "/lab-runtime" && Dir.empty?(@runtime), "exclusive empty external runtime required")
@@ -40,7 +40,7 @@ class IntegratedScenario
     env = IntegratedSubprocessEnvironment.build
     Process.spawn(env, RbConfig.ruby, File.join(__dir__, file), *args,
       unsetenv_others: true, close_others: true,
-      out: [File.join(@root, "#{file}.log"), "a"], err: [:child, :out])
+      out: [ File.join(@root, "#{file}.log"), "a" ], err: [ :child, :out ])
   end
 
   def dispatch(mode)
@@ -112,7 +112,7 @@ class IntegratedScenario
     project = Project.create!(company_id: company.id)
     session = TerminalSession.create!(user_id: 1, project_id: project.id)
     @row = SessionAdmissionService.enqueue!(session)
-    check(SessionAdmissionService.drain! == [@row.id], "SQL permit grant required")
+    check(SessionAdmissionService.drain! == [ @row.id ], "SQL permit grant required")
     @row.reload
     permit = @row.permit_token
     check(permit.present? && SessionAdmission.occupied.count == 1, "durable permit/occupancy required")
@@ -190,7 +190,7 @@ class IntegratedScenario
 
   def cleanup
     errors = []
-    [-> { stop_worker }, -> { @server&.shutdown }, -> { AdmissionLab.cleanup! }].each do |action|
+    [ -> { stop_worker }, -> { @server&.shutdown }, -> { AdmissionLab.cleanup! } ].each do |action|
       action.call
     rescue StandardError => e
       errors << e.class.name

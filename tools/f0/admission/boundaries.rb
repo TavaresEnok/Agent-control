@@ -29,7 +29,7 @@ class TerminalSession < ApplicationRecord
   TERMINAL_STATES = %w[finished failed cancelled].freeze
   WORKFLOW_TIMEOUT = 86_400
   LAUNCH_ABANDONED_ERROR = "Lab launch abandoned"
-  GENERIC_ERROR_MESSAGES = [LAUNCH_ABANDONED_ERROR].freeze
+  GENERIC_ERROR_MESSAGES = [ LAUNCH_ABANDONED_ERROR ].freeze
   has_one :session_admission
   has_one :step_run
   def enqueue! = update!(state: "queued")
@@ -54,6 +54,61 @@ end
 class AgentCredential
   class PreflightError < StandardError; end
 end
+# This SQL-only lab has no Agent Control accounts, grants or broker tables.
+# Refuse the simulation if that isolation changes; it is not a capacity broker.
+class AcLocalCapacityAuthorityService
+  FORBIDDEN_TABLES = %w[agent_credentials ac_capacity_grants ac_shared_capacity_intents ac_capacity_broker_reservations].freeze
+
+  def self.assert_isolated!
+    connection = ActiveRecord::Base.connection
+    isolated = connection.select_value("SELECT current_schema()") == AdmissionLab::SCHEMA
+    isolated &&= connection.tables.none? { |table| table.start_with?("ac_") }
+    absent = FORBIDDEN_TABLES.none? do |table|
+      connection.select_value("SELECT to_regclass(#{connection.quote(table)})").present?
+    end
+    raise "Isolated capacity boundary violated" unless isolated && absent
+  end
+
+  def self.permit_legacy_session?(session)
+    assert_isolated!
+    raise "Invalid lab session" unless session.is_a?(TerminalSession) && session.persisted?
+
+    true
+  end
+end
+
+# The production budget queries AC grants. This deliberately narrow substitute
+# represents zero AC fixtures, not an SQL test of grants or the shared broker.
+class AcCapacityGrant
+  def self.active_or_granted = EmptyGrantScope.new(:active)
+
+  class EmptyGrantScope
+    def initialize(stage) = @stage = stage
+
+    def joins(value)
+      raise ArgumentError, "Unexpected grant join" unless @stage == :active && value == :ac_task
+      self.class.new(:joined)
+    end
+
+    def group(value)
+      raise ArgumentError, "Unexpected grant group" unless @stage == :joined && value == "ac_tasks.project_id"
+      self.class.new(:grouped)
+    end
+
+    def where(value)
+      project_id = value.dig(:ac_tasks, :project_id) if value.is_a?(Hash) && value.keys == [ :ac_tasks ] && value[:ac_tasks].is_a?(Hash) && value[:ac_tasks].keys == [ :project_id ]
+      raise ArgumentError, "Unexpected grant filter" unless @stage == :joined && project_id.is_a?(String) && project_id.match?(/\A[1-9]\d*\z/)
+      self.class.new(:filtered)
+    end
+
+    def sum(value)
+      raise ArgumentError, "Unexpected grant sum" unless %i[grouped filtered].include?(@stage) && value == :quantity
+      AcLocalCapacityAuthorityService.assert_isolated!
+      @stage == :grouped ? {} : 0
+    end
+  end
+end
+
 class SessionService
   class UnsafeMcpUrlError < StandardError; end
   def self.revalidate_admission!(*, **)

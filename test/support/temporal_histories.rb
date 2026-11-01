@@ -80,7 +80,8 @@ module TemporalHistories
 
     def record(scenario, label:)
       with_registered_activities([ scenario.workflow ]) do
-        env = Temporalio::Testing::WorkflowEnvironment.start_time_skipping(data_converter: TemporalService.data_converter)
+        env = Temporalio::Testing::WorkflowEnvironment.start_time_skipping(data_converter: TemporalService.data_converter,
+          test_server_download_dest_dir: ENV["TEMPORAL_TEST_SERVER_DIR"].presence)
         queue = Settings.temporal.task_queue.to_s
         worker = Temporalio::Worker.new(
           client: env.client, task_queue: queue, workflows: [ scenario.workflow ],

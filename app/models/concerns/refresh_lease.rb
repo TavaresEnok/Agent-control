@@ -26,8 +26,11 @@ module RefreshLease
 
     token = SecureRandom.hex(12)
     now = Time.current
-    taken = self.class.where(id: id)
-                      .where("refresh_lease_until IS NULL OR refresh_lease_until < ?", now)
+    candidates = self.class.where(id: id)
+    # Deletion keeps credential IDs as anonymous history; a stale object must
+    # never acquire a new lease after its secrets have been erased.
+    candidates = candidates.where.not(user_id: nil) if is_a?(AgentCredential)
+    taken = candidates.where("refresh_lease_until IS NULL OR refresh_lease_until < ?", now)
                       .update_all(refresh_lease_until: now + LEASE, refresh_lease_token: token) == 1
     return :busy unless taken
 

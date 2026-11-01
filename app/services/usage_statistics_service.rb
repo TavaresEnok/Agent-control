@@ -21,7 +21,7 @@ class UsageStatisticsService
       return Result.new(status: :bad_request, error: "Invalid batch ID")
     end
     digest = Digest::SHA256.hexdigest(JSON.generate(canonicalize(payload)))
-    batch_key = batch_id ? Digest::SHA256.hexdigest("id:#{batch_id}") : digest
+    batch_key = batch_id && Digest::SHA256.hexdigest("id:#{batch_id}")
 
     tokens = extract_terminal_session_tokens(payload)
     return Result.new(status: :accepted) if tokens.empty?
@@ -35,17 +35,19 @@ class UsageStatisticsService
     persisted = false
     sessions.each_value do |terminal_session|
       result = TerminalSession.transaction do
-        receipt = UsageStatisticsBatchReceipt.insert_all(
-          [ { terminal_session_id: terminal_session.id, batch_key: batch_key, payload_digest: digest, created_at: Time.current, updated_at: Time.current } ],
-          unique_by: :index_usage_batch_receipts_on_session_and_digest
-        )
-        if receipt.rows.empty?
-          existing = UsageStatisticsBatchReceipt.find_by!(terminal_session: terminal_session, batch_key: batch_key)
-          raise ArgumentError, "Batch ID reused with different payload" unless existing.payload_digest == digest
-          next :accepted
+        if batch_key
+          receipt = UsageStatisticsBatchReceipt.insert_all(
+            [ { terminal_session_id: terminal_session.id, batch_key: batch_key, payload_digest: digest, created_at: Time.current, updated_at: Time.current } ],
+            unique_by: :index_usage_batch_receipts_on_session_and_digest
+          )
+          if receipt.rows.empty?
+            existing = UsageStatisticsBatchReceipt.find_by!(terminal_session: terminal_session, batch_key: batch_key)
+            raise ArgumentError, "Batch ID reused with different payload" unless existing.payload_digest == digest
+            next :accepted
+          end
         end
-
-        adapter_for(terminal_session).ingest_usage(payload, terminal_session)
+        filtered = UsageStatistics::EventLedger.filter!(payload: payload, terminal_session: terminal_session)
+        adapter_for(terminal_session).ingest_usage(filtered, terminal_session)
       end
       persisted ||= (result == :ok)
     end

@@ -39,7 +39,7 @@ class AcDecisionAuditEventTest < ActiveSupport::TestCase
       revision_number: 1,
       content_hash: "hash_audit_pol",
       content: {
-        "model_chain" => ["claude-sonnet-4.6"],
+        "model_chain" => [ "claude-sonnet-4.6" ],
         "effort_limits" => { "max" => "high" },
         "active_accounts" => [],
         "chain_rules" => []
@@ -100,7 +100,7 @@ class AcDecisionAuditEventTest < ActiveSupport::TestCase
       profile: @profile,
       policy_revision: @policy,
       reason: "Melhor perfil elegível",
-      alternatives_considered: [{ "profile_key" => "prof-other", "reason" => "cota esgotada" }]
+      alternatives_considered: [ { "profile_key" => "prof-other", "reason" => "cota esgotada" } ]
     )
 
     assert_not_nil event

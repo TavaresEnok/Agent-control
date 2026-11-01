@@ -100,6 +100,9 @@ class TerminalSessionResourceTest < ActiveSupport::TestCase
   end
 
   test "someone the session is shared with gets the read-only terminal, no IDE and no IDE token" do
+    Settings.stubs(:domain).returns("flow.example.com")
+    Settings.traefik.stubs(:http_base).returns("https://t.flow.example.com")
+    Settings.traefik.stubs(:ws_base).returns("wss://t.flow.example.com")
     colleague = create(:user, :employee, company: @user.companies.first)
     session = create(:terminal_session, :agent_session, user: @user, project: @project, state: "ready",
                                                         metadata: { "vscode_token" => "tkn-secret", "note" => "x" })
@@ -107,14 +110,26 @@ class TerminalSessionResourceTest < ActiveSupport::TestCase
     shared = TerminalSessionResource.new(session.reload, params: { viewer: colleague }).to_h
     own = TerminalSessionResource.new(session, params: { viewer: @user }).to_h
 
-    assert_match %r{/t/#{session.route_token}/view/ws\z}, shared["websocketUrl"]
+    shared_uri = URI.parse(shared["websocketUrl"])
+    own_uri = URI.parse(own["websocketUrl"])
+    assert_equal "/t/#{session.route_token}/view/ws", shared_uri.path
     assert_nil shared["ideUrl"]
     assert_not shared.to_json.include?("tkn-secret")
-    assert_match %r{/t/#{session.route_token}/tty/ws\z}, own["websocketUrl"]
+    assert_equal "/t/#{session.route_token}/tty/ws", own_uri.path
     assert_includes own["ideUrl"], "tkn-secret"
     # Only the owner may paste an image into the container.
     assert_nil shared["uploadUrl"]
-    assert_match %r{/t/#{session.route_token}/upload\z}, own["uploadUrl"]
+    upload_uri = URI.parse(own["uploadUrl"])
+    assert_equal "/t/#{session.route_token}/upload", upload_uri.path
+    [ [ shared_uri, colleague ], [ own_uri, @user ], [ upload_uri, @user ] ].each do |uri, viewer|
+      ticket = Rack::Utils.parse_query(uri.query)[ContainerTicket::PARAM]
+      assert ticket.present?, "Container URL must carry its signed viewer ticket"
+      claims = ContainerTicket.verify(ticket, session: session)
+      assert claims.present?, "Ticket must authenticate for this terminal session"
+      assert_equal session.id, claims["s"]
+      assert_equal viewer.id, claims["u"]
+      assert_equal viewer, ContainerTicket.user_for(ticket, session: session)
+    end
   end
 
   test "served from a host of their own, container URLs carry the viewer's ticket" do

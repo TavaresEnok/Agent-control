@@ -9,11 +9,11 @@ Rails.application.routes.draw do
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
   # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", as: :rails_health_check
-  get "ready/audit" => "audit_readiness#show"
 
   if ENV["AIXLE_PROCESS_MODE"] == "runner_gateway"
     draw :runner_gateway
   else
+    get "ready/audit" => "audit_readiness#show"
     draw :mcp
     draw :web
   end

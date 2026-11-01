@@ -114,17 +114,48 @@ module Users
       undeclared = User.reflect_on_all_associations.select { |a| a.options[:dependent] && !@user.public_send(a.name).exists? }
       assert_empty undeclared.map(&:name), "FullyWiredUserScenario has no row in these User associations"
 
+      credential = @user.agent_credentials.first
       survivors = references.select(&:nullified_user?).to_h { |reference| [ reference, connection.select_values(reference.rows) ] }
 
       assert_difference("User.count", -1) do
         PermanentDeletionService.call(user: @user, actor: @actor)
       end
 
+      credential.reload
+      assert credential.anonymous_history?
+      assert_not credential.active?
+      assert_empty credential.config_data
+      assert_empty credential.metadata
+      assert_equal :busy, credential.with_refresh_lease { flunk "retired credential was refreshed" }
+      assert AcCapacityGrant.exists?(agent_credential_id: credential.id)
+      assert AcQuotaObservation.exists?(agent_credential_id: credential.id)
+      assert_raises(ArgumentError) { AgentCredential.from_artifacts(nil, @company.id, credential.agent_type, {}) }
+
       survivors.each do |reference, ids|
         fk = reference.foreign_key
         kept = connection.select_values("SELECT id FROM #{connection.quote_table_name(fk.from_table)} " \
                                         "WHERE id IN (#{ids.join(', ')}) AND #{connection.quote_column_name(fk.column)} IS NULL")
         assert_equal ids.sort, kept.sort, "#{reference} rows must outlive the user with the reference nullified"
+      end
+    end
+
+    test "refuses to erase credentials with an unresolved capacity grant" do
+      FullyWiredUserScenario.new(user: @user, company: @company, heir: @heir).build
+      credential = @user.agent_credentials.first
+      AcCapacityGrant.find_by!(agent_credential: credential).update_columns(state: "granted")
+
+      assert_raises(PermanentDeletionService::LiveAgentControlError) do
+        PermanentDeletionService.call(user: @user, actor: @actor)
+      end
+      assert User.exists?(@user.id)
+      assert_equal @user.id, credential.reload.user_id
+    end
+
+    test "refuses to erase credentials during a refresh" do
+      credential = create(:agent_credential, user: @user, company: @company)
+      credential.update_columns(refresh_lease_token: "fixture")
+      assert_raises(PermanentDeletionService::LiveAgentControlError) do
+        PermanentDeletionService.call(user: @user, actor: @actor)
       end
     end
 
@@ -226,7 +257,7 @@ module Users
     end
 
     Reference = Data.define(:foreign_key, :rows) do
-      def nullified_user? = foreign_key.to_table == "users" && foreign_key.on_delete == :nullify
+      def nullified_user? = foreign_key.to_table == "users" && (foreign_key.on_delete == :nullify || foreign_key.from_table == "agent_credentials")
       def to_s = "#{foreign_key.from_table}.#{foreign_key.column} -> #{foreign_key.to_table}"
     end
 

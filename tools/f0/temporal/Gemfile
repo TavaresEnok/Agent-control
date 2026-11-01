@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 source "https://rubygems.org"
 
 # Versions from the imported Aixle Gemfile.lock. No Rails boot or application DB.

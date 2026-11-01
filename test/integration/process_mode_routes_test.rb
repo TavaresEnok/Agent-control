@@ -20,6 +20,7 @@ class ProcessModeRoutesTest < ActionDispatch::IntegrationTest
     assert routed?("POST", "/mcp")
     assert routed?("POST", "/action_mcp")
     assert routed?("GET", "/up")
+    assert routed?("GET", "/ready/audit")
 
     post "/runner/v1/register", headers: { "X-Aixle-Runner-Protocol" => "1" }
     assert_response :not_found
@@ -32,6 +33,7 @@ class ProcessModeRoutesTest < ActionDispatch::IntegrationTest
       assert_equal GATEWAY_PATHS, route_paths(Rails.application.routes.routes.reject(&:internal))
       GATEWAY_ENDPOINTS.each { |verb, path| assert routed?(verb, path), "#{verb} #{path} should route in the gateway" }
       assert_not routed?("POST", "/mcp")
+      assert_not routed?("GET", "/ready/audit")
 
       post "/mcp"
       assert_response :not_found

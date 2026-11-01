@@ -1,0 +1,22 @@
+Run options: --seed 48260
+
+# Running:
+
+..........
+
+Finished in 2.344087s, 4.2661 runs/s, 31.9954 assertions/s.
+
+10 runs, 75 assertions, 0 failures, 0 errors, 0 skips
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+unknown OID 2205: failed to recognize type of 'to_regclass'. It will be treated as String.
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+WARNING: password file "/dev/null" is not a plain file
+unknown OID 2205: failed to recognize type of 'to_regclass'. It will be treated as String.
+unknown OID 2205: failed to recognize type of 'to_regclass'. It will be treated as String.
+unknown OID 2205: failed to recognize type of 'to_regclass'. It will be treated as String.
+W, [2026-11-01T08:18:09.574155 #1]  WARN -- : [SessionAdmission] admission 1: releasing a pinned reservation after 10 minute(s) of proven absence
+W, [2026-11-01T08:18:09.757645 #1]  WARN -- : [SessionLaunchRelay] Admission 1: lab lost start receipt
+W, [2026-11-01T08:18:09.984027 #1]  WARN -- : [SessionAdmission] admission 1: 0 operation(s) stranded by a closed workflow
+W, [2026-11-01T08:18:10.043109 #1]  WARN -- : [SessionAdmission] admission 1: releasing a pinned reservation after 10 minute(s) of proven absence

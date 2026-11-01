@@ -1,0 +1,2 @@
+[2m2026-11-01T07:03:09.832699Z[0m [33m WARN[0m [2mtemporalio_sdk_core::worker[0m[2m:[0m Temporal Server 1.16.0 or newer is required to guarantee that the latest heartbeat details are preserved when an activity fails; the server did not advertise the activity_failure_include_heartbeat capability, so heartbeat details may be lost on failure
+Recorded test/fixtures/files/temporal_histories/ac_task_execution_workflow/baseline_d9dbbef_reconcile_payload/d9dbbef-a1178e8a1e5b.json from d9dbbef sha256=a1178e8a1e5b342728193ededc34639494e5d3a1b191d769ffdb1e9b02e837ba

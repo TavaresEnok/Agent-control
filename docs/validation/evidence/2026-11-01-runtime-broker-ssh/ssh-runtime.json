@@ -1,0 +1,50 @@
+[
+  {
+    "case": "duplicate_and_failure",
+    "receipt": {
+      "company_id": 1,
+      "environment_id": 1,
+      "epoch": "1",
+      "execution_id": 1,
+      "exit_code": 17,
+      "intent_hash": "760efb6325aa663aa4468f747637d0b76be5c30a450133562f95972a2ade9e05",
+      "invocation_id": "ddb7e0c696dd46c9a7891fdede8bac7d",
+      "operation_id": "77069bbe-6e6b-4a9d-b456-f2a85b92fcd8",
+      "remote_job_id": "ac-remote-c36e3ab8d1d2fcd37c81f5148e628639c95ab8ce.service",
+      "state": "failed",
+      "task_id": 1
+    }
+  },
+  {
+    "case": "descendant_supervision",
+    "receipt": {
+      "company_id": 1,
+      "environment_id": 1,
+      "epoch": "1",
+      "execution_id": 1,
+      "exit_code": 0,
+      "intent_hash": "ae233ffd25dca762504a5c795a9f465b021cedb9d9f2e04bc337c06f29a892ed",
+      "invocation_id": "cf0f65bcdcd74c3f811253d4d3e49a42",
+      "operation_id": "1c84569f-dedf-4f3e-9f97-dad6761bdd0d",
+      "remote_job_id": "ac-remote-f3273a915d42e9bedf9ccdf1e52fcd0d387648ef.service",
+      "state": "completed",
+      "task_id": 1
+    }
+  },
+  {
+    "case": "cancel",
+    "receipt": {
+      "company_id": 1,
+      "environment_id": 1,
+      "epoch": "1",
+      "execution_id": 1,
+      "exit_code": 15,
+      "intent_hash": "fdaf4fc5a7fff2529949e85548ef6231e77a392e52fb8c929527dab123e4fafe",
+      "invocation_id": "8c3805b66c7243d09ec9f8d33e2cc248",
+      "operation_id": "07f2632c-98b9-4df9-b195-34edbadb20cf",
+      "remote_job_id": "ac-remote-9051c32261f747a5aeb6e569bdc54ac752019b49.service",
+      "state": "failed",
+      "task_id": 1
+    }
+  }
+]

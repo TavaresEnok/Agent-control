@@ -20,7 +20,7 @@ class CreateAcRemoteEnvironmentsAndOperations < ActiveRecord::Migration[7.1]
       t.timestamps
     end
 
-    add_index :ac_remote_environments, [:company_id, :environment_slug], unique: true, name: "idx_ac_remote_envs_on_company_and_slug"
+    add_index :ac_remote_environments, [ :company_id, :environment_slug ], unique: true, name: "idx_ac_remote_envs_on_company_and_slug"
     add_index :ac_remote_environments, :state
 
     create_table :ac_remote_operations do |t|
@@ -46,7 +46,7 @@ class CreateAcRemoteEnvironmentsAndOperations < ActiveRecord::Migration[7.1]
     end
 
     add_index :ac_remote_operations, :operation_id, unique: true
-    add_index :ac_remote_operations, [:ac_remote_environment_id, :state], name: "idx_ac_remote_ops_on_env_and_state"
+    add_index :ac_remote_operations, [ :ac_remote_environment_id, :state ], name: "idx_ac_remote_ops_on_env_and_state"
     add_index :ac_remote_operations, :remote_job_id
     add_index :ac_remote_operations, :state
   end

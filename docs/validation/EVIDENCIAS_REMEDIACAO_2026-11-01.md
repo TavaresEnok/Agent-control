@@ -1,4 +1,6 @@
-# Evidências da candidata de remediação
+# Evidências da primeira rodada de remediação
+
+Este documento preserva a primeira rodada. A [continuação](CONTINUACAO_REMEDIACAO_2026-11-01.md) registra as provas posteriores e seus resultados; os limites históricos abaixo descrevem somente esta rodada.
 
 Data: 2026-11-01, UTC. Baseline: `d9dbbef65578394d2a253be8258106dc4bd0ce56`.
 Execução isolada no NexoISP; nenhuma CLI de provedor foi usada para inferência.

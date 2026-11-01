@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require_relative "boot"
 require "base64"
 require "digest"

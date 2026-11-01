@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 require_relative "../../../tools/f0/ssh/boot"
 require "minitest/autorun"
 require "tmpdir"
@@ -32,7 +33,7 @@ class OpenSshTransportTest < Minitest::Test
   end
 
   def test_rejects_environment_expansion_paths_before_transport_can_spawn
-    literal_dir = File.join(@dir, '${LANG}')
+    literal_dir = File.join(@dir, "${LANG}")
     FileUtils.mkdir_p(literal_dir)
     { identity_file: @identity, known_hosts_file: @known }.each do |field, source|
       literal_path = File.join(literal_dir, File.basename(source))
@@ -53,9 +54,9 @@ class OpenSshTransportTest < Minitest::Test
   def test_structured_argv_preserves_command_and_identity_spaces
     command = %q(printf '%s' 'space " and quotes')
     argv = transport.argv(command)
-    assert_equal ["/usr/bin/ssh", "-F", "/dev/null", "-T"], argv.take(4)
+    assert_equal [ "/usr/bin/ssh", "-F", "/dev/null", "-T" ], argv.take(4)
     assert_equal @identity, argv[argv.index("-i") + 1]
-    assert_equal ["--", "lab@target", command], argv.last(3)
+    assert_equal [ "--", "lab@target", command ], argv.last(3)
     %w[BatchMode=yes IdentitiesOnly=yes IdentityAgent=none StrictHostKeyChecking=yes ForwardAgent=no ClearAllForwardings=yes SendEnv=-* ControlPath=none ProxyCommand=none].each { |option| assert_includes argv, option }
     assert_includes argv, %(UserKnownHostsFile="#{@known}")
     refute argv.any? { |arg| arg.include?("accept-new") }

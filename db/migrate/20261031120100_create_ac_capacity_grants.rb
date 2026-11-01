@@ -64,9 +64,9 @@ class CreateAcCapacityGrants < ActiveRecord::Migration[8.1]
     end
 
     add_index :ac_capacity_grants, :operation_id, unique: true
-    add_index :ac_capacity_grants, [:ac_task_id, :state]
-    add_index :ac_capacity_grants, [:agent_credential_id, :state]
-    add_index :ac_capacity_grants, [:company_id, :state]
+    add_index :ac_capacity_grants, [ :ac_task_id, :state ]
+    add_index :ac_capacity_grants, [ :agent_credential_id, :state ]
+    add_index :ac_capacity_grants, [ :company_id, :state ]
     add_index :ac_capacity_grants, :state
     add_index :ac_capacity_grants, :expires_at, where: "state IN ('granted','active')"
     add_index :ac_capacity_grants, :epoch

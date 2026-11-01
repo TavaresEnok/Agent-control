@@ -16,6 +16,9 @@ require:
 
 AllCops:
   NewCops: enable
+  # Immutable audit snapshots are evidence, not the executable source tree.
+  Exclude:
+    - "docs/validation/artifacts/**/*"
 
 # Omakase switches off every core department. These two report bugs and unsafe
 # calls rather than style, so they run; what they found before they ran is

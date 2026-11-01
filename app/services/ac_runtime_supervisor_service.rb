@@ -8,20 +8,26 @@ class AcRuntimeSupervisorService
 
   class << self
     def dispatch!(execution:)
-      grant = execution.ac_capacity_grant
-      profile = execution.ac_execution_profile
-      credential = profile&.agent_credential
-      unless grant && profile && credential && credential.active? &&
-             credential.company_id == execution.company_id && profile.company_id == execution.company_id &&
-             grant.company_id == execution.company_id && grant.ac_task_id == execution.ac_task_id &&
-             grant.ac_execution_profile_id == profile.id && grant.agent_credential_id == credential.id &&
-             grant.operation_id == execution.operation_id && grant.epoch.to_s == execution.epoch.to_s &&
-             %w[granted active].include?(grant.state.to_s)
-        raise UnverifiedReceiptError, "Concessão, perfil ou conta não correspondem à execução"
+      AcExecutionFence.synchronize(execution) do
+        unless %w[granted preparing running].include?(execution.state.to_s)
+          raise UnverifiedReceiptError, "Estado da execução não permite despacho"
+        end
+        grant = execution.ac_capacity_grant
+        profile = execution.ac_execution_profile
+        credential = profile&.agent_credential
+        unless grant && profile && credential && credential.active? &&
+               credential.company_id == execution.company_id && profile.company_id == execution.company_id &&
+               grant.company_id == execution.company_id && grant.ac_task_id == execution.ac_task_id &&
+               grant.ac_execution_profile_id == profile.id && grant.agent_credential_id == credential.id &&
+               grant.operation_id == execution.operation_id && grant.epoch.to_s == execution.epoch.to_s &&
+               %w[granted active].include?(grant.state.to_s)
+          raise UnverifiedReceiptError, "Concessão, perfil ou conta não correspondem à execução"
+        end
+        AcSharedCapacityAuthorityService.ensure_bound!(execution: execution) if grant.reconciliation_data["authority"] == "shared"
+        adapter = supervisor!
+        receipt = adapter.dispatch!(execution: execution, operation_id: execution.operation_id, epoch: execution.epoch)
+        verify!(adapter, execution, receipt, allowed: %w[running completed failed not_started])
       end
-      adapter = supervisor!
-      receipt = adapter.dispatch!(execution: execution, operation_id: execution.operation_id, epoch: execution.epoch)
-      verify!(adapter, execution, receipt, allowed: %w[running completed failed not_started])
     end
 
     def cancel!(execution:)

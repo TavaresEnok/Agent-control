@@ -23,6 +23,7 @@ module Users
     class OwnershipTransferError < Error; end
     class LastAdminError < Error; end
     class LiveSessionsError < Error; end
+    class LiveAgentControlError < Error; end
 
     def self.call(user:, actor:) = new(user:, actor:).call
 
@@ -38,7 +39,22 @@ module Users
       ensure_not_the_last_admin!
       ensure_no_live_sessions!
 
-      ActiveRecord::Base.transaction do
+      retired_ids = []
+      SessionAdmissionService.transaction do
+        @user.lock!
+        credentials = AgentCredential.where(user_id: @user.id).order(:id).lock.to_a
+        ensure_no_live_sessions!
+        ensure_no_live_agent_control!(credentials)
+        credentials.each do |credential|
+          next unless agent_control_history?(credential)
+
+          credential.config_data = {}
+          credential.update_columns(user_id: nil, status: "error", account_slug: "retired-#{SecureRandom.hex(16)}",
+            encrypted_config_data: credential.encrypted_config_data, metadata: {}, expires_at: nil, last_used_at: nil,
+            refresh_error: nil, refresh_failure_count: 0, refresh_lease_token: nil, refresh_lease_until: nil, updated_at: Time.current)
+          retired_ids << credential.id
+        end
+        @user.agent_credentials.reset
         audit!
         transfer_owned_projects!
         # transfer_owned_projects! moves ownership with a direct UPDATE, which
@@ -48,6 +64,7 @@ module Users
         @user.owned_projects.reset
         @user.destroy!
       end
+      retired_ids.each { |id| AgentCredential.find(id).send(:invalidate_models_cache) }
     end
 
     private
@@ -87,6 +104,29 @@ module Users
 
       raise LiveSessionsError,
             "Cannot permanently delete #{@user.email}: #{live} of their sessions are still running. Stop them first."
+    end
+
+    def agent_control_history?(credential)
+      [ AcExecutionProfile, AcCapacityGrant, AcSharedCapacityIntent, AcQuotaObservation, AcDecisionAuditEvent ].any? do |model|
+        model.where(agent_credential_id: credential.id).exists?
+      end
+    end
+
+    def ensure_no_live_agent_control!(credentials)
+      ids = credentials.map(&:id)
+      return if ids.empty?
+
+      grants = AcCapacityGrant.where(agent_credential_id: ids)
+      profiles = AcExecutionProfile.where(agent_credential_id: ids)
+      executions = AcExecution.where(ac_capacity_grant_id: grants.select(:id))
+        .or(AcExecution.where(ac_execution_profile_id: profiles.select(:id)))
+      unsafe = credentials.any? { |credential| credential.refresh_lease_token.present? } ||
+        grants.where.not(state: "released").exists? ||
+        AcSharedCapacityIntent.where(agent_credential_id: ids).where.not(state: "released").exists? ||
+        executions.where.not(state: %w[completed failed cancelled]).exists? ||
+        executions.where.not(worktree_lease_token: nil).exists? ||
+        AcRemoteOperation.where(ac_execution_id: executions.select(:id)).where.not(state: %w[completed failed cancelled]).exists?
+      raise LiveAgentControlError, "Cannot delete a user while Agent Control work or credential refresh is active or uncertain" if unsafe
     end
 
     # Reassign each owned project to ITS OWN company's heir admin. Grouping by

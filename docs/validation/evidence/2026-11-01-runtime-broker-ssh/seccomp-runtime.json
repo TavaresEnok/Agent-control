@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "stdout": "threads_allowed\nptrace_blocked\n",
+  "profile_sha256": "1344dba548107f5712329f8fc940bb4b76bf9aba6c916131b21d95da4aa25ad2",
+  "image": "sha256:6a915355968d5eab6886daed3c779966a02f5e2c69808f26a488bfe13ec704a3"
+}

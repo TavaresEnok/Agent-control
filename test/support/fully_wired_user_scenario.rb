@@ -23,6 +23,7 @@ class FullyWiredUserScenario
     build_sign_ins
     build_board
     build_workflow
+    build_agent_control
     build_company_records
     self
   end
@@ -85,6 +86,39 @@ class FullyWiredUserScenario
 
     asset = create(:asset, scope: @project, created_by: @user, shared_by: @user)
     create(:asset_version, asset: asset, uploaded_by: @user)
+  end
+
+  def build_agent_control
+    context = AcWorkContext.create!(company: @company, project: @project, external_id: SecureRandom.uuid, title: "History")
+    plan = AcPlan.create!(company: @company, project: @project, ac_work_context: context,
+      plan_key: SecureRandom.uuid, title: "History", version: 1, state: :draft)
+    task = AcTask.create!(company: @company, project: @project, ac_plan: plan, task_key: "history", title: "History")
+    policy = AcPolicyRevision.create!(company: @company, revision_number: 1, content_hash: SecureRandom.hex(32),
+      state: :draft, content: { "model_chain" => [ "fixture" ], "active_accounts" => [], "chain_rules" => [], "effort_limits" => {} })
+    profile = AcExecutionProfile.create!(company: @company, ac_policy_revision: policy, profile_key: "history",
+      role: "programmer", cli_adapter: "claude_code", model_id: "fixture", agent_credential: @credential, effort_level: "medium")
+    operation_id = SecureRandom.uuid
+    grant = AcCapacityGrant.create!(company: @company, ac_task: task, ac_execution_profile: profile,
+      agent_credential: @credential, operation_id: operation_id, epoch: "1", state: "released",
+      policy_revision_id: policy.id, policy_revision_number: 1)
+    execution = AcExecution.create!(company: @company, ac_task: task, ac_work_context: context, ac_execution_profile: profile,
+      ac_capacity_grant: grant, operation_id: operation_id, epoch: "1", state: "completed")
+    AcReviewVerdict.create!(company: @company, project: @project, ac_task: task, ac_execution: execution,
+      reviewer_role: "reviewer", verdict: "approved", artifact_hash: "fixture", evaluator_identity: "fixture")
+    environment = AcRemoteEnvironment.create!(company: @company, project: @project, name: "Fixture", environment_slug: "fixture",
+      host: "localhost", port: 22, user: "worker", fingerprint: "fixture", identity_key_path: "/fixture/key",
+      known_hosts_path: "/fixture/hosts", authorized_directories: [ "/fixture" ], state: "active")
+    AcRemoteOperation.create!(company: @company, project: @project, ac_remote_environment: environment, ac_task: task,
+      ac_execution: execution, operation_id: SecureRandom.uuid, command: "true", working_directory: "/fixture", state: "completed")
+    AcArtifactRetentionReference.create!(ac_execution: execution, backup_id: "fixture", manifest_digest: "fixture")
+    AcQuotaObservation.create!(company: @company, agent_credential: @credential, cli_adapter: "claude_code",
+      model_scope: "fixture", quota_state: :available, confidence_level: :high, origin: :api_header, observed_at: Time.current)
+    AcSharedCapacityIntent.create!(company: @company, ac_task: task, ac_execution_profile: profile, agent_credential: @credential,
+      operation_id: SecureRandom.uuid, account_key: "sha256:#{'a' * 64}", host_id: "fixture", authority_id: "fixture",
+      epoch: "1", quantity: 1, broker_grant_id: "fixture", state: "released")
+    AcClientCommand.create!(company: @company, user: @user, intent_id: SecureRandom.uuid, command_type: "fixture")
+    event = create(:trigger_event, actor: @user, event_type: "fixture", source: "fixture", project: @project, company: @company)
+    AcNotificationReceipt.create!(trigger_event: event, user: @user)
   end
 
   def build_company_records

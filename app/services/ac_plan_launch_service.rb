@@ -52,6 +52,7 @@ class AcPlanLaunchService
       executions = AcExecution.where(ac_work_context_id: context.id)
       occupied = executions.where.not(state: %w[completed failed cancelled]).exists? ||
         executions.where.not(worktree_lease_token: nil).exists? ||
+        AcRemoteOperation.where(ac_execution_id: executions.select(:id), state: %w[pending running uncertain]).exists? ||
         AcCapacityGrant.joins(ac_task: :ac_plan).where(ac_plans: { ac_work_context_id: context.id }, state: %w[granted active]).exists?
       next false if occupied
 

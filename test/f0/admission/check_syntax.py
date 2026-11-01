@@ -6,7 +6,7 @@ import tree_sitter_ruby
 ROOT = Path(__file__).resolve().parents[3]
 parser = Parser(Language(tree_sitter_ruby.language()))
 paths = sorted((ROOT / "tools/f0/admission").glob("*.rb"))
-paths += sorted((ROOT / "test/f0/admission").glob("*.rb"))
+paths += sorted((ROOT / "tools/f0/admission/tests").glob("*.rb"))
 paths += [ROOT / "tools/f0/admission/Gemfile"]
 for path in paths:
     if parser.parse(path.read_bytes()).root_node.has_error:

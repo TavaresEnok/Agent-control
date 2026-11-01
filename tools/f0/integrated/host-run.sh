@@ -45,7 +45,7 @@ docker run --rm --pull never --network none --security-opt seccomp=unconfined \
   --memory 2g --cpus 2 --pids-limit 512 \
   --mount type=bind,source="$PWD",target=/work,readonly --workdir /work \
   -e BUNDLE_GEMFILE=/work/tools/f0/integrated/Gemfile -e BUNDLE_FROZEN=true \
-  "$sql_image" ruby test/f0/integrated/subprocess_boot_test.rb \
+  "$sql_image" ruby tools/f0/integrated/tests/subprocess_boot_test.rb \
   >"$artifacts/subprocess-boot.log" 2>&1
 docker volume create --label agent-control.fixture="$token" "$name-socket" >"$artifacts/socket-volume.txt"
 created_volume=1

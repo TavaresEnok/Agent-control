@@ -47,9 +47,9 @@ class CreateAcPlans < ActiveRecord::Migration[8.1]
       t.timestamps
     end
 
-    add_index :ac_plans, [:plan_key, :version], unique: true
-    add_index :ac_plans, [:ac_work_context_id, :state]
-    add_index :ac_plans, [:company_id, :project_id]
+    add_index :ac_plans, [ :plan_key, :version ], unique: true
+    add_index :ac_plans, [ :ac_work_context_id, :state ]
+    add_index :ac_plans, [ :company_id, :project_id ]
     add_index :ac_plans, :state
     add_index :ac_plans, :content_hash, where: "content_hash IS NOT NULL"
 

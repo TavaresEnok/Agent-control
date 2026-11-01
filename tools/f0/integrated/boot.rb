@@ -52,9 +52,9 @@ module IntegratedLab
   end
 
   def self.verify_implementations!
-    { [TemporalService, :start_workflow] => "app/services/temporal_service.rb",
-      [SessionLaunchRelay, :dispatch] => "app/services/session_launch_relay.rb",
-      [SessionAdmissionService, :drain!] => "app/services/session_admission_service.rb" }.each do |(owner, method), path|
+    { [ TemporalService, :start_workflow ] => "app/services/temporal_service.rb",
+      [ SessionLaunchRelay, :dispatch ] => "app/services/session_launch_relay.rb",
+      [ SessionAdmissionService, :drain! ] => "app/services/session_admission_service.rb" }.each do |(owner, method), path|
       assert!(owner.method(method).source_location&.first == File.join(AdmissionLab::ROOT, path), "substituted #{owner}.#{method} refused")
     end
     sdk_path = Temporalio::Client.instance_method(:start_workflow).source_location&.first

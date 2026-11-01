@@ -61,9 +61,18 @@ class AcContainerRuntimeSupervisorTest < ActiveSupport::TestCase
     FileUtils.mkdir_p(Rails.application.config.ac_evidence_base_dir)
     @auth = File.join(@root, "auth.json")
     File.write(@auth, "synthetic fixture")
+    File.chmod(0o600, @auth)
+    worker_uid = Process.euid.zero? ? 1000 : Process.euid
+    worker_gid = Process.egid.zero? ? 1000 : Process.egid
+    File.chown(worker_uid, worker_gid, @auth) if Process.euid.zero?
+    @worker_identity = "#{worker_uid}:#{worker_gid}"
     Rails.application.config.ac_runtime_accounts = { @credential.id.to_s => {
       "image" => "sha256:#{'a' * 64}", "argv" => [ "claude", "--model", "{model}", "--effort", "{effort}", "{prompt}" ],
-      "auth_files" => { @auth => "/home/agent/.claude.json" } } }
+      "auth_files" => { @auth => "/home/agent/.claude.json" }, "uid" => @worker_identity, "network" => "none",
+      "cli_adapter" => "claude_code", "agent_type" => "claude_code", "auth_mode" => "subscription",
+      "attestation" => { "status" => "documented_supported", "mode" => "subscription", "cli_adapter" => "claude_code",
+        "credential_id" => @credential.id.to_s, "source" => "https://example.invalid/evidence",
+        "observed_at" => 1.minute.ago.iso8601, "valid_until" => 1.hour.from_now.iso8601 } } }
     @context.update!(metadata: { "git_repo_path" => @repo })
     @execution = AcAdmissionService.admit_execution!(task: @task, operation_id: SecureRandom.uuid,
       requested_by: "test", origin: "test", epoch: "1", execution_profile: @profiles.fetch("programmer"))[:execution]
@@ -92,11 +101,36 @@ class AcContainerRuntimeSupervisorTest < ActiveSupport::TestCase
     assert @adapter.verify_receipt!(execution: @execution, receipt: failed)
   end
 
+  test "terminal or uncertain executions cannot create or start a missing runtime" do
+    %w[completed failed cancelled uncertain paused].each do |state|
+      @execution.update!(state: state)
+      assert @execution.ac_capacity_grant.reload.granted?
+      assert_raises(AcRuntimeSupervisorService::UnverifiedReceiptError) do
+        @adapter.dispatch!(execution: @execution, operation_id: @execution.operation_id, epoch: @execution.epoch)
+      end
+      assert_raises(AcRuntimeSupervisorService::UnverifiedReceiptError) do
+        AcRuntimeSupervisorService.dispatch!(execution: @execution)
+      end
+    end
+    assert_equal 0, @runtime.created
+    assert_equal 0, @runtime.started
+  end
+
+  test "terminal runtime remains observable without being dispatched again" do
+    first = dispatch
+    @runtime.finish(first["process_handle"], 17)
+    @execution.update!(state: :failed, exit_code: 17)
+    assert_equal "failed", @adapter.status!(execution: @execution, operation_id: @execution.operation_id, epoch: @execution.epoch)["state"]
+    assert_raises(AcRuntimeSupervisorService::UnverifiedReceiptError) { dispatch }
+    assert_equal 1, @runtime.created
+    assert_equal 1, @runtime.started
+  end
+
   test "runtime mounts only its clone evidence and selected auth without host authority" do
     dispatch
     spec = @runtime.specs.last
     assert_equal "none", spec[:host_config]["NetworkMode"]
-    assert_equal "1000:1000", spec[:user]
+    assert_equal @worker_identity, spec[:user]
     assert spec[:host_config]["ReadonlyRootfs"]
     assert_equal [ "ALL" ], spec[:host_config]["CapDrop"]
     assert_equal 3, spec[:host_config]["Binds"].size

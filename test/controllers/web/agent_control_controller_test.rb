@@ -44,7 +44,7 @@ class Web::AgentControlControllerTest < ActionDispatch::IntegrationTest
       fingerprint: @fingerprint,
       identity_key_path: @identity_path,
       known_hosts_path: @known_hosts_path,
-      authorized_directories: ["/tmp/web_auth"],
+      authorized_directories: [ "/tmp/web_auth" ],
       state: "active"
     )
     sign_in_as(@user)

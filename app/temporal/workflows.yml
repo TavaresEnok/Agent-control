@@ -261,6 +261,16 @@ workflows:
         task_queue: aixle_ruby
 
 
+  - name: ac_remote_operation_workflow_v2
+    owner: aixle_ruby
+    activities:
+      - name: ac_dispatch_remote_operation_v2_activity
+        task_queue: aixle_ruby
+      - name: ac_query_remote_operation_v2_activity
+        task_queue: aixle_ruby
+      - name: ac_cancel_remote_operation_v2_activity
+        task_queue: aixle_ruby
+
   - name: ac_task_execution_workflow_v2
     owner: aixle_ruby
     activities:

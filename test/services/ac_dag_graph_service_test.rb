@@ -44,7 +44,7 @@ class AcDagGraphServiceTest < ActiveSupport::TestCase
       task_key: "task-2",
       title: "Módulo Alpha",
       position: 2,
-      depends_on: ["task-1"],
+      depends_on: [ "task-1" ],
       state: "running"
     )
 
@@ -56,7 +56,7 @@ class AcDagGraphServiceTest < ActiveSupport::TestCase
       task_key: "task-3",
       title: "Módulo Beta",
       position: 3,
-      depends_on: ["task-1"],
+      depends_on: [ "task-1" ],
       state: "review"
     )
 
@@ -68,7 +68,7 @@ class AcDagGraphServiceTest < ActiveSupport::TestCase
       task_key: "task-4",
       title: "Integração Final",
       position: 4,
-      depends_on: ["task-2", "task-3"],
+      depends_on: [ "task-2", "task-3" ],
       state: "waiting_dependencies"
     )
   end
@@ -85,13 +85,13 @@ class AcDagGraphServiceTest < ActiveSupport::TestCase
     node1 = graph[:nodes].find { |n| n[:task_key] == "task-1" }
     assert_equal "integrated", node1[:state]
     assert_equal "commit-root-123", node1[:approved_commit_sha]
-    assert_equal true, node1[:flags][:integrated]
-    assert_equal true, node1[:flags][:terminal]
+    assert node1[:flags][:integrated]
+    assert node1[:flags][:terminal]
 
     node4 = graph[:nodes].find { |n| n[:task_key] == "task-4" }
     assert_equal "waiting_dependencies", node4[:state]
-    assert_equal true, node4[:flags][:waiting_dependencies]
-    assert_equal ["task-2", "task-3"], node4[:depends_on]
+    assert node4[:flags][:waiting_dependencies]
+    assert_equal [ "task-2", "task-3" ], node4[:depends_on]
 
     # 2. Validação de Arestas
     # task-1 -> task-2, task-1 -> task-3, task-2 -> task-4, task-3 -> task-4 = 4 arestas
@@ -99,11 +99,11 @@ class AcDagGraphServiceTest < ActiveSupport::TestCase
 
     edge1_2 = graph[:edges].find { |e| e[:source_key] == "task-1" && e[:target_key] == "task-2" }
     assert edge1_2.present?
-    assert_equal true, edge1_2[:fulfilled], "Aresta originada em tarefa integrada deve estar cumprida"
+    assert edge1_2[:fulfilled], "Aresta originada em tarefa integrada deve estar cumprida"
 
     edge2_4 = graph[:edges].find { |e| e[:source_key] == "task-2" && e[:target_key] == "task-4" }
     assert edge2_4.present?
-    assert_equal false, edge2_4[:fulfilled], "Aresta originada em tarefa running NÃO deve estar cumprida"
+    assert_not edge2_4[:fulfilled], "Aresta originada em tarefa running NÃO deve estar cumprida"
 
     # 3. Validação do Sumário de Estados
     assert_equal 4, graph[:summary][:total_tasks]
@@ -112,7 +112,7 @@ class AcDagGraphServiceTest < ActiveSupport::TestCase
     assert_equal 1, graph[:summary][:review]
     assert_equal 1, graph[:summary][:waiting_dependencies]
     assert_equal 0, graph[:summary][:pending]
-    assert_equal false, graph[:summary][:all_completed]
+    assert_not graph[:summary][:all_completed]
 
     # 4. Projeção temporal
     assert graph[:projection_timestamp].present?

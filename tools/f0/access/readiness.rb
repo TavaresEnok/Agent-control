@@ -6,8 +6,8 @@ require "timeout"
 module F0Access
   # Only safe startup GETs belong here. Never wrap a session or mutation retry.
   class Readiness
-    TRANSIENT = [Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNREFUSED,
-                 SocketError, Errno::EHOSTUNREACH].freeze
+    TRANSIENT = [ Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNREFUSED,
+                 SocketError, Errno::EHOSTUNREACH ].freeze
     ENDPOINTS = { backend: "backend/up", gateway: "gateway/terminal/tty" }.freeze
 
     def initialize(clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) },
@@ -42,7 +42,7 @@ module F0Access
         end
         remaining = deadline - @clock.call
         break if remaining <= 0
-        @wait.call([0.5, remaining].min)
+        @wait.call([ 0.5, remaining ].min)
       end
       { name: "readiness/#{phase}", status: "NOTRUN", phase: phase,
         endpoint: endpoint, attempts: attempts, reason: "startup_deadline",
@@ -56,8 +56,8 @@ module F0Access
       # connection and the whole response too; no redirects or proxy fallback.
       Timeout.timeout(remaining, Net::ReadTimeout) do
         Net::HTTP.start(uri.host, uri.port, nil, nil, nil, nil,
-                        open_timeout: [2, remaining].min,
-                        read_timeout: [2, remaining].min) do |http|
+                        open_timeout: [ 2, remaining ].min,
+                        read_timeout: [ 2, remaining ].min) do |http|
           http.request(Net::HTTP::Get.new(uri, headers))
         end
       end

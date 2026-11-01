@@ -14,6 +14,9 @@ class AcLocalCapacityAuthorityService
         raise AcCapacityGrant::LimitExceededError, "Recurso ou identidade de capacidade inválida"
       end
       SessionAdmissionService.transaction do
+        agent_credential.reload
+        raise AcCapacityGrant::LimitExceededError, "Credencial indisponível" unless agent_credential.user_id.present? && agent_credential.active?
+
         limit = account_limit!(agent_credential)
         existing = AcCapacityGrant.find_by(operation_id: operation_id)
         if existing
@@ -102,6 +105,15 @@ class AcLocalCapacityAuthorityService
     end
 
     def permit_legacy_session?(session)
+      identities = AcCapacityBrokerConfig.identities
+      return false unless identities.is_a?(Hash)
+      if identities.respond_to?(:values) && identities.values.any? { |item| item.is_a?(Hash) && (item["ownership"] || item[:ownership]) == "shared" }
+        return false
+      end
+      broker_accounts = AcCapacityBrokerConfig.accounts
+      return false unless broker_accounts.is_a?(Hash)
+      return false if broker_accounts.any?
+
       credential = session.session_credential
       unless credential
         return !AcCapacityGrant.active_or_granted.exists?

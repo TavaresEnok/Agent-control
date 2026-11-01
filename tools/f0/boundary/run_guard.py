@@ -35,7 +35,7 @@ def main():
                "LD_LIBRARY_PATH": str(runtime / "usr/lib/x86_64-linux-gnu")}
         ruby = str(runtime / "usr/bin/ruby3.1")
         subprocess.run([ruby, "--version"], env=env, check=True)
-        subprocess.run([ruby, "--disable-gems", str(ROOT / "test/f0/boundary/integration_eligibility_test.rb")],
+        subprocess.run([ruby, "--disable-gems", str(ROOT / "tools/f0/boundary/tests/integration_eligibility_test.rb")],
                        env=env, cwd=ROOT, check=True)
 
 

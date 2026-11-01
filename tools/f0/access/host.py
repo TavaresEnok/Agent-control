@@ -104,8 +104,8 @@ def source_paths():
     # Never send .env, credentials, .git, artifacts, existing auth, or node_modules.
     names = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
     names += [str(p.relative_to(ROOT)) for p in (ROOT / "tools/f0/access").glob("*") if p.is_file()]
-    build_tests = {"test/f0/access/mcp_evidence_test.rb", "test/f0/access/session_cookie_test.rb",
-                   "test/f0/access/readiness_test.rb"}
+    build_tests = {"tools/f0/access/tests/mcp_evidence_test.rb", "tools/f0/access/tests/session_cookie_test.rb",
+                   "tools/f0/access/tests/readiness_test.rb"}
     names += sorted(build_tests)
     roots = {"app", "config", "lib", "db", "public", "bin"}
     for name in sorted(set(names)):

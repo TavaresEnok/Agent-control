@@ -12,3 +12,8 @@ Os caminhos `reference/`, `product/`, `operations/`, `project/` e `testing.md` p
 - [Matriz de remediação de 2026-11-01](validation/REMEDIACAO_2026-11-01.md)
 
 - [Evidências executadas da candidata](validation/EVIDENCIAS_REMEDIACAO_2026-11-01.md)
+
+- [Configuração privada do runtime Agent Control](validation/RUNTIME_AGENT_CONTROL.md)
+
+- [Retenção de artefatos e ledger de telemetria](agent-control-storage-and-telemetry.md)
+- [Continuação: runtime, SSH e broker compartilhado](validation/CONTINUACAO_REMEDIACAO_2026-11-01.md)

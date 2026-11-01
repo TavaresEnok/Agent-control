@@ -36,6 +36,7 @@ class AcAdmissionService
                existing_execution.metadata["manager_identity"] == manager_identity && existing_execution.metadata["manager_epoch"].to_s == manager_epoch.to_s
           raise UnauthorizedExecutionBypassError, "Operação reutilizada para outra tarefa ou época"
         end
+        AcSharedCapacityAuthorityService.bind!(existing_execution.ac_capacity_grant)
         return {
           execution: existing_execution,
           grant: existing_execution.ac_capacity_grant,
@@ -57,8 +58,12 @@ class AcAdmissionService
       profile = execution_profile || (configured.present? ? AcExecutionProfile.find_by(id: configured) : nil) || select_profile_for_task(task, requested_role)
       validate_profile_eligibility!(profile, task, requested_role)
 
+      if AcSharedCapacityAuthorityService.shared?(profile.agent_credential)
+        AcSharedCapacityAuthorityService.prepare!(task: task, profile: profile, operation_id: operation_id, epoch: epoch)
+      end
+
       # 4. Aloca concessão de capacidade atomicamente na mesma transação (§11.3)
-      AcExecution.transaction do
+      result = AcExecution.transaction do
         task.ac_plan.ac_work_context.lock!
         task.ac_plan.lock!
         task.lock!
@@ -70,7 +75,7 @@ class AcAdmissionService
                  concurrent.metadata["manager_identity"] == manager_identity && concurrent.metadata["manager_epoch"].to_s == manager_epoch.to_s
             raise UnauthorizedExecutionBypassError, "Identidade da operação divergente"
           end
-          return { execution: concurrent, grant: concurrent.ac_capacity_grant, reused: true }
+          next { execution: concurrent, grant: concurrent.ac_capacity_grant, reused: true }
         end
         eligible_states = requested_role == "programmer" ? %w[pending queued needs_changes] : %w[review]
         unless eligible_states.include?(task.state.to_s)
@@ -145,6 +150,8 @@ class AcAdmissionService
           reused: false
         }
       end
+      AcSharedCapacityAuthorityService.bind!(result[:grant])
+      result
     end
 
     # §10.2.1: Validação de autoridade de execução — impede contorno do contrato
@@ -166,10 +173,12 @@ class AcAdmissionService
         raise UnauthorizedExecutionBypassError, "Política revogada ou perfil ausente"
       end
       grant = execution.ac_capacity_grant
-      unless grant.present? && %w[granted active].include?(grant.state) && (grant.expires_at.nil? || grant.expires_at > Time.current)
+      unless grant.present? && %w[granted active].include?(grant.state) &&
+             (grant.reconciliation_data["authority"] != "shared" || grant.reconciliation_data["broker_state"] == "bound") && (grant.expires_at.nil? || grant.expires_at > Time.current)
         raise UnauthorizedExecutionBypassError, "Concessão de capacidade inválida ou expirada: execução não admitida"
       end
 
+      AcSharedCapacityAuthorityService.ensure_bound!(execution: execution)
       execution
     end
 

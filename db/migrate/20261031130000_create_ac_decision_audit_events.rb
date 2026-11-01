@@ -66,9 +66,9 @@ class CreateAcDecisionAuditEvents < ActiveRecord::Migration[8.1]
       t.datetime :created_at, null: false
     end
 
-    add_index :ac_decision_audit_events, [:company_id, :occurred_at]
-    add_index :ac_decision_audit_events, [:ac_task_id, :occurred_at], where: "ac_task_id IS NOT NULL"
-    add_index :ac_decision_audit_events, [:ac_work_context_id, :occurred_at], where: "ac_work_context_id IS NOT NULL"
+    add_index :ac_decision_audit_events, [ :company_id, :occurred_at ]
+    add_index :ac_decision_audit_events, [ :ac_task_id, :occurred_at ], where: "ac_task_id IS NOT NULL"
+    add_index :ac_decision_audit_events, [ :ac_work_context_id, :occurred_at ], where: "ac_work_context_id IS NOT NULL"
     add_index :ac_decision_audit_events, :event_type
     add_index :ac_decision_audit_events, :occurred_at
     add_index :ac_decision_audit_events, :agent_credential_id, where: "agent_credential_id IS NOT NULL"

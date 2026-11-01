@@ -3,6 +3,7 @@
 require "digest"
 require "open3"
 require "fileutils"
+require "find"
 
 # An execution owns a named runtime object before it starts. Reconciliation uses
 # that identity, not a PID; an uncertain runtime response never permits a restart.
@@ -12,25 +13,42 @@ class AcContainerRuntimeSupervisor
   end
 
   def dispatch!(execution:, operation_id:, epoch:)
-    config = account_config!(execution)
-    name = identity(execution)
-    container = lookup(name)
-    unless container
-      begin
-        container = @runtime.create_container(spec(execution, config))
-      rescue StandardError
-        container = lookup(name)
-        raise unless container
+    AcExecutionFence.synchronize(execution) do
+      unless %w[granted preparing running].include?(execution.state.to_s)
+        raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Estado da execução não permite despacho"
       end
+      AcAdmissionService.validate_execution_authority!(execution_id: execution.id, operation_id: operation_id, reported_epoch: epoch)
+      config = account_config!(execution)
+      profile = execution.ac_execution_profile
+      credential = profile.agent_credential
+      unless credential && credential.company_id == execution.company_id && credential.active? && profile.eligible?
+        raise AcRuntimeSupervisorService::UnavailableError, "Perfil ou credencial não é elegível"
+      end
+      begin
+        AcRuntimeConfigurationLoader.validate_account!(execution.ac_execution_profile.agent_credential_id.to_s, config,
+          networks: Array(Rails.application.config.try(:ac_worker_networks)))
+      rescue AcRuntimeConfigurationLoader::InvalidConfiguration
+        raise AcRuntimeSupervisorService::UnavailableError, "Configuração da conta não está pronta"
+      end
+      name = identity(execution)
+      container = lookup(name)
+      unless container
+        begin
+          container = @runtime.create_container(spec(execution, config))
+        rescue StandardError
+          container = lookup(name)
+          raise unless container
+        end
+      end
+      verify_container!(execution, container)
+      # Docker's created state is pre-start; exited is a retained terminal result.
+      if container.json.dig("State", "Status") == "created"
+        AcAdmissionService.validate_execution_authority!(execution_id: execution.id,
+          operation_id: operation_id, reported_epoch: epoch)
+        @runtime.start_container(name)
+      end
+      status!(execution: execution, operation_id: operation_id, epoch: epoch)
     end
-    verify_container!(execution, container)
-    # Docker's created state is pre-start; exited is a retained terminal result.
-    if container.json.dig("State", "Status") == "created"
-      AcAdmissionService.validate_execution_authority!(execution_id: execution.id,
-        operation_id: operation_id, reported_epoch: epoch)
-      @runtime.start_container(name)
-    end
-    status!(execution: execution, operation_id: operation_id, epoch: epoch)
   end
 
   def cancel!(execution:, operation_id:, epoch:)
@@ -128,7 +146,12 @@ class AcContainerRuntimeSupervisor
   def account_config!(execution)
     profiles = Rails.application.config.try(:ac_runtime_accounts) || {}
     profile = profiles[execution.ac_execution_profile.agent_credential_id.to_s]
-    unless profile.is_a?(Hash) && profile["image"].to_s.match?(/(?:@|\A)sha256:[a-f0-9]{64}\z/) &&
+    credential = execution.ac_execution_profile.agent_credential
+    binding = profile.is_a?(Hash) && profile["attestation"].is_a?(Hash) &&
+      profile["cli_adapter"] == execution.ac_execution_profile.cli_adapter.to_s && profile["agent_type"] == credential&.agent_type &&
+      profile["auth_mode"] == "subscription" && profile["attestation"]["status"] == "documented_supported" &&
+      profile["attestation"]["mode"] == "subscription" && profile["attestation"]["credential_id"].to_s == credential&.id.to_s
+    unless binding && profile["image"].to_s.match?(/(?:@|\A)sha256:[a-f0-9]{64}\z/) &&
            profile["argv"].is_a?(Array) && profile["argv"].all? { |v| v.is_a?(String) } && profile["argv"].any?
       raise AcRuntimeSupervisorService::UnavailableError, "Imagem fixada e comando da conta não configurados"
     end
@@ -158,6 +181,7 @@ class AcContainerRuntimeSupervisor
     unless path.start_with?(root + "/") && execution.worktree_lease_token.present?
       raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Worktree sem posse ou fora da raiz"
     end
+    prepare_worktree_ownership!(path, config)
     profile = execution.ac_execution_profile
     readonly = %w[reviewer qa].include?(profile.role.to_s)
     mounts = [ "#{path}:/work:#{readonly ? 'ro' : 'rw'}", "#{evidence_path(execution, config)}:/evidence:rw" ]
@@ -176,11 +200,33 @@ class AcContainerRuntimeSupervisor
       cmd: argv, env_vars: [ "HOME=/home/agent", "CI=true", "MITM_DISABLED=true", "OPENAI_API_KEY=", "ANTHROPIC_API_KEY=", "XAI_API_KEY=", "OPENROUTER_API_KEY=", "CODEX_API_KEY=", "OPENAI_BASE_URL=" ],
       labels: labels(execution),
       host_config: { "Binds" => mounts, "ReadonlyRootfs" => true, "CapDrop" => [ "ALL" ],
-                     "SecurityOpt" => [ "no-new-privileges" ], "NetworkMode" => config.fetch("network", "none"),
+                     "SecurityOpt" => [ "no-new-privileges", "seccomp=#{File.read(Rails.root.join("docker/security/seccomp-agent-control.json"))}" ], "NetworkMode" => config.fetch("network", "none"),
                      "Memory" => config.fetch("memory_bytes", 2 * (1024**3)), "NanoCpus" => 1_000_000_000,
                      "PidsLimit" => 256, "LogConfig" => { "Type" => "json-file", "Config" => { "max-size" => "10m", "max-file" => "3" } }, "Tmpfs" => { "/tmp" => "rw,nosuid,nodev,size=128m", "/home/agent" => "rw,nosuid,nodev,size=128m" } },
       user: config.fetch("uid", "1000:1000")
     }
+  end
+
+  # Only a fresh, exclusively leased clone is changed, never its symlink targets.
+  # The controller may be root, while every worker remains a non-root UID.
+  def prepare_worktree_ownership!(path, config)
+    user = config.fetch("uid", "1000:1000").to_s
+    unless user.match?(/\A[1-9][0-9]*:[1-9][0-9]*\z/)
+      raise AcRuntimeSupervisorService::UnavailableError, "UID/GID não privilegiados obrigatórios"
+    end
+    uid, gid = user.split(":").map(&:to_i)
+    unless Process.uid.zero? || (Process.uid == uid && Process.gid == gid)
+      raise AcRuntimeSupervisorService::UnavailableError, "Controlador não pode preparar a posse da worktree"
+    end
+    return unless Process.uid.zero?
+
+    Find.find(path) do |entry|
+      info = File.lstat(entry)
+      unless info.file? || info.directory? || info.symlink?
+        raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Arquivo especial na worktree"
+      end
+      File.lchown(uid, gid, entry)
+    end
   end
 
   def execution_prompt(execution, request)

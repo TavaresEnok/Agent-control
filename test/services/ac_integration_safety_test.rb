@@ -7,6 +7,7 @@ require "open3"
 class AcIntegrationSafetyTest < ActiveSupport::TestCase
   self.use_transactional_tests = false
   include AcSafetyFixtures
+  prepend IsolatedAcDatabase
 
   setup do
     @directory = Dir.mktmpdir("ac-integration-")

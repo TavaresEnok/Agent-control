@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "socket"
+require "io/wait"
 require "websocket/driver"
 
 module F0Access
@@ -13,7 +14,7 @@ module F0Access
       uri = URI(url)
       @socket = TCPSocket.new(uri.host, uri.port)
       @messages = []
-      @driver = ::WebSocket::Driver.client(self, protocols: [protocol])
+      @driver = ::WebSocket::Driver.client(self, protocols: [ protocol ])
       @driver.set_header("Origin", "http://web:4000")
       @driver.set_header("Cookie", cookie) if cookie
       @driver.on(:open) { @open = true }
@@ -32,7 +33,7 @@ module F0Access
         return true if yield(self)
         remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
         return false if remaining <= 0 || @closed
-        next unless IO.select([@socket], nil, nil, remaining)
+        next unless @socket.wait_readable(remaining)
         @driver.parse(@socket.readpartial(65_536))
       end
     rescue EOFError, Errno::ECONNRESET

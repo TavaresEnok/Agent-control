@@ -35,9 +35,7 @@ module InertiaCable
       case entity
       when Company
         current_user.company_memberships.active.exists?(company_id: entity.id)
-      when Project
-        current_user.company_memberships.active.exists?(company_id: entity.company_id)
-      when TerminalSession
+      when Project, TerminalSession
         current_user.company_memberships.active.exists?(company_id: entity.company_id)
       when WorkflowRun
         current_user.company_memberships.active.exists?(company_id: entity.project&.company_id)

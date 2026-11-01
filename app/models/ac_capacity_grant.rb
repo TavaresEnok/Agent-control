@@ -72,7 +72,8 @@ class AcCapacityGrant < ApplicationRecord
   )
     # All admission paths must share one durable authority. The legacy broker's
     # snapshot is not a reservation, so it cannot authorize an independent grant.
-    authority = Rails.application.config.try(:ac_capacity_authority) || AcLocalCapacityAuthorityService
+    authority = Rails.application.config.try(:ac_capacity_authority) ||
+      (AcSharedCapacityAuthorityService.shared?(agent_credential) ? AcSharedCapacityAuthorityService : AcLocalCapacityAuthorityService)
     unless authority && authority.respond_to?(:grant_atomically!)
       raise LimitExceededError, "Autoridade compartilhada de capacidade não configurada"
     end
@@ -96,11 +97,26 @@ class AcCapacityGrant < ApplicationRecord
   def release!
     execution = AcExecution.find_by(ac_capacity_grant_id: id)
     raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Execução não encontrada" unless execution
-    receipt = AcRuntimeSupervisorService.status!(execution: execution)
-    unless %w[completed failed not_started].include?(receipt["state"])
-      raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Término não comprovado"
+
+    receipt = nil
+    shared = false
+    execution.with_lock do
+      execution.assert_no_unsettled_remote_operations!
+      lock!
+      receipt = AcRuntimeSupervisorService.status!(execution: execution)
+      unless %w[completed failed not_started].include?(receipt["state"])
+        raise AcRuntimeSupervisorService::UnverifiedReceiptError, "Término não comprovado"
+      end
+      self.reconciliation_data = reconciliation_data.merge("remote_release_claimed" => true)
+      shared = reconciliation_data["authority"] == "shared"
+      if shared
+        save!
+      else
+        update!(state: :released, released_at: Time.current)
+      end
     end
-    update!(state: :released, released_at: Time.current)
+    AcSharedCapacityAuthorityService.release!(grant: self, execution: execution, receipt: receipt) if shared
+    self
   end
 
   def expire!

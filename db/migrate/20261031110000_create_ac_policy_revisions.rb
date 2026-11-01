@@ -53,11 +53,11 @@ class CreateAcPolicyRevisions < ActiveRecord::Migration[8.1]
       t.timestamps
     end
 
-    add_index :ac_policy_revisions, [:company_id, :revision_number], unique: true
+    add_index :ac_policy_revisions, [ :company_id, :revision_number ], unique: true
     add_index :ac_policy_revisions, :content_hash, unique: true
     add_index :ac_policy_revisions, :state
     add_index :ac_policy_revisions, :predecessor_id
-    add_index :ac_policy_revisions, [:company_id, :state]
+    add_index :ac_policy_revisions, [ :company_id, :state ]
 
     add_check_constraint :ac_policy_revisions,
       "state IN ('draft','published','superseded','revoked')",

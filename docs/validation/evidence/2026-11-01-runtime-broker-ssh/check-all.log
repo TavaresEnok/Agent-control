@@ -1,0 +1,24 @@
+Building test-mode Vite assets...
+Running the worker boot smoke (nothing else in the repo ever loads bin/temporal_worker)...
+Checking that every file eager-loads (CI's test env eager-loads, a local one does not)...
+Running rails-test, rubocop, brakeman, system-test in parallel (DB-touching runs serialized by flock)...
+Running eslint, typescript, fsd, watcher-test in parallel...
+Running fe-test (Vitest + coverage) on its own...
+
+=== Summary ===
+  [OK]   brakeman          21s
+  [OK]   eslint            40s
+  [OK]   fe-test          220s
+  [OK]   fsd                4s
+  [OK]   rails-test       677s
+  [OK]   rubocop            3s
+  [OK]   system-test      707s
+  [OK]   typescript        28s
+  [OK]   vite-build         8s
+  [OK]   watcher-test       1s
+  [OK]   worker-boot        4s
+  [OK]   zeitwerk           5s
+
+=== Coverage (line %) ===
+  backend  (rails / simplecov): 93.35%
+  frontend (vitest / v8):       85.91%

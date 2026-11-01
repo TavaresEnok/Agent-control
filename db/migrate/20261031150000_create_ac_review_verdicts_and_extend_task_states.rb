@@ -57,10 +57,10 @@ class CreateAcReviewVerdictsAndExtendTaskStates < ActiveRecord::Migration[8.1]
       t.timestamps
     end
 
-    add_index :ac_review_verdicts, [:ac_task_id, :state]
-    add_index :ac_review_verdicts, [:artifact_hash, :state]
-    add_index :ac_review_verdicts, [:company_id, :verdict]
-    add_index :ac_review_verdicts, [:ac_task_id, :reviewer_role, :state]
+    add_index :ac_review_verdicts, [ :ac_task_id, :state ]
+    add_index :ac_review_verdicts, [ :artifact_hash, :state ]
+    add_index :ac_review_verdicts, [ :company_id, :verdict ]
+    add_index :ac_review_verdicts, [ :ac_task_id, :reviewer_role, :state ]
 
     add_check_constraint :ac_review_verdicts,
       "verdict IN ('approved','rejected','needs_changes','waived')",

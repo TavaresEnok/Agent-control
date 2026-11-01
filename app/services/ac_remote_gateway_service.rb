@@ -91,6 +91,21 @@ class AcRemoteGatewayService
       format_five_questions(operation.reload)
     end
 
+    def cancel_operation!(operation:, runner: nil)
+      supervisor = Rails.application.config.try(:ac_remote_supervisor)
+      unless supervisor && %i[cancel_operation! verify_operation_receipt!].all? { |method| supervisor.respond_to?(method) }
+        record_observation_failure!(operation, "Supervisor remoto verificável não configurado")
+        return format_five_questions(operation.reload)
+      end
+      begin
+        receipt = supervisor.cancel_operation!(operation: operation, runner: runner)
+        apply_verified_receipt!(operation, supervisor, receipt)
+      rescue StandardError
+        record_observation_failure!(operation, "Cancelamento remoto sem recibo verificável")
+      end
+      format_five_questions(operation.reload)
+    end
+
     def reconcile_completion!(operation:, exit_code:, output: nil, error: nil)
       raise UnprovableRemoteStateError, "Resultado remoto requer recibo verificável do supervisor"
     end
@@ -99,10 +114,17 @@ class AcRemoteGatewayService
 
     def dispatch_under_fence!(operation:, environment:, task:, execution:, supervisor:, metadata:, runner:)
       AcExecutionFence.synchronize(execution, validate: false) do
+        unless %w[granted preparing running].include?(execution.state)
+          raise UnprovableRemoteStateError, "Execução não aceita novo trabalho remoto"
+        end
         execution.ac_capacity_grant.lock!
         environment.lock!
         AcAdmissionService.validate_execution_authority!(execution_id: execution.id,
           operation_id: execution.operation_id, reported_epoch: operation.metadata.fetch("execution_epoch"))
+        if execution.ac_capacity_grant.reconciliation_data["remote_release_claimed"] ||
+           AcRemoteOperation.where(ac_execution_id: execution.id, state: %w[pending running uncertain]).where.not(id: operation.id).exists?
+          raise AcAdmissionService::UnauthorizedExecutionBypassError, "Capacidade em liberação ou operação remota concorrente"
+        end
         raise InactiveRemoteEnvironmentError, "Ambiente inativo" unless environment.active?
         unless environment.directory_authorized?(operation.working_directory)
           raise UnauthorizedRemoteDirectoryError, "Diretório não autorizado"
@@ -119,7 +141,8 @@ class AcRemoteGatewayService
       attributes = { company_id: environment.company_id, project_id: environment.project_id,
         ac_remote_environment_id: environment.id, ac_task_id: task.id, ac_execution_id: execution.id,
         operation_id: operation_id, command: command, working_directory: working_directory, artifact_hash: artifact_hash,
-        state: "pending", metadata: (metadata || {}).to_h.stringify_keys.merge("execution_epoch" => execution.epoch.to_s) }
+        state: "pending", metadata: (metadata || {}).to_h.stringify_keys.merge("execution_epoch" => execution.epoch.to_s,
+          "dispatch_claimed" => true) }
       begin
         [ AcRemoteOperation.create!(attributes), true ]
       rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid
@@ -131,7 +154,14 @@ class AcRemoteGatewayService
                existing.metadata["execution_epoch"] == execution.epoch.to_s
           raise UnprovableRemoteStateError, "Identidade da operação divergente"
         end
-        [ existing, false ]
+        existing.with_lock do
+          if existing.state == "pending" && existing.metadata["dispatch_claimed"] == false
+            existing.update!(metadata: existing.metadata.merge("dispatch_claimed" => true))
+            [ existing, true ]
+          else
+            [ existing, false ]
+          end
+        end
       end
     end
 

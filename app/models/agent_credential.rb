@@ -9,7 +9,7 @@ class AgentCredential < ApplicationRecord
   encrypted_column :encrypted_config_data
   extend Enumerize
 
-  belongs_to :user
+  belongs_to :user, optional: true
   # Credentials are per (user, company): the same person authenticates a separate
   # agent account per company so vendor spend is billed to the company that
   # incurred it, never pooled across tenants.
@@ -30,6 +30,7 @@ class AgentCredential < ApplicationRecord
     in: CompanyMembership::AVAILABLE_AGENTS,
     message: "%{value} is not a valid agent type"
   }
+  validates :user, presence: true, unless: :anonymous_history?
   validates :account_slug, presence: true
   validates :agent_type, uniqueness: {
     scope: %i[user_id company_id account_slug],
@@ -37,6 +38,10 @@ class AgentCredential < ApplicationRecord
   }
   validate :owner_is_a_member_of_the_company
   validates :encrypted_config_data, presence: true
+
+  def anonymous_history?
+    user_id.nil? && error? && account_slug.to_s.start_with?("retired-")
+  end
 
   # Scope helper: this company's credentials only.
   scope :for_company, ->(company) { where(company: company) }
@@ -243,6 +248,8 @@ class AgentCredential < ApplicationRecord
   # Token REFRESH must not pass this — rotating a token is not a new authorization,
   # and wiping the user's pick on every refresh would be its own bug.
   def self.from_artifacts(user_id, company_id, agent_type, artifacts_hash, new_authorization: false, account_slug: "default")
+    raise ArgumentError, "user_id is required" if user_id.blank?
+
     credential = find_or_initialize_by(user_id: user_id, company_id: company_id, agent_type: agent_type, account_slug: account_slug)
     credential.config_data = artifacts_hash
     credential.status = :active
