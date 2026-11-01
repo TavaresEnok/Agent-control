@@ -130,4 +130,129 @@ class Api::V1::AgentControl::ClientCommandsControllerTest < ActionDispatch::Inte
 
     assert_response :unprocessable_entity
   end
+
+  # Prova DEF-07 / RF-24 / RF-44: Pausar plano via comando deduplicado, registrar auditoria e bloquear advance_dag!
+  test "DEF-07 / RF-24: pause_plan pauses active plan, records human intervention audit event and blocks advance_dag" do
+    task = AcTask.create!(
+      company: @company,
+      project: @project,
+      ac_plan: @plan,
+      task_key: "task-pause-1",
+      title: "Tarefa Teste Pausa",
+      scope: "Escopo",
+      position: 1,
+      assigned_role: "programmer",
+      risk_class: "low",
+      depends_on: [],
+      state: "pending"
+    )
+
+    intent_id = "intent-pause-#{SecureRandom.hex(6)}"
+
+    post "/api/v1/agent_control/client_commands", params: {
+      company_id: @company.id,
+      intent_id: intent_id,
+      command_type: "pause_plan",
+      payload: {
+        plan_id: @plan.id,
+        reason: "Inspeção operacional urgente"
+      }
+    }, as: :json
+
+    assert_response :success
+    res = JSON.parse(response.body)
+    assert_equal "processed", res["status"]
+    assert_equal true, res["result"]["paused"]
+    assert_equal "Inspeção operacional urgente", res["result"]["reason"]
+
+    @plan.reload
+    assert_equal true, @plan.paused?
+
+    # Auditoria de intervenção humana (G1 / RF-24 / RF-31)
+    audit = AcDecisionAuditEvent.where(company: @company, project: @project, event_type: "human_intervention").last
+    assert_not_nil audit
+    assert_equal "human", audit.actor_type
+    assert_equal @user.id, audit.actor_user_id
+    assert_equal "pause_plan", audit.decision_details["action"]
+
+    # RF-44: Plano pausado não avança tarefas via advance_dag!
+    ready_tasks = @plan.advance_dag!
+    assert_empty ready_tasks
+  end
+
+  # Prova DEF-07 / RF-24: Retomar plano via comando deduplicado
+  test "DEF-07 / RF-24: resume_plan resumes paused plan and records human intervention audit event" do
+    @plan.pause!(reason: "Pausa prévia", user: @user)
+    assert_equal true, @plan.paused?
+
+    intent_id = "intent-resume-#{SecureRandom.hex(6)}"
+
+    post "/api/v1/agent_control/client_commands", params: {
+      company_id: @company.id,
+      intent_id: intent_id,
+      command_type: "resume_plan",
+      payload: {
+        plan_id: @plan.id
+      }
+    }, as: :json
+
+    assert_response :success
+    res = JSON.parse(response.body)
+    assert_equal "processed", res["status"]
+    assert_equal false, res["result"]["paused"]
+
+    @plan.reload
+    assert_equal false, @plan.paused?
+
+    # Auditoria de retomada humana
+    audit = AcDecisionAuditEvent.where(company: @company, project: @project, event_type: "human_intervention").last
+    assert_not_nil audit
+    assert_equal "resume_plan", audit.decision_details["action"]
+  end
+
+  # Prova DEF-07 / RF-24: Cancelar plano via comando deduplicado abortando tarefas pendentes
+  test "DEF-07 / RF-24: cancel_plan cancels plan, aborts pending tasks and records human intervention audit event" do
+    task = AcTask.create!(
+      company: @company,
+      project: @project,
+      ac_plan: @plan,
+      task_key: "task-cancel-1",
+      title: "Tarefa a ser cancelada",
+      scope: "Escopo",
+      position: 1,
+      assigned_role: "programmer",
+      risk_class: "low",
+      depends_on: [],
+      state: "pending"
+    )
+
+    intent_id = "intent-cancel-#{SecureRandom.hex(6)}"
+
+    post "/api/v1/agent_control/client_commands", params: {
+      company_id: @company.id,
+      intent_id: intent_id,
+      command_type: "cancel_plan",
+      payload: {
+        plan_id: @plan.id,
+        reason: "Cancelamento solicitado pelo gestor"
+      }
+    }, as: :json
+
+    assert_response :success
+    res = JSON.parse(response.body)
+    assert_equal "processed", res["status"]
+    assert_equal true, res["result"]["cancelled"]
+    assert_equal "abandoned", res["result"]["state"]
+
+    @plan.reload
+    assert_equal "abandoned", @plan.state
+
+    task.reload
+    assert_equal "cancelled", task.state
+
+    # Auditoria de cancelamento humano
+    audit = AcDecisionAuditEvent.where(company: @company, project: @project, event_type: "human_intervention").last
+    assert_not_nil audit
+    assert_equal "cancel_plan", audit.decision_details["action"]
+  end
 end

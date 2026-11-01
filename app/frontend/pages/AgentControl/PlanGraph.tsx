@@ -1,6 +1,6 @@
 import { Head } from '@inertiajs/react';
-import { Badge, Box, Button, Card, Group, Modal, Stack, Text, Title } from '@mantine/core';
-import { IconAlertTriangle, IconCheck, IconClock, IconPlayerPlay, IconRefresh } from '@tabler/icons-react';
+import { Badge, Button, Group, Modal, Stack, Text, Title } from '@mantine/core';
+import { IconPlayerPlay, IconPlayerPause, IconPlayerStop, IconRefresh } from '@tabler/icons-react';
 import { useState } from 'react';
 
 import classes from './PlanGraph.module.css';
@@ -45,6 +45,8 @@ export interface GraphData {
     objective: string;
     version: number;
     project_id: number;
+    state?: string;
+    paused?: boolean;
   };
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -57,6 +59,8 @@ export interface GraphData {
     waiting_dependencies: number;
     needs_changes: number;
     all_completed: boolean;
+    plan_state?: string;
+    paused?: boolean;
   };
   projection_timestamp: string;
 }
@@ -87,7 +91,7 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
     }
   };
 
-  const executeDeduplicatedAdvance = async () => {
+  const executePlanCommand = async (commandType: 'advance_dag' | 'pause_plan' | 'resume_plan' | 'cancel_plan', reason?: string) => {
     setLoading(true);
     setCommandFeedback(null);
     const intentId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -98,20 +102,25 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           intent_id: intentId,
-          command_type: 'advance_dag',
-          payload: { plan_id: plan.id }
+          command_type: commandType,
+          payload: { plan_id: plan.id, reason }
         })
       });
 
       const data = await res.json();
       if (res.ok) {
-        setCommandFeedback(data.deduplicated ? 'Comando já processado (Deduplicado)' : 'DAG avançado com sucesso!');
+        let msg = 'Comando processado com sucesso!';
+        if (commandType === 'pause_plan') msg = 'Plano pausado com sucesso!';
+        if (commandType === 'resume_plan') msg = 'Plano retomado com sucesso!';
+        if (commandType === 'cancel_plan') msg = 'Plano cancelado com sucesso!';
+        if (commandType === 'advance_dag') msg = 'DAG avançado com sucesso!';
+        setCommandFeedback(data.deduplicated ? `${msg} (Deduplicado)` : msg);
         await fetchLatestGraph();
       } else {
         setCommandFeedback(`Erro: ${data.error || 'Falha ao processar'}`);
       }
     } catch (err) {
-      setCommandFeedback('Erro de conexão ao enviar comando deduplicado');
+      setCommandFeedback('Erro de conexão ao enviar comando operacional');
     } finally {
       setLoading(false);
     }
@@ -128,6 +137,9 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
     }
   };
 
+  const isPlanPaused = graph.plan.paused || graph.summary.paused;
+  const isPlanCancelled = graph.plan.state === 'abandoned' || graph.summary.plan_state === 'abandoned';
+
   return (
     <div className={classes.container}>
       <Head title={`Grafo do Plano: ${plan.title}`} />
@@ -135,7 +147,12 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
       <header className={classes.header}>
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <div>
-            <Title order={2} size="h3">{plan.title}</Title>
+            <Group gap="xs" align="center">
+              <Title order={2} size="h3">{plan.title}</Title>
+              {isPlanPaused && <Badge color="orange" variant="filled">Pausado</Badge>}
+              {isPlanCancelled && <Badge color="red" variant="filled">Cancelado</Badge>}
+              {!isPlanPaused && !isPlanCancelled && <Badge color="teal" variant="light">Ativo</Badge>}
+            </Group>
             <Text size="sm" c="dimmed">Chave: {plan.plan_key} • Versão {plan.version}</Text>
           </div>
           <Group gap="xs">
@@ -148,16 +165,58 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
             >
               Atualizar
             </Button>
-            <Button
-              variant="filled"
-              color="blue"
-              size="xs"
-              leftSection={<IconPlayerPlay size={14} />}
-              loading={loading}
-              onClick={executeDeduplicatedAdvance}
-            >
-              Avançar DAG
-            </Button>
+            {!isPlanCancelled && !isPlanPaused && (
+              <>
+                <Button
+                  variant="filled"
+                  color="blue"
+                  size="xs"
+                  leftSection={<IconPlayerPlay size={14} />}
+                  loading={loading}
+                  onClick={() => executePlanCommand('advance_dag')}
+                >
+                  Avançar DAG
+                </Button>
+                <Button
+                  variant="light"
+                  color="orange"
+                  size="xs"
+                  leftSection={<IconPlayerPause size={14} />}
+                  loading={loading}
+                  onClick={() => executePlanCommand('pause_plan', 'Pausa solicitada pelo operador')}
+                >
+                  Pausar
+                </Button>
+              </>
+            )}
+            {!isPlanCancelled && isPlanPaused && (
+              <Button
+                variant="filled"
+                color="teal"
+                size="xs"
+                leftSection={<IconPlayerPlay size={14} />}
+                loading={loading}
+                onClick={() => executePlanCommand('resume_plan')}
+              >
+                Retomar
+              </Button>
+            )}
+            {!isPlanCancelled && (
+              <Button
+                variant="subtle"
+                color="red"
+                size="xs"
+                leftSection={<IconPlayerStop size={14} />}
+                loading={loading}
+                onClick={() => {
+                  if (confirm('Tem certeza que deseja cancelar o plano operacional? Tarefas pendentes serão canceladas.')) {
+                    executePlanCommand('cancel_plan', 'Cancelamento confirmado pelo operador');
+                  }
+                }}
+              >
+                Cancelar
+              </Button>
+            )}
           </Group>
         </Group>
 

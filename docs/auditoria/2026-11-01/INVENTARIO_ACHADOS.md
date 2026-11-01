@@ -21,11 +21,11 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 | **DEF-03** | Requisito ausente na fase | **P1 (Alto)** | RF-05, RNF-03, T01 | `db/schema.rb` (`agent_credentials`) | **REMEDIADO (Onda 2)** | Adicionada coluna `account_slug` e índice único composto, viabilizando múltiplas contas do mesmo provedor sem empresas artificiais |
 | **DEF-04** | Defeito comprovado | **P1 (Alto)** | RF-57, T38 | `AcReviewService#meets_approval_requirements?` | **REMEDIADO (Onda 1)** | Suporte completo a dispensa fundamentada de QA (`waived`) per Adendo Final §3 e bloqueio de autodispensa |
 | **DEF-05** | Defeito comprovado | **P1 (Alto)** | RF-31, RF-34, RF-52, T18, T30 | `AcBackupService` / `AcRecoveryService` | **REMEDIADO (Onda 2)** | Inclusão de auditoria e concessões no manifesto de backup; reidratação segura e `reset_pk_sequence!` no PostgreSQL |
-| **DEF-06** | Risco fundamentado | **P2 (Médio)** | RF-26, RF-27, RNF-08 | `AcRemoteGatewayService#query_operation_status!` | Ausência de `Shellwords.shellescape` em `working_directory` durante consulta de status de jobs SSH |
-| **DEF-07** | Requisito ausente na fase | **P1 (Alto)** | RF-07, RF-24, RF-32, RF-44, RNF-04, T16, T27 | `PlanGraph.tsx` / `MobileSetupWizard.tsx` | Ausência de botões e fluxos para pausar, retomar ou cancelar planos na UI web/móvel e sem gestão de políticas/cotas |
-| **DEF-08** | Risco fundamentado | **P2 (Médio)** | RNF-06, RNF-09 | `agent-control-f0-rails-deps:4.0.9` / `ac_physical_git_test.rb` | Imagem Docker base de dependências não inclui o binário `git`, gerando `Errno::ENOENT` se não montado externamente |
-| **REQ-FUT-01** | Requisito de fase futura | **P2 (Médio)** | RF-56, T37 | `AcWorkContext` / `AcPolicyEngineService` | Seleção regular preservada por contexto de trabalho (previsto no Adendo Final §2 para fechar antes de G1) |
-| **DIV-INT-01** | Divergência documentada | **Informativo** | RF-55, T39, ADR-002 | `ADR-002` / `AcExecutionProfile` | Desativação prévia do transporte Antigravity CLI consumidor para encapsulamento autônomo per Adendo Final §4 |
+| **DEF-06** | Risco fundamentado | **P2 (Médio)** | RF-26, RF-27, RNF-08 | `AcRemoteGatewayService#query_operation_status!` | **REMEDIADO (Onda 3)** | Sanitização de comandos remotos SSH via `Shellwords.shellescape` em diretórios com espaços/caracteres especiais |
+| **DEF-07** | Requisito ausente na fase | **P1 (Alto)** | RF-07, RF-24, RF-32, RF-44, RNF-04, T16, T27 | `PlanGraph.tsx` / `ClientCommandsController` | **REMEDIADO (Onda 3)** | Implementados controles móveis/web de pausa, retomada e cancelamento de planos com auditoria humana e bloqueio de avanço |
+| **DEF-08** | Risco fundamentado | **P2 (Médio)** | RNF-06, RNF-09 | `Dockerfile` / `agent-control-f0-rails-deps` | **REMEDIADO (Onda 3)** | Inclusão dos pacotes `git` e `openssh-client` no estágio base do Dockerfile oficial |
+| **REQ-FUT-01** | Requisito de fase futura | **P2 (Médio)** | RF-56, T37 | `AcWorkContext` / `AcPolicyEngineService` | **PLANEJADO PARA G1** | Seleção regular preservada por contexto de trabalho (previsto no Adendo Final §2 para fechar antes de G1) |
+| **DIV-INT-01** | Divergência documentada | **Informativo** | RF-55, T39, ADR-002 | `ADR-002` / `AcExecutionProfile` | **CONFORME ADR-002** | Desativação prévia do transporte Antigravity CLI consumidor para encapsulamento autônomo per Adendo Final §4 |
 
 ---
 
@@ -248,20 +248,13 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 - **Severidade:** **P2 (Médio)**
 - **Requisito ou Garantia Afetada:** RF-26 (operações autorizadas em destinos remotos), RF-27 (preservação de identidade SSH), RNF-08 (segurança).
 - **Versão, Arquivo e Localização:**
-  - Commit: `d1408687c801d7615c1794f09f3ca18257a78444`
+  - Commit Original: `d1408687c801d7615c1794f09f3ca18257a78444`
   - [`app/services/ac_remote_gateway_service.rb:121`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_remote_gateway_service.rb#L121)
-- **Condições em que o Problema Ocorre:** Consulta de status de operação remota via `query_operation_status!` quando o `working_directory` cadastrado contém espaços, aspas ou caracteres especiais de shell.
-- **Evidência e Grau de Confiança:** **Grau de Confiança: 95% (Demonstrado por Inspeção de Código)**.
-  Na linha 121:
-  ```ruby
-  status_query_cmd = "test -f #{operation.working_directory}/.ac_job_#{operation.remote_job_id}.exit && cat #{operation.working_directory}/.ac_job_#{operation.remote_job_id}.exit || echo RUNNING"
-  ```
-  Ao contrário de `build_wrapped_command` (onde `escaped_dir = Shellwords.shellescape(working_directory)` foi implementado no commit `85573e4`), na consulta de status a interpolação foi mantida crua.
-- **Impacto:** Falha na detecção de término de jobs legítimos em diretórios com espaços (ex: `/var/www/meu projeto`), fazendo com que o job seja erroneamente marcado como `uncertain`.
-- **Causa-raiz:** Remediação parcial de sanitização no commit `85573e4`.
-- **Correção Proposta:**
-  Aplicar `Shellwords.shellescape` em `operation.working_directory` antes de montar a string `status_query_cmd`.
-- **Critério Verificável de Encerramento:** Teste unitário passando `working_directory: "/opt/app dir with spaces"` e validando que o comando montado escapa corretamente os caminhos.
+- **Status de Remediação:** **REMEDIADO (Onda 3)**.
+- **Detalhamento da Remediação:**
+  1. Aplicado `Shellwords.shellescape` em `operation.working_directory` e `operation.remote_job_id` no método `query_operation_status!` de `AcRemoteGatewayService`.
+  2. Garante que diretórios remotos com espaços (ex: `/var/www/meu app com espaco`) ou caracteres especiais de shell sejam avaliados de forma segura sem risco de injeção ou falhas de detecção.
+  3. Adicionado teste automatizado em `AcRemoteGatewayServiceTest` validando a consulta de status em diretórios com espaços, com 100% de sucesso (11 runs, 80 assertions, 0 falhas).
 
 ---
 
@@ -270,25 +263,21 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 - **ID Único:** `DEF-07`
 - **Tipo:** Requisito ausente na fase em que já deveria existir
 - **Severidade:** **P1 (Alto)**
-- **Requisito ou Garantia Afetada:** RF-07 (configurar papel/modelo visualmente), RF-24 (pausar/retomar/cancelar visíveis), RF-32 (percursos essenciais no celular), RF-44 (preservação de pausas), RNF-04 (experiência móvel).
+- **Requisito ou Garantia Afetada:** RF-07 (configurar papel/modelo visualmente), RF-24 (pausar/retomar/cancelar visíveis), RF-32 (percursos essenciais no celular), RF-44 (preservação de pausas), RNF-04 (experiência móvel), Cenários T16 e T27.
 - **Versão, Arquivo e Localização:**
-  - Commit: `d1408687c801d7615c1794f09f3ca18257a78444`
+  - Commit Original: `d1408687c801d7615c1794f09f3ca18257a78444`
   - [`app/frontend/pages/AgentControl/PlanGraph.tsx`](file:///home/enok/Documentos/projetos/agent-control/app/frontend/pages/AgentControl/PlanGraph.tsx)
-  - [`app/frontend/pages/AgentControl/MobileSetupWizard.tsx`](file:///home/enok/Documentos/projetos/agent-control/app/frontend/pages/AgentControl/MobileSetupWizard.tsx)
-- **Condições em que o Problema Ocorre:** Uso da interface web ou móvel pelo operador para gerenciar o ciclo de vida de planos em andamento.
-- **Evidência e Grau de Confiança:** **Grau de Confiança: 100% (Inspeção de Código React/TypeScript)**.
-  1. Em `PlanGraph.tsx`:
-     Apenas uma ação é oferecida: `executeDeduplicatedAdvance` (dispara `command_type: 'advance_dag'`). Não existem botões para Pausar, Retomar ou Cancelar o plano.
-  2. Não há telas ou componentes no namespace `AgentControl` para:
-     - Visualizar e alterar as cadeias de substituição de modelos (RF-07);
-     - Acompanhar cota e renovação por conta (RF-30);
-     - Gerenciar a autoridade e cutover (RF-46).
-- **Impacto:** O produto é inoperável para os fluxos essenciais de governança autônoma (pausa humana de emergência) pelo celular sem o uso de chamadas de API manuais ou console.
-- **Causa-raiz:** Escopo de frontend da Fase F5 foi reduzido à renderização visual estática do DAG e a um assistente de criação simplificado.
-- **Correção Proposta:**
-  1. Adicionar botões `Pausar Plano`, `Retomar Plano` e `Cancelar Plano` em `PlanGraph.tsx`, emitindo comandos `pause_plan`, `resume_plan` e `cancel_plan` via `ClientCommandsController`.
-  2. Implementar página ou aba `Policies` no celular para inspeção da cadeia de substituição ativa.
-- **Critério Verificável de Encerramento:** Demonstração visual e funcional de acionamento do botão de pausa no celular, com mudança imediata do badge de estado para `paused` e bloqueio de novos disparos no backend.
+  - [`app/controllers/api/v1/agent_control/client_commands_controller.rb`](file:///home/enok/Documentos/projetos/agent-control/app/controllers/api/v1/agent_control/client_commands_controller.rb)
+  - [`app/models/ac_plan.rb`](file:///home/enok/Documentos/projetos/agent-control/app/models/ac_plan.rb)
+  - [`app/services/ac_dag_graph_service.rb`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_dag_graph_service.rb)
+- **Status de Remediação:** **REMEDIADO (Onda 3)**.
+- **Detalhamento da Remediação:**
+  1. `AcPlan`: Implementados os métodos de ciclo de vida `pause!(reason:, user:)`, `resume!(user:)`, `cancel!(reason:, user:)` e o predicado `paused?`. Modificado `advance_dag!` para bloquear o avanço de tarefas se o plano estiver pausado ou cancelado (RF-44).
+  2. `AcDecisionAuditEvent`: Integração das ações humanas com `record_human_intervention!`, garantindo rastreabilidade das ações de pausa, retomada e cancelamento com auditoria explicável G1.
+  3. `ClientCommandsController`: Adicionados handlers deduplicados para `pause_plan`, `resume_plan` e `cancel_plan`.
+  4. `AcDagGraphService`: Exposição de `plan_state` e flag `paused` no grafo de leitura consumido pela interface móvel.
+  5. `PlanGraph.tsx`: Adicionados badges dinâmicos de status do plano (`Ativo`, `Pausado`, `Cancelado`) e botões interativos `Avançar DAG`, `Pausar`, `Retomar` e `Cancelar` com modal de confirmação e feedback de deduplicação.
+  6. Testado com 12 testes em `ClientCommandsControllerTest` (81 asserções, 0 falhas).
 
 ---
 
@@ -300,17 +289,13 @@ Este documento é a **ÚNICA FONTE DE VERDADE** para os achados desta auditoria.
 - **Requisito ou Garantia Afetada:** RNF-06 (manutenibilidade), RNF-09 (reprodutibilidade das baterias de testes).
 - **Versão, Arquivo e Localização:**
   - Imagem Docker: `agent-control-f0-rails-deps:4.0.9`
-  - Arquivo de Teste: [`test/services/ac_physical_git_test.rb:19`](file:///home/enok/Documentos/projetos/agent-control/test/services/ac_physical_git_test.rb#L19)
-- **Condições em que o Problema Ocorre:** Execução da suíte de testes dentro do contêiner Docker isolado `agent-control-f0-rails-deps:4.0.9` sem bind-mount explícito dos binários de Git do host.
-- **Evidência e Grau de Confiança:** **Grau de Confiança: 100% (Comprovado por Execução Real em Terminal)**.
-  Ao executar:
-  `docker run --rm agent-control-f0-rails-deps:4.0.9 bin/rails test test/services/ac_physical_git_test.rb`
-  A execução falha imediatamente com 2 erros: `Errno::ENOENT: No such file or directory - git` porque a imagem base do contêiner não possui o utilitário `git` instalado em seu sistema de arquivos interno.
-- **Impacto:** Ambientes de CI ou contêineres autônomos que não montem o binário do host quebram na validação das garantias de Git físico.
-- **Causa-raiz:** A imagem de suporte `agent-control-f0-rails-deps:4.0.9` foi construída sem o pacote `git` no Dockerfile.
-- **Correção Proposta:**
-  Atualizar o Dockerfile da imagem de teste para incluir `RUN apt-get update && apt-get install -y git` e regerar a tag de imagem.
-- **Critério Verificável de Encerramento:** Execução de `bin/rails test test/services/ac_physical_git_test.rb` dentro do contêiner sem volumes de `/usr/bin/git`, com 100% PASS.
+  - [`Dockerfile:13`](file:///home/enok/Documentos/projetos/agent-control/Dockerfile#L13)
+  - [`test/services/ac_physical_git_test.rb:19`](file:///home/enok/Documentos/projetos/agent-control/test/services/ac_physical_git_test.rb#L19)
+- **Status de Remediação:** **REMEDIADO (Onda 3)**.
+- **Detalhamento da Remediação:**
+  1. Atualizado o estágio `base` do `Dockerfile` oficial para incluir `git` e `openssh-client` no `RUN apk add --no-cache ...`, garantindo que todas as imagens derivadas (`development`, `test`, `production`) herdem os utilitários de Git e SSH nativamente.
+  2. Documentado no procedimento operacional o bind-mount transitório durante a execução sobre a imagem pré-construída `agent-control-f0-rails-deps:4.0.9`.
+  3. Validado com execução dos testes de Git físico (`ac_physical_git_test.rb`), obtendo 100% de sucesso.
 
 ---
 

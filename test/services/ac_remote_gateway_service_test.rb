@@ -296,4 +296,28 @@ class AcRemoteGatewayServiceTest < ActiveSupport::TestCase
     # 5. Pode ser repetida?
     assert_equal true, questions[:repeatable]
   end
+
+  # Prova DEF-06: Escapamento correto de diretórios remotos com espaços e caracteres especiais
+  test "DEF-06: query_operation_status! properly escapes working directory with spaces and special characters" do
+    op_id = "op-escape-#{SecureRandom.hex(4)}"
+    op = AcRemoteGatewayService.dispatch_operation!(
+      environment: @env_nexoisp,
+      operation_id: op_id,
+      command: "bundle exec rake",
+      working_directory: "/home/enok/Documentos/projetos/nexoisp",
+      runner: @mock_runner
+    )
+
+    # Simula diretório com espaços e caracteres especiais
+    op.update!(
+      working_directory: "/home/enok/Documentos/projetos/nexoisp dir with spaces",
+      state: "running"
+    )
+
+    AcRemoteGatewayService.query_operation_status!(operation: op, runner: @mock_runner)
+
+    last_cmd = @mock_runner.executions.last[:command]
+    assert_includes last_cmd, "nexoisp\\ dir\\ with\\ spaces",
+                    "Comando de status deve escapar espaços do working_directory via Shellwords.shellescape"
+  end
 end

@@ -55,7 +55,9 @@ class AcDagGraphService
         integrated: tasks.count { |t| t.state == "integrated" },
         waiting_dependencies: tasks.count { |t| t.state == "waiting_dependencies" },
         needs_changes: tasks.count { |t| t.state == "needs_changes" },
-        all_completed: plan.all_tasks_completed?
+        all_completed: plan.all_tasks_completed?,
+        plan_state: plan.state,
+        paused: plan.paused?
       }
 
       {
@@ -65,7 +67,9 @@ class AcDagGraphService
           title: plan.title,
           objective: plan.objective,
           version: plan.version,
-          project_id: plan.project_id
+          project_id: plan.project_id,
+          state: plan.state,
+          paused: plan.paused?
         },
         nodes: nodes,
         edges: edges,

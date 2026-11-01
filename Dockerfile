@@ -10,7 +10,7 @@ FROM ruby:4.0.9-alpine AS base
 
 # Runtime libraries of the gems' native extensions (pg → libpq, ruby-vips → vips,
 # psych → yaml) and the tools the app itself runs.
-RUN apk add --no-cache tzdata bash curl libpq postgresql-client vips yaml gcompat su-exec
+RUN apk add --no-cache tzdata bash curl git openssh-client libpq postgresql-client vips yaml gcompat su-exec
 
 # Coder CLI — used by Coder::SshRunner to exec commands on workspaces (N1 / DD-1).
 # Only present in the Rails image; the workflow-step image deliberately does NOT

@@ -81,8 +81,84 @@ class AcPlan < ApplicationRecord
     end
   end
 
+  # ── Controles de Ciclo de Vida (§12, RF-24, RF-44) ──────────────────────
+  def paused?
+    metadata&.dig("paused") == true
+  end
+
+  def pause!(reason: nil, user: nil)
+    update!(
+      metadata: (metadata || {}).merge(
+        "paused" => true,
+        "paused_at" => Time.current.iso8601,
+        "pause_reason" => reason
+      )
+    )
+
+    if user
+      AcDecisionAuditEvent.record_human_intervention!(
+        company: company,
+        project: project,
+        user: user,
+        action: "pause_plan",
+        reason: reason || "Pausa operacional solicitada pelo operador",
+        metadata: { plan_id: id, plan_key: plan_key }
+      )
+    end
+    true
+  end
+
+  def resume!(user: nil)
+    update!(
+      metadata: (metadata || {}).merge(
+        "paused" => false,
+        "resumed_at" => Time.current.iso8601
+      )
+    )
+
+    if user
+      AcDecisionAuditEvent.record_human_intervention!(
+        company: company,
+        project: project,
+        user: user,
+        action: "resume_plan",
+        reason: "Retomada operacional solicitada pelo operador",
+        metadata: { plan_id: id, plan_key: plan_key }
+      )
+    end
+    true
+  end
+
+  def cancel!(reason: nil, user: nil)
+    update!(
+      state: :abandoned,
+      metadata: (metadata || {}).merge(
+        "cancelled" => true,
+        "cancelled_at" => Time.current.iso8601,
+        "cancellation_reason" => reason
+      )
+    )
+
+    # Cancela tarefas não terminais
+    ac_tasks.where.not(state: %w[integrated failed cancelled]).update_all(state: "cancelled")
+
+    if user
+      AcDecisionAuditEvent.record_human_intervention!(
+        company: company,
+        project: project,
+        user: user,
+        action: "cancel_plan",
+        reason: reason || "Cancelamento operacional solicitado pelo operador",
+        metadata: { plan_id: id, plan_key: plan_key }
+      )
+    end
+    true
+  end
+
   # Avalia e avança os estados das tarefas conforme suas dependências
   def advance_dag!
+    return [] if paused? || abandoned?
+
     completed_keys = ac_tasks.where(state: %w[integrated approved completed]).pluck(:task_key)
     newly_ready = []
 

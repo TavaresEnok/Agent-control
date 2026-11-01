@@ -99,6 +99,23 @@ module Api
             ready = plan.advance_dag!
             { plan_id: plan.id, ready_tasks: ready.map(&:task_key) }
 
+          when "pause_plan"
+            plan = AcPlan.where(company: current_company).find(payload["plan_id"])
+            reason = payload["reason"].presence || "Pausa operacional solicitada pelo operador"
+            plan.pause!(reason: reason, user: current_user)
+            { plan_id: plan.id, state: plan.state, paused: true, reason: reason }
+
+          when "resume_plan"
+            plan = AcPlan.where(company: current_company).find(payload["plan_id"])
+            plan.resume!(user: current_user)
+            { plan_id: plan.id, state: plan.state, paused: false }
+
+          when "cancel_plan"
+            plan = AcPlan.where(company: current_company).find(payload["plan_id"])
+            reason = payload["reason"].presence || "Cancelamento operacional solicitado pelo operador"
+            plan.cancel!(reason: reason, user: current_user)
+            { plan_id: plan.id, state: plan.state, cancelled: true, reason: reason }
+
           when "dispatch_remote_operation"
             env = AcRemoteEnvironment.where(company: current_company).find(payload["environment_id"])
             op = AcRemoteGatewayService.dispatch_operation!(

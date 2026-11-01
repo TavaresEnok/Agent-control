@@ -118,7 +118,9 @@ class AcRemoteGatewayService
       end
 
       transport = env.build_transport(lab_opt_in: true)
-      status_query_cmd = "test -f #{operation.working_directory}/.ac_job_#{operation.remote_job_id}.exit && cat #{operation.working_directory}/.ac_job_#{operation.remote_job_id}.exit || echo RUNNING"
+      escaped_dir = Shellwords.shellescape(operation.working_directory)
+      escaped_exit_file = "#{escaped_dir}/.ac_job_#{Shellwords.shellescape(operation.remote_job_id)}.exit"
+      status_query_cmd = "test -f #{escaped_exit_file} && cat #{escaped_exit_file} || echo RUNNING"
 
       begin
         res = runner.execute(transport, status_query_cmd)
