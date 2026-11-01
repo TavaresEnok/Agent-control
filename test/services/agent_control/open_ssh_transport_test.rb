@@ -72,6 +72,7 @@ class OpenSshTransportTest < Minitest::Test
   end
 
   def test_openssh_parses_explicit_configuration_with_spaces_without_connecting
+    skip "OpenSSH client not installed in environment" unless File.executable?("/usr/bin/ssh")
     t = transport
     argv = t.argv("true")
     argv.insert(1, "-G")

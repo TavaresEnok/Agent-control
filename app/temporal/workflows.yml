@@ -249,3 +249,14 @@ workflows:
         task_queue: aixle_ruby
       - name: ac_integrate_task_activity
         task_queue: aixle_ruby
+
+  - name: ac_remote_operation_workflow
+    owner: aixle_ruby
+    activities:
+      - name: ac_dispatch_remote_operation_activity
+        task_queue: aixle_ruby
+      - name: ac_query_remote_operation_activity
+        task_queue: aixle_ruby
+      - name: ac_reconcile_remote_operation_activity
+        task_queue: aixle_ruby
+

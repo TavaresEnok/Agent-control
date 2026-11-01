@@ -1,6 +1,6 @@
 # STATUS — Agent Control
 
-**Atualização:** 2026-11-01. **Fases F0, F1, F2 e F3 CONCLUÍDAS; Gates G0, G1, G2 e G3 APROVADOS. F4 LIBERADA.**
+**Atualização:** 2026-11-01. **Fases F0, F1, F2, F3 e F4 CONCLUÍDAS; Gates G0, G1, G2, G3 e G4 APROVADOS. F5 LIBERADA.**
 **Base do Projeto:** Aixle Flow (`e6ec5a286120aed3a036d85871e796b2f6c97d70`) formalmente aprovado per ADR-001 e comprovação de todos os critérios eliminatórios do G0.
 
 ---
@@ -130,10 +130,39 @@ Em conformidade com o Plano Mestre v1.1 (§9, §12, §15, §19.2 F3), a orquestr
 
 ---
 
-## 7. Próximos Passos (F4 — Ambientes Remotos, SSH e Jobs Persistentes)
+## 7. Fase 4 (F4 — Ambientes Remotos, SSH e Jobs Persistentes — Gate G4): CONCLUÍDA
 
-Avançar para a **Fase 4 (F4 — Ambientes Remotos e Operação Persistente SSH)** conforme §14, §19.2:
-1. Gateway de operações remotas SSH com autenticação por chave isolada (sem agente global nem sudo);
-2. Rastreabilidade persistente de jobs remotos (status, PID/job_id, exit code, artefatos e idempotência);
-3. Suporte aos dois ambientes autorizados de teste (NexoISP e Ajust ERP / painel), sem instalar CLIs de IA nos destinos.
+Em conformidade com o Plano Mestre v1.1 (§11.2, §14, §19.2 F4), os ambientes remotos, transporte SSH persistente e o Gate G4 foram implementados e formalmente aprovados:
+1. **Lote F4-A — Modelos e Schemas ([`AcRemoteEnvironment`](file:///home/enok/Documentos/projetos/agent-control/app/models/ac_remote_environment.rb) e [`AcRemoteOperation`](file:///home/enok/Documentos/projetos/agent-control/app/models/ac_remote_operation.rb)):**
+   - Tabela `ac_remote_environments`: cadastro rigoroso com `environment_slug`, `host`, `port`, `user`, `fingerprint` ed25519, `identity_key_path`, `known_hosts_path` isolado com pinning e lista de `authorized_directories`;
+   - Tabela `ac_remote_operations`: controle de operações com `operation_id` único para idempotência (§11.2), `command`, `working_directory`, estados (`pending`, `running`, `completed`, `failed`, `uncertain`, `cancelled`), `remote_job_id` persistente, `artifact_hash`, `exit_code`, logs e timestamps.
+2. **Lote F4-B — Serviço de Gateway Remoto ([`AcRemoteGatewayService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_remote_gateway_service.rb)):**
+   - Modo de desenvolvimento central estrito (§14.1): IAs e CLIs rodam na central; o destino recebe apenas comandos shell estritamente controlados com chave SSH isolada (sem sudo, sem agent forwarding, sem vazamento de variáveis de ambiente de IA);
+   - Restrição estrita de diretório (§14.2): validação de subcaminhos e rejeição de path traversal (`UnauthorizedRemoteDirectoryError`);
+   - Respostas precisas às 5 perguntas de §14.3: "já iniciou?", "ainda executa?", "qual resultado?", "qual commit usou?", "pode ser repetida?";
+   - Desconexão recuperável (§14.3): o `remote_job_id` permite consultar e reconciliar o job remoto após restauração de conectividade, sem executar outra cópia cega;
+   - Estado `uncertain` (§14.3): se o destino ou conexão não permitir provar o resultado, a etapa transiciona para incerta e bloqueia avanço para integração ou deploy.
+3. **Lote F4-C — Atividades e Workflow Temporal ([`Workflows::AcRemoteOperationWorkflow`](file:///home/enok/Documentos/projetos/agent-control/app/temporal/workflows/ac_remote_operation_workflow.rb)):**
+   - Atividades `AcDispatchRemoteOperationActivity`, `AcQueryRemoteOperationActivity`, `AcReconcileRemoteOperationActivity` registradas em `workflows.yml` e `TemporalWorkflowRegistry`;
+   - Orquestração resiliente com suporte a sinais de cancelamento e pausa.
+4. **Lote F4-D — Bateria de Testes e Provas Formais do Gate G4:**
+   - **G4-E1:** Operação em dois destinos distintos (`NexoISP` e `Ajust ERP`) sem IA nos destinos e sem repasse de credenciais de IA no transporte (§14.1, §14.2);
+   - **G4-E2:** Desconexão recuperável via `remote_job_id` sem execução duplicada cega (§14.3);
+   - **G4-E3:** Idempotência estrita por `operation_id` em despachos repetidos (§11.2, §11.3);
+   - **G4-E4:** Rejeição estrita de diretórios não autorizados fora do escopo cadastrado (§14.2);
+   - **G4-E5:** Transição obrigatória para `uncertain` quando a verificação pós-desconexão é indemonstrável (§14.3).
+
+**Resultado do Gate G4:** **APROVADO (PASS)**.
+**Suíte de Testes AC:** 107/107 testes unitários e de integração aprovados (100% PASS), 499 asserções, 0 falhas, 0 erros (1 skip documentado de cliente OpenSSH no container minimal). Regressão zero nos testes existentes do Aixle Flow (42 runs, 148 asserções PASS).
+
+---
+
+## 8. Próximos Passos (F5 — Produto Operável, Mobile/PWA, Grafo e Comandos Deduplicados)
+
+Avançar para a **Fase 5 (F5 — Produto Operável)** conforme §13, §14, §19.2 F5:
+1. **Configuração móvel completa e workflow por etapas:** Assistente passo a passo para configuração de novos projetos, servidores e chaves SSH;
+2. **Grafo de leitura conectado aos estados reais:** Visualização interativa e reativa do DAG de tarefas e planos alimentado pelos estados duráveis do Temporal;
+3. **Deduplicação de comandos do cliente:** Inclusão de `ClientCommand` com chave de intenção e idempotência em formulários e ações de interface móvel/web (§11.2);
+4. **Gate G5:** Percursos essenciais e visualização gráfica operáveis pelo celular, com deduplicação rigorosa de comandos.
+
 

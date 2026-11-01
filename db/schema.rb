@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_31_150000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_01_100000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "citext"
   enable_extension "pg_catalog.plpgsql"
@@ -245,6 +245,59 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_150000) do
     t.check_constraint "quota_state::text = ANY (ARRAY['exhausted'::character varying::text, 'rate_limited'::character varying::text, 'auth_error'::character varying::text, 'network_error'::character varying::text, 'unknown'::character varying::text, 'available'::character varying::text])", name: "ac_quota_observations_valid_state"
   end
 
+  create_table "ac_remote_environments", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.string "name", null: false
+    t.string "environment_slug", null: false
+    t.string "host", null: false
+    t.integer "port", default: 22, null: false
+    t.string "user", null: false
+    t.string "fingerprint", null: false
+    t.string "identity_key_path", null: false
+    t.string "known_hosts_path", null: false
+    t.string "authorized_directories", default: [], null: false, array: true
+    t.string "state", default: "active", null: false
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["company_id", "environment_slug"], name: "idx_ac_remote_envs_on_company_and_slug", unique: true
+    t.index ["company_id"], name: "index_ac_remote_environments_on_company_id"
+    t.index ["project_id"], name: "index_ac_remote_environments_on_project_id"
+    t.index ["state"], name: "index_ac_remote_environments_on_state"
+  end
+
+  create_table "ac_remote_operations", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.bigint "ac_remote_environment_id", null: false
+    t.bigint "ac_task_id"
+    t.bigint "ac_execution_id"
+    t.string "operation_id", null: false
+    t.text "command", null: false
+    t.string "working_directory", null: false
+    t.string "state", default: "pending", null: false
+    t.string "remote_job_id"
+    t.string "artifact_hash"
+    t.integer "exit_code"
+    t.text "output_log"
+    t.text "error_log"
+    t.datetime "started_at"
+    t.datetime "finished_at"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_execution_id"], name: "index_ac_remote_operations_on_ac_execution_id"
+    t.index ["ac_remote_environment_id", "state"], name: "idx_ac_remote_ops_on_env_and_state"
+    t.index ["ac_remote_environment_id"], name: "index_ac_remote_operations_on_ac_remote_environment_id"
+    t.index ["ac_task_id"], name: "index_ac_remote_operations_on_ac_task_id"
+    t.index ["company_id"], name: "index_ac_remote_operations_on_company_id"
+    t.index ["operation_id"], name: "index_ac_remote_operations_on_operation_id", unique: true
+    t.index ["project_id"], name: "index_ac_remote_operations_on_project_id"
+    t.index ["remote_job_id"], name: "index_ac_remote_operations_on_remote_job_id"
+    t.index ["state"], name: "index_ac_remote_operations_on_state"
+  end
+
   create_table "ac_review_verdicts", force: :cascade do |t|
     t.bigint "company_id", null: false
     t.bigint "project_id", null: false
@@ -271,9 +324,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_150000) do
     t.index ["company_id", "verdict"], name: "index_ac_review_verdicts_on_company_id_and_verdict"
     t.index ["company_id"], name: "index_ac_review_verdicts_on_company_id"
     t.index ["project_id"], name: "index_ac_review_verdicts_on_project_id"
-    t.check_constraint "reviewer_role::text = ANY (ARRAY['reviewer'::character varying, 'qa'::character varying]::text[])", name: "ac_review_verdicts_valid_role"
-    t.check_constraint "state::text = ANY (ARRAY['valid'::character varying, 'invalidated'::character varying, 'superseded'::character varying]::text[])", name: "ac_review_verdicts_valid_state"
-    t.check_constraint "verdict::text = ANY (ARRAY['approved'::character varying, 'rejected'::character varying, 'needs_changes'::character varying, 'waived'::character varying]::text[])", name: "ac_review_verdicts_valid_verdict"
+    t.check_constraint "reviewer_role::text = ANY (ARRAY['reviewer'::character varying::text, 'qa'::character varying::text])", name: "ac_review_verdicts_valid_role"
+    t.check_constraint "state::text = ANY (ARRAY['valid'::character varying::text, 'invalidated'::character varying::text, 'superseded'::character varying::text])", name: "ac_review_verdicts_valid_state"
+    t.check_constraint "verdict::text = ANY (ARRAY['approved'::character varying::text, 'rejected'::character varying::text, 'needs_changes'::character varying::text, 'waived'::character varying::text])", name: "ac_review_verdicts_valid_verdict"
   end
 
   create_table "ac_tasks", force: :cascade do |t|
@@ -309,7 +362,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_150000) do
     t.check_constraint "assigned_role::text = ANY (ARRAY['programmer'::character varying::text, 'manager'::character varying::text, 'qa'::character varying::text, 'reviewer'::character varying::text, 'specialist'::character varying::text, 'integrator'::character varying::text])", name: "ac_tasks_valid_role"
     t.check_constraint "attempt_count >= 0", name: "ac_tasks_nonneg_attempts"
     t.check_constraint "risk_class::text = ANY (ARRAY['low'::character varying::text, 'medium'::character varying::text, 'high'::character varying::text, 'critical'::character varying::text])", name: "ac_tasks_valid_risk_class"
-    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'waiting_dependencies'::character varying, 'queued'::character varying, 'running'::character varying, 'review'::character varying, 'needs_changes'::character varying, 'approved'::character varying, 'integrated'::character varying, 'failed'::character varying, 'cancelled'::character varying]::text[])", name: "ac_tasks_valid_state"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying::text, 'waiting_dependencies'::character varying::text, 'queued'::character varying::text, 'running'::character varying::text, 'review'::character varying::text, 'needs_changes'::character varying::text, 'approved'::character varying::text, 'integrated'::character varying::text, 'failed'::character varying::text, 'cancelled'::character varying::text])", name: "ac_tasks_valid_state"
   end
 
   create_table "ac_work_contexts", force: :cascade do |t|
@@ -2557,6 +2610,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_150000) do
   add_foreign_key "ac_policy_revisions", "companies"
   add_foreign_key "ac_quota_observations", "agent_credentials"
   add_foreign_key "ac_quota_observations", "companies"
+  add_foreign_key "ac_remote_environments", "companies"
+  add_foreign_key "ac_remote_environments", "projects"
+  add_foreign_key "ac_remote_operations", "ac_executions"
+  add_foreign_key "ac_remote_operations", "ac_remote_environments"
+  add_foreign_key "ac_remote_operations", "ac_tasks"
+  add_foreign_key "ac_remote_operations", "companies"
+  add_foreign_key "ac_remote_operations", "projects"
   add_foreign_key "ac_review_verdicts", "ac_executions"
   add_foreign_key "ac_review_verdicts", "ac_tasks"
   add_foreign_key "ac_review_verdicts", "companies"
