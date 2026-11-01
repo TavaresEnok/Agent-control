@@ -1,0 +1,144 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class AcRecoveryServiceTest < ActiveSupport::TestCase
+  setup do
+    @company = create(:company)
+    @user = create(:user, company: @company)
+    @project = create(:project, company: @company, owner: @user)
+    @context = AcWorkContext.create!(
+      company: @company,
+      project: @project,
+      external_id: "ctx-recov-#{SecureRandom.hex(4)}",
+      title: "Contexto Recuperação",
+      state: "active"
+    )
+    @plan = AcPlan.create!(
+      company: @company,
+      project: @project,
+      ac_work_context: @context,
+      plan_key: "plan-recov-1",
+      title: "Plano Recuperação",
+      objective: "Testar T30",
+      version: 1,
+      state: :active,
+      content_hash: Digest::SHA256.hexdigest("plan_recov_1")
+    )
+    @task = AcTask.create!(
+      company: @company,
+      project: @project,
+      ac_plan: @plan,
+      task_key: "task-recov-1",
+      title: "Tarefa Teste",
+      position: 1,
+      state: "pending",
+      risk_class: "low",
+      assigned_role: "programmer"
+    )
+
+    @credential = create(:agent_credential, company: @company, user: @user)
+    @policy = AcPolicyRevision.create!(
+      company: @company,
+      revision_number: 1,
+      content_hash: "hash_recov_1",
+      content: {
+        "model_chain" => ["claude-haiku"],
+        "effort_limits" => { "max" => "high" },
+        "active_accounts" => [],
+        "chain_rules" => []
+      },
+      validation_result: { "valid" => true, "errors" => [] },
+      state: :published,
+      apply_mode: :next_attempts
+    )
+    @profile = AcExecutionProfile.create!(
+      company: @company,
+      ac_policy_revision: @policy,
+      profile_key: "recov-prof",
+      role: :programmer,
+      cli_adapter: :claude_code,
+      model_id: "claude-haiku",
+      effort_level: :medium,
+      agent_credential: @credential,
+      chain_position: 1,
+      state: :active
+    )
+
+    AcRecoveryService.exit_recovery_mode!
+  end
+
+  teardown do
+    AcRecoveryService.exit_recovery_mode!
+  end
+
+  # Prova G6-E2 (T30): Sistema em modo de recuperação bloqueia novas admissões até saneamento
+  test "G6-E2: admission is strictly rejected when recovery mode is active" do
+    AcRecoveryService.enter_recovery_mode!
+    assert AcRecoveryService.recovery_mode_active?
+
+    assert_raises(AcAdmissionService::RecoveryModeActiveError) do
+      AcAdmissionService.admit_execution!(
+        task: @task,
+        operation_id: "op-recov-blocked-#{SecureRandom.hex(4)}",
+        requested_by: "test_runner",
+        execution_profile: @profile
+      )
+    end
+  end
+
+  # Prova G6-E2 (T30): Reconciliação neutraliza execuções pendentes/ativas e libera concessões
+  test "G6-E2: reconcile_active_executions! reconciles running executions and releases grants" do
+    # Admite uma execução normal
+    admission = AcAdmissionService.admit_execution!(
+      task: @task,
+      operation_id: "op-recov-run-#{SecureRandom.hex(4)}",
+      requested_by: "test_runner",
+      execution_profile: @profile
+    )
+    execution = admission[:execution]
+    grant = admission[:grant]
+
+    execution.update!(state: :running)
+    assert_equal "running", execution.state
+    assert_equal "granted", grant.reload.state
+
+    # Dispara reconciliação de recuperação pós-queda
+    reconciled = AcRecoveryService.reconcile_active_executions!(company: @company)
+
+    assert_equal 1, reconciled
+    assert_equal "uncertain", execution.reload.state
+    assert_equal "released", grant.reload.state
+  end
+
+  # Prova G6-E2 (T30): Preservação estrita de pausas prévias
+  test "G6-E2: preserve_pauses! maintains paused plans and queues in waiting state" do
+    @context.pause!(reason: "Manutenção programada")
+    @task.update!(state: "queued")
+
+    AcRecoveryService.preserve_pauses!(company: @company)
+
+    assert_equal "paused", @context.reload.state
+    assert_equal "waiting_dependencies", @task.reload.state
+  end
+
+  # Prova G6-E2: Restauração a partir de manifesto íntegro
+  test "G6-E2: restore_from_manifest! succeeds with valid manifest" do
+    manifest = AcBackupService.export_manifest(company: @company)
+
+    result = AcRecoveryService.restore_from_manifest!(company: @company, manifest: manifest)
+
+    assert_equal true, result[:restored]
+    assert_equal manifest["root_digest"], result[:manifest_root_digest]
+    assert AcRecoveryService.recovery_mode_active?
+  end
+
+  test "G6-E2: restore_from_manifest! aborts when manifest is corrupted" do
+    manifest = AcBackupService.export_manifest(company: @company)
+    manifest["root_digest"] = "corrupted_hash"
+
+    assert_raises(AcRecoveryService::InvalidManifestError) do
+      AcRecoveryService.restore_from_manifest!(company: @company, manifest: manifest)
+    end
+  end
+end

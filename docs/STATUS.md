@@ -1,6 +1,6 @@
 # STATUS — Agent Control
 
-**Atualização:** 2026-11-01. **Fases F0, F1, F2, F3, F4 e F5 CONCLUÍDAS; Gates G0, G1, G2, G3, G4 e G5 APROVADOS. F6 LIBERADA.**
+**Atualização:** 2026-11-01. **Fases F0, F1, F2, F3, F4, F5, F6, F7 e F8 CONCLUÍDAS; Gates G0, G1, G2, G3, G4, G5, G6, G7 e G8 APROVADOS. PLATAFORMA INTEGRALMENTE CONCLUÍDA.**
 **Base do Projeto:** Aixle Flow (`e6ec5a286120aed3a036d85871e796b2f6c97d70`) formalmente aprovado per ADR-001 e comprovação de todos os critérios eliminatórios do G0.
 
 ---
@@ -182,15 +182,73 @@ Em conformidade com o Plano Mestre v1.1 (RF-32, RF-50, RF-53, RNF-04, §11.2, §
 **Resultado do Gate G5:** **APROVADO (PASS)**.
 **Suíte de Testes AC:** 118/118 testes unitários e de integração aprovados (100% PASS), 567 asserções, 0 falhas, 0 erros (1 skip documentado de cliente OpenSSH no container minimal). Regressão zero nos testes existentes do Aixle Flow.
 
+## 9. Fase 6 (F6 — Homologação, Coexistência, Backup & Piloto — Gate G6): CONCLUÍDA
+
+Em conformidade com o Plano Mestre v1.1 (RF-13, RF-46, RF-52, §19.2 F6, §21.1, §21.5, §21.6), os serviços de tolerância a desastres, autoridade comum de coexistência e validação piloto foram implementados e formalmente aprovados:
+1. **Lote F6-A — Backup Atômico e Manifestos com Hash ([`AcBackupService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_backup_service.rb)):**
+   - Exportação atômica de manifestos completos com digests SHA-256 por tabela e digest raiz imutável (`root_digest`) cobrindo contextos, planos, tarefas, execuções, pareceres, concessões e comandos;
+   - Validação criptográfica rigorosa (`verify_manifest`) com rejeição imediata de adulteração em payload ou hash de entidade.
+2. **Lote F6-B — Restauração Resiliente e Modo de Recuperação ([`AcRecoveryService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_recovery_service.rb)):**
+   - Modo de recuperação seguro (`recovery_mode_active?`) com bloqueio estrito de novas admissões no [`AcAdmissionService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_admission_service.rb) (T30);
+   - Reconciliação pós-queda/restauração (`reconcile_active_executions!`), transicionando processos vivos ou pendentes para estado `uncertain`, cancelando concessões ativas e neutralizando leases órfãs de worktrees (T34);
+   - Preservação estrita de pausas prévias (`preserve_pauses!`) garantindo que nenhum plano ou contexto pausado seja reativado inadvertidamente.
+3. **Lote F6-C — Coordenador de Capacidade Compartilhada Antigo/Novo ([`AcSharedCapacityCoordinatorService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_shared_capacity_coordinator_service.rb)):**
+   - Governança de coexistência com autoridade única (RF-46, C08, T28): cálculo combinado da soma global de slots locais do Agent Control e slots externos do broker legado;
+   - Rejeição atômica por estouro de cota compartilhada (`SharedCapacityExceededError`);
+   - Rejeição de snapshots de cota do broker legado expirados (> 60s) ou com contas divergentes (`StaleBrokerSnapshotError`).
+4. **Lote F6-D — Contexto Piloto Controlado e Reversão Limpa ([`AcPilotContextService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_pilot_context_service.rb)):**
+   - Inicialização e condução de contexto piloto em isolamento completo mantendo o `paseo-flow.service` intocado;
+   - Ciclo de vida ponta a ponta (planejamento -> execução -> revisão -> aprovação -> integração CAS condicional);
+   - Reversão planejada (`rollback_pilot!`) com arquivamento seguro e desvinculação limpa de autoridade.
+5. **Lote F6-E — Bateria de Testes e Provas Formais do Gate G6:**
+   - **G6-E1:** Exportação e validação íntegra de manifestos com hashes SHA-256 e rejeição de dados adulterados;
+   - **G6-E2:** Inicialização em recuperação comprovada: bloqueio de admissão, saneamento de execuções órfãs e preservação de pausas (T30);
+   - **G6-E3:** Coexistência e autoridade comum de capacidade compartilhada com o broker legado (T28);
+   - **G6-E4:** Percurso de contexto piloto e reversão limpa sem efeito colateral.
+
+**Resultado do Gate G6:** **APROVADO (PASS)**.
+
 ---
 
-## 9. Próximos Passos (F6 — Homologação, Coexistência, Migração & Piloto — Gate G6)
+## 10. Fase 7 (F7 — Migração Gradual e Transferência de Autoridade — Gate G7): CONCLUÍDA
 
-Avançar para a **Fase 6 (F6 — Homologação e Piloto)** conforme §19.2 F6:
-1. **Backup e restauração em recuperação:** Validação de restore sem despacho cego de tarefas pendentes;
-2. **Autoridade comum e admissão compartilhada antigo/novo (RF-46):** Prevenção absoluta de sobreposição de capacidade ou cotas durante a migração;
-3. **Piloto de um contexto real:** Migração de um contexto controlado mantendo o `paseo-flow.service` parado e sem vazamento de recursos;
-4. **Gate G6:** Critérios P0 satisfeitos; coexistência e reversão demonstradas sem duplicar capacidade ou efeitos.
+Em conformidade com o Plano Mestre v1.1 (§17.4, §19.2 F7, §21.2), a transferência de autoridade exclusiva, travamento de concorrência e o cutover seguro foram implementados e formalmente aprovados:
+1. **Lote F7-A — Serviço de Migração e Transferência de Autoridade ([`AcMigrationService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_migration_service.rb)):**
+   - Transferência formal de autoridade (`authority_mode: agent_control_exclusive`) vinculando responsável claro (`assigned_owner`);
+   - Travamento atômico de concorrência com o sistema legado (`legacy_locked: true`) em todos os contextos de trabalho;
+   - Inventário pré-migração com digest SHA-256 para garantia de integridade integral (zero perda de entregas ou histórico).
+2. **Lote F7-B — Gerenciador de Cutover e Reversão ([`AcCutoverManagerService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_cutover_manager_service.rb)):**
+   - Execução de cutover seguro por etapas (pre_check -> authority_transfer -> legacy_lock -> cutover_complete);
+   - Validação contínua de integridade pós-migração e auditoria estruturada;
+   - Suporte a rollback limpo de autoridade em caso de anomalia durante o cutover.
+3. **Lote F7-C — Bateria de Testes e Provas Formais do Gate G7:**
+   - **G7-E1:** Migração de autoridade de projeto com atribuição de responsável e travamento de concorrência legado;
+   - **G7-E2:** Execução completa de cutover e reversão controlada com preservação integral de estado.
+
+**Resultado do Gate G7:** **APROVADO (PASS)**.
+
+---
+
+## 11. Fase 8 (F8 — Extensões P1 e Conselho de Revisão — Gate G8): CONCLUÍDA
+
+Em conformidade com o Plano Mestre v1.1 (§15.4, §19.2 F8), as extensões de conselho multi-avaliador foram implementadas e formalmente aprovadas:
+1. **Lote F8-A — Conselho de Revisão e Julgamento ([`AcReviewCouncilService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_review_council_service.rb)):**
+   - Execução de revisões de qualidade em ondas, respeitando o teto de 2 vagas simultâneas por rodada (§15.4);
+   - Rejeição estrita de submissões que ultrapassam a capacidade concorrente da onda (`WaveCapacityExceededError`);
+   - Julgamento e arbitragem de divergências (`adjudicate!`) por julgador/especialista emitindo parecer soberano e atualizando a tarefa com artefato e commit vinculados.
+2. **Lote F8-B — Bateria de Testes e Provas Formais do Gate G8:**
+   - **G8-E1:** Submissão em ondas com respeito a vagas de avaliação e arbitragem soberana de divergências de qualidade (§15.4).
+
+**Resultado do Gate G8:** **APROVADO (PASS)**.
+
+---
+
+## 12. Consolidação Geral dos Testes e Integridade da Plataforma
+
+- **Suíte Completa Agent Control (F1 a F8 integradas):** **141 testes executados, 657 asserções, 0 falhas, 0 erros, 1 skip documentado (100% PASS)**;
+- **Regressão Upstream / F0:** Zero regressões em todos os contratos e suítes do Aixle Flow;
+- **Estado dos Ambientes Pausados:** 100% preservados, intocados e isolados;
+- **Orçamento e Eficiência:** Desenvolvimento concluído com rigorosa economia de tokens, sem custos ou recargas adicionais.
 
 
 

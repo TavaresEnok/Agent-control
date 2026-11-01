@@ -28,6 +28,14 @@ class AcExecution < ApplicationRecord
     uncertain: "uncertain"
   }, prefix: true
 
+  def uncertain
+    state_uncertain?
+  end
+
+  def uncertain?
+    state_uncertain?
+  end
+
   validates :operation_id, presence: true, uniqueness: true
   validates :epoch, presence: true
   validates :state, presence: true

@@ -14,10 +14,17 @@ class AcAdmissionService
   class ProfileNotEligibleError < AdmissionError; end
   class UnauthorizedExecutionBypassError < AdmissionError; end
 
+  class RecoveryModeActiveError < AdmissionError; end
+
   class << self
     def admit_execution!(task:, operation_id:, requested_by:, origin: "api", execution_profile: nil, epoch: "1")
       raise ArgumentError, "task é obrigatório" if task.blank?
       raise ArgumentError, "operation_id é obrigatório" if operation_id.blank?
+
+      # 0. T30: Bloqueio estrito de novas admissões durante modo de recuperação
+      if defined?(AcRecoveryService) && AcRecoveryService.recovery_mode_active?
+        raise RecoveryModeActiveError, "Sistema em modo de recuperação: novas admissões estão suspensas até reconciliação (T30)"
+      end
 
       # 1. Idempotência estrita: se já existir execução com o mesmo operation_id, retorna a existente (§11.3)
       existing_execution = AcExecution.find_by(operation_id: operation_id)
