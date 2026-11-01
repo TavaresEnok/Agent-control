@@ -1,6 +1,6 @@
 # STATUS — Agent Control
 
-**Atualização:** 2026-10-31. **Fases F0, F1 e F2 CONCLUÍDAS; Gates G0, G1 e G2 APROVADOS. F3 LIBERADA.**
+**Atualização:** 2026-11-01. **Fases F0, F1, F2 e F3 CONCLUÍDAS; Gates G0, G1, G2 e G3 APROVADOS. F4 LIBERADA.**
 **Base do Projeto:** Aixle Flow (`e6ec5a286120aed3a036d85871e796b2f6c97d70`) formalmente aprovado per ADR-001 e comprovação de todos os critérios eliminatórios do G0.
 
 ---
@@ -98,11 +98,42 @@ Em conformidade com o Plano Mestre v1.1 (§10, §11, §12, §19.2 F2), a execuç
 
 ---
 
-## 6. Próximos Passos (F3 — Equipe, Plano/DAG e Qualidade)
+## 6. Fase 3 (F3 — Equipe, Plano/DAG e Qualidade — Gate G3): CONCLUÍDA
 
-Avançar para a **Fase 3 (F3 — Equipe, Orquestração de Planos e Qualidade)** conforme §19.2:
-1. Plano como grafo acíclico dirigido (DAG) de tarefas com dependências explícitas (`AcPlan` / `AcTask` dependencies);
-2. Gerente único ativo por contexto de trabalho coordenando o avanço das tarefas;
-3. Orquestração de paralelismo respeitando limites de capacidade e concorrência;
-4. Ciclo de qualidade e pareceres independentes (QA/Review) com reprovação, orçamento de correção e invalidação de artefato alterado (Gate G3).
+Em conformidade com o Plano Mestre v1.1 (§9, §12, §15, §19.2 F3), a orquestração de DAG, equipe lógica, pareceres estruturados e o Gate G3 foram implementados e formalmente aprovados:
+1. **Lote F3-A — Modelo `AcReviewVerdict` e DAG em `AcPlan` / `AcTask`:**
+   - Tabela `ac_review_verdicts` com parecer (`approved`, `rejected`, `needs_changes`, `waived`), papel do avaliador (`reviewer`, `qa`), `artifact_hash` imutável examinado, achados estruturados e rastreabilidade;
+   - Suporte a estados `needs_changes` e `waiting_dependencies` no modelo e constraint do banco;
+   - Resolução de DAG em `AcPlan#advance_dag!` e `AcPlan#ready_tasks`, serializando dependências e liberando tarefas prontas;
+   - Gerente único ativo por contexto de trabalho garantido por `AcWorkContext#assign_active_manager!` (RF-04).
+2. **Lote F3-B — Serviço de Revisão Independente ([`AcReviewService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_review_service.rb)):**
+   - Submissão de parecer com verificação de independência mínima (bloqueio de autoaprovação pelo mesmo processo per §15.2);
+   - Retorno à implementação preservando achados (`reject_back_to_implementation!`);
+   - Invalidação automática de pareceres anteriores quando o artefato/commit é modificado (`invalidate_stale_verdicts!`, §15.3).
+3. **Lote F3-C — Serviço de Integração Condicional Protegida ([`AcIntegrationService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_integration_service.rb)):**
+   - Integração atômica condicional com compare-and-swap (CAS) da branch contra a base esperada (§15.3.1);
+   - Rejeição obrigatória de corrida de branch concorrente (`ConcurrentBranchModificationError`);
+   - Verificação de evidências de testes atestadas por executor identificado antes da integração.
+4. **Lote F3-D — Workflow Temporal de Plano / DAG ([`Workflows::AcPlanExecutionWorkflow`](file:///home/enok/Documentos/projetos/agent-control/app/temporal/workflows/ac_plan_execution_workflow.rb)):**
+   - Orquestração de rodadas de execução do DAG no Temporal com suporte a sinais (`pause_plan`, `resume_plan`, `cancel_plan`);
+   - Atividades `AcAdvancePlanDagActivity`, `AcReviewTaskActivity` e `AcIntegrateTaskActivity` registradas em `workflows.yml` e `TemporalWorkflowRegistry`.
+5. **Lote F3-E — Bateria de Testes e Provas Formais do Gate G3:**
+   - **G3-E1:** Ciclo completo demonstrado: `reprovação → correção → nova aprovação` do artefato correto (§19.2 F3);
+   - **G3-E2:** Invalidação imediata de parecer prévio comprovada quando novo artefato é gerado (§15.3);
+   - **G3-E3:** Resolução de dependências do DAG comprovada (espera e desbloqueio coordenado per §12.1);
+   - **G3-E4:** Rejeição de integração por avanço concorrente da branch comprovada (§15.3.1);
+   - **G3-E5:** Gerente único ativo por contexto de trabalho verificado (RF-04);
+   - **G3-E6:** Execução ponta a ponta do workflow de plano no Temporal comprovada.
+
+**Resultado do Gate G3:** **APROVADO (PASS)**.
+**Suíte de Testes AC:** 87/87 testes novos aprovados (100% PASS), 356 asserções, 0 falhas, 0 erros, 0 skips. Regressão zero nos testes existentes do Aixle Flow e F0.
+
+---
+
+## 7. Próximos Passos (F4 — Ambientes Remotos, SSH e Jobs Persistentes)
+
+Avançar para a **Fase 4 (F4 — Ambientes Remotos e Operação Persistente SSH)** conforme §14, §19.2:
+1. Gateway de operações remotas SSH com autenticação por chave isolada (sem agente global nem sudo);
+2. Rastreabilidade persistente de jobs remotos (status, PID/job_id, exit code, artefatos e idempotência);
+3. Suporte aos dois ambientes autorizados de teste (NexoISP e Ajust ERP / painel), sem instalar CLIs de IA nos destinos.
 

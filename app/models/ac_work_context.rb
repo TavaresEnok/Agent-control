@@ -68,6 +68,20 @@ class AcWorkContext < ApplicationRecord
     ac_plans.where(state: :active).order(version: :desc).first
   end
 
+  # ── Gerente Único Ativo por Contexto (RF-04) ─────────────────────────────
+  def active_manager_identity
+    metadata["active_manager_identity"]
+  end
+
+  def assign_active_manager!(identity:)
+    raise ArgumentError, "Identidade do gerente é obrigatória (RF-04)" if identity.blank?
+
+    update!(metadata: metadata.merge(
+      "active_manager_identity" => identity.to_s,
+      "manager_assigned_at" => Time.current.iso8601
+    ))
+  end
+
   private
 
   def pause_reason_required_when_paused

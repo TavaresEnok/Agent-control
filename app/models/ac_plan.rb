@@ -72,6 +72,49 @@ class AcPlan < ApplicationRecord
     published_at.present?
   end
 
+  # ── Orquestração do DAG (§12.1, §12.2) ──────────────────────────────────
+  def ready_tasks
+    completed_keys = ac_tasks.where(state: %w[integrated approved completed]).pluck(:task_key)
+
+    ac_tasks.where(state: %w[pending needs_changes]).select do |task|
+      (task.depends_on || []).all? { |dep_key| completed_keys.include?(dep_key) }
+    end
+  end
+
+  # Avalia e avança os estados das tarefas conforme suas dependências
+  def advance_dag!
+    completed_keys = ac_tasks.where(state: %w[integrated approved completed]).pluck(:task_key)
+    newly_ready = []
+
+    ac_tasks.each do |task|
+      next if %w[running review approved integrated failed cancelled].include?(task.state.to_s)
+
+      deps = task.depends_on || []
+      deps_satisfied = deps.all? { |k| completed_keys.include?(k) }
+
+      if deps_satisfied
+        if task.state == "waiting_dependencies"
+          task.update!(state: :pending)
+          newly_ready << task
+        elsif %w[pending needs_changes].include?(task.state.to_s)
+          newly_ready << task
+        end
+      else
+        if task.state == "pending"
+          task.update!(state: :waiting_dependencies)
+        end
+      end
+    end
+
+    newly_ready
+  end
+
+  def all_tasks_completed?
+    return false if ac_tasks.empty?
+
+    ac_tasks.all? { |t| %w[integrated approved completed].include?(t.state.to_s) }
+  end
+
   # Criar nova versão a partir deste plano
   def new_version
     self.class.new(

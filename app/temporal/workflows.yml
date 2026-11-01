@@ -239,3 +239,13 @@ workflows:
         task_queue: aixle_ruby
       - name: ac_release_capacity_activity
         task_queue: aixle_ruby
+
+  - name: ac_plan_execution_workflow
+    owner: aixle_ruby
+    activities:
+      - name: ac_advance_plan_dag_activity
+        task_queue: aixle_ruby
+      - name: ac_review_task_activity
+        task_queue: aixle_ruby
+      - name: ac_integrate_task_activity
+        task_queue: aixle_ruby

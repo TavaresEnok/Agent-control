@@ -23,6 +23,9 @@ class AcTask < ApplicationRecord
   # Reservas de capacidade associadas
   has_many :ac_capacity_grants, foreign_key: :ac_task_id, dependent: :destroy, inverse_of: :ac_task
 
+  # Pareceres de revisão e qualidade (§15)
+  has_many :ac_review_verdicts, foreign_key: :ac_task_id, dependent: :destroy, inverse_of: :ac_task
+
   # Observações de cota geradas por tentativas desta tarefa
   has_many :ac_quota_observations, foreign_key: :ac_task_id, dependent: :nullify, inverse_of: false
 
@@ -34,7 +37,7 @@ class AcTask < ApplicationRecord
   MAX_ATTEMPT_COUNT = 5
 
   enumerize :state,
-            in: %i[pending queued running review approved integrated failed cancelled],
+            in: %i[pending waiting_dependencies queued running review needs_changes approved integrated failed cancelled],
             default: :pending, predicates: true, scope: true
 
   enumerize :risk_class, in: %i[low medium high critical],
@@ -112,11 +115,26 @@ class AcTask < ApplicationRecord
     update!(state: :integrated)
   end
 
-  def reject_back_to_implementation!
-    # RF-20: retorna à implementação preservando achados
-    return if attempt_limit_reached?
+  def reject_back_to_implementation!(reason: nil)
+    # RF-20, §12.2: retorna à implementação como needs_changes
+    if attempt_limit_reached?
+      update!(state: :failed, metadata: metadata.merge("failure_reason" => "Limite de tentativas excedido (RF-21)"))
+      return
+    end
 
-    update!(state: :queued, approved_commit_sha: nil, approved_artifact_hash: nil)
+    update!(
+      state: :needs_changes,
+      approved_commit_sha: nil,
+      approved_artifact_hash: nil,
+      metadata: metadata.merge("rejection_reason" => reason)
+    )
+  end
+
+  # §15.3: Parecer aprova hash exato de artefato — novo artefato invalida aprovação anterior
+  def review_approved_for?(artifact_hash)
+    return false if artifact_hash.blank?
+
+    ac_review_verdicts.approvals.where(artifact_hash: artifact_hash).exists?
   end
 
   def fail!(reason: nil)

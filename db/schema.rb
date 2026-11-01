@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_31_140000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_31_150000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "citext"
   enable_extension "pg_catalog.plpgsql"
@@ -153,7 +153,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_140000) do
     t.index ["operation_id"], name: "index_ac_executions_on_operation_id", unique: true
     t.index ["process_handle"], name: "index_ac_executions_on_process_handle"
     t.index ["worktree_lease_token"], name: "index_ac_executions_on_worktree_lease_token"
-    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'granted'::character varying, 'preparing'::character varying, 'running'::character varying, 'paused'::character varying, 'completed'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'uncertain'::character varying]::text[])", name: "ac_executions_valid_state"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying::text, 'granted'::character varying::text, 'preparing'::character varying::text, 'running'::character varying::text, 'paused'::character varying::text, 'completed'::character varying::text, 'failed'::character varying::text, 'cancelled'::character varying::text, 'uncertain'::character varying::text])", name: "ac_executions_valid_state"
   end
 
   create_table "ac_plans", force: :cascade do |t|
@@ -245,6 +245,37 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_140000) do
     t.check_constraint "quota_state::text = ANY (ARRAY['exhausted'::character varying::text, 'rate_limited'::character varying::text, 'auth_error'::character varying::text, 'network_error'::character varying::text, 'unknown'::character varying::text, 'available'::character varying::text])", name: "ac_quota_observations_valid_state"
   end
 
+  create_table "ac_review_verdicts", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "project_id", null: false
+    t.bigint "ac_task_id", null: false
+    t.bigint "ac_execution_id"
+    t.string "reviewer_role", default: "reviewer", null: false
+    t.string "verdict", null: false
+    t.string "artifact_hash", null: false
+    t.string "base_commit_hash"
+    t.string "candidate_commit_sha"
+    t.jsonb "findings", default: [], null: false
+    t.string "evaluator_identity", null: false
+    t.integer "policy_revision_number"
+    t.string "state", default: "valid", null: false
+    t.string "invalidation_reason"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["ac_execution_id"], name: "index_ac_review_verdicts_on_ac_execution_id"
+    t.index ["ac_task_id", "reviewer_role", "state"], name: "idx_on_ac_task_id_reviewer_role_state_9b7e43f958"
+    t.index ["ac_task_id", "state"], name: "index_ac_review_verdicts_on_ac_task_id_and_state"
+    t.index ["ac_task_id"], name: "index_ac_review_verdicts_on_ac_task_id"
+    t.index ["artifact_hash", "state"], name: "index_ac_review_verdicts_on_artifact_hash_and_state"
+    t.index ["company_id", "verdict"], name: "index_ac_review_verdicts_on_company_id_and_verdict"
+    t.index ["company_id"], name: "index_ac_review_verdicts_on_company_id"
+    t.index ["project_id"], name: "index_ac_review_verdicts_on_project_id"
+    t.check_constraint "reviewer_role::text = ANY (ARRAY['reviewer'::character varying, 'qa'::character varying]::text[])", name: "ac_review_verdicts_valid_role"
+    t.check_constraint "state::text = ANY (ARRAY['valid'::character varying, 'invalidated'::character varying, 'superseded'::character varying]::text[])", name: "ac_review_verdicts_valid_state"
+    t.check_constraint "verdict::text = ANY (ARRAY['approved'::character varying, 'rejected'::character varying, 'needs_changes'::character varying, 'waived'::character varying]::text[])", name: "ac_review_verdicts_valid_verdict"
+  end
+
   create_table "ac_tasks", force: :cascade do |t|
     t.bigint "company_id", null: false
     t.bigint "project_id", null: false
@@ -278,7 +309,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_140000) do
     t.check_constraint "assigned_role::text = ANY (ARRAY['programmer'::character varying::text, 'manager'::character varying::text, 'qa'::character varying::text, 'reviewer'::character varying::text, 'specialist'::character varying::text, 'integrator'::character varying::text])", name: "ac_tasks_valid_role"
     t.check_constraint "attempt_count >= 0", name: "ac_tasks_nonneg_attempts"
     t.check_constraint "risk_class::text = ANY (ARRAY['low'::character varying::text, 'medium'::character varying::text, 'high'::character varying::text, 'critical'::character varying::text])", name: "ac_tasks_valid_risk_class"
-    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying::text, 'queued'::character varying::text, 'running'::character varying::text, 'review'::character varying::text, 'approved'::character varying::text, 'integrated'::character varying::text, 'failed'::character varying::text, 'cancelled'::character varying::text])", name: "ac_tasks_valid_state"
+    t.check_constraint "state::text = ANY (ARRAY['pending'::character varying, 'waiting_dependencies'::character varying, 'queued'::character varying, 'running'::character varying, 'review'::character varying, 'needs_changes'::character varying, 'approved'::character varying, 'integrated'::character varying, 'failed'::character varying, 'cancelled'::character varying]::text[])", name: "ac_tasks_valid_state"
   end
 
   create_table "ac_work_contexts", force: :cascade do |t|
@@ -2526,6 +2557,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_140000) do
   add_foreign_key "ac_policy_revisions", "companies"
   add_foreign_key "ac_quota_observations", "agent_credentials"
   add_foreign_key "ac_quota_observations", "companies"
+  add_foreign_key "ac_review_verdicts", "ac_executions"
+  add_foreign_key "ac_review_verdicts", "ac_tasks"
+  add_foreign_key "ac_review_verdicts", "companies"
+  add_foreign_key "ac_review_verdicts", "projects"
   add_foreign_key "ac_tasks", "ac_plans"
   add_foreign_key "ac_tasks", "companies"
   add_foreign_key "ac_tasks", "projects"

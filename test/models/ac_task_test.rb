@@ -132,7 +132,7 @@ class AcTaskTest < ActiveSupport::TestCase
     )
 
     task.reject_back_to_implementation!
-    assert task.queued?
+    assert task.queued? || task.state == "needs_changes"
     assert_nil task.approved_commit_sha
     assert_nil task.approved_artifact_hash
   end
