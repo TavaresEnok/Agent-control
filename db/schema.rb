@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_01_100000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_01_110000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "citext"
   enable_extension "pg_catalog.plpgsql"
@@ -49,6 +49,25 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_100000) do
     t.check_constraint "quantity > 0", name: "ac_capacity_grants_positive_qty"
     t.check_constraint "resource_type::text = ANY (ARRAY['inference_slot'::character varying::text, 'worktree'::character varying::text, 'disk_mb'::character varying::text, 'process'::character varying::text])", name: "ac_capacity_grants_valid_resource"
     t.check_constraint "state::text = ANY (ARRAY['pending'::character varying::text, 'granted'::character varying::text, 'active'::character varying::text, 'released'::character varying::text, 'expired'::character varying::text, 'revoked'::character varying::text])", name: "ac_capacity_grants_valid_state"
+  end
+
+  create_table "ac_client_commands", force: :cascade do |t|
+    t.bigint "company_id", null: false
+    t.bigint "user_id"
+    t.string "intent_id", null: false
+    t.string "command_type", null: false
+    t.jsonb "payload", default: {}, null: false
+    t.string "state", default: "received", null: false
+    t.jsonb "result", default: {}, null: false
+    t.text "error_message"
+    t.datetime "processed_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["company_id", "command_type"], name: "index_ac_client_commands_on_company_id_and_command_type"
+    t.index ["company_id"], name: "index_ac_client_commands_on_company_id"
+    t.index ["intent_id"], name: "index_ac_client_commands_on_intent_id", unique: true
+    t.index ["state"], name: "index_ac_client_commands_on_state"
+    t.index ["user_id"], name: "index_ac_client_commands_on_user_id"
   end
 
   create_table "ac_decision_audit_events", force: :cascade do |t|
@@ -2595,6 +2614,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_100000) do
   add_foreign_key "ac_capacity_grants", "ac_tasks"
   add_foreign_key "ac_capacity_grants", "agent_credentials"
   add_foreign_key "ac_capacity_grants", "companies"
+  add_foreign_key "ac_client_commands", "companies"
+  add_foreign_key "ac_client_commands", "users"
   add_foreign_key "ac_decision_audit_events", "companies"
   add_foreign_key "ac_decision_audit_events", "projects"
   add_foreign_key "ac_execution_profiles", "ac_policy_revisions"

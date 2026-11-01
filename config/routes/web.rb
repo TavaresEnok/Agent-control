@@ -185,6 +185,16 @@ namespace :api, defaults: { format: :json } do
       end
     end
 
+    namespace :agent_control do
+      resources :client_commands, only: [:create]
+      resources :plans, only: [:show] do
+        member do
+          get :graph, to: "dag_graphs#show"
+        end
+      end
+      resources :dag_graphs, only: [:show]
+    end
+
     namespace :internal do
       get "ws_auth", to: "ws_auth#show"
       post "usage_statistics", to: "usage_statistics#create"
@@ -749,5 +759,11 @@ scope module: :web, defaults: { format: :html } do
         end
       end
     end
+  end
+
+  # Agent Control Mobile/Web UI (§13, §14, §19.2 F5)
+  scope module: :web do
+    get "/agent_control/plans/:id/graph", to: "agent_control#graph", as: :ac_plan_graph
+    get "/agent_control/wizard", to: "agent_control#wizard", as: :ac_mobile_wizard
   end
 end

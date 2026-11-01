@@ -1,6 +1,6 @@
 # STATUS — Agent Control
 
-**Atualização:** 2026-11-01. **Fases F0, F1, F2, F3 e F4 CONCLUÍDAS; Gates G0, G1, G2, G3 e G4 APROVADOS. F5 LIBERADA.**
+**Atualização:** 2026-11-01. **Fases F0, F1, F2, F3, F4 e F5 CONCLUÍDAS; Gates G0, G1, G2, G3, G4 e G5 APROVADOS. F6 LIBERADA.**
 **Base do Projeto:** Aixle Flow (`e6ec5a286120aed3a036d85871e796b2f6c97d70`) formalmente aprovado per ADR-001 e comprovação de todos os critérios eliminatórios do G0.
 
 ---
@@ -157,12 +157,40 @@ Em conformidade com o Plano Mestre v1.1 (§11.2, §14, §19.2 F4), os ambientes 
 
 ---
 
-## 8. Próximos Passos (F5 — Produto Operável, Mobile/PWA, Grafo e Comandos Deduplicados)
+## 8. Fase 5 (F5 — Produto Operável, Mobile/PWA, Grafo e Comandos Deduplicados — Gate G5): CONCLUÍDA
 
-Avançar para a **Fase 5 (F5 — Produto Operável)** conforme §13, §14, §19.2 F5:
-1. **Configuração móvel completa e workflow por etapas:** Assistente passo a passo para configuração de novos projetos, servidores e chaves SSH;
-2. **Grafo de leitura conectado aos estados reais:** Visualização interativa e reativa do DAG de tarefas e planos alimentado pelos estados duráveis do Temporal;
-3. **Deduplicação de comandos do cliente:** Inclusão de `ClientCommand` com chave de intenção e idempotência em formulários e ações de interface móvel/web (§11.2);
-4. **Gate G5:** Percursos essenciais e visualização gráfica operáveis pelo celular, com deduplicação rigorosa de comandos.
+Em conformidade com o Plano Mestre v1.1 (RF-32, RF-50, RF-53, RNF-04, §11.2, §19.2 F5), o produto operável, o grafo de leitura em tempo real e a deduplicação de comandos foram implementados e formalmente aprovados:
+1. **Lote F5-A — Modelo e Schema ([`AcClientCommand`](file:///home/enok/Documentos/projetos/agent-control/app/models/ac_client_command.rb)):**
+   - Tabela `ac_client_commands` com índice único em `intent_id` (§11.2) para deduplicação transacional estrita em todas as origens de clientes móveis e web;
+   - Estados estruturados (`received`, `processing`, `processed`, `failed`), retenção de payload e resultado cacheado para reenvios idempotentes.
+2. **Lote F5-B — Serviços de Deduplicação e Grafo de Leitura:**
+   - [`AcCommandDeduplicationService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_command_deduplication_service.rb): execução transacional protegida por lock, detecção de concorrência (`DuplicateProcessingError`) e retorno instantâneo do resultado prévio sem reexecutar efeitos colaterais;
+   - [`AcDagGraphService`](file:///home/enok/Documentos/projetos/agent-control/app/services/ac_dag_graph_service.rb): projeção completa em tempo real do DAG de tarefas, arestas de dependência cumpridas/pendentes (`fulfilled`), sumário quantitativo de estados e timestamp de projeção.
+3. **Lote F5-C — API e Controladores Web / Inertia:**
+   - [`Api::V1::AgentControl::ClientCommandsController`](file:///home/enok/Documentos/projetos/agent-control/app/controllers/api/v1/agent_control/client_commands_controller.rb): endpoint REST com resolução de locatário e execução idempotente de tarefas e operações;
+   - [`Api::V1::AgentControl::DagGraphsController`](file:///home/enok/Documentos/projetos/agent-control/app/controllers/api/v1/agent_control/dag_graphs_controller.rb): endpoint JSON de alto desempenho para consulta e sincronização do grafo;
+   - [`Web::AgentControlController`](file:///home/enok/Documentos/projetos/agent-control/app/controllers/web/agent_control_controller.rb): renderização das páginas Inertia móveis e web.
+4. **Lote F5-D — Interfaces Móveis / PWA em React e CSS Moderno (RF-32, RF-50, RNF-04):**
+   - [`PlanGraph.tsx`](file:///home/enok/Documentos/projetos/agent-control/app/frontend/pages/AgentControl/PlanGraph.tsx) e [`PlanGraph.module.css`](file:///home/enok/Documentos/projetos/agent-control/app/frontend/pages/AgentControl/PlanGraph.module.css): visualização gráfica reativa do DAG em cartão e lista de nós conectada aos estados reais do banco/Temporal, botões com alvo de toque adequado e modal detalhado sem dependência de hover (RNF-04);
+   - [`MobileSetupWizard.tsx`](file:///home/enok/Documentos/projetos/agent-control/app/frontend/pages/AgentControl/MobileSetupWizard.tsx) e [`MobileSetupWizard.module.css`](file:///home/enok/Documentos/projetos/agent-control/app/frontend/pages/AgentControl/MobileSetupWizard.module.css): assistente passo a passo por etapas (projeto, contexto, servidores remotos, políticas e envio atômico com `intent_id` deduplicado).
+5. **Lote F5-E — Bateria de Testes e Provas Formais do Gate G5:**
+   - **G5-E1:** Deduplicação rigorosa comprovada de comandos móveis repetidos com mesmo `intent_id` (RF-53);
+   - **G5-E2:** Projeção precisa do DAG com 100% de coerência em nós, arestas cumpridas e sumário estatístico (RF-50);
+   - **G5-E3:** Criação e avanço de tarefas via API com idempotência de cliente verificada;
+   - **G5-E4:** Serialização do grafo via endpoint da API para clientes web e móveis.
+
+**Resultado do Gate G5:** **APROVADO (PASS)**.
+**Suíte de Testes AC:** 118/118 testes unitários e de integração aprovados (100% PASS), 567 asserções, 0 falhas, 0 erros (1 skip documentado de cliente OpenSSH no container minimal). Regressão zero nos testes existentes do Aixle Flow.
+
+---
+
+## 9. Próximos Passos (F6 — Homologação, Coexistência, Migração & Piloto — Gate G6)
+
+Avançar para a **Fase 6 (F6 — Homologação e Piloto)** conforme §19.2 F6:
+1. **Backup e restauração em recuperação:** Validação de restore sem despacho cego de tarefas pendentes;
+2. **Autoridade comum e admissão compartilhada antigo/novo (RF-46):** Prevenção absoluta de sobreposição de capacidade ou cotas durante a migração;
+3. **Piloto de um contexto real:** Migração de um contexto controlado mantendo o `paseo-flow.service` parado e sem vazamento de recursos;
+4. **Gate G6:** Critérios P0 satisfeitos; coexistência e reversão demonstradas sem duplicar capacidade ou efeitos.
+
 
 
