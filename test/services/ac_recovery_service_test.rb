@@ -141,4 +141,43 @@ class AcRecoveryServiceTest < ActiveSupport::TestCase
       AcRecoveryService.restore_from_manifest!(company: @company, manifest: manifest)
     end
   end
+
+  # Prova BUG-P0-03: Reidratação real de entidades no PostgreSQL
+  test "BUG-P0-03: restore_from_manifest! rehydrates deleted entities into the database" do
+    manifest = AcBackupService.export_manifest(company: @company)
+
+    task_id = @task.id
+    plan_id = @plan.id
+
+    # Apaga as tarefas e planos
+    @task.destroy!
+    @plan.destroy!
+
+    assert_nil AcTask.find_by(id: task_id)
+    assert_nil AcPlan.find_by(id: plan_id)
+
+    # Restaura a partir do manifesto
+    result = AcRecoveryService.restore_from_manifest!(company: @company, manifest: manifest)
+
+    assert_equal true, result[:restored]
+    assert_not_nil AcPlan.find_by(id: plan_id), "Plano deve ser reidratado no banco de dados"
+    assert_not_nil AcTask.find_by(id: task_id), "Tarefa deve ser reidratada no banco de dados"
+    assert_equal "Tarefa Teste", AcTask.find(task_id).title
+  end
+
+  # Prova BUG-P1-04: Modo de recuperação persiste no PostgreSQL
+  test "BUG-P1-04: recovery mode persists across memory resets via database" do
+    AcRecoveryService.enter_recovery_mode!(company: @company)
+
+    # Simula perda de memória do processo (Puma worker restart)
+    AcRecoveryService.instance_variable_set(:@recovery_mode_active, false)
+
+    # Modo de recuperação deve continuar ativo devido ao registro persistido no banco
+    assert_equal true, AcRecoveryService.recovery_mode_active?(company: @company)
+
+    # Saída do modo de recuperação limpa o banco
+    AcRecoveryService.exit_recovery_mode!(company: @company)
+    AcRecoveryService.instance_variable_set(:@recovery_mode_active, false)
+    assert_equal false, AcRecoveryService.recovery_mode_active?(company: @company)
+  end
 end

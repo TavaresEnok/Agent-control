@@ -39,6 +39,11 @@ class AcCutoverManagerServiceTest < ActiveSupport::TestCase
     assert_equal true, status[:cutover_completed]
     assert_equal "agent_control_exclusive", status[:authority_mode]
     assert_equal redirect_map["dashboard"], status[:redirect_links]["dashboard"]
+
+    # Verifica gravação do evento formal de auditoria ([BUG-P1-05])
+    audit = AcDecisionAuditEvent.find_by(project: @project, event_type: "human_intervention")
+    assert_not_nil audit, "Evento de auditoria formal deve ser persistido"
+    assert_equal "cutover_completed", audit.decision_details["action"]
   end
 
   test "G7-E4: rejects cutover when approval identifier is blank (strict authorization)" do

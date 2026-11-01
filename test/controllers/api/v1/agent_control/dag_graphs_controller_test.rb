@@ -5,7 +5,7 @@ require "test_helper"
 class Api::V1::AgentControl::DagGraphsControllerTest < ActionDispatch::IntegrationTest
   setup do
     @company = create(:company)
-    @user = create(:user, company: @company)
+    @user = create(:user, :onboarding_completed, company: @company, password: AuthHelper::TEST_PASSWORD)
     @project = create(:project, company: @company, owner: @user)
     @context = AcWorkContext.create!(
       company: @company,
@@ -31,6 +31,20 @@ class Api::V1::AgentControl::DagGraphsControllerTest < ActionDispatch::Integrati
       position: 1,
       state: "pending"
     )
+    sign_in_as @user
+  end
+
+  test "SEC-01: unauthenticated requests are rejected with 401 unauthorized" do
+    # Dispara sem autenticação em sessão limpa
+    reset!
+    get "/api/v1/agent_control/plans/#{@plan.id}/graph", as: :json
+    assert_response :unauthorized
+  end
+
+  test "SEC-01: cross-tenant access to unauthorized company is rejected with 403 forbidden" do
+    other_company = create(:company)
+    get "/api/v1/agent_control/plans/#{@plan.id}/graph", params: { company_id: other_company.id }, as: :json
+    assert_response :forbidden
   end
 
   # Prova G5-E4: API serializa nós e arestas para renderização móvel e web (RF-50)

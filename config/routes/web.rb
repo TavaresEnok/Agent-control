@@ -762,8 +762,6 @@ scope module: :web, defaults: { format: :html } do
   end
 
   # Agent Control Mobile/Web UI (§13, §14, §19.2 F5)
-  scope module: :web do
-    get "/agent_control/plans/:id/graph", to: "agent_control#graph", as: :ac_plan_graph
-    get "/agent_control/wizard", to: "agent_control#wizard", as: :ac_mobile_wizard
-  end
+  get "/agent_control/plans/:id/graph", to: "agent_control#graph", as: :ac_plan_graph
+  get "/agent_control/wizard", to: "agent_control#wizard", as: :ac_mobile_wizard
 end

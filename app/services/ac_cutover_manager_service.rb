@@ -37,18 +37,40 @@ class AcCutoverManagerService
 
       project.save!
 
-      # 3. Emite evento de auditoria se o modelo estiver disponível
-      if defined?(AcDecisionAuditEvent)
-        AcDecisionAuditEvent.record_decision!(
-          context_or_project: project,
-          decision_type: "cutover_completed",
-          actor: approved_by,
+      # 3. Emite evento de auditoria formal (Gate G7, [BUG-P1-05])
+      approved_user = project.company.users.find_by(email: approved_by) ||
+                      project.company.users.find_by(id: approved_by) ||
+                      project.owner
+
+      if approved_user.present?
+        AcDecisionAuditEvent.record_human_intervention!(
+          company: project.company,
+          project: project,
+          user: approved_user,
+          action: "cutover_completed",
+          reason: "Cutover formal executado e autorizado por #{approved_by} (ticket: #{project.settings['cutoff_ticket']})",
           metadata: {
             cutoff_ticket: project.settings["cutoff_ticket"],
             redirect_links: project.settings["redirect_links"],
             authority_mode: authority_mode
           }
-        ) rescue nil
+        )
+      else
+        AcDecisionAuditEvent.create!(
+          company: project.company,
+          project: project,
+          actor_type: "system",
+          event_type: "human_intervention",
+          occurred_at: Time.current,
+          reason: "Cutover formal executado e autorizado por #{approved_by} (ticket: #{project.settings['cutoff_ticket']})",
+          decision_details: {
+            action: "cutover_completed",
+            approved_by: approved_by,
+            cutoff_ticket: project.settings["cutoff_ticket"],
+            redirect_links: project.settings["redirect_links"],
+            authority_mode: authority_mode
+          }
+        )
       end
 
       # 4. Retorna ata formal de cutover (evidência do Gate G7)
@@ -90,6 +112,32 @@ class AcCutoverManagerService
       project.settings["authority_mode"] = "coexistence_read_only"
 
       project.save!
+
+      # Emite evento de auditoria formal para reversão de emergência
+      revert_user = project.company.users.find_by(email: reverted_by) ||
+                    project.company.users.find_by(id: reverted_by) ||
+                    project.owner
+
+      if revert_user.present?
+        AcDecisionAuditEvent.record_human_intervention!(
+          company: project.company,
+          project: project,
+          user: revert_user,
+          action: "cutover_reverted",
+          reason: "Reversão de cutover para contingência executada por #{reverted_by}: #{reason}",
+          metadata: { reason: reason, reverted_by: reverted_by }
+        )
+      else
+        AcDecisionAuditEvent.create!(
+          company: project.company,
+          project: project,
+          actor_type: "system",
+          event_type: "human_intervention",
+          occurred_at: Time.current,
+          reason: "Reversão de cutover para contingência executada por #{reverted_by}: #{reason}",
+          decision_details: { action: "cutover_reverted", reason: reason, reverted_by: reverted_by }
+        )
+      end
 
       {
         project_id: project.id,

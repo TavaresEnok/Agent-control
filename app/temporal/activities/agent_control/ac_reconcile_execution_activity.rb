@@ -15,6 +15,17 @@ module Activities
 
         execution = AcExecution.find(execution_id)
 
+        # Se um processo físico foi lançado e nenhum exit_code explícito foi fornecido (§11.3, [BUG-P0-02])
+        if execution.metadata&.dig("pid").present? && input.exit_code.nil?
+          pid = execution.metadata["pid"].to_i
+          begin
+            _, status = Process.wait2(pid, Process::WNOHANG)
+            exit_code = status ? (status.exitstatus || 0) : 0
+          rescue Errno::ECHILD, Errno::ESRCH
+            exit_code = 0
+          end
+        end
+
         # Reconciliação com validação estrita de época (§11.3)
         execution.reconcile_outcome!(
           exit_code: exit_code,

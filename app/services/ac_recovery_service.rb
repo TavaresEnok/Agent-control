@@ -13,16 +13,50 @@ class AcRecoveryService
   @recovery_mode_active = false
 
   class << self
-    def recovery_mode_active?
-      @recovery_mode_mutex.synchronize { @recovery_mode_active }
+    def recovery_mode_active?(company: nil)
+      @recovery_mode_mutex.synchronize do
+        return true if @recovery_mode_active
+
+        # Persistência no PostgreSQL para sobrevivência a reinicializações e Puma cluster ([BUG-P1-04])
+        query = AcClientCommand.where(command_type: "recovery_mode_state", state: "processing")
+        query = query.where(company_id: company.id) if company.present?
+        query.exists?
+      end
+    rescue StandardError
+      @recovery_mode_active
     end
 
-    def enter_recovery_mode!
-      @recovery_mode_mutex.synchronize { @recovery_mode_active = true }
+    def enter_recovery_mode!(company: nil)
+      @recovery_mode_mutex.synchronize do
+        @recovery_mode_active = true
+        target_company = company || Company.first
+        if target_company.present?
+          cmd = AcClientCommand.find_or_initialize_by(
+            company: target_company,
+            intent_id: "system-recovery-state-#{target_company.id}",
+            command_type: "recovery_mode_state"
+          )
+          cmd.state = "processing"
+          cmd.payload = { "recovery_mode" => true }
+          cmd.processed_at = Time.current
+          cmd.save!
+        end
+        true
+      end
     end
 
-    def exit_recovery_mode!
-      @recovery_mode_mutex.synchronize { @recovery_mode_active = false }
+    def exit_recovery_mode!(company: nil)
+      @recovery_mode_mutex.synchronize do
+        @recovery_mode_active = false
+        target_company = company || Company.first
+        if target_company.present?
+          AcClientCommand.where(
+            company: target_company,
+            command_type: "recovery_mode_state"
+          ).update_all(state: "processed", payload: { "recovery_mode" => false }, updated_at: Time.current)
+        end
+        false
+      end
     end
 
     # T30: Reconcilia execuções pendentes ou ativas sem despacho cego duplicado
@@ -81,34 +115,58 @@ class AcRecoveryService
       paused_contexts.count
     end
 
-    # Restauração controlada a partir de manifesto autenticado
+    # Restauração controlada e reidratação física a partir de manifesto autenticado ([BUG-P0-03])
     def restore_from_manifest!(company:, manifest:)
       unless AcBackupService.verify_manifest(manifest)
         raise InvalidManifestError, "Manifesto inválido ou digest corrompido: restauração bloqueada"
       end
 
-      enter_recovery_mode!
+      enter_recovery_mode!(company: company)
 
-      begin
-        ActiveRecord::Base.transaction do
-          # 1. Neutraliza estado antigo para prevenir concorrência com processos vivos
-          reconcile_active_executions!(company: company)
-          neutralize_orphan_leases!(company: company)
-          preserve_pauses!(company: company)
+      entities = manifest["entities"] || {}
+      rehydrated = {}
 
-          # 2. Retorna resumo do saneamento
-          {
-            restored: true,
-            manifest_root_digest: manifest["root_digest"],
-            reconciliation: {
-              status: "clean_recovery",
-              timestamp: Time.current.iso8601
-            }
+      ActiveRecord::Base.transaction do
+        # 1. Reidratação dos registros no banco respeitando integridade referencial ([BUG-P0-03])
+        rehydrate_entity(AcWorkContext, entities["ac_work_contexts"], rehydrated)
+        rehydrate_entity(AcPolicyRevision, entities["ac_policy_revisions"], rehydrated)
+        rehydrate_entity(AcExecutionProfile, entities["ac_execution_profiles"], rehydrated)
+        rehydrate_entity(AcPlan, entities["ac_plans"], rehydrated)
+        rehydrate_entity(AcTask, entities["ac_tasks"], rehydrated)
+        rehydrate_entity(AcExecution, entities["ac_executions"], rehydrated)
+        rehydrate_entity(AcReviewVerdict, entities["ac_review_verdicts"], rehydrated)
+
+        # 2. Neutraliza estado antigo para prevenir concorrência com processos vivos
+        reconcile_active_executions!(company: company)
+        neutralize_orphan_leases!(company: company)
+        preserve_pauses!(company: company)
+
+        {
+          restored: true,
+          manifest_root_digest: manifest["root_digest"],
+          rehydrated_counts: rehydrated,
+          reconciliation: {
+            status: "clean_recovery",
+            timestamp: Time.current.iso8601
           }
-        end
-      ensure
-        # Permanece em modo de recuperação até liberação explícita pelo operador
+        }
       end
+    end
+
+    private
+
+    def rehydrate_entity(model_class, records, counter_hash)
+      return unless records.is_a?(Array) && records.any?
+
+      count = 0
+      records.each do |attrs|
+        record = model_class.find_or_initialize_by(id: attrs["id"])
+        record.assign_attributes(attrs.except("id", "created_at", "updated_at"))
+        record.save!(validate: false)
+        count += 1
+      end
+
+      counter_hash[model_class.table_name] = count
     end
   end
 end

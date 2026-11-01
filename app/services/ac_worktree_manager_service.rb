@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+require "open3"
+require "fileutils"
+require "securerandom"
+
 # F2 — Isolamento de Worktree e Escritor Único (AC Domain)
 #
 # §11.3.2: Autoridade de escrita da worktree:
@@ -10,9 +14,11 @@
 #   e prepara outra worktree isolada, sem compartilhar diretório gravável.
 class AcWorktreeManagerService
   class ActiveWriterConflictError < StandardError; end
+  class GitError < StandardError; end
 
   class << self
-    def acquire_lease!(execution:, base_path: "/tmp/ac_worktrees")
+    def acquire_lease!(execution:, base_path: "/tmp/ac_worktrees", repo_path: nil)
+      repo_path ||= resolve_repo_path(execution)
       target_path = execution.worktree_path.presence || File.join(base_path, execution.ac_task_id.to_s, execution.operation_id)
 
       AcExecution.transaction do
@@ -27,7 +33,7 @@ class AcWorktreeManagerService
         if conflicting_writer.present?
           # Tenta neutralizar o escritor antigo (§11.3.2)
           if neutralizable?(conflicting_writer)
-            neutralize_writer!(conflicting_writer)
+            neutralize_writer!(conflicting_writer, repo_path: repo_path)
           else
             # Não é possível neutralizar: coloca diretório em quarentena e cria novo caminho isolado
             target_path = quarantine_and_diverge!(conflicting_writer, target_path)
@@ -35,16 +41,50 @@ class AcWorktreeManagerService
         end
 
         token = SecureRandom.hex(16)
+
+        # Criação física de worktree Git caso exista repositório configurado no disco
+        if repo_path.present? && Dir.exist?(File.join(repo_path, ".git"))
+          FileUtils.mkdir_p(File.dirname(target_path))
+          if Dir.exist?(target_path)
+            Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", target_path)
+            FileUtils.rm_rf(target_path)
+          end
+
+          base_commit = execution.ac_task&.metadata&.dig("base_commit_sha") ||
+                        execution.ac_task&.inputs&.dig("base_commit") ||
+                        "HEAD"
+          _out, err, status = Open3.capture3("git", "-C", repo_path, "worktree", "add", "--detach", target_path, base_commit)
+          unless status.success?
+            raise GitError, "Falha física ao alocar git worktree no caminho #{target_path}: #{err}"
+          end
+        else
+          FileUtils.mkdir_p(target_path)
+        end
+
         execution.acquire_worktree_lease!(token, path: target_path)
         token
       end
     end
 
-    def release_lease!(execution:)
+    def release_lease!(execution:, repo_path: nil)
+      repo_path ||= resolve_repo_path(execution)
+      target_path = execution.worktree_path
+
+      if repo_path.present? && Dir.exist?(File.join(repo_path, ".git")) && target_path.present?
+        Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", target_path)
+        Open3.capture3("git", "-C", repo_path, "worktree", "prune")
+      end
+
+      FileUtils.rm_rf(target_path) if target_path.present? && Dir.exist?(target_path)
       execution.revoke_worktree_lease!
     end
 
     private
+
+    def resolve_repo_path(execution)
+      (execution.ac_task&.project&.respond_to?(:custom_fields) ? execution.ac_task.project.custom_fields&.dig("git_repo_path") : nil) ||
+        execution.ac_work_context&.metadata&.dig("git_repo_path")
+    end
 
     def neutralizable?(conflicting_writer)
       # Se o processo antigo falhou, expirou ou foi cancelado, podemos neutralizar a lease
@@ -56,7 +96,13 @@ class AcWorktreeManagerService
       false
     end
 
-    def neutralize_writer!(writer)
+    def neutralize_writer!(writer, repo_path: nil)
+      if repo_path.present? && Dir.exist?(File.join(repo_path, ".git")) && writer.worktree_path.present?
+        Open3.capture3("git", "-C", repo_path, "worktree", "remove", "--force", writer.worktree_path)
+        Open3.capture3("git", "-C", repo_path, "worktree", "prune")
+      end
+      FileUtils.rm_rf(writer.worktree_path) if writer.worktree_path.present? && Dir.exist?(writer.worktree_path)
+
       writer.update!(
         worktree_lease_token: nil,
         state: :cancelled,

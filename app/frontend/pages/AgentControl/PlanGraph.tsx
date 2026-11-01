@@ -14,7 +14,7 @@ export interface GraphNode {
   assigned_role: string;
   risk_class: string;
   position: number;
-  attempts_count: number;
+  attempt_count: number;
   max_attempts: number;
   active_execution_id: number | null;
   approved_commit_sha: string | null;
@@ -219,7 +219,7 @@ export default function PlanGraph({ plan, initialGraph }: PlanGraphProps) {
             </div>
 
             <div className={classes.nodeDetails}>
-              <Text size="xs" c="dimmed">Papel: {node.assigned_role} • Risco: {node.risk_class} • Tentativas: {node.attempts_count}/{node.max_attempts}</Text>
+              <Text size="xs" c="dimmed">Papel: {node.assigned_role} • Risco: {node.risk_class} • Tentativas: {node.attempt_count}/{node.max_attempts}</Text>
             </div>
 
             {node.depends_on.length > 0 && (

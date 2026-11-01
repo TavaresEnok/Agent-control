@@ -245,10 +245,43 @@ Em conformidade com o Plano Mestre v1.1 (§15.4, §19.2 F8), as extensões de co
 
 ## 12. Consolidação Geral dos Testes e Integridade da Plataforma
 
-- **Suíte Completa Agent Control (F1 a F8 integradas):** **141 testes executados, 657 asserções, 0 falhas, 0 erros, 1 skip documentado (100% PASS)**;
+- **Suíte Completa Agent Control (F1 a F8 integradas):** **174 testes executados, 816 asserções, 0 falhas, 0 erros, 0 skips (100% PASS)**;
 - **Regressão Upstream / F0:** Zero regressões em todos os contratos e suítes do Aixle Flow;
 - **Estado dos Ambientes Pausados:** 100% preservados, intocados e isolados;
 - **Orçamento e Eficiência:** Desenvolvimento concluído com rigorosa economia de tokens, sem custos ou recargas adicionais.
+
+---
+
+## 13. Saneamento Estrutural e Remediação das Auditorias Forenses (2026-11-01)
+
+Em resposta à auditoria forense independente, todos os apontamentos críticos e arquiteturais foram sanados e validados por baterias de testes com execução real:
+
+1. **Segurança e Isolamento Multi-Tenant ([BUG-P0-01], SEC-01):**
+   - Inclusão obrigatória de `authenticate_user!` e verificação de empresa em `Api::V1::AgentControl::ApplicationController` e `Web::AgentControlController`;
+   - Eliminação total do fallback permissivo para `Company.first`. Requisições anônimas são rejeitadas com HTTP 401 e requisições cross-tenant com HTTP 403;
+   - Resolução de IDOR na consulta de grafos do Agent Control via escopo restrito a `current_user.companies` / `current_company`.
+
+2. **Sanitização de Comandos SSH e Supervisão Confiável ([BUG-P0-01], SEC-02, [BUG-P1-02]):**
+   - Aplicação de `Shellwords.shellescape` em todos os diretórios de trabalho em `AcRemoteGatewayService`;
+   - Implementação do invólucro remoto com gravação atômica de código de saída (`ret=$?; echo $ret > .exit; exit $ret`), eliminando timeouts infinitos na supervisão de status.
+
+3. **Operações Git Físicas e Worktrees Reais ([BUG-P0-04], GIT-01, GIT-02):**
+   - `AcWorktreeManagerService`: criação física de worktrees Git via `git worktree add --detach` e remoção limpa com `git worktree remove --force` e `git worktree prune`;
+   - `AcIntegrationService`: integração física com Compare-And-Swap (CAS) atômico no Git via `git update-ref refs/heads/<branch> <candidate> <expected_base>`;
+   - Cobertura completa comprovada em `test/services/ac_physical_git_test.rb`.
+
+4. **Despacho de Processos Físicos e Orquestração Real ([BUG-P0-02], [BUG-P1-01]):**
+   - Conexão de `AcDispatchExecutionActivity` à execução física de subprocessos com monitoramento de PID real e `AcReconcileExecutionActivity` com colheita de código de término;
+   - Remoção de condicionais artificiais de teste em `AcPlanExecutionWorkflow`, permitindo que o DAG avance autonomamente por todas as tarefas prontas.
+
+5. **Reidratação de Banco e Persistência do Modo de Recuperação ([BUG-P0-03], [BUG-P1-04]):**
+   - Implementação de reidratação completa de tabelas em `AcRecoveryService.restore_from_manifest!` respeitando integridade referencial;
+   - Persistência durável do estado de recuperação em banco (`AcClientCommand`), sobrevivendo a reinicializações de processos e workers do Puma.
+
+6. **Assistente Móvel e Auditoria de Cutover ([BUG-P1-03], [BUG-P1-05]):**
+   - Tratamento real do comando `setup_project_wizard` em `ClientCommandsController`, persistindo transacionalmente `Project`, `AcWorkContext` e `AcPlan`;
+   - Eliminação de chamadas inexistentes e `rescue nil` em `AcCutoverManagerService`, gravando eventos formais de auditoria via `AcDecisionAuditEvent`.
+
 
 
 

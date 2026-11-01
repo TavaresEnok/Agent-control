@@ -7,7 +7,7 @@ class Web::AgentControlController < Web::ApplicationController
   skip_before_action :enforce_workspace, raise: false
 
   def graph
-    plan = AcPlan.find(params[:id])
+    plan = AcPlan.where(company: current_company).find(params[:id])
     graph_data = AcDagGraphService.build_graph(plan: plan)
 
     render inertia: "AgentControl/PlanGraph", props: {
@@ -17,10 +17,10 @@ class Web::AgentControlController < Web::ApplicationController
   end
 
   def wizard
-    environments = AcRemoteEnvironment.where(company: current_user&.company).select(:id, :name, :environment_slug, :state)
+    environments = AcRemoteEnvironment.where(company: current_company).select(:id, :name, :environment_slug, :state)
 
     render inertia: "AgentControl/MobileSetupWizard", props: {
-      companyId: current_user&.company_id,
+      companyId: current_company&.id,
       environments: environments.as_json
     }
   end

@@ -79,27 +79,41 @@ module Workflows
         ready_task_ids.each do |task_id|
           return early_cancelled_response(plan_id) if @cancelled
 
-          # Simula/executa ciclo de revisão se solicitado no payload do teste ou por fluxo
-          if input.trigger_review_for_task_id == task_id
+          # Se houver override explícito de teste ou fluxo guiado para esta tarefa, honra o filtro;
+          # caso contrário, processa autonomamente todas as tarefas prontas (§12.1, [BUG-P1-01])
+          should_process = if input.trigger_review_for_task_id.present?
+                             input.trigger_review_for_task_id == task_id
+                           else
+                             true
+                           end
+
+          if should_process
+            artifact_hash = (input.trigger_review_for_task_id == task_id && input.review_artifact_hash.presence) ||
+                            "hash-default-#{task_id}"
+            verdict = (input.trigger_review_for_task_id == task_id && input.review_verdict.presence) ||
+                      "approved"
+            evaluator = (input.trigger_review_for_task_id == task_id && input.evaluator_identity.presence) ||
+                        "independent-reviewer"
+
             execute_activity(
               activities.ac_review_task_activity,
               {
                 task_id: task_id,
-                artifact_hash: input.review_artifact_hash || "hash-default-#{task_id}",
-                verdict: input.review_verdict || "approved",
-                evaluator_identity: input.evaluator_identity || "independent-reviewer"
+                artifact_hash: artifact_hash,
+                verdict: verdict,
+                evaluator_identity: evaluator
               }
             )
 
-            if input.review_verdict == "approved"
+            if verdict == "approved"
               execute_activity(
                 activities.ac_integrate_task_activity,
                 {
                   task_id: task_id,
                   expected_base_commit: input.expected_base_commit || "main-base",
-                  candidate_commit: input.candidate_commit || "cand-commit",
+                  candidate_commit: input.candidate_commit || "cand-commit-#{task_id}",
                   current_branch_head: input.current_branch_head || "main-base",
-                  artifact_hash: input.review_artifact_hash || "hash-default-#{task_id}"
+                  artifact_hash: artifact_hash
                 }
               )
             end

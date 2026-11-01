@@ -2,6 +2,7 @@
 
 require "open3"
 require "securerandom"
+require "shellwords"
 
 class AcRemoteGatewayService
   class Error < StandardError; end
@@ -26,6 +27,13 @@ class AcRemoteGatewayService
   end
 
   class << self
+    def build_wrapped_command(working_directory:, command:, remote_job_id:)
+      escaped_dir = Shellwords.shellescape(working_directory)
+      exit_file = "#{working_directory}/.ac_job_#{remote_job_id}.exit"
+      escaped_exit = Shellwords.shellescape(exit_file)
+      "cd #{escaped_dir} && { ( #{command} ) ; ret=$? ; echo $ret > #{escaped_exit} ; exit $ret ; }"
+    end
+
     def dispatch_operation!(environment:, operation_id:, command:, working_directory:,
                             artifact_hash: nil, task: nil, execution: nil, metadata: {}, runner: nil)
       # 1. Idempotência estrita por operation_id (§11.2, §11.3)
@@ -61,8 +69,12 @@ class AcRemoteGatewayService
       runner ||= DefaultRunner.new
       transport = environment.build_transport(lab_opt_in: true)
 
-      # Wrapper do comando que roda dentro do working_directory autorizado
-      wrapped_cmd = "cd #{working_directory} && #{command}"
+      # Wrapper do comando com shell escaping e gravação do exit code (§14.3, [BUG-P1-02])
+      wrapped_cmd = build_wrapped_command(
+        working_directory: working_directory,
+        command: command,
+        remote_job_id: remote_job_id
+      )
 
       begin
         result = runner.execute(transport, wrapped_cmd)

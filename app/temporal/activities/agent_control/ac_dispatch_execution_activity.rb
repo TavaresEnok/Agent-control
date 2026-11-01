@@ -21,6 +21,26 @@ module Activities
         # Idempotência de processo (§11.3.1): se já possui handle registrado, reutiliza
         handle = execution.process_handle.presence || "ac-proc-#{execution.id}-ep#{reported_epoch}-#{SecureRandom.hex(4)}"
 
+        # Execução física real quando houver comando configurado (§11.3.1, [BUG-P0-02])
+        task = execution.ac_task
+        worktree = execution.worktree_path
+        cmd = execution.metadata&.dig("command") || task&.inputs&.dig("command")
+
+        if cmd.present? && worktree.present? && Dir.exist?(worktree)
+          stdin, stdout, stderr, wait_thr = Open3.popen3(cmd, chdir: worktree)
+          stdin.close
+          pid = wait_thr.pid
+          handle = "pid-#{pid}"
+
+          execution.update!(
+            process_handle: handle,
+            metadata: (execution.metadata || {}).merge(
+              "pid" => pid,
+              "command" => cmd
+            )
+          )
+        end
+
         execution.mark_running!(handle: handle) unless execution.state_running?
 
         {

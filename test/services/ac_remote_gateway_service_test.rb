@@ -22,11 +22,23 @@ class AcRemoteGatewayServiceTest < ActiveSupport::TestCase
         command: remote_command
       }
 
-      if @failure_on_command[remote_command]
-        raise AcRemoteGatewayService::RemoteTransportError, @failure_on_command[remote_command]
+      matched_failure = @failure_on_command[remote_command] ||
+        @failure_on_command.find do |pattern, _|
+          pattern_str = pattern.to_s
+          core = pattern_str.include?("&&") ? pattern_str.split("&&").last.strip : pattern_str
+          remote_command.include?(core)
+        end&.last
+
+      if matched_failure
+        raise AcRemoteGatewayService::RemoteTransportError, matched_failure
       end
 
-      response = @responses[remote_command] || {
+      response = @responses[remote_command] ||
+        @responses.find do |pattern, _|
+          pattern_str = pattern.to_s
+          core = pattern_str.include?("&&") ? pattern_str.split("&&").last.strip : pattern_str
+          remote_command.include?(core)
+        end&.last || {
         stdout: "MOCK_SUCCESS",
         stderr: "",
         exit_code: 0,
@@ -169,7 +181,7 @@ class AcRemoteGatewayServiceTest < ActiveSupport::TestCase
     assert_equal 0, status[:result][:exit_code]
 
     # Verifica que NÃO houve execução duplicada do comando principal
-    main_executions = @mock_runner.executions.select { |e| e[:command] == wrapped_cmd }
+    main_executions = @mock_runner.executions.select { |e| e[:command].include?(cmd) && !e[:command].include?("test -f") && !e[:command].include?("rm -f") }
     assert_equal 1, main_executions.count, "Não deve executar cópia cega após desconexão"
   end
 

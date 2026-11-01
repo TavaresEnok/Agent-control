@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "open3"
+
 # F3 — Serviço de Integração Condicional Protegida (AC Domain)
 #
 # Implementa as regras de integração segura do Plano Mestre (§15.3, §15.3.1):
@@ -21,7 +23,8 @@ class AcIntegrationService
       candidate_commit:,
       current_branch_head:,
       artifact_hash:,
-      verification_evidence: {}
+      verification_evidence: {},
+      repo_path: nil
     )
       raise ArgumentError, "task é obrigatório" if task.blank?
       raise ArgumentError, "expected_base_commit é obrigatório" if expected_base_commit.blank?
@@ -50,6 +53,25 @@ class AcIntegrationService
       if current_branch_head.to_s != expected_base_commit.to_s
         raise ConcurrentBranchModificationError,
               "Corrida de branch detectada: base atual (#{current_branch_head}) diverge da base esperada (#{expected_base_commit}). Reconciliação necessária (§15.3.1)"
+      end
+
+      # CAS físico no Git quando houver repositório configurado no disco (§15.3.1)
+      repo_path ||= (task.project&.respond_to?(:custom_fields) ? task.project.custom_fields&.dig("git_repo_path") : nil) ||
+                    task.ac_plan&.ac_work_context&.metadata&.dig("git_repo_path")
+
+      if repo_path.present? && Dir.exist?(File.join(repo_path, ".git"))
+        branch_name = (task.respond_to?(:target_branch) ? task.target_branch.presence : nil) ||
+                      task.metadata&.dig("target_branch") ||
+                      "main"
+        branch_ref = branch_name.start_with?("refs/") ? branch_name : "refs/heads/#{branch_name}"
+
+        stdout, stderr, status = Open3.capture3(
+          "git", "-C", repo_path, "update-ref", branch_ref, candidate_commit, expected_base_commit
+        )
+        unless status.success?
+          raise ConcurrentBranchModificationError,
+                "Git CAS update-ref falhou (ref: #{branch_ref}): #{stderr.presence || stdout}"
+        end
       end
 
       # 5. Evidência de testes atestada por executor confiável (§15.3.1)

@@ -17,7 +17,8 @@ module Api
             intent_id: intent_id,
             company: current_company,
             command_type: command_type,
-            payload: payload
+            payload: payload,
+            user: current_user
           ) do |_command|
             handle_command(command_type, payload)
           end
@@ -33,6 +34,49 @@ module Api
 
         def handle_command(command_type, payload)
           case command_type.to_s
+          when "setup_project_wizard"
+            project_name = payload["project_name"].presence || "Novo Projeto Mobile"
+            context_title = payload["context_title"].presence || "Contexto #{project_name}"
+
+            project = ::Project.create!(
+              company: current_company,
+              name: project_name,
+              owner: current_user
+            )
+
+            context = AcWorkContext.create!(
+              company: current_company,
+              project: project,
+              title: context_title,
+              external_id: "ctx-#{project.id}-#{SecureRandom.hex(4)}",
+              state: "active"
+            )
+
+            plan = AcPlan.create!(
+              company: current_company,
+              project: project,
+              ac_work_context: context,
+              plan_key: "plan-#{project.id}-1",
+              title: "Plano Inicial #{project.name}",
+              objective: "Execução orientada pelo assistente móvel",
+              version: 1,
+              state: :active,
+              content_hash: Digest::SHA256.hexdigest("plan_init_#{project.id}")
+            )
+
+            if payload["remote_environment_id"].present?
+              env = AcRemoteEnvironment.where(company: current_company).find_by(id: payload["remote_environment_id"])
+              context.update!(metadata: (context.metadata || {}).merge("remote_environment_id" => env.id)) if env
+            end
+
+            {
+              project_id: project.id,
+              project_name: project.name,
+              context_id: context.id,
+              plan_id: plan.id,
+              status: "configured"
+            }
+
           when "create_task"
             plan = AcPlan.where(company: current_company).find(payload["plan_id"])
             task = AcTask.create!(
