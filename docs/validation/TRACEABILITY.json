@@ -330,25 +330,25 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/remote-journal-private-20261102.log",
-    "files": "services/remote-worker/worker.py;src/remote.ts;tests/remote_worker_test.py",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Isolated journal process only; no SSH transport, remote host disconnect, real sandbox or production use demonstrated."
+    "limitation": "Two disposable SSH hosts with no model credentials; remote AI CLIs and production hosts not evaluated."
   },
   {
     "id": "RF-27",
     "normative_row": "RF-27\tP0\tPreservar identidade e resultado de uma operação SSH após desconexão\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Lost acknowledgement and manager takeover tested; host reboot and physical network loss remain open."
   },
   {
     "id": "RF-28",
@@ -356,12 +356,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/isolated-engineering-second-20261102.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Only fixed synthetic implementation is container-isolated; QA and real CLIs are not."
   },
   {
     "id": "RF-29",
@@ -769,15 +769,15 @@
   {
     "id": "RNF-03",
     "normative_row": "RNF-03\tIsolamento\tTrabalhador não acessa conta alheia, chave administrativa, Docker socket ou diretório de outro projeto\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/isolated-engineering-second-20261102.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic worker has no host socket, keys or network; hostile agents and all roles not demonstrated."
   },
   {
     "id": "RNF-04",
@@ -1110,25 +1110,25 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/remote-journal-private-20261102.log",
-    "files": "services/remote-worker/worker.py;src/remote.ts;tests/remote_worker_test.py",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log",
+    "files": "src/remote.ts;tests/ssh.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Isolated journal process only; no SSH transport, remote host disconnect, real sandbox or production use demonstrated."
+    "limitation": "Real SSH transport and lost acknowledgement; no network cut or remote host reboot."
   },
   {
     "id": "T15",
     "normative_row": "T15\tTrabalhador tenta acessar outra conta/projeto/administração\tAcesso negado pela fronteira técnica; tarefa legítima continua possível\tRF-28/29, RNF-03\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/isolated-engineering-second-20261102.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Fixed synthetic implementation only; cross-account hostile process proof pending."
   },
   {
     "id": "T16",

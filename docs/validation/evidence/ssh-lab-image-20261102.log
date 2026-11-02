@@ -1,0 +1,41 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile.ssh-lab
+#1 transferring dockerfile: 175B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/agent-control-lab:0.1.0
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 174B done
+#3 DONE 0.0s
+
+#4 [1/2] FROM docker.io/library/agent-control-lab:0.1.0
+#4 DONE 0.0s
+
+#5 [2/2] RUN apk add --no-cache openssh-client openssh-server python3 && passwd -d node
+#5 1.218 ( 1/13) Installing openssh-keygen (10.3_p1-r1)
+#5 1.235 ( 2/13) Installing libedit (20260508.3.1-r1)
+#5 1.250 ( 3/13) Installing openssh-client-common (10.3_p1-r1)
+#5 1.277 ( 4/13) Installing openssh-client-default (10.3_p1-r1)
+#5 1.295 ( 5/13) Installing openssh-server-common (10.3_p1-r1)
+#5 1.309 ( 6/13) Installing openssh-server (10.3_p1-r1)
+#5 1.334 ( 7/13) Installing gdbm (1.26-r0)
+#5 1.347 ( 8/13) Installing mpdecimal (4.0.1-r0)
+#5 1.362 ( 9/13) Installing libpanelw (6.6_p20260516-r0)
+#5 1.375 (10/13) Installing python3 (3.14.10-r1)
+#5 1.547 (11/13) Installing python3-pycache-pyc0 (3.14.10-r1)
+#5 1.682 (12/13) Installing pyc (3.14.10-r1)
+#5 1.682 (13/13) Installing python3-pyc (3.14.10-r1)
+#5 1.682 Executing busybox-1.37.0-r31.trigger
+#5 1.698 OK: 842.6 MiB in 259 packages
+#5 1.760 passwd: password for node changed by root
+#5 DONE 1.8s
+
+#6 exporting to image
+#6 exporting layers
+#6 exporting layers 0.3s done
+#6 writing image sha256:a58a36fd2a892705563276ad9517331e9b83695be8e9f9fefbc3c8da7b1d3c8c done
+#6 naming to docker.io/library/agent-control-ssh-lab:0.1.0 done
+#6 DONE 0.3s

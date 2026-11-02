@@ -1,5 +1,62 @@
 name: ac-implementation
 services:
+  ssh-fixture-init:
+    profiles: [ssh-test]
+    image: agent-control-ssh-lab:0.1.0
+    user: '0:0'
+    network_mode: none
+    volumes: ['..:/workspace:ro','ssh-fixture-keys:/fixtures']
+    working_dir: /workspace
+    command: [node, scripts/prepare-ssh-fixtures.mjs]
+  ssh-host-a:
+    profiles: [ssh-test]
+    image: agent-control-ssh-lab:0.1.0
+    user: '0:0'
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    networks: [lab]
+    tmpfs: ['/run:rw,nosuid,nodev,size=8m','/tmp:rw,noexec,nosuid,nodev,size=8m','/projects:rw,nosuid,nodev,size=32m,uid=1000,gid=1000']
+    volumes:
+      - ssh-fixture-keys:/fixtures:ro
+      - ../services/remote-worker/worker.py:/usr/local/lib/agent-control/worker.py:ro
+    command: [sh, -ec, 'mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-a/sshd_config -h /fixtures/host-a/host_key']
+    depends_on:
+      ssh-fixture-init: {condition: service_completed_successfully}
+  ssh-host-b:
+    profiles: [ssh-test]
+    image: agent-control-ssh-lab:0.1.0
+    user: '0:0'
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    networks: [lab]
+    tmpfs: ['/run:rw,nosuid,nodev,size=8m','/tmp:rw,noexec,nosuid,nodev,size=8m','/projects:rw,nosuid,nodev,size=32m,uid=1000,gid=1000']
+    volumes:
+      - ssh-fixture-keys:/fixtures:ro
+      - ../services/remote-worker/worker.py:/usr/local/lib/agent-control/worker.py:ro
+    command: [sh, -ec, 'mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-b/sshd_config -h /fixtures/host-b/host_key']
+    depends_on:
+      ssh-fixture-init: {condition: service_completed_successfully}
+  ssh-controller:
+    profiles: [ssh-test]
+    image: agent-control-ssh-lab:0.1.0
+    init: true
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    networks: [lab]
+    working_dir: /workspace
+    volumes: ['..:/workspace','ssh-fixture-keys:/fixtures:ro']
+    environment:
+      AC_TEST_DATABASE_URL: postgresql://ac_lab:synthetic-lab-only@db:5432/ac_implementation_test
+      AC_SSH_FIXTURE_ROOT: /fixtures
+    command: [sleep, infinity]
+    depends_on:
+      db: {condition: service_healthy}
+      ssh-host-a: {condition: service_started}
+      ssh-host-b: {condition: service_started}
   remote-fixture:
     profiles: [remote-test]
     image: python@sha256:d6e4d224f70f9e0172a06a3a2eba2f768eb146811a349278b38fff3a36463b47
@@ -84,6 +141,8 @@ services:
       AC_SANDBOX_HOST_ROOT: /home/app/projects/agent-control-implementation/.state/sandbox
       AC_SANDBOX_PROBE: /home/app/projects/agent-control-implementation/scripts/sandbox-probe.mjs
       AC_SANDBOX_PROBE_SHA256: ffbcfcb6bbaec702ff886ed0d72d4458265ad0e8410dd1d5d9b4c70eec2fba66
+      AC_SANDBOX_IMPLEMENTATION: /home/app/projects/agent-control-implementation/scripts/synthetic-worker.mjs
+      AC_SANDBOX_IMPLEMENTATION_SHA256: 69fec5c252c65279d60f06ff93ac087438a0a00789dd840a7b5ac76cbb97db1f
       AC_SANDBOX_IMAGE: sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3
     volumes:
       - ..:/home/app/projects/agent-control-implementation:ro
@@ -105,6 +164,7 @@ services:
     command: [sleep, infinity]
     environment:
       AC_SANDBOX_DATABASE_URL: postgresql://ac_lab:synthetic-sandbox-only@sandbox-db:5432/ac_sandbox_test
+      AC_ISOLATED_ENGINEERING: '1'
       HOME: /workspace/.state/home
     volumes: ['..:/workspace','broker-socket:/run/ac-broker']
     depends_on:
@@ -116,3 +176,5 @@ volumes:
   pg-data:
   sandbox-pg:
   broker-socket:
+
+  ssh-fixture-keys:

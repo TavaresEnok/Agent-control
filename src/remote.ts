@@ -23,7 +23,8 @@ function run(binary:string,args:string[],input:string,timeoutMs:number):Promise<
   child.stdout.on('data',chunk=>{stdout+=String(chunk);if(stdout.length>131072){settled=true;stop();clearTimeout(timer);fail(new Refusal('REMOTE_RESPONSE_TOO_LARGE'));}});
   child.stderr.resume();child.stdin.on('error',()=>{});child.stdin.end(input);
   child.once('error',()=>{clearTimeout(timer);if(!settled){settled=true;fail(new Refusal('REMOTE_TRANSPORT_UNAVAILABLE'));}});
-  child.once('exit',code=>{clearTimeout(timer);if(settled)return;settled=true;code===0?ok(stdout):fail(new Refusal('REMOTE_TRANSPORT_UNCERTAIN'));});
+  // 'exit' may precede the final stdout chunk. Reconcile only after all pipes close.
+  child.once('close',code=>{clearTimeout(timer);if(settled)return;settled=true;code===0?ok(stdout):fail(new Refusal('REMOTE_TRANSPORT_UNCERTAIN'));});
  });
 }
 /** No agent chooses a private-key path or accepts a new host key. Allowed targets are controller configuration. */

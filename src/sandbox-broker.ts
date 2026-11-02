@@ -4,11 +4,15 @@ import { createConnection } from 'node:net';
 import { chmod,chown,lstat,mkdir,readFile,realpath,rm,unlink,writeFile } from 'node:fs/promises';
 import { join,resolve,sep } from 'node:path';
 import { z } from 'zod';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import { Authority,Id,canonical,digest,Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 
-const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup']),jobId:Id,grantId:Id,
- authority:Authority,profile:z.literal('synthetic-probe-v1'),expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup','stop']),jobId:Id,grantId:Id,
+ authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1']),
+ source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict().optional(),
+ expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 type SandboxRequest=z.infer<typeof SandboxRequest>;
 function signature(value:Omit<SandboxRequest,'signature'>,key:Uint8Array){return createHmac('sha256',key).update(canonical(value)).digest('hex');}
 export function signSandbox(value:Omit<SandboxRequest,'signature'>,key:Uint8Array):SandboxRequest{return {...value,signature:signature(value,key)};}
@@ -41,7 +45,13 @@ export class DockerDaemon{
  async stop(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/stop?t=3`);if(![204,304].includes(r.status))throw new Refusal('DOCKER_STOP_UNCERTAIN');}
  async remove(id:string){const r=await this.call('DELETE',`/v1.44/containers/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}
 }
-export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
+export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
+const exec=promisify(execFile);
+async function safeGit(cwd:string,args:string[]){
+ const result=await exec('/usr/bin/git',['-c','safe.directory='+cwd,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,...args],
+  {env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'},timeout:10000,maxBuffer:2000000});
+ return result.stdout.trim();
+}
 export class SandboxBroker{
  readonly ledger:Ledger;readonly docker:DockerDaemon;private readonly active=new Set<string>();
  private readonly monitors=new Map<string,ReturnType<typeof setInterval>>();
@@ -70,6 +80,19 @@ export class SandboxBroker{
   // (without CAP_DAC_OVERRIDE) to read the synthetic worker's receipt.
   await chmod(expected,0o755);await chown(expected,10001,10001);return actual;
  }
+ private executor(request:SandboxRequest){
+  if(request.profile==='synthetic-probe-v1'){
+   if(request.source)throw new Refusal('SANDBOX_PROFILE_MISMATCH');
+   return {path:this.config.probeHostPath,hash:this.config.probeSha256};
+  }
+  if(!request.source||!this.config.implementationPath||!this.config.implementationSha256)throw new Refusal('SANDBOX_IMPLEMENTATION_NOT_CONFIGURED');
+  return {path:this.config.implementationPath,hash:this.config.implementationSha256};
+ }
+ private specification(request:SandboxRequest,work:string,epoch=request.authority.epoch){
+  const executor=this.executor(request);
+  const base={profile:request.profile,image:this.config.imageId,work,probe:executor.path,probeSha256:executor.hash,grant:request.grantId,epoch};
+  return digest(request.source?{...base,sourceDigest:digest(request.source)}:base);
+ }
  private inspectExpected(value:Inspected,request:SandboxRequest,spec:string,work:string){
   const labels=value.Config.Labels??{};
   if(labels['ac.scope']!=='isolated-synthetic' ||labels['ac.job']!==request.jobId||labels['ac.grant']!==request.grantId||
@@ -78,14 +101,15 @@ export class SandboxBroker{
     !value.HostConfig.CapDrop?.includes('ALL')||!value.HostConfig.SecurityOpt?.some(s=>s.startsWith('no-new-privileges'))||
     value.HostConfig.PidsLimit!==64||value.HostConfig.Memory!==268435456||value.HostConfig.NanoCpus!==1000000000||
     value.Mounts.length!==2||!value.Mounts.some(m=>m.Destination==='/work'&&m.Source===work&&m.RW)||
-    !value.Mounts.some(m=>m.Destination==='/runner/probe.mjs'&&m.Source===this.config.probeHostPath&&!m.RW))
+    !value.Mounts.some(m=>m.Destination==='/runner/probe.mjs'&&m.Source===this.executor(request).path&&!m.RW))
     throw new Refusal('SANDBOX_IDENTITY_MISMATCH');
  }
  async perform(raw:unknown){
   const value=this.validate(raw),name='ac-synthetic-'+value.jobId,work=join(this.config.hostRoot,value.jobId,'work');
-  if(createHash('sha256').update(await readFile(this.config.probeHostPath)).digest('hex')!==this.config.probeSha256)
+  const executor=this.executor(value);
+  if(createHash('sha256').update(await readFile(executor.path)).digest('hex')!==executor.hash)
     throw new Refusal('SANDBOX_EXECUTOR_CHANGED');
-  const spec=digest({profile:value.profile,image:this.config.imageId,work,probe:this.config.probeHostPath,probeSha256:this.config.probeSha256,grant:value.grantId,epoch:value.authority.epoch});
+  const spec=this.specification(value,work);
   const principal=(await this.ledger.pool.query('SELECT i.principal_id FROM ac_capacity_grants g JOIN ac_intents i ON i.id=g.intent_id WHERE g.id=$1',[value.grantId])).rows[0]?.principal_id;
   if(!principal)throw new Refusal('GRANT_FORBIDDEN',403);
   const admission=await this.ledger.tx(async c=>{
@@ -96,7 +120,7 @@ export class SandboxBroker{
    if(!grant)throw new Refusal('GRANT_FORBIDDEN',403);
    const prior=(await c.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[value.jobId])).rows[0];
    if(prior){
-    const priorSpec=digest({profile:value.profile,image:this.config.imageId,work,probe:this.config.probeHostPath,probeSha256:this.config.probeSha256,grant:value.grantId,epoch:Number(prior.manager_epoch)});
+    const priorSpec=this.specification(value,work,Number(prior.manager_epoch));
     if(prior.grant_id!==value.grantId||prior.spec_digest!==priorSpec)throw new Refusal('SANDBOX_ID_CONFLICT');
     return {prior,grant,priorSpec};
    }
@@ -113,6 +137,16 @@ export class SandboxBroker{
   });
   if(admission.prior){
    if(value.action==='cleanup')return this.cleanup(value,admission.prior,admission.priorSpec,work);
+   if(value.action==='stop'){
+    return this.ledger.tx(async c=>{
+     await this.ledger.fence(c,value.authority,true);
+     const inspected=await this.docker.inspect(name);
+     if(!inspected)return {jobId:value.jobId,state:'uncertain'};
+     this.inspectExpected(inspected,{...value,authority:{...value.authority,epoch:Number(admission.prior.manager_epoch)}},admission.priorSpec,work);
+     if(inspected.State.Running)await this.docker.stop(inspected.Id);
+     return {jobId:value.jobId,state:'uncertain'};
+    });
+   }
    return this.reconcile(value,admission.prior,admission.priorSpec,work);
   }
   return this.ledger.tx(async c=>{
@@ -121,14 +155,28 @@ export class SandboxBroker{
    const grant=(await c.query('SELECT state,manager_epoch FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[value.grantId])).rows[0];
    if(!grant||grant.state!=='reserved'||Number(grant.manager_epoch)!==value.authority.epoch)throw new Refusal('GRANT_NOT_ELIGIBLE');
    const actual=await this.workspace(value.jobId);if(actual!==work)throw new Refusal('SANDBOX_WORKSPACE_MISMATCH');
+   if(value.source){
+    await chown(work,0,0);
+    // Import a standalone bundle. No host Git metadata or project path is mounted.
+    const bundle=Buffer.from(value.source.bundle,'base64');
+    if(bundle.length>1000000||bundle.toString('base64')!==value.source.bundle)throw new Refusal('SANDBOX_SOURCE_INVALID');
+    const sourcePath=join(this.config.hostRoot,value.jobId,'source.bundle');await writeFile(sourcePath,bundle,{mode:0o600,flag:'wx'});
+    await exec('/usr/bin/git',['init','-q',work],{timeout:10000});
+    await safeGit(work,['fetch','--no-tags',sourcePath,'HEAD']);
+    if(await safeGit(work,['rev-parse','FETCH_HEAD'])!==value.source.base)throw new Refusal('SANDBOX_SOURCE_IDENTITY_MISMATCH');
+    await safeGit(work,['checkout','--detach',value.source.base]);
+    await exec('/bin/chown',['-R','-h','10001:10001',work],{timeout:10000});
+   }
    if(await this.docker.inspect(name))throw new Refusal('SANDBOX_NAME_IN_USE');
    const labels={'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
    const id=await this.docker.create(name,{Image:this.config.imageId,User:'10001:10001',WorkingDir:'/work',
-    Entrypoint:['node','/runner/probe.mjs'],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp'],Labels:labels,
+    Entrypoint:['node','/runner/probe.mjs',...(value.source?[value.jobId]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
+     'GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_AUTHOR_NAME=Synthetic worker','GIT_AUTHOR_EMAIL=fixture@example.invalid',
+     'GIT_COMMITTER_NAME=Synthetic worker','GIT_COMMITTER_EMAIL=fixture@example.invalid'],Labels:labels,
     HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],
      PidsLimit:64,Memory:268435456,NanoCpus:1000000000,AutoRemove:false,Init:true,
      Tmpfs:{'/tmp':'rw,nosuid,nodev,noexec,size=64m'},LogConfig:{Type:'json-file',Config:{'max-size':'1m','max-file':'1'}},
-     Binds:[`${work}:/work:rw`,`${this.config.probeHostPath}:/runner/probe.mjs:ro`]}});
+     Binds:[`${work}:/work:rw`,`${executor.path}:/runner/probe.mjs:ro`]}});
    const created=await this.docker.inspect(id);if(!created)throw new Refusal('DOCKER_CREATE_UNCERTAIN');
    this.inspectExpected(created,value,spec,work);
    await this.ledger.fence(c,value.authority);
@@ -160,9 +208,22 @@ export class SandboxBroker{
    const probeSchema=z.object({visible:z.array(z.string()),network:z.boolean(),uid:z.number()}).strict();
    let probe:z.infer<typeof probeSchema>|null=null;
    try{const decoded=probeSchema.safeParse(JSON.parse(await readFile(join(work,'probe-result.json'),'utf8')));if(decoded.success)probe=decoded.data;}catch{}
-   if(inspected.State.ExitCode===0&&(!probe||probe.visible.length||probe.network||probe.uid!==10001))throw new Refusal('SANDBOX_PROBE_INVALID');
+   let implementation:unknown=null,bundle:string|undefined;
+   if(value.source&&inspected.State.ExitCode===0){
+    const raw=await readFile(join(work,`receipt-${value.jobId}.json`),'utf8');
+    const parsed=z.object({operationId:Id,base:z.string().regex(/^[a-f0-9]{40}$/),commit:z.string().regex(/^[a-f0-9]{40}$/),
+     tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(true)}).strict().parse(JSON.parse(raw));
+    if(parsed.operationId!==value.jobId||parsed.base!==value.source.base||await safeGit(work,['rev-parse','HEAD'])!==parsed.commit||
+      await safeGit(work,['rev-parse','HEAD^{tree}'])!==parsed.tree||await safeGit(work,['rev-parse','HEAD^'])!==parsed.base||
+      await safeGit(work,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==`synthetic-${value.jobId}.txt`)
+      throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
+    const output=join(this.config.hostRoot,value.jobId,'artifact.bundle');
+    await safeGit(work,['bundle','create',output,'HEAD']);
+    const content=await readFile(output);if(content.length>1000000)throw new Refusal('SANDBOX_ARTIFACT_TOO_LARGE');
+    implementation=parsed;bundle=content.toString('base64');
+   }else if(!value.source&&inspected.State.ExitCode===0&&(!probe||probe.visible.length||probe.network||probe.uid!==10001))throw new Refusal('SANDBOX_PROBE_INVALID');
    const receipt={jobId:value.jobId,containerId:inspected.Id,exitCode:inspected.State.ExitCode,finishedAt:inspected.State.FinishedAt,synthetic:true,
-    probe};
+    probe,...(value.source?{implementation,bundle}: {})};
    await c.query('UPDATE ac_sandbox_jobs SET state=$2,receipt=$3 WHERE id=$1',[value.jobId,inspected.State.ExitCode===0?'completed':'failed',receipt]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','running','uncertain')",[value.grantId,receipt]);
    this.active.delete(inspected.Id);const timer=this.monitors.get(inspected.Id);if(timer)clearInterval(timer);this.monitors.delete(inspected.Id);return receipt;
@@ -186,7 +247,8 @@ export class SandboxBroker{
    // Only after a matching container has exited, take back ownership of its
    // dedicated fixture directory so cleanup does not need DAC override.
    const workInfo=await lstat(work).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;});
-   if(workInfo){if(workInfo.isSymbolicLink()||!workInfo.isDirectory()||(await realpath(work))!==work)throw new Refusal('SANDBOX_WORKSPACE_FORBIDDEN',403);await chown(work,0,0);await chmod(work,0o700);}
+   if(workInfo){if(workInfo.isSymbolicLink()||!workInfo.isDirectory()||(await realpath(work))!==work)throw new Refusal('SANDBOX_WORKSPACE_FORBIDDEN',403);
+    await exec('/bin/chown',['-R','-h','0:0',work],{timeout:10000});await chmod(work,0o700);}
    await rm(job,{recursive:true,force:true});return {jobId:value.jobId,state:'cleaned'};
   });
  }
@@ -229,7 +291,7 @@ export async function brokerMain(config:SandboxBrokerConfig){
  }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){lock.release();await broker.close();throw error;}}
  const server=createServer((req:IncomingMessage,res:ServerResponse)=>{
   if(req.method!=='POST'||req.url!=='/v1/jobs'){res.writeHead(404).end();return;}
-  let body='';req.on('data',chunk=>{body+=String(chunk);if(body.length>32768)req.destroy();});
+  let body='';req.on('data',chunk=>{body+=String(chunk);if(body.length>1500000)req.destroy();});
   req.on('end',()=>{void Promise.resolve().then(()=>broker.perform(JSON.parse(body))).then(result=>{res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify(result));})
    .catch(error=>{if(!(error instanceof Refusal))console.error('sandbox broker failure',String((error as NodeJS.ErrnoException)?.code??'UNKNOWN'));res.writeHead(error instanceof Refusal?error.status:400,{'content-type':'application/json'}).end(JSON.stringify({error:error instanceof Refusal?error.code:'INVALID_REQUEST'}));});});
  });

@@ -1,0 +1,4 @@
+FROM agent-control-lab:0.1.0
+USER root
+RUN apk add --no-cache openssh-client openssh-server python3 && passwd -d node
+USER node

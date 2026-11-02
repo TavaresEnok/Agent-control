@@ -1,0 +1,33 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "actualComponents": [
+    "PostgreSQL",
+    "Cezar RunManager",
+    "Git",
+    "Ruby helper",
+    "OS processes"
+  ],
+  "independentVerifierSessions": 5,
+  "reviewers": 3,
+  "judge": 1,
+  "maxSimultaneousReviews": 2,
+  "stages": [
+    "integrate",
+    "judge",
+    "qa",
+    "review",
+    "review",
+    "review"
+  ],
+  "verifiedTree": "ce805ab8e9ad1239166a526dc066465fc7d569a9",
+  "denied": [
+    "changed artifact",
+    "implementation session reused",
+    "invalid signature",
+    "moved base"
+  ],
+  "replayDoesNotRewriteRef": true,
+  "isolatedImplementation": true,
+  "limitation": "Synthetic fixed implementation and reviewers; verification processes remain controller-local. No real provider, mobile client or production deployment."
+}

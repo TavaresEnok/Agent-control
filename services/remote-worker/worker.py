@@ -65,9 +65,9 @@ def execute(config_path, operation):
             raise ValueError('EXECUTABLE_MUST_BE_ABSOLUTE')
         max_log = config.get('maxLogBytes', 1048576)
         max_seconds = config.get('maxSeconds', 60)
-        if not isinstance(max_log, int) or not 1024 <= max_log <= 16777216:
+        if type(max_log) is not int or not 1024 <= max_log <= 16777216:
             raise ValueError('INVALID_LOG_LIMIT')
-        if not isinstance(max_seconds, int) or not 1 <= max_seconds <= 3600:
+        if type(max_seconds) is not int or not 1 <= max_seconds <= 3600:
             raise ValueError('INVALID_TIME_LIMIT')
         def limits():
             resource.setrlimit(resource.RLIMIT_FSIZE, (max_log, max_log))
@@ -139,7 +139,7 @@ def rpc(config_path):
     directory = pathlib.Path(config['projects'][project]).resolve(strict=True)
     if str(directory) != request['root']:
         raise ValueError('PROJECT_ROOT_MISMATCH')
-    if not isinstance(request['epoch'], int) or request['epoch'] < 1:
+    if type(request['epoch']) is not int or request['epoch'] < 1:
         raise ValueError('INVALID_EPOCH')
     fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     with open(root / (operation + '.admission.lock'), 'a') as lock:

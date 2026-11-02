@@ -16,6 +16,7 @@ import { Capacity } from './capacity.ts';
 import { baselineWorkflow,workflowFor } from './workflows.ts';
 import { EngineeringStages,type EngineeringOptions } from './engineering.ts';
 import { Template } from './templates.ts';
+import {IsolatedImplementation} from './isolated-implementation.ts';
 export { baselineWorkflow } from './workflows.ts';
 
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
@@ -38,7 +39,9 @@ export class CezarRuntime {
   private readonly children = new Set<ChildProcess>();
   private running = true;
   private lock: import('pg').PoolClient | undefined;
-  constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions) {
+  constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
+    private readonly isolated?:IsolatedImplementation) {
+    if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     this.capacity = new Capacity(ledger);
     this.engineering=engineeringOptions?new EngineeringStages(ledger,projectId,engineeringOptions):undefined;
     this.store = RunStore.open(join(repo, '.ai/cezar'), { keepLive: true });
@@ -66,6 +69,7 @@ export class CezarRuntime {
     const lost = () => {
       this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
       this.engineering?.close();
+      this.isolated?.close();
       if (this.lock === c) { this.lock = undefined; c.release(true); }
     };
     c.on('error', lost); c.on('end', lost);
@@ -190,6 +194,18 @@ export class CezarRuntime {
             get open(){return opened;},get pid(){return active?.pid;},sendMessage(){return false;},end(){active?.end();},
             interrupt(){cancelled=true;return active?.interrupt();},hardStop(){cancelled=true;active?.hardStop?.();}};
         }
+        if(runtime.isolated){
+          if(!runId)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+          const authority=runtime.authorities.get(runId);if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+          let active:AgentSession|undefined,opened=true,canceled=false;
+          const result=(async()=>{
+            const intent=(await runtime.ledger.pool.query<Intent>('SELECT * FROM ac_intents WHERE run_id=$1',[runId])).rows[0];
+            if(!intent)throw new Refusal('INTENT_MISSING');
+            active=runtime.isolated!.start(intent,authority,spec,onEvent);if(canceled)active.hardStop?.();return active.result;
+          })().finally(()=>{opened=false;});
+          return {result,get open(){return opened;},sendMessage(){return false;},end(){active?.end();},
+            interrupt(){canceled=true;return active?.interrupt();},hardStop(){canceled=true;active?.hardStop?.();}};
+        }
         let child: ChildProcess | undefined, open = true, canceled = false;
         let monitor:ReturnType<typeof setInterval>|undefined;
         let completion:Promise<number|null>|undefined;
@@ -280,6 +296,7 @@ export class CezarRuntime {
   async close() {
     this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
     this.engineering?.close();
+    this.isolated?.close();
     this.manager.dispose(); this.store.flush();
     if (this.lock) { await this.lock.query('SELECT pg_advisory_unlock(hashtextextended($1,1))', [this.repo]); this.lock.release(); this.lock = undefined; }
   }

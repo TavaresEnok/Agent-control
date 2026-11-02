@@ -10,10 +10,13 @@ import {Integrator} from '../src/integration.ts';
 import {canonical,type Command} from '../src/contracts.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {Templates} from '../src/templates.ts';
+import {IsolatedImplementation} from '../src/isolated-implementation.ts';
 
 // Synthetic payloads, actual PostgreSQL, Cezar, Ruby Git helper, processes and Git refs.
 test('engineering DAG records independent verification before conditional integration', {timeout:90000}, async()=>{
- const url=process.env.AC_TEST_DATABASE_URL;if(!url?.includes('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
+ const isolated=process.env.AC_ISOLATED_ENGINEERING==='1';
+ const url=isolated?process.env.AC_SANDBOX_DATABASE_URL:process.env.AC_TEST_DATABASE_URL;
+ if(!url?.endsWith(isolated?'/ac_sandbox_test':'/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
  const db=new Ledger(url);await db.migrate();
  const project=randomUUID(),principal='engineering-'+randomUUID();
  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Engineering fixture']);
@@ -29,7 +32,7 @@ test('engineering DAG records independent verification before conditional integr
  if(options.qualityRevision===undefined||options.targetRef===undefined)throw Error('MISSING_ENGINEERING_FIXTURE_CONFIG');
  await new Templates(db).publish(principal,context,0,{workflow:'engineering-synthetic-v1',qualityRevision:options.qualityRevision,targetRef:options.targetRef});
  const authority=await db.acquire(principal,context,randomUUID(),'synthetic-manager',60);
- const runtime=new CezarRuntime(db,repo,project,options);await runtime.start();
+ const runtime=new CezarRuntime(db,repo,project,options,isolated?new IsolatedImplementation(db):undefined);await runtime.start();
  try{
   const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,
    action:'plan.start',payload:{workflow:'engineering-synthetic-v1',messageRef:'encrypted:synthetic'}};
@@ -43,6 +46,11 @@ test('engineering DAG records independent verification before conditional integr
   }
   assert(done,'synthetic DAG did not finish');
   const operation=(await db.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intent.id])).rows[0];
+  if(isolated){
+   const job=(await db.pool.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1',[operation.id])).rows[0];
+   assert.equal(job.state,'completed');assert.equal(job.profile,'synthetic-implementation-v1');
+   assert.equal(job.receipt.implementation.commit,operation.receipt.commit);
+  }
   assert.equal(git('rev-parse','refs/heads/protected'),operation.receipt.commit);
   assert.equal(git('rev-parse','refs/heads/main'),base);
   const stages=(await db.pool.query('SELECT node_id,session_id,state,receipt FROM ac_stage_operations WHERE intent_id=$1 ORDER BY node_id',[intent.id])).rows;
@@ -71,10 +79,11 @@ test('engineering DAG records independent verification before conditional integr
   git('update-ref','refs/heads/protected',base,operation.receipt.commit);
   const replay=await new Integrator(db,options.quality,options.git,project,'refs/heads/protected').integrate(principal,integration.id,authority);
   assert.equal(replay.status,'integrated');assert.equal(git('rev-parse','refs/heads/protected'),base);
-  await writeFile('docs/validation/evidence/engineering-dag-real-components.json',JSON.stringify({result:'passed',synthetic:true,
+  await writeFile(isolated?'docs/validation/evidence/engineering-dag-isolated.json':'docs/validation/evidence/engineering-dag-real-components.json',JSON.stringify({result:'passed',synthetic:true,
    actualComponents:['PostgreSQL','Cezar RunManager','Git','Ruby helper','OS processes'],
    independentVerifierSessions:5,reviewers:3,judge:1,maxSimultaneousReviews:Number(overlap),stages:stages.map(s=>s.node_id),verifiedTree:operation.receipt.tree,
    denied:['changed artifact','implementation session reused','invalid signature','moved base'],replayDoesNotRewriteRef:true,
-   limitation:'Synthetic fixed processes; no LLM reviewer, hostile sandbox, mobile client, or production deployment.'},null,2));
+   isolatedImplementation:isolated,
+   limitation:'Synthetic fixed implementation and reviewers; verification processes remain controller-local. No real provider, mobile client or production deployment.'},null,2));
  }finally{await runtime.close();await db.close();}
 });
