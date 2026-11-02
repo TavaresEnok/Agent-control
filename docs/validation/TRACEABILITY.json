@@ -379,15 +379,15 @@
   {
     "id": "RF-30",
     "normative_row": "RF-30\tP0\tExibir uso, cota e renovação por conta quando observáveis; indicar desconhecido quando não observáveis\tI3/I6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/usage-observations-20261102.log",
+    "files": "src/usage.ts;src/api.ts;db/migrations/023_usage_observations.sql;tests/usage.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Synthetic cumulative observations and ACL only; no live provider collector, account quota, retries analytics, export or mobile UI; not accepted."
   },
   {
     "id": "RF-31",
@@ -509,15 +509,15 @@
   {
     "id": "RF-40",
     "normative_row": "RF-40\tP0/P1\tColetar e exportar uso, perfil, tentativas, tempo e retrabalho corretamente; oferecer comparação simples com limitações explícitas. Análises estatísticas/painéis avançados ficam em P1\tI7/I9",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/usage-observations-20261102.log",
+    "files": "src/usage.ts;src/api.ts;db/migrations/023_usage_observations.sql;tests/usage.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic cumulative observations and ACL only; no live provider collector, account quota, retries analytics, export or mobile UI; not accepted."
   },
   {
     "id": "RF-41",
@@ -1146,15 +1146,15 @@
   {
     "id": "T17",
     "normative_row": "T17\tUso cumulativo, cache e raciocínio em eventos repetidos\tContadores sem dupla soma; saldo desconhecido permanece desconhecido\tRF-30/40, RNF-14\tI7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/usage-observations-20261102.log",
+    "files": "src/usage.ts;src/api.ts;db/migrations/023_usage_observations.sql;tests/usage.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic cumulative observations and ACL only; no live provider collector, account quota, retries analytics, export or mobile UI; not accepted."
   },
   {
     "id": "T18",

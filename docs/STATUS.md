@@ -73,3 +73,9 @@ A execução `implementation-continuation-20261102.log` registrou **20 testes ap
 - Integração com assinaturas e CLIs reais, análise de elegibilidade dos provedores, autenticação segura, coleta de cotas, QA independente real, hardening de processos, recuperação, observabilidade completa e aceite móvel ainda faltam. O tratamento de fila justa ainda precisa de avaliação com diferentes contas e capacidade global.
 - Dois contêineres de probe que encerraram durante as primeiras provas ficaram como evidência no Docker de laboratório; o teste verde limpa apenas o seu próprio contêiner. O broker de teste e seu banco foram parados; não remover recursos alheios.
 - Antes de nova rodada: ler os documentos normativos, este registro e FINDINGS; construir em cima do commit local, manter as evidências e não tocar Paseos, planos, credenciais ou projetos ativos. A etapa seguinte prioritária é ligar o runtime ao executor isolado sem permitir bypass, seguida de recuperação/SSH e login seguro, com provas pertinentes ao final.
+
+## Continuação — registro de uso por tentativa
+
+Implementado armazenamento transacional de observações cumulativas por concessão, com IDs de evento idempotentes, sequência monotônica, recusa de regressões e consulta por contexto sujeita à ACL. Entrada/saída/cache/raciocínio permanecem campos distintos, sem somá-los indevidamente; a resposta identifica saldo da assinatura como desconhecido. Não existe endpoint público de escrita: somente código interno poderá registrar observações após integrar um adaptador confiável. Não há ainda coleta de provedores reais, preço, comparativo, exportação nem painel de uso.
+
+A verificação focada `docs/validation/evidence/usage-observations-20261102.log` passou com PostgreSQL sintético, incluindo duplicação, conflito, regressão e acesso indevido. Typecheck da aplicação passou. I7/RF-30/RF-40/T17 continuam parciais, sem aprovação de gate; revisão independente continua pendente.

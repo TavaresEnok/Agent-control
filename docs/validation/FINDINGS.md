@@ -56,3 +56,5 @@ A execução completa nativa Cezar antes das correções de asserção registrou
 | AC-IMP-0031 | SSH / alta | não homologado | Contratos, host key fixada e reconciliação foram implementados, mas sem demonstração de SSH em host isolado após queda. Não habilitar execução remota real. |
 | AC-IMP-0032 | Recuperação e backup / alta | não homologado | Exportação cifrada e importação para banco novo foram escritas, porém sem recuperação física completa e sem reconciliação provada de efeitos externos ou worktrees. |
 | AC-IMP-0033 | QA e integração / alta | somente sintético | `implementation-continuation-20261102.log` exercita DAG, três revisores, juiz e CAS Git com processos sintéticos. Não demonstra agentes reais, executor confiável isolado ou revisão humana independente. |
+
+| AC-IMP-0034 | Uso/cotas / média | parcial | Observações cumulativas sintéticas e acesso por contexto verificados em `usage-observations-20261102.log`; saldo é desconhecido e contadores sobrepostos não são somados. Ainda faltam adaptadores confiáveis, coleta real, apresentação móvel, exportação e comparações. |

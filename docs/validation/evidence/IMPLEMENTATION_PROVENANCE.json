@@ -9,11 +9,11 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "54a31cc36053e0c70b5a0ae5c56231bc19fd9efa",
+  "git_head_before_delivery": "8bd255e1ef2506bab28a49a0776d3002f2582666",
   "worktree_changes_present": true,
   "new_sources": {
     "src/admission.ts": "d615b1dd28fe0de1e4078e9eb9016728d35897da7804d1931db0af4f59c86f65",
-    "src/api.ts": "a050570869b6f326538bedfd6a53516635165e948c73f79276263759edaf4fc8",
+    "src/api.ts": "f147fd4806ab8987c80e06de30d4303757acf5b1a11d93c55ccceea3efa95ef3",
     "src/capacity.ts": "4f0422b11b3c7e45cab4cde0bf36cf9589c29ea261255e93431edc218378df0d",
     "src/cezar.ts": "88825af1629a392ab12aca85f7dddd5527317d0139d3164c58e36cdbdc90c01c",
     "src/context-keys.ts": "19e118903b2701751ff3c2c5e4da8e707989836a8b95e3891e4e72acb8feed07",
@@ -35,6 +35,7 @@
     "src/sandbox-client.ts": "8d3487521c59f1d3b2bca8a36caaabbdd4b3ec6f222d0a69a75c326e01fdc050",
     "src/sessions.ts": "54129482785c5a472ca5af24bebab29154b4c883c6e631bdb49eb79d5c090a1a",
     "src/templates.ts": "603e529b048fadb3eefa3297d1d0c8780a3e891f2ce338f8add423a52b131557",
+    "src/usage.ts": "d6711676fccaed29fcea7a35b77d86e3a1fdcb5abee563fada4d7674f4af017e",
     "src/workflows.ts": "591baac934c0dfd89dbae0d1279c8f74b8662ac206b13ab21f48618e05ed6781",
     "adapters/happier-entry.ts": "954c6afa6ccaf5e0618d48c3075ed2d71c6334d294667d4c6524fb485072bae0",
     "db/migrations/001_authority.sql": "8b27b4ad8243d2ba601234c211a261f4719b3cb0c360b22f533c284c135c9b0d",
@@ -59,6 +60,7 @@
     "db/migrations/020_stage_timing.sql": "aa4944dbd5947d35604c374180a82ea356869f3315393903241052770520b33d",
     "db/migrations/021_judge_evidence.sql": "f10eed5ad18076bd083f178b62c5a6446c78140101c0f5f16f5eb55b2cf3dc5f",
     "db/migrations/022_browser_sessions.sql": "11ca8bb10af67ed19eee729ec0c12a83828a57c46fb16201931cc8ce697cf5b0",
+    "db/migrations/023_usage_observations.sql": "ebe2c3e6784fe3d8f3947cbb2a6e1de64f565c2ae7edd519d6d9b63a41e7165e",
     "tests/admission.test.ts": "319422ed701e225f3f39dd37dafd5424e2b629bf8daba25227cf54338b2ea310",
     "tests/capacity.test.ts": "b4e56471be6274db275870782fbfe99207d9a2ff817b4b746ff32646516f5e99",
     "tests/context-keys.test.ts": "dad714157cc7c8f87568affc48666645d1ed215188e9df9cb91b3f1de83e9f7c",
@@ -74,6 +76,7 @@
     "tests/runtime.test.ts": "2dea51065cac52880c45172298e0e70ba2ac5560aa648e0d0cb583669a248d2d",
     "tests/sandbox.test.ts": "47fbab09e661e0c2aebc49ef02b9fa523084661f393e05acad6f99f443eaa368",
     "tests/sessions.test.ts": "4fc682a08a65a89ab97ffc3f75eba36e4fbc23e25aa4a87aa255ec80bb9adcd6",
+    "tests/usage.test.ts": "8c6cb31ed042761e29612c25dba2a3ad5b44c3a8bed0a1aa91903a93516a1719",
     "scripts/audit-delivery.py": "4602d418bea521c38abaf3eb06d2336f5f4893ee44d4fe9ef060e181f79204b1",
     "scripts/backup-lab.mjs": "6792b233560bb925be00c966cd9fe9142e175fbbab0b92ec911231a72c9b1bb7",
     "scripts/browser-acceptance.mjs": "01834aee1c0bcccf745c8a7560d0b3bbb58cc857c58f8e5eec330bdd36dd1a37",

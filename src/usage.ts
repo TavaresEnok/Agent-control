@@ -1,0 +1,41 @@
+import {z} from 'zod';
+import {Ledger} from './ledger.ts';
+import {Authority,Id,digest,Refusal} from './contracts.ts';
+
+// Each value is cumulative for one attempt, as reported by its adapter.
+// Cache and reasoning may overlap input/output; never add them into a total.
+const Counters=z.object({input:z.number().int().nonnegative().safe().nullable(),output:z.number().int().nonnegative().safe().nullable(),
+ cache:z.number().int().nonnegative().safe().nullable(),reasoning:z.number().int().nonnegative().safe().nullable()}).strict();
+const Observation=z.object({grantId:Id,eventId:Id,seq:z.number().int().positive().safe(),counters:Counters}).strict();
+export class Usage {
+ constructor(readonly ledger:Ledger){}
+ async record(principal:string,authority:Authority,raw:z.input<typeof Observation>){
+  const value=Observation.parse(raw),hash=digest(value);
+  return this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 FOR UPDATE',[value.grantId,authority.contextId])).rows[0];
+   if(!grant||Number(grant.manager_epoch)!==authority.epoch)throw new Refusal('USAGE_GRANT_FORBIDDEN',403);
+   const prior=(await c.query('SELECT digest,seq FROM ac_usage_observations WHERE grant_id=$1 AND event_id=$2',[value.grantId,value.eventId])).rows[0];
+   if(prior){if(prior.digest!==hash)throw new Refusal('USAGE_EVENT_CONFLICT');return {duplicate:true};}
+   const last=(await c.query('SELECT seq,counters FROM ac_usage_observations WHERE grant_id=$1 ORDER BY seq DESC LIMIT 1',[value.grantId])).rows[0];
+   if(last){
+    if(value.seq<=Number(last.seq))throw new Refusal('USAGE_SEQUENCE_STALE');
+    for(const k of ['input','output','cache','reasoning'] as const){const old=last.counters[k],next=value.counters[k];
+     if(old!==null&&(next===null||next<old))throw new Refusal('USAGE_COUNTER_REGRESSION');}
+   }
+   await c.query('INSERT INTO ac_usage_observations(grant_id,event_id,seq,counters,digest) VALUES($1,$2,$3,$4,$5)',[value.grantId,value.eventId,value.seq,value.counters,hash]);
+   return {duplicate:false};
+  });
+ }
+ async context(principal:string,contextId:string){
+  Id.parse(contextId);
+  return this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,contextId,false);
+   const rows=await c.query(`SELECT g.id grant_id,g.role,g.account_id,g.profile_id,g.state,p.model,p.effort,
+     u.seq,u.counters,u.observed_at FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id
+     LEFT JOIN LATERAL (SELECT seq,counters,observed_at FROM ac_usage_observations WHERE grant_id=g.id ORDER BY seq DESC LIMIT 1) u ON true
+     WHERE g.context_id=$1 ORDER BY g.created_at,g.id`,[contextId]);
+   return {scope:'reported_attempt_usage',subscriptionBalance:'unknown',overlappingCounters:true,attempts:rows.rows};
+  });
+ }
+}

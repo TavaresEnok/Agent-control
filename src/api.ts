@@ -6,6 +6,7 @@ import type { CezarRuntime } from './cezar.ts';
 import { Control, ControlCommand } from './control.ts';
 import { OperatorProof,Operators } from './operator.ts';
 import type { BrowserSessions } from './sessions.ts';
+import {Usage} from './usage.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -69,6 +70,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       return c.json({contexts:rows.rows});
     })
     .get('/api/v1/ac/contexts/:id/resources', async c => c.json(await control.view(c.get('principal'),Id.parse(c.req.param('id')))))
+    .get('/api/v1/ac/contexts/:id/usage', async c => c.json(await new Usage(ledger).context(c.get('principal'),Id.parse(c.req.param('id')))))
     .post('/api/v1/ac/control', async c => {
       const encoded=c.req.header('x-ac-operator-proof');
       if(!encoded||encoded.length>2000)throw new Refusal('HUMAN_CONTROL_AUTH_REQUIRED',403);
