@@ -205,8 +205,8 @@ export class HappierEndpoint {
       let run;
       try{run=await this.runtime.dispatch(intent,this.options.authority);}
       catch(error){
-        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY'].includes(error.code))throw error;
-        if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY'].includes(error.code))capacityWait??=error;
+        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
+        if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))capacityWait??=error;
         // Admission or capacity may block this intent; status projection and
         // queued chat delivery must still continue for existing work.
         run=await this.runtime.observe(intent,this.options.authority);

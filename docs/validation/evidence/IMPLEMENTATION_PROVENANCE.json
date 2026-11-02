@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "cc7faff0dc9f7ed5e64cc57250b70d23d8a0194a",
+  "git_head_before_delivery": "753c42e08fd02f8e4fcbc25df062be823304ab55",
   "worktree_changes_present": true,
   "new_sources": {
     "src/admission.ts": "d615b1dd28fe0de1e4078e9eb9016728d35897da7804d1931db0af4f59c86f65",
@@ -22,7 +22,7 @@
     "src/engineering.ts": "4d92dc67a41d62031ddc6bec72d7d098ada471991bd3a4058cd4665bfa272083",
     "src/git.ts": "2f9ec25f5dd3c6e64cf7eccc3475b233d47b1fb5033cd232ad807bb15b05d38b",
     "src/happier-import.ts": "7e2117a059a35be6f200bfe31f1c922dcc54898c3bb9e4d9b0f6a6915cb7adc2",
-    "src/happier.ts": "152a8ec81a41cb672706004c557f03a6e877b14f85fa9e0865efcc9651f8d98e",
+    "src/happier.ts": "bad3730ad166d4b30b1da442a3f324ea8588696a97dac2111356ded2fbb19186",
     "src/import.ts": "926d81305a29fa0a17f538dee62aba6ba6100469d5f68c3d8a9a42813984238d",
     "src/integration.ts": "4bd22a808ac15415ec8a3512609841f9a3ad4bc99892109a218d770c00b2f989",
     "src/isolated-implementation.ts": "cd3f5ad36176636c847a0a36237cdc608abddba0d2cc5a971a5adcb1f0afff9d",

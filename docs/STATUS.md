@@ -112,5 +112,6 @@ O gerente substituto pode reconciliar um job isolado já concluído usando o sna
 
 Na admissão de capacidade, a conta antiga configurada como reserva de programação agora é recusada quando outra conta programadora elegível está ativa em algum contexto. A prova `original-reserve-global-20261102.log` cobre dois projetos/contextos, a recusa com outro programador disponível, a admissão após esgotamento dos outros e a liberação segura da concessão. A regra é sintética; não monitora cotas de assinaturas reais nem interrompe à força um processo já iniciado quando uma conta volta.
 Uma recusa por reserva desnecessária limpa a seleção de perfil da espera; ela não fica como cabeça de fila para outros contextos. O mesmo teste de capacidade confirmou essa condição.
+O relay da conversa trata esse novo motivo como espera de capacidade, preservando a projeção dos runs e a entrega de mensagens já persistidas em vez de encerrar o ciclo de supervisão.
 
 O pedido de parada do broker passou a consultar o contêiner após a parada; se houver recibo físico terminal, usa a mesma reconciliação que confirma o resultado e libera a concessão. Na ausência de contêiner ou confirmação, permanece incerto. O typecheck e o probe de isolamento passaram após a alteração (`sandbox-stop-reconcile-20261102.log`); não houve teste de interrupção de um worker lento nesta rodada.

@@ -8,3 +8,6 @@ Limit: quota observations are synthetic; no live account or automatic preemption
 Follow-up: a refused original-account wait now clears desired_profile so it cannot hold the queue for another context.
 Command 3: docker compose -f deploy/compose.lab.yml exec -T runtime node --import tsx --test tests/capacity.test.ts
 Exit code 3: 0; 8 tests, 8 pass, 0 fail, duration 1194 ms. The cleared desired_profile is asserted.
+Follow-up: Happier relay categorizes ORIGINAL_RESERVE_NOT_NEEDED as a wait and keeps projecting existing runs.
+Command 4: docker compose -f deploy/compose.lab.yml exec -T runtime npm run typecheck
+Exit code 4: 0. This relay branch was not behaviorally exercised by the capacity unit test.
