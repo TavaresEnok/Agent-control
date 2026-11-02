@@ -1,0 +1,10 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+tests/managers.test.ts(58,18): error TS2550: Property 'findLast' does not exist on type '{ input: ManagerEndpointInput; closed: number; starts: number; }[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.
+tests/managers.test.ts(58,27): error TS7006: Parameter 'r' implicitly has an 'any' type.
+tests/managers.test.ts(58,79): error TS7006: Parameter 'byte' implicitly has an 'any' type.
+tests/managers.test.ts(59,41): error TS2550: Property 'findLast' does not exist on type '{ input: ManagerEndpointInput; closed: number; starts: number; }[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.
+tests/managers.test.ts(59,50): error TS7006: Parameter 'r' implicitly has an 'any' type.
+tests/managers.test.ts(59,103): error TS7006: Parameter 'byte' implicitly has an 'any' type.

@@ -20,7 +20,7 @@ O comando retorna SHA-256 do arquivo. O tar.gz contém `agent-control/SOURCE-REV
 
 ## Recusas e limites
 
-Exige locks root/Cezar/Happier, versões upstream fixadas e proveniência de todos os fontes próprios/patches modificados. Proveniência velha ou incompleta recusa a entrega. Caminhos privados/dependências rastreados (`.state`, `.git`, `node_modules`, `.env` que não seja exemplo) recusam o pacote em vez de esconder o erro; `dist`, caches Python e metadados de compilação são excluídos. Symlinks absolutos ou que escapem do snapshot são recusados. Não sobrescreve destino existente.
+Exige locks root/Cezar/Happier, versões upstream fixadas e proveniência de todos os fontes próprios/patches modificados. Proveniência velha ou incompleta recusa a entrega. Caminhos privados/dependências rastreados (`.state`, `.git`, `node_modules`, `.env` próprio que não seja exemplo) recusam o pacote em vez de esconder o erro. Configurações de ambiente não exemplares dos checkouts upstream fixados são omitidas integralmente, sem copiar valores, e registradas no manifesto por caminho/blob Git; isso não constitui uma permissão genérica para distribuir `.env`; `dist`, caches Python e metadados de compilação são excluídos. Symlinks absolutos ou que escapem do snapshot são recusados. Não sobrescreve destino existente.
 
 Há detecção limitada de chaves privadas e formatos de tokens nos fontes próprios e arquivos upstream modificados. Fixtures públicas upstream inalteradas mantêm sua proveniência. Isso não equivale a DLP universal: revisão humana/secret scanning permanecem necessários antes de publicar. Nenhuma credencial de `.state` é lida ou precisa existir para empacotar.
 

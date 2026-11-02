@@ -198,7 +198,8 @@ function ProjectScopeRoute() {
   // surface — and its cache under the same `'default'`-led keys the shell chrome (which
   // renders outside this provider) already uses. Only non-boot projects pay the `/api/p/<id>`
   // prefix. Links carry the URL prefix either way (project-router falls back to the URL).
-  const scopeId = projects.data?.bootProject === projectId ? null : projectId
+  const scopeId = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
+    ? projectId : projects.data?.bootProject === projectId ? null : projectId
 
   return (
     <ProjectScopeProvider projectId={scopeId}>

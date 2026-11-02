@@ -1,6 +1,9 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
-import { BrowserRouter } from 'react-router'
+import { BrowserRouter, useLocation } from 'react-router'
+import {getApiBaseUrl} from '@open-mercato/cezar-api-client'
+import type {ReactNode} from 'react'
+import {pathnameProjectId} from './lib/project-router'
 
 import { GlobalEventsProvider } from './api/global-events'
 import { HostUsageProvider } from './api/host-usage'
@@ -17,6 +20,16 @@ import { Telemetry } from './lib/telemetry'
 import { AppRoutes } from './routes'
 import {AgentControlAuthGate} from './components/auth/agent-control-auth-gate'
 
+export function ScopedEvents({children}:{children:ReactNode}){
+  const {pathname}=useLocation()
+  const project=pathnameProjectId(pathname)
+  const url=import.meta.env.VITE_AGENT_CONTROL_MANAGED==='1'
+    ? project&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project)
+      ? `${getApiBaseUrl()}/api/v1/p/${encodeURIComponent(project)}/workspace/events?slim=1` : null
+    : undefined
+  return <GlobalEventsProvider key={import.meta.env.VITE_AGENT_CONTROL_MANAGED==='1'?(project??'unscoped'):'native'} url={url}>{children}</GlobalEventsProvider>
+}
+
 /** Real URLs, no basename: the cockpit is always mounted at the origin root, and the server
  *  serves index.html for every non-/api GET (src/server/static-ui.ts), so a deep link like
  *  `/tasks/:id/changes` cold-loads and survives a refresh.
@@ -25,9 +38,8 @@ import {AgentControlAuthGate} from './components/auth/agent-control-auth-gate'
  *  QueryClientProvider because its chips read `/api/health` and `/api/todos`. Each chip renders
  *  nothing until its query answers — no placeholder that would read as real data.
  *
- *  GlobalEventsProvider sits here, at the root, because the app gets exactly one `/api/events`
- *  stream: it is mounted for the app's whole life, above every route, so navigating never drops
- *  and reopens it — and it publishes the live usage map to anything below.
+ *  The events provider is above the routes and publishes the live usage map to its descendants.
+ *  Managed mode reconnects it when the project in the URL changes.
  */
 export function App() {
   // Lazy initial state rather than a module-level constant: one client per App instance, so a
@@ -38,7 +50,8 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AgentControlAuthGate>
-      <GlobalEventsProvider>
+      <BrowserRouter>
+      <ScopedEvents>
         {/* The machine-telemetry store, one per app: the sidebar widget and the Settings card are
             two readers of the same sample and the same 60 s ring, and exactly one writer (root,
             card or route) is live per viewport. Muted here at the root because the widget lives in
@@ -56,7 +69,6 @@ export function App() {
             {/* Beside ThemeProvider on purpose: appearance (accent/density) is the ui-state.json
                 half of the same boot contract — mirror pre-paints, server truth reconciles. */}
             <AppearanceProvider>
-              <BrowserRouter>
                 <LastLocationController />
                 {/* Page views + error hooks; the server forwards them only after the user opted in
                     (docs/telemetry.md). Renders nothing. */}
@@ -73,11 +85,11 @@ export function App() {
                 </ReferenceStatusRegistry>
                 {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
                 <Toaster />
-              </BrowserRouter>
             </AppearanceProvider>
           </ThemeProvider>
         </HostUsageProvider>
-      </GlobalEventsProvider>
+      </ScopedEvents>
+      </BrowserRouter>
       </AgentControlAuthGate>
     </QueryClientProvider>
   )

@@ -9,6 +9,21 @@ class PackageError(Exception):pass
 def git(root,*args):
  return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.DEVNULL)
 
+def is_environment(name):
+ path=PurePosixPath(name)
+ return path.name=='.env' or path.name.startswith('.env.') and not path.name.endswith('.example')
+
+def omitted_upstream_environment(name):
+ return name.startswith(('upstream/cezar/','upstream/happier/')) and is_environment(name)
+
+def environment_exclusions(root,commit):
+ excluded=[]
+ for entry in git(root,'ls-tree','-rz',commit).split(b'\0'):
+  if not entry:continue
+  meta,raw=entry.split(b'\t',1);mode,kind,oid=meta.decode().split();name=raw.decode('utf8')
+  if omitted_upstream_environment(name):excluded.append({'path':name,'gitBlob':oid,'reason':'upstream_environment_configuration_not_distributed'})
+ return sorted(excluded,key=lambda value:value['path'])
+
 def entries(root,commit):
  result={}
  for entry in git(root,'ls-tree','-rz',commit).split(b'\0'):
@@ -19,7 +34,8 @@ def entries(root,commit):
   if path.is_absolute() or '..' in path.parts or '\\' in name or any(ord(c)<32 for c in name):raise PackageError('UNSAFE_SOURCE_PATH')
   if kind!='blob' or mode not in ('100644','100755','120000'):raise PackageError('UNSUPPORTED_GIT_ENTRY: '+name)
   if any(part in ('.git','.state','node_modules','__pycache__') for part in path.parts):raise PackageError('PRIVATE_OR_DEPENDENCY_PATH: '+name)
-  if path.name=='.env' or path.name.startswith('.env.') and not path.name.endswith('.example'):raise PackageError('PRIVATE_ENVIRONMENT_PATH: '+name)
+  if omitted_upstream_environment(name):continue
+  if is_environment(name):raise PackageError('PRIVATE_ENVIRONMENT_PATH: '+name)
   if 'dist' in path.parts or path.suffix in ('.tsbuildinfo','.pyc'):continue
   result[name]=(mode,oid)
  return result
@@ -87,7 +103,7 @@ def write_package(root,commit,output):
  if output==root or root in output.parents:raise PackageError('OUTPUT_MUST_BE_OUTSIDE_REPOSITORY')
  if output.exists():raise PackageError('OUTPUT_ALREADY_EXISTS')
  manifest={'schemaVersion':1,'kind':'source-only','commit':commit,'sourceDateEpoch':timestamp,
-  'upstreams':{key:value['commit'] for key,value in provenance.items() if key in ('cezar','happier')},'files':[]}
+  'upstreams':{key:value['commit'] for key,value in provenance.items() if key in ('cezar','happier')},'files':[],'excluded':environment_exclusions(root,commit)}
  descriptor,temp=tempfile.mkstemp(prefix='.agent-control-package-',dir=output.parent)
  try:
   with os.fdopen(descriptor,'wb') as raw,gzip.GzipFile(filename='',fileobj=raw,mode='wb',mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w',format=tarfile.PAX_FORMAT) as archive,batch_reader(root) as read:
@@ -120,7 +136,7 @@ def main():
  if args.check and args.output or not args.check and not args.output:raise PackageError('CHOOSE_CHECK_OR_OUTPUT')
  commit=git(root,'rev-parse','--verify',args.commit+'^{commit}').decode().strip()
  if args.check:
-  selected,_=validate(root,commit);print(json.dumps({'commit':commit,'files':len(selected),'state':'source_selection_validated','kind':'source-only'}))
+  selected,_=validate(root,commit);print(json.dumps({'commit':commit,'files':len(selected),'state':'source_selection_validated','kind':'source-only','omittedUpstreamEnvironmentFiles':len(environment_exclusions(root,commit))}))
  else:print(json.dumps(write_package(root,commit,args.output)))
 if __name__=='__main__':
  try:main()

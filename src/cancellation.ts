@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {digest,Refusal,type Authority} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import type {SandboxClient} from './sandbox-client.ts';
-const Source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict();
+const Source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().optional(),composition:z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string(),tree:z.string(),base:z.string(),writePaths:z.array(z.string())}).strict()).optional()}).strict();
 const Execution=z.discriminatedUnion('profile',[
  z.object({profile:z.literal('synthetic-implementation-v1'),source:Source}).strict(),
  z.object({profile:z.literal('synthetic-verification-v1'),source:Source,verification:z.object({artifactId:z.uuid(),operationId:z.uuid(),kind:z.enum(['qa','review','judge'])}).strict()}).strict(),
@@ -56,11 +56,15 @@ export class Cancellations{
      WHERE g.intent_id=$1 AND g.state='reserved'
      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)
      AND NOT EXISTS(SELECT 1 FROM ac_remote_operations r WHERE (r.intent_id=$1 OR (r.intent_id IS NULL AND r.context_id=g.context_id)) AND r.state NOT IN ('completed','failed','canceled_confirmed'))
-     AND ((g.role='programmer' AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.intent_id=$1 AND o.state='registered' AND o.handle IS NULL))
-      OR (g.role IN ('qa','reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.handle IS NULL)))`,
+     AND ((g.role='programmer' AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.intent_id=$1 AND o.grant_id=g.id AND o.state='registered' AND o.handle IS NULL
+       AND NOT EXISTS(SELECT 1 FROM ac_execution_launches l WHERE l.operation_id=o.id)))
+      OR (g.role IN ('qa','reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.handle IS NULL
+       AND NOT EXISTS(SELECT 1 FROM ac_stage_execution_launches l WHERE l.stage_id=s.id))))`,
      [request.intent_id,{state:'not_started',source:'cancellation-reconciliation'}]);
     const pending=(await c.query(`SELECT
      EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released') OR
+     EXISTS(SELECT 1 FROM ac_intents child LEFT JOIN ac_plan_cancellations cc ON cc.intent_id=child.id
+       WHERE child.parent_intent_id=$1 AND (cc.intent_id IS NULL OR cc.state<>'confirmed')) OR
      EXISTS(SELECT 1 FROM ac_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_stage_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_integration_intents t JOIN ac_artifacts a ON a.id=t.artifact_id WHERE a.intent_id=$1 AND t.state='uncertain') OR

@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { Refusal } from './contracts.ts';
 const GitId=z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
@@ -9,18 +9,24 @@ const Identity=z.object({commit:GitId,base:GitId,tree:GitId,legacyDigest:z.strin
 /** Repository is a controller configuration, never a path supplied by the worker. */
 export class GitArtifacts{
  constructor(private readonly repository:string,private readonly rubyBinary='/usr/bin/ruby'){}
- private async invoke(value:Record<string,string>){
+ async assertManagedPath(parentId:string,runId:string,path:string,exists:boolean){
+  z.uuid().parse(parentId);z.uuid().parse(runId);
+  const repo=await realpath(this.repository),expected=resolve(repo,'.ai/cezar/managed',parentId,runId);
+  if(resolve(path)!==expected||await realpath(exists?expected:dirname(expected))!==(exists?expected:dirname(expected)))throw new Refusal('MANAGED_WORKTREE_FORBIDDEN');
+ }
+ private async invoke(value:Record<string,unknown>){
   const repo=await realpath(this.repository);
   const payload=JSON.stringify({...value,repo});
   const result=await new Promise<string>((resolve,reject)=>{
    const child=spawn(this.rubyBinary,[new URL('../services/agent-control-git/helper.rb',import.meta.url).pathname],{
-    env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'},stdio:['pipe','pipe','pipe']});
-   let output='',failed=false;
-   const timeout=setTimeout(()=>{failed=true;child.kill('SIGKILL');reject(new Refusal('GIT_HELPER_TIMEOUT'));},10000);
-   child.stdout.on('data',chunk=>{output+=String(chunk);if(output.length>65536){failed=true;child.kill('SIGKILL');reject(new Refusal('GIT_HELPER_OUTPUT_LIMIT'));}});
+    env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'},stdio:['pipe','pipe','pipe'],detached:true});
+   let output='',failure:string|undefined;
+   const terminate=(reason:string)=>{failure??=reason;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}};
+   const timeout=setTimeout(()=>terminate('GIT_HELPER_TIMEOUT'),10000);
+   child.stdout.on('data',chunk=>{output+=String(chunk);if(output.length>65536)terminate('GIT_HELPER_OUTPUT_LIMIT');});
    child.stderr.resume();
    child.once('error',()=>{clearTimeout(timeout);reject(new Refusal('GIT_HELPER_UNAVAILABLE'));});
-   child.once('exit',code=>{clearTimeout(timeout);if(failed)return;code===0?resolve(output):reject(new Refusal('GIT_IDENTITY_REFUSED'));});
+   child.once('close',code=>{clearTimeout(timeout);if(failure){reject(new Refusal(failure));return;}code===0?resolve(output):reject(new Refusal('GIT_IDENTITY_REFUSED'));});
    child.stdin.on('error',()=>{});child.stdin.end(payload);
   });
   return JSON.parse(result) as unknown;
@@ -29,6 +35,44 @@ export class GitArtifacts{
   GitId.parse(candidate);GitId.parse(base);
   const value=Identity.parse(await this.invoke({action:'identity',candidate,base}));
   if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  return value;
+ }
+ async import(sourceRepo:string,candidate:string,base:string){
+  GitId.parse(candidate);GitId.parse(base);
+  const value=Identity.parse(await this.invoke({action:'import',sourceRepo:await realpath(sourceRepo),candidate,base}));
+  if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  return value;
+ }
+ async compose(base:string,sources:readonly {commit:string;tree:string;base:string;writePaths:readonly string[]}[],destination:string){
+  GitId.parse(base);
+  z.array(z.object({commit:GitId,tree:GitId,base:GitId,writePaths:z.array(z.string().min(1))}).strict()).min(1).max(16).parse(sources);
+  const requested=resolve(destination);
+  const value=Identity.extend({snapshot:z.string()}).strict().parse(await this.invoke({action:'compose',base,sources,destination:requested}));
+  if(value.base!==base||value.snapshot!==requested)throw new Refusal('GIT_SNAPSHOT_MISMATCH');
+  return value;
+ }
+ /** The caller records the process under its fenced grant before input is sent.
+  * A timeout or lost controller is uncertain, never evidence of physical exit. */
+ async composeSupervised(base:string,sources:readonly {commit:string;tree:string;base:string;writePaths:readonly string[];sourceRepo?:string}[],destination:string,
+  onStart:(child:ChildProcess)=>Promise<void>){
+  GitId.parse(base);z.array(z.object({commit:GitId,tree:GitId,base:GitId,writePaths:z.array(z.string().min(1)),sourceRepo:z.string().optional()}).strict()).min(1).max(16).parse(sources);
+  const requested=resolve(destination),repo=await realpath(this.repository);
+  const child=spawn(this.rubyBinary,[new URL('../services/agent-control-git/helper.rb',import.meta.url).pathname],{
+   env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'},stdio:['pipe','pipe','pipe'],detached:true});
+  let output='',overflow=false;
+  child.stdout!.on('data',chunk=>{output+=String(chunk);if(output.length>65536){overflow=true;try{process.kill(-child.pid!,'SIGKILL');}catch{}}});
+  child.stderr!.resume();child.stdin!.on('error',()=>{});
+  const finished=new Promise<{code:number|null;signal:NodeJS.Signals|null}>((ok,fail)=>{child.once('close',(code,signal)=>ok({code,signal}));child.once('error',fail);});
+  void finished.catch(()=>{});
+  try{await onStart(child);}catch(error){try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}throw error;}
+  child.stdin!.end(JSON.stringify({action:'compose',base,sources,destination:requested,repo}));
+  let timedOut=false;
+  const timeout=setTimeout(()=>{timedOut=true;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}},30000);
+  let outcome:{code:number|null;signal:NodeJS.Signals|null};
+  try{outcome=await finished;}finally{clearTimeout(timeout);}
+  if(outcome.code!==0||outcome.signal||overflow||timedOut)throw new Refusal('GIT_COMPOSITION_UNCERTAIN');
+  const value=Identity.extend({snapshot:z.string()}).strict().parse(JSON.parse(output));
+  if(value.base!==base||value.snapshot!==requested)throw new Refusal('GIT_SNAPSHOT_MISMATCH');
   return value;
  }
  async snapshot(candidate:string,base:string,destination:string){

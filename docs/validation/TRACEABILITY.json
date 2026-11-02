@@ -5,12 +5,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/installation-bootstrap-first-20261102.log",
-    "files": "src/installation.ts;src/server-main.ts;tests/installation.test.ts",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md",
+    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Explicit private-config project initialization, not complete visual multi-project/environment administration; configured gateway remains administration-only."
+    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; local registration remains private-config based, at most four active runtimes, no live remote project deployment."
   },
   {
     "id": "RF-02",
@@ -18,12 +18,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md",
+    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; local registration remains private-config based, at most four active runtimes, no live remote project deployment."
   },
   {
     "id": "RF-03",
@@ -44,25 +44,25 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/context-keys.ts;tests/context-keys.test.ts",
+    "evidence": "docs/validation/evidence/manager-registry-sanitized-final-20261102.log;docs/implementation/MANAGER-REGISTRY-20261102.md",
+    "files": "src/managers.ts;src/lab-main.ts;tests/managers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Context fingerprints/rotation revoke authority in synthetic tests. Legacy fixtures still share an account key; no production custody/pairing proof."
+    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open."
   },
   {
     "id": "RF-05",
     "normative_row": "RF-05\tP0\tRepresentar duas contas do mesmo provedor sem usuários/empresas artificiais\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
   },
   {
     "id": "RF-06",
@@ -158,28 +158,28 @@
   {
     "id": "RF-13",
     "normative_row": "RF-13\tP0\tReservar capacidade global e local atomicamente, sem contar a mesma conta duas vezes\tI1/I3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
   },
   {
     "id": "RF-14",
     "normative_row": "RF-14\tP0\tDistribuir vagas entre chats com prioridade e justiça, evitando fome indefinida\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
   },
   {
     "id": "RF-15",
@@ -187,12 +187,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/manager-planning-api-final-20261102.log;docs/validation/evidence/manager-planning-restore-final-20261102.log",
-    "files": "src/planning.ts;src/planning-api.ts;tests/planning.test.ts",
+    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/managed-runtime-fourth-physical-check-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/managed-plan.ts;src/cezar.ts;src/engineering.ts;src/quality.ts;src/git.ts;services/agent-control-git/helper.rb",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Immutable fenced proposals with contracts, dependencies, native graph compilation, comparison and restore as new CAS revision. Dynamic execution and semantic manager inference remain pending."
+    "limitation": "Frozen synthetic task DAG executes under native Cezar; child artifacts, trusted composition and new composition QA/review precede exact CAS. Failed physical task blocks composition/integration. Managed restart recovery, correction loops, all cancellation races and real agent quality remain open."
   },
   {
     "id": "RF-16",
@@ -236,15 +236,15 @@
   {
     "id": "RF-19",
     "normative_row": "RF-19\tP0\tVincular pareceres e verificações a commits e condições exatos, invalidando evidência incompatível\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "types_only_not_behaviorally_verified",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/validation/evidence/git-helper-syntax.log",
-    "files": "src/quality.ts;src/integration.ts;src/git.ts;services/agent-control-git/;db/migrations/005_artifacts_and_quality.sql",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/managed-runtime-fourth-physical-check-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/managed-plan.ts;src/cezar.ts;src/engineering.ts;src/quality.ts;src/git.ts;services/agent-control-git/helper.rb",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Artifact gates/CAS implemented in internal services; no dedicated adversarial proof or complete DAG/verifier integration yet."
+    "limitation": "Frozen synthetic task DAG executes under native Cezar; child artifacts, trusted composition and new composition QA/review precede exact CAS. Failed physical task blocks composition/integration. Managed restart recovery, correction loops, all cancellation races and real agent quality remain open."
   },
   {
     "id": "RF-20",
@@ -314,15 +314,15 @@
   {
     "id": "RF-25",
     "normative_row": "RF-25\tP0\tIntegrar somente artefato aprovado, com proteção contra tentativa antiga e mudança da base\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "types_only_not_behaviorally_verified",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/validation/evidence/git-helper-syntax.log",
-    "files": "src/quality.ts;src/integration.ts;src/git.ts;services/agent-control-git/;db/migrations/005_artifacts_and_quality.sql",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/managed-runtime-fourth-physical-check-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/managed-plan.ts;src/cezar.ts;src/engineering.ts;src/quality.ts;src/git.ts;services/agent-control-git/helper.rb",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Artifact gates/CAS implemented in internal services; no dedicated adversarial proof or complete DAG/verifier integration yet."
+    "limitation": "Frozen synthetic task DAG executes under native Cezar; child artifacts, trusted composition and new composition QA/review precede exact CAS. Failed physical task blocks composition/integration. Managed restart recovery, correction loops, all cancellation races and real agent quality remain open."
   },
   {
     "id": "RF-26",
@@ -408,12 +408,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json",
-    "files": "src/auth-relay.ts;src/installation.ts;upstream/cezar/packages/web/src/components/auth/agent-control-auth-gate.tsx",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
+    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Chromium 390px with two synthetic accounts, distinct signing identities and opaque cookies. Native approval UI, physical devices and complete mobile journey remain pending."
+    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified."
   },
   {
     "id": "RF-33",
@@ -444,15 +444,15 @@
   {
     "id": "RF-35",
     "normative_row": "RF-35\tP0\tNotificar conclusão agrupada e bloqueio relevante, com deduplicação e histórico\tI6/I7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/notifications-first-20261102.log;docs/implementation/NOTIFICATIONS-PARALLEL-20261102.md",
+    "files": "src/notifications.ts;src/happier.ts;tests/notifications.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Durable metadata dedupe, completion batching, immediate blockers and ciphertext outbox with native ACK contract proven using intercepted publication. Physical push and child-exclusion end-to-end coverage remain unverified."
   },
   {
     "id": "RF-36",
@@ -483,15 +483,15 @@
   {
     "id": "RF-38",
     "normative_row": "RF-38\tP1\tPermitir equipe com vários revisores e julgador dentro dos limites compartilhados\tI4/I9",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "types_only_not_behaviorally_verified",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/validation/evidence/git-helper-syntax.log",
-    "files": "src/quality.ts;src/integration.ts;src/git.ts;services/agent-control-git/;db/migrations/005_artifacts_and_quality.sql",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/completed-node-recovery-final-20261102.log",
+    "files": "src/engineering.ts;src/quality-policy.ts;src/managed-plan.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Artifact gates/CAS implemented in internal services; no dedicated adversarial proof or complete DAG/verifier integration yet."
+    "limitation": "Configurable independent review/judge in fixed and dynamic synthetic flows. Not a benchmark of parallel reviewers or validation of real AI opinions."
   },
   {
     "id": "RF-39",
@@ -548,15 +548,15 @@
   {
     "id": "RF-43",
     "normative_row": "RF-43\tP0\tCadastrar templates reutilizáveis por projeto sem duplicar os dados de contas globais\tI3/I4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log",
+    "files": "src/templates.ts;src/control.ts;src/cezar.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Context templates reference existing policies/accounts and are frozen on acceptance. Full project-level reusable-template administration remains incomplete."
   },
   {
     "id": "RF-44",
@@ -600,15 +600,15 @@
   {
     "id": "RF-47",
     "normative_row": "RF-47\tP0\tReservar recursos por execução de etapa e liberar os correspondentes após encerramento reconciliado, sem bloquear avaliação por retenção de worktree\tI3/I5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
   },
   {
     "id": "RF-48",
@@ -616,12 +616,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/integration-approval-native-20261102.log;docs/validation/evidence/integration-uncertain-recovery-final-20261102.log;docs/validation/evidence/physical-node-recovery-20261102.log",
-    "files": "src/quality.ts;src/integration.ts;src/isolated-verification.ts;src/git.ts",
+    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/managed-runtime-fourth-physical-check-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/managed-plan.ts;src/cezar.ts;src/engineering.ts;src/quality.ts;src/git.ts;services/agent-control-git/helper.rb",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Trusted synthetic verifier receipts and exact-artifact CAS/reconciliation tested. Does not homologate real code-review quality, external writers or every failure interval."
+    "limitation": "Frozen synthetic task DAG executes under native Cezar; child artifacts, trusted composition and new composition QA/review precede exact CAS. Failed physical task blocks composition/integration. Managed restart recovery, correction loops, all cancellation races and real agent quality remain open."
   },
   {
     "id": "RF-49",
@@ -642,12 +642,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/manager-planning-api-final-20261102.log",
-    "files": "src/planning.ts;src/planning-api.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
+    "files": "src/managed-plan.ts;src/workspace-stream.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native Cezar read-only proposal graph reused; proposals explicitly have no live run status. Full mobile/live correction graph acceptance remains open."
+    "limitation": "Native graph and scoped event projection reused. Mobile proof demonstrates proposal view and unavailable-manager honesty; no physical-phone live correction graph or end-to-end restart guarantee."
   },
   {
     "id": "RF-51",
@@ -782,15 +782,15 @@
   {
     "id": "RNF-04",
     "normative_row": "RNF-04\tExperiência móvel\tFluxos essenciais utilizáveis em telas de 360 e 390 px de largura, além do desktop; sem dependência de hover\tI6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
+    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified."
   },
   {
     "id": "RNF-05",
@@ -821,15 +821,15 @@
   {
     "id": "RNF-07",
     "normative_row": "RNF-07\tEficiência\tEventos agrupados, contexto selecionado e verificações reutilizadas apenas sob identidade compatível\tI7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/notifications-first-20261102.log;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
+    "files": "src/notifications.ts;src/workspace-stream.ts;src/happier.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Batching of completion messages and coalesced native slim frames implemented; no measured model-token savings, semantic context selector or fleet performance benchmark."
   },
   {
     "id": "RNF-08",
@@ -1380,15 +1380,15 @@
   {
     "id": "T35",
     "normative_row": "T35\tWorkflow muda de estado/correção com celular suspenso e reconectado\tGrafo de leitura e cartões mostram mesmo estado real, responsáveis e atraso de projeção, sem perder navegação\tRF-32/50\tI6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
+    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified."
   },
   {
     "id": "T36",

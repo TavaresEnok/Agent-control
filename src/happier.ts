@@ -6,6 +6,7 @@ import { Ledger } from './ledger.ts';
 import { ContextKeys, type EncryptionVariant } from './context-keys.ts';
 import { Template } from './templates.ts';
 import type { CezarRuntime } from './cezar.ts';
+import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 
 type Rpc = {
   onSocketConnect(socket: Socket): void; onSocketDisconnect(): void;
@@ -91,6 +92,7 @@ export async function recoverHistory(baseUrl: string, sessionId: string, token: 
 }
 
 export class HappierEndpoint {
+  readonly notifications:Notifications;
   readonly socket: Socket;
   readonly rpc: Rpc;
   readonly transport;
@@ -106,7 +108,8 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy> }) {
+    this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
       machineId: options.machineId, serverUrl: options.baseUrl, transports: ['websocket'] });
@@ -148,7 +151,11 @@ export class HappierEndpoint {
       throw new Refusal('HAPPIER_NOT_READY_' + registered.status + '_' + [...this.transportEvents].join(','));
     }
     this.timer = setInterval(() => { if (this.busy) return; this.busy = true;
-      void this.tick().then(() => { this.lastError = undefined; }).catch(error => {
+      void this.tick().then(async() => {
+        if(this.lastError)await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
+          {entityId:this.options.authority.contextId,source:'manager',planRevision:0,seq:0,status:'recovered'});
+        this.lastError = undefined;
+      }).catch(async error => {
         const code = error instanceof Refusal ? error.code : error instanceof z.ZodError
           ? 'CONTRACT_ERROR:' + error.issues.map(issue => issue.path.join('.')).join(',') : error instanceof Error ? error.name : 'UNKNOWN_ERROR';
         if (code !== this.lastError) void this.ledger.pool.query(
@@ -156,6 +163,15 @@ export class HappierEndpoint {
           [this.options.authority.contextId, { code }]).catch(() => {});
         this.lastError = code;
         if (this.lastError === 'STALE_MANAGER') this.close();
+        else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(code)){
+          // Critical controller blockers do not wait for the completion window.
+          // Failure to publish preserves the same encrypted outbox for retry.
+          try{
+            await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
+              {entityId:this.options.authority.contextId,source:'manager',planRevision:0,seq:0,status:'blocked',reason:notificationReason(error)});
+            await this.flushNotifications();await this.deliverQueuedMessages();
+          }catch{}
+        }
       }).finally(() => { this.busy = false; }); }, 300);
   }
   async accept(raw: unknown) {
@@ -174,20 +190,28 @@ export class HappierEndpoint {
       payload: { workflow: selected, messageRef: `${q.localId}:${digest(q.text)}` } };
     const intent = await this.ledger.accept(this.options.principal, command, this.options.authority, 'happier');
     // Canonical history is only in Happier. Ledger outbox stores ciphertext for retry, never the text.
-    await this.enqueue(q.localId, { role: 'user', content: { type: 'text', text: q.text }, localKey: q.localId, meta: q.meta ?? {} });
+    await this.enqueue(q.localId, { role: 'user', content: { type: 'text', text: q.text }, localKey: q.localId, meta: q.meta ?? {} },100);
     return { handled: true, result: { ok: true, providerAcceptancePending: true, intentId: intent.id } };
   }
-  private async enqueue(id: string, content: unknown) {
+  private async enqueue(id: string, content: unknown,priority:0|50|100=0) {
     const ciphertext = this.seal(content);
     await this.ledger.tx(async c => {
       await this.ledger.fence(c, this.options.authority, true);
-      await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
-        [this.options.sessionId + '|' + id, this.options.sessionId, ciphertext]);
+      await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        [this.options.sessionId + '|' + id, this.options.sessionId, ciphertext,priority]);
     });
   }
   async ack(event: string, data: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => this.socket.timeout(8000).emit(event, data,
       (error: Error | null, value: unknown) => error ? reject(error) : resolve(value)));
+  }
+  private async flushNotifications(){
+    await this.validateLink();
+    return this.notifications.flush(this.options.principal,this.options.authority,this.options.sessionId,this.seal);
+  }
+  private async deliverQueuedMessages(){
+    return this.notifications.deliver(this.options.principal,this.options.authority,this.options.sessionId,
+      message=>this.ack('message',{sid:this.options.sessionId,message:message.ciphertext,localId:message.localId,echoToSender:true}),()=>this.validateLink());
   }
   async tick() {
     if (!this.socket.connected) return;
@@ -203,23 +227,27 @@ export class HappierEndpoint {
       catch (error) { this.pendingFailure = error; }
     }
     const intents = await this.ledger.pool.query<import('./ledger.ts').Intent&{cancellation_state:string|null}>(`SELECT i.*,x.state cancellation_state
-      FROM ac_intents i LEFT JOIN ac_plan_cancellations x ON x.intent_id=i.id WHERE i.context_id=$1 ORDER BY i.created_at`, [this.options.authority.contextId]);
+      FROM ac_intents i LEFT JOIN ac_plan_cancellations x ON x.intent_id=i.id
+      WHERE i.context_id=$1 AND i.parent_intent_id IS NULL ORDER BY i.created_at`, [this.options.authority.contextId]);
     let capacityWait:Refusal|undefined;
     for (const intent of intents.rows) {
       if(intent.cancellation_state){
-        const localId=`cancel-${intent.id}-${intent.cancellation_state}`;
-        const text=intent.cancellation_state==='confirmed'
-          ?`Cancelamento do plano ${intent.plan_revision} confirmado após reconciliação. Nenhum novo trabalho será iniciado nesse plano.`
-          :`Cancelamento do plano ${intent.plan_revision} solicitado. Novas etapas estão bloqueadas; a parada física ainda depende de confirmação.`;
-        await this.enqueue(localId,{role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
-          message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}});
+        await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
+          {entityId:intent.run_id,source:'cancellation',planRevision:intent.plan_revision,seq:0,
+            status:intent.cancellation_state==='confirmed'?'cancel_confirmed':'cancel_requested',reason:intent.cancellation_state==='confirmed'?'NONE':'PLAN_CANCELLATION_REQUESTED'});
         continue;
       }
       let run;
-      try{run=await this.runtime.dispatch(intent,this.options.authority);}
+      try{
+        run=await this.runtime.dispatch(intent,this.options.authority);
+        await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
+          {entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'recovered'});
+      }
       catch(error){
         if(!(error instanceof Refusal)||!['PLAN_CANCELLATION_REQUESTED','HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
         if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))capacityWait??=error;
+        await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
+          {entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:notificationReason(error)});
         // Admission or capacity may block this intent; status projection and
         // queued chat delivery must still continue for existing work.
         run=await this.runtime.observe(intent,this.options.authority);
@@ -232,17 +260,12 @@ export class HappierEndpoint {
         await this.ledger.refreshPending(c,this.options.authority.contextId); });
       await this.ledger.event(this.options.principal, { schemaVersion: 1, eventId: randomUUID(), contextId: intent.context_id,
         runId: run.id, planRevision: intent.plan_revision, seq, status: run.status }, this.options.authority);
-      await this.enqueue(`status-${run.id}-${seq}`, { role: 'agent', content: { type: 'output', data: { type: 'assistant', uuid: `status-${run.id}-${seq}`,
-        message: { role: 'assistant', content: [{ type: 'text', text: `Cezar ${run.id}: ${run.status} (contexto ${intent.context_id}, evento ${seq}).` }] } } }, meta: { sentFrom: 'cli' } });
+      const status=notificationStatus(run.status);
+      await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
+        {entityId:run.id,source:'runtime',planRevision:intent.plan_revision,seq,status,
+          reason:status==='failed'?'EXECUTION_FAILED':status==='waiting'?notificationReason(run.error):['cancelled','canceled'].includes(status)?'RECONCILIATION_REQUIRED':'NONE'});
     }
-    const outgoing = await this.ledger.pool.query('SELECT id,ciphertext FROM ac_chat_messages WHERE session_id=$1 AND NOT sent ORDER BY sequence', [this.options.sessionId]);
-    for (const item of outgoing.rows) {
-      const result = await this.ack('message', { sid: this.options.sessionId, message: item.ciphertext,
-        localId: item.id.slice(this.options.sessionId.length + 1), echoToSender: true });
-      if (z.object({ ok: z.boolean().optional() }).passthrough().parse(result).ok === false) throw new Refusal('HAPPIER_PUBLICATION_FAILED');
-      await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
-        await c.query('UPDATE ac_chat_messages SET sent=true WHERE id=$1 AND session_id=$2', [item.id, this.options.sessionId]); });
-    }
+    await this.flushNotifications();await this.deliverQueuedMessages();
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
     if (recoveryFailure !== undefined) throw recoveryFailure;
     if (capacityWait) throw capacityWait;

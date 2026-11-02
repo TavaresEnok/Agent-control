@@ -592,10 +592,11 @@ function applyGlobalEvent(
  * and a handful of components each opening their own stream would spend that budget on duplicate
  * copies of the same messages and then stall every other request behind them.
  */
-export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void {
+export function useGlobalEvents(usage: UsageStore, url: string | null = SSE_URL): void {
   const queryClient = useQueryClient()
 
   useEffect(() => {
+    if (url === null) return
     // jsdom has no EventSource, and neither would a prerender. Read it off `globalThis` so the
     // check and the construction see the same binding (`vi.stubGlobal` is what the tests install).
     const Source = globalThis.EventSource
@@ -1025,11 +1026,11 @@ const UsageContext = createContext<UsageStore | null>(null)
  *
  * Must sit inside `QueryClientProvider` (it patches that cache) and be rendered exactly once.
  */
-export function GlobalEventsProvider({ children }: { children: ReactNode }) {
+export function GlobalEventsProvider({ children, url }: { children: ReactNode; url?: string | null }) {
   // One store per provider instance, created lazily: a module-level singleton would let one test's
   // ticks bleed into the next, and StrictMode's double-invoked render still yields exactly one.
   const [usage] = useState(createUsageStore)
-  useGlobalEvents(usage)
+  useGlobalEvents(usage, url)
   // The ONE session-long `health` topic subscription (queries.ts): here, at the root that is
   // mounted for the app's whole life, so health stays live continuously instead of flapping with
   // the lifecycles of the ~15 `useHealth` readers below.

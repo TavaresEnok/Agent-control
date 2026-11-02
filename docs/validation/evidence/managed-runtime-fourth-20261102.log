@@ -1,0 +1,28 @@
+start 2026-11-02T18:58:07Z
+TAP version 13
+# Subtest: managed fork joins verified unit artifacts and verifies the composition
+ok 1 - managed fork joins verified unit artifacts and verifies the composition
+  ---
+  duration_ms: 7849.77764
+  type: 'test'
+  ...
+# Subtest: failed fork branch cannot produce a composition or advance the target
+ok 2 - failed fork branch cannot produce a composition or advance the target
+  ---
+  duration_ms: 1639.195192
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10977.221991
+end 2026-11-02T18:58:20Z
+exit 0
+Complementary SQL on ac_managed_test_4bde76fa: SELECT state,jsonb_typeof(receipt->exitCode),exitCode,matching_job,valid_container,finished FROM failed sandbox jobs
+failed|number|1|t|t|t
+query exit 0

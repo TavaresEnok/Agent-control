@@ -1,0 +1,22 @@
+v22.23.3
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+TAP version 13
+# Subtest: durable completion batching and immediate blockers use one encrypted outbox with fenced retry receipts
+ok 1 - durable completion batching and immediate blockers use one encrypted outbox with fenced retry receipts
+  ---
+  duration_ms: 3414.191272
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4196.787039
+TYPECHECK_EXIT=0 TEST_EXIT=0

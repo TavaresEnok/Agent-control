@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { createQueryClient } from './api/query-client'
 import { queryKeys, workspaceQueryKeys } from './api/queries'
-import type { ProjectsResponse, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import {getApiScope,type ProjectsResponse,type WorkspaceUiState} from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
@@ -30,6 +30,7 @@ afterEach(() => {
   resetToasts()
   localStorage.clear()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 /** Seed the location this browser was last on — where the cockpit now remembers it. */
@@ -99,6 +100,20 @@ function ProjectNavigationProbe() {
   const navigate = useNavigate()
   return <button onClick={() => navigate('/p/other/')}>Switch project</button>
 }
+
+it('keeps the boot project explicitly scoped in managed mode and switches with the route', async () => {
+  vi.stubEnv('VITE_AGENT_CONTROL_MANAGED','1')
+  const client=createQueryClient()
+  client.setQueryData(queryKeys.health,HEALTH)
+  client.setQueryData(workspaceQueryKeys.projects,REGISTRY)
+  render(<QueryClientProvider client={client}><ThemeProvider><AppearanceProvider><MemoryRouter initialEntries={[`/p/${BOOT}/`]}>
+    <ListViewProvider><AppRoutes/><ProjectNavigationProbe/></ListViewProvider>
+  </MemoryRouter></AppearanceProvider></ThemeProvider></QueryClientProvider>)
+  await waitFor(()=>expect(getApiScope()).toBe(BOOT))
+  fireEvent.click(screen.getByRole('button',{name:'Switch project'}))
+  await waitFor(()=>expect(getApiScope()).toBe('other'))
+  client.clear()
+})
 
 /** Cold-load the router at a URL, exactly as a pasted deep link would — under the same providers
  *  the app shell supplies. With `seed` (the default) the health and registry answers the redirect

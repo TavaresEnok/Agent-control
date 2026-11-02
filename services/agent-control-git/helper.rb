@@ -15,6 +15,8 @@ begin
   input = JSON.parse(STDIN.read(65_537))
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
   expected = case input['action']
+    when 'import' then %w[action base candidate repo sourceRepo]
+    when 'compose' then %w[action base destination repo sources]
     when 'identity', 'diff' then %w[action base candidate repo]
     when 'observe' then %w[action base candidate repo targetRef]
     when 'snapshot' then %w[action base candidate destination repo]
@@ -22,19 +24,86 @@ begin
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[identity diff observe snapshot cas].include?(input['action'])
-  %w[base candidate].each do |key|
+  raise 'INVALID_ACTION' unless %w[identity diff observe snapshot cas compose import].include?(input['action'])
+  (input['action'] == 'compose' ? %w[base] : %w[base candidate]).each do |key|
     raise 'INVALID_GIT_ID' unless input[key].is_a?(String) && input[key].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
   end
   repo = File.realpath(input.fetch('repo'))
-  candidate = input.fetch('candidate'); base = input.fetch('base')
+  base = input.fetch('base')
+  if input['action'] == 'compose'
+    destination = input.fetch('destination'); sources = input.fetch('sources')
+    raise 'INVALID_REQUEST' unless destination.is_a?(String) && destination.start_with?('/') && !File.exist?(destination) && !File.symlink?(destination) && sources.is_a?(Array) && sources.length.between?(1, 16)
+    seen = []
+    sources.each do |source|
+      raise 'INVALID_REQUEST' unless source.is_a?(Hash) && [ %w[base commit tree writePaths].sort, %w[base commit tree writePaths sourceRepo].sort ].include?(source.keys.sort) && source['base'] == base &&
+        %w[commit tree].all? { |k| source[k].is_a?(String) && source[k].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/) } &&
+        source['writePaths'].is_a?(Array) && source['writePaths'].all? { |p| p.is_a?(String) && p.match?(%r{\A[^/\x00-\x1f]+(?:/[^/\x00-\x1f]+)*\z}) && p.split('/').none? { |part| %w[. .. .git].include?(part.downcase) } }
+      if source['sourceRepo']
+        AcSafeGit.with_repository(File.realpath(source['sourceRepo'])) do |metadata|
+          _, _, fetched = AcSafeGit.capture('-C', repo, 'fetch', '--no-tags', metadata, source['commit'])
+          raise 'GIT_OPERATION_FAILED' unless fetched.success?
+        end
+      end
+      raise 'INVALID_REQUEST' unless git(repo, 'rev-parse', "#{source['commit']}^{tree}") == source['tree'] && git(repo, 'rev-parse', "#{source['commit']}^") == base
+      paths, _, status = AcSafeGit.capture('-C', repo, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', base, source['commit'])
+      raise 'GIT_OPERATION_FAILED' unless status.success?
+      entries, _, status = AcSafeGit.capture('-C', repo, 'ls-tree', '-r', '-z', source['commit'])
+      raise 'GIT_OPERATION_FAILED' unless status.success?
+      modes = entries.split("\0").to_h do |entry|
+        header, path = entry.split("\t", 2)
+        [path, header.split(' ', 2).first]
+      end
+      paths.split("\0").each do |path|
+        raise 'INVALID_REQUEST' unless source['writePaths'].any? { |scope| path == scope || path.start_with?(scope + '/') }
+        raise 'INVALID_REQUEST' if modes[path] && !%w[100644 100755].include?(modes[path])
+        raise 'INVALID_REQUEST' if seen.any? { |prior| path == prior || path.start_with?(prior + '/') || prior.start_with?(path + '/') }
+        seen << path
+      end
+    end
+    AcSafeGit.with_repository(repo) do |metadata|
+      _, _, cloned = AcSafeGit.capture('clone', '--no-local', '--no-checkout', '--', metadata, destination)
+      raise 'GIT_OPERATION_FAILED' unless cloned.success?
+      ([base] + sources.map { |source| source['commit'] }).each do |object|
+        _, _, fetched = AcSafeGit.capture('-C', destination, 'fetch', '--no-tags', metadata, object)
+        raise 'GIT_OPERATION_FAILED' unless fetched.success?
+      end
+    end
+    sources.each_with_index do |source, index|
+      git(destination, 'update-ref', "refs/agent-control/sources/#{index}", source['commit'])
+    end
+    git(destination, 'checkout', '--detach', base)
+    current = git(destination, 'rev-parse', "#{base}^{tree}")
+    sources.each do |source|
+      git(destination, 'read-tree', '-m', base, current, source['commit'])
+      raise 'INVALID_REQUEST' unless git(destination, 'ls-files', '-u').empty?
+      current = git(destination, 'write-tree')
+    end
+    candidate = git(destination, 'commit-tree', current, '-p', base, '-m', 'Agent Control deterministic composition')
+    git(destination, 'checkout', '--detach', candidate)
+    tree = git(destination, 'rev-parse', "#{candidate}^{tree}")
+    AcSafeGit.with_repository(destination) do |metadata|
+      _, _, fetched = AcSafeGit.capture('-C', repo, 'fetch', '--no-tags', metadata, candidate)
+      raise 'GIT_OPERATION_FAILED' unless fetched.success?
+    end
+    raise 'GIT_OPERATION_FAILED' unless git(repo, 'rev-parse', "#{candidate}^{tree}") == tree
+    puts JSON.generate({commit: candidate, base: base, tree: tree, legacyDigest: AcArtifactIdentity.digest(repo: destination, commit: candidate, base: base), source: 'AcSafeGit+AcArtifactIdentity', snapshot: File.realpath(destination)})
+    exit 0
+  end
+  candidate = input.fetch('candidate')
+  if input['action'] == 'import'
+    source_repo = File.realpath(input.fetch('sourceRepo'))
+    AcSafeGit.with_repository(source_repo) do |metadata|
+      _, _, fetched = AcSafeGit.capture('-C', repo, 'fetch', '--no-tags', metadata, candidate)
+      raise 'GIT_OPERATION_FAILED' unless fetched.success?
+    end
+  end
   git(repo, 'cat-file', '-e', "#{base}^{commit}")
   git(repo, 'cat-file', '-e', "#{candidate}^{commit}")
   tree = git(repo, 'rev-parse', '--verify', "#{candidate}^{tree}")
   identity = {commit: candidate, base: base, tree: tree,
     legacyDigest: AcArtifactIdentity.digest(repo: repo, commit: candidate, base: base),
     source: 'AcSafeGit+AcArtifactIdentity'}
-  if input['action'] == 'identity'
+  if %w[identity import].include?(input['action'])
     puts JSON.generate(identity)
   elsif input['action'] == 'observe'
     ref = input.fetch('targetRef')

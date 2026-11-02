@@ -1,13 +1,12 @@
 import {constants} from 'node:fs';
 import {open,mkdir,realpath,stat} from 'node:fs/promises';
 import {isAbsolute,join,resolve,sep} from 'node:path';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
 import {randomBytes} from 'node:crypto';
 import {z} from 'zod';
 import {Ledger} from './ledger.ts';
 import {Operators} from './operator.ts';
 import {Refusal,digest} from './contracts.ts';
+import {Projects} from './projects.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -15,13 +14,14 @@ const origin=()=>z.string().transform(value=>{
  return url.origin;
 });
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
+const projectDefinition=z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200)}).strict();
 export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
- dataDirectory:absolute,project:z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200)}).strict(),
+ dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
  happier:z.object({upstreamOrigin:origin(),webOrigin:origin(),publicServerOrigin:origin()}).strict(),
  sessionMaxAgeSeconds:z.number().int().min(60).max(2592000).default(86400),
-}).strict().refine(value=>value.dataDirectory!==value.project.repo&&!value.dataDirectory.startsWith(value.project.repo+sep),'Credential storage must be outside project repository');
+}).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project');
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536){
@@ -50,22 +50,8 @@ export async function sessionKey(config:Installation,create=false){
 }
 export async function initializeInstallation(config:Installation,ledger:Ledger){
  await privateDirectory(config.dataDirectory);
- if(await realpath(config.project.repo)!==config.project.repo)throw new Refusal('NON_CANONICAL_PROJECT_REPOSITORY');
- const git=await promisify(execFile)('git',['-C',config.project.repo,'rev-parse','--show-toplevel'],{encoding:'utf8',timeout:5000});
- if(git.stdout.trim()!==config.project.repo)throw new Refusal('PROJECT_REPOSITORY_ROOT_REQUIRED');
  await ledger.migrate();
- await ledger.tx(async c=>{
-  await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,2))',[config.project.id]);
-  const prior=(await c.query('SELECT label FROM ac_projects WHERE id=$1',[config.project.id])).rows[0];
-  if(prior){
-   if(prior.label!==config.project.label||!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,config.project.owner])).rowCount)
-    throw new Refusal('INSTALLATION_PROJECT_CONFLICT');
-  }else{
-   await c.query('INSERT INTO ac_projects VALUES($1,$2)',[config.project.id,config.project.label]);
-   await c.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[config.project.id,config.project.owner]);
-  }
-  await c.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',[config.project.owner]);
- });
+ await new Projects(ledger).register([config.project,...config.projects],config.project.owner);
  const key=await sessionKey(config,true);key.fill(0);
  return {projectId:config.project.id,mode:config.mode};
 }

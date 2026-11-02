@@ -8,12 +8,13 @@ import {Ledger,type Intent} from './ledger.ts';
 import {SandboxClient} from './sandbox-client.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import type {AgentRunSpec,AgentSession,AgentEvent} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
+import {readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
 const exec=promisify(execFile);
 async function git(cwd:string,args:string[]){
  const r=await exec('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,...args],{
   env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000,maxBuffer:2000000});return r.stdout.trim();
 }
-const Launch=z.object({profile:z.literal('synthetic-implementation-v1'),source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().max(1400000)}).strict()}).strict();
+const Launch=z.object({profile:z.literal('synthetic-implementation-v1'),source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().max(1400000),outputPath:z.string().min(1).optional()}).strict()}).strict();
 const Implementation=z.object({operationId:Id,base:z.string().regex(/^[a-f0-9]{40}$/),commit:z.string().regex(/^[a-f0-9]{40}$/),
  tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(true)}).strict();
 const Receipt=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),implementation:Implementation.nullable(),bundle:z.string().max(1400000).optional()}).passthrough();
@@ -27,11 +28,13 @@ export class IsolatedImplementation{
  private readonly stops=new Set<()=>void>();
  constructor(readonly ledger:Ledger,readonly client=new SandboxClient(),private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){}
  close(){this.active=false;for(const stop of this.stops)stop();}
- start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void):AgentSession{
+ start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void,unit?:ManagedUnit):AgentSession{
   let open=true,canceled=false,grantId:string|undefined,execution:z.infer<typeof Launch>|undefined;
   const stop=()=>{if(canceled)return;canceled=true;if(grantId&&execution)void this.client.perform('stop',intent.operation_id,grantId,authority,execution).catch(()=>{});};
   this.stops.add(stop);
   const result=(async()=>{
+   const binding=await readManagedUnit(this.ledger,intent);
+   if(Boolean(binding)!==Boolean(unit)||(binding&&digest(binding.unit)!==digest(unit)))throw new Refusal('MANAGED_UNIT_MISMATCH');
    const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[intent.id,authority.contextId])).rows[0]?.principal_id;
    if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
    const saved=await this.ledger.tx(async c=>{
@@ -62,7 +65,9 @@ export class IsolatedImplementation{
     const base=await git(spec.cwd,['rev-parse','HEAD']);const bundlePath=join(temporary,'source.bundle');
     await git(spec.cwd,['bundle','create',bundlePath,'HEAD']);const source=await readFile(bundlePath);
     if(source.length>1000000)throw new Refusal('SANDBOX_SOURCE_TOO_LARGE');
-    execution=Launch.parse({profile:'synthetic-implementation-v1',source:{base,bundle:source.toString('base64')}});
+    const managed=unit?await readManagedInput(this.ledger,intent.id):null;
+    if(managed&&(managed.unitId!==unit?.id||managed.kind!=='task'||managed.base!==base||!managed.writePaths[0]))throw new Refusal('MANAGED_INPUT_MISMATCH');
+    execution=Launch.parse({profile:'synthetic-implementation-v1',source:{base,bundle:source.toString('base64'),...(managed?{outputPath:managed.writePaths[0]}:{})}});
     const snapshot=execution;
     grantId=await this.ledger.tx(async c=>{
      await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
@@ -147,9 +152,10 @@ export class IsolatedImplementation{
   try{
    const path=join(temporary,'result.bundle');await writeFile(path,content,{mode:0o600,flag:'wx'});
    await git(cwd,['fetch','--no-tags',path,'HEAD']);
+   const outputPath=launch.source.outputPath??`synthetic-${intent.operation_id}.txt`;
    if(await git(cwd,['rev-parse','FETCH_HEAD'])!==artifact.commit||await git(cwd,['rev-parse',artifact.commit+'^{tree}'])!==artifact.tree||
-     await git(cwd,['rev-parse',artifact.commit+'^'])!==artifact.base||await git(cwd,['diff-tree','--no-commit-id','--name-only','-r',artifact.commit])!==`synthetic-${intent.operation_id}.txt`||
-     await git(cwd,['show',`${artifact.commit}:synthetic-${intent.operation_id}.txt`])!==`Synthetic isolated effect ${intent.operation_id}`)
+     await git(cwd,['rev-parse',artifact.commit+'^'])!==artifact.base||await git(cwd,['diff-tree','--no-commit-id','--name-only','-r',artifact.commit])!==outputPath||
+     await git(cwd,['show',`${artifact.commit}:${outputPath}`])!==`Synthetic isolated effect ${intent.operation_id}`)
      throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
    await this.ledger.tx(async c=>{
     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);

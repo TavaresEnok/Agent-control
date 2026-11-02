@@ -45,8 +45,8 @@
     {
       "path": "packages/cezar/src/workflows/run.ts",
       "upstream_blob": "a0cbeeb9e0bb90c5b58a93d1203b5201d5445abd",
-      "current_blob": "ad1030ad31a603c9ed757307909d7381f78de003",
-      "sha256": "70aa2379215d0bef4790b3e0573d6195127856a7228bbf9714816edf7f1b001f"
+      "current_blob": "c840da375612323378567041c013a89d18581442",
+      "sha256": "a7d7e1f4a4e677174e50316187d40d333967f29b5165f177c934b2d7224d2448"
     },
     {
       "path": "packages/cezar/src/workflows/templates.ts",
@@ -79,10 +79,16 @@
       "sha256": "a8dd8483707b1b0bde5196a0adc24561eeb509f726733d8d2725e0836ce848ff"
     },
     {
+      "path": "packages/web/src/api/global-events.tsx",
+      "upstream_blob": "c42f186d9349522412bb2dff412ccb60e5a79f54",
+      "current_blob": "ac3e247790c6834ddb66337b873b0468411e9331",
+      "sha256": "8050b3873ec464a879469cc07a0b2d11597d7c5afa632126dd8c46b095e156e6"
+    },
+    {
       "path": "packages/web/src/app.tsx",
       "upstream_blob": "a652bcdd2ddcde86a60ef972caec6e27fd2e4df8",
-      "current_blob": "b3217003d8ad83f0b29c97bbea9848760f4e4cdc",
-      "sha256": "6e0b305c6ab53ac9af1c8762f3622295df6730e756f0d25cb6350dc594c1515a"
+      "current_blob": "46a84ecbd59a3895dbb719ca633992ea5947dabc",
+      "sha256": "b01a6b789af5a6a37051c31e4a069ca7289776aeb5a9d3b9b0d18766d037620c"
     },
     {
       "path": "packages/web/src/components/composer/composer.tsx",
@@ -95,6 +101,24 @@
       "upstream_blob": "921b8120b6d806f03a84955d058453938a3f3ea3",
       "current_blob": "a0ce2ad0c30f475fc43534d0804e48bc2deafd7e",
       "sha256": "442b84181bcdce699746eea35a0b3575f2ec6887216977b39e0f2208c2f4ea5a"
+    },
+    {
+      "path": "packages/web/src/hooks/use-webhooks.ts",
+      "upstream_blob": "bb5b31d0fd448f0323f9351c2cde5457f1727603",
+      "current_blob": "6512091b357d8dee090d53aeecd8c11eaae82b89",
+      "sha256": "0b62170f5149302ebe6e30db9ee459332f34fa0e5f8033100b65f64d6a8b3ea2"
+    },
+    {
+      "path": "packages/web/src/routes.test.tsx",
+      "upstream_blob": "f9340100b81f79a362cee85b507b4dd82f55f52c",
+      "current_blob": "b35ceacf448013a1f73a0336465fd480bd4af964",
+      "sha256": "f61ca0d3a016d200b50c47b219720e525a6b9c34022c599add1a92ebeee12e10"
+    },
+    {
+      "path": "packages/web/src/routes.tsx",
+      "upstream_blob": "5671b481034a83a89359812aaf87137ae36312da",
+      "current_blob": "ea4fa5174ea209f5f9c3a92b12a2efed4cf1f9e7",
+      "sha256": "cc70c694fa4c31210804d7b27f4c57eb954d902517ae083eddb41bb9f5e541a4"
     },
     {
       "path": "packages/web/src/routes/settings/registry.tsx",
@@ -121,84 +145,9 @@
       "sha256": "375b1d80c2d405959f7bb56af89113675851e26003dac31579e3ac6f4a94c84c"
     },
     {
-      "path": "packages/web/src/components/composer/canonical-chat.test.tsx",
-      "change": "added",
-      "sha256": "3d8c9b307b879ac2bd4cac792ffc9c875229f4ba2e840e92d3dadef2a399dbe9"
-    },
-    {
       "path": "packages/cezar/src/git-worktree-identity.test.ts",
       "change": "added",
       "sha256": "80073780f0548ad27aec9ae338d86df4a9d6a6fbef01b0dc041f20a594df4732"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-section.tsx",
-      "change": "added",
-      "sha256": "b5162095f8fb76ec7e9ab11c15b8c47b726d88f31c334f4941f71c9fdf1f008f"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-operator.ts",
-      "change": "added",
-      "sha256": "7f9d87705195a2c61dafae7aab2ec7b8cb3c883cc2a0f7cb111decdc46ccebd5"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-policy-editor.tsx",
-      "change": "added",
-      "sha256": "da8b0011f6ae6fb92b9238729f4a4dac30b3d9c185c341196b35fb9cab33ba23"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-policy-editor.test.tsx",
-      "change": "added",
-      "sha256": "f800f8789d245f05099a869cd77d6fc17c2d7558ad1876be78aa6b11c38116e7"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-capacity-editor.tsx",
-      "change": "added",
-      "sha256": "5ca8c2a7e1d5af4519ba83e674a7d6df9fec0604ab2284daba7c8d5589ab0453"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-capacity-editor.test.tsx",
-      "change": "added",
-      "sha256": "0f54bfe57537a403664e12447485d89dfe1a7c79257f5a96cd7ea48ad9fd2025"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-profile-editor.tsx",
-      "change": "added",
-      "sha256": "89e032cee504de4241b11b027290a39668ed0302afb0d4da3f2f98599070521d"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-profile-editor.test.tsx",
-      "change": "added",
-      "sha256": "7d7c47907532af119a653e510a77118dc2e1ecaf617262cb312a15bcf045a5f9"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-integration-approval.tsx",
-      "change": "added",
-      "sha256": "a40ec4ab029b1d7b1b5d40768d29f46d59e633a253f5289b539df84fadeda9eb"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-integration-approval.test.tsx",
-      "change": "added",
-      "sha256": "5f04e2dd19eaa5b74c1ffa0dd67f1b50c7ea2a17292140f47d45e56a6f7471a9"
-    },
-    {
-      "path": "packages/web/src/components/auth/agent-control-auth-gate.tsx",
-      "change": "added",
-      "sha256": "eded21a75430d30280eb8fee22e4c102b1a823265f9d92ccb2688f83637f0354"
-    },
-    {
-      "path": "packages/web/src/components/auth/agent-control-auth-gate.test.tsx",
-      "change": "added",
-      "sha256": "0783504e924f8d05eeae64f10580d86058f1fb8ba7645ab28ecf16f9b0235099"
-    },
-    {
-      "path": "packages/web/src/routes/settings/agent-control-manager-plans.tsx",
-      "change": "added",
-      "sha256": "ba7f8a83d5f8a7bddb35cd1fa6889ffe840d87d58e2bf83199552b48c4489089"
-    },
-    {
-      "path": "packages/contract/src/agent-control-plans.ts",
-      "change": "added",
-      "sha256": "e1d30cfd1f4071d379e5df4005508069c8ae09d5c889aca405a724b310fc503a"
     },
     {
       "path": "packages/contract/src/agent-control-operations.ts",
@@ -206,19 +155,114 @@
       "sha256": "e2e097c07a79356f23f85545710668ab25569872a23b4a4d94c833d8888bbaf8"
     },
     {
+      "path": "packages/contract/src/agent-control-plans.ts",
+      "change": "added",
+      "sha256": "e1d30cfd1f4071d379e5df4005508069c8ae09d5c889aca405a724b310fc503a"
+    },
+    {
+      "path": "packages/web/src/api/agent-control-streams.test.tsx",
+      "change": "added",
+      "sha256": "fa332c67710c582f8f745b0ba11b7f9e9b3d1381f498dcd7b6e39c78aa8763d4"
+    },
+    {
+      "path": "packages/web/src/components/auth/agent-control-auth-gate.test.tsx",
+      "change": "added",
+      "sha256": "0783504e924f8d05eeae64f10580d86058f1fb8ba7645ab28ecf16f9b0235099"
+    },
+    {
+      "path": "packages/web/src/components/auth/agent-control-auth-gate.tsx",
+      "change": "added",
+      "sha256": "eded21a75430d30280eb8fee22e4c102b1a823265f9d92ccb2688f83637f0354"
+    },
+    {
+      "path": "packages/web/src/components/composer/canonical-chat.test.tsx",
+      "change": "added",
+      "sha256": "3d8c9b307b879ac2bd4cac792ffc9c875229f4ba2e840e92d3dadef2a399dbe9"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-capacity-editor.test.tsx",
+      "change": "added",
+      "sha256": "0f54bfe57537a403664e12447485d89dfe1a7c79257f5a96cd7ea48ad9fd2025"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-capacity-editor.tsx",
+      "change": "added",
+      "sha256": "5ca8c2a7e1d5af4519ba83e674a7d6df9fec0604ab2284daba7c8d5589ab0453"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-fetch.test.ts",
+      "change": "added",
+      "sha256": "5aa18111a31f8735daf5b634a34566311982a59eee86bcaa4028d42b68786308"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-fetch.ts",
+      "change": "added",
+      "sha256": "00ef344aea1a7c5e2e92171ea24e0dba11b1af60380835852fa6815bc04ecea2"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-integration-approval.test.tsx",
+      "change": "added",
+      "sha256": "5f04e2dd19eaa5b74c1ffa0dd67f1b50c7ea2a17292140f47d45e56a6f7471a9"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-integration-approval.tsx",
+      "change": "added",
+      "sha256": "d2106724abe5130e151317530f6a678a642b5a0db75696dbe61f9e7e1efdb1d1"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-manager-plans.test.tsx",
+      "change": "added",
+      "sha256": "81ef8709ba51bbb0cd63a7d0cb5132926def76305fd90ddc82bc5178b3edec00"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-manager-plans.tsx",
+      "change": "added",
+      "sha256": "13ad20bb2c042e2bf95262086da2ff35362b48c4f7094cec24557ba52bf49449"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-observability.tsx",
+      "change": "added",
+      "sha256": "36ff9fb279774f88e898cdf51f9583c58d5ef1bb4fb03425ee96a86524bc287e"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-operator.ts",
+      "change": "added",
+      "sha256": "7f9d87705195a2c61dafae7aab2ec7b8cb3c883cc2a0f7cb111decdc46ccebd5"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-policy-editor.test.tsx",
+      "change": "added",
+      "sha256": "f800f8789d245f05099a869cd77d6fc17c2d7558ad1876be78aa6b11c38116e7"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-policy-editor.tsx",
+      "change": "added",
+      "sha256": "da8b0011f6ae6fb92b9238729f4a4dac30b3d9c185c341196b35fb9cab33ba23"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-profile-editor.test.tsx",
+      "change": "added",
+      "sha256": "7d7c47907532af119a653e510a77118dc2e1ecaf617262cb312a15bcf045a5f9"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-profile-editor.tsx",
+      "change": "added",
+      "sha256": "89e032cee504de4241b11b027290a39668ed0302afb0d4da3f2f98599070521d"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-provider-collectors.tsx",
       "change": "added",
       "sha256": "d1ad719ba6164d94a344e6fa85f8299844b78419473ba3f51c35d72f1048bdbe"
     },
     {
-      "path": "packages/web/src/routes/settings/agent-control-observability.tsx",
-      "change": "added",
-      "sha256": "969d0a12dc484f9d21025c99e842d6efd58708cfe1077d426ad293a3d5ef213f"
-    },
-    {
       "path": "packages/web/src/routes/settings/agent-control-provider-operations.test.tsx",
       "change": "added",
       "sha256": "076c3af0b518cd69b4b0dcf2ca98a64283cdef061c01ac25adb6ad2554db4471"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-section.tsx",
+      "change": "added",
+      "sha256": "451d54589a0965d3c0fa43e9781d3c63e7239e94cefac9e66e8bcb632d3bd6a8"
     }
   ],
   "happier": [

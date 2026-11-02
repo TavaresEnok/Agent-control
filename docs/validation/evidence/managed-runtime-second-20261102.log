@@ -1,0 +1,19 @@
+start 2026-11-02T18:56:10Z
+TAP version 13
+# Subtest: managed fork joins verified unit artifacts and verifies the composition
+ok 1 - managed fork joins verified unit artifacts and verifies the composition
+  ---
+  duration_ms: 8116.336858
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9978.112036
+end 2026-11-02T18:56:20Z
+exit 0

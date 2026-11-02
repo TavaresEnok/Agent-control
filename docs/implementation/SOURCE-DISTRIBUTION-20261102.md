@@ -17,3 +17,9 @@ A revisão independente do `scripts/prepare-build.mjs` corrigido verificou por l
 Não repeti build nesta revisão. A comprovação dos quatro JS acidentais e os testes focados pertencem à frente que implementou a correção. Antes do commit/pacote final, a proveniência precisa incluir a versão final do script e excluir esses arquivos gerados da seleção Git.
 
 O empacotador também passou a verificar explicitamente o SHA-256 dos dois patches históricos contra `upstream/PROVENANCE.json`; a fixture pequena continuou aprovada (`source-package-patch-provenance-20261102.log`).
+
+## Compatibilidade com configurações públicas upstream
+
+O check integrado do commit `2fa0776b` identificou quatro `.env` públicos do Happier rastreados na baseline. Inspeção não imprimiu valores: três arquivos só continham configurações de desenvolvimento/teste e o quarto também define nomes de segredos de desenvolvimento. A solução não distribui nem adiciona exceção por valor: omite integralmente configurações de ambiente não exemplares dos dois upstreams fixados e registra caminho/blob Git/motivo no manifesto. Arquivo `.env` próprio rastreado continua sendo recusa, assim como chaves privadas e tokens nos fontes modificados. Licenças, `.env.example`, locks e hashes upstream permanecem preservados.
+
+`source-package-upstream-environment-20261102.log`: teste pequeno aprovado incluindo omissão de config upstream, registro de exclusão e recusa de `.env` próprio. `source-package-upstream-environment-check-20261102.log`: nova seleção aplicada ao snapshot anterior `2fa0776b` passou, com 25.930 arquivos e quatro configurações omitidas. Esse check não substitui o check do novo commit que incluirá a correção; a proveniência deve ser atualizada nesse commit. Nenhum pacote grande foi criado.

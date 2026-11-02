@@ -15,6 +15,7 @@ import {createPlanningApi} from './planning-api.ts';
 import {createObservabilityApi} from './observability-api.ts';
 import {OperationalObservability} from './observability.ts';
 import {diskPolicyFromEnvironment} from './disk-admission.ts';
+import {managedWorkspaceStream} from './workspace-stream.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -43,7 +44,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
   sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[]) {
   const app = new Hono<{ Variables: { principal: string } }>();
-  const control = new Control(ledger,providerAdapters);
+  const control = new Control(ledger,providerAdapters,runtime.projectId);
   app.use('*', async (c, next) => {
     if(sessions&&c.req.method==='GET'){
       const ui=await publicUi(c.req.path);if(ui)return ui;
@@ -82,20 +83,32 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     .post('/api/v1/ac/auth/session',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.issue(c.req.raw);})
     .post('/api/v1/ac/auth/logout',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.revoke(c.req.raw);})
     .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: runtime.executionMode }))
+    .get('/api/v1/ac/projects',async c=>{
+      const projects=(await ledger.pool.query(`SELECT p.id,p.label,m.role FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id
+       WHERE p.id=$1 AND m.principal_id=$2`,[runtime.projectId,c.get('principal')])).rows;
+      c.header('Cache-Control','no-store');return c.json({projects,selectedProjectId:projects.length?runtime.projectId:null});
+    })
     .post('/api/v1/ac/operator/bootstrap',async c=>{
       const value=z.object({deviceId:Id,publicKey:z.string().min(40).max(200),token:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(await c.req.json());
       await new Operators(ledger).bootstrap(c.get('principal'),value);
       return c.json({state:'active'});
     })
     .get('/api/v1/ac/contexts', async c => {
-      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.pause_revision,x.draining,x.drain_revision,x.plan_revision,x.capacity_policy_revision,s.session_id
+      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.pause_revision,x.draining,x.drain_revision,x.plan_revision,x.policy_revision,x.capacity_policy_revision,s.session_id
         FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
         JOIN ac_session_links s ON s.context_id=x.id WHERE x.project_id=$1 AND m.principal_id=$2 AND NOT x.archived ORDER BY x.created_at`,
         [runtime.projectId,c.get('principal')]);
       return c.json({contexts:rows.rows});
     })
     .get('/api/v1/ac/contexts/:id/resources', async c => c.json(await control.view(c.get('principal'),Id.parse(c.req.param('id')))))
-    .get('/api/v1/ac/contexts/:id/usage', async c => c.json(await new Usage(ledger).context(c.get('principal'),Id.parse(c.req.param('id')))))
+    .get('/api/v1/ac/contexts/:id/usage', async c => {
+      const contextId=Id.parse(c.req.param('id'));
+      await ledger.tx(async db=>{
+        const scope=await ledger.authorize(db,c.get('principal'),contextId,false);
+        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+      });
+      return c.json(await new Usage(ledger).context(c.get('principal'),contextId));
+    })
     .get('/api/v1/ac/contexts/:id/artifacts/:artifactId/diff',async c=>{
       const contextId=Id.parse(c.req.param('id')),artifactId=Id.parse(c.req.param('artifactId'));
       const artifact=await ledger.tx(async db=>{
@@ -126,6 +139,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     })
     .post('/api/v1/ac/commands', async c => {
       const command = Command.parse(await c.req.json());
+      await ledger.tx(async db=>{
+        const context=await ledger.authorize(db,c.get('principal'),command.contextId);
+        if(context.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+      });
       const authority = manager(command.contextId);
       if (!authority) throw new Refusal('MANAGER_UNAVAILABLE');
       const intent = await ledger.accept(c.get('principal'), command, authority, 'cockpit');
@@ -135,10 +152,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     .get('/api/v1/ac/contexts/:id', async c => {
       const contextId = Id.parse(c.req.param('id'));
       const data = await ledger.tx(async db => {
-        await ledger.authorize(db, c.get('principal'), contextId, false);
-        const context = await db.query(`SELECT x.id,x.project_id,x.paused,x.plan_revision,s.session_id
+        const scope=await ledger.authorize(db, c.get('principal'), contextId, false);
+        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+        const context = await db.query(`SELECT x.id,x.project_id,x.paused,x.plan_revision,x.policy_revision,s.session_id
           FROM ac_contexts x JOIN ac_session_links s ON s.context_id=x.id WHERE x.id=$1`, [contextId]);
-        const intents = await db.query('SELECT id,run_id,state,plan_revision FROM ac_intents WHERE context_id=$1 ORDER BY created_at', [contextId]);
+        const intents = await db.query('SELECT id,run_id,state,plan_revision FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NULL ORDER BY created_at', [contextId]);
         return { ...context.rows[0], intents: intents.rows };
       });
       return c.json(data);
@@ -146,7 +164,8 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     .get('/api/v1/ac/contexts/:id/events', async c => {
       const contextId = Id.parse(c.req.param('id'));
       const events = await ledger.tx(async db => {
-        await ledger.authorize(db, c.get('principal'), contextId, false);
+        const scope=await ledger.authorize(db, c.get('principal'), contextId, false);
+        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
         const rows = (await db.query('SELECT * FROM ac_events WHERE context_id=$1 ORDER BY run_id,seq', [contextId])).rows;
         return rows.map(row => Projection.parse({ schemaVersion: 1, eventId: row.event_id,
           contextId: row.context_id, runId: row.run_id, planRevision: row.plan_revision,
@@ -159,7 +178,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const row = await ledger.pool.query(`SELECT i.context_id,s.session_id FROM ac_intents i
         JOIN ac_session_links s ON s.context_id=i.context_id WHERE i.run_id=$1`, [runId]);
       if (!row.rowCount) throw new Refusal('RUN_FORBIDDEN', 403);
-      await ledger.tx(db => ledger.authorize(db, c.get('principal'), row.rows[0].context_id, false));
+      await ledger.tx(async db => {
+        const scope=await ledger.authorize(db,c.get('principal'),row.rows[0].context_id,false);
+        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+      });
       const target = new URL('/session/' + encodeURIComponent(row.rows[0].session_id), happierWebUrl);
       if (!['https:', 'http:'].includes(target.protocol)) throw new Refusal('INVALID_CHAT_ORIGIN');
       return c.redirect(target.href, 303);
@@ -182,6 +204,12 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
         [runtime.projectId, c.get('principal')]);
       if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
     }
+    if(path==='/api/v1/workspace/events')return managedWorkspaceStream(ledger,runtime,c.get('principal'),c.req.raw,async()=>{
+      const bearer=c.req.raw.headers.get('authorization');
+      return bearer?authenticate(c.req.raw):await sessions?.authenticate(c.req.raw)??await authenticate(c.req.raw);
+    });
+    if(runtime.executionMode==='administration-only'&&/^\/api\/v1\/(?:providers(?:\/status)?|models)$/.test(path))
+      return c.json({error:'PROVIDER_RUNTIME_NOT_ACTIVATED'},403);
     if (path === '/api/v1/runs') {
       const allowed = await ledger.pool.query(`SELECT i.run_id FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
         JOIN ac_memberships m ON m.project_id=x.project_id WHERE x.project_id=$1 AND m.principal_id=$2`, [runtime.projectId, c.get('principal')]);
@@ -192,7 +220,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (run) {
       const bound = await ledger.pool.query('SELECT context_id FROM ac_intents WHERE run_id=$1', [run[1]]);
       if (!bound.rowCount) throw new Refusal('RUN_FORBIDDEN', 403);
-      await ledger.tx(db => ledger.authorize(db, c.get('principal'), bound.rows[0].context_id, false));
+      await ledger.tx(async db => {
+        const scope=await ledger.authorize(db,c.get('principal'),bound.rows[0].context_id,false);
+        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+      });
       return runtime.native.fetch(nativeRequest);
     }
     if (/^\/api\/v1\/(health|capabilities|ui-state|repo|config|open-targets|workflows(?:\/[^/]+)?|providers(?:\/status)?|models|telemetry\/consent|workspace\/(ui-state|config|events|capabilities))$/.test(path))

@@ -1,0 +1,39 @@
+start 2026-11-02T18:57:20Z
+TAP version 13
+# Subtest: managed fork joins verified unit artifacts and verifies the composition
+ok 1 - managed fork joins verified unit artifacts and verifies the composition
+  ---
+  duration_ms: 8956.360158
+  type: 'test'
+  ...
+# Subtest: failed fork branch cannot produce a composition or advance the target
+not ok 2 - failed fork branch cannot produce a composition or advance the target
+  ---
+  duration_ms: 233.270272
+  type: 'test'
+  location: '/workspace/tests/managed-runtime-integration.test.ts:2:783'
+  failureType: 'testCodeFailure'
+  error: 'MANAGED_WRITE_SCOPE_UNAVAILABLE'
+  code: 'MANAGED_WRITE_SCOPE_UNAVAILABLE'
+  stack: |-
+    executionRecipe (/workspace/src/managed-plan.ts:32:9)
+    freezeManagedExecution (/workspace/src/managed-plan.ts:79:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async <anonymous> (/workspace/src/ledger.ts:162:12)
+    async Ledger.tx (/workspace/src/ledger.ts:16:45)
+    async TestContext.<anonymous> (/workspace/tests/managed-runtime-integration.test.ts:107:16)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10962.417216
+
+end 2026-11-02T18:57:33Z
+exit 1

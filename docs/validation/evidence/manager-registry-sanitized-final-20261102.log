@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: manager registry owns one endpoint, fences takeover and isolates key cleanup without changing work
+ok 1 - manager registry owns one endpoint, fences takeover and isolates key cleanup without changing work
+  ---
+  duration_ms: 866.238991
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1546.70965

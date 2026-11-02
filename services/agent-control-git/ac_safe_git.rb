@@ -8,7 +8,8 @@ require "fileutils"
 # alone is insufficient: clean/process filters can execute during `git status`.
 class AcSafeGit
   ENVIRONMENT = { "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_CONFIG_SYSTEM" => "/dev/null",
-                  "GIT_TERMINAL_PROMPT" => "0", "GIT_SSH_COMMAND" => "/bin/false", "GIT_NO_REPLACE_OBJECTS" => "1" }.freeze
+                  "GIT_TERMINAL_PROMPT" => "0", "GIT_SSH_COMMAND" => "/bin/false", "GIT_NO_REPLACE_OBJECTS" => "1",
+                  "GIT_LITERAL_PATHSPECS" => "1" }.freeze
   OPTIONS = [ "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never" ].freeze
 
   def self.capture(*args)
@@ -61,7 +62,10 @@ class AcSafeGit
   end
 
   def self.invoke(*args, index_path: nil)
-    environment = { "PATH" => "/usr/bin:/bin", "HOME" => "/nonexistent", "LANG" => "C.UTF-8" }.merge(ENVIRONMENT)
+    environment = { "PATH" => "/usr/bin:/bin", "HOME" => "/nonexistent", "LANG" => "C.UTF-8",
+                    "GIT_AUTHOR_NAME" => "Agent Control", "GIT_AUTHOR_EMAIL" => "agent-control@invalid",
+                    "GIT_COMMITTER_NAME" => "Agent Control", "GIT_COMMITTER_EMAIL" => "agent-control@invalid",
+                    "GIT_AUTHOR_DATE" => "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE" => "2000-01-01T00:00:00Z" }.merge(ENVIRONMENT)
     environment["GIT_INDEX_FILE"] = index_path if index_path
     Open3.capture3(environment, "git", *OPTIONS, *args, unsetenv_others: true)
   end

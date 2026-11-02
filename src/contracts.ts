@@ -8,7 +8,10 @@ export const Command = z.object({
   schemaVersion: z.literal(1), intentId: Id, deliveryAttemptId: Id,
   contextId: Id, policyRevision: z.number().int().positive(),
   action: z.literal('plan.start'),
-  payload: z.object({ workflow: z.enum(['baseline-synthetic-v1','engineering-synthetic-v1']), messageRef: z.string().min(1).max(200) }).strict(),
+  payload: z.discriminatedUnion('workflow',[
+   z.object({workflow:z.enum(['baseline-synthetic-v1','engineering-synthetic-v1']),messageRef:z.string().min(1).max(200)}).strict(),
+   z.object({workflow:z.literal('managed-synthetic-v1'),messageRef:z.string().min(1).max(200),proposalRevision:z.number().int().positive(),proposalDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
+  ]),
 }).strict();
 export type Command = z.infer<typeof Command>;
 export const Checkpoint = z.object({
@@ -33,5 +36,5 @@ export function canonical(value: unknown): string {
 }
 export const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 export class Refusal extends Error {
-  constructor(public readonly code: string, public readonly status: 400 | 401 | 403 | 404 | 409 = 409) { super(code); }
+  constructor(public readonly code: string, public readonly status: 400 | 401 | 403 | 404 | 409 | 503 = 409) { super(code); }
 }

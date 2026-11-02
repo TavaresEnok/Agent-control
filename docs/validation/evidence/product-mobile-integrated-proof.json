@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "projects": 2,
+  "viewports": [
+    360,
+    390
+  ],
+  "nativeProjectSwitch": true,
+  "projectScopedProposalAndCache": true,
+  "managerUnavailableHonest": true,
+  "scopedStreamCloseOnSwitch": true,
+  "nativeEventSourceOpenConfirmed": true,
+  "limits": [
+    "Synthetic identities and repositories only; no workers or model inference.",
+    "Native Happier approval UI and physical phone not exercised.",
+    "Browser proof does not replace independent review or production deployment validation."
+  ]
+}

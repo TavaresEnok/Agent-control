@@ -20,6 +20,7 @@ class Packaging(TestCase):
     'upstream/cezar/package-lock.json':'{}','upstream/happier/yarn.lock':'# synthetic',
     'upstream/PROVENANCE.json':json.dumps({name:{'commit':'a'*40,'patch_sha256':package.sha(('synthetic '+name).encode())} for name in ['cezar','happier']}),
     'upstream/CHANGES.json':json.dumps({'cezar':[],'happier':[]}),
+    'upstream/happier/apps/cli/.env.dev':'PUBLIC_FIXTURE_SECRET=not-distributed',
     'upstream/patches/cezar-complete.patch':'synthetic cezar','upstream/patches/happier-complete.patch':'synthetic happier',
     'docs/validation/ACCEPTANCE-I0-I2.md':'synthetic criteria','docs/operations/DISTRIBUTION.md':'synthetic instructions',
     'src/fixture.ts':'export const synthetic=true;\n'}.items():put(name,value)
@@ -33,8 +34,10 @@ class Packaging(TestCase):
    for output in outputs:package.write_package(root,revision,output)
    self.assertEqual(outputs[0].read_bytes(),outputs[1].read_bytes())
    with tarfile.open(outputs[0]) as archive:
-    names=archive.getnames();self.assertFalse(any('.state' in name for name in names))
+    names=archive.getnames();self.assertFalse(any('.state' in name for name in names));self.assertFalse(any(name.endswith('/.env.dev') for name in names))
     manifest=json.load(archive.extractfile('agent-control/SOURCE-MANIFEST.json'))
+    self.assertEqual(manifest['excluded'][0]['path'],'upstream/happier/apps/cli/.env.dev')
+    self.assertEqual(manifest['excluded'][0]['reason'],'upstream_environment_configuration_not_distributed')
     for record in manifest['files']:
      self.assertEqual(package.sha(archive.extractfile('agent-control/'+record['path']).read()),record['sha256'])
    with self.assertRaisesRegex(package.PackageError,'OUTPUT_ALREADY_EXISTS'):package.write_package(root,revision,outputs[0])
@@ -42,6 +45,9 @@ class Packaging(TestCase):
    private=commit()
    with self.assertRaisesRegex(package.PackageError,'PRIVATE_OR_DEPENDENCY_PATH'):package.validate(root,private)
    subprocess.run(['git','-C',str(root),'rm','-q','.state/private-token'],check=True)
+   put('.env','SECRET=synthetic-must-be-refused');put('src/fixture.ts','export const synthetic=true;\n');provenance();environment=commit()
+   with self.assertRaisesRegex(package.PackageError,'PRIVATE_ENVIRONMENT_PATH'):package.validate(root,environment)
+   subprocess.run(['git','-C',str(root),'rm','-q','.env'],check=True)
    put('src/fixture.ts','const privateKey="-----BEGIN '+'PRIVATE KEY-----";');provenance();secret=commit()
    with self.assertRaisesRegex(package.PackageError,'POSSIBLE_CREDENTIAL_IN_SOURCE'):package.validate(root,secret)
 if __name__=='__main__':main()

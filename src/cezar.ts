@@ -4,12 +4,15 @@ import { join,sep } from 'node:path';
 import { mkdir, readFile,realpath } from 'node:fs/promises';
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import { RunManager } from '../upstream/cezar/packages/cezar/dist/workflows/run.js';
 import {WorkspaceSemaphore} from '../upstream/cezar/packages/cezar/dist/workspace/semaphore.js';
 import { RunStore } from '../upstream/cezar/packages/cezar/dist/runs/store.js';
 import { createApp } from '../upstream/cezar/packages/cezar/dist/server/server.js';
 import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/dist/core/runner-factory.js';
+import {childTaskEnvelope} from '../upstream/cezar/packages/cezar/dist/dispatch/engine.js';
 import type { AgentRunner, AgentSession, AgentEvent, AgentRunResult } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import { Authority, digest, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
@@ -22,11 +25,13 @@ import {IsolatedVerification} from './isolated-verification.ts';
 import {Cancellations} from './cancellation.ts';
 import type {RemoteOperations} from './remote.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
+import {ManagedExecutionInput,readManagedInput,readManagedUnit,readManagedRecipe,type ManagedRecipe} from './managed-plan.ts';
 export { baselineWorkflow } from './workflows.ts';
 
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/), tree: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   exitCode: z.literal(0), synthetic: z.literal(true) }).strict();
+const execFileAsync=promisify(execFile);
 function terminate(child:ChildProcess,signal:NodeJS.Signals){
   if(child.exitCode!==null||child.signalCode!==null)return;
   try{if(child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch{child.kill(signal);}
@@ -41,6 +46,7 @@ export class CezarRuntime {
   readonly native;
   private readonly invocation = new AsyncLocalStorage<{ intent: Intent; authority: Authority }>();
   private readonly authorities = new Map<string, Authority>();
+  private readonly managedPlans = new Map<string,{recipe:ManagedRecipe;used:Set<string>}>();
   private readonly children = new Set<ChildProcess>();
   private readonly recovering = new Set<string>();
   private readonly recoveryAt = new Map<string,number>();
@@ -71,10 +77,28 @@ export class CezarRuntime {
     this.store = RunStore.open(join(repo, '.ai/cezar'), { keepLive: true });
     requireManagedRunnerBoundary();
     this.manager = new RunManager(this.store, repo, { semaphore:this.semaphore,managed: {
-      authorizeStart: (workflow, input) => {
+      authorizeStart: (workflow, input, graphOwned) => {
         if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+        if(input.dispatch){
+          if(!graphOwned||input.dispatch.rootRunId!==input.dispatch.parentRunId)throw new Refusal('UNAPPROVED_PLAN');
+          const parentId=input.dispatch.parentRunId,entry=this.managedPlans.get(parentId),parent=this.store.getRun(parentId);
+          if(!entry||!parent)throw new Refusal('UNAPPROVED_PLAN');
+          const unit=entry.recipe.units.find(u=>input.task===childTaskEnvelope({objective:`AC_MANAGED_UNIT:${u.id}`},
+            {id:parentId,branch:parent.branch},['{{TREE_PATHS}}']));
+          if(!unit||entry.used.has(unit.id))throw new Refusal('UNAPPROVED_PLAN');
+          const launch=Object.entries(entry.recipe.launches).find(([,ids])=>ids.includes(unit.id));
+          if(!launch||parent.graphState?.cursor!==launch[0])throw new Refusal('UNAPPROVED_PLAN');
+          const isFork=launch[1].length>1;
+          const expected={name:isFork?'(fork branch)':'(planned)',source:'built-in',steps:[{id:'task',name:unit.id,prompt:'{{task}}'}]};
+          if(digest(workflow)!==digest(expected))throw new Refusal('UNAPPROVED_PLAN');
+          entry.used.add(unit.id);const authority=this.authorities.get(parentId);
+          if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+          this.authorities.set(unit.runId,authority);return unit.runId;
+        }
         const current = this.invocation.getStore();
-        if (!current || digest(workflow) !== digest(workflowFor(current.intent.command.payload.workflow)) || input.task !== `Intent ${current.intent.id}` || input.dispatch)
+        const expected=current?.intent.command.payload.workflow==='managed-synthetic-v1'
+          ?this.managedPlans.get(current.intent.run_id)?.recipe.workflow:current?workflowFor(current.intent.command.payload.workflow):undefined;
+        if (!current || !expected || digest(workflow) !== digest(expected) || input.task !== `Intent ${current.intent.id}`)
           throw new Refusal('UNAPPROVED_PLAN');
         return current.intent.run_id;
       },
@@ -130,18 +154,55 @@ export class CezarRuntime {
     if(this.executionEnabled)await this.manager.recover();
   }
   get executionMode():'administration-only'|'execution'{return this.executionEnabled?'execution':'administration-only';}
+  private managedExecutionReady():boolean{return this.executionEnabled&&Boolean(this.isolated)&&Boolean(this.engineering);}
+  async readManagedSourceArtifacts(intent:Intent,authority:Authority):Promise<readonly {unitId:string;artifactId:string;cwd:string}[]>{
+    const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
+    if(!bound||bound.unit.kind!=='composition'||intent.context_id!==authority.contextId)throw new Refusal('MANAGED_UNIT_MISMATCH');
+    const identities=await this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+      const parent=(await c.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[bound.parentIntentId,authority.contextId])).rows[0];
+      if(!parent)throw new Refusal('MANAGED_UNIT_MISMATCH');await this.ledger.authorize(c,parent.principal_id,authority.contextId);
+      const rows: {unitId:string;artifactId:string;runId:string}[]=[];
+      for(const id of input.sources){
+        const unit=bound.recipe.units.find(u=>u.id===id);
+        if(!unit||unit.kind!=='task')throw new Refusal('MANAGED_SOURCE_MISMATCH');
+        const result=(await c.query(`SELECT a.id FROM ac_artifacts a JOIN ac_operations o ON o.intent_id=a.intent_id
+          JOIN ac_intents i ON i.id=a.intent_id WHERE i.id=$1 AND i.parent_intent_id=$2 AND i.parent_unit_id=$3
+          AND i.context_id=$4 AND o.state='completed' AND o.receipt->>'commit'=a.commit_id
+          AND o.receipt->>'tree'=a.tree_id AND o.receipt->>'base'=a.base_id`,
+          [unit.intentId,bound.parentIntentId,id,authority.contextId])).rows;
+        if(result.length!==1)throw new Refusal('MANAGED_SOURCE_MISMATCH');
+        rows.push({unitId:id,artifactId:result[0].id,runId:unit.runId});
+      }
+      return rows;
+    });
+    const root=await realpath(join(this.repo,'.ai/cezar/managed'));
+    const result=[];
+    for(const source of identities){
+      const expected=join(root,bound.parentIntentId,source.runId),cwd=await realpath(expected);
+      if(cwd!==expected||!cwd.startsWith(root+sep))throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
+      result.push({unitId:source.unitId,artifactId:source.artifactId,cwd});
+    }
+    return result;
+  }
   async dispatch(intent: Intent, authority: Authority) {
     if(!this.executionEnabled)throw new Refusal('ADMINISTRATION_ONLY');
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    const delivery=(await this.ledger.pool.query('SELECT parent_intent_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0];
+    if(!delivery)throw new Refusal('INTENT_MISSING');
+    if(delivery.parent_intent_id)throw new Refusal('SUBDELIVERY_DISPATCH_FORBIDDEN',403);
     await this.refreshSchedulerBudget();
-    const workflow=workflowFor(intent.command.payload.workflow);
+    const recipe=intent.command.payload.workflow==='managed-synthetic-v1'?await readManagedRecipe(this.ledger,intent.id):undefined;
+    // Admission stays closed until every managed node has an effect-boundary adapter.
+    if(recipe&&!this.managedExecutionReady())throw new Refusal('MANAGED_RUNTIME_NOT_READY');
+    const workflow=recipe?.workflow??workflowFor(intent.command.payload.workflow);
     if(workflow.name==='engineering-synthetic-v1'&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
     const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
       FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1`,[intent.id])).rows[0];
     if (!identity || identity.operation_id!==intent.operation_id || identity.context_id!==intent.context_id || identity.run_id!==intent.run_id || identity.plan_revision!==intent.plan_revision || digest(identity.command)!==digest(intent.command))
       throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
     if (identity.project_id!==this.projectId) throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-    const grant = identity.operation_state === 'registered' ? await this.capacity.reserve(identity.principal_id,
+    const grant = !recipe&&identity.operation_state === 'registered' ? await this.capacity.reserve(identity.principal_id,
       {attemptId:identity.execution_attempt_id,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority) : null;
     await this.ledger.tx(async c => {
       await this.ledger.fence(c, authority);
@@ -180,6 +241,7 @@ export class CezarRuntime {
       if (existing) return;
       if (current.rows[0].state !== 'registered') throw new Refusal('OPERATION_UNCERTAIN');
       this.authorities.set(intent.run_id, authority);
+      if(recipe)this.managedPlans.set(intent.run_id,{recipe,used:new Set()});
       // startRun persists a stable run ID before enqueue; the runner checks epoch again at spawn.
       this.invocation.run({ intent, authority }, () => this.manager.startRun(workflow,
         { task: `Intent ${intent.id}`, runner: 'claude', worktree: true, generateFollowups: false }));
@@ -206,6 +268,8 @@ export class CezarRuntime {
           return intent;
         });
         if(this.diskGuard&&!await this.canReplayWithoutDiskAdmission(intent,authority,nodeId))await this.diskGuard.assertAdmission();
+        const entry=this.managedPlans.get(runId);
+        if(entry?.recipe.launches[nodeId])await this.freezeManagedBatch(intent,authority,entry.recipe,nodeId);
         if(waitingReason)this.manager.setManagedAdmissionWait(runId,'context-admission',null);
         return;
       }catch(error){
@@ -216,6 +280,46 @@ export class CezarRuntime {
         }
         await new Promise(resolve=>setTimeout(resolve,250));
       }
+    }
+  }
+  private async freezeManagedBatch(parent:Intent,authority:Authority,recipe:ManagedRecipe,nodeId:string){
+    const ids=recipe.launches[nodeId];if(!ids?.length)throw new Refusal('MANAGED_UNIT_MISMATCH');
+    const units=ids.map(id=>recipe.units.find(u=>u.id===id));
+    if(units.some(u=>!u))throw new Refusal('MANAGED_UNIT_MISMATCH');
+    const members=units.map(u=>u!);
+    const composition=recipe.units.find(u=>u.kind==='composition'&&digest(u.sources)===digest(ids));
+    const all=composition?[...members,composition]:members;
+    const target=recipe.targetRef,allowed=this.engineeringOptions?.allowedTargets??(this.engineeringOptions?.targetRef?[this.engineeringOptions.targetRef]:[]);
+    if(!allowed.includes(target))throw new Refusal('INTEGRATION_TARGET_FORBIDDEN',403);
+    const result=await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',this.repo,'rev-parse','--verify',`${target}^{commit}`],
+      {env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000});
+    const base=result.stdout.trim();if(!/^[a-f0-9]{40}$/.test(base))throw new Refusal('MANAGED_BASE_INVALID');
+    await this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,parent.id);
+      const current=(await c.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2 FOR UPDATE',[parent.id,authority.contextId])).rows[0];
+      if(!current)throw new Refusal('INTENT_SCOPE_MISMATCH',403);await this.ledger.authorize(c,current.principal_id,authority.contextId);
+      for(const unit of all){
+        const input=ManagedExecutionInput.parse({parentIntentId:parent.id,unitId:unit.id,kind:unit.kind,base,
+          writePaths:unit.writePaths,acceptanceRefs:unit.acceptanceRefs,sources:unit.sources});
+        await c.query('INSERT INTO ac_managed_delivery_inputs(intent_id,base_id,snapshot,digest) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+          [unit.intentId,base,input,digest(input)]);
+        const saved=(await c.query('SELECT digest FROM ac_managed_delivery_inputs WHERE intent_id=$1',[unit.intentId])).rows[0];
+        if(saved?.digest!==digest(input))throw new Refusal('MANAGED_BASE_CHANGED');
+      }
+    });
+    const managedRoot=join(this.repo,'.ai/cezar/managed');await mkdir(managedRoot,{recursive:true,mode:0o700});
+    const root=await realpath(managedRoot),repoRoot=await realpath(this.repo);
+    if(root!==join(repoRoot,'.ai/cezar/managed'))throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
+    const parentDir=join(root,parent.id);await mkdir(parentDir,{recursive:true,mode:0o700});
+    if(await realpath(parentDir)!==parentDir)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
+    for(const unit of members){
+      if(unit.kind!=='task')continue;
+      const cwd=join(parentDir,unit.runId);await mkdir(cwd,{mode:0o700});
+      const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
+      await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','clone','--no-local','--no-hardlinks','--',repoRoot,cwd],{env,timeout:30000});
+      await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'checkout','--detach',base],{env,timeout:10000});
+      if(await realpath(cwd)!==cwd)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
+      await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,parent.id);});
     }
   }
   /** A disk gate admits new writes, never suppresses an authenticated completed
@@ -265,7 +369,32 @@ export class CezarRuntime {
       if(!row||row.context_id!==authority.contextId||row.context_id!==intent.context_id||row.run_id!==intent.run_id||
          row.operation_id!==intent.operation_id||row.plan_revision!==intent.plan_revision||row.project_id!==this.projectId||
          digest(row.command)!==digest(intent.command))throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
-      return this.store.getRun(intent.run_id);
+      const run=this.store.getRun(intent.run_id);
+      if(intent.command.payload.workflow==='managed-synthetic-v1'&&run?.status==='done'){
+        const recipe=await readManagedRecipe(this.ledger,intent.id);
+        if(digest(run.workflowDef)!==digest(recipe.workflow))throw new Refusal('FROZEN_PLAN_MISMATCH');
+        const children=(await c.query(`SELECT i.id,i.parent_unit_id,o.id operation_id,o.state,o.receipt FROM ac_intents i
+          JOIN ac_operations o ON o.intent_id=i.id WHERE i.parent_intent_id=$1 AND i.context_id=$2 ORDER BY i.parent_unit_id`,
+          [intent.id,authority.contextId])).rows;
+        if(children.length!==recipe.units.length||children.some(child=>{
+          const receipt=SyntheticReceipt.safeParse(child.receipt);
+          return child.state!=='completed'||!receipt.success||receipt.data.operationId!==child.operation_id||
+            !recipe.units.some(unit=>unit.id===child.parent_unit_id&&unit.intentId===child.id&&unit.operationId===child.operation_id);
+        }))throw new Refusal('MANAGED_AGGREGATE_INCOMPLETE');
+        for(const unitId of new Set(Object.values(recipe.bindings).filter(binding=>binding.phase==='integrate').map(binding=>binding.unitId))){
+          const child=children.find(value=>value.parent_unit_id===unitId);if(!child)throw new Refusal('MANAGED_AGGREGATE_INCOMPLETE');
+          const integrated=(await c.query(`SELECT 1 FROM ac_artifacts a JOIN ac_integration_intents t ON t.artifact_id=a.id
+            WHERE a.intent_id=$1 AND a.commit_id=$2 AND a.tree_id=$3 AND a.base_id=$4 AND t.target_ref=$5 AND t.state='integrated'`,
+            [child.id,child.receipt.commit,child.receipt.tree,child.receipt.base,recipe.targetRef])).rowCount;
+          if(!integrated)throw new Refusal('MANAGED_AGGREGATE_INCOMPLETE');
+        }
+        const receipt={kind:'managed-aggregate-v1',recipeDigest:digest(recipe),children:children.map(child=>({intentId:child.id,unitId:child.parent_unit_id,receiptDigest:digest(child.receipt)}))};
+        const updated=await c.query("UPDATE ac_operations SET state='completed',receipt=$2,manager_epoch=$3 WHERE id=$1 AND state='registered' AND grant_id IS NULL RETURNING id",
+          [intent.operation_id,receipt,authority.epoch]);
+        if(!updated.rowCount){const existing=(await c.query('SELECT state,receipt FROM ac_operations WHERE id=$1',[intent.operation_id])).rows[0];
+          if(existing?.state!=='completed'||digest(existing.receipt)!==digest(receipt))throw new Refusal('MANAGED_AGGREGATE_MISMATCH');}
+      }
+      return run;
     });
   }
   /** Reconcile a previous isolated launch in the original Cezar worktree.
@@ -353,6 +482,54 @@ export class CezarRuntime {
         const runId=spec.env?.CEZ_TASK_ID;
         const run=runId?runtime.store.getRun(runId):undefined;
         const nodeId=spec.env?.AC_MANAGED_NODE_ID;
+        const parentRunId=run?.dispatch?.parentRunId??runId;
+        const managed=parentRunId?runtime.managedPlans.get(parentRunId):undefined;
+        if(managed&&runId&&nodeId){
+          let active:AgentSession|undefined,opened=true,canceled=false;
+          const result=(async()=>{
+            const authority=runtime.authorities.get(runId)??runtime.authorities.get(parentRunId!);
+            if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+            const binding=runId===parentRunId?managed.recipe.bindings[nodeId]:undefined;
+            const unit=binding?managed.recipe.units.find(u=>u.id===binding.unitId):managed.recipe.units.find(u=>u.runId===runId);
+            if(!unit||(runId===parentRunId&&!binding)||(runId!==parentRunId&&nodeId!=='task'))throw new Refusal('MANAGED_UNIT_MISMATCH');
+            const intent=(await runtime.ledger.pool.query<Intent>('SELECT * FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
+            if(!intent)throw new Refusal('INTENT_MISSING');
+            const verified=await readManagedUnit(runtime.ledger,intent);
+            if(!verified||digest(verified.unit)!==digest(unit))throw new Refusal('MANAGED_UNIT_MISMATCH');
+            await readManagedInput(runtime.ledger,intent.id);
+            const root=await realpath(join(runtime.repo,'.ai/cezar/managed'));
+            const cwd=join(root,verified.parentIntentId,unit.runId);
+            if(binding){
+              if(!runtime.engineering||binding.phase==='implement'||await realpath(cwd)!==cwd)throw new Refusal('ENGINEERING_NODE_NOT_ADMITTED');
+              active=runtime.engineering.start(intent,authority,binding.phase,{...spec,cwd},onEvent);
+            }else if(unit.kind==='composition'){
+              if(!runtime.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
+              const sources=await runtime.readManagedSourceArtifacts(intent,authority);
+              if(canceled)throw new Refusal('STAGE_CANCELED');
+              const receipt=await runtime.engineering.composeManaged(intent,authority,unit,z.uuid().parse(spec.sessionId),cwd,sources);
+              const text=`Managed composition completed: ${receipt.commit}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
+              return {text,toolCalls:[],tokensUsed:0};
+            }else{
+              if(!runtime.isolated||await realpath(cwd)!==cwd)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN');
+              const principal=(await runtime.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;
+              if(!principal)throw new Refusal('INTENT_MISSING');
+              let grant;
+              for(;;){
+                if(canceled||!runtime.running)throw new Refusal('STAGE_CANCELED');
+                try{grant=await runtime.capacity.reserve(principal,{attemptId:unit.attemptId,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority);break;}
+                catch(error){if(!(error instanceof Refusal)||!['NO_ELIGIBLE_CAPACITY','CAPACITY_QUEUED','CAPACITY_BUSY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
+                  await new Promise(resolve=>setTimeout(resolve,250));}
+              }
+              await runtime.ledger.tx(async c=>{await runtime.ledger.fence(c,authority);await runtime.ledger.assertIntentActive(c,authority.contextId,intent.id);
+                const saved=await c.query("UPDATE ac_operations SET grant_id=$2 WHERE id=$1 AND intent_id=$3 AND state='registered' AND (grant_id IS NULL OR grant_id=$2)",
+                  [intent.operation_id,grant.id,intent.id]);if(!saved.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');});
+              active=runtime.isolated.start(intent,authority,{...spec,cwd},onEvent,unit);
+            }
+            if(canceled)active.hardStop?.();return active.result;
+          })().finally(()=>{opened=false;});
+          return {result,get open(){return opened;},get pid(){return active?.pid;},sendMessage(){return false;},end(){active?.end();},
+            interrupt(){canceled=true;return active?.interrupt();},hardStop(){canceled=true;active?.hardStop?.();}};
+        }
         if(run?.workflow==='engineering-synthetic-v1'&&nodeId!=='implement'){
           if(!runtime.engineering||!runId||!nodeId)throw new Refusal('ENGINEERING_NODE_NOT_ADMITTED');
           const authority=runtime.authorities.get(runId);if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
@@ -466,6 +643,7 @@ export class CezarRuntime {
     };
   }
   async close() {
+    this.store.emit('managed-runtime-close');
     this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
     this.engineering?.close();
     this.isolated?.close();

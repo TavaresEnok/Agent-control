@@ -1,0 +1,6 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+tests/project-ingress.test.ts(18,30): error TS7034: Variable 'authorities' implicitly has type 'any[]' in some locations where its type cannot be determined.
+tests/project-ingress.test.ts(32,80): error TS7005: Variable 'authorities' implicitly has an 'any[]' type.

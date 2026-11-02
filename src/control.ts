@@ -36,11 +36,12 @@ export const ControlCommand=z.discriminatedUnion('action',[
 /** Human administration has a separate intent identity but uses the same PG/RBAC authority.
  * A nested Capacity view shares this transaction: effect and dedupe commit together. */
 export class Control {
- constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[]){}
+ constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[],private readonly projectScope?:string){}
  async execute(principal:string,raw:z.input<typeof ControlCommand>,proof:OperatorProof){
   const command=ControlCommand.parse(raw);
   return this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,command.contextId);
+   if(this.projectScope&&context.project_id!==this.projectScope)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
    await new Operators(this.ledger).verify(c,principal,raw,proof);
    const admission=(await c.query(command.action==='admission.set'
     ?'SELECT enabled FROM ac_admission_control WHERE id=1 FOR UPDATE'
@@ -79,9 +80,10 @@ export class Control {
       result={draining:updated.rows[0].draining,revision:updated.rows[0].drain_revision};break;
      }
      case 'plan.cancel':{
-      const target=(await c.query('SELECT state,plan_revision FROM ac_intents WHERE id=$1 AND context_id=$2 FOR UPDATE',
+      const target=(await c.query('SELECT state,plan_revision,parent_intent_id FROM ac_intents WHERE id=$1 AND context_id=$2 FOR UPDATE',
        [command.payload.intentId,command.contextId])).rows[0];
       if(!target)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+      if(target.parent_intent_id)throw new Refusal('MANAGED_SUBDELIVERY_CONTROL_ROOT_REQUIRED',403);
       if(target.plan_revision!==command.payload.planRevision)throw new Refusal('PLAN_REVISION_MISMATCH');
       const prior=(await c.query('SELECT state FROM ac_plan_cancellations WHERE intent_id=$1',[command.payload.intentId])).rows[0];
       if(!prior&&['done','review','failed','canceled','cancelled'].includes(target.state))throw new Refusal('PLAN_ALREADY_TERMINAL');
@@ -121,6 +123,7 @@ export class Control {
  async view(principal:string,contextId:string){
   return this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,Id.parse(contextId),false);
+   if(this.projectScope&&context.project_id!==this.projectScope)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
    const accounts=(await c.query(`SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.revision,a.max_concurrent,
     (a.owner_id=$2 AND $3::boolean) can_manage,
     CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE 'unknown' END quota_status,
@@ -146,7 +149,7 @@ export class Control {
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
    const waits=(await c.query('SELECT attempt_id,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
    const plans=(await c.query(`SELECT i.id,i.run_id,i.plan_revision,i.state,c.state cancellation_state
-    FROM ac_intents i LEFT JOIN ac_plan_cancellations c ON c.intent_id=i.id WHERE i.context_id=$1 ORDER BY i.created_at DESC LIMIT 100`,[contextId])).rows;
+    FROM ac_intents i LEFT JOIN ac_plan_cancellations c ON c.intent_id=i.id WHERE i.context_id=$1 AND i.parent_intent_id IS NULL ORDER BY i.created_at DESC LIMIT 100`,[contextId])).rows;
    const approvals=(await c.query(`SELECT a.id,a.commit_id,a.tree_id,a.base_id,a.identity_digest,a.policy_revision,x.target_ref,
     EXISTS(SELECT 1 FROM ac_integration_approvals h WHERE h.artifact_id=a.id AND h.target_ref=x.target_ref) approved,
     EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=a.intent_id) canceled

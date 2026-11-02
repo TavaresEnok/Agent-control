@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: composition preserves source changes, is deterministic, and rejects scope violations
+ok 1 - composition preserves source changes, is deterministic, and rejects scope violations
+  ---
+  duration_ms: 1645.030992
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2451.618288

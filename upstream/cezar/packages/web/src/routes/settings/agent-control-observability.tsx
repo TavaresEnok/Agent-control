@@ -2,6 +2,8 @@ import {useQuery} from '@tanstack/react-query'
 import {agentControlOperationalSnapshotSchema,type AgentControlOperationalSnapshot} from '@open-mercato/cezar-api-client'
 import {Button} from '@/components/ui/button'
 import {SettingsField} from './settings-field'
+import {agentControlFetch} from './agent-control-fetch'
+import {useProjectScope} from '@/api/project-scope-context'
 function samples(data:AgentControlOperationalSnapshot,name:string){return data.metrics.find(metric=>metric.name===`agent_control_${name}`)?.samples??[]}
 function value(data:AgentControlOperationalSnapshot,name:string,state?:string){const rows=samples(data,name);return state===undefined?rows[0]?.value:rows.find(row=>row.labels.state===state)?.value}
 function bytes(value:string){const tenths=BigInt(value)*10n/1073741824n;return `${tenths/10n},${tenths%10n} GiB`}
@@ -32,8 +34,9 @@ function OperationalReadout({data}:{data:AgentControlOperationalSnapshot}){
  </div>
 }
 export function AgentControlObservability({enabled}:{enabled:boolean}){
- const observed=useQuery({queryKey:['ac-operational-observability'],enabled,refetchInterval:15000,queryFn:async()=>{
-  const response=await fetch('/api/v1/ac/observability',{credentials:'include'})
+ const {projectId}=useProjectScope()
+ const observed=useQuery({queryKey:['ac-operational-observability',projectId],enabled,refetchInterval:15000,queryFn:async()=>{
+  const response=await agentControlFetch('/api/v1/ac/observability')
   if(!response.ok)throw Error(`Métricas indisponíveis (HTTP ${response.status}).`)
   return agentControlOperationalSnapshotSchema.parse(await response.json())
  }})

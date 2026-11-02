@@ -10,9 +10,10 @@ import { Authority,Id,canonical,digest,Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import {DiskAdmissionGuard,type DiskAdmissionPolicy} from './disk-admission.ts';
 
+const CompositionSource=z.object({unitId:z.string(),artifactId:Id,commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict();
 const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup','stop']),jobId:Id,grantId:Id,
  authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1']),
- source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict().optional(),
+ source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().regex(/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/).max(240).optional(),composition:z.array(CompositionSource).min(2).max(4).optional()}).strict().optional(),
  verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict().optional(),
  expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 type SandboxRequest=z.infer<typeof SandboxRequest>;
@@ -140,6 +141,21 @@ export class SandboxBroker{
     LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 FOR UPDATE OF g`,[value.grantId,value.authority.contextId])).rows[0];
    if(!grant)throw new Refusal('GRANT_FORBIDDEN',403);
    if(value.action==='start')await this.ledger.assertIntentActive(c,value.authority.contextId,grant.intent_id);
+   if(value.source){
+    const binding=(await c.query(`SELECT i.parent_intent_id,m.base_id,m.snapshot,m.digest FROM ac_intents i
+     LEFT JOIN ac_managed_delivery_inputs m ON m.intent_id=i.id WHERE i.id=$1`,[grant.intent_id])).rows[0];
+    if(binding?.parent_intent_id){
+     const input=z.object({kind:z.enum(['task','composition']),writePaths:z.array(z.string()).min(1),sources:z.array(z.string())}).passthrough().safeParse(binding.snapshot);
+     if(!input.success||digest(binding.snapshot)!==binding.digest||
+       (input.data.kind==='task'&&(value.source.outputPath!==input.data.writePaths[0]||value.source.composition!==undefined))||
+       (!value.verification&&value.source.base!==binding.base_id))throw new Refusal('MANAGED_INPUT_MISMATCH');
+     if(input.data.kind==='composition'){
+      const sources=(await c.query('SELECT snapshot,digest FROM ac_managed_composition_sources WHERE intent_id=$1',[grant.intent_id])).rows[0];
+      if(!value.verification||value.source.outputPath!==undefined||!value.source.composition||!sources||digest(sources.snapshot)!==sources.digest||
+        digest(value.source.composition)!==sources.digest||digest(value.source.composition.map(s=>s.unitId))!==digest(input.data.sources))throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
+     }
+    }else if(value.source.outputPath!==undefined||value.source.composition!==undefined)throw new Refusal('MANAGED_INPUT_MISMATCH');
+   }
    const prior=(await c.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[value.jobId])).rows[0];
    if(prior){
     const priorSpec=this.specification(value,work,Number(prior.manager_epoch));
@@ -204,6 +220,11 @@ export class SandboxBroker{
     await exec('/usr/bin/git',['init','-q',work],{timeout:10000});
     await safeGit(work,['fetch','--no-tags',sourcePath,'HEAD']);
     if(await safeGit(work,['rev-parse','FETCH_HEAD'])!==value.source.base)throw new Refusal('SANDBOX_SOURCE_IDENTITY_MISMATCH');
+    for(const [i,source] of (value.source.composition??[]).entries()){
+     const ref=`refs/agent-control/sources/${i}`;
+     await safeGit(work,['fetch','--no-tags',sourcePath,`${ref}:${ref}`]);
+     if(await safeGit(work,['rev-parse',ref])!==source.commit)throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
+    }
     await safeGit(work,['checkout','--detach',value.source.base]);
     if(value.verification){
      const artifact=(await c.query('SELECT tree_id FROM ac_artifacts WHERE id=$1',[value.verification.artifactId])).rows[0];
@@ -219,7 +240,7 @@ export class SandboxBroker{
    if(await this.docker.inspect(name))throw new Refusal('SANDBOX_NAME_IN_USE');
    const labels={'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
    const id=await this.docker.create(name,{Image:this.config.imageId,User:'10001:10001',WorkingDir:'/work',
-    Entrypoint:['node','/runner/probe.mjs',...(value.verification?[value.verification.operationId,value.verification.kind]:value.source?[value.jobId]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
+    Entrypoint:['node','/runner/probe.mjs',...(value.verification?[value.verification.operationId,value.verification.kind,...(value.source?.composition?['--composition',Buffer.from(JSON.stringify(value.source.composition)).toString('base64')]:value.source?.outputPath?[value.source.outputPath]:[])]:value.source?[value.jobId,...(value.source.outputPath?[value.source.outputPath]:[])]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
      'GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_AUTHOR_NAME=Synthetic worker','GIT_AUTHOR_EMAIL=fixture@example.invalid',
      'GIT_COMMITTER_NAME=Synthetic worker','GIT_COMMITTER_EMAIL=fixture@example.invalid'],Labels:labels,
     HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],
@@ -283,7 +304,7 @@ export class SandboxBroker{
      tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(true)}).strict().parse(JSON.parse(raw));
     if(parsed.operationId!==value.jobId||parsed.base!==value.source.base||await safeGit(work,['rev-parse','HEAD'])!==parsed.commit||
       await safeGit(work,['rev-parse','HEAD^{tree}'])!==parsed.tree||await safeGit(work,['rev-parse','HEAD^'])!==parsed.base||
-      await safeGit(work,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==`synthetic-${value.jobId}.txt`)
+      await safeGit(work,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==(value.source.outputPath??`synthetic-${value.jobId}.txt`))
       throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
     const output=join(this.config.hostRoot,value.jobId,'artifact.bundle');
     await safeGit(work,['bundle','create',output,'HEAD']);

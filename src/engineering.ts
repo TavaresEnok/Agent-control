@@ -10,6 +10,7 @@ import { GitArtifacts } from './git.ts';
 import { Quality,QualityPolicy, type VerificationReceipt,type ArtifactRow } from './quality.ts';
 import { Integrator } from './integration.ts';
 import {IsolatedVerification,type IsolatedVerificationResult} from './isolated-verification.ts';
+import {readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;
  onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void};
@@ -27,6 +28,72 @@ export class EngineeringStages{
  constructor(readonly ledger:Ledger,readonly projectId:string,readonly options:EngineeringOptions){
   if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
+ }
+ async composeManaged(intent:Intent,authority:Authority,unit:ManagedUnit,sessionId:string,destination:string,
+  sources:readonly {unitId:string;artifactId:string;cwd:string}[]){
+  z.uuid().parse(sessionId);
+  const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
+  if(!bound||digest(bound.unit)!==digest(unit)||unit.kind!=='composition'||digest(sources.map(s=>s.unitId))!==digest(input.sources))
+   throw new Refusal('MANAGED_UNIT_MISMATCH');
+  await this.options.git.assertManagedPath(bound.parentIntentId,unit.runId,destination,false);
+  const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[intent.id,authority.contextId])).rows[0]?.principal_id;
+  if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+  const identities=await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const items=[];
+   for(const source of sources){
+    const frozen=bound.recipe.units.find(u=>u.id===source.unitId);
+    if(!frozen||frozen.kind!=='task')throw new Refusal('MANAGED_SOURCE_MISMATCH');
+    const artifact=await this.options.quality.assertReady(c,source.artifactId,authority);
+    if(artifact.intent_id!==frozen.intentId||artifact.context_id!==intent.context_id||artifact.base_id!==input.base)throw new Refusal('MANAGED_SOURCE_MISMATCH');
+    items.push({commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,writePaths:frozen.writePaths});
+   }
+   return items;
+  });
+  for(const source of sources){const frozen=bound.recipe.units.find(u=>u.id===source.unitId)!;
+   await this.options.git.assertManagedPath(bound.parentIntentId,frozen.runId,source.cwd,true);}
+  const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:unit.attemptId,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority);
+  await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const snapshot=identities.map((value,index)=>({unitId:sources[index]!.unitId,artifactId:sources[index]!.artifactId,...value}));
+   await c.query('INSERT INTO ac_managed_composition_sources(intent_id,snapshot,digest) VALUES($1,$2,$3) ON CONFLICT(intent_id) DO NOTHING',[intent.id,JSON.stringify(snapshot),digest(snapshot)]);
+   const stored=(await c.query('SELECT snapshot,digest FROM ac_managed_composition_sources WHERE intent_id=$1',[intent.id])).rows[0];
+   if(!stored||stored.digest!==digest(snapshot)||digest(stored.snapshot)!==stored.digest)throw new Refusal('MANAGED_SOURCE_MISMATCH');
+   const changed=await c.query("UPDATE ac_operations SET state='uncertain',grant_id=$2 WHERE id=$1 AND intent_id=$3 AND state='registered' AND manager_epoch=$4 AND (grant_id IS NULL OR grant_id=$2)",[intent.operation_id,grant.id,intent.id,authority.epoch]);
+   if(!changed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
+  });
+  let child:ChildProcess|undefined,monitor:ReturnType<typeof setInterval>|undefined;
+  try{
+   const result=await this.options.git.composeSupervised(input.base,identities.map((value,index)=>({...value,sourceRepo:sources[index]!.cwd})),destination,async processChild=>{
+    child=processChild;this.children.add(processChild);processChild.once('exit',()=>this.children.delete(processChild));
+    await new Promise<void>((ok,fail)=>{processChild.once('spawn',ok);processChild.once('error',fail);});
+    const stat=await readFile(`/proc/${processChild.pid}/stat`,'utf8'),startTime=stat.slice(stat.lastIndexOf(')')+2).split(' ')[19];
+    const bootId=(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim();
+    if(!/^\d+$/.test(startTime??''))throw new Refusal('PROCESS_IDENTITY_UNAVAILABLE');
+    await this.ledger.tx(async c=>{
+     await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+     for(const source of sources)await this.options.quality.assertReady(c,source.artifactId,authority);
+     const eligible=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
+      JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
+      AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp() FOR UPDATE OF g`,[grant.id,authority.contextId,authority.epoch]);
+     if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');
+     await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[grant.id]);
+     const changed=await c.query("UPDATE ac_operations SET state='running',native_session_id=$2,handle=$3 WHERE id=$1 AND state='uncertain' AND manager_epoch=$4",[intent.operation_id,sessionId,{pid:processChild.pid,startTime,bootId,operationId:intent.operation_id,epoch:authority.epoch,synthetic:true},authority.epoch]);
+     if(!changed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
+    });
+    let checking=false;monitor=setInterval(()=>{if(checking)return;checking=true;void this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);}).catch(()=>stop(child)).finally(()=>{checking=false;});},500);
+   });
+   const identity=await this.options.git.identity(result.commit,result.base);
+   if(identity.tree!==result.tree)throw new Refusal('MANAGED_COMPOSITION_MISMATCH');
+   const receipt={operationId:intent.operation_id,commit:result.commit,tree:result.tree,base:result.base,exitCode:0,synthetic:true};
+   await this.ledger.tx(async c=>{
+    await this.ledger.fence(c,authority,true);
+    const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND manager_epoch=$3 AND state='running'",[grant.id,{state:'exited',processId:String(child?.pid),exitCode:0,source:'managed-git-compositor'},authority.epoch]);
+    const completed=await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='running' AND manager_epoch=$3",[intent.operation_id,receipt,authority.epoch]);
+    if(!released.rowCount||!completed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
+   });
+   return receipt;
+  }finally{if(monitor)clearInterval(monitor);stop(child);}
  }
  /** Reattach a completed node after controller loss. Only saved, authenticated
   * results are replayable here; uncertain or absent effects are never relaunched. */
@@ -217,6 +284,17 @@ export class EngineeringStages{
    const implementation=(await this.ledger.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intent.id])).rows[0];
    if(implementation?.state!=='completed'||!implementation.receipt?.commit||!implementation.native_session_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
    const source=implementation.receipt;
+   const managed=await readManagedUnit(this.ledger,intent);
+   if(managed?.unit.kind==='task'){
+    await this.options.git.assertManagedPath(managed.parentIntentId,managed.unit.runId,spec.cwd,true);
+    await this.ledger.tx(async c=>{
+     await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+     const operation=(await c.query("SELECT receipt,state FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE",[intent.operation_id,intent.id])).rows[0];
+     if(operation?.state!=='completed'||digest(operation.receipt)!==digest(source))throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
+     const imported=await this.options.git.import(spec.cwd,source.commit,source.base);
+     if(imported.tree!==source.tree)throw new Refusal('MANAGED_SOURCE_MISMATCH');
+    });
+   }
    const artifact=await this.options.quality.register(principal,{id:artifactId(intent.id,source.commit),contextId:intent.context_id,intentId:intent.id,
     implementationGrantId:implementation.grant_id,implementationSessionId:implementation.native_session_id,policyRevision:contract.quality_revision,
     commit:source.commit,tree:source.tree,base:source.base,risk:'high'},authority);

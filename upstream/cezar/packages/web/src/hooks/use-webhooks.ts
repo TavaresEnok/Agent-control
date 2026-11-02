@@ -9,7 +9,7 @@ export function useWebhookList(projectId: string, enabled: boolean) {
 export function useWebhookSubscription(projectId: string, enabled: boolean) {
   const client = useQueryClient()
   useEffect(() => {
-    if (!enabled || !globalThis.EventSource) return
+    if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' || !enabled || !globalThis.EventSource) return
     let disposed = false
     const source = new EventSource(`${getApiBaseUrl()}${API_PREFIX}/p/${encodeURIComponent(projectId)}/webhooks/events`, { withCredentials: true })
     const onEvent = (event: MessageEvent<string>) => {

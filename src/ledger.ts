@@ -4,9 +4,10 @@ import pg from 'pg';
 import { Authority, Checkpoint, Command, digest, Refusal, Projection } from './contracts.ts';
 import { workflowFor } from './workflows.ts';
 import { Template } from './templates.ts';
+import {freezeManagedExecution} from './managed-plan.ts';
 
 export type Intent = { id: string; context_id: string; operation_id: string; run_id: string;
-  manager_epoch: string; plan_revision: number; state: string; command: Command };
+  manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
 export class Ledger {
   readonly pool: pg.Pool;
   constructor(connectionString: string) { this.pool = new pg.Pool({ connectionString, max: 8 }); }
@@ -87,7 +88,7 @@ export class Ledger {
   async assertIntentActive(c:pg.PoolClient,contextId:string,intentId:string){
     if(!(await c.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2',[intentId,contextId])).rowCount)
       throw new Refusal('INTENT_SCOPE_MISMATCH',403);
-    if((await c.query('SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1',[intentId])).rowCount)
+    if((await c.query('SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 OR intent_id=(SELECT parent_intent_id FROM ac_intents WHERE id=$1)',[intentId])).rowCount)
       throw new Refusal('PLAN_CANCELLATION_REQUESTED');
   }
   async pause(principal: string, contextId: string, paused: boolean) {
@@ -106,7 +107,7 @@ export class Ledger {
     });
   }
   async refreshPending(c: pg.PoolClient, contextId: string) {
-    const pending=(await c.query("SELECT id FROM ac_intents WHERE context_id=$1 AND state NOT IN ('done','review','failed','canceled') ORDER BY created_at,id",[contextId])).rows.map(r=>r.id);
+    const pending=(await c.query("SELECT id FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NULL AND state NOT IN ('done','review','failed','canceled') ORDER BY created_at,id",[contextId])).rows.map(r=>r.id);
     await c.query("UPDATE ac_checkpoints SET snapshot=jsonb_set(snapshot,'{pendingIntentIds}',$2::jsonb),updated_at=now() WHERE context_id=$1",[contextId,JSON.stringify(pending)]);
   }
   async recoverCheckpoint(authority: Authority): Promise<Checkpoint|null> {
@@ -147,7 +148,7 @@ export class Ledger {
           (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [command.intentId, command.contextId, principal, hash, command, randomUUID(), randomUUID(), a.epoch, revision])).rows[0];
-        if(context.active_template_revision){
+        if(command.payload.workflow!=='managed-synthetic-v1'&&context.active_template_revision){
           const selected=(await c.query('SELECT snapshot,digest FROM ac_context_templates WHERE context_id=$1 AND revision=$2',
             [command.contextId,context.active_template_revision])).rows[0];
           if(!selected)throw new Refusal('TEMPLATE_NOT_FOUND');
@@ -157,7 +158,9 @@ export class Ledger {
           await c.query('INSERT INTO ac_intent_templates VALUES($1,$2,$3,$4,$5)',
             [intent.id,command.contextId,context.active_template_revision,template,selected.digest]);
         }else if(command.payload.workflow==='engineering-synthetic-v1')throw new Refusal('TEMPLATE_REQUIRED');
-        const workflow=workflowFor(command.payload.workflow);
+        const workflow=command.payload.workflow==='managed-synthetic-v1'
+          ?await freezeManagedExecution(this,c,intent,principal,a,command.payload.proposalRevision,command.payload.proposalDigest)
+          :workflowFor(command.payload.workflow);
         await c.query('INSERT INTO ac_frozen_plans VALUES($1,$2,$3,$4,$5)',[command.contextId,revision,intent.id,digest(workflow),workflow]);
         await c.query('INSERT INTO ac_operations(id,intent_id,state,manager_epoch) VALUES($1,$2,\'registered\',$3)', [intent.operation_id, intent.id, a.epoch]);
         await c.query('INSERT INTO ac_outbox(id,intent_id) VALUES($1,$2)', [randomUUID(), intent.id]);

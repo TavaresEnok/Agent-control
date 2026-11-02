@@ -13,8 +13,10 @@ import {AgentControlIntegrationApproval,approvalSchema} from './agent-control-in
 import {AgentControlManagerPlans} from './agent-control-manager-plans'
 import {AgentControlProviderCollectors} from './agent-control-provider-collectors'
 import {AgentControlObservability} from './agent-control-observability'
+import {agentControlFetch} from './agent-control-fetch'
+import {useProjectScope} from '@/api/project-scope-context'
 
-const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
+const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),policy_revision:z.number().int().positive().nullable().optional(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
  grant_id:z.string().uuid(),role:z.string(),account_id:z.string().uuid(),model:z.string(),effort:z.string(),state:z.string(),
  counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
@@ -36,7 +38,7 @@ const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.s
  waits:z.array(z.object({attempt_id:z.string(),role:z.string(),reason:z.string().nullable()})),
  grants:z.array(z.object({id:z.string(),role:z.string(),state:z.string(),profile_id:z.string(),emergency:z.boolean()}))})
 async function request(path:string,body?:unknown,extraHeaders:Record<string,string>={}):Promise<unknown>{
- const response=await fetch(path,{method:body?'POST':'GET',credentials:'include',headers:{...(body?{'content-type':'application/json'}:{}),...extraHeaders},
+ const response=await agentControlFetch(path,{method:body?'POST':'GET',headers:{...(body?{'content-type':'application/json'}:{}),...extraHeaders},
   body:body?JSON.stringify(body):undefined})
  const value:unknown=await response.json()
  if(!response.ok){const parsed=z.object({error:z.string()}).safeParse(value);throw Error(parsed.success?parsed.data.error:`HTTP_${response.status}`)}
@@ -44,24 +46,28 @@ async function request(path:string,body?:unknown,extraHeaders:Record<string,stri
 }
 /** Uses the existing Settings shell; all state comes from the PG authority. */
 export function AgentControlSection(){
+ const {projectId}=useProjectScope()
+ return <ScopedAgentControlSection key={projectId??'default'} projectId={projectId}/>
+}
+function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const cache=useQueryClient()
  const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[sessionId,setSessionId]=useState('')
  const [requiredReviews,setRequiredReviews]=useState(1),[requireHuman,setRequireHuman]=useState(false),[requireJudge,setRequireJudge]=useState(false)
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
- const contexts=useQuery({queryKey:['ac-contexts'],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
+ const contexts=useQuery({queryKey:['ac-contexts',projectId],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
  const contextId=selected||contexts.data?.contexts[0]?.id||''
- const resources=useQuery({queryKey:['ac-resources',contextId],enabled:!!contextId,refetchInterval:5000,
+ const resources=useQuery({queryKey:['ac-resources',contextId,projectId],enabled:!!contextId,refetchInterval:5000,
   queryFn:async()=>resourcesSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/resources`))})
- const operator=useQuery({queryKey:['ac-operator-identity'],queryFn:async()=>z.object({principalId:z.string(),projectId:z.string().uuid(),
+ const operator=useQuery({queryKey:['ac-operator-identity',projectId],queryFn:async()=>z.object({principalId:z.string(),projectId:z.string().uuid(),
   installationId:z.string().uuid(),operatorDeviceIds:z.array(z.string().uuid())}).parse(await request('/api/v1/ac/operator/identity'))})
- const identity=useQuery({queryKey:['ac-operator-device',operator.data?.principalId],enabled:!!operator.data,
+ const identity=useQuery({queryKey:['ac-operator-device',operator.data?.principalId,projectId],enabled:!!operator.data,
   queryFn:()=>operatorIdentity(operator.data!.principalId,operator.data!.operatorDeviceIds)})
  const linkContext=useMutation({mutationFn:async()=>{
   if(!operator.data)throw Error('PROJECT_NOT_READY')
   return z.object({contextId:z.string().uuid()}).parse(await request('/api/v1/ac/contexts',{projectId:operator.data.projectId,happierSessionId:sessionId}))
  },onSuccess:value=>{setSelected(value.contextId);setSessionId('');void cache.invalidateQueries({queryKey:['ac-contexts']})}})
- const usage=useQuery({queryKey:['ac-usage',contextId],enabled:!!contextId,refetchInterval:5000,
+ const usage=useQuery({queryKey:['ac-usage',contextId,projectId],enabled:!!contextId,refetchInterval:5000,
   queryFn:async()=>usageSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/usage`))})
  const mutate=useMutation({mutationFn:async(command:{action:string;payload:unknown})=>{
    const storageKey=`ac-control-pending:${contextId}`
@@ -127,7 +133,8 @@ export function AgentControlSection(){
      onClick={()=>mutate.mutate({action:'plan.cancel',payload:{intentId:plan.id,planRevision:plan.plan_revision}})}>Cancelar este plano e solicitar parada</Button>}
    </div>)}
   </SettingsField>}
-  {data&&<AgentControlManagerPlans key={contextId} contextId={contextId}/>}
+  {data&&operator.data&&<AgentControlManagerPlans key={contextId} contextId={contextId} policyRevision={selectedContext?.policy_revision??null}
+   principalId={operator.data.principalId} projectId={operator.data.projectId}/>}
   {data&&<AgentControlProviderCollectors key={`providers-${contextId}`} accounts={data.accounts} bindings={data.providerBindings} adapters={data.providerAdapters}
    canConfigure={data.canConfigureCapacity} busy={busy} onBind={payload=>mutate.mutate({action:'provider.bind',payload})}/>}
   {data&&<AgentControlObservability enabled={data.canConfigureCapacity}/>}

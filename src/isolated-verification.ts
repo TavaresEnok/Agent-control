@@ -7,8 +7,10 @@ import {Authority,Id,digest,Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {SandboxClient} from './sandbox-client.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
+import {readManagedInput} from './managed-plan.ts';
 const exec=promisify(execFile),GitId=z.string().regex(/^[a-f0-9]{40}$/);
-const Launch=z.object({profile:z.literal('synthetic-verification-v1'),source:z.object({base:GitId,bundle:z.string().max(1400000)}).strict(),
+const CompositionSource=z.object({unitId:z.string(),artifactId:Id,commit:GitId,tree:GitId,base:GitId,writePaths:z.array(z.string())}).strict();
+const Launch=z.object({profile:z.literal('synthetic-verification-v1'),source:z.object({base:GitId,bundle:z.string().max(1400000),outputPath:z.string().optional(),composition:z.array(CompositionSource).min(2).max(4).optional()}).strict(),
  verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict()}).strict();
 const Result=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),verification:z.object({
  artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge']),commit:GitId,tree:GitId,base:GitId,
@@ -44,9 +46,20 @@ export class IsolatedVerification{
   try{
    if(await git(cwd,['rev-parse','HEAD'])!==artifact.commit||await git(cwd,['rev-parse','HEAD^{tree}'])!==artifact.tree)
     throw new Refusal('ARTIFACT_TREE_MISMATCH');
-   const bundlePath=join(temporary,'source.bundle');await git(cwd,['bundle','create',bundlePath,'HEAD']);
+   const owner=(await this.ledger.pool.query('SELECT i.id,i.parent_intent_id FROM ac_artifacts a JOIN ac_intents i ON i.id=a.intent_id WHERE a.id=$1 AND i.context_id=$2',[artifact.id,authority.contextId])).rows[0];
+   if(!owner)throw new Refusal('ARTIFACT_MISSING');
+   const input=owner.parent_intent_id?await readManagedInput(this.ledger,owner.id):null;
+   let composition:z.infer<typeof CompositionSource>[]|undefined;
+   if(input?.kind==='composition'){
+    const row=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_managed_composition_sources WHERE intent_id=$1',[owner.id])).rows[0];
+    if(!row||digest(row.snapshot)!==row.digest)throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
+    composition=z.array(CompositionSource).min(2).max(4).parse(row.snapshot);
+    if(digest(composition.map(s=>s.unitId))!==digest(input.sources))throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
+   }
+   const bundlePath=join(temporary,'source.bundle');await git(cwd,['bundle','create',bundlePath,'HEAD',...(composition?.map((_,i)=>`refs/agent-control/sources/${i}`)??[])]);
    const bundle=await readFile(bundlePath);if(bundle.length>1000000)throw new Refusal('SANDBOX_SOURCE_TOO_LARGE');
-   launch=Launch.parse({profile:'synthetic-verification-v1',source:{base:artifact.commit,bundle:bundle.toString('base64')},verification:{artifactId:artifact.id,operationId,kind}});
+   const outputPath=input?.kind==='task'?input.writePaths[0]:undefined;
+   launch=Launch.parse({profile:'synthetic-verification-v1',source:{base:artifact.commit,bundle:bundle.toString('base64'),...(outputPath?{outputPath}:{}),...(composition?{composition}:{})},verification:{artifactId:artifact.id,operationId,kind}});
    const snapshot=launch;
    await this.ledger.tx(async c=>{
     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);

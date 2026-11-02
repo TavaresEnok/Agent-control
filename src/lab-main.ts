@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { serve } from '@hono/node-server';
 import { Ledger } from './ledger.ts';
 import { CezarRuntime } from './cezar.ts';
-import { HappierEndpoint, loadHappier } from './happier.ts';
+import { loadHappier } from './happier.ts';
+import {ManagerRegistry,happierEndpointFactory} from './managers.ts';
 import { createApi } from './api.ts';
 import { randomBytes,randomUUID } from 'node:crypto';
 import { GitArtifacts } from './git.ts';
@@ -46,26 +47,25 @@ if(!enrolled&&!pending){
 }
 
 const boundary = await loadHappier();
-const endpoints: HappierEndpoint[] = [];
 const metadataResponse = await fetch('http://127.0.0.1:18401/v2/sessions/' + fixture.sessions[0], { headers: { authorization: 'Bearer ' + fixture.token } });
 const metadataBody = z.object({ session: z.object({ metadata: z.string() }).passthrough() }).passthrough().parse(await metadataResponse.json());
 const key = Buffer.from(fixture.secret, 'base64url');
 const { machineId } = z.object({ machineId: z.string() }).passthrough().parse(boundary.decrypt(key, 'legacy', boundary.decodeBase64(metadataBody.session.metadata)));
-for (let i = 0; i < fixture.contexts.length; i++) {
-  const instanceId = randomUUID();
-  let authority: import('./contracts.ts').Authority | undefined;
-  for (let retry = 0; retry < 60; retry++) {
-    try { authority = await ledger.acquire(fixture.principal, fixture.contexts[i], instanceId, 'synthetic-sol-profile'); break; }
-    catch (error) {
-      if (!(error instanceof Error) || error.message !== 'MANAGER_ACTIVE') throw error;
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+const managers=new ManagerRegistry(ledger,fixture.project,happierEndpointFactory(ledger,runtime,boundary,
+ {baseUrl:'http://127.0.0.1:18401',token:fixture.token,machineId}));
+try{
+ for(let i=0;i<fixture.contexts.length;i++){
+  let started=false;
+  for(let retry=0;retry<60;retry++){
+   try{await managers.start({principal:fixture.principal,contextId:fixture.contexts[i],sessionId:fixture.sessions[i],
+    profileId:'synthetic-sol-profile',keyVersion:1,encryptionVariant:'legacy',key});started=true;break;}
+   catch(error){if(!(error instanceof Error)||error.message!=='MANAGER_ACTIVE')throw error;
+    await new Promise(resolve=>setTimeout(resolve,500));}
   }
-  if (!authority) throw Error('MANAGER_STILL_ACTIVE_AFTER_BOUNDED_WAIT');
-  const endpoint = new HappierEndpoint(ledger, runtime, boundary, { baseUrl: 'http://127.0.0.1:18401', token: fixture.token,
-    key, principal: fixture.principal, sessionId: fixture.sessions[i], machineId, authority });
-  await endpoint.start(); endpoints.push(endpoint);
-}
+  if(!started)throw Error('MANAGER_STILL_ACTIVE_AFTER_BOUNDED_WAIT');
+ }
+}catch(error){await managers.close();await runtime.close();await ledger.close();throw error;}
+finally{key.fill(0);}
 const verifyBearer = async (request:Request) => {
   const authorization = request.headers.get('authorization'); if (!authorization) return null;
   const response = await fetch('http://127.0.0.1:18401/v1/account/profile', { headers: { authorization } });
@@ -77,10 +77,19 @@ let browserKey:Buffer;
 try{const info=await lstat(browserKeyPath);if(!info.isFile()||info.isSymbolicLink()||(info.mode&0o077)!==0)throw Error('UNSAFE_BROWSER_KEY');browserKey=await readFile(browserKeyPath);}
 catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;browserKey=randomBytes(32);await writeFile(browserKeyPath,browserKey,{mode:0o600,flag:'wx'});}
 const sessions=new BrowserSessions(ledger,browserKey,verifyBearer,{origin:'http://127.0.0.1:18402',secure:false,maxAgeSeconds:86400});
-const api=createApi(ledger,runtime,verifyBearer,context=>endpoints.find(e=>e.options.authority.contextId===context)?.options.authority,
+const api=createApi(ledger,runtime,verifyBearer,context=>managers.authority(context),
  'http://127.0.0.1:18400',undefined,sessions,new HappierAuthRelay(sessions,{upstreamUrl:'http://127.0.0.1:18401',webUrl:'http://127.0.0.1:18400',publicServerUrl:'http://127.0.0.1:18401'}));
 const server = serve({ fetch: api.fetch, hostname: '127.0.0.1', port: 18402 }, () => console.log('ISOLATED_AGENT_CONTROL_READY'));
-process.on('SIGTERM', () => {
-  endpoints.forEach(e => e.close()); server.close();
-  void runtime.close().then(() => ledger.close()).then(() => process.exit(0));
-});
+let shuttingDown=false;
+const shutdown=()=>{
+ if(shuttingDown)return;shuttingDown=true;server.close();
+ void (async()=>{
+  let failed=false;
+  try{await managers.close();}catch{failed=true;}
+  try{await runtime.close();}catch{failed=true;}
+  try{await ledger.close();}catch{failed=true;}
+  if(failed)console.error('ISOLATED_SHUTDOWN_RECONCILIATION_REQUIRED');
+  process.exit(failed?1:0);
+ })();
+};
+process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);

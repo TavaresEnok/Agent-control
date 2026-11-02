@@ -1314,6 +1314,7 @@ interface PreparedUserMessage {
  * subject, so the always-on flushes are not mistaken for the opt-in timer.
  * The user's working tree is never touched.
  */
+const graphStartCapability = Symbol('managed graph start');
 export class RunManager {
   readonly lifecycle: WorktreeLifecycleCoordinator;
 
@@ -1480,13 +1481,13 @@ export class RunManager {
 
 
   private offManagedPersistence = () => {};
-  private readonly managed: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean>; beforeNode?: (runId: string, nodeId: string, cancelled: () => boolean) => Promise<void> } | undefined;
+  private readonly managed: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput, graphOwned: boolean) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean>; beforeNode?: (runId: string, nodeId: string, cancelled: () => boolean) => Promise<void> } | undefined;
 
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
     options: {
-      managed?: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean>; beforeNode?: (runId: string, nodeId: string, cancelled: () => boolean) => Promise<void> };
+      managed?: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput, graphOwned: boolean) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean>; beforeNode?: (runId: string, nodeId: string, cancelled: () => boolean) => Promise<void> };
       semaphore?: WorkspaceSemaphore;
       projectId?: string;
       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
@@ -1876,8 +1877,9 @@ export class RunManager {
     workflow: WorkflowDef,
     input: StartRunInput,
     group?: { groupId: string; variant: string },
+    capability?: typeof graphStartCapability,
   ): RunRecord {
-    const managedId = this.managed?.authorizeStart(workflow, input);
+    const managedId = this.managed?.authorizeStart(workflow, input, capability === graphStartCapability);
     if (managedId && this.store.getRun(managedId)) return this.store.getRun(managedId)!;
     if (input.readOnly && !group) {
       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
@@ -3220,7 +3222,7 @@ export class RunManager {
     input: DispatchInput,
     /** Internal only (graph nodes — never the route): run the child as this workflow instead of
      *  the single synthetic step an agent's order gets. */
-    opts: { workflow?: WorkflowDef; graphOwned?: boolean } = {},
+    opts: { workflow?: WorkflowDef; graphOwned?: boolean; [graphStartCapability]?: true } = {},
   ): { id: string; branch?: string } | { refused: string } {
     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
@@ -3308,7 +3310,7 @@ export class RunManager {
         ...(input.review_of?.length ? { reviewOf: input.review_of } : {}),
         ...(budget.budgetUsd !== undefined ? { budgetUsd: budget.budgetUsd } : {}),
       },
-    });
+    }, undefined, opts[graphStartCapability] ? graphStartCapability : undefined);
     // The task list shows the order's own title rather than the first line of the envelope, and
     // the child forks its worktree off the PARENT's branch: `execute()` prefers a recorded
     // `baseBranch` over the configured one, so seeding it is the whole of the change.
@@ -6827,7 +6829,7 @@ export class RunManager {
             ...(a.review ? { kind: 'review' as const, review_of: [reviewOf] } : {}),
           },
           {
-            graphOwned: true,
+            graphOwned: true, [graphStartCapability]: true,
             // The branch's own skill and tool limits ride on the child's single step.
             workflow: {
               name: '(fork branch)',
@@ -6968,7 +6970,7 @@ export class RunManager {
           ...(node.runner ? { runner: node.runner } : {}),
           ...(node.model ? { model: node.model } : {}),
           ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
-        }, { graphOwned: true });
+        }, { graphOwned: true, [graphStartCapability]: true });
         if ('refused' in spawned) {
           note(`dispatch refused — ${spawned.refused}`, 'danger');
           return 'failed';
@@ -7067,7 +7069,7 @@ export class RunManager {
               ...(node.runner ? { runner: node.runner } : {}),
               ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
             },
-            { workflow: def, graphOwned: true },
+            { workflow: def, graphOwned: true, [graphStartCapability]: true },
           );
           if ('refused' in spawned) {
             note(`sub-workflow refused — ${spawned.refused}`, 'danger');

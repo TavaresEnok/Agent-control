@@ -2,23 +2,30 @@
 // loop or model adapter is started by this entrypoint.
 import {serve} from '@hono/node-server';
 import {z} from 'zod';
-import {loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator} from './installation.ts';
+import {join} from 'node:path';
+import {loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory} from './installation.ts';
 import {Ledger} from './ledger.ts';
-import {CezarRuntime} from './cezar.ts';
+import {Projects,ProjectRuntimes} from './projects.ts';
+import {createProjectGateway} from './projects-api.ts';
 import {BrowserSessions} from './sessions.ts';
 import {HappierAuthRelay} from './auth-relay.ts';
-import {createApi} from './api.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
  if(!path||extra.length||!['initialize','operator-bootstrap','serve'].includes(command))throw Error('USAGE: server-main initialize|operator-bootstrap|serve /absolute/private-config.json');
  const config=await loadInstallation(path),ledger=new Ledger(config.databaseUrl);
- let runtime:CezarRuntime|undefined,serving=false;
+ let runtimes:ProjectRuntimes|undefined,serving=false;
  try{
   if(command==='initialize'){console.log(JSON.stringify(await initializeInstallation(config,ledger)));return;}
   if(command==='operator-bootstrap'){console.log(JSON.stringify(await prepareInstallationOperator(config,ledger)));return;}
   // Serving does not silently migrate schemas or create projects/credentials.
-  const registered=(await ledger.pool.query("SELECT 1 FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2 AND m.role='owner'",[config.project.id,config.project.owner])).rowCount;
+  const registered=(await ledger.pool.query("SELECT 1 FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id JOIN ac_project_repositories r ON r.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2 AND m.role='owner' AND r.repo=$3",[config.project.id,config.project.owner,config.project.repo])).rowCount;
   if(!registered)throw Error('INSTALLATION_NOT_INITIALIZED');
+  const nativeHome=join(config.dataDirectory,'cezar');await privateDirectory(nativeHome);
+  process.env.CEZ_HOME=nativeHome;
+  for(const name of ['CEZ_AUTONAME','CEZ_AUTOMATIONS','CEZ_SKILLS_AUTO_UPDATE','CEZ_TELEMETRY'])process.env[name]='0';
+  process.env.CEZ_NO_BANNER='1';process.env.DO_NOT_TRACK='1';process.env.CEZ_SINGLE_PROJECT='0';
+  process.env.CEZ_DRY_RUN='1';
+  const {CezarRuntime}=await import('./cezar.ts'),{createApi}=await import('./api.ts');
   const key=await sessionKey(config);
   const verify=async(request:Request)=>{
    const authorization=request.headers.get('authorization');if(!authorization?.startsWith('Bearer '))return null;
@@ -28,16 +35,29 @@ async function main(){
    }catch{return null;}
   };
   const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
-  runtime=new CezarRuntime(ledger,config.project.repo,config.project.id);await runtime.start('administration-only');
+  runtimes=new ProjectRuntimes(async project=>{
+   const runtime=new CezarRuntime(ledger,project.repo,project.id);
+   try{await runtime.start('administration-only');return runtime;}catch(error){await runtime.close();throw error;}
+  });
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
-  const api=createApi(ledger,runtime,verify,()=>undefined,config.happier.webOrigin,access,sessions,
-   new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin}));
-  const server=serve({fetch:api.fetch,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:false})));
+  const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,()=>undefined,config.happier.webOrigin,access,sessions,relay);
+  const projects=new Projects(ledger),activeRuntimes=runtimes;
+  const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
+  const defaultApp=appFor(defaultRuntime);
+  const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
+   publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
+    const bearer=request.headers.get('authorization');
+    const principal=bearer?await verify(request):await sessions.authenticate(request)??await verify(request);
+    if(principal&&!bearer)sessions.checkOrigin(request);
+    return principal;
+   }});
+  const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:false})));
   serving=true;
   let closing=false;
-  const close=()=>{if(closing)return;closing=true;server.close();void runtime!.close().then(()=>ledger.close()).then(()=>process.exit(0));};
+  const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await activeRuntimes.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
   process.once('SIGTERM',close);process.once('SIGINT',close);
- }finally{if(!serving){await runtime?.close();await ledger.close();}}
+ }finally{if(!serving){try{await runtimes?.close();}finally{await ledger.close();}}}
 }
 main().catch(()=>{console.error('INSTALLATION_COMMAND_FAILED: inspect private configuration, initialization and service availability; secrets are not logged.');process.exitCode=1;});

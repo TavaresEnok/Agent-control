@@ -2,15 +2,18 @@ import {useState} from 'react'
 import {useQuery} from '@tanstack/react-query'
 import {z} from 'zod'
 import {Button} from '@/components/ui/button'
+import {agentControlFetch} from './agent-control-fetch'
+import {useProjectScope} from '@/api/project-scope-context'
 export const approvalSchema=z.object({id:z.string().uuid(),commit_id:z.string(),tree_id:z.string(),base_id:z.string(),identity_digest:z.string(),
  policy_revision:z.number(),target_ref:z.string(),approved:z.boolean(),canceled:z.boolean()})
 const diffSchema=z.object({artifactId:z.string(),artifactDigest:z.string(),commit:z.string(),tree:z.string(),base:z.string(),diff:z.string(),truncated:z.boolean(),diffSha256:z.string()})
 export function AgentControlIntegrationApproval({contextId,artifact,canApprove,busy,onApprove}:{contextId:string;artifact:z.infer<typeof approvalSchema>;
  canApprove:boolean;busy:boolean;onApprove:(payload:{artifactId:string;artifactDigest:string;policyRevision:number;targetRef:string})=>void}){
  const [opened,setOpened]=useState(false)
- const diff=useQuery({queryKey:['ac-artifact-diff',contextId,artifact.id,artifact.identity_digest],enabled:opened,
+ const {projectId}=useProjectScope()
+ const diff=useQuery({queryKey:['ac-artifact-diff',contextId,artifact.id,artifact.identity_digest,projectId],enabled:opened,
   queryFn:async()=>{
-   const response=await fetch(`/api/v1/ac/contexts/${contextId}/artifacts/${artifact.id}/diff`,{credentials:'include'})
+   const response=await agentControlFetch(`/api/v1/ac/contexts/${contextId}/artifacts/${artifact.id}/diff`)
    if(!response.ok)throw Error(`DIFF_HTTP_${response.status}`)
    const value=diffSchema.parse(await response.json())
    if(value.artifactId!==artifact.id||value.artifactDigest!==artifact.identity_digest||value.commit!==artifact.commit_id||value.tree!==artifact.tree_id||value.base!==artifact.base_id)throw Error('APPROVAL_ARTIFACT_MISMATCH')
