@@ -38,4 +38,6 @@ A rodada administrativa mais recente está em `product-admin-mobile-native-effec
 
 ## Limites preservados
 
+Checkpoint local de código: `857962317b7375aec93bbb4a5a7cbe1d88a04145`. `six-workers-source-selection-85796231-20261102.log` confirma seleção de 26.123 arquivos do commit e proveniência coerente, com quatro configurações de ambiente upstream omitidas. É uma validação de fontes, não uma instalação ou homologação; nenhum arquivo grande de distribuição foi recriado.
+
 Não houve inferência, uso de assinaturas, migração, publicação ou ativação de projetos pausados. O gateway de instalação permanece administrativo. Semântica por modelo, correções limitadas, elegibilidade de adaptadores reais, custódia completa e homologação operacional continuam pendentes.
