@@ -1479,13 +1479,13 @@ export class RunManager {
 
 
   private offManagedPersistence = () => {};
-  private readonly managed: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean> } | undefined;
+  private readonly managed: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean>; beforeNode?: (runId: string, nodeId: string, cancelled: () => boolean) => Promise<void> } | undefined;
 
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
     options: {
-      managed?: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean> };
+      managed?: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean>; beforeNode?: (runId: string, nodeId: string, cancelled: () => boolean) => Promise<void> };
       semaphore?: WorkspaceSemaphore;
       projectId?: string;
       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
@@ -6485,6 +6485,10 @@ export class RunManager {
       const resuming = resumeNode?.id === node.id && cursor === undefined;
       cursor = node.id;
       persistWalk();
+      // The existing graph remains the only scheduler. A managed authority may
+      // hold the next node without starting its session or consuming an iteration.
+      await this.managed?.beforeNode?.(runId, node.id, () => state.cancelled || this.active.get(runId) !== state);
+      if (state.cancelled || this.active.get(runId) !== state) return null;
       const kind: 'agent' | 'check' = node.type === 'agent' ? 'agent' : 'check';
       const iteration = (this.store.getRun(runId)?.steps.find((s) => s.id === node.id)?.iterations ?? 0) + 1;
       this.store.updateRun(runId, { currentStepId: node.id });

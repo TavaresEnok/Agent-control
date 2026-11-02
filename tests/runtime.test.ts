@@ -51,6 +51,9 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
     assert.equal((await db.pool.query('SELECT state FROM ac_operations WHERE id=$1', [intent.operation_id])).rows[0].state, 'registered');
     await assert.rejects(runtime.dispatch({ ...intent, run_id: randomUUID() }, authority), /INTENT_IDENTITY_MISMATCH/);
     await assert.rejects(runtime.dispatch(intent, old), (e: unknown) => e instanceof Refusal && e.code === 'STALE_MANAGER');
+    // Drain stops new plans, while an already accepted native workflow completes.
+    await db.pool.query('UPDATE ac_contexts SET draining=true,drain_revision=drain_revision+1 WHERE id=$1',[context]);
+    await assert.rejects(db.accept('owner',{...body,intentId:randomUUID(),deliveryAttemptId:randomUUID()},authority,'api'),/CONTEXT_DRAINING/);
     await runtime.dispatch(intent, authority); await runtime.dispatch(intent, authority);
     let complete = false;
     for (let i = 0; i < 300; i++) {
@@ -94,6 +97,9 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
       body: JSON.stringify({ ...body, deliveryAttemptId: randomUUID() }) });
     assert.equal(retry.status, 202);
     assert.equal((await retry.json()).runId, intent.run_id);
+    const contextList=await (await api.request('/api/v1/ac/contexts',{headers})).json();
+    assert.equal(contextList.contexts[0].draining,true);
+    await db.pool.query('UPDATE ac_contexts SET draining=false,drain_revision=drain_revision+1 WHERE id=$1',[context]);
     await db.pause('owner', context, true);
     await assert.rejects(runtime.dispatch(intent, authority), (e: unknown) => e instanceof Refusal && e.code === 'HUMAN_PAUSED');
     await db.pool.query("UPDATE ac_operations SET state='uncertain' WHERE id=$1", [intent.operation_id]);

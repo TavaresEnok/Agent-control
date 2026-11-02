@@ -171,3 +171,7 @@ Migração 028 acrescenta revisão a contas e perfis. Os comandos assinados `acc
 O cadastro visual de perfis passou a usar exclusivamente o catálogo do controlador. A consulta filtra os provedores acessíveis ao projeto; a tela filtra modelo, papel e esforço conforme a conta e limpa escolhas incompatíveis na troca de conta/função. Perfis não podem ser cadastrados por texto livre de modelo nem por esforço fora dos valores homologados. O backend continua validando o contrato independentemente da UI.
 
 `catalog-profile-ui-20261102.log` prova a troca entre dois provedores, funções e esforços distintos sem conservar uma combinação inválida. `catalog-profile-control-20261102.log` confirma que modelo de provedor não compartilhado não aparece nos recursos do projeto. Tipos, backend e web compilaram. O catálogo continua sintético; descoberta oficial de modelos, elegibilidade real e login sem fixture permanecem pendentes.
+
+## Continuação — controle de admissão entre etapas
+
+Drenagem assinada e versionada acrescentada: impede novos planos, preserva retries de intenções aceitas e permite concluir o trabalho aceito. Settings distingue drenagem de pausa. A pausa mantém o cursor Cezar antes do próximo nó e aguarda retomada sem reprovar a etapa. QA/revisão/juiz esperam capacidade na mesma tentativa, em vez de falhar quando a cota sintética acaba. ADR-004 delimita semânticas, evidências e intervalos ainda não homologados. Cancelamento público, recuperação de todos os nós, login/provedores reais e aceite móvel continuam pendentes; nenhum gate completo foi aprovado.

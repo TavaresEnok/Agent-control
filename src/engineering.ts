@@ -114,8 +114,20 @@ export class EngineeringStages{
      await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[stage.id,{integration:receipt}]);});
     if(receipt.status!=='integrated')throw new Refusal('INTEGRATION_REJECTED');
    }else{
-    const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:stage.attempt_id,intentId:intent.id,contextId:intent.context_id,
+    const reserve=()=>new Capacity(this.ledger).reserve(principal,{attemptId:stage.attempt_id,intentId:intent.id,contextId:intent.context_id,
      role:node==='qa'?'qa':node==='judge'?'judge':'reviewer'},authority);
+    // Capacity exhaustion is an admission wait in this same native session,
+    // not failed verification. Reuse the persisted stage/attempt on every poll.
+    let grant:Awaited<ReturnType<typeof reserve>>;let waitReason:string|undefined;
+    for(;;){
+     if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
+     try{grant=await reserve();break;}
+     catch(error){
+      if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+      if(waitReason!==error.code){onEvent?.({type:'text',text:`Stage ${node} waiting: ${error.code}. No verifier launched.`});waitReason=error.code;}
+      await new Promise(resolve=>setTimeout(resolve,1000));
+     }
+    }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
     if(this.options.isolatedVerification){
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',

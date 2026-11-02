@@ -122,6 +122,7 @@ export class Ledger {
         intent = old.rows[0];
       } else {
         await this.fence(c, a);
+        if(context.draining)throw new Refusal('CONTEXT_DRAINING');
         if (context.policy_revision !== command.policyRevision) throw new Refusal('POLICY_REVISION_MISMATCH');
         const revision = context.plan_revision + 1;
         const saved = await c.query('SELECT snapshot FROM ac_checkpoints WHERE context_id=$1 FOR UPDATE', [command.contextId]);

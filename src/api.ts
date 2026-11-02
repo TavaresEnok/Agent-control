@@ -63,7 +63,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       return c.json({state:'active'});
     })
     .get('/api/v1/ac/contexts', async c => {
-      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.pause_revision,x.plan_revision,x.capacity_policy_revision,s.session_id
+      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.pause_revision,x.draining,x.drain_revision,x.plan_revision,x.capacity_policy_revision,s.session_id
         FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
         JOIN ac_session_links s ON s.context_id=x.id WHERE x.project_id=$1 AND m.principal_id=$2 AND NOT x.archived ORDER BY x.created_at`,
         [runtime.projectId,c.get('principal')]);

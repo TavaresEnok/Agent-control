@@ -9,7 +9,7 @@ import {AgentControlPolicyEditor,policyEditorSchema} from './agent-control-polic
 import {AgentControlCapacityEditor,capacityEditorSchema} from './agent-control-capacity-editor'
 import {AgentControlProfileEditor,catalogEntrySchema} from './agent-control-profile-editor'
 
-const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative()}))})
+const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
  grant_id:z.string().uuid(),role:z.string(),account_id:z.string().uuid(),model:z.string(),effort:z.string(),state:z.string(),
  counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
@@ -79,8 +79,12 @@ export function AgentControlSection(){
    {selectedContext&&<div className="flex flex-wrap items-center gap-2">
     <span>{selectedContext.paused?'Pausada':'Ativa'}</span>
     <Button disabled={busy} onClick={()=>mutate.mutate({action:'context.pause',payload:{paused:!selectedContext.paused,expectedRevision:selectedContext.pause_revision}})}>
-     {selectedContext.paused?'Retomar conversa':'Pausar conversa'}
+     {selectedContext.paused?'Retomar etapas':'Pausar novas etapas'}
     </Button>
+    <Button disabled={busy} onClick={()=>mutate.mutate({action:'context.drain',payload:{draining:!selectedContext.draining,expectedRevision:selectedContext.drain_revision}})}>
+     {selectedContext.draining?'Permitir novos planos':'Concluir planos aceitos e aguardar'}
+    </Button>
+    <p className="w-full text-xs text-muted-foreground">{selectedContext.draining?'Drenagem ativa: os planos já aceitos podem concluir; novos planos são recusados.':'Novos planos permitidos, sujeitos à pausa, às políticas e à capacidade.'} A pausa impede novas etapas; não confirma cancelamento de processos.</p>
    </div>}
   </SettingsField>
   {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}

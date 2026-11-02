@@ -17,6 +17,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('device.revoke'),payload:z.object({deviceId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('admission.set'),payload:z.object({enabled:z.boolean(),expectedRevision:z.number().int().positive(),reason:z.string().min(1).max(200)}).strict()}).strict(),
  z.object({...base,action:z.literal('context.pause'),payload:z.object({paused:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
+ z.object({...base,action:z.literal('context.drain'),payload:z.object({draining:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
  z.object({...base,action:z.literal('account.add'),payload:AccountInput}).strict(),
  z.object({...base,action:z.literal('account.share'),payload:z.object({accountId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('account.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
@@ -41,6 +42,7 @@ export class Control {
     :'SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
    const allowedWhileClosed=command.action==='admission.set'||command.action==='device.revoke'||
     (command.action==='context.pause'&&command.payload.paused)||
+    (command.action==='context.drain'&&command.payload.draining)||
     ((command.action==='account.state'||command.action==='profile.state')&&!command.payload.enabled);
    if(!admission?.enabled&&!allowedWhileClosed)throw new Refusal('ADMISSION_CLOSED');
    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,2))',[command.intentId]);
@@ -63,6 +65,12 @@ export class Control {
       const updated=await c.query('UPDATE ac_contexts SET paused=$2,pause_revision=pause_revision+1 WHERE id=$1 RETURNING paused,pause_revision',
        [command.contextId,command.payload.paused]);
       result={paused:updated.rows[0].paused,revision:updated.rows[0].pause_revision};break;
+     }
+     case 'context.drain':{
+      if(context.drain_revision!==command.payload.expectedRevision)throw new Refusal('DRAIN_REVISION_CONFLICT');
+      const updated=await c.query('UPDATE ac_contexts SET draining=$2,drain_revision=drain_revision+1 WHERE id=$1 RETURNING draining,drain_revision',
+       [command.contextId,command.payload.draining]);
+      result={draining:updated.rows[0].draining,revision:updated.rows[0].drain_revision};break;
      }
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;
      case 'account.share':await service.shareAccount(principal,command.payload.accountId,context.project_id);result={accountId:command.payload.accountId};break;

@@ -59,6 +59,7 @@ export class CezarRuntime {
         return current.intent.run_id;
       },
       runnerFactory: () => this.runner(),
+      beforeNode: (runId,nodeId,cancelled)=>this.awaitNodeAdmission(runId,nodeId,cancelled),
       // Active-agent recovery must reconcile physical handles first (I5); never blindly respawn.
       authorizeRecovery: async run => {
         const current=this.invocation.getStore();
@@ -152,6 +153,28 @@ export class CezarRuntime {
     await this.ledger.tx(async c => { await this.ledger.fence(c, authority);
       await c.query("UPDATE ac_outbox SET state='dispatched',attempts=attempts+1 WHERE intent_id=$1", [intent.id]); });
     return this.store.getRun(intent.run_id);
+  }
+  /** Hold the native cursor, without launching a session or rewriting its plan.
+   * No transaction/row lock is held during the wait, so human resume can proceed. */
+  private async awaitNodeAdmission(runId:string,nodeId:string,cancelled:()=>boolean){
+    let waiting=false;
+    for(;;){
+      if(!this.running||!this.lock||cancelled())return;
+      const authority=this.authorities.get(runId);
+      if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+      try{
+        await this.ledger.tx(c=>this.ledger.fence(c,authority));
+        if(waiting){this.store.updateRun(runId,{status:'running',error:undefined});this.store.flush({throwOnError:true});}
+        return;
+      }catch(error){
+        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+        if(!waiting){
+          this.store.updateRun(runId,{status:'waiting',error:`Managed admission waiting before ${nodeId}`});
+          this.store.flush({throwOnError:true});waiting=true;
+        }
+        await new Promise(resolve=>setTimeout(resolve,250));
+      }
+    }
   }
   /** Read an already persisted run while admission is paused. This cannot start a run. */
   async observe(intent:Intent,authority:Authority){

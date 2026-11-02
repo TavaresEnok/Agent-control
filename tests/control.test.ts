@@ -64,5 +64,21 @@ test('signed pause is deduplicated and stale commands cannot undo a newer decisi
   await assert.rejects(control.execute(principal,stale,proof(stale)),/PAUSE_REVISION_CONFLICT/);
   const row=(await ledger.pool.query('SELECT paused,pause_revision FROM ac_contexts WHERE id=$1',[contextId])).rows[0];
   assert.deepEqual(row,{paused:false,pause_revision:2});
+  const authority=await ledger.acquire(principal,contextId,randomUUID(),'synthetic-manager');
+  const plan={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,
+   action:'plan.start' as const,payload:{workflow:'baseline-synthetic-v1' as const,messageRef:'encrypted:drain-fixture'}};
+  const accepted=await ledger.accept(principal,plan,authority,'api');
+  const drain={...pause,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'context.drain' as const,payload:{draining:true,expectedRevision:0}};
+  const draining=await control.execute(principal,drain,proof(drain));
+  assert.deepEqual(await control.execute(principal,{...drain,deliveryAttemptId:randomUUID()},proof(drain)),draining);
+  assert.equal((await ledger.accept(principal,{...plan,deliveryAttemptId:randomUUID()},authority,'api')).id,accepted.id,'accepted plan retry remains idempotent while draining');
+  await assert.rejects(ledger.accept(principal,{...plan,intentId:randomUUID(),deliveryAttemptId:randomUUID()},authority,'api'),/CONTEXT_DRAINING/);
+  await ledger.tx(c=>ledger.fence(c,authority)); // existing steps remain admissible
+  const stopDrain={...drain,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{draining:false,expectedRevision:1}};
+  await control.execute(principal,stopDrain,proof(stopDrain));
+  const staleDrain={...drain,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
+  await assert.rejects(control.execute(principal,staleDrain,proof(staleDrain)),/DRAIN_REVISION_CONFLICT/);
+  assert.deepEqual((await ledger.pool.query('SELECT paused,draining,drain_revision FROM ac_contexts WHERE id=$1',[contextId])).rows[0],
+   {paused:false,draining:false,drain_revision:2});
  }finally{await ledger.close();}
 });

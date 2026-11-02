@@ -1,0 +1,41 @@
+TAP version 13
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 1 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 247.990915
+  type: 'test'
+  ...
+# Subtest: signed pause is deduplicated and stale commands cannot undo a newer decision
+not ok 2 - signed pause is deduplicated and stale commands cannot undo a newer decision
+  ---
+  duration_ms: 133.441112
+  type: 'test'
+  location: '/workspace/tests/control.test.ts:1:3935'
+  failureType: 'testCodeFailure'
+  error: 'new row for relation "ac_deliveries" violates check constraint "ac_deliveries_channel_check"'
+  code: '23514'
+  name: 'error'
+  stack: |-
+    /workspace/node_modules/pg/lib/client.js:545:17
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async <anonymous> (/workspace/src/ledger.ts:162:7)
+    async Ledger.tx (/workspace/src/ledger.ts:15:45)
+    async TestContext.<anonymous> (/workspace/tests/control.test.ts:70:18)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 3 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 2552.468332
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 2
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5329.049076

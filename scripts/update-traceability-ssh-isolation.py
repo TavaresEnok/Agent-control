@@ -28,7 +28,8 @@ updates = {
     'RNF-03': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Synthetic workers have no host socket, keys or network; verifier snapshots read-only. Hostile real agents and account boundaries not homologated.'),
     'T14': ('docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log', 'src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts', 'Real SSH and completed result after restart; interrupted in-flight operation still uncertain.'),
     'T15': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts', 'Fixed synthetic verifiers attempted snapshot writes and controller path access; cross-account hostile process proof pending.'),
-    'T06': ('docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/cezar.ts;src/isolated-implementation.ts;tests/native-recovery.test.ts', 'Human pause preserved through successor reconciliation of synthetic implementation; full operator/mobile and concurrent pause cases remain open.'),
+    'RF-24': ('docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log', 'src/control.ts;src/ledger.ts;src/cezar.ts;src/engineering.ts;tests/native-pause.test.ts', 'Signed pause/drain and native step-boundary wait verified synthetically; complete cancellation and concurrent effect recovery remain open.'),
+    'T06': ('docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log', 'src/cezar.ts;tests/native-recovery.test.ts;tests/native-pause.test.ts', 'Pause preserved across successor reconciliation and at native QA boundary; crash at other stages and mobile control remain open.'),
     'T08': ('docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-graph-recovery-red-20261102.log', 'src/cezar.ts;src/isolated-implementation.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts', 'Actual controller SIGKILL at one receipt boundary; fallback, cancellation and other node recovery positions remain open.'),
     'RNF-10': ('docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log', 'scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs', 'Synthetic copy restore and Git/runtime read verified; no operational disaster recovery or RPO/RTO measurement.'),
     'T18': ('docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log', 'scripts/prove-backup-restore.mjs;scripts/prove-restored-worktrees.mjs;tests/fixtures/restored-runtime-smoke.ts', 'Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified.'),
@@ -40,7 +41,7 @@ for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 25
+assert len(rows) == 111 and len(updates) == 26
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()

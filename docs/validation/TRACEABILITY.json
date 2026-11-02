@@ -304,12 +304,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/guarded-pause-20261102.log",
-    "files": "src/control.ts;src/api.ts;src/ledger.ts;db/migrations/024_pause_revision.sql;tests/control.test.ts",
+    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log",
+    "files": "src/control.ts;src/ledger.ts;src/cezar.ts;src/engineering.ts;tests/native-pause.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Signed pause and revision conflicts tested with synthetic database; full mobile, recovery and all ingress scenarios not homologated."
+    "limitation": "Signed pause/drain and native step-boundary wait verified synthetically; complete cancellation and concurrent effect recovery remain open."
   },
   {
     "id": "RF-25",
@@ -1006,12 +1006,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log",
-    "files": "src/cezar.ts;src/isolated-implementation.ts;tests/native-recovery.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log",
+    "files": "src/cezar.ts;tests/native-recovery.test.ts;tests/native-pause.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Human pause preserved through successor reconciliation of synthetic implementation; full operator/mobile and concurrent pause cases remain open."
+    "limitation": "Pause preserved across successor reconciliation and at native QA boundary; crash at other stages and mobile control remain open."
   },
   {
     "id": "T07",
