@@ -5,6 +5,7 @@ import { Authority, Id, digest, canonical, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import type { GitArtifacts } from './git.ts';
 import { QualityPolicy,QualityPolicies } from './quality-policy.ts';
+import {ManagedRecipe} from './managed-plan.ts';
 export { QualityPolicy } from './quality-policy.ts';
 const GitId=z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 export const ArtifactInput=z.object({id:Id,contextId:Id,intentId:Id,implementationGrantId:Id,implementationSessionId:Id,
@@ -38,13 +39,30 @@ export class Quality {
       const context=await this.ledger.authorize(c,principal,value.contextId);
       if(value.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
       await this.ledger.fence(c,authority,true);
-      const implementation=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_intents i ON i.id=g.intent_id
-        JOIN ac_operations o ON o.grant_id=g.id
-        WHERE g.id=$1 AND g.context_id=$2 AND g.intent_id=$3 AND g.role='programmer' AND g.state='released'
+      const implementation=await c.query(`SELECT g.id,g.resource_kind,g.account_id,g.profile_id,g.attempt_id,g.manager_epoch grant_epoch,
+        g.physical_receipt,i.parent_intent_id,i.parent_unit_id,i.run_id,i.operation_id,o.execution_attempt_id,o.manager_epoch operation_epoch,
+        o.native_session_id,o.handle,o.receipt operation_receipt,m.recipe,m.recipe_digest FROM ac_capacity_grants g JOIN ac_intents i ON i.id=g.intent_id
+        JOIN ac_operations o ON o.grant_id=g.id AND o.intent_id=i.id AND o.id=i.operation_id
+        LEFT JOIN ac_managed_executions m ON m.parent_intent_id=i.parent_intent_id
+        WHERE g.id=$1 AND g.context_id=$2 AND i.context_id=g.context_id AND g.project_id=$7 AND g.intent_id=$3 AND g.role='programmer' AND g.state='released'
         AND g.physical_receipt IS NOT NULL AND o.state='completed'
         AND o.receipt->>'commit'=$4 AND o.receipt->>'tree'=$5 AND o.receipt->>'base'=$6`,
-        [value.implementationGrantId,value.contextId,value.intentId,value.commit,value.tree,value.base]);
+        [value.implementationGrantId,value.contextId,value.intentId,value.commit,value.tree,value.base,context.project_id]);
       if(!implementation.rowCount)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
+      const grant=implementation.rows[0];
+      if(grant.resource_kind==='local_compositor'){
+        const recipe=ManagedRecipe.parse(grant.recipe),unit=recipe.units.find(item=>item.id===grant.parent_unit_id);
+        if(grant.account_id!==null||grant.profile_id!==null||recipe.parentIntentId!==grant.parent_intent_id||digest(recipe)!==grant.recipe_digest||
+           !unit||unit.kind!=='composition'||unit.intentId!==value.intentId||unit.runId!==grant.run_id||unit.operationId!==grant.operation_id||
+           unit.attemptId!==grant.attempt_id||grant.execution_attempt_id!==grant.attempt_id||Number(grant.grant_epoch)!==Number(grant.operation_epoch)||
+           Number(grant.grant_epoch)>authority.epoch||grant.native_session_id!==value.implementationSessionId||
+           grant.operation_receipt?.operationId!==grant.operation_id||grant.operation_receipt?.exitCode!==0||grant.operation_receipt?.synthetic!==true||
+           !Number.isInteger(grant.handle?.pid)||grant.handle.pid<=0||grant.handle?.operationId!==grant.operation_id||
+           Number(grant.handle?.epoch)!==Number(grant.operation_epoch)||
+           grant.physical_receipt?.state!=='exited'||grant.physical_receipt?.exitCode!==0||
+           grant.physical_receipt?.source!=='managed-git-compositor'||grant.physical_receipt?.processId!==String(grant.handle?.pid))
+          throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
+      }else if(grant.resource_kind!=='model'||!grant.account_id||!grant.profile_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
       if(!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,value.policyRevision])).rowCount)
         throw new Refusal('QUALITY_POLICY_REQUIRED');
       const identity=digest({commit:value.commit,tree:value.tree,base:value.base});
@@ -81,7 +99,7 @@ export class Quality {
       const role=receipt.kind==='qa'?'qa':receipt.kind==='judge'?'judge':'reviewer';
       if(receipt.kind==='judge')await this.assertReady(c,artifact.id,authority,{ignoreJudge:true});
       const grant=await c.query(`SELECT 1 FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 AND intent_id=$3
-        AND role=$4 AND state='released' AND physical_receipt IS NOT NULL`,[receipt.grantId,artifact.context_id,artifact.intent_id,role]);
+        AND role=$4 AND resource_kind='model' AND state='released' AND physical_receipt IS NOT NULL`,[receipt.grantId,artifact.context_id,artifact.intent_id,role]);
       if(!grant.rowCount)throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
       if(receipt.status==='passed'&&receipt.exitCode!==0)throw new Refusal('VERIFICATION_EXIT_FAILED');
       const hash=digest(receipt);

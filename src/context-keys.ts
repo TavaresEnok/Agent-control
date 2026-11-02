@@ -6,12 +6,17 @@ export type EncryptionVariant='legacy'|'dataKey';
 export const keyFingerprint=(key:Uint8Array)=>createHash('sha256').update(key).digest('hex');
 export class ContextKeys{
  constructor(readonly ledger:Ledger){}
- async authorize(principal:string,contextId:string,version:number,variant:EncryptionVariant,fingerprint:string){
+ async authorize(principal:string,contextId:string,version:number,variant:EncryptionVariant,fingerprint:string,link?:{sessionId:string}){
   const input=z.object({contextId:Id,version:z.number().int().positive(),variant:z.enum(['legacy','dataKey']),
    fingerprint:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse({contextId,version,variant,fingerprint});
   await this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,input.contextId);
    if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+   if(link){
+    const sessionId=z.string().min(1).max(200).parse(link.sessionId);
+    if(!(await c.query('SELECT 1 FROM ac_session_links WHERE context_id=$1 AND principal_id=$2 AND session_id=$3 FOR SHARE',
+     [contextId,principal,sessionId])).rowCount)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
+   }
    const previous=(await c.query('SELECT COALESCE(max(version),0) version FROM ac_context_keys WHERE context_id=$1',[contextId])).rows[0].version;
    if(Number(previous)>=version)throw new Refusal('KEY_VERSION_CONFLICT');
    await c.query("UPDATE ac_context_keys SET state='revoked' WHERE context_id=$1 AND state='active'",[contextId]);

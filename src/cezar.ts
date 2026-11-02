@@ -647,7 +647,7 @@ export class CezarRuntime {
               }
               const sources=await runtime.readManagedSourceArtifacts(intent,authority);
               if(canceled)throw new Refusal('STAGE_CANCELED');
-              const receipt=await runtime.engineering.composeManaged(intent,authority,unit,z.uuid().parse(spec.sessionId),cwd,sources);
+              const receipt=await runtime.engineering.composeManaged(intent,authority,unit,z.uuid().parse(spec.sessionId),cwd,sources,spec.env?.CEZ_TASK_ID);
               const text=`Managed composition completed: ${receipt.commit}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
               return {text,toolCalls:[],tokensUsed:0};
             }else{

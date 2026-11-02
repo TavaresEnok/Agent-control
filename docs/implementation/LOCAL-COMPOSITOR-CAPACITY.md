@@ -1,6 +1,6 @@
 # Capacidade local para o compositor Git
 
-Estado: proposta; não implementada. O compositor sintético determinístico ainda reserva um grant de `programmer` associado a conta e perfil de modelo. Portanto uma quota de IA indisponível ou desconhecida pode impedir uma composição que não faz inferência. As métricas de observabilidade distinguem os dois usos, mas não alteram a admissão.
+Estado atual: a separação foi implementada na migração 040, em Capacity, Engineering, Quality, uso e interface. O compositor continua sujeito aos limites de programador, mas não exige conta/perfil ou quota de modelo. A prova PG focada e os limites estão em `LOCAL-CAPACITY-SOURCE-VAULT-20261102.md`. Abaixo permanece a proposta histórica que orientou a implementação; seus critérios de validação completa não são declarados integralmente aprovados.
 
 ## Por que não há bypass seguro apenas em código
 

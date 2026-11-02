@@ -14,7 +14,7 @@ export class Usage {
   return this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
    const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 FOR UPDATE',[value.grantId,authority.contextId])).rows[0];
-   if(!grant||Number(grant.manager_epoch)!==authority.epoch)throw new Refusal('USAGE_GRANT_FORBIDDEN',403);
+   if(!grant||grant.resource_kind!=='model'||Number(grant.manager_epoch)!==authority.epoch)throw new Refusal('USAGE_GRANT_FORBIDDEN',403);
    const prior=(await c.query('SELECT digest,seq FROM ac_usage_observations WHERE grant_id=$1 AND event_id=$2',[value.grantId,value.eventId])).rows[0];
    if(prior){if(prior.digest!==hash)throw new Refusal('USAGE_EVENT_CONFLICT');return {duplicate:true};}
    const last=(await c.query('SELECT seq,counters FROM ac_usage_observations WHERE grant_id=$1 ORDER BY seq DESC LIMIT 1',[value.grantId])).rows[0];
@@ -31,9 +31,9 @@ export class Usage {
   Id.parse(contextId);
   return this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,contextId,false);
-   const rows=await c.query(`SELECT g.id grant_id,g.role,g.account_id,g.profile_id,g.state,p.model,p.effort,
-     u.seq,u.counters,u.observed_at FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id
-     LEFT JOIN LATERAL (SELECT seq,counters,observed_at FROM ac_usage_observations WHERE grant_id=g.id ORDER BY seq DESC LIMIT 1) u ON true
+   const rows=await c.query(`SELECT g.id grant_id,g.role,g.resource_kind,g.account_id,g.profile_id,g.state,p.model,p.effort,
+     u.seq,u.counters,u.observed_at FROM ac_capacity_grants g LEFT JOIN ac_profiles p ON p.id=g.profile_id AND g.resource_kind='model'
+     LEFT JOIN LATERAL (SELECT seq,counters,observed_at FROM ac_usage_observations WHERE grant_id=g.id AND g.resource_kind='model' ORDER BY seq DESC LIMIT 1) u ON true
      WHERE g.context_id=$1 ORDER BY g.created_at,g.id`,[contextId]);
    return {scope:'reported_attempt_usage',subscriptionBalance:'unknown',overlappingCounters:true,attempts:rows.rows};
   });

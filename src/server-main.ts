@@ -13,7 +13,8 @@ import {ProjectAdmin} from './project-admin.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
- if(!path||extra.length||!['initialize','inspect','operator-bootstrap','serve'].includes(command))throw Error('USAGE: server-main initialize|inspect|operator-bootstrap|serve /absolute/private-config.json');
+ const keyCommand=command==='context-key-authorize'||command==='context-key-import';
+ if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import'].includes(command)||extra.length!==(keyCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
@@ -29,6 +30,10 @@ async function main(){
   }
   if(command==='initialize'){console.log(JSON.stringify(await initializeInstallation(config,ledger)));return;}
   if(command==='operator-bootstrap'){console.log(JSON.stringify(await prepareInstallationOperator(config,ledger)));return;}
+  if(command==='vault-initialize'){const {initializeContextVault}=await import('./context-vault-cli.ts');console.log(JSON.stringify(await initializeContextVault(config,ledger)));return;}
+  if(command==='context-key-authorize'||command==='context-key-import'){
+   const {executeContextKey}=await import('./context-vault-cli.ts');console.log(JSON.stringify(await executeContextKey(command,config,ledger,extra[0])));return;
+  }
   // Serving does not silently migrate schemas or create projects/credentials.
   const registered=(await ledger.pool.query("SELECT 1 FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id JOIN ac_project_repositories r ON r.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2 AND m.role='owner' AND r.repo=$3",[config.project.id,config.project.owner,config.project.repo])).rowCount;
   if(!registered)throw Error('INSTALLATION_NOT_INITIALIZED');

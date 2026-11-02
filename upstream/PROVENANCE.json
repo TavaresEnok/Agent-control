@@ -4,7 +4,7 @@
     "branch": "main",
     "status": "",
     "remotes": "origin\thttps://github.com/open-mercato/cezar.git (fetch)\norigin\thttps://github.com/open-mercato/cezar.git (push)\n",
-    "patch_sha256": "79fd0e4ecc7b10aee51bb77cc505d7e5c3f7087a34d8255782bdffd44cb3689d"
+    "patch_sha256": "cc039e571bd19d1fff4ffc0c1aab71e7dbcfe6f91415abd69fb48156c1ec0acd"
   },
   "happier": {
     "commit": "0895032a518271f764155c212d0146609d238ae7",

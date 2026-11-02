@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type pg from 'pg';
 import { Authority, digest, Id, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
+import {ManagedRecipe} from './managed-plan.ts';
 
 export const Role = z.enum(['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge']);
 export type Role = z.infer<typeof Role>;
@@ -29,7 +30,10 @@ export const QuotaInput = z.object({ status: z.enum(['available','exhausted','ra
   source: z.string().min(1).max(200), ttlSeconds: z.number().int().min(1).max(3600) }).strict();
 export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role }).strict();
 export type Grant = { id: string; attempt_id: string; context_id: string; account_id: string; profile_id: string;
-  state: string; manager_epoch: string; request_digest: string; emergency: boolean };
+  resource_kind:'model'; state: string; manager_epoch: string; request_digest: string; emergency: boolean };
+export const LocalCompositorGrantRequest=z.object({attemptId:Id,intentId:Id,contextId:Id}).strict();
+export type LocalCompositorGrant={id:string;attempt_id:string;intent_id:string;context_id:string;manager_epoch:string;
+ resource_kind:'local_compositor';account_id:null;profile_id:null;role:'programmer';state:string;request_digest:string;emergency:false};
 
 type Candidate = { id: string; account_id: string; eligibility: string; quota: string; enabled: boolean; max_concurrent: number };
 const evaluations: Role[] = ['reviewer','qa','specialist','judge'];
@@ -168,7 +172,7 @@ export class Capacity {
       const hash = digest(request);
       const old = (await c.query<Grant>('SELECT * FROM ac_capacity_grants WHERE attempt_id=$1', [request.attemptId])).rows[0];
       if (old) {
-        if (old.request_digest !== hash) throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
+        if (old.resource_kind!=='model'||old.request_digest !== hash) throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
         return old;
       }
       if (!(await c.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2', [request.intentId,request.contextId])).rowCount)
@@ -182,7 +186,7 @@ export class Capacity {
       const priority=request.role==='manager'?100:evaluations.includes(request.role)?50:0;
       const wait=await c.query(`INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,priority)
         VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(attempt_id) DO UPDATE SET manager_epoch=excluded.manager_epoch
-        WHERE ac_capacity_waits.request_digest=excluded.request_digest RETURNING attempt_id`,
+        WHERE ac_capacity_waits.resource_kind='model' AND ac_capacity_waits.request_digest=excluded.request_digest RETURNING attempt_id`,
         [request.attemptId,request.contextId,request.intentId,request.role,hash,authority.epoch,priority]);
       if(!wait.rowCount)throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
       const preferred = (await c.query('SELECT profile_id FROM ac_regular_selections WHERE context_id=$1 AND role=$2 AND policy_revision=$3',
@@ -206,7 +210,7 @@ export class Capacity {
         JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
         JOIN ac_intents i ON i.id=w.intent_id
         JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
-        WHERE p.account_id=$1 AND p.enabled AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused
+        WHERE w.resource_kind='model' AND p.account_id=$1 AND p.enabled AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused
         AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id)
         AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
         ORDER BY w.priority DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
@@ -257,6 +261,80 @@ export class Capacity {
     });
     if('blockedCode' in result)throw new Refusal(result.blockedCode);
     return result;
+  }
+  /** Local deterministic composition shares programmer slots but has no model
+   * account or quota. It can only bind the exact frozen managed unit. */
+  async reserveLocalCompositor(principal:string,raw:z.input<typeof LocalCompositorGrantRequest>,authority:Authority):Promise<LocalCompositorGrant>{
+    const request=LocalCompositorGrantRequest.parse(raw);
+    const result=await this.tx<LocalCompositorGrant|{blockedCode:string}>(async c=>{
+      const context=await this.ledger.authorize(c,principal,request.contextId);
+      if(request.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
+      await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,request.contextId,request.intentId);
+      const config=(await c.query('SELECT * FROM ac_capacity_config WHERE id=1 FOR UPDATE')).rows[0];
+      if(!config)throw new Refusal('CAPACITY_NOT_CONFIGURED');
+      const parent=(await c.query('SELECT parent_intent_id FROM ac_intents WHERE id=$1 AND context_id=$2',[request.intentId,request.contextId])).rows[0]?.parent_intent_id;
+      if(!parent)throw new Refusal('LOCAL_COMPOSITOR_BINDING_INVALID');
+      await c.query('SELECT id FROM ac_intents WHERE id=$1 FOR UPDATE',[parent]);
+      await c.query('SELECT id FROM ac_intents WHERE id=$1 FOR UPDATE',[request.intentId]);
+      const binding=(await c.query(`SELECT i.id,i.context_id,i.parent_intent_id,i.parent_unit_id,i.operation_id,i.run_id,i.principal_id,i.plan_revision,
+        p.context_id parent_context,p.principal_id parent_principal,p.plan_revision parent_revision,o.state operation_state,o.manager_epoch operation_epoch,
+        o.execution_attempt_id,e.recipe,e.recipe_digest
+        FROM ac_intents i JOIN ac_intents p ON p.id=i.parent_intent_id JOIN ac_operations o ON o.intent_id=i.id
+        JOIN ac_managed_executions e ON e.parent_intent_id=p.id AND e.context_id=i.context_id
+        WHERE i.id=$1 AND i.context_id=$2 FOR UPDATE OF o`,[request.intentId,request.contextId])).rows[0];
+      const recipe=ManagedRecipe.safeParse(binding?.recipe);
+      if(!binding||!recipe.success||digest(recipe.data)!==binding.recipe_digest||recipe.data.parentIntentId!==binding.parent_intent_id||
+        binding.parent_context!==request.contextId||binding.parent_principal!==binding.principal_id||binding.parent_revision!==binding.plan_revision||
+        binding.execution_attempt_id!==request.attemptId)throw new Refusal('LOCAL_COMPOSITOR_BINDING_INVALID');
+      const matches=recipe.data.units.filter(u=>u.id===binding.parent_unit_id);
+      if(matches.length!==1||matches[0]!.kind!=='composition'||matches[0]!.intentId!==request.intentId||
+        matches[0]!.operationId!==binding.operation_id||matches[0]!.runId!==binding.run_id||matches[0]!.attemptId!==request.attemptId)
+        throw new Refusal('LOCAL_COMPOSITOR_BINDING_INVALID');
+      await this.ledger.assertIntentActive(c,request.contextId,request.intentId);
+      const hash=digest({resourceKind:'local_compositor',...request});
+      const old=(await c.query<LocalCompositorGrant>('SELECT * FROM ac_capacity_grants WHERE attempt_id=$1',[request.attemptId])).rows[0];
+      if(old){
+        if(old.resource_kind!=='local_compositor'||old.request_digest!==hash||old.intent_id!==request.intentId||old.context_id!==request.contextId)
+          throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
+        if(Number(old.manager_epoch)!==authority.epoch)throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
+        return old;
+      }
+      if(binding.operation_state!=='registered'||Number(binding.operation_epoch)!==authority.epoch)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
+      const stored=(await c.query('SELECT snapshot,digest FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',
+        [context.project_id,context.capacity_policy_revision])).rows[0];
+      if(!stored)throw new Refusal('CAPACITY_POLICY_REQUIRED');
+      const policy=CapacityPolicy.parse(stored.snapshot);if(digest(policy)!==stored.digest)throw new Refusal('POLICY_DIGEST_MISMATCH');
+      const waiting=await c.query(`INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,priority,resource_kind)
+        VALUES($1,$2,$3,'programmer',$4,$5,0,'local_compositor') ON CONFLICT(attempt_id) DO UPDATE SET manager_epoch=excluded.manager_epoch
+        WHERE ac_capacity_waits.resource_kind='local_compositor' AND ac_capacity_waits.request_digest=excluded.request_digest RETURNING attempt_id`,
+        [request.attemptId,request.contextId,request.intentId,hash,authority.epoch]);
+      if(!waiting.rowCount)throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
+      const counts=(await c.query(`SELECT count(*) FILTER(WHERE context_id=$1)::int context,count(*)::int global
+        FROM ac_capacity_grants WHERE state<>'released' AND role='programmer'`,[request.contextId])).rows[0];
+      if(counts.context>=policy.maxProgrammersPerContext||counts.global>=config.programming_limit){
+        await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_BUSY' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_BUSY'};
+      }
+      const first=(await c.query(`SELECT w.attempt_id FROM ac_capacity_waits w JOIN ac_contexts x ON x.id=w.context_id
+        JOIN ac_managers m ON m.context_id=x.id JOIN ac_intents i ON i.id=w.intent_id
+        JOIN ac_operations o ON o.id=i.operation_id AND o.intent_id=i.id AND o.execution_attempt_id=w.attempt_id
+        JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
+        WHERE w.resource_kind='local_compositor' AND w.role='programmer' AND NOT x.paused AND NOT x.archived
+        AND i.context_id=w.context_id AND o.state='registered' AND o.manager_epoch=m.epoch
+        AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
+        AND (SELECT count(*) FROM ac_capacity_grants g WHERE g.context_id=w.context_id AND g.role='programmer' AND g.state<>'released') <
+          CASE WHEN r.snapshot->>'maxProgrammersPerContext' ~ '^(10|[1-9])$' THEN (r.snapshot->>'maxProgrammersPerContext')::int ELSE 0 END
+        AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))
+        ORDER BY w.priority DESC,w.sequence LIMIT 1`)).rows[0];
+      if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
+      const grant=(await c.query<LocalCompositorGrant>(`INSERT INTO ac_capacity_grants
+        (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,resource_kind)
+        VALUES($1,$2,$3,$4,$5,NULL,NULL,'programmer',$6,$7,$8,$9,false,'reserved','local_compositor') RETURNING *`,
+        [randomUUID(),request.attemptId,request.intentId,request.contextId,authority.epoch,context.project_id,context.capacity_policy_revision,config.revision,hash])).rows[0]!;
+      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.local_compositor_reserved',$2)",
+        [request.contextId,{grantId:grant.id,attemptId:request.attemptId}]);
+      await c.query('DELETE FROM ac_capacity_waits WHERE attempt_id=$1',[request.attemptId]);return grant;
+    });
+    if('blockedCode' in result)throw new Refusal(result.blockedCode);return result;
   }
   async cancelWait(principal:string,attemptId:string,authority:Authority){
     await this.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);

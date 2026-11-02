@@ -307,14 +307,19 @@
       "sha256": "076c3af0b518cd69b4b0dcf2ca98a64283cdef061c01ac25adb6ad2554db4471"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-remote-sources.tsx",
+      "change": "added",
+      "sha256": "58badbb1359bd39a48243f964f959e3e4a8410dc33d5a8f14866f5df7b92f005"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
       "change": "added",
-      "sha256": "50fa2cdcdcd132a7456c5c4e65e63f460ec1c7e861ce3c68f52f516af1594f0e"
+      "sha256": "c941ff9188ccea3817dbaed91730cca1098ec495813e86b88de5e433b568f201"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "ae8cd063ae22db40a8af07eb74fd565859ac724a1a956e2d4854770df924a5d1"
+      "sha256": "e1d850bfca43cd4793fa2e49ef9aa3c0bfb92ded778e1e8f3f2264c12f97d6c2"
     }
   ],
   "happier": [

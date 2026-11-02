@@ -10,6 +10,9 @@ const Start=z.object({principal:z.string().min(1).max(200),contextId:Id,sessionI
  profileId:z.string().min(1).max(100),keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey']),
  key:z.instanceof(Uint8Array).refine(value=>value.byteLength===32,'INVALID_CONTEXT_KEY')}).strict();
 export type ManagerStart=z.input<typeof Start>;
+export type ManagerKeyRequest=Omit<ManagerStart,'key'>;
+/** load transfers ownership of its returned buffer to the registry. */
+export type ManagerKeySource={load(input:ManagerKeyRequest):Promise<Uint8Array>};
 export type ManagedEndpoint={start():Promise<void>;close():void|Promise<void>;lastError?:string;connectionState?(): 'connected'|'disconnected'};
 export type ManagerEndpointInput=Omit<z.infer<typeof Start>,'key'> & {authority:Authority;key:Uint8Array};
 export type ManagerEndpointFactory=(input:ManagerEndpointInput)=>ManagedEndpoint|Promise<ManagedEndpoint>;
@@ -23,6 +26,7 @@ export class ManagerRegistry{
  private readonly entries=new Map<string,Entry>();
  private readonly starts=new Map<string,{signature:string;promise:Promise<Authority>}>();
  private readonly restarts=new Map<string,AbortController>();
+ private readonly keyLoads=new Map<string,AbortController>();
  private closed=false;
  constructor(readonly ledger:Ledger,readonly projectId:string,private readonly factory:ManagerEndpointFactory,private readonly options:{startupTimeoutMs?:number;closeTimeoutMs?:number}={}){Id.parse(projectId);}
  private bounded<T>(work:Promise<T>,ms:number,signal?:AbortSignal):Promise<T>{
@@ -61,7 +65,7 @@ export class ManagerRegistry{
  }
  start(raw:ManagerStart):Promise<Authority>{
   if(this.closed)return Promise.reject(new Refusal('MANAGER_REGISTRY_CLOSED'));
-  if(this.restarts.has(raw.contextId))return Promise.reject(new Refusal('MANAGER_RESTART_IN_PROGRESS'));
+  if(this.restarts.has(raw.contextId)||this.keyLoads.has(raw.contextId))return Promise.reject(new Refusal('MANAGER_RESTART_IN_PROGRESS'));
   const input=Start.parse(raw),key=Uint8Array.from(input.key);
   const signature=digest({projectId:this.projectId,principal:input.principal,contextId:input.contextId,sessionId:input.sessionId,
    profileId:input.profileId,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant,keyFingerprint:keyFingerprint(key)});
@@ -74,13 +78,34 @@ export class ManagerRegistry{
   const promise=this.activate(entry).finally(()=>{if(this.starts.get(input.contextId)?.promise===promise)this.starts.delete(input.contextId);});
   this.starts.set(input.contextId,{signature,promise});return promise;
  }
+ async startFromKeySource(raw:ManagerKeyRequest,source:ManagerKeySource):Promise<Authority>{
+  return this.fromKeySource(raw,source,false);
+ }
+ async restartFromKeySource(raw:ManagerKeyRequest,source:ManagerKeySource):Promise<Authority>{
+  return this.fromKeySource(raw,source,true);
+ }
+ private async fromKeySource(raw:ManagerKeyRequest,source:ManagerKeySource,restart:boolean):Promise<Authority>{
+  const input=Start.omit({key:true}).parse(raw),guard=new AbortController();
+  if(this.closed)throw new Refusal('MANAGER_REGISTRY_CLOSED');
+  if(this.keyLoads.has(input.contextId)||this.restarts.has(input.contextId)||this.starts.has(input.contextId))throw new Refusal('MANAGER_RESTART_IN_PROGRESS');
+  this.keyLoads.set(input.contextId,guard);let key:Uint8Array|undefined,copy:Uint8Array<ArrayBuffer>|undefined;
+  try{
+   const loading=Promise.resolve().then(()=>source.load(input));
+   void loading.then(value=>{if(guard.signal.aborted)value.fill(0);},()=>{});
+   key=await this.bounded(loading,this.options.startupTimeoutMs??15000,guard.signal);
+   if(guard.signal.aborted||this.closed)throw new Refusal('MANAGER_STOPPED');
+   copy=Uint8Array.from(key);
+   this.keyLoads.delete(input.contextId);
+   return await (restart?this.restart({...input,key:copy}):this.start({...input,key:copy}));
+  }finally{guard.abort();copy?.fill(0);key?.fill(0);if(this.keyLoads.get(input.contextId)===guard)this.keyLoads.delete(input.contextId);}
+ }
  /** Explicit caller-supplied credentials only; no retry or credential retention. */
  async restart(raw:ManagerStart):Promise<Authority>{
   if(this.closed)throw new Refusal('MANAGER_REGISTRY_CLOSED');
   const input=Start.parse(raw),key=Uint8Array.from(input.key),contextId=input.contextId;
   const guard=new AbortController();
   try{
-   if(this.restarts.has(contextId)||this.starts.has(contextId))throw new Refusal('MANAGER_RESTART_IN_PROGRESS');
+   if(this.restarts.has(contextId)||this.starts.has(contextId)||this.keyLoads.has(contextId))throw new Refusal('MANAGER_RESTART_IN_PROGRESS');
    const current=this.entries.get(contextId);
    if(current&&current.input.principal!==input.principal)throw new Refusal('MANAGER_OWNER_MISMATCH',403);
    this.restarts.set(contextId,guard);
@@ -145,13 +170,13 @@ export class ManagerRegistry{
   }
  }
  async stop(contextId:string){
-  Id.parse(contextId);this.restarts.get(contextId)?.abort();const entry=this.entries.get(contextId);if(!entry)return {contextId,state:'stopped' as const};
+  Id.parse(contextId);this.keyLoads.get(contextId)?.abort();this.restarts.get(contextId)?.abort();const entry=this.entries.get(contextId);if(!entry)return {contextId,state:'stopped' as const};
   // A delayed start still checks canceled before exposing authority, and closes
   // its endpoint again when it eventually settles. Old fencing is revoked now.
   await this.dispose(entry);return {contextId,state:'stopped' as const};
  }
  async close(){
-  this.closed=true;for(const guard of this.restarts.values())guard.abort();const results=await Promise.allSettled([...this.entries.values()].map(entry=>this.dispose(entry)));
+  this.closed=true;for(const guard of this.keyLoads.values())guard.abort();for(const guard of this.restarts.values())guard.abort();const results=await Promise.allSettled([...this.entries.values()].map(entry=>this.dispose(entry)));
   if(results.some(result=>result.status==='rejected'))throw new Refusal('MANAGER_SHUTDOWN_CLEANUP_REQUIRED');
  }
 }

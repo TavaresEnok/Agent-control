@@ -31,12 +31,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json",
-    "files": "src/auth-relay.ts;src/sessions.ts;src/ledger.ts;src/api.ts",
+    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/auth-relay.ts;src/sessions.ts;src/ledger.ts;src/api.ts;src/context-vault.ts;src/context-vault-cli.ts;src/managers.ts;tests/context-vault.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified."
+    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
   },
   {
     "id": "RF-04",
@@ -44,12 +44,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/manager-registry-sanitized-final-20261102.log;docs/implementation/MANAGER-REGISTRY-20261102.md",
-    "files": "src/managers.ts;src/lab-main.ts;tests/managers.test.ts",
+    "evidence": "docs/validation/evidence/manager-registry-sanitized-final-20261102.log;docs/implementation/MANAGER-REGISTRY-20261102.md;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/managers.ts;src/lab-main.ts;tests/managers.test.ts;src/context-vault.ts;src/context-vault-cli.ts;tests/context-vault.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open."
+    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
   },
   {
     "id": "RF-05",
@@ -161,12 +161,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
-    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/local-compositor-capacity-second-20261102.log;docs/validation/evidence/local-compositor-capacity-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts;db/migrations/040_local_compositor_capacity.sql;tests/local-compositor-capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated. Local compositor uses a separate model-free grant with programmer global/context limits, fencing and capacity queue; focused PG proof used synthetic records, not a physical worker or complete fairness proof."
   },
   {
     "id": "RF-14",
@@ -174,12 +174,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
-    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/local-compositor-capacity-second-20261102.log;docs/validation/evidence/local-compositor-capacity-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts;db/migrations/040_local_compositor_capacity.sql;tests/local-compositor-capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated. Local compositor uses a separate model-free grant with programmer global/context limits, fencing and capacity queue; focused PG proof used synthetic records, not a physical worker or complete fairness proof."
   },
   {
     "id": "RF-15",
@@ -330,12 +330,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts;src/remote-git.ts;tests/remote-git.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts;src/remote-git.ts;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Two disposable SSH hosts with no model credentials; remote AI CLIs and production hosts not evaluated. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
+    "limitation": "Two disposable SSH hosts with no model credentials; remote AI CLIs and production hosts not evaluated. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; the original intent payload is unchanged; product integration, aggregate resource limits and lock recovery remain open. Separate signed owner authorization binds intent, host, commit and tree before export and replay; it authorizes source reading, not merge. Focused PG proof passed; previous synthetic SSH proof was not rerun under this contract."
   },
   {
     "id": "RF-27",
@@ -343,12 +343,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py;src/remote-git.ts;tests/remote-git.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py;src/remote-git.ts;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Plan binding and parent-confirmed cancellation implemented. Two-host lost-ack proof is historical; new cancellation through SSH, supervisor death and interrupted-host recovery remain open. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
+    "limitation": "Plan binding and parent-confirmed cancellation implemented. Two-host lost-ack proof is historical; new cancellation through SSH, supervisor death and interrupted-host recovery remain open. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; the original intent payload is unchanged; product integration, aggregate resource limits and lock recovery remain open. Separate signed owner authorization binds intent, host, commit and tree before export and replay; it authorizes source reading, not merge. Focused PG proof passed; previous synthetic SSH proof was not rerun under this contract."
   },
   {
     "id": "RF-28",
@@ -603,12 +603,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
-    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts",
+    "evidence": "docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/local-compositor-capacity-second-20261102.log;docs/validation/evidence/local-compositor-capacity-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/capacity.ts;src/cezar.ts;src/engineering.ts;tests/capacity.test.ts;tests/managed-runtime-integration.test.ts;db/migrations/040_local_compositor_capacity.sql;tests/local-compositor-capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated."
+    "limitation": "Distinct synthetic accounts and physical per-stage grants, capacity queues and release are implemented; real quota identities, fairness/starvation/SLO and hostile-process exhaustion are not fully homologated. Local compositor uses a separate model-free grant with programmer global/context limits, fencing and capacity queue; focused PG proof used synthetic records, not a physical worker or complete fairness proof."
   },
   {
     "id": "RF-48",
@@ -655,12 +655,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
-    "files": "src/remote.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts",
+    "evidence": "docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/remote.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; the original intent payload is unchanged; product integration, aggregate resource limits and lock recovery remain open. Separate signed owner authorization binds intent, host, commit and tree before export and replay; it authorizes source reading, not merge. Focused PG proof passed; previous synthetic SSH proof was not rerun under this contract."
   },
   {
     "id": "RF-52",
@@ -837,12 +837,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/;ACCEPTANCE-I0-I2.md;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/context-vault.ts;src/context-vault-cli.ts;src/managers.ts;tests/context-vault.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
   },
   {
     "id": "RNF-09",
@@ -1110,12 +1110,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
-    "files": "src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Real SSH and completed result after restart; interrupted in-flight operation still uncertain. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
+    "limitation": "Real SSH and completed result after restart; interrupted in-flight operation still uncertain. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; the original intent payload is unchanged; product integration, aggregate resource limits and lock recovery remain open. Separate signed owner authorization binds intent, host, commit and tree before export and replay; it authorizes source reading, not merge. Focused PG proof passed; previous synthetic SSH proof was not rerun under this contract."
   },
   {
     "id": "T15",
@@ -1175,12 +1175,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/;ACCEPTANCE-I0-I2.md;docs/implementation/MANAGER-LIFECYCLE-20261102.md;docs/validation/evidence/diagnostics-manager-transport-20261102.log",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/managers.ts;tests/managers.test.ts",
+    "evidence": "docs/validation/evidence/;ACCEPTANCE-I0-I2.md;docs/implementation/MANAGER-LIFECYCLE-20261102.md;docs/validation/evidence/diagnostics-manager-transport-20261102.log;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/managers.ts;tests/managers.test.ts;src/context-vault.ts;src/context-vault-cli.ts;tests/context-vault.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Explicit registry restart revalidates caller-supplied credentials; no authorized administrative key provider or operational restart proof is established. Transport-disconnected and fenced manager authority were distinguished in the focused synthetic test; operational restart remains unproven."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Explicit registry restart revalidates caller-supplied credentials; an opt-in vault and explicit key source exist, while operational restart and automated activation remain unproven. Transport-disconnected and fenced manager authority were distinguished in the focused synthetic test; operational restart remains unproven. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
   },
   {
     "id": "T20",
@@ -1253,12 +1253,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
-    "files": "src/remote.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts",
+    "evidence": "docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "src/remote.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; the original intent payload is unchanged; product integration, aggregate resource limits and lock recovery remain open. Separate signed owner authorization binds intent, host, commit and tree before export and replay; it authorizes source reading, not merge. Focused PG proof passed; previous synthetic SSH proof was not rerun under this contract."
   },
   {
     "id": "T26",
@@ -1305,12 +1305,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/validation/evidence/local-compositor-capacity-second-20261102.log;docs/validation/evidence/local-compositor-capacity-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
+    "files": "db/migrations/040_local_compositor_capacity.sql;src/capacity.ts;src/engineering.ts;tests/local-compositor-capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Local compositor uses a separate model-free grant with programmer global/context limits, fencing and capacity queue; focused PG proof used synthetic records, not a physical worker or complete fairness proof."
   },
   {
     "id": "T30",

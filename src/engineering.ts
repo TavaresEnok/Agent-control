@@ -35,16 +35,19 @@ export class EngineeringStages{
   const saved=await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
    const row=(await c.query(`SELECT i.principal_id,o.state,o.manager_epoch,o.receipt,o.handle,o.native_session_id,
-    g.state grant_state,g.role,g.attempt_id,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.physical_receipt,s.snapshot,s.digest
+    g.state grant_state,g.role,g.resource_kind,g.account_id,g.profile_id,g.attempt_id,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.physical_receipt,s.snapshot,s.digest
     FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id LEFT JOIN ac_capacity_grants g ON g.id=o.grant_id
     LEFT JOIN ac_managed_composition_sources s ON s.intent_id=i.id WHERE i.id=$1 AND i.context_id=$2 AND o.id=$3 FOR UPDATE OF o`,
     [intent.id,authority.contextId,intent.operation_id])).rows[0];
    if(!row)throw new Refusal('MANAGED_RECEIPT_MISMATCH');await this.ledger.authorize(c,row.principal_id,authority.contextId);
    if(row.state!=='completed'||row.grant_state!=='released')return null;
    if(row.role!=='programmer'||row.attempt_id!==unit.attemptId||row.grant_intent!==intent.id||row.grant_context!==authority.contextId||
+      !((row.resource_kind==='local_compositor'&&row.account_id===null&&row.profile_id===null)||
+        (row.resource_kind==='model'&&row.account_id!==null&&row.profile_id!==null))||
       Number(row.manager_epoch)!==Number(row.grant_epoch)||Number(row.manager_epoch)>authority.epoch||!row.native_session_id||
       row.receipt?.operationId!==intent.operation_id||row.receipt?.base!==input.base||row.receipt?.exitCode!==0||row.receipt?.synthetic!==true||
       row.physical_receipt?.state!=='exited'||row.physical_receipt?.exitCode!==0||row.physical_receipt?.source!=='managed-git-compositor'||
+      !Number.isInteger(row.handle?.pid)||row.handle.pid<=0||row.handle?.operationId!==intent.operation_id||Number(row.handle?.epoch)!==Number(row.manager_epoch)||
       row.physical_receipt?.processId!==String(row.handle?.pid)||!row.snapshot||digest(row.snapshot)!==row.digest)
     throw new Refusal('MANAGED_RECEIPT_MISMATCH');
    const schema=z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict()).min(2).max(4);
@@ -76,7 +79,7 @@ export class EngineeringStages{
   return true;
  }
  async composeManaged(intent:Intent,authority:Authority,unit:ManagedUnit,sessionId:string,destination:string,
-  sources:readonly {unitId:string;artifactId:string;cwd:string}[]){
+  sources:readonly {unitId:string;artifactId:string;cwd:string}[],runId?:string){
   z.uuid().parse(sessionId);
   const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
   if(!bound||digest(bound.unit)!==digest(unit)||unit.kind!=='composition'||digest(sources.map(s=>s.unitId))!==digest(input.sources))
@@ -98,7 +101,20 @@ export class EngineeringStages{
   });
   for(const source of sources){const frozen=bound.recipe.units.find(u=>u.id===source.unitId)!;
    await this.options.git.assertManagedPath(bound.parentIntentId,frozen.runId,source.cwd,true);}
-  const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:unit.attemptId,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority);
+  const capacity=new Capacity(this.ledger);let grant:Awaited<ReturnType<Capacity['reserveLocalCompositor']>>;
+  const admissionWait=(reason:string|null)=>{if(runId)this.options.onAdmissionWait?.(runId,`composition:${intent.operation_id}`,reason);};
+  try{
+   for(;;){
+    if(!this.running)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    // Pausing admission must not hide a cancellation or an expired fence.
+    await this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);});
+    try{grant=await capacity.reserveLocalCompositor(principal,{attemptId:unit.attemptId,intentId:intent.id,contextId:intent.context_id},authority);break;}
+    catch(error){
+     if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+     admissionWait(error.code);await new Promise(resolve=>setTimeout(resolve,250));
+    }
+   }
+  }finally{admissionWait(null);}
   await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
    const snapshot=identities.map((value,index)=>({unitId:sources[index]!.unitId,artifactId:sources[index]!.artifactId,...value}));
@@ -119,9 +135,12 @@ export class EngineeringStages{
     await this.ledger.tx(async c=>{
      await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
      for(const source of sources)await this.options.quality.assertReady(c,source.artifactId,authority);
-     const eligible=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
-      JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
-      AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp() FOR UPDATE OF g`,[grant.id,authority.contextId,authority.epoch]);
+     const eligible=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_operations o ON o.grant_id=g.id JOIN ac_intents i ON i.id=o.intent_id
+      WHERE g.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved' AND g.intent_id=$4 AND g.attempt_id=$5
+      AND g.project_id=$6 AND g.role='programmer' AND g.resource_kind='local_compositor' AND g.account_id IS NULL AND g.profile_id IS NULL
+      AND o.id=$7 AND o.intent_id=$4 AND o.manager_epoch=$3 AND o.execution_attempt_id=$5 AND o.state='uncertain'
+      AND i.parent_intent_id=$8 AND i.parent_unit_id=$9 AND i.run_id=$10 FOR UPDATE OF g,o`,
+      [grant.id,authority.contextId,authority.epoch,intent.id,unit.attemptId,this.projectId,intent.operation_id,bound.parentIntentId,unit.id,unit.runId]);
      if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');
      await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[grant.id]);
      const changed=await c.query("UPDATE ac_operations SET state='running',native_session_id=$2,handle=$3 WHERE id=$1 AND state='uncertain' AND manager_epoch=$4",[intent.operation_id,sessionId,{pid:processChild.pid,startTime,bootId,operationId:intent.operation_id,epoch:authority.epoch,synthetic:true},authority.epoch]);
@@ -134,8 +153,8 @@ export class EngineeringStages{
    const receipt={operationId:intent.operation_id,commit:result.commit,tree:result.tree,base:result.base,exitCode:0,synthetic:true};
    await this.ledger.tx(async c=>{
     await this.ledger.fence(c,authority,true);
-    const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND manager_epoch=$3 AND state='running'",[grant.id,{state:'exited',processId:String(child?.pid),exitCode:0,source:'managed-git-compositor'},authority.epoch]);
-    const completed=await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='running' AND manager_epoch=$3",[intent.operation_id,receipt,authority.epoch]);
+    const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND manager_epoch=$3 AND state='running' AND resource_kind='local_compositor' AND intent_id=$4 AND attempt_id=$5 AND context_id=$6 AND role='programmer' AND account_id IS NULL AND profile_id IS NULL",[grant.id,{state:'exited',processId:String(child?.pid),exitCode:0,source:'managed-git-compositor'},authority.epoch,intent.id,unit.attemptId,authority.contextId]);
+    const completed=await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND intent_id=$4 AND grant_id=$5 AND state='running' AND manager_epoch=$3",[intent.operation_id,receipt,authority.epoch,intent.id,grant.id]);
     if(!released.rowCount||!completed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
    });
    return receipt;

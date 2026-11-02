@@ -16,16 +16,32 @@ import {AgentControlObservability} from './agent-control-observability'
 import {AgentControlImportPreview} from './agent-control-import-preview'
 import {AgentControlProjectAdmin} from './agent-control-project-admin'
 import {AgentControlDiagnostics} from './agent-control-diagnostics'
+import {AgentControlRemoteSources} from './agent-control-remote-sources'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
 const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),policy_revision:z.number().int().positive().nullable().optional(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
-const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
- grant_id:z.string().uuid(),role:z.string(),account_id:z.string().uuid(),model:z.string(),effort:z.string(),state:z.string(),
- counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
- observed_at:z.string().nullable()}))})
+const usageBase={grant_id:z.string().uuid(),role:z.string(),state:z.string()}
+const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.discriminatedUnion('resource_kind',[
+ z.object({...usageBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),model:z.string(),effort:z.string(),
+  seq:z.union([z.number(),z.string()]).nullable(),counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),observed_at:z.string().nullable()}),
+ z.object({...usageBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),model:z.null(),effort:z.null(),seq:z.null(),counters:z.null(),observed_at:z.null()}),
+]))})
+const grantBase={id:z.string(),role:z.string(),state:z.string()}
+const grantSchema=z.discriminatedUnion('resource_kind',[
+ z.object({...grantBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),emergency:z.boolean()}),
+ z.object({...grantBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),emergency:z.literal(false)}),
+])
+const waitBase={attempt_id:z.string(),role:z.string(),reason:z.string().nullable()}
+const waitSchema=z.discriminatedUnion('resource_kind',[
+ z.object({...waitBase,resource_kind:z.literal('model'),desired_profile:z.string().uuid().nullable()}),
+ z.object({...waitBase,resource_kind:z.literal('local_compositor'),desired_profile:z.null()}),
+])
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
+ canAuthorizeRemoteSource:z.boolean(),remoteSourceHosts:z.array(z.object({id:z.string().uuid(),label:z.string()})).max(100),
+ remoteSourceAuthorizations:z.array(z.object({authorizationId:z.string().uuid(),intentId:z.string().uuid(),hostId:z.string().uuid(),
+  commit:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),tree:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),kind:z.literal('source_read_authorization')})).max(100),
  remoteOperations:z.array(z.object({id:z.string().uuid(),intent_id:z.string().uuid().nullable(),task_id:z.string(),state:z.string(),host_label:z.string()})),
  operatorDeviceIds:z.array(z.string().uuid()),
  capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
@@ -38,8 +54,8 @@ const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.s
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
  activeTemplateRevision:z.number().nullable(),
  plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
- waits:z.array(z.object({attempt_id:z.string(),role:z.string(),reason:z.string().nullable()})),
- grants:z.array(z.object({id:z.string(),role:z.string(),state:z.string(),profile_id:z.string(),emergency:z.boolean()}))})
+ waits:z.array(waitSchema),
+ grants:z.array(grantSchema)})
 async function request(path:string,body?:unknown,extraHeaders:Record<string,string>={}):Promise<unknown>{
  const response=await agentControlFetch(path,{method:body?'POST':'GET',headers:{...(body?{'content-type':'application/json'}:{}),...extraHeaders},
   body:body?JSON.stringify(body):undefined})
@@ -141,6 +157,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   </SettingsField>}
   {data&&operator.data&&<AgentControlManagerPlans key={`plans-${contextId}`} contextId={contextId} policyRevision={selectedContext?.policy_revision??null}
    principalId={operator.data.principalId} projectId={operator.data.projectId}/>}
+  {data&&<AgentControlRemoteSources key={`remote-sources-${contextId}`} canAuthorize={data.canAuthorizeRemoteSource} hosts={data.remoteSourceHosts}
+   plans={data.plans} authorizations={data.remoteSourceAuthorizations} busy={busy} onAuthorize={payload=>mutate.mutate({action:'remote.source.authorize',payload})}/>}
   {data&&<AgentControlProviderCollectors key={`providers-${contextId}`} accounts={data.accounts} bindings={data.providerBindings} adapters={data.providerAdapters}
    canConfigure={data.canConfigureCapacity} busy={busy} onBind={payload=>mutate.mutate({action:'provider.bind',payload})}/>}
   {data&&<AgentControlObservability enabled={data.canConfigureCapacity}/>}
@@ -240,19 +258,20 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </SettingsField>
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
     <ul className="flex flex-col gap-2">{data.waits.map(w=><li key={w.attempt_id} className="break-words rounded-md border p-3">
-     {w.role} · {w.reason==='CAPACITY_BUSY'?'Aguardando vaga':w.reason==='CAPACITY_QUEUED'?'Aguardando sua vez':'Nenhum perfil elegível disponível'}
+     {w.resource_kind==='local_compositor'?'Composição determinística local':w.role} · {w.reason==='CAPACITY_BUSY'?'Aguardando vaga':w.reason==='CAPACITY_QUEUED'?'Aguardando sua vez':w.resource_kind==='local_compositor'?'Aguardando capacidade local':'Nenhum perfil elegível disponível'}
     </li>)}</ul>
     <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">
-     {g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
+     {g.resource_kind==='local_compositor'?'Composição determinística local':g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
     </li>)}</ul>
    </SettingsField>
-   <SettingsField title="Uso por tentativa" hint="Contadores informados pelo executor, não saldo da assinatura. Cache e raciocínio podem estar incluídos em entrada e saída.">
-    <p>Saldo da assinatura: desconhecido</p>
+   <SettingsField title="Uso por tentativa" hint="Contadores de modelos são informados pelo executor, não representam saldo da assinatura. Cache e raciocínio podem estar incluídos em entrada e saída.">
+    {usage.data?.attempts.some(item=>item.resource_kind==='model')&&<p>Saldo da assinatura: desconhecido</p>}
     {usage.data?.attempts.length===0&&<p>Nenhuma tentativa registrada nesta conversa.</p>}
     <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
-     <strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
-     {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
-      Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}
+     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/>Contadores de modelo não se aplicam.</>:
+      <><strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
+       {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
+        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}</>}
     </li>)}</ul>
    </SettingsField>
   </>}

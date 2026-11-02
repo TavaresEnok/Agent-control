@@ -12,6 +12,7 @@ const metricStates={
  roles:['manager','programmer','reviewer','qa','specialist','judge','other'],
  storage:['reserved','published','retained','deleting','deleted'],
  managedKinds:['task_implementation','git_composition','unclassified'],
+ resourceKinds:['model','local_compositor','other'],
 } as const;
 const Decimal=z.string().regex(/^\d+$/);
 export type MetricSample={labels:Record<string,string>;value:string};
@@ -45,6 +46,10 @@ export class OperationalObservability{
    const states=async(table:string)=> (await c.query<CounterRow>(`SELECT state label,count(*)::text value FROM ${table} GROUP BY state`)).rows;
    metrics.push(gauge('intents','Current durable intents by state; not completion rate.',enumerated(await states('ac_intents'),metricStates.intents,'state')));
    metrics.push(gauge('grants','Global grants including unresolved physical effects.',enumerated(await states('ac_capacity_grants'),metricStates.grants,'state')));
+   const resourceGrants=(await c.query<{kind:string;label:string;value:string}>('SELECT resource_kind kind,state label,count(*)::text value FROM ac_capacity_grants GROUP BY resource_kind,state')).rows;
+   metrics.push(gauge('resource_grants','Global reservations by fixed resource kind and state, including uncertain effects.',
+    metricStates.resourceKinds.flatMap(kind=>enumerated(resourceGrants.filter(row=>(metricStates.resourceKinds as readonly string[]).includes(row.kind)?row.kind===kind:kind==='other'),metricStates.grants,'state')
+     .map(row=>({...row,labels:{...row.labels,resource_kind:kind}})))));
    const operations:MetricSample[]=[];
    for(const [scope,table] of [['implementation','ac_operations'],['stage','ac_stage_operations'],['sandbox','ac_sandbox_jobs'],['remote','ac_remote_operations'],['integration','ac_integration_intents']] as const)
     operations.push(...enumerated(await states(table),metricStates.operations,'state').map(row=>({...row,labels:{...row.labels,scope}})));
@@ -53,6 +58,12 @@ export class OperationalObservability{
     JOIN ac_intents i ON i.id=w.intent_id WHERE i.state NOT IN ('done','review','failed','canceled','cancelled')
     AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id) GROUP BY w.reason`)).rows;
    metrics.push(gauge('capacity_waits','Nonterminal, noncanceled durable capacity waits.',enumerated(waits,metricStates.reasons,'reason')));
+   const resourceWaits=(await c.query<{kind:string;label:string;value:string}>(`SELECT w.resource_kind kind,COALESCE(w.reason,'other') label,count(*)::text value
+    FROM ac_capacity_waits w JOIN ac_intents i ON i.id=w.intent_id WHERE i.state NOT IN ('done','review','failed','canceled','cancelled')
+    AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id)) GROUP BY w.resource_kind,w.reason`)).rows;
+   metrics.push(gauge('resource_capacity_waits','Nonterminal noncanceled capacity waits by fixed resource kind and reason.',
+    metricStates.resourceKinds.flatMap(kind=>enumerated(resourceWaits.filter(row=>(metricStates.resourceKinds as readonly string[]).includes(row.kind)?row.kind===kind:kind==='other'),metricStates.reasons,'reason')
+     .map(row=>({...row,labels:{...row.labels,resource_kind:kind}})))));
    const age=(await c.query(`SELECT COALESCE(GREATEST(0,floor(extract(epoch FROM (current_timestamp-min(w.created_at))))),0)::text seconds
     FROM ac_capacity_waits w JOIN ac_intents i ON i.id=w.intent_id WHERE i.state NOT IN ('done','review','failed','canceled','cancelled')
     AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id)`)).rows[0].seconds;
@@ -78,7 +89,7 @@ export class OperationalObservability{
     WHERE g.role='programmer' AND g.intent_id=b.intent_id GROUP BY 1,2`)).rows;
    const byKind=(rows:{kind:string;label:string;value:string}[],states:readonly string[],key:string)=>
     metricStates.managedKinds.flatMap(kind=>enumerated(rows.filter(row=>row.kind===kind),states,key).map(row=>({...row,labels:{...row.labels,kind}})));
-   metrics.push(gauge('managed_programmer_grants','Managed programmer grants linked to unit operations; composition still uses programmer capacity, not a cost or inference measure.',
+   metrics.push(gauge('managed_programmer_grants','Managed programmer-budget grants linked to unit operations; local composition is not inference or token usage.',
     byKind(managedGrants,metricStates.grants,'state')));
    const managedWaits=(await c.query<{kind:string;label:string;value:string}>(`${managedBindings}
     SELECT CASE WHEN b.attempt_id=w.attempt_id::text THEN b.kind ELSE 'unclassified' END kind,COALESCE(w.reason,'other') label,count(*)::text value

@@ -17,18 +17,25 @@ it('does not duplicate diagnostics when resources and plan controls arrive after
   if(path.endsWith('/resources'))return pending
   if(path.endsWith('/contexts'))return new Response(JSON.stringify({contexts:[{id:context,paused:false,pause_revision:0,draining:false,drain_revision:0,policy_revision:1}]}))
   if(path.endsWith('/operator/identity'))return new Response(JSON.stringify({principalId:'fixture',projectId:installation,installationId:installation,operatorDeviceIds:[]}))
-  if(path.endsWith('/usage'))return new Response(JSON.stringify({subscriptionBalance:'unknown',overlappingCounters:true,attempts:[]}))
+  if(path.endsWith('/usage'))return new Response(JSON.stringify({subscriptionBalance:'unknown',overlappingCounters:true,attempts:[
+   {grant_id:context,role:'programmer',state:'uncertain',resource_kind:'local_compositor',account_id:null,profile_id:null,model:null,effort:null,seq:null,counters:null,observed_at:null},
+   {grant_id:installation,role:'reviewer',state:'running',resource_kind:'model',account_id:context,profile_id:installation,model:'fixture-model',effort:'medium',seq:null,counters:null,observed_at:null}]}))
   return new Response('{}')
  }))
  const client=new QueryClient({defaultOptions:{queries:{retry:false}}})
  render(<QueryClientProvider client={client}><AgentControlSection/></QueryClientProvider>)
  await screen.findByText('Fixture diagnostics');expect(screen.queryByText('Fixture plans')).toBeNull()
  resolveResources(new Response(JSON.stringify({installationId:installation,principalId:'fixture',verifierDigest:'a'.repeat(64),contextId:context,assignedPolicyRevision:null,
-  approvals:[],canApproveIntegration:false,remoteOperations:[],operatorDeviceIds:[],capacity:null,canConfigureCapacity:false,providerBindings:[],providerAdapters:[],accounts:[],profiles:[],catalog:[],policies:[],qualityPolicies:[],templates:[],activeTemplateRevision:null,plans:[],waits:[],grants:[]})))
+  approvals:[],canApproveIntegration:false,canAuthorizeRemoteSource:false,remoteSourceHosts:[],remoteSourceAuthorizations:[],remoteOperations:[],operatorDeviceIds:[],capacity:null,canConfigureCapacity:false,providerBindings:[],providerAdapters:[],accounts:[],profiles:[],catalog:[],policies:[],qualityPolicies:[],templates:[],activeTemplateRevision:null,plans:[],waits:[],grants:[
+   {id:context,role:'programmer',state:'uncertain',resource_kind:'local_compositor',account_id:null,profile_id:null,emergency:false},
+   {id:installation,role:'reviewer',state:'running',resource_kind:'model',account_id:context,profile_id:installation,emergency:false}]})))
  await screen.findByText('Fixture plans')
  await waitFor(()=>expect(identityGate.resolve).toBeDefined())
  identityGate.resolve!({deviceId:installation,publicKey:'fixture'})
  await screen.findByText('Dispositivo de administração')
  await waitFor(()=>expect(screen.getAllByText('Fixture diagnostics')).toHaveLength(1))
+ expect(screen.getAllByText(/Composição determinística local/)).toHaveLength(2)
+ expect(screen.getByText('Contadores de modelo não se aplicam.')).toBeTruthy()
+ expect(screen.getByText('fixture-model · medium')).toBeTruthy()
  client.clear()
 })

@@ -5,6 +5,7 @@ import { resolve, join } from 'node:path';
 import { Authority, Id, Refusal, digest } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import {GitExportRequest,sourceSnapshot,verifyGitExport} from './remote-git.ts';
+import {requireRemoteSource} from './remote-source-authorizations.ts';
 export const RemoteHostInput=z.object({id:Id,label:z.string().min(1).max(100),hostname:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/),
  port:z.number().int().min(1).max(65535),username:z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
  publicKey:z.string().min(30).max(16384).refine(s=>!/[\r\n]/.test(s)),fingerprint:z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
@@ -64,6 +65,7 @@ export class RemoteOperations{
    await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
    const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR UPDATE',[input.hostId,context.project_id])).rows[0];
    if(!host||!host.allowed_tasks.includes('git-export'))throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
+   const authorization=await requireRemoteSource(c,{contextId:input.contextId,projectId:context.project_id,intentId:input.intentId,hostId:input.hostId,commit:input.commit,tree:input.tree});
    const requestDigest=digest({action:'git-export',...input});
    const previous=(await c.query('SELECT * FROM ac_remote_operations WHERE id=$1 FOR UPDATE',[input.operationId])).rows[0];
    if(previous&&previous.request_digest!==requestDigest)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');
@@ -78,7 +80,7 @@ export class RemoteOperations{
     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'remote.git.exported',$2)",[input.contextId,{operationId:input.operationId,hostId:input.hostId,commit:input.commit,tree:input.tree,bundleSha256:result.sha256}]);
    }
    const snapshot=sourceSnapshot(saved,{...input,projectId:context.project_id,requestDigest,bundleSha256:result.sha256});
-   return {...result,snapshot};
+   return {...result,snapshot:{...snapshot,sourceAuthorizationId:authorization.authorizationId,sourceCommitmentDigest:authorization.commitmentDigest}};
   });
  }
  async registerHost(principal:string,projectId:string,raw:z.input<typeof RemoteHostInput>){

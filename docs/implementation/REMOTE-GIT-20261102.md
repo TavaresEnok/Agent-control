@@ -28,8 +28,9 @@ passar o resultado de `exportGit`; o destino é publicado por rename depois de
 validado sob lock exclusivo por operationId. Lock preexistente é recusado; após
 crash requer reconciliação manual. Replay aceita destino existente apenas com a
 mesma identidade. O proprietário pode ler qualquer OID disponível no projeto
-autorizado do host; commit/tree não estão vinculados ao payload da intenção ou a
-um artefato anterior. A materialização é uma primitiva local: ainda não há vínculo de
+autorizado do host após uma autorização complementar assinada para intenção, host,
+commit e tree. O payload original da intenção não é reescrito, e a fonte não é
+convertida em artefato aprovado. A materialização é uma primitiva local: ainda não há vínculo de
 produto com cadastro de projeto, interface ou execução gerenciada automática.
 O limite de 64 KiB é explícito e exclui projetos maiores nesta primeira fatia;
 nenhuma inferência de prontidão geral de RF-51 decorre desta prova.
@@ -54,14 +55,22 @@ ser presumida para todo caminho de criação de intenção. Não se deve reinter
 `messageRef`, um `inputRef` livre do plano ou o digest do pedido posterior como
 autorização original de um snapshot específico.
 
-Para obter esse vínculo sem ambiguidade seria necessário um contrato autenticado
-versionado, anterior à exportação, que cubra pelo menos projeto, host, commit,
-tree e intenção/contexto, com domínio e regras explícitas de replay. A
-persistência teria de preservar a evidência verificável dessa autorização e a
-exportação teria de compará-la antes de aceitar a fonte. A forma de transporte,
-versão, política para intenções antigas e eventual migração ainda precisam de
-decisão própria. Nenhum desses mecanismos foi criado nesta rodada; um snapshot
-continua `not_reviewed` e não dá permissão de integração.
+A migração 041 acrescentou esse contrato como uma autorização complementar de
+leitura. A ação `remote.source.authorize` exige owner e assinatura de dispositivo,
+persiste o compromisso versionado com projeto, contexto, intenção, host, commit e
+tree e conserva a prova verificável. `src/remote-source-authorizations.ts` confere
+a assinatura, a instalação e o comando persistido antes de cada exportação,
+inclusive replay. Intenções antigas também exigem a autorização; não se presume
+confiança no `messageRef`. O painel oferece o formulário e os metadados das últimas
+autorizações sem expor chaves, provas ou credenciais SSH. Isso não altera o payload
+original e não aprova código: o snapshot continua `not_reviewed` e não dá permissão
+de integração.
+
+`remote-source-signed-first-20261102.log` passou um teste focado com PostgreSQL
+descartável e transporte sintético. As fixtures antigas foram adaptadas para obter
+autorização autêntica por Control/Operators; a prova SSH anterior não foi repetida
+após o novo contrato. Portanto a autorização integrada ao transporte SSH real
+continua aguardando validação em conjunto.
 
 ## Evidência local
 

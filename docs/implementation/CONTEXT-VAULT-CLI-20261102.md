@@ -1,0 +1,11 @@
+# Custódia local opt-in
+
+A instalação pode declarar `contextVault` com `directory` e `masterFile` absolutos, canônicos e dentro do `dataDirectory` privado. A configuração é opcional; o gateway não passa a iniciar gerentes nem a carregar chaves por causa dela. Os comandos verificam a identidade da instalação e os caminhos dos repositórios configurados e registrados no PostgreSQL.
+
+- `npm run gateway -- vault-initialize /caminho/config.json` cria o diretório privado e uma chave mestra aleatória de 32 bytes em arquivo exclusivo; arquivo existente válido não é sobrescrito.
+- `npm run gateway -- context-key-authorize /caminho/config.json /caminho/descriptor.json` autoriza explicitamente uma nova versão de chave. A rotação revoga a versão ativa anterior e expira a lease do gerente conforme ContextKeys.
+- `npm run gateway -- context-key-import /caminho/config.json /caminho/descriptor.json` importa a chave para o cofre somente após a versão estar autorizada. Não autoriza, conecta ou executa por si só.
+
+O descriptor JSON privado 0600 contém `principal`, `contextId`, `sessionId`, `profileId`, `keyVersion`, `encryptionVariant` (`legacy` ou `dataKey`) e `keyFile` absoluto. O arquivo indicado é privado 0600 e contém exatamente 32 bytes binários. Ambos os arquivos devem estar fora de todos os repositórios configurados ou registrados; o comando não os move nem os apaga. O principal deve ser o proprietário administrativo configurado, possuir o contexto e corresponder ao vínculo de sessão. Conteúdo da chave não é argumento nem variável de ambiente. Guardar e transportar os dois arquivos privados é responsabilidade do operador; o comando não importa token de provedor nem inicia gerente automaticamente.
+
+O cofre verifica autorização de contexto e vínculo antes e depois da leitura, autentica o cabeçalho e não sobrescreve uma entrada existente. Após uma interrupção entre link e unlink, uma entrada pode ter dois links e é recusada até inspeção local; falha após a publicação também pode deixar uma entrada existente apesar de o comando informar erro. A verificação de caminhos não constitui isolamento contra processos hostis com o mesmo UID ou administrador do host. Backup, rotação da chave mestra e reativação autônoma não estão implementados por estes comandos.

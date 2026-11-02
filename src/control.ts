@@ -10,8 +10,10 @@ import { Templates,Template } from './templates.ts';
 import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
 import {ProviderCollectors,ProviderBinding,projectProviderSnapshot,type ProviderAdapter} from './providers.ts';
 import {IntegrationApproval,approveIntegration} from './approvals.ts';
+import {authorizeRemoteSource,RemoteSourcePayload} from './remote-source-authorizations.ts';
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
+ z.object({...base,action:z.literal('remote.source.authorize'),payload:RemoteSourcePayload}).strict(),
  z.object({...base,action:z.literal('integration.approve'),payload:IntegrationApproval}).strict(),
  z.object({...base,action:z.literal('quality.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:QualityPolicy}).strict()}).strict(),
  z.object({...base,action:z.literal('template.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),template:Template}).strict()}).strict(),
@@ -43,6 +45,7 @@ export class Control {
    const context=await this.ledger.authorize(c,principal,command.contextId);
    if(this.projectScope&&context.project_id!==this.projectScope)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
    await new Operators(this.ledger).verify(c,principal,raw,proof);
+   if(command.action==='remote.source.authorize'&&context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
    const admission=(await c.query(command.action==='admission.set'
     ?'SELECT enabled FROM ac_admission_control WHERE id=1 FOR UPDATE'
     :'SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
@@ -60,6 +63,7 @@ export class Control {
    else{
     const service=new Capacity(this.ledger,c);
     switch(command.action){
+     case 'remote.source.authorize':result=await authorizeRemoteSource(c,principal,context.project_id,command,proof);break;
      case 'integration.approve':result=await approveIntegration(this.ledger,c,principal,command.contextId,command.payload);break;
      case 'quality.publish':result={revision:await new QualityPolicies(this.ledger,c).publish(principal,context.project_id,command.payload.expectedRevision,command.payload.policy)};break;
      case 'template.publish':result=await new Templates(this.ledger,c).publish(principal,command.contextId,command.payload.expectedRevision,command.payload.template);break;
@@ -145,9 +149,9 @@ export class Control {
     WHERE EXISTS(SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.provider=m.provider AND x.project_id=$1)
     ORDER BY m.provider,m.model`,[context.project_id])).rows;
    const policies=(await c.query('SELECT revision,digest,snapshot,published_at FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
-   const grants=(await c.query(`SELECT id,attempt_id,intent_id,profile_id,account_id,role,policy_revision,emergency,state,created_at
+   const grants=(await c.query(`SELECT id,attempt_id,intent_id,resource_kind,profile_id,account_id,role,policy_revision,emergency,state,created_at
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
-   const waits=(await c.query('SELECT attempt_id,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
+   const waits=(await c.query('SELECT attempt_id,resource_kind,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
    const plans=(await c.query(`SELECT i.id,i.run_id,i.plan_revision,i.state,c.state cancellation_state
     FROM ac_intents i LEFT JOIN ac_plan_cancellations c ON c.intent_id=i.id WHERE i.context_id=$1 AND i.parent_intent_id IS NULL ORDER BY i.created_at DESC LIMIT 100`,[contextId])).rows;
    const approvals=(await c.query(`SELECT a.id,a.commit_id,a.tree_id,a.base_id,a.identity_digest,a.policy_revision,x.target_ref,
@@ -159,6 +163,11 @@ export class Control {
    const remoteOperations=(await c.query(`SELECT r.id,r.intent_id,r.task_id,r.state,h.label host_label
     FROM ac_remote_operations r JOIN ac_remote_hosts h ON h.id=r.host_id WHERE r.context_id=$1 ORDER BY r.created_at DESC LIMIT 100`,[contextId])).rows;
    const qualityPolicies=(await c.query('SELECT revision,snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
+   const remoteSourceHosts=(await c.query(`SELECT id,label FROM ac_remote_hosts WHERE project_id=$1 AND enabled
+    AND 'git-export'=ANY(allowed_tasks) ORDER BY label,id LIMIT 100`,[context.project_id])).rows;
+   const remoteSourceAuthorizations=(await c.query(`SELECT control_intent_id AS "authorizationId",intent_id AS "intentId",host_id AS "hostId",
+    commit_id AS commit,tree_id AS tree,'source_read_authorization'::text AS kind FROM ac_remote_source_authorizations
+    WHERE context_id=$1 AND project_id=$2 ORDER BY created_at DESC,control_intent_id LIMIT 100`,[contextId,context.project_id])).rows;
    const templates=(await c.query('SELECT revision,snapshot,digest FROM ac_context_templates WHERE context_id=$1 ORDER BY revision',[contextId])).rows;
    const canConfigureCapacity=context.role!=='viewer'&&!!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
    const config=(await c.query('SELECT * FROM ac_capacity_config WHERE id=1')).rows[0];
@@ -170,7 +179,8 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,providerBindings,providerAdapters,profiles,catalog,policies,grants,plans,approvals,remoteOperations,operatorDeviceIds,canApproveIntegration:context.role==='owner'};
+    accounts,providerBindings,providerAdapters,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
+    remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner'};
   });
  }
 }

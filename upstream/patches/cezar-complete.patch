@@ -2340,12 +2340,62 @@ index 0000000000000000000000000000000000000000..fda43566d44e242af84b9324c99818a3
 + expect(within(admission).getByText('não informado')).toBeTruthy();expect(within(admission).queryByText('Fechada')).toBeNull()
 + client.clear()
 +})
+diff --git a/packages/web/src/routes/settings/agent-control-remote-sources.tsx b/packages/web/src/routes/settings/agent-control-remote-sources.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..bdebaabbb9c16c95cdd4c4de6cd6d0442e996dae
+--- /dev/null
++++ b/packages/web/src/routes/settings/agent-control-remote-sources.tsx
+@@ -0,0 +1,44 @@
++import {useState} from 'react'
++import {Button} from '@/components/ui/button'
++import {Input} from '@/components/ui/input'
++import {SettingsField} from './settings-field'
++
++type Plan={id:string;plan_revision:number;state:string;cancellation_state:'requested'|'confirmed'|null}
++type Host={id:string;label:string}
++type Authorization={authorizationId:string;intentId:string;hostId:string;commit:string;tree:string;kind:'source_read_authorization'}
++export type RemoteSourcePayload={schemaVersion:1;intentId:string;hostId:string;commit:string;tree:string}
++const gitId=/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
++const terminal=new Set(['done','review','failed','canceled','cancelled','cancellation_requested'])
++const pageSize=10
++export function AgentControlRemoteSources({canAuthorize,hosts,plans,authorizations,busy,onAuthorize}:{canAuthorize:boolean;hosts:Host[];plans:Plan[];authorizations:Authorization[];busy:boolean;onAuthorize:(payload:RemoteSourcePayload)=>void}){
++ const [intentId,setIntentId]=useState(''),[hostId,setHostId]=useState(''),[commit,setCommit]=useState(''),[tree,setTree]=useState(''),[page,setPage]=useState(0)
++ const eligible=plans.filter(plan=>!plan.cancellation_state&&!terminal.has(plan.state))
++ const valid=eligible.some(plan=>plan.id===intentId)&&hosts.some(host=>host.id===hostId)&&gitId.test(commit)&&gitId.test(tree)&&commit.length===tree.length
++ const lastPage=Math.max(0,Math.ceil(authorizations.length/pageSize)-1),currentPage=Math.min(page,lastPage)
++ return <SettingsField title="Fontes Git remotas" hint="A autorização permite apenas ler o commit e a árvore identificados no host e plano selecionados.">
++  <p className="text-sm">Autorizar leitura não inicia execução nem aprova integração.</p>
++  {canAuthorize&&<>
++   {eligible.length===0&&<p role="status">Nenhum plano elegível nesta conversa.</p>}
++   {hosts.length===0&&<p role="status">Nenhum host autorizado para exportar Git neste projeto.</p>}
++   <form className="flex min-w-0 flex-col gap-2" onSubmit={event=>{event.preventDefault();if(valid&&!busy)onAuthorize({schemaVersion:1,intentId,hostId,commit,tree})}}>
++    <label className="flex flex-col gap-1">Plano<select aria-label="Plano para leitura remota" className="h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm" value={intentId} onChange={event=>setIntentId(event.target.value)} required>
++     <option value="">Selecione um plano</option>{eligible.map(plan=><option key={plan.id} value={plan.id}>Plano {plan.plan_revision} · {plan.state} · {plan.id}</option>)}
++    </select></label>
++    <label className="flex flex-col gap-1">Host<select aria-label="Host para leitura remota" className="h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm" value={hostId} onChange={event=>setHostId(event.target.value)} required>
++     <option value="">Selecione um host</option>{hosts.map(host=><option key={host.id} value={host.id}>{host.label}</option>)}
++    </select></label>
++    <label className="flex flex-col gap-1">Commit<Input value={commit} onChange={event=>setCommit(event.target.value)} pattern="([a-f0-9]{40}|[a-f0-9]{64})" maxLength={64} required/></label>
++    <label className="flex flex-col gap-1">Árvore<Input value={tree} onChange={event=>setTree(event.target.value)} pattern="([a-f0-9]{40}|[a-f0-9]{64})" maxLength={64} required/></label>
++    <p className="text-xs text-muted-foreground">Informe hashes Git hexadecimais minúsculos com 40 ou 64 caracteres; ambos devem ter o mesmo tamanho.</p>
++    <Button type="submit" disabled={busy||!valid}>Autorizar leitura desta fonte</Button>
++   </form>
++  </>}
++  {authorizations.length>0&&<div className="flex min-w-0 flex-col gap-2">
++   <p className="text-sm">Autorizações de leitura registradas; o uso continua sujeito ao estado atual do plano e do host.</p>
++   <ul className="flex min-w-0 flex-col gap-2">{authorizations.slice(currentPage*pageSize,(currentPage+1)*pageSize).map(item=><li key={item.authorizationId} className="min-w-0 break-all rounded-md border p-3 text-sm">
++    <p>Plano: {item.intentId}</p><p>Host: {hosts.find(host=>host.id===item.hostId)?.label??item.hostId}</p><p>Commit: {item.commit}</p><p>Árvore: {item.tree}</p>
++   </li>)}</ul>
++   {lastPage>0&&<div className="flex flex-wrap items-center gap-2"><Button type="button" variant="outline" disabled={currentPage===0} onClick={()=>setPage(currentPage-1)}>Anteriores</Button><span>Página {currentPage+1} de {lastPage+1}</span><Button type="button" variant="outline" disabled={currentPage===lastPage} onClick={()=>setPage(currentPage+1)}>Próximos</Button></div>}
++  </div>}
++ </SettingsField>
++}
 diff --git a/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx b/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f15263fd8dac9c9d912b1f0b9e97755223f74454
+index 0000000000000000000000000000000000000000..b760d791da5307a182d5e72711c04618e966f268
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,41 @@
 +import {cleanup,render,screen,waitFor} from '@testing-library/react'
 +import {QueryClient,QueryClientProvider} from '@tanstack/react-query'
 +import {afterEach,expect,it,vi} from 'vitest'
@@ -2365,27 +2415,34 @@ index 0000000000000000000000000000000000000000..f15263fd8dac9c9d912b1f0b9e977552
 +  if(path.endsWith('/resources'))return pending
 +  if(path.endsWith('/contexts'))return new Response(JSON.stringify({contexts:[{id:context,paused:false,pause_revision:0,draining:false,drain_revision:0,policy_revision:1}]}))
 +  if(path.endsWith('/operator/identity'))return new Response(JSON.stringify({principalId:'fixture',projectId:installation,installationId:installation,operatorDeviceIds:[]}))
-+  if(path.endsWith('/usage'))return new Response(JSON.stringify({subscriptionBalance:'unknown',overlappingCounters:true,attempts:[]}))
++  if(path.endsWith('/usage'))return new Response(JSON.stringify({subscriptionBalance:'unknown',overlappingCounters:true,attempts:[
++   {grant_id:context,role:'programmer',state:'uncertain',resource_kind:'local_compositor',account_id:null,profile_id:null,model:null,effort:null,seq:null,counters:null,observed_at:null},
++   {grant_id:installation,role:'reviewer',state:'running',resource_kind:'model',account_id:context,profile_id:installation,model:'fixture-model',effort:'medium',seq:null,counters:null,observed_at:null}]}))
 +  return new Response('{}')
 + }))
 + const client=new QueryClient({defaultOptions:{queries:{retry:false}}})
 + render(<QueryClientProvider client={client}><AgentControlSection/></QueryClientProvider>)
 + await screen.findByText('Fixture diagnostics');expect(screen.queryByText('Fixture plans')).toBeNull()
 + resolveResources(new Response(JSON.stringify({installationId:installation,principalId:'fixture',verifierDigest:'a'.repeat(64),contextId:context,assignedPolicyRevision:null,
-+  approvals:[],canApproveIntegration:false,remoteOperations:[],operatorDeviceIds:[],capacity:null,canConfigureCapacity:false,providerBindings:[],providerAdapters:[],accounts:[],profiles:[],catalog:[],policies:[],qualityPolicies:[],templates:[],activeTemplateRevision:null,plans:[],waits:[],grants:[]})))
++  approvals:[],canApproveIntegration:false,canAuthorizeRemoteSource:false,remoteSourceHosts:[],remoteSourceAuthorizations:[],remoteOperations:[],operatorDeviceIds:[],capacity:null,canConfigureCapacity:false,providerBindings:[],providerAdapters:[],accounts:[],profiles:[],catalog:[],policies:[],qualityPolicies:[],templates:[],activeTemplateRevision:null,plans:[],waits:[],grants:[
++   {id:context,role:'programmer',state:'uncertain',resource_kind:'local_compositor',account_id:null,profile_id:null,emergency:false},
++   {id:installation,role:'reviewer',state:'running',resource_kind:'model',account_id:context,profile_id:installation,emergency:false}]})))
 + await screen.findByText('Fixture plans')
 + await waitFor(()=>expect(identityGate.resolve).toBeDefined())
 + identityGate.resolve!({deviceId:installation,publicKey:'fixture'})
 + await screen.findByText('Dispositivo de administração')
 + await waitFor(()=>expect(screen.getAllByText('Fixture diagnostics')).toHaveLength(1))
++ expect(screen.getAllByText(/Composição determinística local/)).toHaveLength(2)
++ expect(screen.getByText('Contadores de modelo não se aplicam.')).toBeTruthy()
++ expect(screen.getByText('fixture-model · medium')).toBeTruthy()
 + client.clear()
 +})
 diff --git a/packages/web/src/routes/settings/agent-control-section.tsx b/packages/web/src/routes/settings/agent-control-section.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..bbe8ffe5f42304945182ef919810b1dc0e16e593
+index 0000000000000000000000000000000000000000..9bbe1ee011cff8a1efbc8345aef4da141c4478d0
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-section.tsx
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,279 @@
 +import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 +import { useState } from 'react'
 +import { z } from 'zod'
@@ -2404,16 +2461,32 @@ index 0000000000000000000000000000000000000000..bbe8ffe5f42304945182ef919810b1dc
 +import {AgentControlImportPreview} from './agent-control-import-preview'
 +import {AgentControlProjectAdmin} from './agent-control-project-admin'
 +import {AgentControlDiagnostics} from './agent-control-diagnostics'
++import {AgentControlRemoteSources} from './agent-control-remote-sources'
 +import {agentControlFetch} from './agent-control-fetch'
 +import {useProjectScope} from '@/api/project-scope-context'
 +
 +const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),policy_revision:z.number().int().positive().nullable().optional(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
-+const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
-+ grant_id:z.string().uuid(),role:z.string(),account_id:z.string().uuid(),model:z.string(),effort:z.string(),state:z.string(),
-+ counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
-+ observed_at:z.string().nullable()}))})
++const usageBase={grant_id:z.string().uuid(),role:z.string(),state:z.string()}
++const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.discriminatedUnion('resource_kind',[
++ z.object({...usageBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),model:z.string(),effort:z.string(),
++  seq:z.union([z.number(),z.string()]).nullable(),counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),observed_at:z.string().nullable()}),
++ z.object({...usageBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),model:z.null(),effort:z.null(),seq:z.null(),counters:z.null(),observed_at:z.null()}),
++]))})
++const grantBase={id:z.string(),role:z.string(),state:z.string()}
++const grantSchema=z.discriminatedUnion('resource_kind',[
++ z.object({...grantBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),emergency:z.boolean()}),
++ z.object({...grantBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),emergency:z.literal(false)}),
++])
++const waitBase={attempt_id:z.string(),role:z.string(),reason:z.string().nullable()}
++const waitSchema=z.discriminatedUnion('resource_kind',[
++ z.object({...waitBase,resource_kind:z.literal('model'),desired_profile:z.string().uuid().nullable()}),
++ z.object({...waitBase,resource_kind:z.literal('local_compositor'),desired_profile:z.null()}),
++])
 +const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
 + approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
++ canAuthorizeRemoteSource:z.boolean(),remoteSourceHosts:z.array(z.object({id:z.string().uuid(),label:z.string()})).max(100),
++ remoteSourceAuthorizations:z.array(z.object({authorizationId:z.string().uuid(),intentId:z.string().uuid(),hostId:z.string().uuid(),
++  commit:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),tree:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),kind:z.literal('source_read_authorization')})).max(100),
 + remoteOperations:z.array(z.object({id:z.string().uuid(),intent_id:z.string().uuid().nullable(),task_id:z.string(),state:z.string(),host_label:z.string()})),
 + operatorDeviceIds:z.array(z.string().uuid()),
 + capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
@@ -2426,8 +2499,8 @@ index 0000000000000000000000000000000000000000..bbe8ffe5f42304945182ef919810b1dc
 + templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
 + activeTemplateRevision:z.number().nullable(),
 + plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
-+ waits:z.array(z.object({attempt_id:z.string(),role:z.string(),reason:z.string().nullable()})),
-+ grants:z.array(z.object({id:z.string(),role:z.string(),state:z.string(),profile_id:z.string(),emergency:z.boolean()}))})
++ waits:z.array(waitSchema),
++ grants:z.array(grantSchema)})
 +async function request(path:string,body?:unknown,extraHeaders:Record<string,string>={}):Promise<unknown>{
 + const response=await agentControlFetch(path,{method:body?'POST':'GET',headers:{...(body?{'content-type':'application/json'}:{}),...extraHeaders},
 +  body:body?JSON.stringify(body):undefined})
@@ -2529,6 +2602,8 @@ index 0000000000000000000000000000000000000000..bbe8ffe5f42304945182ef919810b1dc
 +  </SettingsField>}
 +  {data&&operator.data&&<AgentControlManagerPlans key={`plans-${contextId}`} contextId={contextId} policyRevision={selectedContext?.policy_revision??null}
 +   principalId={operator.data.principalId} projectId={operator.data.projectId}/>}
++  {data&&<AgentControlRemoteSources key={`remote-sources-${contextId}`} canAuthorize={data.canAuthorizeRemoteSource} hosts={data.remoteSourceHosts}
++   plans={data.plans} authorizations={data.remoteSourceAuthorizations} busy={busy} onAuthorize={payload=>mutate.mutate({action:'remote.source.authorize',payload})}/>}
 +  {data&&<AgentControlProviderCollectors key={`providers-${contextId}`} accounts={data.accounts} bindings={data.providerBindings} adapters={data.providerAdapters}
 +   canConfigure={data.canConfigureCapacity} busy={busy} onBind={payload=>mutate.mutate({action:'provider.bind',payload})}/>}
 +  {data&&<AgentControlObservability enabled={data.canConfigureCapacity}/>}
@@ -2628,19 +2703,20 @@ index 0000000000000000000000000000000000000000..bbe8ffe5f42304945182ef919810b1dc
 +   </SettingsField>
 +   <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
 +    <ul className="flex flex-col gap-2">{data.waits.map(w=><li key={w.attempt_id} className="break-words rounded-md border p-3">
-+     {w.role} · {w.reason==='CAPACITY_BUSY'?'Aguardando vaga':w.reason==='CAPACITY_QUEUED'?'Aguardando sua vez':'Nenhum perfil elegível disponível'}
++     {w.resource_kind==='local_compositor'?'Composição determinística local':w.role} · {w.reason==='CAPACITY_BUSY'?'Aguardando vaga':w.reason==='CAPACITY_QUEUED'?'Aguardando sua vez':w.resource_kind==='local_compositor'?'Aguardando capacidade local':'Nenhum perfil elegível disponível'}
 +    </li>)}</ul>
 +    <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">
-+     {g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
++     {g.resource_kind==='local_compositor'?'Composição determinística local':g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
 +    </li>)}</ul>
 +   </SettingsField>
-+   <SettingsField title="Uso por tentativa" hint="Contadores informados pelo executor, não saldo da assinatura. Cache e raciocínio podem estar incluídos em entrada e saída.">
-+    <p>Saldo da assinatura: desconhecido</p>
++   <SettingsField title="Uso por tentativa" hint="Contadores de modelos são informados pelo executor, não representam saldo da assinatura. Cache e raciocínio podem estar incluídos em entrada e saída.">
++    {usage.data?.attempts.some(item=>item.resource_kind==='model')&&<p>Saldo da assinatura: desconhecido</p>}
 +    {usage.data?.attempts.length===0&&<p>Nenhuma tentativa registrada nesta conversa.</p>}
 +    <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
-+     <strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
-+     {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
-+      Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}
++     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/>Contadores de modelo não se aplicam.</>:
++      <><strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
++       {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
++        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}</>}
 +    </li>)}</ul>
 +   </SettingsField>
 +  </>}

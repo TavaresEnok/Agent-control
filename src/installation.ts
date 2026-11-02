@@ -20,18 +20,21 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
+ contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
  happier:z.object({upstreamOrigin:origin(),webOrigin:origin(),publicServerOrigin:origin()}).strict(),
  sessionMaxAgeSeconds:z.number().int().min(60).max(2592000).default(86400),
-}).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root');
+}).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root')
+ .refine(value=>!value.contextVault||[value.dataDirectory,value.contextVault.directory,value.contextVault.masterFile].every(path=>resolve(path)===path)&&
+  value.contextVault.directory.startsWith(value.dataDirectory+sep)&&value.contextVault.masterFile.startsWith(value.dataDirectory+sep)&&value.contextVault.directory!==value.contextVault.masterFile,'Vault paths must be canonical and inside private data directory');
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536){
- const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+ const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
  try{
   const info=await file.stat();
   if(!info.isFile()||info.nlink!==1||(info.mode&0o077)!==0||info.uid!==process.getuid?.()||info.size>maxBytes)throw new Refusal('UNSAFE_PRIVATE_FILE',403);
-  const bytes=await file.readFile();if(bytes.length>maxBytes)throw new Refusal('PRIVATE_FILE_TOO_LARGE');return bytes;
+  const bytes=await file.readFile();if(bytes.length>maxBytes){bytes.fill(0);throw new Refusal('PRIVATE_FILE_TOO_LARGE');}return bytes;
  }finally{await file.close();}
 }
 export async function loadInstallation(path:string){

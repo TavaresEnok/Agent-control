@@ -4,11 +4,24 @@ import {execFileSync} from 'node:child_process';
 import {chmod,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {randomBytes,randomUUID} from 'node:crypto';
+import {generateKeyPairSync,randomBytes,randomUUID,sign} from 'node:crypto';
 import {RemoteGitMaterializer,sourceSnapshot,verifyGitExport} from '../src/remote-git.ts';
 import {Ledger} from '../src/ledger.ts';
 import {RemoteOperations,OpenSshTransport,type RemoteTransport} from '../src/remote.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
+import {Control} from '../src/control.ts';
+import {Operators,operatorMessage} from '../src/operator.ts';
+
+async function authorizeFixture(ledger:Ledger,principal:string,contextId:string,input:{intentId:string;hostId:string;commit:string;tree:string}){
+ const deviceId=randomUUID(),keys=generateKeyPairSync('ed25519');
+ await ledger.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',[principal]);
+ await new Operators(ledger).enroll(principal,principal,deviceId,keys.publicKey.export({format:'der',type:'spki'}).toString('base64'));
+ const installationId=(await ledger.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0].id;
+ const command={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,action:'remote.source.authorize' as const,
+  payload:{schemaVersion:1 as const,intentId:input.intentId,hostId:input.hostId,commit:input.commit,tree:input.tree}};
+ const proof={deviceId,expiresAt:Date.now()+120000};
+ await new Control(ledger).execute(principal,command,{...proof,signature:sign(null,Buffer.from(operatorMessage(principal,command,proof,installationId)),keys.privateKey).toString('hex')});
+}
 
 test('source snapshot rejects tampered persisted identity and never claims review',()=>{
  const expected={operationId:randomUUID(),contextId:randomUUID(),intentId:randomUUID(),hostId:randomUUID(),projectId:randomUUID(),
@@ -88,10 +101,11 @@ test('two pinned SSH fixture hosts export only their configured commit and tree'
    await remote.registerHost(principal,metadata.projectId,{id:hostId,label:'synthetic ssh '+name,hostname:'ssh-host-'+name,port:2222,username:'node',
     publicKey:(await readFile(publicPath,'utf8')).trim(),fingerprint,credentialRef,remoteRoot:'/projects/repo',allowedTasks:['git-export'],maxConcurrent:2});
    const request={operationId:randomUUID(),intentId:intent.id,contextId,hostId,...identities[i]};
+   await authorizeFixture(ledger,principal,contextId,request);
    const output=await remote.exportGit(principal,request,authority),replayed=await remote.exportGit(principal,request,authority);
    assert.equal(output.sha256,replayed.sha256);
    await materializer.materialize(request.operationId,request.commit,request.tree,output.bundle);
-   await assert.rejects(remote.exportGit(principal,{...request,tree:'0'.repeat(request.tree.length)},authority),/REMOTE_OPERATION_ID_CONFLICT/);
+   await assert.rejects(remote.exportGit(principal,{...request,tree:'0'.repeat(request.tree.length)},authority),/REMOTE_SOURCE_AUTHORIZATION_REQUIRED/);
   }
  }finally{await rm(temporary,{recursive:true,force:true});await ledger.close();await database.close();}
 });
@@ -114,9 +128,10 @@ test('remote export is bound to an authorized active intent and immutable operat
   await remote.registerHost(principal,project,{id:hostId,label:'fixture',hostname:'fixture.invalid',port:2222,username:'fixture',
    publicKey:'ssh-ed25519 '+'A'.repeat(64),fingerprint:'SHA256:'+'A'.repeat(43),credentialRef:randomUUID(),remoteRoot:'/fixture',allowedTasks:['git-export'],maxConcurrent:2});
   const input={operationId:randomUUID(),intentId:intent.id,contextId,hostId,commit:'1'.repeat(40),tree:'2'.repeat(40)};
+  await authorizeFixture(ledger,principal,contextId,input);
   assert.equal((await remote.exportGit(principal,input,authority)).sha256,hash);
   assert.equal((await remote.exportGit(principal,input,authority)).sha256,hash);assert.equal(calls,2);
-  await assert.rejects(remote.exportGit(principal,{...input,tree:'3'.repeat(40)},authority),/REMOTE_OPERATION_ID_CONFLICT/);
+  await assert.rejects(remote.exportGit(principal,{...input,tree:'3'.repeat(40)},authority),/REMOTE_SOURCE_AUTHORIZATION_REQUIRED/);
   await assert.rejects(remote.exportGit('wrong-principal',input,authority),/FORBIDDEN/);
   const nonOwner='remote-git-reader-'+randomUUID();await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'operator')",[project,nonOwner]);
   await assert.rejects(remote.exportGit(nonOwner,input,authority),/PROJECT_OWNER_REQUIRED/);

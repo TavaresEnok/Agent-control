@@ -1,0 +1,20 @@
+TAP version 13
+# Subtest: local compositor capacity remains fenced and bounded without model quota
+ok 1 - local compositor capacity remains fenced and bounded without model quota
+  ---
+  duration_ms: 1124.798061
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1738.723488
+
+Command: docker compose -f deploy/compose.lab.yml run --rm --no-deps runtime node --import tsx --test tests/local-compositor-capacity.test.ts
+Exit code: 0
+Scope: one isolated disposable PostgreSQL database; synthetic model quota exhausted, local compositor grant/attempt replay, uncertain grants counted against global/context limits, model reuse and database binding forgery refused. No Docker workers, inference or physical process validation.

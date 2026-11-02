@@ -30,6 +30,10 @@ export class ContextDiagnostics{
    const operations=await c.query(`SELECT o.id,i.parent_intent_id FROM ac_operations o JOIN ac_intents i ON i.id=o.intent_id
     WHERE i.context_id=$1 AND o.state='uncertain' ORDER BY o.id LIMIT 101`,[contextId]);
    for(const row of operations.rows.slice(0,100))findings.push({code:row.parent_intent_id?'managed_effect_uncertain':'effect_uncertain',meaning:'O resultado físico da operação não está confirmado.',owner:'Controlador de recuperação',nextCondition:'Obter e conferir evidência física da operação original.',evidence:[{kind:'operation',id:row.id}]});
+   const localGrants=await c.query(`SELECT o.id operation_id FROM ac_capacity_grants g
+    LEFT JOIN ac_operations o ON o.id=(SELECT op.id FROM ac_operations op WHERE op.intent_id=g.intent_id AND op.grant_id=g.id LIMIT 1)
+    WHERE g.context_id=$1 AND g.resource_kind='local_compositor' AND g.state='uncertain' ORDER BY g.id LIMIT 101`,[contextId]);
+   for(const row of localGrants.rows.slice(0,100))findings.push({code:'managed_effect_uncertain',meaning:'Uma concessão do compositor local mantém resultado físico incerto.',owner:'Controlador de recuperação',nextCondition:'Conciliar a concessão e a evidência física antes de liberar capacidade.',evidence:row.operation_id?[{kind:'operation',id:row.operation_id}]:[{kind:'context',id:contextId}]});
    const stages=await c.query(`SELECT s.id FROM ac_stage_operations s JOIN ac_intents i ON i.id=s.intent_id
     WHERE i.context_id=$1 AND s.state='uncertain' ORDER BY s.id LIMIT 101`,[contextId]);
    for(const row of stages.rows.slice(0,100))findings.push({code:'stage_uncertain',meaning:'O resultado físico da etapa não está confirmado.',owner:'Controlador de recuperação',nextCondition:'Conciliar o recibo e a concessão da etapa original.',evidence:[{kind:'stage',id:row.id}]});
@@ -54,7 +58,7 @@ export class ContextDiagnostics{
     if(!policy.success||digest(policy.data)!==row.digest){findings.push({code:'policy_unknown',meaning:'Não foi possível verificar a política congelada.',owner:'Administrador do projeto',nextCondition:'Conciliar a política e sua integridade.',evidence:[{kind:'artifact',id:row.id}]});continue;}
     if(policy.data.requireHumanIntegration)findings.push({code:'approval_missing',meaning:'A aprovação exigida para este artefato e destino ainda não consta.',owner:'Aprovador autorizado',nextCondition:'Decisão autorizada sobre o artefato e destino congelados.',evidence:[{kind:'artifact',id:row.id},{kind:'stage',id:row.stage_id}]});
    }
-   const truncated=[cancellations,waits,operations,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
+   const truncated=[cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
    await c.query('COMMIT');
    return {contextId,findings,truncated,assessment:findings.length?'observed':'unknown',
     ...(findings.length?{}:{explanation:'Nenhuma causa foi comprovada nos registros consultados; o estado de parada é desconhecido.'})};
