@@ -20,6 +20,8 @@ test('composition preserves source changes, is deterministic, and rejects scope 
   }
   const service=new GitArtifacts(repo),a=await service.compose(base,sources,join(root,'a')),b=await service.compose(base,sources,join(root,'b'));
   assert.equal(a.commit,b.commit);assert.equal(a.tree,b.tree);
+  assert.equal((await service.verifyComposition(a.snapshot,a.commit,base,sources.map(s=>s.commit))).tree,a.tree);
+  await assert.rejects(service.verifyComposition(a.snapshot,a.commit,base,[sources[1]!.commit,sources[0]!.commit]));
   let launched=false;
   const supervised=await service.composeSupervised(base,sources.map(source=>({...source,sourceRepo:a.snapshot})),join(root,'supervised'),async child=>{
    await new Promise<void>((ok,fail)=>{child.once('spawn',ok);child.once('error',fail);});
@@ -32,6 +34,7 @@ test('composition preserves source changes, is deterministic, and rejects scope 
   assert.equal((await service.identity(a.commit,base)).tree,a.tree);
   const other=join(root,'other');execFileSync('git',['clone','--no-local',repo,other],{stdio:'ignore'});
   assert.equal((await new GitArtifacts(other).import(a.snapshot,a.commit,base)).tree,a.tree);
+  assert.equal((await service.identityAt(a.snapshot,a.commit,base)).tree,a.tree);
   git('checkout','--detach',base);await symlink('root',join(repo,'link'));git('add','link');git('commit','-m','link');
   await assert.rejects(service.compose(base,[{base,commit:git('rev-parse','HEAD'),tree:git('rev-parse','HEAD^{tree}'),writePaths:['link']}],join(root,'symlink')));
   git('checkout','--detach',base);const magic=':(glob)*.txt';await writeFile(join(repo,magic),'literal');

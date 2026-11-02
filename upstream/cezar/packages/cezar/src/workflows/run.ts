@@ -2626,6 +2626,25 @@ export class RunManager {
     return true;
   }
 
+  /** Re-enter a reconciled system node without inventing child outputs. */
+  async resumeConfirmedGraphNode(runId: string): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    if (!this.managed || !run || this.active.has(runId) || this.starting.has(runId)
+        || this.queue.includes(runId) || run.status !== 'waiting'
+        || run.error !== 'Managed execution awaiting authoritative reconciliation'
+        || run.askParked || run.attentionRequest) return false;
+    const cursor = run.graphState?.cursor;
+    const graph = run.workflowDef?.graph;
+    if (!cursor || !graph?.nodes.some(node => node.id === cursor && (node.type === 'fork' || node.type === 'dispatch'))) return false;
+    if (!await this.managed.authorizeRecovery?.(run)) return false;
+    this.store.updateRun(runId, {status:'queued',error:undefined,currentStepId:undefined,
+      startedAt:undefined,finishedAt:undefined,activity:undefined});
+    this.store.flush({throwOnError:true});
+    const requeued=this.store.getRun(runId);
+    if(requeued)await this.reviveQueuedRun(requeued, `managed graph reconciled — resuming at "${cursor}"`);
+    void this.pump();return true;
+  }
+
   /** Managed admission waits reuse the native waiting-slot exemption. The
    * graph/session stays owned here; external capacity remains authoritative.
    * Keys keep parallel council members from clearing each other's waits. */

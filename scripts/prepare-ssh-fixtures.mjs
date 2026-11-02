@@ -12,7 +12,10 @@ for(const name of ['a','b']){
  const dir=root+'/host-'+name;await mkdir(dir,{recursive:true,mode:0o755});await chown(dir,1000,1000);
  try{await readFile(dir+'/host_key');}catch{execFileSync('ssh-keygen',['-q','-t','ed25519','-N','','-f',dir+'/host_key']);}
  await writeFile(dir+'/authorized_keys',publicKey+'\n',{mode:0o600});await chown(dir+'/authorized_keys',1000,1000);
- await writeFile(dir+'/worker.json',JSON.stringify({stateDirectory:'/projects/journal',projects:{[projectId]:'/projects/repo'},
+ let oldConfig;
+ try{oldConfig=JSON.parse(await readFile(dir+'/worker.json','utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(oldConfig?.gitExportProjects&&JSON.stringify(oldConfig.gitExportProjects)!==JSON.stringify([projectId]))throw Error('SSH_GIT_FIXTURE_CONFIG_CONFLICT');
+ await writeFile(dir+'/worker.json',JSON.stringify({stateDirectory:'/projects/journal',projects:{[projectId]:'/projects/repo'},gitExportProjects:[projectId],
   tasks:{count:['/usr/bin/python3','-c',"import pathlib;print(len(pathlib.Path('launches').read_text()))"],fixture:['/usr/bin/python3','-c',"import pathlib,time;p=pathlib.Path('launches');p.open('a').write('x');time.sleep(.4)"],
    slow:['/usr/bin/python3','-c',"import pathlib,time;p=pathlib.Path('slow-launches');p.open('a').write('x');time.sleep(2)"]},maxSeconds:5,maxLogBytes:4096}));
  await writeFile(dir+'/sshd_config',`Port 2222\nListenAddress 0.0.0.0\nHostKey /fixtures/host-${name}/host_key\nPidFile /run/sshd.pid\nAuthorizedKeysFile /fixtures/host-${name}/authorized_keys\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers node\nAllowTcpForwarding no\nAllowAgentForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitTTY no\nForceCommand /usr/bin/python3 /usr/local/lib/agent-control/worker.py --config /fixtures/host-${name}/worker.json\nLogLevel ERROR\n`);

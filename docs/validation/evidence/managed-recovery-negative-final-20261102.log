@@ -1,0 +1,20 @@
+Command: docker compose -f deploy/compose.lab.yml exec -T runtime node --import tsx --test tests/managed-recovery-negative.test.ts
+start 2026-11-02T19:25:55Z
+TAP version 13
+# Subtest: a partial persisted fork with an orphan cannot resume, including while paused
+ok 1 - a partial persisted fork with an orphan cannot resume, including while paused
+  ---
+  duration_ms: 1325.441517
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2950.84399
+end 2026-11-02T19:25:58Z
+exit 0

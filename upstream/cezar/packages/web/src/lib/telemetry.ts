@@ -38,7 +38,7 @@ type Context = Record<string, ContextValue>
 function send(path: string, body: unknown): void {
   // Unit tests stub `fetch` and count its calls; telemetry must not be one of them (the server
   // drops test-run telemetry too).
-  if (import.meta.env.MODE === 'test') return
+  if (import.meta.env.MODE === 'test' || import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return
   try {
     void fetch(path, {
       method: 'POST',

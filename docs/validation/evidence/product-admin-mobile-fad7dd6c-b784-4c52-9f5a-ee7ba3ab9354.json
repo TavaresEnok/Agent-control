@@ -1,0 +1,23 @@
+{
+  "result": "passed",
+  "registeredProjects": 3,
+  "signedRegistration": true,
+  "operatorBootstrap": true,
+  "projectHeaders": true,
+  "sanitizedImportPreview": true,
+  "importedBatches": 0,
+  "executionIntents": 0,
+  "operations": 0,
+  "outbox": 0,
+  "grants": 0,
+  "viewports": [
+    360,
+    390
+  ],
+  "limits": [
+    "Synthetic identities, sessions and repositories; no model inference or real accounts.",
+    "Happier pairing approved by synthetic client, not native approval UI.",
+    "The synthetic account remains in the disposable Happier lab service.",
+    "No physical phone, import execution, backup restoration or production deploy."
+  ]
+}

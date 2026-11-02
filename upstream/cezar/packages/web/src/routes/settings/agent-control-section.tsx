@@ -13,6 +13,9 @@ import {AgentControlIntegrationApproval,approvalSchema} from './agent-control-in
 import {AgentControlManagerPlans} from './agent-control-manager-plans'
 import {AgentControlProviderCollectors} from './agent-control-provider-collectors'
 import {AgentControlObservability} from './agent-control-observability'
+import {AgentControlImportPreview} from './agent-control-import-preview'
+import {AgentControlProjectAdmin} from './agent-control-project-admin'
+import {AgentControlDiagnostics} from './agent-control-diagnostics'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -95,7 +98,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const selectedContext=contexts.data?.contexts.find(c=>c.id===contextId)
  const busy=mutate.isPending||bootstrap.isPending
  const selectStyle='h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm'
- return <div className="flex min-w-0 flex-col gap-6">
+ return <div className="flex min-w-0 flex-col gap-6 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
   <SettingsField title="Agent Control" hint="Contas de laboratório, políticas publicadas e capacidade confirmada.">
    <form className="flex flex-col gap-2" onSubmit={event=>{event.preventDefault();linkContext.mutate()}}>
     <label className="flex flex-col gap-1">Vincular conversa existente do Happier
@@ -122,9 +125,12 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </div>}
   </SettingsField>
   <Button variant="outline" disabled={busy} onClick={()=>{void request('/api/v1/ac/auth/logout',{}).then(()=>window.location.reload())}}>Sair deste navegador</Button>
+  <AgentControlImportPreview/>
+  <AgentControlProjectAdmin/>
   {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
+  {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
   {data&&<SettingsField title="Planos desta conversa" hint="Cancelar bloqueia novas etapas. A confirmação de parada depende da reconciliação física e preserva os artefatos existentes.">
    {data.plans.length===0&&<p>Nenhum plano aceito nesta conversa.</p>}
    {data.plans.map(plan=><div key={plan.id} className="flex flex-wrap items-center gap-2 rounded-md border p-2">
@@ -133,7 +139,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      onClick={()=>mutate.mutate({action:'plan.cancel',payload:{intentId:plan.id,planRevision:plan.plan_revision}})}>Cancelar este plano e solicitar parada</Button>}
    </div>)}
   </SettingsField>}
-  {data&&operator.data&&<AgentControlManagerPlans key={contextId} contextId={contextId} policyRevision={selectedContext?.policy_revision??null}
+  {data&&operator.data&&<AgentControlManagerPlans key={`plans-${contextId}`} contextId={contextId} policyRevision={selectedContext?.policy_revision??null}
    principalId={operator.data.principalId} projectId={operator.data.projectId}/>}
   {data&&<AgentControlProviderCollectors key={`providers-${contextId}`} accounts={data.accounts} bindings={data.providerBindings} adapters={data.providerAdapters}
    canConfigure={data.canConfigureCapacity} busy={busy} onBind={payload=>mutate.mutate({action:'provider.bind',payload})}/>}

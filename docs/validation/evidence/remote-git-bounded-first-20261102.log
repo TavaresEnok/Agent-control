@@ -1,0 +1,32 @@
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+✖ bounded configured repository export verifies commit, tree, hash and idempotent materialization (513.943723ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1233.409335
+
+✖ failing tests:
+
+test at tests/remote-git.test.ts:1:626
+✖ bounded configured repository export verifies commit, tree, hash and idempotent materialization (513.943723ms)
+  Error: REMOTE_GIT_ROOT_UNSAFE
+      at RemoteGitMaterializer.materialize (/home/app/projects/agent-control-implementation/src/remote-git.ts:37:105)
+      at async TestContext.<anonymous> (/home/app/projects/agent-control-implementation/tests/remote-git.test.ts:35:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    code: 'REMOTE_GIT_ROOT_UNSAFE',
+    status: 409
+  }

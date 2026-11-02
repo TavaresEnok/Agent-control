@@ -6,9 +6,11 @@ Este é um repositório novo de desenvolvimento. Não alterar instalações oper
 
 ## Equipe de desenvolvimento autorizada em 02/11/2026
 
-O proprietário autorizou explicitamente esta sessão com um coordenador geral, dois gerentes técnicos Sol 6.1 Médio e oito trabalhadores Terra 6.1 Médio, quatro por gerente. Os testes de criação dos dois modelos passaram. Não criar agentes adicionais além desse orçamento, trocar os modelos ou elevar o esforço sem instrução do proprietário. Essa estrutura é da equipe que desenvolve o Agent Control; não altera automaticamente as políticas de contas ou capacidade do produto.
+Configuração vigente, após a última instrução do proprietário: um único gerente/revisor principal Sol 6.1 Médio e seis trabalhadores Terra 6.1 Médio. Os dois gerentes Sol adicionais foram retirados da execução, assim como dois trabalhadores da configuração anterior. Não reativá-los, criar gerentes/revisores adicionais, exceder seis trabalhadores, trocar os modelos ou elevar o esforço sem nova instrução do proprietário. Essa estrutura é da equipe que desenvolve o Agent Control; não altera automaticamente as políticas de contas ou capacidade do produto.
 
-Cada trabalhador deve ter ownership de arquivos e contratos definido pelo gerente. Todos compartilham o repositório: preservar alterações alheias e coordenar antes de editar arquivos compartilhados. O coordenador geral integra as entregas e mantém STATUS, FINDINGS, rastreabilidade e proveniência. Não abrir outras contas de provedores ou usar as assinaturas do produto para acelerar a equipe.
+Os seis trabalhadores recebem tarefas diretamente do agente principal, que concentra gerência, revisão e aprovação da integração. Não criar subagentes ou delegar a outros modelos. Cada trabalhador deve ter ownership de arquivos e contratos definido pelo principal. Todos compartilham o repositório: preservar alterações alheias e coordenar antes de editar arquivos compartilhados. O principal integra as entregas e mantém STATUS, FINDINGS, rastreabilidade e proveniência. Não abrir outras contas de provedores ou usar as assinaturas do produto para acelerar a equipe.
+
+Famílias Hono montadas sob o prefixo compartilhado `/api/v1/ac` devem limitar seus middlewares aos próprios endpoints. Um `app.use('*')` nessa família pode interceptar pareamento e sessão públicos e quebrar o login; a regressão histórica está preservada nas evidências de planejamento. Todos os ingressos continuam sob a autenticação, origem e autorização centrais aplicáveis.
 
 Use somente o compose `deploy/compose.lab.yml` para os testes da bancada, mantendo recursos e portas isolados. Nunca montar socket Docker ou homes operacionais dentro de workers. `.state/` contém fixtures privadas e é excluído de Git/entregas.
 

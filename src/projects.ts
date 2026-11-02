@@ -4,11 +4,12 @@ import {promisify} from 'node:util';
 import {Ledger} from './ledger.ts';
 import {Refusal} from './contracts.ts';
 import type {CezarRuntime} from './cezar.ts';
+import {projectRepositoryIdentity,validateTrustedProjectPath} from './project-repository.ts';
 
 export type ProjectDefinition={id:string;label:string;repo:string;owner:string};
 export type ProjectSummary={id:string;label:string;role:'owner'|'operator'|'viewer'};
 export class Projects {
- constructor(readonly ledger:Ledger){}
+ constructor(readonly ledger:Ledger,readonly projectRoots:readonly {id:string;path:string}[]=[]){}
  async register(definitions:readonly ProjectDefinition[],controlAdmin?:string){
   // Filesystem validation precedes the transaction; no runtime lock is acquired here.
   for(const project of definitions){
@@ -52,7 +53,14 @@ export class Projects {
   }));
  }
  async authorized(principal:string,id:string):Promise<{id:string;repo:string}|null>{
-  return (await this.ledger.pool.query(`SELECT p.id,r.repo FROM ac_projects p JOIN ac_project_repositories r ON r.project_id=p.id JOIN ac_memberships m ON m.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2`,[id,principal])).rows[0]??null;
+  const row=(await this.ledger.pool.query(`SELECT p.id,r.repo,i.repo_dev,i.repo_ino,i.git_dev,i.git_ino,i.root_id,i.root_path,i.relative_path FROM ac_projects p JOIN ac_project_repositories r ON r.project_id=p.id JOIN ac_memberships m ON m.project_id=p.id LEFT JOIN ac_project_repository_identity i ON i.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2`,[id,principal])).rows[0];
+  if(!row)return null;
+  if(row.repo_dev!==null){
+   try{if(!this.projectRoots.some(root=>root.id===row.root_id&&root.path===row.root_path)||await validateTrustedProjectPath(row.root_path,row.relative_path)!==row.repo)throw Error('root changed');
+    const identity=await projectRepositoryIdentity(row.repo);if(identity.repoDev!==row.repo_dev||identity.repoIno!==row.repo_ino||identity.gitDev!==row.git_dev||identity.gitIno!==row.git_ino)throw Error('changed');}
+   catch{throw new ProjectUnavailable('PROJECT_REPOSITORY_IDENTITY_CHANGED');}
+  }
+  return {id:row.id,repo:row.repo};
  }
 }
 export class ProjectUnavailable extends Error {}

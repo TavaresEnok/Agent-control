@@ -14,6 +14,20 @@ export class GitArtifacts{
   const repo=await realpath(this.repository),expected=resolve(repo,'.ai/cezar/managed',parentId,runId);
   if(resolve(path)!==expected||await realpath(exists?expected:dirname(expected))!==(exists?expected:dirname(expected)))throw new Refusal('MANAGED_WORKTREE_FORBIDDEN');
  }
+ async managedPath(parentId:string,runId:string){
+  z.uuid().parse(parentId);z.uuid().parse(runId);const repo=await realpath(this.repository),path=resolve(repo,'.ai/cezar/managed',parentId,runId);
+  await this.assertManagedPath(parentId,runId,path,true);return path;
+ }
+ async verifyComposition(path:string,commit:string,base:string,sources:readonly string[]){
+  GitId.parse(commit);GitId.parse(base);z.array(GitId).min(1).max(16).parse(sources);
+  const value=Identity.parse(await this.invoke({action:'verify-composition',sourceRepo:path,candidate:commit,base,sources}));
+  if(value.commit!==commit||value.base!==base)throw new Refusal('MANAGED_COMPOSITION_MISMATCH');return value;
+ }
+ async identityAt(path:string,commit:string,base:string){
+  GitId.parse(commit);GitId.parse(base);
+  const value=Identity.parse(await this.invoke({action:'identity-at',sourceRepo:path,candidate:commit,base}));
+  if(value.commit!==commit||value.base!==base)throw new Refusal('MANAGED_SOURCE_MISMATCH');return value;
+ }
  private async invoke(value:Record<string,unknown>){
   const repo=await realpath(this.repository);
   const payload=JSON.stringify({...value,repo});

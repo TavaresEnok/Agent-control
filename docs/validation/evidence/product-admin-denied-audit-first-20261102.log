@@ -1,0 +1,4 @@
+PRODUCT_ADMIN_MOBILE_DIAGNOSTIC_HEADINGS: 1
+PRODUCT_ADMIN_MOBILE_DENIED_REQUESTS: [{"method":"GET","path":"/api/v1/providers/status","status":403},{"method":"POST","path":"/api/v1/telemetry/page","status":403},{"method":"GET","path":"/api/v1/workspace/skills-update","status":403},{"method":"PUT","path":"/api/v1/workspace/ui-state","status":403},{"method":"GET","path":"/api/v1/star-count","status":403},{"method":"POST","path":"/api/v1/telemetry/error","status":403}]
+PRODUCT_ADMIN_MOBILE_AUDIT_COMPLETE
+exit_code=0

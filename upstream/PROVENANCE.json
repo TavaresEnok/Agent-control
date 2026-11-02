@@ -4,14 +4,14 @@
     "branch": "main",
     "status": "",
     "remotes": "origin\thttps://github.com/open-mercato/cezar.git (fetch)\norigin\thttps://github.com/open-mercato/cezar.git (push)\n",
-    "patch_sha256": "5e5707e40bb1f09ef5c69afaa2c48d6a5ce98df955d5e6259b7e127a533010e9"
+    "patch_sha256": "79fd0e4ecc7b10aee51bb77cc505d7e5c3f7087a34d8255782bdffd44cb3689d"
   },
   "happier": {
     "commit": "0895032a518271f764155c212d0146609d238ae7",
     "branch": "dev",
     "status": "",
     "remotes": "origin\thttps://github.com/happier-dev/happier.git (fetch)\norigin\thttps://github.com/happier-dev/happier.git (push)\n",
-    "patch_sha256": "66eae91bb322a9c43b44bec555474729263757cca9b62f006d724883723ff6ac"
+    "patch_sha256": "b1da6666cdeb22b2def08486e45c9945adfbb98500092dacb4c7b8cf0a9ffa58"
   },
   "consolidated_zip": {
     "sha256": "ceb3f85cab8fa0d1c0bfa9600aa3198aebdafab94fd79b2558d2b2f1660bc209",

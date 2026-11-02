@@ -3,18 +3,30 @@
 import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
-import {loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory} from './installation.ts';
+import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
 import {createProjectGateway} from './projects-api.ts';
 import {BrowserSessions} from './sessions.ts';
 import {HappierAuthRelay} from './auth-relay.ts';
+import {ProjectAdmin} from './project-admin.ts';
+import {createProjectAdminApi} from './project-admin-api.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
- if(!path||extra.length||!['initialize','operator-bootstrap','serve'].includes(command))throw Error('USAGE: server-main initialize|operator-bootstrap|serve /absolute/private-config.json');
- const config=await loadInstallation(path),ledger=new Ledger(config.databaseUrl);
+ if(!path||extra.length||!['initialize','inspect','operator-bootstrap','serve'].includes(command))throw Error('USAGE: server-main initialize|inspect|operator-bootstrap|serve /absolute/private-config.json');
+ // Inspection must be able to report a missing root rather than abort before
+ // its read-only checks. The private file and config schema remain mandatory.
+ const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
+ const ledger=new Ledger(config.databaseUrl);
  let runtimes:ProjectRuntimes|undefined,serving=false;
  try{
+  if(command==='inspect'){
+   const {inspectInstallationReadiness}=await import('./installation-readiness.ts');
+   const report=await inspectInstallationReadiness(ledger,config);
+   console.log(JSON.stringify(report));
+   if(report.checks.some(check=>check.status!=='ok'))process.exitCode=2;
+   return;
+  }
   if(command==='initialize'){console.log(JSON.stringify(await initializeInstallation(config,ledger)));return;}
   if(command==='operator-bootstrap'){console.log(JSON.stringify(await prepareInstallationOperator(config,ledger)));return;}
   // Serving does not silently migrate schemas or create projects/credentials.
@@ -43,10 +55,11 @@ async function main(){
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
   const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,()=>undefined,config.happier.webOrigin,access,sessions,relay);
-  const projects=new Projects(ledger),activeRuntimes=runtimes;
+  const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
+   projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory)),
    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
     const bearer=request.headers.get('authorization');
     const principal=bearer?await verify(request):await sessions.authenticate(request)??await verify(request);

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, realpath, lstat, rm, writeFile } from 'node:fs/promises
 import { resolve, join } from 'node:path';
 import { Authority, Id, Refusal, digest } from './contracts.ts';
 import { Ledger } from './ledger.ts';
+import {GitExportRequest,sourceSnapshot,verifyGitExport} from './remote-git.ts';
 export const RemoteHostInput=z.object({id:Id,label:z.string().min(1).max(100),hostname:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/),
  port:z.number().int().min(1).max(65535),username:z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
  publicKey:z.string().min(30).max(16384).refine(s=>!/[\r\n]/.test(s)),fingerprint:z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
@@ -53,6 +54,33 @@ export class OpenSshTransport implements RemoteTransport{
 }
 export class RemoteOperations{
  constructor(readonly ledger:Ledger,private readonly transport:RemoteTransport){}
+ /** Read-only export is still fenced, intent-bound, host-whitelisted and audited. */
+ async exportGit(principal:string,raw:z.input<typeof GitExportRequest>,authority:Authority){
+  const input=GitExportRequest.parse(raw);
+  if(input.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
+  return this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,input.contextId);await this.ledger.fence(c,authority);
+   if(!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[context.project_id,principal])).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+   await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
+   const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR UPDATE',[input.hostId,context.project_id])).rows[0];
+   if(!host||!host.allowed_tasks.includes('git-export'))throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
+   const requestDigest=digest({action:'git-export',...input});
+   const previous=(await c.query('SELECT * FROM ac_remote_operations WHERE id=$1 FOR UPDATE',[input.operationId])).rows[0];
+   if(previous&&previous.request_digest!==requestDigest)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');
+   await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[input.contextId]);
+   const result=verifyGitExport(await this.transport.exchange(host,{schemaVersion:1,action:'git-export',operationId:input.operationId,
+    projectId:context.project_id,commit:input.commit,tree:input.tree}),{operationId:input.operationId,projectId:context.project_id,commit:input.commit,tree:input.tree});
+   let saved=previous;
+   if(!previous){
+    saved=(await c.query(`INSERT INTO ac_remote_operations(id,context_id,host_id,task_id,request_digest,manager_epoch,state,intent_id,remote_receipt)
+     VALUES($1,$2,$3,'git-export',$4,$5,'completed',$6,$7) RETURNING *`,[input.operationId,input.contextId,input.hostId,requestDigest,authority.epoch,input.intentId,
+      {commit:input.commit,tree:input.tree,bundleSha256:result.sha256}])).rows[0];
+    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'remote.git.exported',$2)",[input.contextId,{operationId:input.operationId,hostId:input.hostId,commit:input.commit,tree:input.tree,bundleSha256:result.sha256}]);
+   }
+   const snapshot=sourceSnapshot(saved,{...input,projectId:context.project_id,requestDigest,bundleSha256:result.sha256});
+   return {...result,snapshot};
+  });
+ }
  async registerHost(principal:string,projectId:string,raw:z.input<typeof RemoteHostInput>){
   const host=RemoteHostInput.parse(raw);
   await this.ledger.tx(async c=>{

@@ -1,0 +1,50 @@
+start 2026-11-02T19:26:47Z
+TAP version 13
+# Subtest: managed SIGKILL after physical reconciles without repeating effect
+not ok 1 - managed SIGKILL after physical reconciles without repeating effect
+  ---
+  duration_ms: 76.417025
+  type: 'test'
+  location: '/workspace/tests/managed-recovery.test.ts:1:749'
+  failureType: 'testCodeFailure'
+  error: 'MIGRATION_CHANGED'
+  code: 'MIGRATION_CHANGED'
+  stack: |-
+    <anonymous> (/workspace/src/ledger.ts:29:79)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Ledger.tx (/workspace/src/ledger.ts:16:45)
+    async Ledger.migrate (/workspace/src/ledger.ts:22:5)
+    async TestContext.<anonymous> (/workspace/tests/managed-recovery.test.ts:20:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: managed SIGKILL after cas reconciles without repeating effect
+not ok 2 - managed SIGKILL after cas reconciles without repeating effect
+  ---
+  duration_ms: 55.318017
+  type: 'test'
+  location: '/workspace/tests/managed-recovery.test.ts:1:749'
+  failureType: 'testCodeFailure'
+  error: 'MIGRATION_CHANGED'
+  code: 'MIGRATION_CHANGED'
+  stack: |-
+    <anonymous> (/workspace/src/ledger.ts:29:79)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Ledger.tx (/workspace/src/ledger.ts:16:45)
+    async Ledger.migrate (/workspace/src/ledger.ts:22:5)
+    async TestContext.<anonymous> (/workspace/tests/managed-recovery.test.ts:20:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1618.083434
+
+end 2026-11-02T19:26:49Z
+exit 1

@@ -4,6 +4,8 @@ O pacote-fonte contém um snapshot de **um commit Git**, incluindo cada checkout
 
 Antes de empacotar, finalize a implementação/revisão, atualize `upstream/CHANGES.json` e a proveniência com os scripts existentes e faça commit local. Não há push/publicação neste procedimento. O empacotador lê objetos Git, não os arquivos vivos: alterações ainda não commitadas não entram no pacote.
 
+Para atualizar a proveniência de uma continuação, selecione primeiro os novos fontes no índice Git, execute `scripts/upstream-changes.py`, depois `scripts/refresh-upstream-patches.py` e `scripts/collect-provenance.py`. O atualizador de patches exige os snapshots fixados, usa índice temporário e não altera refs ou índices originais dos upstreams. Ele gera patches Git binários, inclusive arquivos novos/deletados e modos; não modifica o código da aplicação. Revise as diferenças e o relatório de auditoria antes do commit. O diretório das candidatas fixadas pode ser informado como argumento aos dois primeiros scripts.
+
 Validação sem gerar arquivo grande:
 
 ```bash

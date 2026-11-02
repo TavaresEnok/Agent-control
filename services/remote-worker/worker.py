@@ -2,7 +2,7 @@
 """Operation journal for controller-approved SSH tasks. No AI credentials or scheduler.
 This process boundary is not a hostile-code sandbox; deploy it as a restricted executor.
 """
-import argparse, fcntl, hashlib, json, os, pathlib, resource, signal, stat, subprocess, sys, time, uuid
+import argparse, fcntl, hashlib, importlib.util, json, os, pathlib, resource, signal, stat, subprocess, sys, time, uuid
 
 
 def atomic(path, value):
@@ -131,6 +131,12 @@ def rpc(config_path):
     operation = str(uuid.UUID(request['operationId']))
     record = operation_path(root, operation)
     action = request.get('action')
+    if action == 'git-export':
+        # Only a fixed installed helper may implement this read-only action.
+        spec = importlib.util.spec_from_file_location('remote_git', '/usr/local/lib/agent-control/remote_git.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.export(config, request)
     if action == 'cancel':
         if set(request) != {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'epoch'}:
             raise ValueError('INVALID_REQUEST')
@@ -199,7 +205,7 @@ def main():
     else:
         try:
             print(json.dumps(rpc(args.config)))
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             print(json.dumps({'error': 'REMOTE_OPERATION_REFUSED'}))
             raise SystemExit(1)
 

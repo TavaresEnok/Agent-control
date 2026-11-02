@@ -31,6 +31,28 @@ test('administrator telemetry is read-only, bounded-label aggregates and disting
   const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId:context,role:'programmer'},authority);
   await capacity.transition(principal,grant.id,authority,'uncertain');
   await assert.rejects(capacity.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId:context,role:'programmer'},authority));
+  // Synthetic immutable recipe and child records exercise classification without
+  // launching workers or changing capacity admission.
+  const children=['task','composition','waiting','unmatched'].map(kind=>({kind,id:randomUUID(),operation:randomUUID(),run:randomUUID(),attempt:randomUUID(),unit:`DO_NOT_EXPORT_UNIT_${kind}`}));
+  await ledger.pool.query(`INSERT INTO ac_manager_plans(context_id,revision,manager_epoch,manager_instance_id,principal_id,digest,snapshot,compilation_digest,compilation)
+   VALUES($1,1,$2,$3,$4,$5,'{}',$5,'{}')`,[context,authority.epoch,randomUUID(),principal,'0'.repeat(64)]);
+  const recipe={units:children.filter(child=>child.kind!=='unmatched').map(child=>({id:child.unit,intentId:child.id,operationId:child.operation,attemptId:child.attempt,kind:child.kind==='task'?'task':'composition'}))};
+  await ledger.pool.query('INSERT INTO ac_managed_executions VALUES($1,$2,1,$3,$3,$4)',[intent.id,context,'0'.repeat(64),recipe]);
+  for(const child of children){
+   await ledger.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,parent_intent_id,parent_unit_id)
+    VALUES($1,$2,$3,'fixture','{}',$4,$5,$6,$7,$8,$9)`,[child.id,context,principal,child.operation,child.run,authority.epoch,intent.plan_revision,intent.id,child.unit]);
+   await ledger.pool.query("INSERT INTO ac_operations(id,intent_id,state,manager_epoch,execution_attempt_id) VALUES($1,$2,'registered',$3,$4)",[child.operation,child.id,authority.epoch,child.attempt]);
+  }
+  for(const child of [children[0]!,children[1]!,children[3]!]){
+   const childGrant=randomUUID();
+   await ledger.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+    SELECT $1,$2,$3,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,'fixture',emergency,'reserved'
+    FROM ac_capacity_grants WHERE id=$4`,[childGrant,child.attempt,child.id,grant.id]);
+   await ledger.pool.query('UPDATE ac_operations SET grant_id=$2 WHERE id=$1',[child.operation,childGrant]);
+  }
+  const waiting=children[2]!;
+  await ledger.pool.query(`INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,reason)
+   VALUES($1,$2,$3,'programmer','fixture',$4,'CAPACITY_BUSY')`,[waiting.attempt,context,waiting.id,authority.epoch]);
   await ledger.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second'");
   await ledger.pool.query("UPDATE ac_quota_observations SET observed_at=clock_timestamp()-interval '5 minutes',expires_at=clock_timestamp()-interval '1 minute'");
   const before=(await ledger.pool.query('SELECT count(*)::int total FROM ac_audit')).rows[0].total;
@@ -38,6 +60,10 @@ test('administrator telemetry is read-only, bounded-label aggregates and disting
   const snapshot=await service.snapshot(principal);
   const value=(name:string,labels:Record<string,string>)=>snapshot.metrics.find(row=>row.name==='agent_control_'+name)?.samples.find(row=>Object.entries(labels).every(([key,value])=>row.labels[key]===value))?.value;
   assert.equal(value('grants',{state:'uncertain'}),'1');
+  assert.equal(value('managed_programmer_grants',{kind:'task_implementation',state:'reserved'}),'1');
+  assert.equal(value('managed_programmer_grants',{kind:'git_composition',state:'reserved'}),'1');
+  assert.equal(value('managed_programmer_grants',{kind:'unclassified',state:'reserved'}),'1');
+  assert.equal(value('managed_programmer_capacity_waits',{kind:'git_composition',reason:'CAPACITY_BUSY'}),'1');
   assert.equal(value('managers',{state:'stale'}),'1');
   assert.equal(value('quota_accounts',{state:'unknown'}),'1');assert.equal(value('quota_accounts',{state:'available'}),'0');
   assert.equal(value('disk_observation_available',{volume:'configured_0'}),'1');assert.equal(value('disk_observation_available',{volume:'configured_1'}),'0');

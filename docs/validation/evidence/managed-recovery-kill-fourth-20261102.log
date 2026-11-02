@@ -1,0 +1,27 @@
+start 2026-11-02T19:31:19Z
+24db6f1e6f43e31a6f419153389a0a85c8f7163053f7b7eeea65f4ccb6d6bed3  -
+TAP version 13
+# Subtest: managed SIGKILL after physical reconciles without repeating effect
+ok 1 - managed SIGKILL after physical reconciles without repeating effect
+  ---
+  duration_ms: 14439.518777
+  type: 'test'
+  ...
+# Subtest: managed SIGKILL after cas reconciles without repeating effect
+ok 2 - managed SIGKILL after cas reconciles without repeating effect
+  ---
+  duration_ms: 14623.322281
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 31245.194424
+24db6f1e6f43e31a6f419153389a0a85c8f7163053f7b7eeea65f4ccb6d6bed3  -
+end 2026-11-02T19:31:51Z
+exit 0

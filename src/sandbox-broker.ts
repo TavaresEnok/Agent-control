@@ -17,6 +17,14 @@ const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start'
  verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict().optional(),
  expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 type SandboxRequest=z.infer<typeof SandboxRequest>;
+const TerminalReceipt=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),finishedAt:z.string().min(1),synthetic:z.literal(true)}).passthrough();
+function confirmedTerminal(job:Record<string,any>,grant:Record<string,any>,request:SandboxRequest){
+ const receipt=TerminalReceipt.safeParse(job.receipt);
+ if(!receipt.success||receipt.data.jobId!==request.jobId||!Number.isFinite(Date.parse(receipt.data.finishedAt))||receipt.data.finishedAt.startsWith('0001-')||
+    (job.state==='completed')!==(receipt.data.exitCode===0)||grant.state!=='released'||!grant.physical_receipt||
+    digest(job.receipt)!==digest(grant.physical_receipt))throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
+ return job.receipt;
+}
 export type SandboxExecution={profile:'synthetic-implementation-v1';source:NonNullable<SandboxRequest['source']>}|
  {profile:'synthetic-verification-v1';source:NonNullable<SandboxRequest['source']>;verification:NonNullable<SandboxRequest['verification']>};
 function signature(value:Omit<SandboxRequest,'signature'>,key:Uint8Array){return createHmac('sha256',key).update(canonical(value)).digest('hex');}
@@ -159,7 +167,10 @@ export class SandboxBroker{
    const prior=(await c.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[value.jobId])).rows[0];
    if(prior){
     const priorSpec=this.specification(value,work,Number(prior.manager_epoch));
-    if(prior.grant_id!==value.grantId||prior.spec_digest!==priorSpec)throw new Refusal('SANDBOX_ID_CONFLICT');
+    if(prior.context_id!==value.authority.contextId||prior.profile!==value.profile||prior.grant_id!==value.grantId||prior.spec_digest!==priorSpec||
+       Number(prior.manager_epoch)>value.authority.epoch||Number(prior.manager_epoch)!==Number(grant.manager_epoch))throw new Refusal('SANDBOX_ID_CONFLICT');
+    if(value.action==='start'&&Number(prior.manager_epoch)!==value.authority.epoch)throw new Refusal('SANDBOX_RECONCILIATION_REQUIRED');
+    if(['completed','failed'].includes(String(prior.state)))confirmedTerminal(prior,grant,value);
     return {prior,grant,priorSpec};
    }
    if(value.action!=='start')throw new Refusal('SANDBOX_JOB_NOT_FOUND');
@@ -262,8 +273,11 @@ export class SandboxBroker{
   if(['completed','failed'].includes(String(prior.state)))return prior.receipt;
   return this.ledger.tx(async c=>{
    await this.ledger.fence(c,value.authority,true);
+   const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 FOR UPDATE',[value.grantId,value.authority.contextId])).rows[0];
    const job=(await c.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[value.jobId])).rows[0];
-   if(['completed','failed'].includes(job.state))return job.receipt;
+   if(!grant||!job||job.grant_id!==grant.id||job.context_id!==value.authority.contextId||Number(job.manager_epoch)!==Number(grant.manager_epoch)||
+      Number(job.manager_epoch)>value.authority.epoch||job.spec_digest!==spec)throw new Refusal('SANDBOX_ID_CONFLICT');
+   if(['completed','failed'].includes(job.state))return confirmedTerminal(job,grant,value);
    const inspected=await this.docker.inspect('ac-synthetic-'+value.jobId);
    if(!inspected)return {jobId:value.jobId,state:'uncertain'};
    // Compare against the epoch that created the container, not the successor's epoch.
@@ -314,7 +328,8 @@ export class SandboxBroker{
    const receipt={jobId:value.jobId,containerId:inspected.Id,exitCode:inspected.State.ExitCode,finishedAt:inspected.State.FinishedAt,synthetic:true,
     probe,...(value.verification?{verification,verificationIsolation}:value.source?{implementation,bundle}: {})};
    await c.query('UPDATE ac_sandbox_jobs SET state=$2,receipt=$3 WHERE id=$1',[value.jobId,inspected.State.ExitCode===0?'completed':'failed',receipt]);
-   await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','running','uncertain')",[value.grantId,receipt]);
+   const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','running','uncertain') RETURNING id",[value.grantId,receipt]);
+   if(!released.rowCount)throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
    this.active.delete(inspected.Id);const timer=this.monitors.get(inspected.Id);if(timer)clearInterval(timer);this.monitors.delete(inspected.Id);return receipt;
   });
  }

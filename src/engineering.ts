@@ -29,6 +29,52 @@ export class EngineeringStages{
   if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
  }
+ async replayManagedComposition(intent:Intent,authority:Authority,unit:ManagedUnit):Promise<boolean>{
+  const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
+  if(!bound||unit.kind!=='composition'||digest(bound.unit)!==digest(unit))throw new Refusal('MANAGED_UNIT_MISMATCH');
+  const saved=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   const row=(await c.query(`SELECT i.principal_id,o.state,o.manager_epoch,o.receipt,o.handle,o.native_session_id,
+    g.state grant_state,g.role,g.attempt_id,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.physical_receipt,s.snapshot,s.digest
+    FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id LEFT JOIN ac_capacity_grants g ON g.id=o.grant_id
+    LEFT JOIN ac_managed_composition_sources s ON s.intent_id=i.id WHERE i.id=$1 AND i.context_id=$2 AND o.id=$3 FOR UPDATE OF o`,
+    [intent.id,authority.contextId,intent.operation_id])).rows[0];
+   if(!row)throw new Refusal('MANAGED_RECEIPT_MISMATCH');await this.ledger.authorize(c,row.principal_id,authority.contextId);
+   if(row.state!=='completed'||row.grant_state!=='released')return null;
+   if(row.role!=='programmer'||row.attempt_id!==unit.attemptId||row.grant_intent!==intent.id||row.grant_context!==authority.contextId||
+      Number(row.manager_epoch)!==Number(row.grant_epoch)||Number(row.manager_epoch)>authority.epoch||!row.native_session_id||
+      row.receipt?.operationId!==intent.operation_id||row.receipt?.base!==input.base||row.receipt?.exitCode!==0||row.receipt?.synthetic!==true||
+      row.physical_receipt?.state!=='exited'||row.physical_receipt?.exitCode!==0||row.physical_receipt?.source!=='managed-git-compositor'||
+      row.physical_receipt?.processId!==String(row.handle?.pid)||!row.snapshot||digest(row.snapshot)!==row.digest)
+    throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   const schema=z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict()).min(2).max(4);
+   const sources=schema.parse(row.snapshot);
+   if(digest(sources.map(s=>s.unitId))!==digest(input.sources))throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   for(const source of sources){
+    const frozen=bound.recipe.units.find(u=>u.id===source.unitId),artifact=await this.options.quality.assertReady(c,source.artifactId,authority);
+    if(!frozen||frozen.kind!=='task'||artifact.intent_id!==frozen.intentId||artifact.project_id!==this.projectId||artifact.base_id!==input.base||
+      artifact.commit_id!==source.commit||artifact.tree_id!==source.tree||source.base!==input.base||digest(source.writePaths)!==digest(frozen.writePaths))
+     throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+    const evidence=(await c.query(`SELECT o.state,o.receipt,g.state grant_state,g.physical_receipt,j.state job_state,j.receipt job_receipt
+     FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id JOIN ac_sandbox_jobs j ON j.id=o.id
+     WHERE o.id=$1 AND o.intent_id=$2`,[frozen.operationId,frozen.intentId])).rows[0];
+    if(evidence?.state!=='completed'||evidence.grant_state!=='released'||evidence.job_state!=='completed'||
+      evidence.receipt?.commit!==source.commit||evidence.receipt?.tree!==source.tree||evidence.receipt?.base!==source.base||
+      digest(evidence.physical_receipt)!==digest(evidence.job_receipt)||digest(evidence.receipt)!==digest(evidence.job_receipt?.implementation))
+     throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   }
+   return {receipt:row.receipt,sources};
+  });
+  if(!saved)return false;
+  for(const source of saved.sources){const frozen=bound.recipe.units.find(u=>u.id===source.unitId)!;
+   const cwd=await this.options.git.managedPath(bound.parentIntentId,frozen.runId),identity=await this.options.git.identityAt(cwd,source.commit,source.base);
+   if(identity.tree!==source.tree)throw new Refusal('MANAGED_RECEIPT_MISMATCH');}
+  const cwd=await this.options.git.managedPath(bound.parentIntentId,unit.runId);
+  const identity=await this.options.git.verifyComposition(cwd,saved.receipt.commit,saved.receipt.base,saved.sources.map(s=>s.commit));
+  const registered=await this.options.git.identity(saved.receipt.commit,saved.receipt.base);
+  if(identity.tree!==saved.receipt.tree||registered.tree!==saved.receipt.tree)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+  return true;
+ }
  async composeManaged(intent:Intent,authority:Authority,unit:ManagedUnit,sessionId:string,destination:string,
   sources:readonly {unitId:string;artifactId:string;cwd:string}[]){
   z.uuid().parse(sessionId);
@@ -427,10 +473,16 @@ export class EngineeringStages{
    verifierVersion:'synthetic-isolated-verifier-v1/'+verified.nodeVersion};
   const signature=createHmac('sha256',this.key).update(canonical(receipt)).digest('hex');
   await this.ledger.tx(async c=>{
-   await this.ledger.fence(c,authority,true);
-   const physical=(await c.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
-   if(physical?.state!=='released'||physical.physical_receipt?.jobId!==stage.id||physical.physical_receipt?.containerId!==verified.containerId||
-    physical.physical_receipt?.exitCode!==verified.exitCode)throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
+   await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const physical=(await c.query(`SELECT g.state,g.physical_receipt,j.state job_state,j.receipt job_receipt,s.session_id,s.node_id,s.grant_id,
+    x.quality_revision FROM ac_capacity_grants g JOIN ac_sandbox_jobs j ON j.id=$2 JOIN ac_stage_operations s ON s.id=j.id
+    JOIN ac_execution_contracts x ON x.intent_id=s.intent_id WHERE g.id=$1 AND s.intent_id=$3 FOR UPDATE OF g,j,s`,[grantId,stage.id,intent.id])).rows[0];
+   if(physical?.state!=='released'||!['completed','failed'].includes(physical.job_state)||digest(physical.physical_receipt)!==digest(physical.job_receipt)||
+    physical.session_id!==stage.session_id||physical.node_id!==node||physical.grant_id!==grantId||physical.quality_revision!==artifact.policy_revision||
+    physical.physical_receipt?.jobId!==stage.id||physical.physical_receipt?.containerId!==verified.containerId||
+    physical.physical_receipt?.exitCode!==verified.exitCode||digest(physical.physical_receipt?.verification)!==digest({artifactId:verified.artifactId,operationId:verified.operationId,
+      kind:verified.kind,commit:verified.commit,tree:verified.tree,base:verified.base,verifierDigest:verified.verifierDigest,output:verified.output,nodeVersion:verified.nodeVersion}))
+    throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
    const updated=await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND intent_id=$3 AND manager_epoch<=$4 AND state IN ('uncertain','running') RETURNING id",
     [stage.id,{verification:receipt,signature},intent.id,authority.epoch]);
    if(!updated.rowCount)throw new Refusal('STAGE_RESULT_CONFLICT');

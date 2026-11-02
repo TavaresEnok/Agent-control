@@ -1,0 +1,19 @@
+# Administração de projetos — 02/11/2026
+
+A família global `createProjectAdminApi(new ProjectAdmin(ledger, config.projectRoots, config.dataDirectory))` oferece leitura de capacidades e cadastro assinado de projeto. O gateway a chama após autenticar e validar origem no caminho exato `/api/v1/ac/project-admin`, antes da seleção de runtime. A leitura informa servidor local e administração remota indisponível; fornece somente identificadores e rótulos das raízes autorizadas, sem seus caminhos absolutos. Não há gestão de hosts SSH nem comandos remotos nesta entrega.
+
+A configuração privada aceita `projectRoots` como lista de `{id,label,path}`, vazia por padrão. O formulário pede nome, raiz e caminho relativo de repositório Git existente. O cadastro não cria diretórios, não enumera o filesystem e não altera o repositório. A resposta de sucesso invalida a lista nativa de projetos; o projeto cadastrado pertence ao administrador que assinou o comando.
+
+A operação exige administrador global e prova de dispositivo humano ativo, verificados antes do acesso ao filesystem e novamente na transação. Recusa travessias, symlinks nos componentes, `.git` como arquivo ou symlink e interseção entre repositório e diretório privado em qualquer sentido. Raiz, componentes, repositório e `.git` devem pertencer ao UID do serviço e não admitir escrita por grupo ou outros. São persistidas as identidades de dispositivo e inode do repositório e `.git`; requisições posteriores ao gateway revalidam a raiz configurada, permissões e identidades antes de selecionar o runtime. Retirar uma raiz configurada torna indisponíveis os projetos cadastrados sob ela.
+
+A migração 039 mantém intenções e entregas administrativas globais, além das identidades. Cadastro, associação, intenção, entrega e auditoria são confirmados na mesma transação. Repetir a intenção com o mesmo conteúdo retorna o resultado; mudar conteúdo ou reutilizar entrega para outra intenção é recusado. A interface só permite descartar rascunho após uma primeira recusa HTTP definitiva; uma entrega incerta preserva sua identidade. O corpo HTTP aceita JSON sem compressão até 16 KiB e tem prazo total de leitura de dez segundos.
+
+As verificações de caminho usam operações de filesystem separadas e não eliminam substituição concorrente entre a última verificação e o uso. Raízes e seus ancestrais devem ser administrados como infraestrutura confiável e inacessíveis para escrita por workers ou outros usuários não confiáveis. Identidade e permissões detectam mudanças persistentes, mas não provam isolamento contra administrador hostil nem fecham todos os intervalos de corrida. Revisão independente e validação operacional permanecem abertas.
+
+## Evidência
+
+- `docker compose -f deploy/compose.lab.yml exec -T runtime node --import tsx --test tests/project-admin.test.ts`: exit 0, 1 teste em banco descartável. Cobre registro, replay, assinatura forjada, recusa de não administrador, conflito de entrega, caminhos privados nos dois sentidos, travessia, symlinks, gitfile, diretório gravável e mudança de inode. Uma barreira força duas solicitações da mesma intenção a consultarem antes da gravação e verifica ambas as entregas e a recusa do reuso em outra intenção. A tentativa inicial no host terminou exit 1 por `AC_TEST_DATABASE_URL` ausente.
+- `npm test -w @open-mercato/cezar-web -- --run src/routes/settings/agent-control-project-admin.test.tsx`: exit 0, 5 testes de formulário, retry, descarte após recusa definitiva ou erro de assinatura antes do envio, e preservação de uma tentativa anterior incerta.
+- `node --import tsx --test tests/project-admin-api.test.ts`: exit 0, 2 testes de leitura parada, tamanho, tipo, encoding e roteamento autenticado exato.
+
+Não foram cadastrados projetos reais nem executados modelos ou comandos remotos. Typecheck/build final e prova visual ponta a ponta são pendências da integração.

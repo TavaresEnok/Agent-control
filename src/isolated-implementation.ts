@@ -1,6 +1,6 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,rm,realpath} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {z} from 'zod';
 import {Authority,digest,Refusal,Id} from './contracts.ts';
@@ -25,8 +25,15 @@ const Running=z.object({state:z.literal('running'),containerId:z.string().regex(
  * A real provider adapter remains a distinct, unauthorized activation. */
 export class IsolatedImplementation{
  private active=true;
+ private managedRepository?:string;
  private readonly stops=new Set<()=>void>();
  constructor(readonly ledger:Ledger,readonly client=new SandboxClient(),private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){}
+ bindManagedRepository(repo:string){const path=resolve(repo);if(this.managedRepository&&this.managedRepository!==path)throw new Refusal('MANAGED_REPOSITORY_MISMATCH');this.managedRepository=path;}
+ private async managedCwd(parent:string,unit:ManagedUnit){
+  if(!this.managedRepository)throw new Refusal('MANAGED_REPOSITORY_MISSING');
+  const repo=await realpath(this.managedRepository),cwd=join(repo,'.ai/cezar/managed',parent,unit.runId);
+  if(await realpath(cwd)!==cwd)throw new Refusal('MANAGED_WORKTREE_FORBIDDEN');return cwd;
+ }
  close(){this.active=false;for(const stop of this.stops)stop();}
  start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void,unit?:ManagedUnit):AgentSession{
   let open=true,canceled=false,grantId:string|undefined,execution:z.infer<typeof Launch>|undefined;
@@ -106,7 +113,7 @@ export class IsolatedImplementation{
      await new Promise(resolve=>setTimeout(resolve,250));
     }
     if(!receipt)throw new Refusal('SANDBOX_RESULT_UNCERTAIN');
-    const committed=await this.apply(principal,intent,authority,spec.cwd,receipt,execution);
+    const committed=await this.apply(principal,intent,authority,spec.cwd,receipt,execution,Boolean(unit));
     await this.client.perform('cleanup',intent.operation_id,grantId,authority,execution);
     const text=`Isolated synthetic implementation completed: ${committed.commit}`;
     onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
@@ -116,6 +123,65 @@ export class IsolatedImplementation{
  }
  /** Reconcile an immutable launch after controller loss. Never starts a second worker.
   * A running old writer is stopped by the broker and remains uncertain until a later inspection. */
+ async reconcileManagedTask(intent:Intent,authority:Authority,unit:ManagedUnit):Promise<'completed'|'uncertain'|'failed'>{
+  const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
+  if(!bound||digest(bound.unit)!==digest(unit)||unit.kind!=='task')throw new Refusal('MANAGED_UNIT_MISMATCH');
+  const initial=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   const row=(await c.query(`SELECT i.principal_id,o.state,o.manager_epoch,o.grant_id,l.snapshot,l.digest,l.context_id launch_context,l.manager_epoch launch_epoch
+    FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id LEFT JOIN ac_execution_launches l ON l.operation_id=o.id
+    WHERE i.id=$1 AND i.context_id=$2 AND i.run_id=$3 AND o.id=$4 FOR UPDATE OF o`,[intent.id,authority.contextId,intent.run_id,intent.operation_id])).rows[0];
+   if(!row)throw new Refusal('MANAGED_RECEIPT_MISMATCH');await this.ledger.authorize(c,row.principal_id,authority.contextId);
+   return row;
+  });
+  if(!initial.snapshot||!initial.grant_id||!['running','uncertain','completed'].includes(initial.state))return 'uncertain';
+  const launch=Launch.parse(initial.snapshot);
+  if(digest(launch)!==initial.digest||initial.launch_context!==authority.contextId||launch.source.base!==input.base||launch.source.outputPath!==input.writePaths[0]||
+     Number(initial.launch_epoch)>authority.epoch||Number(initial.manager_epoch)>authority.epoch)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+  const present=(await this.ledger.pool.query('SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount;
+  if(!present)return 'uncertain';
+  const response=await this.client.perform('reconcile',intent.operation_id,initial.grant_id,authority,launch);
+  const parsed=Receipt.safeParse(response);
+  if(!parsed.success){if(z.object({state:z.enum(['running','uncertain'])}).passthrough().safeParse(response).success)return 'uncertain';throw new Refusal('MANAGED_RECEIPT_MISMATCH');}
+  const receipt=parsed.data;
+  const terminal=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   const row=(await c.query(`SELECT o.state,o.receipt operation_receipt,o.manager_epoch operation_epoch,
+    g.state grant_state,g.manager_epoch grant_epoch,g.physical_receipt,g.attempt_id,g.role,g.intent_id grant_intent,g.context_id grant_context,
+    j.state job_state,j.receipt job_receipt,j.manager_epoch job_epoch,j.profile,j.context_id,j.grant_id
+    FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id JOIN ac_sandbox_jobs j ON j.id=o.id
+    WHERE o.id=$1 AND o.intent_id=$2 FOR UPDATE OF o,g,j`,[intent.operation_id,intent.id])).rows[0];
+   if(!row||!['completed','failed'].includes(row.job_state)||row.grant_state!=='released')return null;
+   if(row.context_id!==authority.contextId||row.grant_context!==authority.contextId||row.grant_intent!==intent.id||row.attempt_id!==unit.attemptId||row.role!=='programmer'||row.grant_id!==initial.grant_id||row.profile!=='synthetic-implementation-v1'||
+      Number(row.job_epoch)!==Number(initial.launch_epoch)||Number(row.grant_epoch)!==Number(initial.launch_epoch)||
+      Number(row.operation_epoch)>authority.epoch||digest(row.job_receipt)!==digest(row.physical_receipt)||digest(row.job_receipt)!==digest(response)||
+      receipt.jobId!==intent.operation_id||typeof row.job_receipt.finishedAt!=='string'||row.job_receipt.finishedAt.startsWith('0001-')||!Number.isFinite(Date.parse(row.job_receipt.finishedAt))||
+      ((receipt.exitCode===0)!==(row.job_state==='completed')))throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   return row;
+  });
+  if(!terminal)return 'uncertain';
+  if(receipt.exitCode!==0){if(terminal.state==='completed')throw new Refusal('MANAGED_RECEIPT_MISMATCH');return 'failed';}
+  if(!receipt.implementation||!receipt.bundle||receipt.implementation.operationId!==intent.operation_id||receipt.implementation.base!==input.base)
+   throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+  const cwd=await this.managedCwd(bound.parentIntentId,unit);
+  if(terminal.state==='completed'){
+   const content=Buffer.from(receipt.bundle,'base64');
+   if(content.length>1000000||content.toString('base64')!==receipt.bundle)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'replay-'));
+   try{const file=join(temporary,'result.bundle');await writeFile(file,content,{mode:0o600,flag:'wx'});
+    await git(cwd,['bundle','verify',file]);
+    if(await git(cwd,['bundle','list-heads',file])!==`${receipt.implementation.commit} HEAD`)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   }finally{await rm(temporary,{recursive:true,force:true});}
+   if(digest(terminal.operation_receipt)!==digest(receipt.implementation)||await git(cwd,['rev-parse','HEAD'])!==receipt.implementation.commit||
+      await git(cwd,['rev-parse','HEAD^{tree}'])!==receipt.implementation.tree||await git(cwd,['rev-parse','HEAD^'])!==input.base||
+      await git(cwd,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==input.writePaths[0]||
+      await git(cwd,['show',`HEAD:${input.writePaths[0]}`])!==`Synthetic isolated effect ${intent.operation_id}`)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   return 'completed';
+  }
+  await this.apply(initial.principal_id,intent,authority,cwd,receipt,launch,true);
+  await this.client.perform('cleanup',intent.operation_id,initial.grant_id,authority,launch);
+  return 'completed';
+ }
  async reconcileExisting(intent:Intent,authority:Authority,cwd:string):Promise<'uncertain'|'completed'|'failed'>{
   const row=await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
@@ -143,7 +209,7 @@ export class IsolatedImplementation{
   await this.client.perform('cleanup',intent.operation_id,row.grant_id,authority,launch);
   return 'completed';
  }
- private async apply(principal:string,intent:Intent,authority:Authority,cwd:string,receipt:z.infer<typeof Receipt>,launch:z.infer<typeof Launch>){
+ private async apply(principal:string,intent:Intent,authority:Authority,cwd:string,receipt:z.infer<typeof Receipt>,launch:z.infer<typeof Launch>,managed=false){
   if(receipt.jobId!==intent.operation_id||receipt.exitCode!==0||!receipt.implementation||!receipt.bundle)throw new Refusal('SANDBOX_IMPLEMENTATION_FAILED');
   const artifact=receipt.implementation;
   if(artifact.operationId!==intent.operation_id||artifact.base!==launch.source.base)throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
@@ -151,19 +217,22 @@ export class IsolatedImplementation{
   const parent=resolve('.state/isolated-artifacts');const temporary=await mkdtemp(join(parent,'result-'));
   try{
    const path=join(temporary,'result.bundle');await writeFile(path,content,{mode:0o600,flag:'wx'});
-   await git(cwd,['fetch','--no-tags',path,'HEAD']);
-   const outputPath=launch.source.outputPath??`synthetic-${intent.operation_id}.txt`;
-   if(await git(cwd,['rev-parse','FETCH_HEAD'])!==artifact.commit||await git(cwd,['rev-parse',artifact.commit+'^{tree}'])!==artifact.tree||
-     await git(cwd,['rev-parse',artifact.commit+'^'])!==artifact.base||await git(cwd,['diff-tree','--no-commit-id','--name-only','-r',artifact.commit])!==outputPath||
-     await git(cwd,['show',`${artifact.commit}:${outputPath}`])!==`Synthetic isolated effect ${intent.operation_id}`)
-     throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
    await this.ledger.tx(async c=>{
-    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,!managed);
+    if(managed)await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
     const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 FOR UPDATE',[intent.operation_id])).rows[0];
     const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[op?.grant_id])).rows[0];
     if(!op||Number(op.manager_epoch)>authority.epoch||!['running','uncertain'].includes(op.state)||grant?.state!=='released'||
       grant.physical_receipt?.jobId!==intent.operation_id||grant.physical_receipt?.containerId!==receipt.containerId)
       throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
+    if(managed){const job=(await c.query('SELECT state,receipt FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[intent.operation_id])).rows[0];
+     if(job?.state!=='completed'||digest(job.receipt)!==digest(grant.physical_receipt)||digest(job.receipt)!==digest(receipt))throw new Refusal('MANAGED_RECEIPT_MISMATCH');}
+    await git(cwd,['fetch','--no-tags',path,'HEAD']);
+   const outputPath=launch.source.outputPath??`synthetic-${intent.operation_id}.txt`;
+   if(await git(cwd,['rev-parse','FETCH_HEAD'])!==artifact.commit||await git(cwd,['rev-parse',artifact.commit+'^{tree}'])!==artifact.tree||
+     await git(cwd,['rev-parse',artifact.commit+'^'])!==artifact.base||await git(cwd,['diff-tree','--no-commit-id','--name-only','-r',artifact.commit])!==outputPath||
+     await git(cwd,['show',`${artifact.commit}:${outputPath}`])!==`Synthetic isolated effect ${intent.operation_id}`)
+     throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
     const head=await git(cwd,['rev-parse','HEAD']);if(head!==artifact.base&&head!==artifact.commit)throw new Refusal('SANDBOX_BASE_CHANGED');
     await git(cwd,['merge','--ff-only',artifact.commit]);
     await c.query("UPDATE ac_operations SET state='completed',manager_epoch=$3,receipt=$2 WHERE id=$1",[intent.operation_id,artifact,authority.epoch]);

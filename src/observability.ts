@@ -11,6 +11,7 @@ const metricStates={
  reasons:['NO_ELIGIBLE_CAPACITY','CAPACITY_QUEUED','CAPACITY_BUSY','ORIGINAL_RESERVE_NOT_NEEDED','GLOBAL_CAPACITY_LIMIT','CONTEXT_CAPACITY_LIMIT','ACCOUNT_CAPACITY_LIMIT','other'],
  roles:['manager','programmer','reviewer','qa','specialist','judge','other'],
  storage:['reserved','published','retained','deleting','deleted'],
+ managedKinds:['task_implementation','git_composition','unclassified'],
 } as const;
 const Decimal=z.string().regex(/^\d+$/);
 export type MetricSample={labels:Record<string,string>;value:string};
@@ -56,6 +57,36 @@ export class OperationalObservability{
     FROM ac_capacity_waits w JOIN ac_intents i ON i.id=w.intent_id WHERE i.state NOT IN ('done','review','failed','canceled','cancelled')
     AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id)`)).rows[0].seconds;
    metrics.push(gauge('capacity_wait_oldest_seconds','Oldest nonterminal noncanceled wait; zero when empty.',[sample(age)]));
+   // Classify only programmer grants linked to the child's physical operation.
+   // The immutable recipe and child binding, not the role alone, identify the
+   // compositor. Unmatched/ambiguous bindings stay visibly unclassified.
+   const managedBindings=`WITH bindings AS (
+    SELECT i.id intent_id,i.parent_intent_id,i.parent_unit_id,o.id operation_id,
+     CASE WHEN count(u.value)=1 AND min(u.value->>'kind')='task' THEN 'task_implementation'
+          WHEN count(u.value)=1 AND min(u.value->>'kind')='composition' THEN 'git_composition'
+          ELSE 'unclassified' END kind,
+     CASE WHEN count(u.value)=1 THEN min(u.value->>'attemptId') ELSE NULL END attempt_id
+    FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id
+    LEFT JOIN ac_managed_executions e ON e.parent_intent_id=i.parent_intent_id AND e.context_id=i.context_id
+    LEFT JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(e.recipe->'units')='array' THEN e.recipe->'units' ELSE '[]'::jsonb END) u(value)
+      ON u.value->>'id'=i.parent_unit_id AND u.value->>'intentId'=i.id::text AND u.value->>'operationId'=o.id::text
+    WHERE i.parent_intent_id IS NOT NULL GROUP BY i.id,i.parent_intent_id,i.parent_unit_id,o.id
+   )`;
+   const managedGrants=(await c.query<{kind:string;label:string;value:string}>(`${managedBindings}
+    SELECT CASE WHEN b.attempt_id=g.attempt_id::text THEN b.kind ELSE 'unclassified' END kind,g.state label,count(*)::text value
+    FROM bindings b JOIN ac_operations o ON o.id=b.operation_id JOIN ac_capacity_grants g ON g.id=o.grant_id
+    WHERE g.role='programmer' AND g.intent_id=b.intent_id GROUP BY 1,2`)).rows;
+   const byKind=(rows:{kind:string;label:string;value:string}[],states:readonly string[],key:string)=>
+    metricStates.managedKinds.flatMap(kind=>enumerated(rows.filter(row=>row.kind===kind),states,key).map(row=>({...row,labels:{...row.labels,kind}})));
+   metrics.push(gauge('managed_programmer_grants','Managed programmer grants linked to unit operations; composition still uses programmer capacity, not a cost or inference measure.',
+    byKind(managedGrants,metricStates.grants,'state')));
+   const managedWaits=(await c.query<{kind:string;label:string;value:string}>(`${managedBindings}
+    SELECT CASE WHEN b.attempt_id=w.attempt_id::text THEN b.kind ELSE 'unclassified' END kind,COALESCE(w.reason,'other') label,count(*)::text value
+    FROM bindings b JOIN ac_capacity_waits w ON w.intent_id=b.intent_id JOIN ac_intents i ON i.id=b.intent_id
+    WHERE w.role='programmer' AND i.state NOT IN ('done','review','failed','canceled','cancelled')
+     AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id)) GROUP BY 1,2`)).rows;
+   metrics.push(gauge('managed_programmer_capacity_waits','Nonterminal noncanceled managed programmer waits by frozen unit kind; no inference or token usage is implied.',
+    byKind(managedWaits,metricStates.reasons,'reason')));
    const roles=(await c.query<CounterRow>(`SELECT role label,count(*)::text value FROM ac_capacity_grants WHERE state<>'released' GROUP BY role`)).rows;
    metrics.push(gauge('active_grants_by_role','Capacity reservations by fixed role, including uncertain effects.',enumerated(roles,metricStates.roles,'role')));
    const managers=(await c.query<CounterRow>(`SELECT CASE WHEN m.context_id IS NULL THEN 'missing' WHEN m.lease_until<=current_timestamp THEN 'stale' ELSE 'leased' END label,

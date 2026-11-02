@@ -1,0 +1,5 @@
+Command: docker compose -p ac-managed-corec-9ace21ef -f deploy/compose.lab.yml --profile sandbox-test exec -T sandbox-db psql -U ac_lab -d ac_managed_test_9ace21ef -At -c "$SQL"
+SQL:
+SELECT a.context_id,a.detail->>'intentId',a.detail->>'operationId',a.detail->>'previousEpoch',a.detail->>'epoch',a.detail->>'proof',i.parent_unit_id,(o.id::text=a.detail->>'operationId') AS operation_matches,o.state FROM ac_audit a JOIN ac_intents i ON i.id=(a.detail->>'intentId')::uuid JOIN ac_operations o ON o.intent_id=i.id WHERE a.kind='managed.operation_adopted' ORDER BY a.id;
+55561943-87eb-49b3-8cce-3f82c4ca3e0e|c507db44-6eb4-5b1d-a7e5-3f849c791489|489004fe-f20f-5e2a-a8f2-9f39cc5dc1b9|1|2|no-launch-or-grant|compose-0|t|completed
+query exit: 0

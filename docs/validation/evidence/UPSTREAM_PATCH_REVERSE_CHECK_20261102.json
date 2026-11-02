@@ -1,0 +1,15 @@
+{
+  "checks": [
+    {
+      "upstream": "cezar",
+      "exitCode": 1,
+      "scope": "reverse applicability check only; no patch applied"
+    },
+    {
+      "upstream": "happier",
+      "exitCode": 1,
+      "scope": "reverse applicability check only; no patch applied"
+    }
+  ],
+  "result": "failed"
+}

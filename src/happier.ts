@@ -53,11 +53,24 @@ const Pending = z.object({ didMaterialize: z.boolean(), deferredReason: z.string
   message: z.object({ localId: z.string().nullable().optional(), content: z.object({ t: z.literal('encrypted'), c: z.string() }) }).nullable().optional() }).passthrough();
 const UserRecord = z.object({ role: z.literal('user'), content: z.object({ type: z.literal('text'), text: z.string() }), meta: z.unknown().optional() });
 
+async function boundedNetwork<T>(operation:(signal:AbortSignal)=>Promise<T>,timeoutMs:number,parent?:AbortSignal):Promise<T>{
+  if(parent?.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
+  const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
+  let aborted!:()=>void;
+  const cancelled=new Promise<never>((_,reject)=>{
+    aborted=()=>{controller.abort();reject(new Refusal('HAPPIER_TRANSPORT_CANCELED'));};
+    if(parent?.aborted)aborted();else parent?.addEventListener('abort',aborted,{once:true});
+    timer=setTimeout(()=>{controller.abort();reject(new Refusal('HAPPIER_TRANSPORT_TIMEOUT'));},timeoutMs);
+  });
+  try{return await Promise.race([Promise.resolve().then(()=>operation(controller.signal)),cancelled]);}
+  finally{clearTimeout(timer);parent?.removeEventListener('abort',aborted);}
+}
+
 // Read only the linked session using Happier's native backward cursor. Never silently
 // present a truncated or non-progressing traversal as a complete history.
 export async function recoverHistory(baseUrl: string, sessionId: string, token: string,
   key: Uint8Array, boundary: HappierBoundary, fetchPage: typeof fetch = fetch, variant: EncryptionVariant = 'legacy',
-  authorize: () => Promise<void> = async () => {}): Promise<unknown[]> {
+  authorize: () => Promise<void> = async () => {},options:{signal?:AbortSignal;timeoutMs?:number}={}): Promise<unknown[]> {
   const messages: { seq: number; content: unknown }[] = [];
   let before: number | undefined;
   for (let page = 0; page < 100; page++) {
@@ -65,10 +78,13 @@ export async function recoverHistory(baseUrl: string, sessionId: string, token: 
     url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
     if (before !== undefined) url.searchParams.set('beforeSeq', String(before));
     await authorize();
-    const response = await fetchPage(url, { headers: { authorization: 'Bearer ' + token } });
-    if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+    const data=await boundedNetwork(async signal=>{
+      const response=await fetchPage(url,{headers:{authorization:'Bearer '+token},signal});
+      if(!response.ok)throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+      return response.json();
+    },options.timeoutMs??10000,options.signal);
     const result = z.object({ messages: z.array(z.object({ seq: z.number().int().nonnegative(), content: z.unknown() }).passthrough()),
-      hasMore: z.boolean(), nextBeforeSeq: z.number().int().positive().nullable() }).passthrough().parse(await response.json());
+      hasMore: z.boolean(), nextBeforeSeq: z.number().int().positive().nullable() }).passthrough().parse(data);
     let previous = before ?? Infinity;
     for (const message of result.messages) {
       if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
@@ -98,6 +114,7 @@ export class HappierEndpoint {
   readonly transport;
   private timer: ReturnType<typeof setInterval> | undefined;
   private busy = false;
+  private readonly lifecycle = new AbortController();
   private runtimeReady = false;
   private revision: number | undefined;
   private lastPendingAt = 0;
@@ -108,7 +125,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number }) {
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
@@ -124,7 +141,7 @@ export class HappierEndpoint {
       revalidateExplicitUserRequest: async () => ({ status: 'ready' }),
       sessionRuntimeControls: { handleUserMessage: raw => this.accept(raw) } });
     socket.on('rpc-request', async (data: unknown, callback: (value: unknown) => void) => callback(await this.rpc.handleRequest(data)));
-    socket.on('connect', () => { this.runtimeReady = false; this.rpc.onSocketConnect(socket); });
+    socket.on('connect', () => { if(this.lifecycle.signal.aborted){socket.disconnect();return;}this.runtimeReady = false; this.rpc.onSocketConnect(socket); });
     socket.on('disconnect', () => this.rpc.onSocketDisconnect());
   }
   async validateKey() {
@@ -136,16 +153,26 @@ export class HappierEndpoint {
     if (row.rows[0]?.session_id !== this.options.sessionId || row.rows[0]?.principal_id !== this.options.principal) throw new Refusal('SESSION_CONTEXT_MISMATCH', 403);
   }
   async start() {
+    try{
     await this.validateLink();
-    const profileResponse = await fetch(this.options.baseUrl + '/v1/account/profile', { headers: { authorization: 'Bearer ' + this.options.token } });
-    if (!profileResponse.ok || z.object({ id: z.string() }).passthrough().parse(await profileResponse.json()).id !== this.options.principal)
+    if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
+    const timeout=this.options.transportTimeoutMs??10000;
+    const profile = await boundedNetwork(async signal=>{
+      const response=await fetch(this.options.baseUrl+'/v1/account/profile',{headers:{authorization:'Bearer '+this.options.token},signal});
+      if(!response.ok)throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH',403);
+      return response.json();
+    },timeout,this.lifecycle.signal);
+    if (z.object({ id: z.string() }).passthrough().parse(profile).id !== this.options.principal)
       throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH', 403);
     this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
-    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateKey());
+    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateKey(),{signal:this.lifecycle.signal,timeoutMs:timeout});
     // Fetching authorized pages may take time; re-read current structured state before activating RPC.
     this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
-    await this.transport.connect();
-    const registered = await this.rpc.waitForRegisteredHandlers(['session.userMessage.send'], { timeoutMs: 10000 });
+    if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
+    const connecting=this.transport.connect();
+    void connecting.then(()=>{if(this.lifecycle.signal.aborted)this.socket.disconnect();},()=>{});
+    await boundedNetwork(()=>connecting,timeout,this.lifecycle.signal);
+    const registered = await boundedNetwork(()=>this.rpc.waitForRegisteredHandlers(['session.userMessage.send'], { timeoutMs: timeout }),timeout,this.lifecycle.signal);
     if (registered.status !== 'ready') {
       this.socket.disconnect();
       throw new Refusal('HAPPIER_NOT_READY_' + registered.status + '_' + [...this.transportEvents].join(','));
@@ -173,6 +200,7 @@ export class HappierEndpoint {
           }catch{}
         }
       }).finally(() => { this.busy = false; }); }, 300);
+    }catch(error){this.close();throw error;}
   }
   async accept(raw: unknown) {
     const q = UserRequest.parse(raw); await this.validateLink();
@@ -291,5 +319,6 @@ export class HappierEndpoint {
       this.runtimeReady = false;
     }
   }
-  close() { if (this.timer) clearInterval(this.timer); this.socket.disconnect(); }
+  connectionState(): 'connected'|'disconnected' {return this.socket.connected?'connected':'disconnected';}
+  close() { this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.socket.disconnect(); }
 }

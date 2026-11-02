@@ -100,14 +100,32 @@ export class IsolatedVerification{
    const stage=(await c.query(`SELECT s.intent_id,s.manager_epoch,s.node_id,l.snapshot,l.digest FROM ac_stage_operations s
     JOIN ac_stage_execution_launches l ON l.stage_id=s.id WHERE s.id=$1 AND s.grant_id=$2 AND l.context_id=$3`,[stageId,grantId,authority.contextId])).rows[0];
    if(!stage||Number(stage.manager_epoch)>authority.epoch||stage.node_id!==kind)throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
-   await this.ledger.assertIntentActive(c,authority.contextId,stage.intent_id);
    return stage;
   });
   const launch=Launch.parse(row.snapshot);
   if(digest(launch)!==row.digest||launch.source.base!==artifact.commit||launch.verification.artifactId!==artifact.id||
     launch.verification.operationId!==operationId||launch.verification.kind!==kind)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
   const response=await this.client.perform('reconcile',stageId,grantId,authority,launch);
-  return verifiedResult(response,stageId,artifact,operationId,kind,verifierDigest);
+  const result=verifiedResult(response,stageId,artifact,operationId,kind,verifierDigest);
+  if(!result)return null;
+  await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+   await this.ledger.assertIntentActive(c,authority.contextId,row.intent_id);
+   const physical=(await c.query(`SELECT j.context_id,j.grant_id,j.manager_epoch,j.profile,j.state,j.receipt,
+    g.manager_epoch grant_epoch,g.state grant_state,g.physical_receipt,s.intent_id,s.node_id,s.manager_epoch stage_epoch,l.snapshot,l.digest
+    FROM ac_capacity_grants g JOIN ac_sandbox_jobs j ON j.grant_id=g.id
+    JOIN ac_stage_operations s ON s.id=j.id AND s.grant_id=g.id JOIN ac_stage_execution_launches l ON l.stage_id=s.id
+    WHERE j.id=$1 AND g.id=$2 FOR UPDATE OF g,j,s`,[stageId,grantId])).rows[0];
+   const terminal=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),finishedAt:z.string().min(1)}).passthrough().safeParse(response);
+   if(!physical||physical.context_id!==authority.contextId||physical.grant_id!==grantId||physical.intent_id!==row.intent_id||physical.node_id!==kind||
+      physical.profile!=='synthetic-verification-v1'||Number(physical.manager_epoch)>authority.epoch||
+      Number(physical.manager_epoch)!==Number(physical.grant_epoch)||Number(physical.manager_epoch)!==Number(physical.stage_epoch)||
+      !['completed','failed'].includes(physical.state)||physical.grant_state!=='released'||!terminal.success||terminal.data.jobId!==stageId||
+      !Number.isFinite(Date.parse(terminal.data.finishedAt))||terminal.data.finishedAt.startsWith('0001-')||
+      !physical.receipt||!physical.physical_receipt||digest(physical.snapshot)!==physical.digest||physical.digest!==row.digest||digest(physical.receipt)!==digest(response)||
+      digest(physical.physical_receipt)!==digest(response))throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
+  });
+  return result;
  }
  async cleanup(stageId:string,grantId:string,authority:Authority){
   const row=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=$1 AND context_id=$2',[stageId,authority.contextId])).rows[0];

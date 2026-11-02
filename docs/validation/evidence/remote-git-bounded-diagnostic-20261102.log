@@ -1,0 +1,55 @@
+TAP version 13
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: will change to "main" in Git 3.0. To configure the initial branch name
+# hint: to use in all of your new repositories, which will suppress this warning,
+# hint: call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: will change to "main" in Git 3.0. To configure the initial branch name
+# hint: to use in all of your new repositories, which will suppress this warning,
+# hint: call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# /dev/shm/ac-remote-git-nLkiHB/materialized/.remote-git-DpgiFN/input.bundle is okay
+# error: cannot fork() for index-pack: Resource temporarily unavailable
+# error: index-pack died
+# error: cannot fork() for maintenance: Resource temporarily unavailable
+# Subtest: bounded configured repository export verifies commit, tree, hash and idempotent materialization
+not ok 1 - bounded configured repository export verifies commit, tree, hash and idempotent materialization
+  ---
+  duration_ms: 458.413886
+  type: 'test'
+  location: '/workspace/tests/remote-git.test.ts:1:626'
+  failureType: 'testCodeFailure'
+  error: 'REMOTE_GIT_MATERIALIZATION_FAILED'
+  code: 'REMOTE_GIT_MATERIALIZATION_FAILED'
+  stack: |-
+    ChildProcess.<anonymous> (/workspace/src/remote-git.ts:27:92)
+    ChildProcess.emit (node:events:519:28)
+    maybeClose (node:internal/child_process:1101:16)
+    ChildProcess._handle.onexit (node:internal/child_process:304:5)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1352.181628

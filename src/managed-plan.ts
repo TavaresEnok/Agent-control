@@ -24,6 +24,7 @@ export const ManagedExecutionInput=z.object({parentIntentId:Id,unitId:z.string()
 export type ManagedExecutionInput=z.infer<typeof ManagedExecutionInput>;
 export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
  const preview=compileManagerPlan(plan,policies),tasks=new Map(plan.tasks.map(task=>[task.id,task])),policy=new Map(policies.map(p=>[p.qualityRevision,QualityPolicy.parse(p.policy)]));
+ if(plan.tasks.some(task=>task.maxCorrections>0))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
  if(new Set(plan.tasks.map(task=>task.targetRef)).size!==1)throw new Refusal('MANAGED_SINGLE_TARGET_REQUIRED');
  if(plan.tasks.some(task=>task.acceptanceRefs.length!==1||task.acceptanceRefs[0]!=='acceptance:synthetic-effect-v1'))
   throw new Refusal('MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE');

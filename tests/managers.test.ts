@@ -66,3 +66,60 @@ test('manager registry owns one endpoint, fences takeover and isolates key clean
   assert.deepEqual(shared,initial);unblock();await stopping;
  }finally{for(const registry of registries)await registry.close();await db.close();await isolated.close();}
 });
+
+test('explicit restart validates fresh credentials, advances epoch and preserves successor and uncertain work',async()=>{
+ const url=process.env.AC_TEST_DATABASE_URL;if(!url)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const isolated=await isolatedDatabase(url,'restart'),db=new Ledger(isolated.url);const registries:ManagerRegistry[]=[];
+ try{
+  await db.migrate();const project=randomUUID(),principal='restart-'+randomUUID(),key=randomBytes(32),original=Buffer.from(key);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Synthetic restart']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  const context=await db.createContext(principal,project,randomUUID());
+  const sessionId=(await db.pool.query('SELECT session_id FROM ac_session_links WHERE context_id=$1',[context])).rows[0].session_id;
+  await new ContextKeys(db).authorize(principal,context,1,'legacy',keyFingerprint(key));
+  const input={principal,contextId:context,sessionId,profileId:'synthetic',keyVersion:1,encryptionVariant:'legacy' as const,key};
+  const records:{key:Uint8Array;closed:number}[]=[];let duringClose:(()=>Promise<void>)|undefined;
+  const registry=new ManagerRegistry(db,project,options=>{
+   const record={key:options.key,closed:0};records.push(record);
+   return {async start(){},async close(){record.closed++;await duringClose?.();}};
+  });registries.push(registry);
+  const first=await registry.start(input);
+  await assert.rejects(registry.restart({...input,key:randomBytes(32)}),/CONTEXT_KEY_UNAUTHORIZED/);
+  assert.equal(records[0].closed,0);await db.heartbeat(first);
+  const capacity=await provisionCapacity(db,principal,project);await capacity.service.assignPolicy(principal,context,capacity.revision);
+  const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:restart'}};
+  const intent=await db.accept(principal,command,first,'api');
+  const grant=await capacity.service.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId:context,role:'programmer'},first);
+  await capacity.service.transition(principal,grant.id,first,'uncertain');await db.pause(principal,context,true);
+  const restarted=await registry.restart(input);assert.equal(restarted.epoch,first.epoch+1);
+  assert(records[0].key.every(value=>value===0));assert(records[1].key.some(value=>value!==0));assert.deepEqual(key,original);
+  assert.equal((await db.pool.query('SELECT paused FROM ac_contexts WHERE id=$1',[context])).rows[0].paused,true);
+  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant.id])).rows[0].state,'uncertain');
+  const successor=new ManagerRegistry(db,project,()=>({async start(){},close(){}}));registries.push(successor);
+  let other:Awaited<ReturnType<ManagerRegistry['start']>>|undefined;
+  duringClose=async()=>{duringClose=undefined;other=await successor.start(input);};
+  await assert.rejects(registry.restart(input),/MANAGER_ACTIVE/);assert(other);await db.heartbeat(other);
+  assert(records[1].key.every(value=>value===0));assert.deepEqual(key,original);
+ }finally{for(const registry of registries)await registry.close();await db.close();await isolated.close();}
+});
+
+test('manager status distinguishes disconnected transport from fenced authority',async()=>{
+ const url=process.env.AC_TEST_DATABASE_URL;if(!url)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const isolated=await isolatedDatabase(url,'status'),db=new Ledger(isolated.url);let registry:ManagerRegistry|undefined;
+ try{
+  await db.migrate();const project=randomUUID(),principal='status-'+randomUUID(),key=randomBytes(32);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Synthetic status']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  const contextId=await db.createContext(principal,project,randomUUID());
+  const sessionId=(await db.pool.query('SELECT session_id FROM ac_session_links WHERE context_id=$1',[contextId])).rows[0].session_id;
+  const keys=new ContextKeys(db);await keys.authorize(principal,contextId,1,'legacy',keyFingerprint(key));
+  let connected=true,closed=0;
+  registry=new ManagerRegistry(db,project,()=>({async start(){},close(){closed++;},connectionState:()=>connected?'connected':'disconnected'}));
+  const authority=await registry.start({principal,contextId,sessionId,profileId:'synthetic',keyVersion:1,encryptionVariant:'legacy',key});
+  assert.equal((await registry.status(contextId)).state,'running');connected=false;
+  const offline=await registry.status(contextId);assert.equal(offline.state,'disconnected');assert.deepEqual(registry.authority(contextId),authority);
+  await db.heartbeat(authority);connected=true;assert.equal((await registry.status(contextId)).state,'running');
+  await keys.revoke(principal,contextId,1);connected=false;
+  assert.equal((await registry.status(contextId)).state,'revoked');assert.equal(registry.authority(contextId),undefined);assert.equal(closed,1);
+ }finally{await registry?.close();await db.close();await isolated.close();}
+});

@@ -2,6 +2,8 @@
 
 Coordenação de quatro executores Terra Médio autorizados explicitamente pelo proprietário. Trabalho somente no fork e compose de laboratório; não houve inferência, conta real, migração operacional ou publicação. Acompanhamento por relógio registrado às 18:49:59 UTC; primeiro fechamento das entregas coordenadas às 18:55:34 UTC, seguido de revisão e provas integradas do root descritas abaixo. Não constitui homologação do produto.
 
+A continuação posterior ao checkpoint `b7ab7bcb` está em [PRODUCT-P0-CONTINUATION-20261102.md](PRODUCT-P0-CONTINUATION-20261102.md): lifecycle limitado de rede, cadastro administrativo assinado, prévias de importação/manifesto e primitiva Git por SSH com hardening e limites explícitos.
+
 ## Código e provas concluídas
 
 | Frente | Implementação | Prova delimitada |

@@ -2,6 +2,8 @@ node_modules/
 .state/
 dist/
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
 upstream/**/node_modules/
 upstream/**/dist/
 upstream/happier/apps/server/generated/

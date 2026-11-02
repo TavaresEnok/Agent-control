@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: remote export is bound to an authorized active intent and immutable operation identity
+ok 1 - remote export is bound to an authorized active intent and immutable operation identity
+  ---
+  duration_ms: 2010.383222
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3658.949174

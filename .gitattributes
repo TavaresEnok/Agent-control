@@ -1,0 +1,5 @@
+# Evidence logs retain stdout/stderr bytes, including ANSI and trailing spaces.
+# Do not rewrite positive or negative logs merely to satisfy cosmetic checks.
+docs/validation/evidence/*.log -whitespace
+# Unified diff context lines use a literal space; preserve valid patch syntax.
+upstream/patches/*.patch -whitespace

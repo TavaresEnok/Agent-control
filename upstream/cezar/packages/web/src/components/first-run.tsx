@@ -1332,6 +1332,7 @@ function parentPath(path: string): string {
  * counts as a visit; opening a feature's page counts as having seen it.
  */
 export function useFeatureNews(pathname: string): ReadonlySet<string> {
+  const managed = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
   const uiState = useWorkspaceUiState()
   const health = useHealth()
   const write = useOnboardingWrite()
@@ -1339,11 +1340,11 @@ export function useFeatureNews(pathname: string): ReadonlySet<string> {
   const loaded = uiState.data !== undefined
   const recorded = React.useRef(false)
   React.useEffect(() => {
-    if (!loaded || recorded.current) return
+    if (managed || !loaded || recorded.current) return
     recorded.current = true
     const patch = visitPatch(onboarding, Date.now())
     if (patch) write(patch)
-  }, [loaded, onboarding, write])
+  }, [loaded, managed, onboarding, write])
   const designMode = health.data?.capabilities.designMode
   const automations = health.data?.capabilities.automations
   const paths = React.useMemo(
@@ -1351,9 +1352,10 @@ export function useFeatureNews(pathname: string): ReadonlySet<string> {
     [loaded, onboarding, designMode, automations],
   )
   React.useEffect(() => {
+    if (managed) return
     const opened = [...paths].filter(([path]) => pathname === path || pathname.startsWith(`${path}/`)).map(([, id]) => id)
     if (opened.length > 0) write({ dismissedAnnouncements: [...(onboarding?.dismissedAnnouncements ?? []), ...opened].slice(-50) })
-  }, [pathname, paths, onboarding, write])
+  }, [managed, pathname, paths, onboarding, write])
   return React.useMemo(
     () => new Set(NAV_ITEMS.filter((item) => [...paths.keys()].some((path) => navOwnsPath(item.to, path))).map((item) => item.to)),
     [paths],

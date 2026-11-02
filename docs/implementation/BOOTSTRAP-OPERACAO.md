@@ -36,6 +36,8 @@ O `owner` é a identidade nativa Happier, não e-mail inventado. O repositório 
 2. `operator-bootstrap`: prepara código de 10 minutos para o proprietário e informa somente o caminho do arquivo privado. Ler pelo terminal privado e inserir no painel; apagar o arquivo após uso. Não enviar pelo chat.
 3. `serve`: exige instalação inicializada e chave existente. Inicia o cockpit, autentica sessão Happier e permite administração assinada. Não cria gerente, workers, contas nem contextos por credencial implícita.
 
+`inspect` é uma operação local somente leitura: `npm run gateway -- inspect /caminho/config.json`. Retorna códigos e estados dos pré-requisitos sem exibir caminhos, usuários ou acesso ao banco. Exit 0 significa somente que todos os checks pontuais retornaram `ok`; exit 2 indica ao menos um `blocked` ou `unknown`. Configuração inválida ou arquivo privado inseguro produzem exit 1, sem imprimir o segredo. Não aplica migrações, não cria arquivos e não inicia o gateway ou agentes. Consulte `INSTALLATION-READINESS-20261102.md`; esse comando não certifica produção nem testa as contas de IA.
+
 Conversa canônica continua no Happier. O painel pode vincular uma sessão Happier existente: a credencial autenticada precisa provar acesso ao mesmo ID e a sessão deve declarar E2EE. A transcrição e a chave de conteúdo permanecem no Happier/cliente; vincular não autoriza custódia de gerente ou inferência. Não declarar desenvolvimento autônomo operacional por conseguir abrir a interface.
 
 Rollback de código: parar somente o gateway novo e voltar ao commit anterior; não remover chaves/banco. Migrações adicionadas não são revertidas automaticamente. Restore e homologação de infraestrutura continuam sujeitos aos gates documentados.

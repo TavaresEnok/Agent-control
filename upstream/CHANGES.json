@@ -45,8 +45,8 @@
     {
       "path": "packages/cezar/src/workflows/run.ts",
       "upstream_blob": "a0cbeeb9e0bb90c5b58a93d1203b5201d5445abd",
-      "current_blob": "c840da375612323378567041c013a89d18581442",
-      "sha256": "a7d7e1f4a4e677174e50316187d40d333967f29b5165f177c934b2d7224d2448"
+      "current_blob": "cbdd2f5a542f531e59934d691bd39bf1bda3d9da",
+      "sha256": "325a211123b0710eb7b238094204ca96ad9165a6db4b37963cf208f343b275cb"
     },
     {
       "path": "packages/cezar/src/workflows/templates.ts",
@@ -103,10 +103,22 @@
       "sha256": "442b84181bcdce699746eea35a0b3575f2ec6887216977b39e0f2208c2f4ea5a"
     },
     {
+      "path": "packages/web/src/components/first-run.tsx",
+      "upstream_blob": "fd4c1d5f2564aa52b2595a5df723ccb0d4e3ae6e",
+      "current_blob": "64659acbe07ce23642ec9231ff5ee0702b30e3d3",
+      "sha256": "9229cb4137ebf2fbf5170790ad89968ad9890bf83dad273e8c5312aa85ec1d2e"
+    },
+    {
       "path": "packages/web/src/hooks/use-webhooks.ts",
       "upstream_blob": "bb5b31d0fd448f0323f9351c2cde5457f1727603",
       "current_blob": "6512091b357d8dee090d53aeecd8c11eaae82b89",
       "sha256": "0b62170f5149302ebe6e30db9ee459332f34fa0e5f8033100b65f64d6a8b3ea2"
+    },
+    {
+      "path": "packages/web/src/lib/telemetry.ts",
+      "upstream_blob": "a395d853bb30a19f853390bd95d5f928a0edb0bf",
+      "current_blob": "3e0aae039de3b5e9fb798599e035e8511c8ebb86",
+      "sha256": "0e8851e4c611c2d6e83202cfde5e34e4b17d9baf5c40a287e0131e46d485b939"
     },
     {
       "path": "packages/web/src/routes.test.tsx",
@@ -152,7 +164,7 @@
     {
       "path": "packages/contract/src/agent-control-operations.ts",
       "change": "added",
-      "sha256": "e2e097c07a79356f23f85545710668ab25569872a23b4a4d94c833d8888bbaf8"
+      "sha256": "06dd46579cdc19a786ee8435ed03934e3cb2fced1d8fc6507d2626fe08eb51ea"
     },
     {
       "path": "packages/contract/src/agent-control-plans.ts",
@@ -180,6 +192,16 @@
       "sha256": "3d8c9b307b879ac2bd4cac792ffc9c875229f4ba2e840e92d3dadef2a399dbe9"
     },
     {
+      "path": "packages/web/src/components/first-run-managed.test.tsx",
+      "change": "added",
+      "sha256": "3a7573c6940dd4d7852eecd3bd7f938211c9f5d8fa36f3a355b486aa9c2ce9f9"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-backup-preview.ts",
+      "change": "added",
+      "sha256": "6608c87ebec74ad1f4e50dad771d1776de0d594a0bee0f43005b62c601033c07"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-capacity-editor.test.tsx",
       "change": "added",
       "sha256": "0f54bfe57537a403664e12447485d89dfe1a7c79257f5a96cd7ea48ad9fd2025"
@@ -190,6 +212,16 @@
       "sha256": "5ca8c2a7e1d5af4519ba83e674a7d6df9fec0604ab2284daba7c8d5589ab0453"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-diagnostics.test.tsx",
+      "change": "added",
+      "sha256": "3d894c3d7c91ac4366a9820abe8cb562792635ba53d2eac620a3b46dc3533cd1"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-diagnostics.tsx",
+      "change": "added",
+      "sha256": "75ee715c02cd87f603e90d10002525bb8a0a7a8b623be0cd8b1cb335a73ebd04"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-fetch.test.ts",
       "change": "added",
       "sha256": "5aa18111a31f8735daf5b634a34566311982a59eee86bcaa4028d42b68786308"
@@ -198,6 +230,11 @@
       "path": "packages/web/src/routes/settings/agent-control-fetch.ts",
       "change": "added",
       "sha256": "00ef344aea1a7c5e2e92171ea24e0dba11b1af60380835852fa6815bc04ecea2"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-import-preview.tsx",
+      "change": "added",
+      "sha256": "bb38ef9bf811c22b3ba845c847c51d0859705cd6a7b324376963237de3949cd0"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-integration-approval.test.tsx",
@@ -250,6 +287,16 @@
       "sha256": "89e032cee504de4241b11b027290a39668ed0302afb0d4da3f2f98599070521d"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-project-admin.test.tsx",
+      "change": "added",
+      "sha256": "44b65df06d0358c9ff64991a6b8221d2b372a4daeb968b42e4ab8efa272b7703"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-project-admin.tsx",
+      "change": "added",
+      "sha256": "85a32a9c48c4dd8a9cdf88b2fc883910a8792255b3a050d454a07a5b36854780"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-provider-collectors.tsx",
       "change": "added",
       "sha256": "d1ad719ba6164d94a344e6fa85f8299844b78419473ba3f51c35d72f1048bdbe"
@@ -260,9 +307,14 @@
       "sha256": "076c3af0b518cd69b4b0dcf2ca98a64283cdef061c01ac25adb6ad2554db4471"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
+      "change": "added",
+      "sha256": "50fa2cdcdcd132a7456c5c4e65e63f460ec1c7e861ce3c68f52f516af1594f0e"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "451d54589a0965d3c0fa43e9781d3c63e7239e94cefac9e66e8bcb632d3bd6a8"
+      "sha256": "ae8cd063ae22db40a8af07eb74fd565859ac724a1a956e2d4854770df924a5d1"
     }
   ],
   "happier": [

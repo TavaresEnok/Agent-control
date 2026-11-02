@@ -1,0 +1,5 @@
+Command: npm run typecheck
+Exit: 1
+src/cezar.ts(118,55): error TS2345: RunRecord workflowDef is optional but recoveryStateDigest parameter required it.
+src/cezar.ts(444,92): error TS2345: RunRecord workflowDef is optional but recoveryStateDigest parameter required it.
+Correction: recoveryStateDigest now accepts optional workflowDef and graphState. This is a transcript of the compiler output abbreviated to the relevant mismatch; the initial output was not redirected to a file.

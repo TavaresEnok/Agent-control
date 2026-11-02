@@ -1,0 +1,3 @@
+PRODUCT_ADMIN_MOBILE_FAILED: registration: root selection (TimeoutError)
+PRODUCT_ADMIN_MOBILE_INDICATORS: {"panel":true,"inputs":16,"registrationButton":[{"disabled":true}],"alerts":[]}
+exit_code=1

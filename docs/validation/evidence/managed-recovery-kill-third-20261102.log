@@ -1,0 +1,38 @@
+start 2026-11-02T19:29:06Z
+bf4a117d66e47568ed40adfe024e6e166e9f9de631bd77ef36d3f00c6c31647a  db/migrations/039_project_admin_intents.sql
+24db6f1e6f43e31a6f419153389a0a85c8f7163053f7b7eeea65f4ccb6d6bed3  -
+TAP version 13
+# Subtest: managed SIGKILL after physical reconciles without repeating effect
+not ok 1 - managed SIGKILL after physical reconciles without repeating effect
+  ---
+  duration_ms: 10505.164205
+  type: 'test'
+  location: '/workspace/tests/managed-recovery.test.ts:1:749'
+  failureType: 'testCodeFailure'
+  error: 'RECOVERY_FAILED {"error":"workflow ended at \\"failed\\"","steps":[{"id":"launch-0","name":"Fork","kind":"check","status":"done","iterations":2,"tokensUsed":0,"startedAt":"2026-11-02T19:29:15.085Z","finishedAt":"2026-11-02T19:29:15.089Z"},{"id":"task-one-implement","name":"task-one","kind":"agent","status":"done","iterations":0,"tokensUsed":0,"startedAt":"2026-11-02T19:29:15.087Z","finishedAt":"2026-11-02T19:29:15.088Z"},{"id":"task-two-implement","name":"task-two","kind":"agent","status":"done","iterations":0,"tokensUsed":0,"startedAt":"2026-11-02T19:29:15.087Z","finishedAt":"2026-11-02T19:29:15.088Z"},{"id":"task-one-qa","name":"task-one: qa","kind":"agent","status":"done","iterations":1,"tokensUsed":0,"startedAt":"2026-11-02T19:29:15.095Z","finishedAt":"2026-11-02T19:29:16.071Z","sessionId":"e52639a4-1c60-4616-8c3e-51902cf51722","backend":"claude","profileId":"default","usageInvocationEpoch":1,"usageInvocationsStarted":1},{"id":"task-one-review","name":"task-one: review","kind":"agent","status":"done","iterations":1,"tokensUsed":0,"startedAt":"2026-11-02T19:29:16.076Z","finishedAt":"2026-11-02T19:29:16.876Z","sessionId":"f46e1e4d-817f-483c-8c43-6c2acf845a83","backend":"claude","profileId":"default","usageInvocationEpoch":1,"usageInvocationsStarted":1},{"id":"task-two-qa","name":"task-two: qa","kind":"agent","status":"done","iterations":1,"tokensUsed":0,"startedAt":"2026-11-02T19:29:16.879Z","finishedAt":"2026-11-02T19:29:17.711Z","sessionId":"66123bfe-95e6-4a14-9e8d-c0abb33ef3d4","backend":"claude","profileId":"default","usageInvocationEpoch":1,"usageInvocationsStarted":1},{"id":"task-two-review","name":"task-two: review","kind":"agent","status":"done","iterations":1,"tokensUsed":0,"startedAt":"2026-11-02T19:29:17.719Z","finishedAt":"2026-11-02T19:29:18.641Z","sessionId":"173c9bfc-ba28-4b13-8fa2-fc5da0e1f6cc","backend":"claude","profileId":"default","usageInvocationEpoch":1,"usageInvocationsStarted":1},{"id":"compose-0-launch","name":"compose-0","kind":"check","status":"failed","iterations":1,"tokensUsed":0,"startedAt":"2026-11-02T19:29:18.655Z","finishedAt":"2026-11-02T19:29:18.842Z","error":"ended on \\"failed\\""},{"id":"compose-0-qa","name":"compose-0: qa","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"compose-0-review","name":"compose-0: review","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"compose-0-integrate","name":"compose-0: integrate","kind":"agent","status":"pending","iterations":0,"tokensUsed":0}]}'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/workspace/tests/managed-recovery.test.ts:69:36)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: managed SIGKILL after cas reconciles without repeating effect
+ok 2 - managed SIGKILL after cas reconciles without repeating effect
+  ---
+  duration_ms: 10312.808792
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 22663.817784
+
+24db6f1e6f43e31a6f419153389a0a85c8f7163053f7b7eeea65f4ccb6d6bed3  -
+end 2026-11-02T19:29:29Z
+exit 1

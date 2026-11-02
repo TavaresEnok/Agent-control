@@ -15,6 +15,8 @@ begin
   input = JSON.parse(STDIN.read(65_537))
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
   expected = case input['action']
+    when 'identity-at' then %w[action base candidate repo sourceRepo]
+    when 'verify-composition' then %w[action base candidate repo sourceRepo sources]
     when 'import' then %w[action base candidate repo sourceRepo]
     when 'compose' then %w[action base destination repo sources]
     when 'identity', 'diff' then %w[action base candidate repo]
@@ -24,7 +26,7 @@ begin
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[identity diff observe snapshot cas compose import].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[identity diff observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
   (input['action'] == 'compose' ? %w[base] : %w[base candidate]).each do |key|
     raise 'INVALID_GIT_ID' unless input[key].is_a?(String) && input[key].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
   end
@@ -90,6 +92,22 @@ begin
     exit 0
   end
   candidate = input.fetch('candidate')
+  if input['action'] == 'identity-at'
+    source_repo = File.realpath(input.fetch('sourceRepo'))
+    raise 'GIT_OPERATION_FAILED' unless git(source_repo, 'rev-parse', 'HEAD') == candidate && git(source_repo, 'rev-parse', "#{candidate}^") == base
+    tree = git(source_repo, 'rev-parse', "#{candidate}^{tree}")
+    puts JSON.generate({commit: candidate, base: base, tree: tree, legacyDigest: AcArtifactIdentity.digest(repo: source_repo, commit: candidate, base: base), source: 'AcSafeGit+AcArtifactIdentity'})
+    exit 0
+  end
+  if input['action'] == 'verify-composition'
+    source_repo = File.realpath(input.fetch('sourceRepo')); sources = input.fetch('sources')
+    raise 'INVALID_REQUEST' unless sources.is_a?(Array) && sources.length.between?(1, 16) && sources.all? { |id| id.is_a?(String) && id.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/) }
+    raise 'GIT_OPERATION_FAILED' unless git(source_repo, 'rev-parse', 'HEAD') == candidate && git(source_repo, 'rev-parse', "#{candidate}^") == base
+    sources.each_with_index { |id, index| raise 'GIT_OPERATION_FAILED' unless git(source_repo, 'rev-parse', "refs/agent-control/sources/#{index}") == id }
+    tree = git(source_repo, 'rev-parse', "#{candidate}^{tree}")
+    puts JSON.generate({commit: candidate, base: base, tree: tree, legacyDigest: AcArtifactIdentity.digest(repo: source_repo, commit: candidate, base: base), source: 'AcSafeGit+AcArtifactIdentity'})
+    exit 0
+  end
   if input['action'] == 'import'
     source_repo = File.realpath(input.fetch('sourceRepo'))
     AcSafeGit.with_repository(source_repo) do |metadata|

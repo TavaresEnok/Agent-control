@@ -13,7 +13,15 @@ const metricSampleSchema=z.object({labels:z.record(z.string(),z.string()),value:
 export const agentControlOperationalSnapshotSchema=z.object({schemaVersion:z.literal(1),scope:z.literal('installation_aggregate'),
  observedAt:z.iso.datetime(),databaseReadOnly:z.literal(true),diskObservation:z.enum(['not_configured','observed','partially_unavailable']),
  metrics:z.array(z.object({name:z.string().regex(/^agent_control_[a-z_]+$/),help:z.string(),type:z.literal('gauge'),samples:z.array(metricSampleSchema)}).strict())}).strict();
+export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact']),id:z.uuid()}).strict();
+export const agentControlDiagnosticFindingSchema=z.object({code:z.enum(['context_paused','context_draining','cancellation_requested','cancellation_confirmed',
+ 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing']),
+ meaning:z.string(),owner:z.string(),nextCondition:z.string(),evidence:z.array(agentControlDiagnosticEvidenceSchema)}).strict();
+export const agentControlDiagnosticsSchema=z.object({contextId:z.uuid(),findings:z.array(agentControlDiagnosticFindingSchema),truncated:z.boolean(),
+ assessment:z.enum(['observed','unknown']),explanation:z.string().optional()}).strict();
 export type AgentControlProviderBinding=z.infer<typeof agentControlProviderBindingSchema>;
 export type AgentControlProviderAdapter=z.infer<typeof agentControlProviderAdapterSchema>;
 export type AgentControlProviderBindInput=z.infer<typeof agentControlProviderBindInputSchema>;
 export type AgentControlOperationalSnapshot=z.infer<typeof agentControlOperationalSnapshotSchema>;
+export type AgentControlDiagnosticFinding=z.infer<typeof agentControlDiagnosticFindingSchema>;
+export type AgentControlDiagnostics=z.infer<typeof agentControlDiagnosticsSchema>;

@@ -5,12 +5,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md",
-    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md;docs/implementation/PROJECT-ADMIN-20261102.md;docs/implementation/PRODUCT-P0-CONTINUATION-20261102.md;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
+    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts;src/project-admin.ts;src/project-admin-api.ts;tests/project-admin.test.ts;tests/project-admin-api.test.ts;src/installation-readiness.ts;tests/installation-readiness.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; local registration remains private-config based, at most four active runtimes, no live remote project deployment."
+    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; registration uses signed administration and configured private roots, at most four active runtimes, no live remote project deployment. Signed local project registration requires configured private roots; filesystem races, remote administration and operational deployment remain open. Integrated build passed; this is not behavioral acceptance. The third mobile run covered synthetic registration, preview and geometry but is not overall mobile acceptance; local inspect is read-only and does not establish operational readiness. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
   },
   {
     "id": "RF-02",
@@ -18,12 +18,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md",
-    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md;docs/implementation/PROJECT-ADMIN-20261102.md;docs/implementation/PRODUCT-P0-CONTINUATION-20261102.md",
+    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts;src/project-admin.ts;src/project-admin-api.ts;tests/project-admin.test.ts;tests/project-admin-api.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; local registration remains private-config based, at most four active runtimes, no live remote project deployment."
+    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; registration uses signed administration and configured private roots, at most four active runtimes, no live remote project deployment. Signed local project registration requires configured private roots; filesystem races, remote administration and operational deployment remain open."
   },
   {
     "id": "RF-03",
@@ -265,12 +265,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/implementation/MANAGED-EXECUTION-LIMITS.md",
+    "files": "src/managed-plan.ts;tests/managed-core-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Preflight explicitly refuses maxCorrections greater than zero before recipe or children; plans remain previewable and no correction executor exists."
   },
   {
     "id": "RF-22",
@@ -278,12 +278,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log",
-    "files": "src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/six-workers-integrated-build-second-20261102.log",
+    "files": "src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native graph resumes from completed QA/review/judge/integration and physical implementation/QA receipts; Prepared QA/integration adopted only with proof of no launch; missing output, other uncertain effects and real providers remain open."
+    "limitation": "Native graph resumes from completed QA/review/judge/integration and physical implementation/QA receipts; Prepared QA/integration adopted only with proof of no launch; missing output, other uncertain effects and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Integrated build passed; this is not behavioral acceptance."
   },
   {
     "id": "RF-23",
@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open."
+    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open."
   },
   {
     "id": "RF-24",
@@ -304,12 +304,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/execution-controls-regression-final-20261102.log",
-    "files": "src/control.ts;src/cancellation.ts;src/ledger.ts;src/cezar.ts;tests/native-pause.test.ts;tests/cancellation.test.ts",
+    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/CORE-C-managed-cancel-final-20261102.log;docs/validation/evidence/CORE-C-live-writer-first-20261102.log",
+    "files": "src/control.ts;src/cancellation.ts;src/ledger.ts;src/cezar.ts;tests/native-pause.test.ts;tests/cancellation.test.ts;tests/managed-cancellation.test.ts;tests/managed-running-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Signed pause/drain/cancellation implemented; uncertain grants held and forged receipt rejected. Broker stop uses contract stub in this increment; complete physical cancellation, remote linkage and concurrent recovery remain open."
+    "limitation": "Signed pause/drain/cancellation implemented; uncertain grants held and forged receipt rejected. Broker stop uses contract stub in this increment; complete physical cancellation, remote linkage and concurrent recovery remain open. Parent cancellation uses simulated physical receipts; a separate physical broker baseline stops a live worker. Inaccessible managed executor and remote cancellation remain open."
   },
   {
     "id": "RF-25",
@@ -317,12 +317,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/managed-runtime-fourth-physical-check-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
-    "files": "src/managed-plan.ts;src/cezar.ts;src/engineering.ts;src/quality.ts;src/git.ts;services/agent-control-git/helper.rb",
+    "evidence": "docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/managed-runtime-fourth-physical-check-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log",
+    "files": "src/managed-plan.ts;src/cezar.ts;src/engineering.ts;src/quality.ts;src/git.ts;services/agent-control-git/helper.rb;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Frozen synthetic task DAG executes under native Cezar; child artifacts, trusted composition and new composition QA/review precede exact CAS. Failed physical task blocks composition/integration. Managed restart recovery, correction loops, all cancellation races and real agent quality remain open."
+    "limitation": "Frozen synthetic task DAG executes under native Cezar; child artifacts, trusted composition and new composition QA/review precede exact CAS. Failed physical task blocks composition/integration. Other managed restart intervals, correction loops, all cancellation races and real agent quality remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open."
   },
   {
     "id": "RF-26",
@@ -330,12 +330,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts;src/remote-git.ts;tests/remote-git.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Two disposable SSH hosts with no model credentials; remote AI CLIs and production hosts not evaluated."
+    "limitation": "Two disposable SSH hosts with no model credentials; remote AI CLIs and production hosts not evaluated. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
   },
   {
     "id": "RF-27",
@@ -343,12 +343,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py;src/remote-git.ts;tests/remote-git.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Plan binding and parent-confirmed cancellation implemented. Two-host lost-ack proof is historical; new cancellation through SSH, supervisor death and interrupted-host recovery remain open."
+    "limitation": "Plan binding and parent-confirmed cancellation implemented. Two-host lost-ack proof is historical; new cancellation through SSH, supervisor death and interrupted-host recovery remain open. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
   },
   {
     "id": "RF-28",
@@ -421,12 +421,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/implementation/IMPORT-PREVIEW-20261102.md",
+    "files": "src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore."
   },
   {
     "id": "RF-34",
@@ -434,12 +434,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
-    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/relocate-restored-worktrees.mjs",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/IMPORT-PREVIEW-20261102.md",
+    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/relocate-restored-worktrees.mjs;src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Encrypted synthetic backup, new database, relocated Git/native metadata and managed runtime startup verified; full UI, external effects and off-host custody pending."
+    "limitation": "Encrypted synthetic backup, new database, relocated Git/native metadata and managed runtime startup verified; full UI, external effects and off-host custody pending. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore."
   },
   {
     "id": "RF-35",
@@ -564,12 +564,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/guarded-pause-20261102.log",
-    "files": "src/control.ts;src/api.ts;src/ledger.ts;db/migrations/024_pause_revision.sql;tests/control.test.ts",
+    "evidence": "docs/validation/evidence/guarded-pause-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/control.ts;src/api.ts;src/ledger.ts;db/migrations/024_pause_revision.sql;tests/control.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Signed pause and revision conflicts tested with synthetic database; full mobile, recovery and all ingress scenarios not homologated."
+    "limitation": "Signed pause and revision conflicts tested with synthetic database; full mobile, recovery and all ingress scenarios not homologated. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open."
   },
   {
     "id": "RF-45",
@@ -577,12 +577,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/CORE-C-broker-terminal-recovery-first-20261102.log",
+    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/sandbox-broker.ts;src/isolated-verification.ts;tests/broker-terminal-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication. Receipt consistency and fenced recovery were tested in limited synthetic fixtures; full ingress and provider equivalence remain open."
   },
   {
     "id": "RF-46",
@@ -642,12 +642,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log",
-    "files": "src/managed-plan.ts;src/workspace-stream.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
+    "files": "src/managed-plan.ts;src/workspace-stream.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native graph and scoped event projection reused. Mobile proof demonstrates proposal view and unavailable-manager honesty; no physical-phone live correction graph or end-to-end restart guarantee."
+    "limitation": "Native graph and scoped event projection reused. Mobile proof demonstrates proposal view and unavailable-manager honesty; no physical-phone live correction graph or end-to-end restart guarantee. Third mobile run covered registration, preview and geometry but counted two diagnostics headings. Keys and root aria-label were fixed; the subsequent final Chromium check passed with one diagnostic heading. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
   },
   {
     "id": "RF-51",
@@ -655,12 +655,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
+    "files": "src/remote.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
   },
   {
     "id": "RF-52",
@@ -798,12 +798,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/validation/evidence/diagnostics-focused-first-20261102.log;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/diagnostics-manager-transport-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
+    "files": "src/diagnostics.ts;src/diagnostics-api.ts;tests/diagnostics.test.ts;src/installation-readiness.ts;src/server-main.ts;tests/installation-readiness.test.ts;tests/managers.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Read-only context diagnostics reports evidenced findings or unknown; focused test does not cover approval or receipt inconsistency findings and does not prove coverage for every stopped task. Integrated build passed; this is not behavioral acceptance. Local read-only readiness passed 2/2 including PG, TCP and CLI; manager transport distinction passed 1/1. Duplicate diagnostic UI regression is preserved; fixed focused test was reported 1/1 without an individual log, and the subsequent final Chromium check passed with one diagnostic heading. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
   },
   {
     "id": "RNF-06",
@@ -1006,12 +1006,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log",
-    "files": "src/cezar.ts;tests/native-recovery.test.ts;tests/native-pause.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/cezar.ts;tests/native-recovery.test.ts;tests/native-pause.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Pause preserved across successor reconciliation and at native QA boundary; crash at other stages and mobile control remain open."
+    "limitation": "Pause preserved across successor reconciliation and at native QA boundary; crash at other stages and mobile control remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open."
   },
   {
     "id": "T07",
@@ -1032,12 +1032,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-graph-recovery-red-20261102.log",
-    "files": "src/cezar.ts;src/isolated-implementation.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-graph-recovery-red-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
+    "files": "src/cezar.ts;src/isolated-implementation.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Actual controller SIGKILL at one receipt boundary; fallback, cancellation and other node recovery positions remain open."
+    "limitation": "Actual controller SIGKILL at one receipt boundary; fallback, cancellation and other node recovery positions remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open."
   },
   {
     "id": "T09",
@@ -1110,12 +1110,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log",
-    "files": "src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
+    "files": "src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Real SSH and completed result after restart; interrupted in-flight operation still uncertain."
+    "limitation": "Real SSH and completed result after restart; interrupted in-flight operation still uncertain. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
   },
   {
     "id": "T15",
@@ -1162,12 +1162,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
-    "files": "scripts/prove-backup-restore.mjs;scripts/prove-restored-worktrees.mjs;tests/fixtures/restored-runtime-smoke.ts",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/IMPORT-PREVIEW-20261102.md",
+    "files": "scripts/prove-backup-restore.mjs;scripts/prove-restored-worktrees.mjs;tests/fixtures/restored-runtime-smoke.ts;src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified."
+    "limitation": "Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore."
   },
   {
     "id": "T19",
@@ -1175,12 +1175,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/;ACCEPTANCE-I0-I2.md;docs/implementation/MANAGER-LIFECYCLE-20261102.md;docs/validation/evidence/diagnostics-manager-transport-20261102.log",
+    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/managers.ts;tests/managers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Explicit registry restart revalidates caller-supplied credentials; no authorized administrative key provider or operational restart proof is established. Transport-disconnected and fenced manager authority were distinguished in the focused synthetic test; operational restart remains unproven."
   },
   {
     "id": "T20",
@@ -1188,12 +1188,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/validation/evidence/CORE-C-managed-cancel-final-20261102.log;docs/validation/evidence/CORE-C-live-writer-first-20261102.log",
+    "files": "src/cancellation.ts;tests/managed-cancellation.test.ts;tests/managed-running-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Parent cancellation uses simulated physical receipts; a separate physical broker baseline stops a live worker. Inaccessible managed executor and remote cancellation remain open."
   },
   {
     "id": "T21",
@@ -1253,12 +1253,12 @@
     "status": "future_phase",
     "code_state": "not_implemented",
     "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "evidence": "docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md",
+    "files": "src/remote.ts;src/remote-git.ts;services/remote-worker/worker.py;tests/remote-git.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; intent-payload binding, product integration, aggregate resource limits and lock recovery remain open."
   },
   {
     "id": "T26",
@@ -1383,12 +1383,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
-    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
+    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified."
+    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified. The third mobile run found duplicate diagnostic headings; focused corrected test was reported 1/1 without a standalone log. The subsequent final Chromium check passed with one diagnostic heading; suspension/reconnect acceptance remains pending. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
   },
   {
     "id": "T36",

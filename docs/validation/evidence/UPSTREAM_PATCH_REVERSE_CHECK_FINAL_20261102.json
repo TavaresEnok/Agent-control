@@ -1,0 +1,16 @@
+{
+  "checks": [
+    {
+      "upstream": "cezar",
+      "exitCode": 0,
+      "scope": "reverse applicability check with upstream working directory; no patch applied"
+    },
+    {
+      "upstream": "happier",
+      "exitCode": 0,
+      "scope": "reverse applicability check with upstream working directory; no patch applied"
+    }
+  ],
+  "result": "passed",
+  "priorAttempt": "UPSTREAM_PATCH_REVERSE_CHECK_20261102.json used parent working directory and failed; no patch was applied"
+}

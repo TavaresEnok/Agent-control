@@ -7,6 +7,7 @@ import {Ledger} from './ledger.ts';
 import {Operators} from './operator.ts';
 import {Refusal,digest} from './contracts.ts';
 import {Projects} from './projects.ts';
+import {ProjectRoot} from './project-admin.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -17,11 +18,12 @@ const absolute=z.string().refine(isAbsolute,'Absolute path required');
 const projectDefinition=z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200)}).strict();
 export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
+ projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
  happier:z.object({upstreamOrigin:origin(),webOrigin:origin(),publicServerOrigin:origin()}).strict(),
  sessionMaxAgeSeconds:z.number().int().min(60).max(2592000).default(86400),
-}).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project');
+}).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root');
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536){
@@ -32,7 +34,13 @@ export async function readPrivateFile(path:string,maxBytes=65536){
   const bytes=await file.readFile();if(bytes.length>maxBytes)throw new Refusal('PRIVATE_FILE_TOO_LARGE');return bytes;
  }finally{await file.close();}
 }
-export async function loadInstallation(path:string){return Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8')));}
+export async function loadInstallation(path:string){
+ const config=Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8')));
+ for(const root of config.projectRoots){
+  if(resolve(root.path)!==root.path||await realpath(root.path)!==root.path||!(await stat(root.path)).isDirectory())throw new Refusal('PROJECT_ROOT_UNAVAILABLE');
+ }
+ return config;
+}
 export async function privateDirectory(path:string){
  if(resolve(path)!==path)throw new Refusal('NON_CANONICAL_PRIVATE_DIRECTORY');
  await mkdir(path,{recursive:true,mode:0o700});

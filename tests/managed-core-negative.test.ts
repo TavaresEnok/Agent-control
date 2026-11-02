@@ -3,11 +3,21 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {Ledger} from '../src/ledger.ts';
 import {CezarRuntime} from '../src/cezar.ts';
-import {ManagerPlans, type ManagerPlan} from '../src/planning.ts';
+import {ManagerPlans,compileManagerPlan, type ManagerPlan} from '../src/planning.ts';
+import {executionRecipe} from '../src/managed-plan.ts';
 import {digest} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const policy={schemaVersion:1 as const,requiredReviews:1,allowLowRiskQaWaiver:false,requireJudge:true,requireHumanIntegration:true,verifierDigest:'a'.repeat(64)};
+
+test('managed correction budgets remain previewable but cannot launch without an executor',()=>{
+ const plan:ManagerPlan={schemaVersion:1,contextId:randomUUID(),objectiveRef:'message:objective',sourceMessageRef:'message:request',constraintRefs:[],tasks:[{
+  id:'one',objectiveRef:'message:one',acceptanceRefs:['acceptance:synthetic-effect-v1'],inputRefs:[],outputRefs:['output:one'],dependsOn:[],writePaths:['src/one'],qualityRevision:1,targetRef:'refs/heads/main',maxCorrections:1}]};
+ const policies=[{qualityRevision:1,policy}];
+ assert.doesNotThrow(()=>compileManagerPlan(plan,policies));
+ assert.throws(()=>executionRecipe(plan,policies,randomUUID(),1),/MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE/);
+ assert.doesNotThrow(()=>executionRecipe({...plan,tasks:plan.tasks.map(task=>({...task,maxCorrections:0}))},policies,randomUUID(),1));
+});
 
 test('managed children cannot change identity or cross contexts, and are never enqueued independently',async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');

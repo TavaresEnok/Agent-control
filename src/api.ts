@@ -16,6 +16,8 @@ import {createObservabilityApi} from './observability-api.ts';
 import {OperationalObservability} from './observability.ts';
 import {diskPolicyFromEnvironment} from './disk-admission.ts';
 import {managedWorkspaceStream} from './workspace-stream.ts';
+import {createImportPreviewApi} from './import-preview-api.ts';
+import {createDiagnosticsApi} from './diagnostics-api.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -67,6 +69,8 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.route('/api/v1/ac',createPlanningApi(ledger,runtime.projectId,manager));
   app.route('/api/v1/ac',createObservabilityApi(new OperationalObservability(ledger,{diskPolicy:diskPolicyFromEnvironment()})));
+  app.route('/api/v1/ac',createImportPreviewApi(ledger,runtime.projectId));
+  app.route('/api/v1/ac',createDiagnosticsApi(ledger,runtime.projectId));
   const family = app
     .get('/api/v1/ac/auth/status',c=>c.json({authenticated:true,principalId:c.get('principal')}))
     .get('/api/v1/ac/operator/identity',async c=>{

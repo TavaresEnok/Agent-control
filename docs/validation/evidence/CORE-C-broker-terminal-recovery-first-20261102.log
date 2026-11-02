@@ -1,0 +1,22 @@
+START 2026-11-02T19:23:05Z
+COMMAND: docker compose -p ac-managed-corec-5cef87ab -f deploy/compose.lab.yml --profile sandbox-test run --rm --no-deps -e AC_SANDBOX_DATABASE_URL=<isolated-db>/ac_managed_test_5cef87ab sandbox-client node --import tsx --test tests/broker-terminal-recovery.test.ts
+ Volume ac-managed-corec-5cef87ab_broker-socket  Creating
+ Volume ac-managed-corec-5cef87ab_broker-socket  Created
+TAP version 13
+# Subtest: broker replay requires matching terminal job and grant evidence
+ok 1 - broker replay requires matching terminal job and grant evidence
+  ---
+  duration_ms: 915.729735
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1778.859796
+EXIT 0
+END 2026-11-02T19:23:07Z

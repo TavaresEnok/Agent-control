@@ -1,0 +1,9 @@
+
+> agent-control@0.1.0 prebuild
+> node scripts/prepare-build.mjs --before
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+tests/diagnostics.test.ts(29,141): error TS2345: Argument of type 'string' is not assignable to parameter of type '"approval_missing" | "cancellation_confirmed" | "cancellation_requested" | "capacity_wait" | "context_draining" | "context_paused" | "effect_uncertain" | "integration_uncertain" | "managed_effect_uncertain" | "physical_receipt_unconfirmed" | "policy_unknown" | "stage_uncertain"'.

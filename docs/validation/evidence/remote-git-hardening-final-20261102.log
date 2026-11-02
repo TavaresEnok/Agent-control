@@ -1,0 +1,41 @@
+TAP version 13
+# hint: Using 'master' as the name for the initial branch. This default branch name
+# hint: will change to "main" in Git 3.0. To configure the initial branch name
+# hint: to use in all of your new repositories, which will suppress this warning,
+# hint: call:
+# hint:
+# hint: \\tgit config --global init.defaultBranch <name>
+# hint:
+# hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+# hint: 'development'. The just-created branch can be renamed via this command:
+# hint:
+# hint: \\tgit branch -m <name>
+# hint:
+# hint: Disable this message with "git config set advice.defaultBranchName false"
+# Subtest: bounded configured repository export verifies commit, tree, hash and idempotent materialization
+ok 1 - bounded configured repository export verifies commit, tree, hash and idempotent materialization
+  ---
+  duration_ms: 1720.525826
+  type: 'test'
+  ...
+# Subtest: two pinned SSH fixture hosts export only their configured commit and tree
+ok 2 - two pinned SSH fixture hosts export only their configured commit and tree
+  ---
+  duration_ms: 1852.235599
+  type: 'test'
+  ...
+# Subtest: remote export is bound to an authorized active intent and immutable operation identity
+ok 3 - remote export is bound to an authorized active intent and immutable operation identity
+  ---
+  duration_ms: 926.225933
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5288.412477
