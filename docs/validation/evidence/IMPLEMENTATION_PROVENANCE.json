@@ -9,12 +9,12 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "88fbe028f655372a14b1b5a6de4ef403159e092a",
+  "git_head_before_delivery": "853b9351918f05b079c1b3fa710c706eb690c95c",
   "worktree_changes_present": true,
   "new_sources": {
     "src/admission.ts": "d615b1dd28fe0de1e4078e9eb9016728d35897da7804d1931db0af4f59c86f65",
     "src/api.ts": "5167ba90227c3481c122ae5944e2f5d87a48d30d04b65ce9ee6fce122526b460",
-    "src/capacity.ts": "4f0422b11b3c7e45cab4cde0bf36cf9589c29ea261255e93431edc218378df0d",
+    "src/capacity.ts": "72daf05aa4da78ffbaf40333d518c2290f536388984a7a80b50ad554a00350bf",
     "src/cezar.ts": "93e62088bbf523d1966fca22f61cd46617ef08bbecfa7b00bcee9e5c5812c6ea",
     "src/context-keys.ts": "19e118903b2701751ff3c2c5e4da8e707989836a8b95e3891e4e72acb8feed07",
     "src/contracts.ts": "d4f93e41c08f2bf2296168b47321a51ecf2fa44de45c8d5fd25435d003cd8688",
@@ -67,7 +67,7 @@
     "db/migrations/026_sandbox_implementation_profile.sql": "9e620a7c269b236131cbabf8a3bad845b89ffc024e1121655cd13e23910cd385",
     "tests/admission.test.ts": "319422ed701e225f3f39dd37dafd5424e2b629bf8daba25227cf54338b2ea310",
     "tests/broker-recovery.test.ts": "9ece30855e189c122015854e8839468d2127f04113ee94d3f9f0e487262e25d6",
-    "tests/capacity.test.ts": "b4e56471be6274db275870782fbfe99207d9a2ff817b4b746ff32646516f5e99",
+    "tests/capacity.test.ts": "5437d272e290a7192cf659fd56572e2a67ee847099fd97ee778fbdc58b524e3c",
     "tests/context-keys.test.ts": "dad714157cc7c8f87568affc48666645d1ed215188e9df9cb91b3f1de83e9f7c",
     "tests/control.test.ts": "00db395fb827feb82cedb541871e5aea9f8e8b86a0dae4fc198edf0d8d1795a4",
     "tests/engineering.test.ts": "02237ddec9738a1e354085712967e703b5f537b8ee205115312f08596946d023",
@@ -108,7 +108,7 @@
     "scripts/synthetic-worker.mjs": "69fec5c252c65279d60f06ff93ac087438a0a00789dd840a7b5ac76cbb97db1f",
     "scripts/traceability.py": "18e0f3f6290593cad967d214914b23753e47c57c35e6f493bc9f3f532af4a000",
     "scripts/typecheck-happier-ui.mjs": "b417d59fab882126974e40df49b93309e89861af70910381510b7b3b3c106553",
-    "scripts/update-traceability-ssh-isolation.py": "38522d7bb75626732ac0b6fb0f1beb8c5e82292f47effa3a0ce5298a62bb0ce8",
+    "scripts/update-traceability-ssh-isolation.py": "d8a879af56ad878cb591f45a51fb8ab24e5820d8bfc843f4b03fd49a48ff2198",
     "scripts/upstream-changes.py": "8d5a78f14055a754de42d3c54664f75c7d65e3c094ebb8a8ade417d11b17ae78",
     "scripts/validate-increment.sh": "b1cbbc0da41fcdaddd98626303176c34e6839157a1dcce8721627d95e13f0a91",
     "scripts/verify-canonical-history.mjs": "092c2c3b646c25aae53b89b662f5e8bcc6b521ff113a0974f9fb92b36070a3f4",

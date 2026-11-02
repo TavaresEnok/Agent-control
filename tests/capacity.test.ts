@@ -71,6 +71,37 @@ test('emergency yields future attempts when a regular account recovers, without 
  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[emergency.id])).rows[0].state,'reserved');
  await release(regular.id);await release(emergency.id);
 });
+test('original Codex programming reserve is admitted only after other active programmer accounts are unavailable',async()=>{
+ const secondProject=randomUUID();
+ await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[secondProject,'Original reserve fixture']);
+ await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[secondProject,principal]);
+ await service.shareAccount(principal,accounts[2],secondProject);
+ const onlyOriginal:CapacityPolicy={schemaVersion:1,maxProgrammersPerContext:8,maxEvaluatorsPerContext:2,
+  roles:{programmer:{regular:[profiles[2]],emergency:[]}}};
+ const revision=await service.publish(principal,secondProject,0,onlyOriginal);
+ const secondContext=await db.createContext(principal,secondProject,randomUUID());
+ const secondAuthority=await db.acquire(principal,secondContext,randomUUID(),'fixture-manager',60);
+ await service.assignPolicy(principal,secondContext,revision);
+ const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:secondContext,policyRevision:1,
+  action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:original-reserve'}};
+ const secondIntent=(await db.accept(principal,command,secondAuthority,'api')).id;
+ const attempt={attemptId:randomUUID(),intentId:secondIntent,contextId:secondContext,role:'programmer' as const};
+ await service.configure(principal,{programmingLimit:128,evaluationLimit:128,
+  originalFallback:{accountId:accounts[2],programmingLimit:1,evaluationLimit:1}});
+ try{
+  await service.observeQuota(principal,accounts[0],{status:'available',source:'synthetic-fixture',ttlSeconds:3600});
+  await service.observeQuota(principal,accounts[2],{status:'available',source:'synthetic-fixture',ttlSeconds:3600});
+  await assert.rejects(service.reserve(principal,attempt,secondAuthority),/ORIGINAL_RESERVE_NOT_NEEDED/);
+  await service.observeQuota(principal,accounts[0],{status:'exhausted',source:'synthetic-fixture',ttlSeconds:3600});
+  await service.observeQuota(principal,accounts[1],{status:'exhausted',source:'synthetic-fixture',ttlSeconds:3600});
+  const grant=await service.reserve(principal,attempt,secondAuthority);
+  assert.equal(grant.account_id,accounts[2]);
+  await service.transition(principal,grant.id,secondAuthority,'released',{processId:'not-started',state:'not_started'});
+ }finally{
+  await service.configure(principal,{programmingLimit:128,evaluationLimit:128,originalFallback:null});
+  for(const account of accounts)await service.observeQuota(principal,account,{status:'available',source:'synthetic-fixture',ttlSeconds:3600});
+ }
+});
 test('uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt',async()=>{
  const grant=await service.reserve(principal,request(),authority);
  await service.transition(principal,grant.id,authority,'running');

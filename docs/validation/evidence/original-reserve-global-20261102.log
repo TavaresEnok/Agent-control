@@ -1,0 +1,7 @@
+Scope: synthetic accounts and PostgreSQL capacity ledger; no subscription inference.
+Command 1: docker compose -f deploy/compose.lab.yml exec -T runtime npm run typecheck
+Exit code 1: 0; tsc --noEmit passed.
+Command 2: docker compose -f deploy/compose.lab.yml exec -T runtime node --import tsx --test tests/capacity.test.ts
+Exit code 2: 0; 8 tests, 8 pass, 0 fail, duration 2172 ms.
+New assertion: a second project/context whose only programmer is the original reserve cannot receive that account while another eligible programmer account is active globally. After the other programmer quotas become exhausted, the reserve is admitted under its configured limit. An existing grant is released only with a trusted not-started receipt.
+Limit: quota observations are synthetic; no live account or automatic preemption of a running process was tested.

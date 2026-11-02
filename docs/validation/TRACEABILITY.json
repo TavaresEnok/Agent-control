@@ -132,15 +132,15 @@
   {
     "id": "RF-11",
     "normative_row": "RF-11\tP0\tRespeitar permanência de trabalhador regular e devolução da reserva emergencial\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/original-reserve-global-20261102.log",
+    "files": "src/capacity.ts;tests/capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Global original-account reserve admission tested with synthetic quotas; live providers and safe transition of running tasks remain open."
   },
   {
     "id": "RF-12",

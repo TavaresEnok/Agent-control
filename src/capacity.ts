@@ -213,8 +213,13 @@ export class Capacity {
           JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=x.project_id
           JOIN ac_quota_observations q ON q.account_id=a.id
           WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled
-          AND p.role IN ('programmer','reviewer','qa','specialist','judge') AND a.eligibility='documented_supported'
-          AND q.status='available' AND q.expires_at>clock_timestamp() LIMIT 1`,[selected.account_id])).rowCount;
+          AND (($2='programmer' AND p.role='programmer') OR ($2<>'programmer' AND p.role IN ('reviewer','qa','specialist','judge')))
+          AND a.eligibility='documented_supported'
+          AND q.status='available' AND q.expires_at>clock_timestamp() LIMIT 1`,[selected.account_id,request.role])).rowCount;
+        if(other&&request.role==='programmer'){
+          await c.query("UPDATE ac_capacity_waits SET reason='ORIGINAL_RESERVE_NOT_NEEDED' WHERE attempt_id=$1",[request.attemptId]);
+          return {blockedCode:'ORIGINAL_RESERVE_NOT_NEEDED'};
+        }
         if(!other)originalLimit=isEvaluation?config.original_evaluation_limit:config.original_programming_limit;
       }
       if (Number(counts.account)>=selected.max_concurrent || Number(counts.context)>=localLimit || Number(counts.global)>=globalLimit || Number(counts.account_role)>=originalLimit)
