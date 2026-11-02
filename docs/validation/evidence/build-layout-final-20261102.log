@@ -1,0 +1,10 @@
+
+> agent-control@0.1.0 prebuild
+> node scripts/prepare-build.mjs --before
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+BUILT_API_IMPORT_OK
+BUILT_API_IMPORT_AFTER_SOURCE_CLEANUP_OK

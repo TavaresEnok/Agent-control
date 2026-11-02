@@ -8,6 +8,7 @@ import { Operators,type OperatorProof } from './operator.ts';
 import { Admission } from './admission.ts';
 import { Templates,Template } from './templates.ts';
 import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
+import {ProviderCollectors,ProviderBinding,projectProviderSnapshot,type ProviderAdapter} from './providers.ts';
 import {IntegrationApproval,approveIntegration} from './approvals.ts';
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
@@ -21,6 +22,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('context.pause'),payload:z.object({paused:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
  z.object({...base,action:z.literal('context.drain'),payload:z.object({draining:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
  z.object({...base,action:z.literal('plan.cancel'),payload:z.object({intentId:Id,planRevision:z.number().int().positive()}).strict()}).strict(),
+ z.object({...base,action:z.literal('provider.bind'),payload:ProviderBinding}).strict(),
  z.object({...base,action:z.literal('account.add'),payload:AccountInput}).strict(),
  z.object({...base,action:z.literal('account.share'),payload:z.object({accountId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('account.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
@@ -34,7 +36,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
 /** Human administration has a separate intent identity but uses the same PG/RBAC authority.
  * A nested Capacity view shares this transaction: effect and dedupe commit together. */
 export class Control {
- constructor(readonly ledger:Ledger){}
+ constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[]){}
  async execute(principal:string,raw:z.input<typeof ControlCommand>,proof:OperatorProof){
   const command=ControlCommand.parse(raw);
   return this.ledger.tx(async c=>{
@@ -95,6 +97,7 @@ export class Control {
       await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[command.payload.intentId]);
       result={intentId:command.payload.intentId,cancellationState:prior?.state??'requested'};break;
      }
+     case 'provider.bind':result=await new ProviderCollectors(this.ledger,this.providerAdapters,c).bind(principal,context.project_id,command.payload);break;
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;
      case 'account.share':await service.shareAccount(principal,command.payload.accountId,context.project_id);result={accountId:command.payload.accountId};break;
      case 'account.state':await service.setEnabled(principal,context.project_id,'account',command.payload);result={id:command.payload.id,enabled:command.payload.enabled,revision:command.payload.expectedRevision+1};break;
@@ -124,6 +127,15 @@ export class Control {
     q.source quota_source,q.observed_at,q.expires_at
     FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id LEFT JOIN ac_quota_observations q ON q.account_id=a.id
     WHERE x.project_id=$1 ORDER BY a.id`,[context.project_id,principal,context.role==='owner'])).rows;
+   const providerBindings=(await c.query(`SELECT b.account_id,b.adapter_id,b.adapter_version,b.revision,b.minimum_interval_seconds,
+    (b.lease_id IS NOT NULL) probe_pending,b.probe_uncertain,o.snapshot,o.digest,o.completed_at,o.expires_at,
+    COALESCE(o.expires_at>clock_timestamp(),false) fresh
+    FROM ac_provider_bindings b JOIN ac_account_access x ON x.account_id=b.account_id
+    LEFT JOIN LATERAL(SELECT snapshot,digest,completed_at,expires_at FROM ac_provider_observations
+     WHERE account_id=b.account_id AND binding_revision=b.revision AND adapter_digest=b.adapter_digest AND state='completed'
+     ORDER BY completed_at DESC LIMIT 1) o ON true WHERE x.project_id=$1 ORDER BY b.account_id`,[context.project_id])).rows.map(row=>{const {digest:storedDigest,...binding}=row;return {...binding,
+     snapshot:row.snapshot?projectProviderSnapshot(row.snapshot,storedDigest,row.fresh===true):null};});
+   const providerAdapters=this.providerAdapters.map(adapter=>({id:adapter.manifest.id,version:adapter.manifest.version,provider:adapter.manifest.provider,mode:adapter.manifest.mode,source:adapter.manifest.source}));
    const profiles=(await c.query(`SELECT p.*,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
     JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows;
    const catalog=(await c.query(`SELECT m.provider,m.model,m.efforts,m.roles,m.source FROM ac_model_catalog m
@@ -151,10 +163,11 @@ export class Control {
     originalFallback:canConfigureCapacity&&config.original_account_id?{accountId:config.original_account_id,programmingLimit:config.original_programming_limit,
      evaluationLimit:config.original_evaluation_limit}:null}:null;
    const installation=(await c.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
+   const operatorDeviceIds=(await c.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,profiles,catalog,policies,grants,plans,approvals,remoteOperations,canApproveIntegration:context.role==='owner'};
+    accounts,providerBindings,providerAdapters,profiles,catalog,policies,grants,plans,approvals,remoteOperations,operatorDeviceIds,canApproveIntegration:context.role==='owner'};
   });
  }
 }

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "scope": "isolated-build-layout",
+  "removedOnlyProvenGeneratedSources": [
+    {
+      "path": "upstream/cezar/packages/contract/src/agent-control-plans.js",
+      "sha256": "4f6a9ba36302dab9a4516b616f51440d59e7b1ba606a77f85fb4ecc0c3cce2c9",
+      "matchesFreshEmission": true,
+      "gitTracked": false,
+      "typescriptSha256": "e1d30cfd1f4071d379e5df4005508069c8ae09d5c889aca405a724b310fc503a"
+    },
+    {
+      "path": "upstream/cezar/packages/contract/src/health.js",
+      "sha256": "70289b135afd22e4409c6eab8c7b7b4dd667a63aa3d3349cbd4fdc5068927b1a",
+      "matchesFreshEmission": true,
+      "gitTracked": false,
+      "typescriptSha256": "57e25716fb2e0128f9b3afd4ce1162d8dd5908dabc8964015a8752d115e854f4"
+    },
+    {
+      "path": "upstream/cezar/packages/contract/src/secrets.js",
+      "sha256": "3c1e1cff85af2e38eeeb02e329ada5da6d9b89742de262b3d33d8d5e8129789d",
+      "matchesFreshEmission": true,
+      "gitTracked": false,
+      "typescriptSha256": "cc5e3b601439a7aff0a35da26ff1b5656d1e1cdd43d7a1c956b4fa99c8a679f1"
+    },
+    {
+      "path": "upstream/cezar/packages/contract/src/workflows.js",
+      "sha256": "8bcdfc5379b84708a59dbeee281cd5be90c6dba496d55472549e2b0d4cbc4e9f",
+      "matchesFreshEmission": true,
+      "gitTracked": false,
+      "typescriptSha256": "c7e95d6b4ca85423d7c3519b835576e696a83c056bc5f9433842637c78014878"
+    }
+  ],
+  "outputUpstreamDirectoryReal": true,
+  "compiledContractDirectoryReal": true
+}

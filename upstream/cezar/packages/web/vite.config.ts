@@ -38,6 +38,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(appDir, 'src'),
+      '@agent-control/happier-browser-auth': resolve(appDir, '../../../../adapters/happier-browser-auth.ts'),
       '@open-mercato/cezar-api-client': resolve(packagesDir, 'api-client/src/index.ts'),
     },
   },

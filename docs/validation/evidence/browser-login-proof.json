@@ -1,0 +1,17 @@
+{
+  "result": "passed",
+  "accounts": 2,
+  "mobileViewport": 390,
+  "pairing": "native-Happier-v3",
+  "approval": "synthetic client using native envelope, not native approval UI",
+  "opaqueHttpOnlyCookie": true,
+  "distinctOperatorKeys": true,
+  "deviceBootstrapRequired": true,
+  "signedControlsPersisted": 2,
+  "contentKeysInRelayOrStorage": false,
+  "limits": [
+    "No physical phone or native Happier approval UI tested.",
+    "Synthetic accounts only; no model subscription or inference.",
+    "Clean-host production bootstrap and independent review remain open."
+  ]
+}

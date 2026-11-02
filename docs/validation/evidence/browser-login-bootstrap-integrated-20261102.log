@@ -1,0 +1,15 @@
+/workspace/src/ledger.ts:28
+        if (prior.rowCount) { if (prior.rows[0].digest !== digest(sql)) throw new Refusal('MIGRATION_CHANGED'); continue; }
+                                                                              ^
+
+Refusal [Error]: MIGRATION_CHANGED
+    at <anonymous> (/workspace/src/ledger.ts:28:79)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Ledger.tx (/workspace/src/ledger.ts:15:45)
+    at async Ledger.migrate (/workspace/src/ledger.ts:21:5)
+    at async <anonymous> (/workspace/scripts/prove-browser-login.mjs:14:31) {
+  code: 'MIGRATION_CHANGED',
+  status: 409
+}
+
+Node.js v22.23.3

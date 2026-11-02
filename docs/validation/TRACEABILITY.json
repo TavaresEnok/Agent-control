@@ -5,12 +5,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/installation-bootstrap-first-20261102.log",
+    "files": "src/installation.ts;src/server-main.ts;tests/installation.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Explicit private-config project initialization, not complete visual multi-project/environment administration; configured gateway remains administration-only."
   },
   {
     "id": "RF-02",
@@ -31,12 +31,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/context-keys.ts;tests/context-keys.test.ts",
+    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json",
+    "files": "src/auth-relay.ts;src/sessions.ts;src/ledger.ts;src/api.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Context fingerprints/rotation revoke authority in synthetic tests. Legacy fixtures still share an account key; no production custody/pairing proof."
+    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified."
   },
   {
     "id": "RF-04",
@@ -119,15 +119,15 @@
   {
     "id": "RF-10",
     "normative_row": "RF-10\tP0\tDistinguir cota esgotada, limite temporário, autenticação inválida, falha de rede e estado desconhecido\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/providers.ts;src/capacity.ts;tests/providers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Synthetic read-only collectors distinguish transport, invalid response, expired and reported quota. Real CLI protocol and eligibility not homologated."
   },
   {
     "id": "RF-11",
@@ -148,12 +148,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
-    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log",
+    "files": "src/providers.ts;src/capacity.ts;src/cezar.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
+    "limitation": "Fresh collector observations feed existing Capacity admission; no new scheduler. Stuck probes remain quarantined; no automatic real-account recovery claimed."
   },
   {
     "id": "RF-13",
@@ -187,12 +187,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/manager-planning-api-final-20261102.log;docs/validation/evidence/manager-planning-restore-final-20261102.log",
+    "files": "src/planning.ts;src/planning-api.ts;tests/planning.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Immutable fenced proposals with contracts, dependencies, native graph compilation, comparison and restore as new CAS revision. Dynamic execution and semantic manager inference remain pending."
   },
   {
     "id": "RF-16",
@@ -382,12 +382,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/usage-observations-20261102.log",
-    "files": "src/usage.ts;src/api.ts;db/migrations/023_usage_observations.sql;tests/usage.test.ts",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/providers.ts;src/control.ts;src/usage.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic cumulative observations and ACL only; no live provider collector, account quota, retries analytics, export or mobile UI; not accepted."
+    "limitation": "Normalized synthetic percentage/reset only when reported and fresh; unknown otherwise. No actual subscription balance or collector homologation."
   },
   {
     "id": "RF-31",
@@ -395,25 +395,25 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/observability-final-20261102.log;docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/observability.ts;src/observability-api.ts;src/providers.ts;src/planning.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Read-only admin aggregate telemetry and durable audits; logs are not a full production audit/retention certification."
   },
   {
     "id": "RF-32",
     "normative_row": "RF-32\tP0\tPermitir os percursos essenciais de configuração e operação pelo celular\tI6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json",
+    "files": "src/auth-relay.ts;src/installation.ts;upstream/cezar/packages/web/src/components/auth/agent-control-auth-gate.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Chromium 390px with two synthetic accounts, distinct signing identities and opaque cookies. Native approval UI, physical devices and complete mobile journey remain pending."
   },
   {
     "id": "RF-33",
@@ -613,15 +613,15 @@
   {
     "id": "RF-48",
     "normative_row": "RF-48\tP0\tAceitar evidências de verificação apenas do executor confiável e condicionar atomicamente a integração à base esperada\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "types_only_not_behaviorally_verified",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/validation/evidence/git-helper-syntax.log",
-    "files": "src/quality.ts;src/integration.ts;src/git.ts;services/agent-control-git/;db/migrations/005_artifacts_and_quality.sql",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/integration-approval-native-20261102.log;docs/validation/evidence/integration-uncertain-recovery-final-20261102.log;docs/validation/evidence/physical-node-recovery-20261102.log",
+    "files": "src/quality.ts;src/integration.ts;src/isolated-verification.ts;src/git.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Artifact gates/CAS implemented in internal services; no dedicated adversarial proof or complete DAG/verifier integration yet."
+    "limitation": "Trusted synthetic verifier receipts and exact-artifact CAS/reconciliation tested. Does not homologate real code-review quality, external writers or every failure interval."
   },
   {
     "id": "RF-49",
@@ -642,12 +642,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/manager-planning-api-final-20261102.log",
+    "files": "src/planning.ts;src/planning-api.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Native Cezar read-only proposal graph reused; proposals explicitly have no live run status. Full mobile/live correction graph acceptance remains open."
   },
   {
     "id": "RF-51",
@@ -873,15 +873,15 @@
   {
     "id": "RNF-11",
     "normative_row": "RNF-11\tCapacidade\tAdmissão considera memória, CPU, disco, vagas e contas; fila saudável substitui lançamento acima da capacidade\tI3/I5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/storage-admission-final-20261102.log;docs/validation/evidence/observability-final-20261102.log",
+    "files": "src/disk-admission.ts;src/storage.ts;src/sandbox-broker.ts;src/isolated-verification.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Opt-in free-space guard and private disposable-spool reservations, preserving uncertain grants. Not hard disk quota or full memory/CPU/disk exhaustion homologation."
   },
   {
     "id": "RNF-12",
@@ -899,28 +899,28 @@
   {
     "id": "RNF-13",
     "normative_row": "RNF-13\tCompatibilidade\tAtualização de CLI ou modelo passa por contrato de protocolo antes de virar padrão\tI3/I7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/providers.ts;tests/providers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Collector manifest/version binding refuses mismatch; real CLI upgrades and provider adapters remain unverified."
   },
   {
     "id": "RNF-14",
     "normative_row": "RNF-14\tTransparência\tCota não observada nunca é apresentada como disponível ou percentual estimado sem identificação\tI3/I6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log;docs/validation/evidence/observability-final-20261102.log",
+    "files": "src/providers.ts;src/usage.ts;src/observability.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Expired/unknown observations never become inferred balance. Local token counters remain separate from quota."
   },
   {
     "id": "RNF-15",
@@ -1094,15 +1094,15 @@
   {
     "id": "T13",
     "normative_row": "T13\tAutenticação expira, rede falha ou modelo é inválido\tEstados distintos, recuperação apropriada; nenhuma falsa marca de esgotamento\tRF-08/10\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/providers.ts;tests/providers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic transport/invalid response states and quarantine verified; real provider auth/model errors untested."
   },
   {
     "id": "T14",
@@ -1263,15 +1263,15 @@
   {
     "id": "T26",
     "normative_row": "T26\tLogin expira ou versão de CLI muda protocolo\tTrabalho preservado; estado explicado; versão/auth incompatível não admite novas execuções até confirmação válida\tRF-06/08/10/23\tI3/I5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/providers.ts;tests/providers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Manifest-version mismatch refused, no probe replay after uncertain timeout; actual CLI/auth upgrade scenario not homologated."
   },
   {
     "id": "T27",
@@ -1328,15 +1328,15 @@
   {
     "id": "T31",
     "normative_row": "T31\tCapacidade desconhecida, saldo desconhecido com sucesso recente e probes concorrentes\tEstados distintos; probe serializado e limitado; sem tempestade, falsa cota ou emergência indevida\tRF-10/12/13\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
+    "files": "src/providers.ts;tests/providers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "One concurrent probe, throttle, event dedupe without TTL renewal, fresh quota feeds real PG grant admission; synthetic provider only."
   },
   {
     "id": "T32",

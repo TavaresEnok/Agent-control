@@ -42,3 +42,6 @@ export * from './deferred-start.ts';
 export * from './usage-windows.ts';
 
 export * from './tracker-operations.ts';
+
+export * from './agent-control-plans.ts';
+export * from './agent-control-operations.ts';

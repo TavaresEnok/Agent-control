@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: storage pool refuses low-space admission and preserves active, changed, held and unknown data
+ok 1 - storage pool refuses low-space admission and preserves active, changed, held and unknown data
+  ---
+  duration_ms: 1183.892077
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2028.876502

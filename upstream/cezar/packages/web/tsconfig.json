@@ -23,6 +23,7 @@
     // file's directory, which is what the mapping below already assumed.
     "paths": {
       "@/*": ["./src/*"],
+      "@agent-control/happier-browser-auth": ["../../../../adapters/happier-browser-auth.ts"],
       // Source, not `dist` — see the matching alias in vite.config.ts. Typechecking the web
       // app must not depend on the api-client having been built.
       "@open-mercato/cezar-api-client": ["../api-client/src/index.ts"]

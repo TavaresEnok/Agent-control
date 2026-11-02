@@ -15,6 +15,7 @@ import { ThemeProvider } from './components/theme-provider'
 import { Toaster } from './components/ui/toaster'
 import { Telemetry } from './lib/telemetry'
 import { AppRoutes } from './routes'
+import {AgentControlAuthGate} from './components/auth/agent-control-auth-gate'
 
 /** Real URLs, no basename: the cockpit is always mounted at the origin root, and the server
  *  serves index.html for every non-/api GET (src/server/static-ui.ts), so a deep link like
@@ -36,6 +37,7 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <AgentControlAuthGate>
       <GlobalEventsProvider>
         {/* The machine-telemetry store, one per app: the sidebar widget and the Settings card are
             two readers of the same sample and the same 60 s ring, and exactly one writer (root,
@@ -76,6 +78,7 @@ export function App() {
           </ThemeProvider>
         </HostUsageProvider>
       </GlobalEventsProvider>
+      </AgentControlAuthGate>
     </QueryClientProvider>
   )
 }

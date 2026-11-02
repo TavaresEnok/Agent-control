@@ -1,0 +1,8 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+tests/providers.test.ts(32,69): error TS2339: Property 'expiresAt' does not exist on type '{ status: string; remainingPercent: null; subscriptionBalance: string; fresh: boolean; } | { schemaVersion: 1; source: string; resetAt: string | null; failure: "invalid_response" | "none" | "transport"; ... 5 more ...; expiresAt: any; }'.
+  Property 'expiresAt' does not exist on type '{ status: string; remainingPercent: null; subscriptionBalance: string; fresh: boolean; }'.
+tests/providers.test.ts(34,73): error TS2339: Property 'expiresAt' does not exist on type '{ status: string; remainingPercent: null; subscriptionBalance: string; fresh: boolean; } | { schemaVersion: 1; source: string; resetAt: string | null; failure: "invalid_response" | "none" | "transport"; ... 5 more ...; expiresAt: any; }'.
+  Property 'expiresAt' does not exist on type '{ status: string; remainingPercent: null; subscriptionBalance: string; fresh: boolean; }'.

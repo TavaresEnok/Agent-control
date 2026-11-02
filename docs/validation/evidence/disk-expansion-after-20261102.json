@@ -1,0 +1,103 @@
+[
+  {
+    "command": [
+      "hostname"
+    ],
+    "exitCode": 0,
+    "stdout": "app\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "lsblk",
+      "-b",
+      "-e7",
+      "-o",
+      "NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINTS"
+    ],
+    "exitCode": 0,
+    "stdout": "NAME                      PATH                                      SIZE TYPE FSTYPE      MOUNTPOINTS\nsda                       /dev/sda                          322122547200 disk             \n\u251c\u2500sda1                    /dev/sda1                              1048576 part             \n\u251c\u2500sda2                    /dev/sda2                           2147483648 part ext4        /boot\n\u2514\u2500sda3                    /dev/sda3                         319972949504 part LVM2_member \n  \u2514\u2500ubuntu--vg-ubuntu--lv /dev/mapper/ubuntu--vg-ubuntu--lv 319970869248 lvm  ext4        /\nsr0                       /dev/sr0                            3303444480 rom  iso9660     \nzram0                     /dev/zram0                         10056757248 disk             [SWAP]\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "findmnt",
+      "-no",
+      "SOURCE,FSTYPE,OPTIONS",
+      "/"
+    ],
+    "exitCode": 0,
+    "stdout": "/dev/mapper/ubuntu--vg-ubuntu--lv ext4   rw,relatime\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "df",
+      "-B1",
+      "-T",
+      "/"
+    ],
+    "exitCode": 0,
+    "stdout": "Filesystem                        Type    1B-blocks         Used    Available Use% Mounted on\n/dev/mapper/ubuntu--vg-ubuntu--lv ext4 314615791616 176097689600 125284892672  59% /\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "df",
+      "-hT",
+      "/",
+      "/home/app/projects"
+    ],
+    "exitCode": 0,
+    "stdout": "Filesystem                        Type  Size  Used Avail Use% Mounted on\n/dev/mapper/ubuntu--vg-ubuntu--lv ext4  294G  165G  117G  59% /\n/dev/mapper/ubuntu--vg-ubuntu--lv ext4  294G  165G  117G  59% /\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "pvs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  PV         VG        Fmt  Attr PSize         PFree\n  /dev/sda3  ubuntu-vg lvm2 a--  319970869248B    0B\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "vgs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  VG        #PV #LV #SN Attr   VSize         VFree\n  ubuntu-vg   1   1   0 wz--n- 319970869248B    0B\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "lvs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  LV        VG        Attr       LSize         Pool Origin Data%  Meta%  Move Log Cpy%Sync Convert\n  ubuntu-lv ubuntu-vg -wi-ao---- 319970869248B                                                    \n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "sfdisk",
+      "--dump",
+      "/dev/sda"
+    ],
+    "exitCode": 0,
+    "stdout": "label: gpt\nlabel-id: DFE7DDA0-96B3-4B44-8459-D69B0C9803D1\ndevice: /dev/sda\nunit: sectors\nfirst-lba: 34\nlast-lba: 629145566\nsector-size: 512\n\n/dev/sda1 : start=        2048, size=        2048, type=21686148-6449-6E6F-744E-656564454649, uuid=B9727582-2ABD-485B-B6B0-03A17A3AF85B\n/dev/sda2 : start=        4096, size=     4194304, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=BB3F5CDA-8FA6-4C7D-A384-6D52D5AE930B\n/dev/sda3 : start=     4198400, size=   624947167, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=02232BF8-CDA0-447E-AD82-D7C6BB47D23B\n",
+    "stderr": ""
+  }
+]

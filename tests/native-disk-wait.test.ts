@@ -1,0 +1,53 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {resolve,join} from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {Ledger} from '../src/ledger.ts';
+import {CezarRuntime} from '../src/cezar.ts';
+import {Capacity} from '../src/capacity.ts';
+import {Templates} from '../src/templates.ts';
+import {Refusal} from '../src/contracts.ts';
+import type {DiskGuard} from '../src/disk-admission.ts';
+import {provisionEngineering} from './fixtures/provision-engineering.ts';
+import {isolatedDatabase} from './fixtures/isolated-database.ts';
+
+test('disk pressure parks the same native cursor, respects pause and recovers without repeating implementation',{timeout:30000},async()=>{
+ const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const database=await isolatedDatabase(base,'diskwait'),ledger=new Ledger(database.url);
+ let runtime:CezarRuntime|undefined,repo:string|undefined,blocked=true,observations=0,receipts=0;
+ const guard:DiskGuard={async assertAdmission(){observations++;if(blocked)throw new Refusal('STORAGE_LOW_SPACE');}};
+ try{
+  await ledger.migrate();const principal='disk-wait-'+randomUUID(),project=randomUUID();
+  await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Disk wait synthetic fixture']);
+  await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  await mkdir('.state/projects',{recursive:true});repo=await mkdtemp(resolve('.state/projects/ac-disk-wait-'));
+  const git=(...args:string[])=>execFileSync('git',['-C',repo!,...args],{encoding:'utf8'}).trim();
+  git('init','-q','-b','main');git('config','user.email','fixture@example.invalid');git('config','user.name','Synthetic fixture');
+  await writeFile(join(repo,'README.md'),'Disk wait fixture only\n');git('add','.');git('commit','-qm','base');git('branch','protected');
+  await mkdir(join(repo,'.ai/cezar'),{recursive:true});await writeFile(join(repo,'.ai/cezar/config.json'),JSON.stringify({baseBranch:'main',skillsRepos:[],worktreeRetention:0}));
+  const {revision,options}=await provisionEngineering(ledger,principal,project,repo,1,false);
+  const context=await ledger.createContext(principal,project,randomUUID());await new Capacity(ledger).assignPolicy(principal,context,revision);
+  await new Templates(ledger).publish(principal,context,0,{workflow:'engineering-synthetic-v1',qualityRevision:options.qualityRevision!,targetRef:options.targetRef!});
+  const authority=await ledger.acquire(principal,context,randomUUID(),'synthetic-manager',60);
+  runtime=new CezarRuntime(ledger,repo,project,options,undefined,undefined,{diskGuard:guard});await runtime.start();assert.equal(runtime.executionMode,'execution');
+  const original=runtime.recordReceipt.bind(runtime);runtime.recordReceipt=async(...args)=>{await original(...args);receipts++;blocked=true;};
+  const intent=await ledger.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'engineering-synthetic-v1',messageRef:'encrypted:disk-wait'}},authority,'api');
+  await runtime.dispatch(intent,authority);
+  const until=async(check:()=>boolean|Promise<boolean>)=>{for(let i=0;i<180;i++){const run=runtime!.store.getRun(intent.run_id);if(run?.status==='failed')throw Error(run.error);if(await check())return;await new Promise(resolve=>setTimeout(resolve,50));}throw Error('DISK_WAIT_TIMEOUT');};
+  await until(()=>runtime!.store.getRun(intent.run_id)?.status==='waiting');
+  const parked=runtime.store.getRun(intent.run_id);assert.equal(parked?.graphState?.cursor,'implement');assert.match(parked?.error??'',/STORAGE_LOW_SPACE/);
+  assert.equal((await ledger.pool.query('SELECT state FROM ac_operations WHERE id=$1',[intent.operation_id])).rows[0].state,'registered');assert.equal(receipts,0);
+  await ledger.pause(principal,context,true);blocked=false;
+  await until(()=>runtime!.store.getRun(intent.run_id)?.error?.includes('HUMAN_PAUSED')??false);assert.equal(receipts,0);
+  await ledger.pause(principal,context,false);
+  await until(()=>runtime!.store.getRun(intent.run_id)?.status==='waiting'&&runtime!.store.getRun(intent.run_id)?.graphState?.cursor==='qa');
+  assert.equal(receipts,1);assert.equal((await ledger.pool.query('SELECT count(*)::int total FROM ac_stage_operations WHERE intent_id=$1',[intent.id])).rows[0].total,0);
+  blocked=false;await until(()=>['done','review'].includes(runtime!.store.getRun(intent.run_id)?.status??''));
+  assert.equal(receipts,1);assert.equal(runtime.store.listRuns().length,1);assert(observations>=3);
+  const receipt=(await ledger.pool.query('SELECT receipt FROM ac_operations WHERE id=$1',[intent.operation_id])).rows[0].receipt;
+  assert.equal(git('rev-parse','protected'),receipt.commit);assert.notEqual(receipt.commit,git('rev-parse','main'));
+  assert.equal((await ledger.pool.query("SELECT count(*)::int total FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released'",[intent.id])).rows[0].total,0);
+ }finally{await runtime?.close();await ledger.close();await database.close();if(repo)await rm(repo,{recursive:true,force:true});}
+});

@@ -6,6 +6,7 @@ import {z} from 'zod';
 import {Authority,digest,Refusal,Id} from './contracts.ts';
 import {Ledger,type Intent} from './ledger.ts';
 import {SandboxClient} from './sandbox-client.ts';
+import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import type {AgentRunSpec,AgentSession,AgentEvent} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 const exec=promisify(execFile);
 async function git(cwd:string,args:string[]){
@@ -24,7 +25,7 @@ const Running=z.object({state:z.literal('running'),containerId:z.string().regex(
 export class IsolatedImplementation{
  private active=true;
  private readonly stops=new Set<()=>void>();
- constructor(readonly ledger:Ledger,readonly client=new SandboxClient()){}
+ constructor(readonly ledger:Ledger,readonly client=new SandboxClient(),private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){}
  close(){this.active=false;for(const stop of this.stops)stop();}
  start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void):AgentSession{
   let open=true,canceled=false,grantId:string|undefined,execution:z.infer<typeof Launch>|undefined;
@@ -53,6 +54,9 @@ export class IsolatedImplementation{
     const text=`Reconciled isolated result replayed: ${saved.commit}`;
     onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
    }
+   // Before bundling or recording a potentially launched operation. Replay and
+   // reconciliation above remain usable during disk pressure.
+   await this.diskGuard?.assertAdmission();
    const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'operation-'));
    try{
     const base=await git(spec.cwd,['rev-parse','HEAD']);const bundlePath=join(temporary,'source.bundle');

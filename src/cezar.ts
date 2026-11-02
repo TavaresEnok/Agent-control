@@ -21,6 +21,7 @@ import {IsolatedImplementation} from './isolated-implementation.ts';
 import {IsolatedVerification} from './isolated-verification.ts';
 import {Cancellations} from './cancellation.ts';
 import type {RemoteOperations} from './remote.ts';
+import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 export { baselineWorkflow } from './workflows.ts';
 
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
@@ -47,9 +48,13 @@ export class CezarRuntime {
   private budgetRefresh:Promise<void>|undefined;
   private budgetRefreshAt=0;
   private running = true;
+  private executionEnabled = true;
+  private readonly diskGuard:DiskGuard|undefined;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
-    private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations) {
+    private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations,
+    admissionOptions?:{diskGuard?:DiskGuard}) {
+    this.diskGuard=admissionOptions?.diskGuard??diskGuardFromEnvironment();
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     if(remote&&remote.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     this.capacity = new Capacity(ledger);
@@ -108,8 +113,9 @@ export class CezarRuntime {
     this.native = createApp({ repoRoot: repo, store: this.store, manager: this.manager,
       bootProjectId: projectId, semaphore:this.semaphore,version: 'agent-control-0.1.0' });
   }
-  async start() {
-    await this.refreshSchedulerBudget();
+  async start(mode:'execution'|'administration-only'='execution') {
+    this.executionEnabled=mode==='execution';
+    if(this.executionEnabled)await this.refreshSchedulerBudget();
     const c = await this.ledger.pool.connect();
     const r = await c.query('SELECT pg_try_advisory_lock(hashtextextended($1,1)) AS ok', [this.repo]);
     if (!r.rows[0].ok) { c.release(); throw new Refusal('RUNTIME_ALREADY_ACTIVE'); }
@@ -121,9 +127,11 @@ export class CezarRuntime {
       if (this.lock === c) { this.lock = undefined; c.release(true); }
     };
     c.on('error', lost); c.on('end', lost);
-    await this.manager.recover();
+    if(this.executionEnabled)await this.manager.recover();
   }
+  get executionMode():'administration-only'|'execution'{return this.executionEnabled?'execution':'administration-only';}
   async dispatch(intent: Intent, authority: Authority) {
+    if(!this.executionEnabled)throw new Refusal('ADMINISTRATION_ONLY');
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
     await this.refreshSchedulerBudget();
     const workflow=workflowFor(intent.command.payload.workflow);
@@ -184,29 +192,43 @@ export class CezarRuntime {
   /** Hold the native cursor, without launching a session or rewriting its plan.
    * No transaction/row lock is held during the wait, so human resume can proceed. */
   private async awaitNodeAdmission(runId:string,nodeId:string,cancelled:()=>boolean){
-    let waiting=false;
+    let waitingReason:string|undefined;
     for(;;){
       if(!this.running||!this.lock||cancelled())return;
       const authority=this.authorities.get(runId);
       if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
       try{
-        await this.ledger.tx(async c=>{
+        const intent=await this.ledger.tx(async c=>{
           await this.ledger.fence(c,authority);
-          const intent=(await c.query('SELECT id FROM ac_intents WHERE run_id=$1 AND context_id=$2',[runId,authority.contextId])).rows[0];
+          const intent=(await c.query<Intent>('SELECT * FROM ac_intents WHERE run_id=$1 AND context_id=$2',[runId,authority.contextId])).rows[0];
           if(!intent)throw new Refusal('INTENT_MISSING');
           await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+          return intent;
         });
-        if(waiting)this.manager.setManagedAdmissionWait(runId,'context-admission',null);
+        if(this.diskGuard&&!await this.canReplayWithoutDiskAdmission(intent,authority,nodeId))await this.diskGuard.assertAdmission();
+        if(waitingReason)this.manager.setManagedAdmissionWait(runId,'context-admission',null);
         return;
       }catch(error){
         if(error instanceof Refusal&&error.code==='PLAN_CANCELLATION_REQUESTED'){this.manager.cancel(runId);return;}
-        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
-        if(!waiting){
-          this.manager.setManagedAdmissionWait(runId,'context-admission',`${error.code} before ${nodeId}`);waiting=true;
+        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED','STORAGE_LOW_SPACE','DISK_OBSERVATION_UNAVAILABLE'].includes(error.code))throw error;
+        if(waitingReason!==error.code){
+          this.manager.setManagedAdmissionWait(runId,'context-admission',`${error.code} before ${nodeId}`);waitingReason=error.code;
         }
         await new Promise(resolve=>setTimeout(resolve,250));
       }
     }
+  }
+  /** A disk gate admits new writes, never suppresses an authenticated completed
+   * result replay. The actual runner still validates its durable receipt and
+   * artifact identity; no uncertain effect is converted to completed here. */
+  private async canReplayWithoutDiskAdmission(intent:Intent,authority:Authority,nodeId:string){
+    if(nodeId==='implement'){
+      const saved=await this.ledger.pool.query(`SELECT 1 FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id
+        WHERE o.id=$1 AND o.intent_id=$2 AND o.state='completed' AND g.state='released'`,[intent.operation_id,intent.id]);
+      return Boolean(saved.rowCount);
+    }
+    const sessionId=this.store.getRun(intent.run_id)?.steps.find(step=>step.id===nodeId)?.sessionId;
+    return Boolean(sessionId&&this.engineering&&await this.engineering.canReplayCompleted(intent,authority,nodeId,sessionId));
   }
   private async refreshSchedulerBudget(){
     if(this.budgetRefresh)return this.budgetRefresh;

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import {bodyLimit} from 'hono/body-limit';
 import { z } from 'zod';
 import { Command, Authority, Id, Refusal, Projection } from './contracts.ts';
 import { Ledger } from './ledger.ts';
@@ -8,6 +9,12 @@ import { OperatorProof,Operators } from './operator.ts';
 import type { BrowserSessions } from './sessions.ts';
 import {Usage} from './usage.ts';
 import {GitArtifacts} from './git.ts';
+import type {HappierAuthRelay} from './auth-relay.ts';
+import type {ProviderAdapter} from './providers.ts';
+import {createPlanningApi} from './planning-api.ts';
+import {createObservabilityApi} from './observability-api.ts';
+import {OperationalObservability} from './observability.ts';
+import {diskPolicyFromEnvironment} from './disk-admission.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -33,14 +40,16 @@ async function publicUi(path:string):Promise<Response|null>{
 export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
-  verifySessionAccess: (principal: string, sessionId: string) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions) {
+  verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
+  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[]) {
   const app = new Hono<{ Variables: { principal: string } }>();
-  const control = new Control(ledger);
+  const control = new Control(ledger,providerAdapters);
   app.use('*', async (c, next) => {
     if(sessions&&c.req.method==='GET'){
       const ui=await publicUi(c.req.path);if(ui)return ui;
     }
+    if(c.req.path==='/api/v1/ac/auth/config'&&c.req.method==='GET'){c.header('Cache-Control','no-store');return c.json(authRelay?.config??{enabled:false});}
+    if(authRelay&&c.req.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim'].includes(c.req.path))return next();
     if(c.req.path==='/api/v1/ac/auth/session'&&c.req.method==='POST'&&sessions)return next();
     const bearer=c.req.raw.headers.get('authorization');
     const principal = bearer?await authenticate(c.req.raw):await sessions?.authenticate(c.req.raw)??await authenticate(c.req.raw);
@@ -48,16 +57,31 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (!principal) return c.json({ error: 'AUTH_REQUIRED' }, 401);
     c.set('principal', principal); await next();
   });
+  app.use('/api/v1/ac/*',bodyLimit({maxSize:256*1024,onError:c=>c.json({error:'REQUEST_BODY_TOO_LARGE'},413)}));
   app.onError((e, c) => {
     if (e instanceof Refusal) return c.json({ error: e.code }, e.status);
     if (e instanceof z.ZodError || e instanceof SyntaxError) return c.json({ error: 'INVALID_CONTRACT' }, 400);
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
   });
+  app.route('/api/v1/ac',createPlanningApi(ledger,runtime.projectId,manager));
+  app.route('/api/v1/ac',createObservabilityApi(new OperationalObservability(ledger,{diskPolicy:diskPolicyFromEnvironment()})));
   const family = app
+    .get('/api/v1/ac/auth/status',c=>c.json({authenticated:true,principalId:c.get('principal')}))
+    .get('/api/v1/ac/operator/identity',async c=>{
+      const principal=c.get('principal');
+      const membership=await ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2',[runtime.projectId,principal]);
+      if(!membership.rowCount)throw new Refusal('PROJECT_FORBIDDEN',403);
+      const installation=(await ledger.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
+      if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
+      const ids=(await ledger.pool.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
+      c.header('Cache-Control','no-store');return c.json({principalId:principal,projectId:runtime.projectId,installationId:installation.id,operatorDeviceIds:ids});
+    })
+    .post('/api/v1/ac/auth/pair',async c=>{if(!authRelay)throw new Refusal('INGRESS_DISABLED',403);return authRelay.forward(c.req.raw,'begin');})
+    .post('/api/v1/ac/auth/pair/claim',async c=>{if(!authRelay)throw new Refusal('INGRESS_DISABLED',403);return authRelay.forward(c.req.raw,'claim');})
     .post('/api/v1/ac/auth/session',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.issue(c.req.raw);})
     .post('/api/v1/ac/auth/logout',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.revoke(c.req.raw);})
-    .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: 'isolated-synthetic' }))
+    .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: runtime.executionMode }))
     .post('/api/v1/ac/operator/bootstrap',async c=>{
       const value=z.object({deviceId:Id,publicKey:z.string().min(40).max(200),token:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(await c.req.json());
       await new Operators(ledger).bootstrap(c.get('principal'),value);
@@ -94,8 +118,9 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       return c.json(await control.execute(c.get('principal'),command,proof));
     })
     .post('/api/v1/ac/contexts', async c => {
-      const body = z.object({ projectId: Id, happierSessionId: z.string().min(1) }).strict().parse(await c.req.json());
-      if (!await verifySessionAccess(c.get('principal'), body.happierSessionId)) throw new Refusal('SESSION_OWNERSHIP_UNVERIFIED', 403);
+      const body = z.object({ projectId: Id, happierSessionId: z.string().min(1).max(200) }).strict().parse(await c.req.json());
+      if(body.projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+      if (!await verifySessionAccess(c.get('principal'), body.happierSessionId,c.req.raw)) throw new Refusal('SESSION_OWNERSHIP_UNVERIFIED', 403);
       const contextId = await ledger.createContext(c.get('principal'), body.projectId, body.happierSessionId);
       return c.json({ contextId }, 201);
     })

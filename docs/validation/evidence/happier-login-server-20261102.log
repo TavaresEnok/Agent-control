@@ -1,0 +1,3116 @@
+(node:48) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[17:47:40.855] INFO: undefined SQLite startup diagnostics | [1793641660855]
+    localTime: "17:47:40.855"
+    module: "storage"
+    event: "sqlite-startup-diagnostics"
+    sqlite: {
+      "provider": "sqlite",
+      "journalMode": "WAL",
+      "synchronous": "NORMAL",
+      "busyTimeoutMs": 30000,
+      "journalSizeLimitBytes": 67108864,
+      "databaseUrlSocketTimeoutSeconds": 30,
+      "databaseUrlConnectionLimit": 1,
+      "databaseUrlConnectionLimitStatus": "configured",
+      "databaseUrlPoolAcquisitionTimeoutStatus": "unbounded",
+      "ignoredDatabaseUrlQueryParameters": []
+    }
+[17:47:41.064] INFO: undefined Initializing auth module... | [1793641661064]
+    localTime: "17:47:41.064"
+    module: "auth"
+[17:47:41.741] WARN: undefined Historical Bun auth-token verification enabled (attempt=1) | [1793641661741]
+    localTime: "17:47:41.741"
+    module: "auth"
+[17:47:41.742] INFO: undefined Auth module initialized | [1793641661742]
+    localTime: "17:47:41.742"
+    module: "auth"
+[17:47:41.742] INFO: undefined Metrics server disabled | [1793641661742]
+    localTime: "17:47:41.742"
+    module: "metrics"
+[17:47:41.752] INFO: undefined Starting API... | [1793641661752]
+    localTime: "17:47:41.752"
+[17:47:42.957] INFO: undefined Server listening at http://127.0.0.1:18401 | [1793641662957]
+    localTime: "17:47:42.957"
+[17:47:43.124] INFO: undefined API ready on port http://localhost:18401 | [1793641663124]
+    localTime: "17:47:43.124"
+[17:47:43.152] INFO: undefined Ready | [1793641663152]
+    localTime: "17:47:43.152"
+[17:48:10.754] INFO: undefined incoming request | [1793641690754]
+    localTime: "17:48:10.756"
+    reqId: "req-1"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 45722
+    }
+[17:48:10.865] INFO: undefined request completed | [1793641690865]
+    localTime: "17:48:10.865"
+    reqId: "req-1"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 107.64544600000227
+[17:48:10.880] INFO: undefined incoming request | [1793641690880]
+    localTime: "17:48:10.880"
+    reqId: "req-2"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 45728
+    }
+[17:48:10.912] INFO: undefined request completed | [1793641690912]
+    localTime: "17:48:10.912"
+    reqId: "req-2"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.294784999998228
+[17:48:10.926] INFO: undefined incoming request | [1793641690926]
+    localTime: "17:48:10.926"
+    reqId: "req-3"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 45722
+    }
+[17:48:10.946] INFO: undefined request completed | [1793641690946]
+    localTime: "17:48:10.946"
+    reqId: "req-3"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 19.9859129999968
+[17:48:10.950] INFO: undefined incoming request | [1793641690950]
+    localTime: "17:48:10.950"
+    reqId: "req-4"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 45728
+    }
+[17:48:10.967] INFO: undefined request completed | [1793641690967]
+    localTime: "17:48:10.968"
+    reqId: "req-4"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.193093999994744
+[17:48:14.405] INFO: undefined incoming request | [1793641694405]
+    localTime: "17:48:14.405"
+    reqId: "req-5"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:14.416] INFO: undefined request completed | [1793641694416]
+    localTime: "17:48:14.416"
+    reqId: "req-5"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.937186999995902
+[17:48:14.431] INFO: undefined incoming request | [1793641694431]
+    localTime: "17:48:14.431"
+    reqId: "req-6"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:14.437] INFO: undefined request completed | [1793641694437]
+    localTime: "17:48:14.437"
+    reqId: "req-6"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 5.422925999999279
+[17:48:14.521] INFO: undefined incoming request | [1793641694521]
+    localTime: "17:48:14.521"
+    reqId: "req-7"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/response",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 45722
+    }
+[17:48:14.529] INFO: undefined request completed | [1793641694529]
+    localTime: "17:48:14.529"
+    reqId: "req-7"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.432121999998344
+[17:48:15.948] INFO: undefined incoming request | [1793641695948]
+    localTime: "17:48:15.948"
+    reqId: "req-8"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:15.954] INFO: undefined request completed | [1793641695954]
+    localTime: "17:48:15.954"
+    reqId: "req-8"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 6.3739130000030855
+[17:48:15.976] INFO: undefined incoming request | [1793641695976]
+    localTime: "17:48:15.976"
+    reqId: "req-9"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:15.988] INFO: undefined request completed | [1793641695988]
+    localTime: "17:48:15.988"
+    reqId: "req-9"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.155014000003575
+[17:48:16.013] INFO: undefined incoming request | [1793641696013]
+    localTime: "17:48:16.013"
+    reqId: "req-a"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.031] INFO: undefined request completed | [1793641696031]
+    localTime: "17:48:16.031"
+    reqId: "req-a"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.520047999998496
+[17:48:16.067] INFO: undefined incoming request | [1793641696067]
+    localTime: "17:48:16.067"
+    reqId: "req-b"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.081] INFO: undefined incoming request | [1793641696081]
+    localTime: "17:48:16.081"
+    reqId: "req-c"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49934
+    }
+[17:48:16.083] INFO: undefined incoming request | [1793641696083]
+    localTime: "17:48:16.084"
+    reqId: "req-d"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49936
+    }
+[17:48:16.085] INFO: undefined request completed | [1793641696085]
+    localTime: "17:48:16.085"
+    reqId: "req-b"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.498411000000488
+[17:48:16.087] INFO: undefined incoming request | [1793641696087]
+    localTime: "17:48:16.087"
+    reqId: "req-e"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49940
+    }
+[17:48:16.107] INFO: undefined request completed | [1793641696107]
+    localTime: "17:48:16.107"
+    reqId: "req-c"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 26.02880500000174
+[17:48:16.111] INFO: undefined request completed | [1793641696111]
+    localTime: "17:48:16.111"
+    reqId: "req-d"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 27.679520999998203
+[17:48:16.114] INFO: undefined request completed | [1793641696114]
+    localTime: "17:48:16.114"
+    reqId: "req-e"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 26.504359999998996
+[17:48:16.129] INFO: undefined incoming request | [1793641696129]
+    localTime: "17:48:16.129"
+    reqId: "req-f"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.142] INFO: undefined request completed | [1793641696142]
+    localTime: "17:48:16.142"
+    reqId: "req-f"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.617253000003984
+[17:48:16.219] INFO: undefined incoming request | [1793641696219]
+    localTime: "17:48:16.219"
+    reqId: "req-g"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49942
+    }
+[17:48:16.229] INFO: undefined incoming request | [1793641696229]
+    localTime: "17:48:16.229"
+    reqId: "req-h"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49934
+    }
+[17:48:16.231] INFO: undefined request completed | [1793641696231]
+    localTime: "17:48:16.231"
+    reqId: "req-g"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.529372000004514
+[17:48:16.241] INFO: undefined request completed | [1793641696241]
+    localTime: "17:48:16.241"
+    reqId: "req-h"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.47171199999866
+[17:48:16.251] INFO: undefined incoming request | [1793641696251]
+    localTime: "17:48:16.251"
+    reqId: "req-i"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.252] INFO: undefined incoming request | [1793641696252]
+    localTime: "17:48:16.252"
+    reqId: "req-j"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49936
+    }
+[17:48:16.266] INFO: undefined incoming request | [1793641696266]
+    localTime: "17:48:16.266"
+    reqId: "req-k"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49934
+    }
+[17:48:16.269] INFO: undefined request completed | [1793641696269]
+    localTime: "17:48:16.269"
+    reqId: "req-i"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.53328799999872
+[17:48:16.270] INFO: undefined request completed | [1793641696270]
+    localTime: "17:48:16.270"
+    reqId: "req-j"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.010504000005312
+[17:48:16.277] INFO: undefined incoming request | [1793641696277]
+    localTime: "17:48:16.277"
+    reqId: "req-l"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49940
+    }
+[17:48:16.280] INFO: undefined request completed | [1793641696280]
+    localTime: "17:48:16.280"
+    reqId: "req-k"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.564744000002975
+[17:48:16.287] INFO: undefined incoming request | [1793641696287]
+    localTime: "17:48:16.287"
+    reqId: "req-m"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.290] INFO: undefined incoming request | [1793641696290]
+    localTime: "17:48:16.290"
+    reqId: "req-n"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49934
+    }
+[17:48:16.292] INFO: undefined request completed | [1793641696292]
+    localTime: "17:48:16.292"
+    reqId: "req-l"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.003601000003982
+[17:48:16.319] INFO: undefined request completed | [1793641696319]
+    localTime: "17:48:16.319"
+    reqId: "req-m"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.687974000000395
+[17:48:16.322] INFO: undefined request completed | [1793641696322]
+    localTime: "17:48:16.322"
+    reqId: "req-n"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.16987599999993
+[17:48:16.323] INFO: undefined incoming request | [1793641696323]
+    localTime: "17:48:16.323"
+    reqId: "req-o"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49936
+    }
+[17:48:16.333] INFO: undefined incoming request | [1793641696333]
+    localTime: "17:48:16.333"
+    reqId: "req-p"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.336] INFO: undefined request completed | [1793641696336]
+    localTime: "17:48:16.336"
+    reqId: "req-o"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.64465200000268
+[17:48:16.345] INFO: undefined request completed | [1793641696345]
+    localTime: "17:48:16.345"
+    reqId: "req-p"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.141616000000795
+[17:48:16.362] INFO: undefined incoming request | [1793641696362]
+    localTime: "17:48:16.363"
+    reqId: "req-q"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.363] INFO: undefined incoming request | [1793641696363]
+    localTime: "17:48:16.363"
+    reqId: "req-r"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49934
+    }
+[17:48:16.377] INFO: undefined request completed | [1793641696377]
+    localTime: "17:48:16.377"
+    reqId: "req-q"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.14926099999866
+[17:48:16.377] INFO: undefined request completed | [1793641696377]
+    localTime: "17:48:16.377"
+    reqId: "req-r"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.535658000000694
+[17:48:16.391] INFO: undefined incoming request | [1793641696391]
+    localTime: "17:48:16.392"
+    reqId: "req-s"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.393] INFO: undefined incoming request | [1793641696393]
+    localTime: "17:48:16.393"
+    reqId: "req-t"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49934
+    }
+[17:48:16.425] INFO: undefined request completed | [1793641696425]
+    localTime: "17:48:16.425"
+    reqId: "req-s"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 32.68426999999792
+[17:48:16.425] INFO: undefined request completed | [1793641696425]
+    localTime: "17:48:16.425"
+    reqId: "req-t"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.593315999998595
+[17:48:16.850] INFO: undefined incoming request | [1793641696850]
+    localTime: "17:48:16.850"
+    reqId: "req-u"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 49924
+    }
+[17:48:16.860] INFO: undefined request completed | [1793641696860]
+    localTime: "17:48:16.860"
+    reqId: "req-u"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.692515000002459
+[17:48:55.664] INFO: undefined incoming request | [1793641735664]
+    localTime: "17:48:55.664"
+    reqId: "req-v"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43366
+    }
+[17:48:55.685] INFO: undefined request completed | [1793641735685]
+    localTime: "17:48:55.685"
+    reqId: "req-v"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 21.173691999996663
+[17:48:55.693] INFO: undefined incoming request | [1793641735693]
+    localTime: "17:48:55.693"
+    reqId: "req-w"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43380
+    }
+[17:48:55.701] INFO: undefined request completed | [1793641735701]
+    localTime: "17:48:55.701"
+    reqId: "req-w"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 7.769767999998294
+[17:48:55.712] INFO: undefined incoming request | [1793641735712]
+    localTime: "17:48:55.712"
+    reqId: "req-x"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43366
+    }
+[17:48:55.726] INFO: undefined request completed | [1793641735726]
+    localTime: "17:48:55.726"
+    reqId: "req-x"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.22888100000273
+[17:48:55.728] INFO: undefined incoming request | [1793641735728]
+    localTime: "17:48:55.728"
+    reqId: "req-y"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43380
+    }
+[17:48:55.737] INFO: undefined request completed | [1793641735737]
+    localTime: "17:48:55.737"
+    reqId: "req-y"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.446240000004764
+[17:48:58.898] INFO: undefined incoming request | [1793641738898]
+    localTime: "17:48:58.898"
+    reqId: "req-z"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:48:58.902] INFO: undefined request completed | [1793641738902]
+    localTime: "17:48:58.902"
+    reqId: "req-z"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 3.08712199999718
+[17:48:58.913] INFO: undefined incoming request | [1793641738913]
+    localTime: "17:48:58.913"
+    reqId: "req-10"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:48:58.915] INFO: undefined request completed | [1793641738915]
+    localTime: "17:48:58.915"
+    reqId: "req-10"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 2.0310929999977816
+[17:48:59.015] INFO: undefined incoming request | [1793641739015]
+    localTime: "17:48:59.015"
+    reqId: "req-11"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/response",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43366
+    }
+[17:48:59.021] INFO: undefined request completed | [1793641739021]
+    localTime: "17:48:59.021"
+    reqId: "req-11"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 5.8005600000033155
+[17:49:00.424] INFO: undefined incoming request | [1793641740424]
+    localTime: "17:49:00.424"
+    reqId: "req-12"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.432] INFO: undefined request completed | [1793641740432]
+    localTime: "17:49:00.432"
+    reqId: "req-12"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 7.118784999998752
+[17:49:00.454] INFO: undefined incoming request | [1793641740454]
+    localTime: "17:49:00.454"
+    reqId: "req-13"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.468] INFO: undefined request completed | [1793641740468]
+    localTime: "17:49:00.468"
+    reqId: "req-13"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.901763000001665
+[17:49:00.491] INFO: undefined incoming request | [1793641740491]
+    localTime: "17:49:00.492"
+    reqId: "req-14"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.500] INFO: undefined request completed | [1793641740500]
+    localTime: "17:49:00.500"
+    reqId: "req-14"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.638386999999057
+[17:49:00.542] INFO: undefined incoming request | [1793641740542]
+    localTime: "17:49:00.542"
+    reqId: "req-15"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.549] INFO: undefined incoming request | [1793641740549]
+    localTime: "17:49:00.549"
+    reqId: "req-16"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:00.553] INFO: undefined incoming request | [1793641740553]
+    localTime: "17:49:00.553"
+    reqId: "req-17"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:00.557] INFO: undefined request completed | [1793641740557]
+    localTime: "17:49:00.557"
+    reqId: "req-15"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.608274000012898
+[17:49:00.568] INFO: undefined request completed | [1793641740568]
+    localTime: "17:49:00.568"
+    reqId: "req-16"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 18.486831999995047
+[17:49:00.570] INFO: undefined request completed | [1793641740570]
+    localTime: "17:49:00.570"
+    reqId: "req-17"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 16.388315000003786
+[17:49:00.594] INFO: undefined incoming request | [1793641740594]
+    localTime: "17:49:00.594"
+    reqId: "req-18"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.596] INFO: undefined incoming request | [1793641740596]
+    localTime: "17:49:00.596"
+    reqId: "req-19"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:00.598] INFO: undefined incoming request | [1793641740598]
+    localTime: "17:49:00.598"
+    reqId: "req-1a"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:00.624] INFO: undefined incoming request | [1793641740624]
+    localTime: "17:49:00.624"
+    reqId: "req-1b"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43414
+    }
+[17:49:00.626] INFO: undefined request completed | [1793641740626]
+    localTime: "17:49:00.626"
+    reqId: "req-18"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.98429200000828
+[17:49:00.628] INFO: undefined incoming request | [1793641740628]
+    localTime: "17:49:00.628"
+    reqId: "req-1c"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43420
+    }
+[17:49:00.629] INFO: undefined request completed | [1793641740629]
+    localTime: "17:49:00.629"
+    reqId: "req-19"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 33.3673689999996
+[17:49:00.630] INFO: undefined request completed | [1793641740630]
+    localTime: "17:49:00.630"
+    reqId: "req-1a"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 32.016380000000936
+[17:49:00.631] INFO: undefined incoming request | [1793641740631]
+    localTime: "17:49:00.631"
+    reqId: "req-1d"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43434
+    }
+[17:49:00.648] INFO: undefined request completed | [1793641740648]
+    localTime: "17:49:00.648"
+    reqId: "req-1b"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 23.360941000006278
+[17:49:00.650] INFO: undefined request completed | [1793641740650]
+    localTime: "17:49:00.650"
+    reqId: "req-1c"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 22.02012499999546
+[17:49:00.652] INFO: undefined request completed | [1793641740652]
+    localTime: "17:49:00.652"
+    reqId: "req-1d"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 20.471185999995214
+[17:49:00.752] INFO: undefined incoming request | [1793641740752]
+    localTime: "17:49:00.752"
+    reqId: "req-1e"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.754] INFO: undefined incoming request | [1793641740754]
+    localTime: "17:49:00.754"
+    reqId: "req-1f"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:00.755] INFO: undefined incoming request | [1793641740755]
+    localTime: "17:49:00.755"
+    reqId: "req-1g"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:00.772] INFO: undefined request completed | [1793641740772]
+    localTime: "17:49:00.772"
+    reqId: "req-1e"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 20.022578000003705
+[17:49:00.774] INFO: undefined request completed | [1793641740774]
+    localTime: "17:49:00.774"
+    reqId: "req-1f"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 19.480340999987675
+[17:49:00.774] INFO: undefined request completed | [1793641740774]
+    localTime: "17:49:00.774"
+    reqId: "req-1g"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 18.877938000005088
+[17:49:00.779] INFO: undefined incoming request | [1793641740779]
+    localTime: "17:49:00.779"
+    reqId: "req-1h"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43414
+    }
+[17:49:00.788] INFO: undefined incoming request | [1793641740788]
+    localTime: "17:49:00.788"
+    reqId: "req-1i"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.792] INFO: undefined request completed | [1793641740792]
+    localTime: "17:49:00.792"
+    reqId: "req-1h"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.165498000002117
+[17:49:00.796] INFO: undefined incoming request | [1793641740796]
+    localTime: "17:49:00.796"
+    reqId: "req-1j"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:00.819] INFO: undefined request completed | [1793641740819]
+    localTime: "17:49:00.819"
+    reqId: "req-1i"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 30.629633000004105
+[17:49:00.828] INFO: undefined request completed | [1793641740828]
+    localTime: "17:49:00.828"
+    reqId: "req-1j"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.260800999996718
+[17:49:00.837] INFO: undefined incoming request | [1793641740837]
+    localTime: "17:49:00.837"
+    reqId: "req-1k"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.839] INFO: undefined incoming request | [1793641740839]
+    localTime: "17:49:00.839"
+    reqId: "req-1l"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:00.853] INFO: undefined request completed | [1793641740853]
+    localTime: "17:49:00.853"
+    reqId: "req-1k"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 15.269222000002628
+[17:49:00.854] INFO: undefined request completed | [1793641740854]
+    localTime: "17:49:00.855"
+    reqId: "req-1l"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.870605000003707
+[17:49:00.867] INFO: undefined incoming request | [1793641740867]
+    localTime: "17:49:00.868"
+    reqId: "req-1m"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:00.869] INFO: undefined incoming request | [1793641740869]
+    localTime: "17:49:00.869"
+    reqId: "req-1n"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:00.882] INFO: undefined request completed | [1793641740882]
+    localTime: "17:49:00.882"
+    reqId: "req-1m"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.176420000003418
+[17:49:00.882] INFO: undefined request completed | [1793641740882]
+    localTime: "17:49:00.882"
+    reqId: "req-1n"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.287971999990987
+[17:49:01.364] INFO: undefined incoming request | [1793641741364]
+    localTime: "17:49:01.364"
+    reqId: "req-1o"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:01.374] INFO: undefined request completed | [1793641741374]
+    localTime: "17:49:01.374"
+    reqId: "req-1o"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.818998000002466
+[17:49:01.390] INFO: undefined incoming request | [1793641741390]
+    localTime: "17:49:01.390"
+    reqId: "req-1p"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:01.400] INFO: undefined request completed | [1793641741400]
+    localTime: "17:49:01.400"
+    reqId: "req-1p"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.408457999990787
+[17:49:01.486] INFO: undefined incoming request | [1793641741486]
+    localTime: "17:49:01.486"
+    reqId: "req-1q"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:01.498] INFO: undefined request completed | [1793641741498]
+    localTime: "17:49:01.498"
+    reqId: "req-1q"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.820363000006182
+[17:49:01.631] INFO: undefined incoming request | [1793641741631]
+    localTime: "17:49:01.632"
+    reqId: "req-1r"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:01.642] INFO: undefined request completed | [1793641741642]
+    localTime: "17:49:01.642"
+    reqId: "req-1r"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.6350250000105
+[17:49:01.684] INFO: undefined incoming request | [1793641741684]
+    localTime: "17:49:01.684"
+    reqId: "req-1s"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:01.685] INFO: undefined incoming request | [1793641741685]
+    localTime: "17:49:01.685"
+    reqId: "req-1t"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:01.697] INFO: undefined request completed | [1793641741697]
+    localTime: "17:49:01.697"
+    reqId: "req-1s"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.189915000009933
+[17:49:01.698] INFO: undefined request completed | [1793641741698]
+    localTime: "17:49:01.698"
+    reqId: "req-1t"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.887355999991996
+[17:49:01.798] INFO: undefined incoming request | [1793641741798]
+    localTime: "17:49:01.798"
+    reqId: "req-1u"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:01.812] INFO: undefined request completed | [1793641741812]
+    localTime: "17:49:01.812"
+    reqId: "req-1u"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.882044000012684
+[17:49:02.258] INFO: undefined incoming request | [1793641742258]
+    localTime: "17:49:02.258"
+    reqId: "req-1v"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:02.264] INFO: undefined request completed | [1793641742264]
+    localTime: "17:49:02.264"
+    reqId: "req-1v"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 6.200664000003599
+[17:49:02.272] INFO: undefined incoming request | [1793641742272]
+    localTime: "17:49:02.272"
+    reqId: "req-1w"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:02.277] INFO: undefined request completed | [1793641742277]
+    localTime: "17:49:02.277"
+    reqId: "req-1w"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 4.222854000006919
+[17:49:02.303] INFO: undefined incoming request | [1793641742303]
+    localTime: "17:49:02.303"
+    reqId: "req-1x"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/response",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43366
+    }
+[17:49:02.312] INFO: undefined request completed | [1793641742312]
+    localTime: "17:49:02.313"
+    reqId: "req-1x"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.841955000010785
+[17:49:03.785] INFO: undefined incoming request | [1793641743785]
+    localTime: "17:49:03.785"
+    reqId: "req-1y"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:03.793] INFO: undefined request completed | [1793641743793]
+    localTime: "17:49:03.793"
+    reqId: "req-1y"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 7.679584999990766
+[17:49:03.803] INFO: undefined incoming request | [1793641743803]
+    localTime: "17:49:03.803"
+    reqId: "req-1z"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:03.817] INFO: undefined request completed | [1793641743817]
+    localTime: "17:49:03.817"
+    reqId: "req-1z"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.697736999994959
+[17:49:03.828] INFO: undefined incoming request | [1793641743828]
+    localTime: "17:49:03.828"
+    reqId: "req-20"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:03.843] INFO: undefined request completed | [1793641743843]
+    localTime: "17:49:03.843"
+    reqId: "req-20"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 15.325952999992296
+[17:49:03.867] INFO: undefined incoming request | [1793641743867]
+    localTime: "17:49:03.867"
+    reqId: "req-21"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:03.871] INFO: undefined incoming request | [1793641743871]
+    localTime: "17:49:03.871"
+    reqId: "req-22"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:03.879] INFO: undefined incoming request | [1793641743879]
+    localTime: "17:49:03.879"
+    reqId: "req-23"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:03.887] INFO: undefined incoming request | [1793641743887]
+    localTime: "17:49:03.887"
+    reqId: "req-24"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43414
+    }
+[17:49:03.888] INFO: undefined incoming request | [1793641743888]
+    localTime: "17:49:03.889"
+    reqId: "req-25"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43420
+    }
+[17:49:03.890] INFO: undefined incoming request | [1793641743890]
+    localTime: "17:49:03.890"
+    reqId: "req-26"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43434
+    }
+[17:49:03.898] INFO: undefined request completed | [1793641743898]
+    localTime: "17:49:03.898"
+    reqId: "req-21"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 30.91797399999632
+[17:49:03.904] INFO: undefined request completed | [1793641743904]
+    localTime: "17:49:03.904"
+    reqId: "req-22"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 32.99620400001004
+[17:49:03.930] INFO: undefined incoming request | [1793641743930]
+    localTime: "17:49:03.931"
+    reqId: "req-27"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:03.932] INFO: undefined request completed | [1793641743932]
+    localTime: "17:49:03.932"
+    reqId: "req-23"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 52.85225199999695
+[17:49:03.934] INFO: undefined incoming request | [1793641743934]
+    localTime: "17:49:03.934"
+    reqId: "req-28"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:03.935] INFO: undefined request completed | [1793641743935]
+    localTime: "17:49:03.935"
+    reqId: "req-24"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 47.91728800001147
+[17:49:03.936] INFO: undefined request completed | [1793641743936]
+    localTime: "17:49:03.936"
+    reqId: "req-25"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 47.27677099998982
+[17:49:03.937] INFO: undefined request completed | [1793641743937]
+    localTime: "17:49:03.937"
+    reqId: "req-26"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 46.35806100000627
+[17:49:03.951] INFO: undefined request completed | [1793641743951]
+    localTime: "17:49:03.951"
+    reqId: "req-27"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 20.142219000001205
+[17:49:03.954] INFO: undefined request completed | [1793641743954]
+    localTime: "17:49:03.954"
+    reqId: "req-28"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 19.52816200000234
+[17:49:03.998] INFO: undefined incoming request | [1793641743998]
+    localTime: "17:49:03.998"
+    reqId: "req-29"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.015] INFO: undefined request completed | [1793641744015]
+    localTime: "17:49:04.015"
+    reqId: "req-29"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.34487000000081
+[17:49:04.019] INFO: undefined incoming request | [1793641744019]
+    localTime: "17:49:04.019"
+    reqId: "req-2a"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:04.028] INFO: undefined incoming request | [1793641744028]
+    localTime: "17:49:04.028"
+    reqId: "req-2b"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:04.029] INFO: undefined incoming request | [1793641744029]
+    localTime: "17:49:04.029"
+    reqId: "req-2c"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43414
+    }
+[17:49:04.036] INFO: undefined request completed | [1793641744036]
+    localTime: "17:49:04.036"
+    reqId: "req-2a"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 16.971103000003495
+[17:49:04.051] INFO: undefined request completed | [1793641744051]
+    localTime: "17:49:04.051"
+    reqId: "req-2b"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 23.130319999996573
+[17:49:04.052] INFO: undefined incoming request | [1793641744052]
+    localTime: "17:49:04.052"
+    reqId: "req-2d"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.057] INFO: undefined request completed | [1793641744057]
+    localTime: "17:49:04.057"
+    reqId: "req-2c"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 27.725089000014123
+[17:49:04.059] INFO: undefined incoming request | [1793641744059]
+    localTime: "17:49:04.059"
+    reqId: "req-2e"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:04.067] INFO: undefined incoming request | [1793641744067]
+    localTime: "17:49:04.067"
+    reqId: "req-2f"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:04.081] INFO: undefined request completed | [1793641744081]
+    localTime: "17:49:04.081"
+    reqId: "req-2d"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 29.37010499999451
+[17:49:04.089] INFO: undefined incoming request | [1793641744089]
+    localTime: "17:49:04.089"
+    reqId: "req-2g"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.120] INFO: undefined request completed | [1793641744120]
+    localTime: "17:49:04.120"
+    reqId: "req-2e"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 60.947211000006064
+[17:49:04.122] INFO: undefined request completed | [1793641744122]
+    localTime: "17:49:04.122"
+    reqId: "req-2f"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 54.13564699998824
+[17:49:04.136] INFO: undefined incoming request | [1793641744136]
+    localTime: "17:49:04.136"
+    reqId: "req-2h"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:04.139] INFO: undefined incoming request | [1793641744139]
+    localTime: "17:49:04.139"
+    reqId: "req-2i"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43404
+    }
+[17:49:04.142] INFO: undefined request completed | [1793641744142]
+    localTime: "17:49:04.142"
+    reqId: "req-2g"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 53.55154000000039
+[17:49:04.160] INFO: undefined request completed | [1793641744160]
+    localTime: "17:49:04.160"
+    reqId: "req-2h"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 23.895122999994783
+[17:49:04.161] INFO: undefined request completed | [1793641744161]
+    localTime: "17:49:04.161"
+    reqId: "req-2i"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 21.867673999993713
+[17:49:04.640] INFO: undefined incoming request | [1793641744640]
+    localTime: "17:49:04.640"
+    reqId: "req-2j"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.653] INFO: undefined request completed | [1793641744653]
+    localTime: "17:49:04.653"
+    reqId: "req-2j"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.835812000004807
+[17:49:04.664] INFO: undefined incoming request | [1793641744664]
+    localTime: "17:49:04.664"
+    reqId: "req-2k"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.677] INFO: undefined request completed | [1793641744677]
+    localTime: "17:49:04.677"
+    reqId: "req-2k"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.294519000002765
+[17:49:04.775] INFO: undefined incoming request | [1793641744775]
+    localTime: "17:49:04.776"
+    reqId: "req-2l"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.792] INFO: undefined request completed | [1793641744792]
+    localTime: "17:49:04.792"
+    reqId: "req-2l"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 16.223159999994095
+[17:49:04.902] INFO: undefined incoming request | [1793641744902]
+    localTime: "17:49:04.902"
+    reqId: "req-2m"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.913] INFO: undefined request completed | [1793641744913]
+    localTime: "17:49:04.913"
+    reqId: "req-2m"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.36334500000521
+[17:49:04.942] INFO: undefined incoming request | [1793641744942]
+    localTime: "17:49:04.942"
+    reqId: "req-2n"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43388
+    }
+[17:49:04.943] INFO: undefined incoming request | [1793641744943]
+    localTime: "17:49:04.943"
+    reqId: "req-2o"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 43402
+    }
+[17:49:04.958] INFO: undefined request completed | [1793641744958]
+    localTime: "17:49:04.958"
+    reqId: "req-2n"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 15.405941000004532
+[17:49:04.958] INFO: undefined request completed | [1793641744958]
+    localTime: "17:49:04.958"
+    reqId: "req-2o"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.906789000000572
+[18:06:46.473] INFO: undefined incoming request | [1793642806473]
+    localTime: "18:06:46.473"
+    reqId: "req-2p"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 36688
+    }
+[18:06:46.494] INFO: undefined request completed | [1793642806494]
+    localTime: "18:06:46.494"
+    reqId: "req-2p"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 20.325945999938995
+[18:06:46.504] INFO: undefined incoming request | [1793642806504]
+    localTime: "18:06:46.504"
+    reqId: "req-2q"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 36702
+    }
+[18:06:46.515] INFO: undefined request completed | [1793642806515]
+    localTime: "18:06:46.515"
+    reqId: "req-2q"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.474644999951124
+[18:06:46.527] INFO: undefined incoming request | [1793642806527]
+    localTime: "18:06:46.527"
+    reqId: "req-2r"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 36688
+    }
+[18:06:46.545] INFO: undefined request completed | [1793642806545]
+    localTime: "18:06:46.545"
+    reqId: "req-2r"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.721541000064462
+[18:06:46.547] INFO: undefined incoming request | [1793642806547]
+    localTime: "18:06:46.547"
+    reqId: "req-2s"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 36702
+    }
+[18:06:46.559] INFO: undefined request completed | [1793642806559]
+    localTime: "18:06:46.559"
+    reqId: "req-2s"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.349025000119582
+[18:07:58.299] INFO: undefined incoming request | [1793642878299]
+    localTime: "18:07:58.299"
+    reqId: "req-2t"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37900
+    }
+[18:07:58.319] INFO: undefined request completed | [1793642878319]
+    localTime: "18:07:58.319"
+    reqId: "req-2t"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 19.088854999979958
+[18:07:58.328] INFO: undefined incoming request | [1793642878328]
+    localTime: "18:07:58.328"
+    reqId: "req-2u"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37908
+    }
+[18:07:58.339] INFO: undefined request completed | [1793642878339]
+    localTime: "18:07:58.339"
+    reqId: "req-2u"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.364536999957636
+[18:07:58.349] INFO: undefined incoming request | [1793642878349]
+    localTime: "18:07:58.349"
+    reqId: "req-2v"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37900
+    }
+[18:07:58.363] INFO: undefined request completed | [1793642878363]
+    localTime: "18:07:58.363"
+    reqId: "req-2v"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.640597000019625
+[18:07:58.365] INFO: undefined incoming request | [1793642878365]
+    localTime: "18:07:58.365"
+    reqId: "req-2w"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37908
+    }
+[18:07:58.374] INFO: undefined request completed | [1793642878374]
+    localTime: "18:07:58.374"
+    reqId: "req-2w"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.0748560000211
+[18:08:00.904] INFO: undefined incoming request | [1793642880904]
+    localTime: "18:08:00.904"
+    reqId: "req-2x"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:00.907] INFO: undefined request completed | [1793642880907]
+    localTime: "18:08:00.907"
+    reqId: "req-2x"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 3.187610999913886
+[18:08:00.921] INFO: undefined incoming request | [1793642880921]
+    localTime: "18:08:00.921"
+    reqId: "req-2y"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:00.924] INFO: undefined request completed | [1793642880924]
+    localTime: "18:08:00.924"
+    reqId: "req-2y"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 2.6496020001359284
+[18:08:01.010] INFO: undefined incoming request | [1793642881010]
+    localTime: "18:08:01.010"
+    reqId: "req-2z"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/response",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37900
+    }
+[18:08:01.015] INFO: undefined request completed | [1793642881015]
+    localTime: "18:08:01.015"
+    reqId: "req-2z"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 4.891641000052914
+[18:08:02.432] INFO: undefined incoming request | [1793642882432]
+    localTime: "18:08:02.432"
+    reqId: "req-30"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.436] INFO: undefined request completed | [1793642882436]
+    localTime: "18:08:02.436"
+    reqId: "req-30"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 4.410104000009596
+[18:08:02.455] INFO: undefined incoming request | [1793642882455]
+    localTime: "18:08:02.455"
+    reqId: "req-31"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.466] INFO: undefined request completed | [1793642882466]
+    localTime: "18:08:02.466"
+    reqId: "req-31"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.584376000100747
+[18:08:02.487] INFO: undefined incoming request | [1793642882487]
+    localTime: "18:08:02.487"
+    reqId: "req-32"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.496] INFO: undefined request completed | [1793642882496]
+    localTime: "18:08:02.496"
+    reqId: "req-32"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.169241999974474
+[18:08:02.531] INFO: undefined incoming request | [1793642882531]
+    localTime: "18:08:02.531"
+    reqId: "req-33"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.540] INFO: undefined incoming request | [1793642882540]
+    localTime: "18:08:02.540"
+    reqId: "req-34"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:02.542] INFO: undefined request completed | [1793642882542]
+    localTime: "18:08:02.542"
+    reqId: "req-33"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.356127999955788
+[18:08:02.549] INFO: undefined incoming request | [1793642882549]
+    localTime: "18:08:02.549"
+    reqId: "req-35"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:02.552] INFO: undefined request completed | [1793642882552]
+    localTime: "18:08:02.552"
+    reqId: "req-34"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.682383000152186
+[18:08:02.559] INFO: undefined request completed | [1793642882559]
+    localTime: "18:08:02.559"
+    reqId: "req-35"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.664724000031129
+[18:08:02.582] INFO: undefined incoming request | [1793642882582]
+    localTime: "18:08:02.582"
+    reqId: "req-36"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.591] INFO: undefined request completed | [1793642882591]
+    localTime: "18:08:02.591"
+    reqId: "req-36"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.598829000024125
+[18:08:02.592] INFO: undefined incoming request | [1793642882592]
+    localTime: "18:08:02.592"
+    reqId: "req-37"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:02.598] INFO: undefined incoming request | [1793642882598]
+    localTime: "18:08:02.598"
+    reqId: "req-38"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:02.599] INFO: undefined incoming request | [1793642882599]
+    localTime: "18:08:02.599"
+    reqId: "req-39"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:02.600] INFO: undefined request completed | [1793642882600]
+    localTime: "18:08:02.601"
+    reqId: "req-37"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.6373560000211
+[18:08:02.609] INFO: undefined request completed | [1793642882609]
+    localTime: "18:08:02.609"
+    reqId: "req-38"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.341281000059098
+[18:08:02.609] INFO: undefined request completed | [1793642882609]
+    localTime: "18:08:02.609"
+    reqId: "req-39"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.073619999922812
+[18:08:02.621] INFO: undefined incoming request | [1793642882621]
+    localTime: "18:08:02.621"
+    reqId: "req-3a"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.629] INFO: undefined request completed | [1793642882629]
+    localTime: "18:08:02.629"
+    reqId: "req-3a"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 7.824560000095516
+[18:08:02.687] INFO: undefined incoming request | [1793642882687]
+    localTime: "18:08:02.687"
+    reqId: "req-3b"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:02.688] INFO: undefined incoming request | [1793642882688]
+    localTime: "18:08:02.688"
+    reqId: "req-3c"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:02.697] INFO: undefined incoming request | [1793642882697]
+    localTime: "18:08:02.697"
+    reqId: "req-3d"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:02.699] INFO: undefined request completed | [1793642882699]
+    localTime: "18:08:02.699"
+    reqId: "req-3b"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.924700000090525
+[18:08:02.699] INFO: undefined request completed | [1793642882699]
+    localTime: "18:08:02.699"
+    reqId: "req-3c"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.483973999973387
+[18:08:02.700] INFO: undefined incoming request | [1793642882700]
+    localTime: "18:08:02.700"
+    reqId: "req-3e"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.708] INFO: undefined request completed | [1793642882708]
+    localTime: "18:08:02.708"
+    reqId: "req-3d"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.653641000157222
+[18:08:02.712] INFO: undefined request completed | [1793642882712]
+    localTime: "18:08:02.712"
+    reqId: "req-3e"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.145800000056624
+[18:08:02.714] INFO: undefined incoming request | [1793642882714]
+    localTime: "18:08:02.714"
+    reqId: "req-3f"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52470
+    }
+[18:08:02.722] INFO: undefined incoming request | [1793642882722]
+    localTime: "18:08:02.722"
+    reqId: "req-3g"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.724] INFO: undefined incoming request | [1793642882724]
+    localTime: "18:08:02.724"
+    reqId: "req-3h"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:02.725] INFO: undefined request completed | [1793642882725]
+    localTime: "18:08:02.725"
+    reqId: "req-3f"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.081667000195011
+[18:08:02.726] INFO: undefined incoming request | [1793642882726]
+    localTime: "18:08:02.726"
+    reqId: "req-3i"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:02.736] INFO: undefined incoming request | [1793642882736]
+    localTime: "18:08:02.736"
+    reqId: "req-3j"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:02.740] INFO: undefined request completed | [1793642882740]
+    localTime: "18:08:02.740"
+    reqId: "req-3g"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.318551999982446
+[18:08:02.741] INFO: undefined request completed | [1793642882741]
+    localTime: "18:08:02.741"
+    reqId: "req-3h"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 16.765731999883428
+[18:08:02.742] INFO: undefined request completed | [1793642882742]
+    localTime: "18:08:02.742"
+    reqId: "req-3i"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 15.600357000017539
+[18:08:02.749] INFO: undefined request completed | [1793642882749]
+    localTime: "18:08:02.749"
+    reqId: "req-3j"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.810222000116482
+[18:08:02.817] INFO: undefined incoming request | [1793642882817]
+    localTime: "18:08:02.817"
+    reqId: "req-3k"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.826] INFO: undefined request completed | [1793642882826]
+    localTime: "18:08:02.826"
+    reqId: "req-3k"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.018196000019088
+[18:08:02.836] INFO: undefined incoming request | [1793642882836]
+    localTime: "18:08:02.836"
+    reqId: "req-3l"
+    req: {
+      "method": "POST",
+      "url": "/v1/sessions",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37900
+    }
+[18:08:02.843] INFO: undefined Creating new session for user cmvzknqei0009kc3ii63yf02o with tag browser-login-c8096a24-713a-48d3-841f-8f3262977b83 | [1793642882843]
+    localTime: "18:08:02.843"
+    module: "session-create"
+    userId: "cmvzknqei0009kc3ii63yf02o"
+    tag: "browser-login-c8096a24-713a-48d3-841f-8f3262977b83"
+[18:08:02.855] INFO: undefined Emitting new-session update to user-scoped connections | [1793642882855]
+    localTime: "18:08:02.855"
+    module: "session-create"
+    userId: "cmvzknqei0009kc3ii63yf02o"
+    sessionId: "cmvzkntwe000dkc3i5n6qgong"
+    updateType: "new-session"
+    updateId: "5iW8JZYD8fR0"
+    updateSeq: 1
+[18:08:02.857] INFO: undefined Session resolved: cmvzkntwe000dkc3i5n6qgong | [1793642882857]
+    localTime: "18:08:02.857"
+    module: "session-create"
+    sessionId: "cmvzkntwe000dkc3i5n6qgong"
+    userId: "cmvzknqei0009kc3ii63yf02o"
+[18:08:02.857] INFO: undefined request completed | [1793642882857]
+    localTime: "18:08:02.857"
+    reqId: "req-3l"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 21.436557999812067
+[18:08:02.921] INFO: undefined incoming request | [1793642882921]
+    localTime: "18:08:02.921"
+    reqId: "req-3m"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.929] INFO: undefined request completed | [1793642882929]
+    localTime: "18:08:02.929"
+    reqId: "req-3m"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.453744999831542
+[18:08:02.933] INFO: undefined incoming request | [1793642882933]
+    localTime: "18:08:02.933"
+    reqId: "req-3n"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.940] INFO: undefined request completed | [1793642882940]
+    localTime: "18:08:02.940"
+    reqId: "req-3n"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 6.46835199999623
+[18:08:02.942] INFO: undefined incoming request | [1793642882942]
+    localTime: "18:08:02.942"
+    reqId: "req-3o"
+    req: {
+      "method": "GET",
+      "url": "/v2/sessions/cmvzkntwe000dkc3i5n6qgong",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:02.961] INFO: undefined request completed | [1793642882961]
+    localTime: "18:08:02.961"
+    reqId: "req-3o"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 19.208369999891147
+[18:08:02.975] INFO: undefined incoming request | [1793642882975]
+    localTime: "18:08:02.975"
+    reqId: "req-3p"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:02.982] INFO: undefined incoming request | [1793642882982]
+    localTime: "18:08:02.982"
+    reqId: "req-3q"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:02.982] INFO: undefined incoming request | [1793642882982]
+    localTime: "18:08:02.982"
+    reqId: "req-3r"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:02.985] INFO: undefined incoming request | [1793642882985]
+    localTime: "18:08:02.985"
+    reqId: "req-3s"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:02.987] INFO: undefined request completed | [1793642882987]
+    localTime: "18:08:02.987"
+    reqId: "req-3p"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.060010000132024
+[18:08:02.999] INFO: undefined request completed | [1793642882999]
+    localTime: "18:08:02.999"
+    reqId: "req-3q"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.498095999937505
+[18:08:03.000] INFO: undefined request completed | [1793642883000]
+    localTime: "18:08:03.000"
+    reqId: "req-3r"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.19885400007479
+[18:08:03.001] INFO: undefined request completed | [1793642883001]
+    localTime: "18:08:03.001"
+    reqId: "req-3s"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 15.339816000079736
+[18:08:03.005] INFO: undefined incoming request | [1793642883005]
+    localTime: "18:08:03.005"
+    reqId: "req-3t"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.015] INFO: undefined request completed | [1793642883015]
+    localTime: "18:08:03.015"
+    reqId: "req-3t"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.082001999951899
+[18:08:03.016] INFO: undefined incoming request | [1793642883016]
+    localTime: "18:08:03.016"
+    reqId: "req-3u"
+    req: {
+      "method": "GET",
+      "url": "/v2/sessions/cmvzkntwe000dkc3i5n6qgong",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:03.023] INFO: undefined request completed | [1793642883023]
+    localTime: "18:08:03.023"
+    reqId: "req-3u"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 6.046178000047803
+[18:08:03.042] INFO: undefined incoming request | [1793642883042]
+    localTime: "18:08:03.042"
+    reqId: "req-3v"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.051] INFO: undefined request completed | [1793642883051]
+    localTime: "18:08:03.051"
+    reqId: "req-3v"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.601400999817997
+[18:08:03.051] INFO: undefined incoming request | [1793642883051]
+    localTime: "18:08:03.051"
+    reqId: "req-3w"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:03.059] INFO: undefined request completed | [1793642883059]
+    localTime: "18:08:03.059"
+    reqId: "req-3w"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 7.926433000015095
+[18:08:03.138] INFO: undefined incoming request | [1793642883138]
+    localTime: "18:08:03.138"
+    reqId: "req-3x"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.145] INFO: undefined request completed | [1793642883145]
+    localTime: "18:08:03.145"
+    reqId: "req-3x"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 6.92504100012593
+[18:08:03.227] INFO: undefined incoming request | [1793642883227]
+    localTime: "18:08:03.227"
+    reqId: "req-3y"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.236] INFO: undefined request completed | [1793642883236]
+    localTime: "18:08:03.236"
+    reqId: "req-3y"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.881221000105143
+[18:08:03.270] INFO: undefined incoming request | [1793642883270]
+    localTime: "18:08:03.270"
+    reqId: "req-3z"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.271] INFO: undefined incoming request | [1793642883271]
+    localTime: "18:08:03.271"
+    reqId: "req-40"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:03.285] INFO: undefined request completed | [1793642883285]
+    localTime: "18:08:03.285"
+    reqId: "req-3z"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.97622700012289
+[18:08:03.285] INFO: undefined request completed | [1793642883285]
+    localTime: "18:08:03.285"
+    reqId: "req-40"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.45519099989906
+[18:08:03.383] INFO: undefined incoming request | [1793642883383]
+    localTime: "18:08:03.383"
+    reqId: "req-41"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.393] INFO: undefined request completed | [1793642883393]
+    localTime: "18:08:03.393"
+    reqId: "req-41"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.480665999930352
+[18:08:03.724] INFO: undefined incoming request | [1793642883724]
+    localTime: "18:08:03.724"
+    reqId: "req-42"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.729] INFO: undefined request completed | [1793642883729]
+    localTime: "18:08:03.729"
+    reqId: "req-42"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 5.243143999949098
+[18:08:03.738] INFO: undefined incoming request | [1793642883738]
+    localTime: "18:08:03.738"
+    reqId: "req-43"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:03.743] INFO: undefined request completed | [1793642883743]
+    localTime: "18:08:03.743"
+    reqId: "req-43"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 4.6904970000032336
+[18:08:03.766] INFO: undefined incoming request | [1793642883766]
+    localTime: "18:08:03.766"
+    reqId: "req-44"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/response",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37900
+    }
+[18:08:03.773] INFO: undefined request completed | [1793642883773]
+    localTime: "18:08:03.773"
+    reqId: "req-44"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 6.9379859999753535
+[18:08:05.250] INFO: undefined incoming request | [1793642885250]
+    localTime: "18:08:05.250"
+    reqId: "req-45"
+    req: {
+      "method": "POST",
+      "url": "/v1/auth/request/claim",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.255] INFO: undefined request completed | [1793642885255]
+    localTime: "18:08:05.255"
+    reqId: "req-45"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 4.659042000072077
+[18:08:05.265] INFO: undefined incoming request | [1793642885265]
+    localTime: "18:08:05.265"
+    reqId: "req-46"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.274] INFO: undefined request completed | [1793642885274]
+    localTime: "18:08:05.274"
+    reqId: "req-46"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.411360999802127
+[18:08:05.281] INFO: undefined incoming request | [1793642885281]
+    localTime: "18:08:05.282"
+    reqId: "req-47"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.292] INFO: undefined request completed | [1793642885292]
+    localTime: "18:08:05.292"
+    reqId: "req-47"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 10.477624000050128
+[18:08:05.312] INFO: undefined incoming request | [1793642885312]
+    localTime: "18:08:05.312"
+    reqId: "req-48"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.314] INFO: undefined incoming request | [1793642885314]
+    localTime: "18:08:05.314"
+    reqId: "req-49"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.316] INFO: undefined incoming request | [1793642885316]
+    localTime: "18:08:05.316"
+    reqId: "req-4a"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:05.325] INFO: undefined incoming request | [1793642885325]
+    localTime: "18:08:05.325"
+    reqId: "req-4b"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:05.326] INFO: undefined incoming request | [1793642885326]
+    localTime: "18:08:05.326"
+    reqId: "req-4c"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52470
+    }
+[18:08:05.333] INFO: undefined incoming request | [1793642885333]
+    localTime: "18:08:05.333"
+    reqId: "req-4d"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52472
+    }
+[18:08:05.336] INFO: undefined request completed | [1793642885336]
+    localTime: "18:08:05.336"
+    reqId: "req-48"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 24.42124200006947
+[18:08:05.349] INFO: undefined incoming request | [1793642885349]
+    localTime: "18:08:05.349"
+    reqId: "req-4e"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.350] INFO: undefined request completed | [1793642885350]
+    localTime: "18:08:05.350"
+    reqId: "req-49"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 35.98268399992958
+[18:08:05.351] INFO: undefined request completed | [1793642885351]
+    localTime: "18:08:05.351"
+    reqId: "req-4a"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 34.79144900012761
+[18:08:05.364] INFO: undefined incoming request | [1793642885364]
+    localTime: "18:08:05.364"
+    reqId: "req-4f"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.367] INFO: undefined request completed | [1793642885367]
+    localTime: "18:08:05.367"
+    reqId: "req-4b"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 41.08119699987583
+[18:08:05.367] INFO: undefined request completed | [1793642885367]
+    localTime: "18:08:05.367"
+    reqId: "req-4c"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 40.63288799999282
+[18:08:05.373] INFO: undefined request completed | [1793642885373]
+    localTime: "18:08:05.373"
+    reqId: "req-4d"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 39.62362900003791
+[18:08:05.376] INFO: undefined incoming request | [1793642885376]
+    localTime: "18:08:05.376"
+    reqId: "req-4g"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:05.380] INFO: undefined request completed | [1793642885380]
+    localTime: "18:08:05.380"
+    reqId: "req-4e"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 31.195729000028223
+[18:08:05.417] INFO: undefined request completed | [1793642885417]
+    localTime: "18:08:05.417"
+    reqId: "req-4f"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 52.428496999898925
+[18:08:05.424] INFO: undefined request completed | [1793642885424]
+    localTime: "18:08:05.424"
+    reqId: "req-4g"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 47.68141399999149
+[18:08:05.442] INFO: undefined incoming request | [1793642885442]
+    localTime: "18:08:05.442"
+    reqId: "req-4h"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:05.452] INFO: undefined request completed | [1793642885452]
+    localTime: "18:08:05.452"
+    reqId: "req-4h"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.702601999975741
+[18:08:05.457] INFO: undefined incoming request | [1793642885457]
+    localTime: "18:08:05.457"
+    reqId: "req-4i"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.459] INFO: undefined incoming request | [1793642885459]
+    localTime: "18:08:05.459"
+    reqId: "req-4j"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.471] INFO: undefined incoming request | [1793642885471]
+    localTime: "18:08:05.471"
+    reqId: "req-4k"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:05.472] INFO: undefined incoming request | [1793642885472]
+    localTime: "18:08:05.472"
+    reqId: "req-4l"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52458
+    }
+[18:08:05.474] INFO: undefined incoming request | [1793642885474]
+    localTime: "18:08:05.474"
+    reqId: "req-4m"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52470
+    }
+[18:08:05.475] INFO: undefined incoming request | [1793642885475]
+    localTime: "18:08:05.475"
+    reqId: "req-4n"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52472
+    }
+[18:08:05.476] INFO: undefined request completed | [1793642885476]
+    localTime: "18:08:05.476"
+    reqId: "req-4i"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 18.258285999996588
+[18:08:05.476] INFO: undefined request completed | [1793642885476]
+    localTime: "18:08:05.476"
+    reqId: "req-4j"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 17.52116999984719
+[18:08:05.494] INFO: undefined incoming request | [1793642885494]
+    localTime: "18:08:05.494"
+    reqId: "req-4o"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.515] INFO: undefined request completed | [1793642885515]
+    localTime: "18:08:05.515"
+    reqId: "req-4k"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 26.46127999993041
+[18:08:05.516] INFO: undefined request completed | [1793642885516]
+    localTime: "18:08:05.516"
+    reqId: "req-4l"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 44.08840799983591
+[18:08:05.518] INFO: undefined request completed | [1793642885518]
+    localTime: "18:08:05.518"
+    reqId: "req-4m"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 43.40336099988781
+[18:08:05.518] INFO: undefined request completed | [1793642885518]
+    localTime: "18:08:05.518"
+    reqId: "req-4n"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 43.28484799992293
+[18:08:05.526] INFO: undefined incoming request | [1793642885526]
+    localTime: "18:08:05.526"
+    reqId: "req-4p"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.528] INFO: undefined incoming request | [1793642885528]
+    localTime: "18:08:05.528"
+    reqId: "req-4q"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52448
+    }
+[18:08:05.529] INFO: undefined request completed | [1793642885529]
+    localTime: "18:08:05.529"
+    reqId: "req-4o"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 34.472925999900326
+[18:08:05.542] INFO: undefined request completed | [1793642885542]
+    localTime: "18:08:05.542"
+    reqId: "req-4p"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 15.580627999966964
+[18:08:05.542] INFO: undefined request completed | [1793642885542]
+    localTime: "18:08:05.542"
+    reqId: "req-4q"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 14.57012699986808
+[18:08:05.574] INFO: undefined incoming request | [1793642885574]
+    localTime: "18:08:05.575"
+    reqId: "req-4r"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.579] INFO: undefined incoming request | [1793642885579]
+    localTime: "18:08:05.579"
+    reqId: "req-4s"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.583] INFO: undefined request completed | [1793642885583]
+    localTime: "18:08:05.583"
+    reqId: "req-4r"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 8.599314999999478
+[18:08:05.591] INFO: undefined request completed | [1793642885591]
+    localTime: "18:08:05.591"
+    reqId: "req-4s"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.958419000031427
+[18:08:05.599] INFO: undefined incoming request | [1793642885599]
+    localTime: "18:08:05.599"
+    reqId: "req-4t"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.619] INFO: undefined request completed | [1793642885619]
+    localTime: "18:08:05.619"
+    reqId: "req-4t"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 20.11334399995394
+[18:08:05.622] INFO: undefined incoming request | [1793642885622]
+    localTime: "18:08:05.622"
+    reqId: "req-4u"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.630] INFO: undefined request completed | [1793642885630]
+    localTime: "18:08:05.630"
+    reqId: "req-4u"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 7.896284000016749
+[18:08:05.631] INFO: undefined incoming request | [1793642885631]
+    localTime: "18:08:05.631"
+    reqId: "req-4v"
+    req: {
+      "method": "GET",
+      "url": "/v2/sessions/cmvzkntwe000dkc3i5n6qgong",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.636] INFO: undefined request completed | [1793642885636]
+    localTime: "18:08:05.636"
+    reqId: "req-4v"
+    res: {
+      "statusCode": 404
+    }
+    responseTime: 4.710312000010163
+[18:08:05.643] INFO: undefined incoming request | [1793642885643]
+    localTime: "18:08:05.643"
+    reqId: "req-4w"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.656] INFO: undefined request completed | [1793642885656]
+    localTime: "18:08:05.656"
+    reqId: "req-4w"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.923772000009194
+[18:08:05.775] INFO: undefined incoming request | [1793642885775]
+    localTime: "18:08:05.775"
+    reqId: "req-4x"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.787] INFO: undefined request completed | [1793642885787]
+    localTime: "18:08:05.787"
+    reqId: "req-4x"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 11.668554999865592
+[18:08:05.852] INFO: undefined incoming request | [1793642885852]
+    localTime: "18:08:05.852"
+    reqId: "req-4y"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.861] INFO: undefined request completed | [1793642885861]
+    localTime: "18:08:05.861"
+    reqId: "req-4y"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 9.307154000038281
+[18:08:05.883] INFO: undefined incoming request | [1793642885883]
+    localTime: "18:08:05.883"
+    reqId: "req-4z"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 37918
+    }
+[18:08:05.884] INFO: undefined incoming request | [1793642885884]
+    localTime: "18:08:05.884"
+    reqId: "req-50"
+    req: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 52432
+    }
+[18:08:05.897] INFO: undefined request completed | [1793642885897]
+    localTime: "18:08:05.897"
+    reqId: "req-4z"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 13.20270700007677
+[18:08:05.897] INFO: undefined request completed | [1793642885897]
+    localTime: "18:08:05.897"
+    reqId: "req-50"
+    res: {
+      "statusCode": 200
+    }
+    responseTime: 12.902356999926269

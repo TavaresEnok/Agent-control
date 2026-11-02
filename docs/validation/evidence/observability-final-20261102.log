@@ -1,0 +1,18 @@
+v22.23.3
+TAP version 13
+# Subtest: administrator telemetry is read-only, bounded-label aggregates and distinguishes unavailable disk/quota
+ok 1 - administrator telemetry is read-only, bounded-label aggregates and distinguishes unavailable disk/quota
+  ---
+  duration_ms: 1128.267562
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2124.874055
+OBSERVABILITY_EXIT=0

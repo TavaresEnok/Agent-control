@@ -61,6 +61,12 @@
       "sha256": "1539a7cf42e0ee36edc429d40b6f6adc9465392bbc485af23bede8e77f23f0f8"
     },
     {
+      "path": "packages/contract/src/index.ts",
+      "upstream_blob": "6b44d3f2249086f21a3c118c9f95ed790d83249c",
+      "current_blob": "00e6760e55c78aaa410dc84239d5af2eedc60afb",
+      "sha256": "a63d89183b20e621cf0dd38d299230ad81fc0bbb9cbb421bc196d48c8ed266e9"
+    },
+    {
       "path": "packages/web/src/api/client.test.ts",
       "upstream_blob": "daa36644f8234fd5f9a75bdb0e3af2f957758a1a",
       "current_blob": "140c6004fe79fee8eb56376aa01c8de80655e7b3",
@@ -71,6 +77,12 @@
       "upstream_blob": "bf04232ce280ca56600f3ef13e90e23da5ad8e32",
       "current_blob": "2c59ed6f08ce637bf57996229d7011e6463f98c0",
       "sha256": "a8dd8483707b1b0bde5196a0adc24561eeb509f726733d8d2725e0836ce848ff"
+    },
+    {
+      "path": "packages/web/src/app.tsx",
+      "upstream_blob": "a652bcdd2ddcde86a60ef972caec6e27fd2e4df8",
+      "current_blob": "b3217003d8ad83f0b29c97bbea9848760f4e4cdc",
+      "sha256": "6e0b305c6ab53ac9af1c8762f3622295df6730e756f0d25cb6350dc594c1515a"
     },
     {
       "path": "packages/web/src/components/composer/composer.tsx",
@@ -97,6 +109,18 @@
       "sha256": "eeea252040c5cb0e9c1ffbe6ebe53965490738c3bf53035c5f347a87a8c9a695"
     },
     {
+      "path": "packages/web/tsconfig.json",
+      "upstream_blob": "c9d3ad98175ed471032de2e77b068d1f21c33e83",
+      "current_blob": "e836c9291d347583ffd5c2f6c09d1f1a8c51ed3e",
+      "sha256": "f2834e4826740204e9a756b363f2c4c338d8419115d93d68ebdccc8cfd5bc794"
+    },
+    {
+      "path": "packages/web/vite.config.ts",
+      "upstream_blob": "ce40171d09aeaa2f95f032cf7e66852bb725f20d",
+      "current_blob": "832efaeb776aa49610315a87a8b010a6552d3ae3",
+      "sha256": "375b1d80c2d405959f7bb56af89113675851e26003dac31579e3ac6f4a94c84c"
+    },
+    {
       "path": "packages/web/src/components/composer/canonical-chat.test.tsx",
       "change": "added",
       "sha256": "3d8c9b307b879ac2bd4cac792ffc9c875229f4ba2e840e92d3dadef2a399dbe9"
@@ -109,12 +133,12 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "7261ff1386e1cca2a843c97908a24f316d96e817f075a7d70733803d1b625a84"
+      "sha256": "b5162095f8fb76ec7e9ab11c15b8c47b726d88f31c334f4941f71c9fdf1f008f"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-operator.ts",
       "change": "added",
-      "sha256": "56675e05a64f2f7cf0c5aad2e9c559c8fd79753b577cf9801eecace06c202ec0"
+      "sha256": "7f9d87705195a2c61dafae7aab2ec7b8cb3c883cc2a0f7cb111decdc46ccebd5"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-policy-editor.tsx",
@@ -155,6 +179,46 @@
       "path": "packages/web/src/routes/settings/agent-control-integration-approval.test.tsx",
       "change": "added",
       "sha256": "5f04e2dd19eaa5b74c1ffa0dd67f1b50c7ea2a17292140f47d45e56a6f7471a9"
+    },
+    {
+      "path": "packages/web/src/components/auth/agent-control-auth-gate.tsx",
+      "change": "added",
+      "sha256": "eded21a75430d30280eb8fee22e4c102b1a823265f9d92ccb2688f83637f0354"
+    },
+    {
+      "path": "packages/web/src/components/auth/agent-control-auth-gate.test.tsx",
+      "change": "added",
+      "sha256": "0783504e924f8d05eeae64f10580d86058f1fb8ba7645ab28ecf16f9b0235099"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-manager-plans.tsx",
+      "change": "added",
+      "sha256": "ba7f8a83d5f8a7bddb35cd1fa6889ffe840d87d58e2bf83199552b48c4489089"
+    },
+    {
+      "path": "packages/contract/src/agent-control-plans.ts",
+      "change": "added",
+      "sha256": "e1d30cfd1f4071d379e5df4005508069c8ae09d5c889aca405a724b310fc503a"
+    },
+    {
+      "path": "packages/contract/src/agent-control-operations.ts",
+      "change": "added",
+      "sha256": "e2e097c07a79356f23f85545710668ab25569872a23b4a4d94c833d8888bbaf8"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-provider-collectors.tsx",
+      "change": "added",
+      "sha256": "d1ad719ba6164d94a344e6fa85f8299844b78419473ba3f51c35d72f1048bdbe"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-observability.tsx",
+      "change": "added",
+      "sha256": "969d0a12dc484f9d21025c99e842d6efd58708cfe1077d426ad293a3d5ef213f"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-provider-operations.test.tsx",
+      "change": "added",
+      "sha256": "076c3af0b518cd69b4b0dcf2ca98a64283cdef061c01ac25adb6ad2554db4471"
     }
   ],
   "happier": [

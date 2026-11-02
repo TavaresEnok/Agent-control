@@ -6,6 +6,7 @@ import {z} from 'zod';
 import {Authority,Id,digest,Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {SandboxClient} from './sandbox-client.ts';
+import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 const exec=promisify(execFile),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 const Launch=z.object({profile:z.literal('synthetic-verification-v1'),source:z.object({base:GitId,bundle:z.string().max(1400000)}).strict(),
  verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict()}).strict();
@@ -31,10 +32,11 @@ async function git(cwd:string,args:string[]){
 export class IsolatedVerification{
  private active=true;
  private readonly stops=new Set<()=>void>();
- constructor(readonly ledger:Ledger,readonly client:SandboxClient){}
+ constructor(readonly ledger:Ledger,readonly client:SandboxClient,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){}
  close(){this.active=false;for(const stop of this.stops)stop();}
  async run(principal:string,stageId:string,grantId:string,authority:Authority,cwd:string,
   artifact:{id:string;commit:string;tree:string;base:string},operationId:string,kind:'qa'|'review'|'judge',verifierDigest:string,isCanceled:()=>boolean){
+  await this.diskGuard?.assertAdmission();
   const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'verify-'));
   let launch:z.infer<typeof Launch>|undefined,stopped=false;
   const stop=()=>{if(stopped)return;stopped=true;if(launch)void this.client.perform('stop',stageId,grantId,authority,launch).catch(()=>{});};

@@ -17,5 +17,11 @@ for name in ['cezar','happier']:
 for rel in ['packages/web/src/components/composer/canonical-chat.test.tsx','packages/cezar/src/git-worktree-identity.test.ts','packages/web/src/routes/settings/agent-control-section.tsx','packages/web/src/routes/settings/agent-control-operator.ts','packages/web/src/routes/settings/agent-control-policy-editor.tsx','packages/web/src/routes/settings/agent-control-policy-editor.test.tsx','packages/web/src/routes/settings/agent-control-capacity-editor.tsx','packages/web/src/routes/settings/agent-control-capacity-editor.test.tsx','packages/web/src/routes/settings/agent-control-profile-editor.tsx','packages/web/src/routes/settings/agent-control-profile-editor.test.tsx','packages/web/src/routes/settings/agent-control-integration-approval.tsx','packages/web/src/routes/settings/agent-control-integration-approval.test.tsx']:
  p=root/'upstream/cezar'/rel
  result['cezar'].append({'path':rel,'change':'added','sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+for rel in ['packages/web/src/components/auth/agent-control-auth-gate.tsx','packages/web/src/components/auth/agent-control-auth-gate.test.tsx','packages/web/src/routes/settings/agent-control-manager-plans.tsx','packages/contract/src/agent-control-plans.ts','packages/contract/src/agent-control-operations.ts','packages/web/src/routes/settings/agent-control-provider-collectors.tsx','packages/web/src/routes/settings/agent-control-observability.tsx']:
+ p=root/'upstream/cezar'/rel
+ result['cezar'].append({'path':rel,'change':'added','sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+rel='packages/web/src/routes/settings/agent-control-provider-operations.test.tsx'
+p=root/'upstream/cezar'/rel
+result['cezar'].append({'path':rel,'change':'added','sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
 (root/'upstream/CHANGES.json').write_text(json.dumps(result,indent=2)+'\n')
 print({k:len(v) for k,v in result.items()})

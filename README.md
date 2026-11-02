@@ -13,11 +13,17 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 - `src/api.ts`: gateway autenticado; rotas não integradas recusadas. Escrita nativa Cezar, terminal, MCP e WS não são expostos.
 - `src/capacity.ts` + `src/control.ts`: contas sintéticas, catálogo, políticas versionadas, seleção regular, concessões PG e comandos administrativos idempotentes.
 - `src/context-keys.ts`: autorização, versionamento e revogação de fingerprints de chave por contexto, preservando a criptografia Happier.
-- `src/quality.ts` + `src/integration.ts`: contratos de evidência, independência, dispensa QA e integração condicional; ainda exigem prova própria e conexão ao fluxo completo.
+- `src/quality.ts` + `src/integration.ts`: evidência independente, dispensa QA e integração CAS, conectadas ao grafo sintético com recuperação de recibos. Revisão real e todos os intervalos de falha permanecem pendentes.
 - `services/agent-control-git/` + `src/git.ts`: helpers AcSafeGit/AcArtifactIdentity preservados e wrapper controlado de identidade/CAS.
-- Settings → Agent Control: seção inicial de contas/perfis/políticas/concessões no cockpit existente; escrita humana exige autenticação específica ainda não habilitada.
+- Settings → Agent Control: contas/perfis/políticas, propostas de planos e grafo nativo, cotas, métricas, aprovação do artefato e operação assinada por dispositivo.
+- `src/auth-relay.ts` + `src/sessions.ts`: login pelo pareamento Happier V3, cookie opaco e vínculo de conversa E2EE existente, sem entregar chave de conteúdo ao controlador.
+- `src/planning.ts`: propostas imutáveis com contratos/dependências, comparação e restauração como nova revisão; execução dinâmica dessas propostas ainda não ativada.
+- `src/providers.ts`: coletores sintéticos versionados com TTL, vínculo assinado e alimentação da capacidade existente; nenhum coletor de assinatura real homologado.
+- `src/disk-admission.ts` + `src/storage.ts`: espera recuperável por disco e retenção opt-in de descartáveis registrados, preservando worktrees, conversas e efeitos incertos.
+- `src/observability.ts`: métricas administrativas agregadas/read-only em JSON e Prometheus, sem transcrições ou identificadores de contas.
 - `scripts/backup-lab.mjs` e `scripts/restore-lab.mjs`: arquivo cifrado e extração autenticada para nova área; não são restauração operacional.
 - `src/lab-main.ts`: launcher **de fixture sintética**, reaproveitando as sessões criadas pelo teste. Não é bootstrap de produção.
+- `src/server-main.ts`: bootstrap configurável sem fixture e gateway em modo administrativo; não inicia gerente ou trabalhadores. [Procedimento](docs/implementation/BOOTSTRAP-OPERACAO.md).
 
 ## Comece aqui
 
@@ -28,6 +34,7 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 - [Critérios desta entrega](docs/validation/ACCEPTANCE-I0-I2.md)
 - [111 requisitos/cenários rastreados](docs/validation/TRACEABILITY.json)
 - [Proveniência](upstream/PROVENANCE.json)
+- [Distribuição de fontes por commit](docs/operations/DISTRIBUTION.md)
 - [Diretriz recebida](docs/normative/DIRETRIZ_MESTRE_V1.md)
 
 Uma mensagem comum do Happier é admitida pelo template sintético fixado. Isso não implementa ainda um gerente de IA que compreende e planeja solicitações arbitrárias. Os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos.

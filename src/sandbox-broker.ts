@@ -8,6 +8,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import { Authority,Id,canonical,digest,Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
+import {DiskAdmissionGuard,type DiskAdmissionPolicy} from './disk-admission.ts';
 
 const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup','stop']),jobId:Id,grantId:Id,
  authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1']),
@@ -48,7 +49,7 @@ export class DockerDaemon{
  async stop(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/stop?t=3`);if(![204,304].includes(r.status))throw new Refusal('DOCKER_STOP_UNCERTAIN');}
  async remove(id:string){const r=await this.call('DELETE',`/v1.44/containers/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}
 }
-export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;
+export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;diskPolicy?:DiskAdmissionPolicy;
  verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;
  imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
 const exec=promisify(execFile);
@@ -59,9 +60,12 @@ async function safeGit(cwd:string,args:string[]){
 }
 export class SandboxBroker{
  readonly ledger:Ledger;readonly docker:DockerDaemon;private readonly active=new Set<string>();
+ private readonly diskGuard:DiskAdmissionGuard|undefined;
  private readonly monitors=new Map<string,ReturnType<typeof setInterval>>();
  constructor(private readonly config:SandboxBrokerConfig,private readonly key:Uint8Array,docker=new DockerDaemon()){
   if(key.byteLength!==32||!/^sha256:[a-f0-9]{64}$/.test(config.imageId)||!/^[a-f0-9]{64}$/.test(config.probeSha256))throw Error('INVALID_BROKER_CONFIG');
+  this.diskGuard=config.diskPolicy?new DiskAdmissionGuard(config.diskPolicy):undefined;
+  if(this.diskGuard&&!this.diskGuard.policy.paths.includes(resolve(config.hostRoot)))throw Error('BROKER_DISK_POLICY_MUST_COVER_HOST_ROOT');
   this.ledger=new Ledger(config.databaseUrl);this.docker=docker;
  }
  private validate(raw:unknown){
@@ -156,6 +160,15 @@ export class SandboxBroker{
     ?await c.query('SELECT 1 FROM ac_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3',[value.jobId,grant.intent_id,value.grantId])
     :await c.query("SELECT 1 FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3 AND (($4='qa' AND node_id='qa') OR ($4='reviewer' AND node_id='review') OR ($4='judge' AND node_id='judge'))",[value.jobId,grant.intent_id,value.grantId,grant.role]);
    if(!owner.rowCount)throw new Refusal('SANDBOX_OPERATION_MISMATCH',403);
+   if(this.diskGuard){
+    // Serialize accounting across all broker instances sharing this ledger.
+    // Uncertain jobs retain their estimated write budget; never free it merely
+    // because a process cannot be observed. Existing reconcile paths bypass
+    // admission so storage pressure cannot prevent recovery or stop.
+    await c.query('SELECT pg_advisory_xact_lock(189234,34)');
+    const pending=BigInt((await c.query("SELECT count(*)::text total FROM ac_sandbox_jobs WHERE state IN ('running','uncertain')")).rows[0].total);
+    await this.diskGuard.assertAdmission(pending*BigInt(this.diskGuard.policy.estimatedWriteBytes));
+   }
    await c.query("INSERT INTO ac_sandbox_jobs(id,context_id,grant_id,manager_epoch,profile,spec_digest,state) VALUES($1,$2,$3,$4,$5,$6,'uncertain')",
     [value.jobId,value.authority.contextId,value.grantId,value.authority.epoch,value.profile,spec]);
    return {prior:null,grant,priorSpec:spec};
@@ -200,6 +213,9 @@ export class SandboxBroker{
    }
    const output=join(this.config.hostRoot,value.jobId,'output');
    if(value.verification){await mkdir(output,{mode:0o777});await chmod(output,0o777);}
+   // Re-observe after checkout immediately before creating any container.
+   // Failure here preserves the registered uncertain job/grant for recovery.
+   await this.diskGuard?.assertAdmission();
    if(await this.docker.inspect(name))throw new Refusal('SANDBOX_NAME_IN_USE');
    const labels={'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
    const id=await this.docker.create(name,{Image:this.config.imageId,User:'10001:10001',WorkingDir:'/work',

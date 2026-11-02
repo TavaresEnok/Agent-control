@@ -1,0 +1,24 @@
+import {readFile} from 'node:fs/promises';
+import {randomBytes} from 'node:crypto';
+import {serve} from '@hono/node-server';
+import {Ledger} from '../../src/ledger.ts';
+import {CezarRuntime} from '../../src/cezar.ts';
+import {BrowserSessions} from '../../src/sessions.ts';
+import {HappierAuthRelay} from '../../src/auth-relay.ts';
+import {createApi} from '../../src/api.ts';
+const config=JSON.parse(await readFile(process.argv[2],'utf8'));
+const database=process.env.AC_TEST_DATABASE_URL;
+if(!database||config.scope!=='isolated-browser-login'||!/^\/ac_implementation_test_browserlogin_[a-f0-9]{20}$/.test(new URL(database).pathname)||!['db','127.0.0.1','localhost'].includes(new URL(database).hostname))throw Error('ISOLATED_FIXTURE_REQUIRED');
+const ledger=new Ledger(database);await ledger.migrate();
+const runtime=new CezarRuntime(ledger,config.repo,config.project);await runtime.start('administration-only');
+const verify=async(request:Request)=>{
+ const authorization=request.headers.get('authorization');if(!authorization)return null;
+ const response=await fetch('http://127.0.0.1:18401/v1/account/profile',{headers:{authorization},signal:AbortSignal.timeout(5000)});
+ if(!response.ok)return null;const profile=await response.json();return typeof profile.id==='string'?profile.id:null;
+};
+const sessions=new BrowserSessions(ledger,randomBytes(32),verify,{origin:'http://127.0.0.1:18403',secure:false,maxAgeSeconds:3600});
+const relay=new HappierAuthRelay(sessions,{upstreamUrl:'http://127.0.0.1:18401',webUrl:'http://127.0.0.1:18400',publicServerUrl:'http://127.0.0.1:18401'});
+const access=async(principal:string,sessionId:string,request?:Request)=>request?sessions.verifyHappierSession(request,principal,sessionId,'http://127.0.0.1:18401'):false;
+const api=createApi(ledger,runtime,verify,()=>undefined,'http://127.0.0.1:18400',access,sessions,relay);
+const server=serve({fetch:api.fetch,hostname:'127.0.0.1',port:18403},()=>console.log('BROWSER_LOGIN_FIXTURE_READY'));
+process.on('SIGTERM',()=>{server.close();void runtime.close().then(()=>ledger.close()).then(()=>process.exit(0));});

@@ -40,6 +40,12 @@ export class Ledger {
     return this.tx(async c => {
       const access = await c.query('SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [projectId, principal]);
       if (!access.rowCount || access.rows[0].role === 'viewer') throw new Refusal('PROJECT_FORBIDDEN', 403);
+      await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,3))',[sessionId]);
+      const linked=(await c.query('SELECT s.context_id,s.principal_id,x.project_id,x.archived FROM ac_session_links s JOIN ac_contexts x ON x.id=s.context_id WHERE s.session_id=$1',[sessionId])).rows[0];
+      if(linked){
+        if(linked.principal_id!==principal||linked.project_id!==projectId||linked.archived)throw new Refusal('SESSION_LINK_CONFLICT');
+        return linked.context_id as string;
+      }
       const id = randomUUID();
       await c.query('INSERT INTO ac_contexts(id,project_id) VALUES($1,$2)', [id, projectId]);
       await c.query('INSERT INTO ac_session_links(session_id,context_id,principal_id) VALUES($1,$2,$3)', [sessionId, id, principal]);

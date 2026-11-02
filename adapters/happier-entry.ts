@@ -5,3 +5,5 @@ export { RpcHandlerManager } from '../upstream/happier/apps/cli/src/api/rpc/RpcH
 export { registerSessionUserMessageSendHandler } from '../upstream/happier/apps/cli/src/rpc/handlers/sessionUserMessageSend.ts';
 export { materializeNextPendingQueueV2Message, resolveAcceptedPendingQueueV2Delivery, markPendingQueueV2DeliveryHandled } from '../upstream/happier/apps/cli/src/api/session/pendingQueueV2Transport.ts';
 export { SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT, SessionRuntimeActivitySnapshotRequestSchema, SessionRuntimeActivitySnapshotAckSchema } from '../upstream/happier/packages/protocol/src/sessionRuntimeActivity/transport.ts';
+// Native provisioning envelope used by synthetic browser-pairing acceptance.
+export {sealTerminalProvisioningV3Payload} from '../upstream/happier/packages/protocol/src/crypto/terminalProvisioningV2.ts';

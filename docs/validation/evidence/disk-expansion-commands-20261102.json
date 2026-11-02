@@ -1,0 +1,85 @@
+[
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "growpart",
+      "/dev/sda",
+      "3"
+    ],
+    "exitCode": 0,
+    "stdout": "CHANGED: partition=3 start=4198400 old: size=415231967 end=419430366 new: size=624947167 end=629145566\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "blockdev",
+      "--getsize64",
+      "/dev/sda3"
+    ],
+    "exitCode": 0,
+    "stdout": "319972949504\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "pvresize",
+      "/dev/sda3"
+    ],
+    "exitCode": 0,
+    "stdout": "  Physical volume \"/dev/sda3\" changed\n  1 physical volume(s) resized or updated / 0 physical volume(s) not resized\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "pvs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  PV         VG        Fmt  Attr PSize         PFree        \n  /dev/sda3  ubuntu-vg lvm2 a--  319970869248B 107374182400B\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "vgs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  VG        #PV #LV #SN Attr   VSize         VFree        \n  ubuntu-vg   1   1   0 wz--n- 319970869248B 107374182400B\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "lvextend",
+      "-l",
+      "+100%FREE",
+      "/dev/ubuntu-vg/ubuntu-lv"
+    ],
+    "exitCode": 0,
+    "stdout": "  Size of logical volume ubuntu-vg/ubuntu-lv changed from <198.00 GiB (50687 extents) to <298.00 GiB (76287 extents).\n  Logical volume ubuntu-vg/ubuntu-lv successfully resized.\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "resize2fs",
+      "/dev/ubuntu-vg/ubuntu-lv"
+    ],
+    "exitCode": 0,
+    "stdout": "Filesystem at /dev/ubuntu-vg/ubuntu-lv is mounted on /; on-line resizing required\nold_desc_blocks = 25, new_desc_blocks = 38\nThe filesystem on /dev/ubuntu-vg/ubuntu-lv is now 78117888 (4k) blocks long.\n\n",
+    "stderr": "resize2fs 1.47.0 (5-Feb-2023)\n"
+  }
+]

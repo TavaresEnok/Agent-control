@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "start": "node --import tsx src/lab-main.ts",
-    "start:built": "node dist/src/lab-main.js"
+    "start:built": "node dist/src/lab-main.js",
+    "gateway": "node --import tsx src/server-main.ts",
+    "prebuild": "node scripts/prepare-build.mjs --before"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

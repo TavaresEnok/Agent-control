@@ -13,6 +13,7 @@ import { Quality } from './quality.ts';
 import { Operators } from './operator.ts';
 import { digest } from './contracts.ts';
 import { BrowserSessions } from './sessions.ts';
+import {HappierAuthRelay} from './auth-relay.ts';
 const fixture = z.object({ token: z.string(), secret: z.string(), sessions: z.array(z.string()), contexts: z.array(z.uuid()),
   project: z.uuid(), principal: z.string(), repo: z.string() }).parse(JSON.parse(await readFile('.state/browser-fixture.json', 'utf8')));
 if (!process.env.AC_TEST_DATABASE_URL?.includes('/ac_implementation_test')) throw Error('ISOLATED_DATABASE_REQUIRED');
@@ -77,7 +78,7 @@ try{const info=await lstat(browserKeyPath);if(!info.isFile()||info.isSymbolicLin
 catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;browserKey=randomBytes(32);await writeFile(browserKeyPath,browserKey,{mode:0o600,flag:'wx'});}
 const sessions=new BrowserSessions(ledger,browserKey,verifyBearer,{origin:'http://127.0.0.1:18402',secure:false,maxAgeSeconds:86400});
 const api=createApi(ledger,runtime,verifyBearer,context=>endpoints.find(e=>e.options.authority.contextId===context)?.options.authority,
- 'http://127.0.0.1:18400',undefined,sessions);
+ 'http://127.0.0.1:18400',undefined,sessions,new HappierAuthRelay(sessions,{upstreamUrl:'http://127.0.0.1:18401',webUrl:'http://127.0.0.1:18400',publicServerUrl:'http://127.0.0.1:18401'}));
 const server = serve({ fetch: api.fetch, hostname: '127.0.0.1', port: 18402 }, () => console.log('ISOLATED_AGENT_CONTROL_READY'));
 process.on('SIGTERM', () => {
   endpoints.forEach(e => e.close()); server.close();

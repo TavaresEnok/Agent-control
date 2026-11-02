@@ -1,0 +1,80 @@
+[
+  {
+    "command": [
+      "hostname"
+    ],
+    "exitCode": 0,
+    "stdout": "app\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "lsblk",
+      "-b",
+      "-e7",
+      "-o",
+      "NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINTS"
+    ],
+    "exitCode": 0,
+    "stdout": "NAME                      PATH                                      SIZE TYPE FSTYPE      MOUNTPOINTS\nsda                       /dev/sda                          322122547200 disk             \n\u251c\u2500sda1                    /dev/sda1                              1048576 part             \n\u251c\u2500sda2                    /dev/sda2                           2147483648 part ext4        /boot\n\u2514\u2500sda3                    /dev/sda3                         212598767104 part LVM2_member \n  \u2514\u2500ubuntu--vg-ubuntu--lv /dev/mapper/ubuntu--vg-ubuntu--lv 212596686848 lvm  ext4        /\nsr0                       /dev/sr0                            3303444480 rom  iso9660     \nzram0                     /dev/zram0                         10056757248 disk             [SWAP]\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "findmnt",
+      "-no",
+      "SOURCE,FSTYPE,OPTIONS",
+      "/"
+    ],
+    "exitCode": 0,
+    "stdout": "/dev/mapper/ubuntu--vg-ubuntu--lv ext4   rw,relatime\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "df",
+      "-B1",
+      "-T",
+      "/"
+    ],
+    "exitCode": 0,
+    "stdout": "Filesystem                        Type    1B-blocks         Used   Available Use% Mounted on\n/dev/mapper/ubuntu--vg-ubuntu--lv ext4 208930103296 176097107968 23894478848  89% /\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "pvs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  PV         VG        Fmt  Attr PSize         PFree\n  /dev/sda3  ubuntu-vg lvm2 a--  212596686848B    0B\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "vgs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  VG        #PV #LV #SN Attr   VSize         VFree\n  ubuntu-vg   1   1   0 wz--n- 212596686848B    0B\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "sudo",
+      "-n",
+      "lvs",
+      "--units",
+      "b"
+    ],
+    "exitCode": 0,
+    "stdout": "  LV        VG        Attr       LSize         Pool Origin Data%  Meta%  Move Log Cpy%Sync Convert\n  ubuntu-lv ubuntu-vg -wi-ao---- 212596686848B                                                    \n",
+    "stderr": ""
+  }
+]

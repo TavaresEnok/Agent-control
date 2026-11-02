@@ -8,8 +8,14 @@ for label,args in [('toolchain',['docker','image','inspect','agent-control-lab:0
 result['git_head_before_delivery']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
 result['worktree_changes_present']=bool(subprocess.check_output(['git','status','--porcelain'],cwd=root))
 result['new_sources']={}
-for folder in ['src','adapters','db','tests','scripts','services']:
- for p in sorted((root/folder).rglob('*')):
-  if p.is_file():result['new_sources'][p.relative_to(root).as_posix()]=hashlib.sha256(p.read_bytes()).hexdigest()
+# Capture the selected Git delivery (including staged new files), rather than
+# unrelated interpreter caches or untracked files produced while proving it.
+selected=subprocess.check_output(['git','ls-files','-z'],cwd=root).split(b'\0')
+for raw in sorted(filter(None,selected)):
+ name=raw.decode();parts=Path(name).parts
+ if parts[0] not in ['src','adapters','db','tests','scripts','services']:continue
+ if any(part in ['.state','node_modules','__pycache__','dist'] for part in parts):continue
+ p=root/name
+ if p.is_file() and not p.is_symlink():result['new_sources'][name]=hashlib.sha256(p.read_bytes()).hexdigest()
 result['criteria_sha256']=hashlib.sha256((root/'docs/validation/ACCEPTANCE-I0-I2.md').read_bytes()).hexdigest()
 (root/'docs/validation/evidence/IMPLEMENTATION_PROVENANCE.json').write_text(json.dumps(result,indent=2)+'\n')

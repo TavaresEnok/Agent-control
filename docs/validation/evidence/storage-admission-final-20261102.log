@@ -1,0 +1,28 @@
+v22.23.3
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+TAP version 13
+# Subtest: fresh disk pressure refuses a verification before any DB transition or broker command
+ok 1 - fresh disk pressure refuses a verification before any DB transition or broker command
+  ---
+  duration_ms: 31.136187
+  type: 'test'
+  ...
+# Subtest: storage pool refuses low-space admission and preserves active, changed, held and unknown data
+ok 2 - storage pool refuses low-space admission and preserves active, changed, held and unknown data
+  ---
+  duration_ms: 1143.1662
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2378.131051
+TYPECHECK_EXIT=0 TEST_EXIT=0
