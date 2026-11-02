@@ -10,7 +10,7 @@ import {Capacity} from '../src/capacity.ts';
 import {Templates} from '../src/templates.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 
-test('human pause holds the next native node and resumes the same plan without repeating implementation',{timeout:30000},async()=>{
+for(const finish of ['resume','cancel'] as const)test(`human pause holds the next native node, then ${finish} preserves implementation identity`,{timeout:30000},async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
  const db=new Ledger(url);await db.migrate();let runtime:CezarRuntime|undefined;
  try{
@@ -42,6 +42,16 @@ test('human pause holds the next native node and resumes the same plan without r
   assert.equal(parked?.steps.find(step=>step.id==='implement')?.status,'done');
   assert.equal((await db.pool.query('SELECT count(*) n FROM ac_stage_operations WHERE intent_id=$1',[intent.id])).rows[0].n,'0');
   await new Promise(resolve=>setTimeout(resolve,400));assert.equal(runtime.store.getRun(intent.run_id)?.status,'waiting');
+  if(finish==='cancel'){
+   await db.pool.query('INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,$4)',[intent.id,context,principal,intent.plan_revision]);
+   await runtime.reconcileCancellations(authority);
+   await new Promise(resolve=>setTimeout(resolve,350));
+   assert.equal((await db.pool.query('SELECT state FROM ac_plan_cancellations WHERE intent_id=$1',[intent.id])).rows[0].state,'confirmed');
+   assert.equal((await db.pool.query('SELECT count(*) n FROM ac_stage_operations WHERE intent_id=$1',[intent.id])).rows[0].n,'0');
+   assert.equal(implementationReceipts,1);assert.equal(git('rev-parse','protected'),git('rev-parse','main'));
+   assert.equal(runtime.store.getRun(intent.run_id)?.status,'cancelled');
+   return;
+  }
   const account=(await db.pool.query('SELECT a.id FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1',[project])).rows[0].id;
   await new Capacity(db).observeQuota(principal,account,{status:'exhausted',source:'synthetic://pause-capacity-fixture',ttlSeconds:3600});
   await db.pause(principal,context,false);

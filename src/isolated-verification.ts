@@ -38,6 +38,9 @@ export class IsolatedVerification{
    const snapshot=launch;
    await this.ledger.tx(async c=>{
     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+    const intent=(await c.query('SELECT intent_id FROM ac_stage_operations WHERE id=$1',[stageId])).rows[0];
+    if(!intent)throw new Refusal('STAGE_MISSING');
+    await this.ledger.assertIntentActive(c,authority.contextId,intent.intent_id);
     if(!this.active||isCanceled())throw new Refusal('STAGE_CANCELED');
     const stage=(await c.query('SELECT * FROM ac_stage_operations WHERE id=$1 FOR UPDATE',[stageId])).rows[0];
     if(stage?.state!=='registered'||Number(stage.manager_epoch)!==authority.epoch||stage.node_id!==kind)

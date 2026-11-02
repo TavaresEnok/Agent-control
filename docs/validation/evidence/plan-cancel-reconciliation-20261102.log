@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: signed cancellation blocks effects and confirms only never-started or physically reconciled grants
+ok 1 - signed cancellation blocks effects and confirms only never-started or physically reconciled grants
+  ---
+  duration_ms: 489.135421
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then resume preserves implementation identity
+ok 2 - human pause holds the next native node, then resume preserves implementation identity
+  ---
+  duration_ms: 3396.70807
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then cancel preserves implementation identity
+ok 3 - human pause holds the next native node, then cancel preserves implementation identity
+  ---
+  duration_ms: 1187.308441
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8020.590455

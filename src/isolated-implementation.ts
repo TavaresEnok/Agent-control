@@ -34,7 +34,7 @@ export class IsolatedImplementation{
    const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[intent.id,authority.contextId])).rows[0]?.principal_id;
    if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
    const saved=await this.ledger.tx(async c=>{
-    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
     const row=(await c.query(`SELECT o.state,o.receipt,o.manager_epoch,g.state grant_state,j.state job_state,j.receipt job_receipt
       FROM ac_operations o JOIN ac_intents i ON i.id=o.intent_id
       LEFT JOIN ac_capacity_grants g ON g.id=o.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=o.id
@@ -61,7 +61,7 @@ export class IsolatedImplementation{
     execution=Launch.parse({profile:'synthetic-implementation-v1',source:{base,bundle:source.toString('base64')}});
     const snapshot=execution;
     grantId=await this.ledger.tx(async c=>{
-     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
      if(!this.active||canceled)throw new Refusal('STAGE_CANCELED');
      const operation=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];
      if(operation?.state!=='registered'||Number(operation.manager_epoch)!==authority.epoch||!operation.grant_id)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');

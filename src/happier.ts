@@ -193,6 +193,7 @@ export class HappierEndpoint {
     if (!this.socket.connected) return;
     await this.validateKey();
     await this.ledger.heartbeat(this.options.authority);
+    await this.runtime.reconcileCancellations(this.options.authority);
     let recoveryFailure:unknown;
     try{await this.runtime.recoverManaged(this.options.authority);}catch(error){recoveryFailure=error;}
     this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
@@ -201,13 +202,23 @@ export class HappierEndpoint {
       try { await this.receivePending(); this.pendingFailure = undefined; }
       catch (error) { this.pendingFailure = error; }
     }
-    const intents = await this.ledger.pool.query<import('./ledger.ts').Intent>('SELECT * FROM ac_intents WHERE context_id=$1 ORDER BY created_at', [this.options.authority.contextId]);
+    const intents = await this.ledger.pool.query<import('./ledger.ts').Intent&{cancellation_state:string|null}>(`SELECT i.*,x.state cancellation_state
+      FROM ac_intents i LEFT JOIN ac_plan_cancellations x ON x.intent_id=i.id WHERE i.context_id=$1 ORDER BY i.created_at`, [this.options.authority.contextId]);
     let capacityWait:Refusal|undefined;
     for (const intent of intents.rows) {
+      if(intent.cancellation_state){
+        const localId=`cancel-${intent.id}-${intent.cancellation_state}`;
+        const text=intent.cancellation_state==='confirmed'
+          ?`Cancelamento do plano ${intent.plan_revision} confirmado após reconciliação. Nenhum novo trabalho será iniciado nesse plano.`
+          :`Cancelamento do plano ${intent.plan_revision} solicitado. Novas etapas estão bloqueadas; a parada física ainda depende de confirmação.`;
+        await this.enqueue(localId,{role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
+          message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}});
+        continue;
+      }
       let run;
       try{run=await this.runtime.dispatch(intent,this.options.authority);}
       catch(error){
-        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
+        if(!(error instanceof Refusal)||!['PLAN_CANCELLATION_REQUESTED','HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
         if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))capacityWait??=error;
         // Admission or capacity may block this intent; status projection and
         // queued chat delivery must still continue for existing work.
@@ -216,7 +227,8 @@ export class HappierEndpoint {
       if (!run) continue;
       const seq = Number(run.lastSeq ?? 0);
       await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
-        await c.query('UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3', [intent.id, run.status, this.options.authority.contextId]);
+        await c.query(`UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3
+          AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1)`, [intent.id, run.status, this.options.authority.contextId]);
         await this.ledger.refreshPending(c,this.options.authority.contextId); });
       await this.ledger.event(this.options.principal, { schemaVersion: 1, eventId: randomUUID(), contextId: intent.context_id,
         runId: run.id, planRevision: intent.plan_revision, seq, status: run.status }, this.options.authority);

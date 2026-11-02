@@ -1,177 +1,43 @@
-# Continuidade — 02/11/2026 (America/Fortaleza)
+# Agent Control — estado atual de implementação
 
-Branch local: `implementation/i0-i2`, neste novo repositório. Arquitetura definida: Cezar + Happier + PostgreSQL. Não existe migração ou implantação de produção autorizada.
+Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
-## Entrega executada
+**Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
-Baseline original fixada e patches conferidos; contratos/migrações PostgreSQL; contextos independentes no mesmo projeto; gerente por época/instância/lease; pausa e checkpoint; intenções/entregas/outbox distintas; idempotência concorrente; snapshot de plano imutável; RunManager/RunStore Cezar reais; processo sintético e commit Git; Happier servidor/RPC/fila/criptografia/cliente web reais; estado publicado no histórico canônico e grafo; composer concorrente substituído no build do produto; gateway com ACL e rotas fechadas por padrão.
+## Implementado e observado
 
-A contraprova de falha do pending-poll foi executada RED → GREEN e o relay de intenção confirmada deixou de depender da saúde desse transporte. Duas sessões com o mesmo localId não colidem porque contexto e sessão fazem parte das identidades.
+| Área | Implementação e evidência delimitada |
+|---|---|
+| Autoridade | PostgreSQL, ACL, contextos independentes, gerente por instância/época/lease, planos congelados, intenções/entregas/outbox, deduplicação e recusa de ingressos não admitidos. |
+| Conversa | Happier real como histórico cifrado canônico, relay/RPC/pending queue, paginação e checkpoint; Cezar sem segundo composer. Duas conversas/contextos no mesmo projeto foram exercitados. |
+| Contas e capacidade | Contas **sintéticas**, catálogo, papéis e cadeias versionadas, concessões globais, filas, quotas com TTL, seleção regular e reserva da conta original. Contas/perfis podem ser desativados sem liberar efeitos incertos. |
+| Engenharia | Grafo nativo sintético: implementação, QA, revisores independentes por sessão, juiz e integração CAS do commit/árvore/base. Implementação e verificadores têm perfil Docker isolado no runtime configurado para broker. |
+| Recuperação | SIGKILL após implementação física, reconciliação do sucessor e continuação do mesmo grafo sem segundo worker. Não cobre todos os nós/intervalos. |
+| Operação | Pausa no limite de nós, drenagem de planos aceitos, espera por capacidade na mesma tentativa, cancelamento pedido/confirmado com bloqueio de novos efeitos e preservação de grants incertos. ADR-004/005. |
+| SSH | Dois hosts descartáveis, fingerprints fixados, diário idempotente, confirmação perdida e recibo concluído após reinício. Operação em trânsito permanece conservadoramente incerta. |
+| Administração | Settings Cezar: seis papéis, cadeias ordenadas, limites globais/locais, catálogo, perfis, estados de conta, pausa/drenagem/cancelamento, templates, políticas de qualidade e uso observado. Comandos assinados por dispositivo. Atualização periódica de estado não substitui CAS/assinatura. |
+| Backup | Backup cifrado, extração e importação em banco novo com admissão fechada, relocação de Git/worktrees e leitura de runtime sem despacho. Origem conferida intacta. Não é prova de restore operacional completo. |
 
-## Estado por gate
+## O que ainda impede considerar o projeto pronto
 
-| Gate | Código | Testes observados | Aceite completo |
-|---|---|---|---|
-| I0 | Baseline, proveniência, matrizes e CI de base disponíveis | Types/build Cezar; servidor/runtime e UI Happier; instalação nova; testes nativos e de pacote | Pendente: CI remota/VM independente, revisão e limitações registradas |
-| I1 | Fatia de autoridade/intenção implementada | PG real, concorrência, gerações, pausas, entrada inválida, escopo, outbox e operação incerta | Parcial: AC-IMP-0001 |
-| I2 | Conversa canônica e integração executável | Duas sessões/contextos, histórico cifrado, checkpoint, takeover, navegador desktop/390, reconexão e Cezar | Parcial: AC-IMP-0002/0005/0006/0020 |
-| I3 | Contas sintéticas, catálogo, políticas imutáveis e concessões globais integradas ao runner | Suíte de capacidade e integração consolidada; resultados do incremento em evidence | Parcial: não há contas reais, condição histórica especial ou justiça durável |
-| I4 | Contratos de artefato, verificação, QA e preparação/execução CAS no controlador | Types; ensaio próprio de qualidade/CAS ainda pendente | Não homologado; não conectado ao template QA/conselho completo |
-| I5 | Recibo ligado a grant, grupo de processos, observação de autoridade e identidade PID/start-time/boot | Escopo de processo sintético; contraprovas hostis/SSH ausentes | Parcial; não usar como sandbox de produção |
-| I6 | Seção Settings Cezar com contas/perfis/políticas/concessões e comandos deduplicados | Types/build do cockpit; browser desta seção pendente | Escrita humana recusada até autenticação específica; restante de administração ausente |
-| I7 | Scripts de backup cifrado e extração para nova área | Sintaxe; backup/restore operacional ainda não executado | Não homologado |
-| I8–I10 | Requisitos preservados e rastreados | Não homologados por estas provas | Fases futuras; nenhum recurso removido do escopo |
+1. Bootstrap de produto e login/pareamento integrado sem fixtures; custódia/rotação/revogação completa e acesso móvel autenticado. O cookie e a assinatura já existem, mas não equivalem ao percurso completo.
+2. Adaptadores e elegibilidade de provedores/CLIs, coletores de cota e gestão de credenciais. Uso real depende das autorizações específicas previstas na diretriz; não habilitar contas silenciosamente.
+3. Planejamento semântico de gerente e autoria de workflows além dos templates sintéticos congelados; fork/join útil com correção limitada, novo artefato após reprovação e políticas completas.
+4. Recuperação de QA/revisão/juiz/integração e todos os intervalos entre efeitos. Pausa concorrente depois do hook pode exigir reconciliação. Parada pelo broker de sucessor tem validação de contrato com stub, ainda sem prova física completa em todos os intervalos.
+5. Vínculo de cada operação SSH ao plano, cancelamento remoto preciso e queda durante efeito. Hoje pedido de cancelamento pendente restringe conservadoramente todo o contexto SSH.
+6. Experiência administrativa essencial completa no celular, login real, navegador em identidades de build atuais e revisão independente. Provas de viewport anteriores não homologam as telas acrescentadas depois.
+7. Restore completo de conversa/UI, efeitos externos posteriores ao backup, ensaio em outro host, métricas/SLOs, retenção/disco cheio, piloto e migração autorizados.
+8. Aceites restantes da matriz de **111 RF/RNF/T**, inclusive P1/P2 conforme prioridade e autorização. Não converter presença de código ou teste sintético em gate aprovado.
 
-Os resultados e comandos estão em `docs/validation/evidence/`, com códigos em CHECKS.jsonl e JSONs das provas. O registro canônico de pendências é FINDINGS.md. TRACEABILITY.json/CSV preserva 57 RF, 15 RNF e 39 T, distinguindo código, teste e aceite. Nenhum requisito integral foi aprovado por analogia.
+## Evidências recentes
 
-## Próxima sessão: passos exatos
+- `docs/validation/evidence/execution-controls-regression-final-20261102.log`: 14 testes aprovados, sem skips; PG/Git/Cezar/processos sintéticos. A primeira rodada falhou por contaminação entre fixtures; a suíte global agora cria banco descartável próprio, sem modificar contas alheias.
+- `docs/validation/evidence/plan-cancel-reconciliation-20261102.log`: recibo de parada forjado recusado, capacidade incerta preservada; confirmação do contrato usa stub de broker.
+- `docs/validation/evidence/native-pause-capacity-20261102.log`: pausa antes do QA, cota sintética esgotada, espera e conclusão do mesmo run sem repetir implementação.
+- Evidências e limites anteriores: `docs/validation/FINDINGS.md`, `docs/validation/TRACEABILITY.csv`, ADRs e manifesto em `docs/validation/evidence/`.
 
-1. Ler esta página, FINDINGS e a Diretriz Mestre. Conferir `git status`; não sobrescrever mudanças concorrentes.
-2. Reabrir somente a bancada descrita em `docs/operations/LAB.md`. Não ligar Paseos, filas ou contas antigas.
-3. Fechar o restante de I1: contratos e persistência de política/revisão, concessões e aprovações; inventário de ingressos habilitados e testes de perda de PG/ack/processo com IDs persistentes. Reusar o modo gerenciado existente, sem segundo scheduler.
-4. Fechar I2: custódia/rotação/revogação de chave por contexto, frescor e atualização completa de checkpoint, histórico segmentado acima do limite, vínculo dinâmico e autorização de conta/sessão. Não usar as credenciais sintéticas como mecanismo de produto.
-5. Encaminhar código crítico para revisão independente autorizada. Não criar subagentes ou utilizar outras contas automaticamente.
-6. Só então fechar I3/I4 pelos contratos aprovados: contas/perfis/elegibilidade, capacidade global e papéis, QA/revisão e integração do artefato exato. Helpers Git antigos permanecem fontes de reuso, não foram substituídos por um novo integrador.
+## Continuidade
 
-## Limites atuais
+Ler AGENTS, Diretriz Mestre, este arquivo e FINDINGS; conferir `git status`. Trabalhar somente neste repositório e compose `deploy/compose.lab.yml`. Não ligar filas/Paseos, usar contas reais, criar subagentes ou migrar projetos. Priorizar implementação e verificações pertinentes, concentrando validação ampla em fronteiras de integração. Os testes que dependem de perfis Docker/SSH/Happier exigem seus serviços de bancada; não interpretar skip como aprovação.
 
-Gerente/programadores são processos sintéticos; mensagens acionam o workflow fixo de bancada. Nenhum modelo real compreende/planeja tarefas nesta fatia. Não há QA/revisor independente completo, integração final, supervisor hostil, SSH recuperável, backup/restore, piloto ou migração.
-
-Os endpoints ainda não implementados recusam acesso. Erros 403 dessas consultas/escritas opcionais upstream aparecem na evidência de browser e não representam configuração aplicada. App Android/iOS físico, pareamento e distribuição não foram testados. A identidade web foi pré-autorizada com conta sintética para testar o percurso, não para certificar login móvel.
-
-Procedimento de rollback: manter a bancada parada; voltar apenas este novo repositório a um commit conhecido. Bancos/sessões/artefatos da bancada ficam em seu volume e `.state/`; não existe alteração operacional para reverter. Não executar prune global ou limpeza de projetos reais.
-
-## Continuação — checkpoint
-
-Checkpoint existente passa a acompanhar atomicamente novas revisões e IDs de intenção; a recuperação recusa checkpoint antigo. Testes PG/Cezar e build em `docs/validation/evidence/checkpoint-continuation-green.log`. Persistem as limitações registradas em AC-IMP-0020; não se afirma continuidade completa. A estimativa anterior de cerca de 15% é qualitativa para o produto inteiro, não contagem de requisitos aprovados.
-
-## Continuação — paginação de histórico
-
-O adaptador recupera páginas nativas Happier em ordem, valida cursores e recusa limites inconsistentes ou mais de 15.000 mensagens. Servidor e criptografia Happier reais foram exercitados com mais de 150 mensagens sintéticas e troca de gerente (`docs/validation/evidence/i2-history-real-server-20261102.log`); sete testes PG/Cezar/cursores e build em `i2-history-unit-20261102.log`. Integração real de modelo, autenticação por dispositivo e limites acima da janela seguem pendentes.
-
-A projeção de eventos e escritas locais da outbox agora verificam a época da autoridade na mesma transação. A fronteira de chamada remota em trânsito ainda exige reconciliação (AC-IMP-0023). Oito testes e typecheck/build passaram em `docs/validation/evidence/i2-history-fencing-final2-20261102.log`.
-
-O recebimento de resultado sintético também exige autoridade, identidade e estado running coerentes; evidência `docs/validation/evidence/receipt-identity-20261102.log`. Validação do artefato real e reconciliação de escritores continuam pendentes (AC-IMP-0024).
-
-## Incremento atual de implementação
-
-Código adicional e seus limites: `docs/implementation/I1-I4-IMPLEMENTACAO.md`. Migrações 004–008 adicionam capacidade, controle, qualidade, catálogo e fingerprints por contexto. A integração condicional está implementada em serviço interno, ainda sem prova Git/Ruby própria ou conexão ao fluxo completo; não expõe uma rota de merge não homologada. A suíte consolidada anterior ao ajuste final de processos registrou 17 aprovações; o resultado final está em `implementation-increment-final.log`.
-
-A solicitação mais recente prioriza implementação e validação concentrada ao final. Não reexecutar toda a suíte upstream de mais de 13 mil casos a cada alteração. Manter verificações pertinentes à mudança e falhas preservadas.
-
-## Continuação — execução de engenharia e segurança (02/11/2026)
-
-Avanço **parcial e sintético**, sem alterar as instalações operacionais: foram adicionados templates versionados, etapas de implementação/QA/revisão/julgador no grafo Cezar, políticas de qualidade e verificador com identidade fixada, recibos ligados ao artefato Git e integração condicional; controle de capacidade com espera durável, assinaturas de operador, fechamento global de admissão, importação cifrada para sessões Happier pausadas, esqueleto de operação SSH e scripts de backup/restauração isolados. O cockpit possui comandos de configuração sujeitos à prova de operador. Sessões web de bancada usam cookie opaco e bearer cifrado no PostgreSQL.
-
-A execução `implementation-continuation-20261102.log` registrou **20 testes aprovados e 1 omitido**, com PostgreSQL/Cezar/Git e servidor Happier da bancada, incluindo três revisores e julgador sintéticos e importação com confirmação perdida. O teste omitido foi executado em perfil isolado separado e passou em `sandbox-probe-final-20261102.log`; as falhas anteriores estão preservadas. `browser-session-20261102.log` verifica emissão, persistência cifrada, origem e revogação da sessão, sem demonstrar login completo no navegador ou celular. O build TypeScript e do servidor Cezar passaram. Nada disso aprova as fases completas.
-
-### Limitações e continuação necessária
-
-- A prova Docker usa **exclusivamente um executor sintético fixo**. A integração posterior da etapa de implementação está documentada abaixo; QA e revisão continuam fora dessa fronteira. Não executar IAs reais nem alegar isolamento de produção.
-- O executor SSH e as rotinas de backup/importação de banco ainda não foram demonstrados em um ciclo real de interrupção/restauração. Uma importação de conversa sintética ao servidor Happier foi verificada; não há conversor completo de dados Paseo nem autorização de migração.
-- O cookie de sessão possui escopo `/api/`, mas portas não isolam cookies. A instalação definitiva precisa de origem/hostname dedicado, HTTPS, proteção e custódia de chaves independentes; o pareamento de browser e autenticação móvel continuam pendentes.
-- Integração com assinaturas e CLIs reais, análise de elegibilidade dos provedores, autenticação segura, coleta de cotas, QA independente real, hardening de processos, recuperação, observabilidade completa e aceite móvel ainda faltam. O tratamento de fila justa ainda precisa de avaliação com diferentes contas e capacidade global.
-- Dois contêineres de probe que encerraram durante as primeiras provas ficaram como evidência no Docker de laboratório; o teste verde limpa apenas o seu próprio contêiner. O broker de teste e seu banco foram parados; não remover recursos alheios.
-- Antes de nova rodada: ler os documentos normativos, este registro e FINDINGS; construir em cima do commit local, manter as evidências e não tocar Paseos, planos, credenciais ou projetos ativos. As etapas seguintes são completar a recuperação do grafo nativo, isolar verificadores e homologar autenticação/SSH, com provas pertinentes ao final.
-
-## Continuação — registro de uso por tentativa
-
-Implementado armazenamento transacional de observações cumulativas por concessão, com IDs de evento idempotentes, sequência monotônica, recusa de regressões e consulta por contexto sujeita à ACL. Entrada/saída/cache/raciocínio permanecem campos distintos, sem somá-los indevidamente; a resposta identifica saldo da assinatura como desconhecido. Não existe endpoint público de escrita: somente código interno poderá registrar observações após integrar um adaptador confiável. Não há ainda coleta de provedores reais, preço, comparativo, exportação nem painel de uso.
-
-A verificação focada `docs/validation/evidence/usage-observations-20261102.log` passou com PostgreSQL sintético, incluindo duplicação, conflito, regressão e acesso indevido. Typecheck da aplicação passou. I7/RF-30/RF-40/T17 continuam parciais, sem aprovação de gate; revisão independente continua pendente.
-
-## Continuação — pausa versionada, uso no cockpit e diário remoto
-
-A pausa e a retomada do cockpit passaram a usar comando assinado de operador, identidade deduplicada e revisão monotônica do contexto. Uma solicitação antiga não substitui uma decisão posterior; a antiga rota sem assinatura agora recusa a operação. A pausa ainda pode ser solicitada com a admissão global fechada; retomada não a abre. O botão fica na seção de configurações da conversa. O cockpit também mostra observações de uso por tentativa e explicita saldo desconhecido e a sobreposição possível dos contadores. Coletores reais continuam pendentes.
-
-Em contêiner descartável sem rede, o diário do executor remoto preservou uma única execução ao receber a mesma intenção duas vezes e permitiu consultar o resultado depois da perda simulada de confirmação; diretório de estado com permissões amplas é recusado. É uma prova do processo Python local, não uma prova de SSH, reconexão de rede ou isolamento hostil. Evidências: `guarded-pause-20261102.log`, `remote-journal-private-20261102.log` e os typechecks da rodada. A primeira prova Python falhou porque a imagem antiga da bancada não tem Python; a saída foi preservada. Nenhum servidor ou conta real foi usado.
-
-A ligação posterior da implementação ao executor isolado e SSH entre duas fixtures constam abaixo. Ainda faltam isolamento de QA/revisão, recuperação completa do grafo, pareamento mobile e integrações com contas homologadas. As fases permanecem abertas.
-
-## Continuação — entrega de mensagens com execução pausada ou aguardando capacidade
-
-O relay Happier agora consulta execuções já existentes sem despachar novos efeitos quando a conversa está pausada, a admissão fechada ou a tentativa aguarda capacidade. Com isso, continua projetando seu estado e entregando mensagens previamente persistidas; bloqueios de capacidade permanecem registrados e são novamente avaliados nas próximas iterações. A mudança não inicia um segundo coordenador e não libera recursos incertos.
-
-A prova `happier-capacity-relay-20261102.log` usou servidor Happier, PostgreSQL, grafo Cezar e Git da bancada: confirmou entrega durante pausa e durante falha de capacidade injetada, sem abrir novo run. O teste é sintético; não demonstra retentativa com contas reais, UI móvel ou recuperação física completa. O typecheck da aplicação também passou. Nenhum gate adicional foi homologado.
-
-## Continuação — dois hosts SSH e implementação isolada (02/11/2026)
-
-O laboratório agora inclui dois servidores SSH descartáveis com chaves de host fixadas e sem portas públicas. A prova `ssh-two-hosts-first-20261102.log` confirmou envio e reconciliação após confirmação perdida, deduplicação no diário remoto, continuidade após fechar a conexão, inspeção após troca de gerente e recusa da autoridade antiga. O diário estava em `tmpfs` nesta prova: reinício do contêiner remoto e queda física de rede ainda não foram validados.
-
-A etapa sintética de implementação do grafo Cezar usa agora o broker de contêiner isolado, uma cópia Git em bundle e um recibo de commit/árvore/base validado antes de aplicar o resultado na worktree do Cezar. O worker não recebe socket Docker, credenciais nem a worktree do host; roda sem rede, com usuário distinto e raiz somente leitura. A prova `isolated-engineering-second-20261102.log` concluiu o grafo sintético e a integração condicionada; `sandbox-probe-after-implementation-20261102.log` confirmou que o perfil anterior ainda funciona. O primeiro log negativo, causado pelo constraint anterior de perfil no banco, foi preservado e corrigido pela migração 026.
-
-Este avanço **não homologa execução real**: somente a implementação sintética usa o contêiner; QA, revisões e juiz ainda são processos sintéticos locais. Recuperação após perda de autoridade ou falha entre efeito Git e commit do banco, autenticação de CLIs reais, dispositivos móveis e migração continuam abertos. Nenhum Paseo, projeto ou fila operacional foi alterado.
-
-No incremento seguinte, o início do worker passou a reconciliar a mesma identidade quando a confirmação do broker se perde, sem repetir o lançamento. A execução de engenharia com confirmação descartada passou em `isolated-start-ack-recovery-20261102.log`; o typecheck também passou. O encerramento do runtime agora solicita parada para workers isolados ainda ativos, sem tratar isso sozinho como confirmação de liberação da capacidade.
-
-Os hosts SSH descartáveis receberam volumes de estado separados. A execução `ssh-restart-persistence-20261102.log` registra o teste com ambos os hosts, reinício externo de `ssh-host-a` e nova consulta do recibo remoto; a intenção repetida devolveu o mesmo resultado. Esse teste valida uma operação **já concluída** antes do reinício. Morte do host durante a escrita permanece incerta por projeto e requer reconciliação adicional antes de qualquer retentativa.
-
-O broker de contêiner agora confere jobs persistidos em estado incerto/em execução ao iniciar, verifica identidade da imagem, etiquetas, UID, mounts e limites antes de parar qualquer writer ainda ativo. A prova focada `broker-restart-neutralization-20261102.log` usa PostgreSQL real e um daemon Docker falso para verificar a decisão de parar; não equivale a um SIGKILL com worker real. O broker mantém o recibo incerto até o controlador reconciliar o resultado físico. Sem essa etapa, não há liberação antecipada nem segundo lançamento.
-
-O gerente substituto pode reconciliar um job isolado já concluído usando o snapshot imutável, o recibo físico e a mesma cópia de trabalho do Cezar. A prova `isolated-successor-recovery-20261102.log` lançou o worker no broker, deixou o banco da operação incerto, trocou a época do gerente, recusou identidade de run divergente e aplicou o commit uma vez; releitura não criou outro contêiner. O método de runtime confina a recuperação à worktree real do run. **Ainda não há retomada automática dos nós seguintes do grafo nativo depois de crash do controlador**; a prova cobre a reconciliação do artefato e a segurança da não duplicação.
-
-Na admissão de capacidade, a conta antiga configurada como reserva de programação agora é recusada quando outra conta programadora elegível está ativa em algum contexto. A prova `original-reserve-global-20261102.log` cobre dois projetos/contextos, a recusa com outro programador disponível, a admissão após esgotamento dos outros e a liberação segura da concessão. A regra é sintética; não monitora cotas de assinaturas reais nem interrompe à força um processo já iniciado quando uma conta volta.
-Uma recusa por reserva desnecessária limpa a seleção de perfil da espera; ela não fica como cabeça de fila para outros contextos. O mesmo teste de capacidade confirmou essa condição.
-O relay da conversa trata esse novo motivo como espera de capacidade, preservando a projeção dos runs e a entrega de mensagens já persistidas em vez de encerrar o ciclo de supervisão.
-
-O pedido de parada do broker passou a consultar o contêiner após a parada; se houver recibo físico terminal, usa a mesma reconciliação que confirma o resultado e libera a concessão. Na ausência de contêiner ou confirmação, permanece incerto. O typecheck e o probe de isolamento passaram após a alteração (`sandbox-stop-reconcile-20261102.log`); não houve teste de interrupção de um worker lento nesta rodada.
-
-Os contêineres da bancada `deploy/compose.lab.yml` foram parados após aquela rodada, preservando seus volumes e recibos. A rodada de recuperação nativa abaixo reabriu apenas essa bancada. Nenhum serviço operacional foi reiniciado ou alterado.
-
-## Continuação — retomada do grafo após SIGKILL
-
-Implementada a retomada do mesmo run nativo depois de reconciliar a implementação isolada. `RunManager.resumeConfirmedNode` aceita somente uma execução gerenciada estacionada para reconciliação, sem processo ativo, pergunta ou gate pendente. A autorização transacional confere o gerente, a admissão, a pausa, a definição congelada e os recibos físicos. O heartbeat da conversa solicita essa retomada; o Cezar mantém a fila e o grafo.
-
-Na prova `native-graph-recovery-final-20261102.log`, um controlador filho recebeu SIGKILL depois de concluir o worker físico, antes de devolver seu resultado. O sucessor reconciliou o commit, preservou a pausa sem abrir QA e, após retomada, concluiu QA, duas revisões, juiz e integração do mesmo run. Nenhum novo start de programação foi feito. O caso normal de engenharia também passou nessa execução. A contraprova sem a chamada de continuação falhou com o run em waiting (`native-graph-recovery-red-20261102.log`); depois de restaurar a correção, os dois testes passaram. Backend Cezar e aplicação compilaram.
-
-Decisão e fronteiras: `docs/architecture/ADR-002-RECUPERACAO-NATIVA.md`. A cobertura permanece sintética e restrita à interrupção da implementação antes do QA. Recuperação dos demais nós, pausa concorrente entre nós, isolamento dos verificadores, autenticação/CLIs reais e homologação mobile continuam abertos. As fases completas não foram aprovadas.
-
-## Continuação — QA, revisores e juiz isolados
-
-O runtime isolado agora executa QA, cada revisor e juiz em contêineres individuais. O snapshot Git é somente leitura; a saída usa um mount separado. Os workers recebem o verificador existente e um wrapper fixo, ambos por hash, sem socket Docker, chaves ou credenciais administrativas. O broker valida concessão, papel, intenção, artefato e identidade do contêiner; só o controlador assina o parecer após receber confirmação física. Os snapshots de lançamento das etapas são imutáveis na migração 027.
-
-`isolated-verification-final-20261102.log` contém três testes aprovados: engenharia com três revisores e juiz, retomada após SIGKILL e probe anterior. QA, os três revisores e juiz confirmaram UID 10001, escrita negada no snapshot e caminhos administrativos ausentes. O teto de duas avaliações simultâneas continuou válido. O backend compilou. A implementação do verificador original foi reaproveitada sem alteração.
-
-ADR e limites: `docs/architecture/ADR-003-VERIFICADORES-ISOLADOS.md`. O launcher antigo continua uma fixture local e não foi promovido a bootstrap de produção. Não há modelos reais, isolamento homologado de contas reais, recuperação de crash durante QA/revisão ou revisão independente desta fronteira. As fases completas permanecem abertas.
-
-## Continuação — backup e restauração em cópia
-
-Os scripts agora exigem a parada dos executores da bancada, validam o inventário completo do arquivo e conferem novamente o hash do dump antes de importar. O banco novo recebe admissão fechada, leases expiradas, cotas desconhecidas, concessões abertas incertas e sessões revogadas. Pausas e recibos concluídos não são removidos. A ausência da pasta opcional de chaves é registrada, sem inventar custódia existente.
-
-`backup-restore-first-20261102.log` prova a criação de backup cifrado de 2.601 arquivos, rejeição de arquivo corrompido e dump alterado, extração íntegra e importação em banco novo. A origem foi comparada antes/depois e permaneceu igual. A pausa foi preservada, nenhuma concessão incerta foi liberada e não sobraram leases/cotas/sessões ativas na cópia. Nenhum runtime foi iniciado a partir dela. Os executores da bancada ficaram parados; somente seu banco permaneceu ligado.
-
-Reprodução: `docs/operations/LAB.md`. A cópia ainda contém caminhos Git absolutos da bancada e não foi iniciada como uma central restaurada. Relocação das worktrees, reconciliação física, recuperação off-host e ensaio de RPO/RTO continuam pendentes. Isso não aprova I7/I8 integralmente nem autoriza dados reais.
-
-Na continuação, `relocate-restored-worktrees.mjs` passou a validar e reparar somente os ponteiros Git da cópia, recusando configurações/objetos externos e backlinks inconsistentes. `restored-worktrees-first-20261102.log` confirma 45 repositórios, 60 worktrees relocadas e os 2.601 arquivos originais com hashes preservados. Um runtime gerenciado temporário leu as duas execuções nativas do projeto restaurado com admissão fechada, sem listener, endpoint de conversa ou trabalhador. Operações e concessões permaneceram iguais.
-
-O código usado na prova é o fork local; não houve reprodução em outra VM. A UI e o histórico Happier ainda não foram abertos a partir da cópia e efeitos físicos externos permanecem não reconciliados. Não há aprovação integral de disaster recovery nem autorização de migração.
-
-A prova final também reloca `worktreePath` nos 60 registros nativos, além dos ponteiros Git. Configurações de lifecycle desconhecidas são recusadas antes de qualquer escrita. Os hashes dos 2.601 arquivos de origem são conferidos antes **e depois** do startup (`restored-worktrees-final-20261102.log`). A limpeza nativa por ID de tarefa foi desativada apenas no modo gerenciado, onde poderia atingir um processo da origem que conservasse o mesmo run ID; a contraprova falhou antes e os três testes nativos passaram depois. A parada física continua responsabilidade do broker.
-
-## Continuação — edição visual das cadeias de papéis
-
-Settings → Agent Control passou a permitir gerente, programação, revisão, QA, especialista e julgador, com cadeias regulares e de emergência ordenáveis e limites por conversa editáveis. A tela carrega uma revisão existente sem perder funções, identifica a conta de cada perfil, impede duplicação entre cadeias e recusa reserva sem regular. Publicar e atribuir uma revisão continuam operações distintas, sujeitas à assinatura de operador e ao controle de versão existente no backend.
-
-Os dois testes de componente passaram em `policy-editor-final-20261102.log`, incluindo preservação de todas as funções, reordenação e recusa de configuração inválida. Tipos do frontend e build web passaram. A primeira execução encontrou matchers de teste ausentes e uma inicialização tipada inadequada; as saídas e correções foram preservadas. Não houve prova de browser móvel nessa rodada. Login sem fixture, contas reais, demais telas administrativas e homologação completa de I6 continuam pendentes.
-
-## Continuação — limites globais e edição concorrente
-
-A consulta de recursos expõe limites globais e permissão de edição. Apenas administrador da central com acesso de escrita ao contexto recebe os dados da conta de reserva final e o formulário de alteração; outros usuários veem os limites, sem essa identidade privada. O painel permite programadores/avaliações globais e os limites especiais da conta original, mantendo a autorização e a versão no controlador.
-
-Os editores de capacidade e de cadeias agora guardam a revisão carregada. Uma atualização do servidor durante a edição exige recarregamento antes de publicar. O formulário de política também é recriado ao trocar de conversa, evitando carregar um rascunho de outra conversa. `capacity-ui-tests-20261102.log` registra quatro testes aprovados; `capacity-ui-control-20261102.log` cobre dois testes de controle/pausa e a consulta somente leitura. Tipos, backend e web compilaram. A publicação continua exigindo dispositivo de operador autorizado; integração do login e aceite móvel ainda não estão homologados.
-
-## Continuação — habilitação de contas e perfis
-
-Migração 028 acrescenta revisão a contas e perfis. Os comandos assinados `account.state` e `profile.state` validam titular, proprietário do projeto e revisão, sem apagar recibos ou liberar grants. A interface exibe estado e mostra os controles somente para quem pode gerenciar o recurso. Novas concessões respeitam a desabilitação; trabalhos já incertos continuam incertos.
-
-`account-state-final-20261102.log` prova desabilitação/reativação, replay sem segunda alteração, conflito de revisão, recusa de novas concessões e preservação do grant incerto. Também confirma que desabilitar é permitido com admissão fechada, mas reativar e reabrir continuam bloqueados. A primeira execução falhou na limpeza da fixture por `RECONCILIATION_REQUIRED`; a regra foi mantida e a limpeza do teste corrigida. O escopo e a restauração explícita da configuração sintética estão em `account-state-scope-20261102.md`. Backend e frontend compilaram; escrita móvel/login e contas reais continuam não homologados.
-
-## Continuação — perfis a partir do catálogo validado
-
-O cadastro visual de perfis passou a usar exclusivamente o catálogo do controlador. A consulta filtra os provedores acessíveis ao projeto; a tela filtra modelo, papel e esforço conforme a conta e limpa escolhas incompatíveis na troca de conta/função. Perfis não podem ser cadastrados por texto livre de modelo nem por esforço fora dos valores homologados. O backend continua validando o contrato independentemente da UI.
-
-`catalog-profile-ui-20261102.log` prova a troca entre dois provedores, funções e esforços distintos sem conservar uma combinação inválida. `catalog-profile-control-20261102.log` confirma que modelo de provedor não compartilhado não aparece nos recursos do projeto. Tipos, backend e web compilaram. O catálogo continua sintético; descoberta oficial de modelos, elegibilidade real e login sem fixture permanecem pendentes.
-
-## Continuação — controle de admissão entre etapas
-
-Drenagem assinada e versionada acrescentada: impede novos planos, preserva retries de intenções aceitas e permite concluir o trabalho aceito. Settings distingue drenagem de pausa. A pausa mantém o cursor Cezar antes do próximo nó e aguarda retomada sem reprovar a etapa. QA/revisão/juiz esperam capacidade na mesma tentativa, em vez de falhar quando a cota sintética acaba. ADR-004 delimita semânticas, evidências e intervalos ainda não homologados. Cancelamento público, recuperação de todos os nós, login/provedores reais e aceite móvel continuam pendentes; nenhum gate completo foi aprovado.
+O histórico cronológico foi preservado em `docs/implementation/CONTINUATION-20261102.md`. Afirmações antigas de pendências ou percentuais nesse histórico retratam a etapa em que foram registradas; este arquivo é o resumo vigente. Não há percentual de conclusão calculado e validado para o produto inteiro.

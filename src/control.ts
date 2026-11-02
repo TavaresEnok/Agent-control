@@ -18,6 +18,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('admission.set'),payload:z.object({enabled:z.boolean(),expectedRevision:z.number().int().positive(),reason:z.string().min(1).max(200)}).strict()}).strict(),
  z.object({...base,action:z.literal('context.pause'),payload:z.object({paused:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
  z.object({...base,action:z.literal('context.drain'),payload:z.object({draining:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
+ z.object({...base,action:z.literal('plan.cancel'),payload:z.object({intentId:Id,planRevision:z.number().int().positive()}).strict()}).strict(),
  z.object({...base,action:z.literal('account.add'),payload:AccountInput}).strict(),
  z.object({...base,action:z.literal('account.share'),payload:z.object({accountId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('account.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
@@ -40,7 +41,7 @@ export class Control {
    const admission=(await c.query(command.action==='admission.set'
     ?'SELECT enabled FROM ac_admission_control WHERE id=1 FOR UPDATE'
     :'SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
-   const allowedWhileClosed=command.action==='admission.set'||command.action==='device.revoke'||
+   const allowedWhileClosed=command.action==='admission.set'||command.action==='device.revoke'||command.action==='plan.cancel'||
     (command.action==='context.pause'&&command.payload.paused)||
     (command.action==='context.drain'&&command.payload.draining)||
     ((command.action==='account.state'||command.action==='profile.state')&&!command.payload.enabled);
@@ -71,6 +72,22 @@ export class Control {
       const updated=await c.query('UPDATE ac_contexts SET draining=$2,drain_revision=drain_revision+1 WHERE id=$1 RETURNING draining,drain_revision',
        [command.contextId,command.payload.draining]);
       result={draining:updated.rows[0].draining,revision:updated.rows[0].drain_revision};break;
+     }
+     case 'plan.cancel':{
+      const target=(await c.query('SELECT state,plan_revision FROM ac_intents WHERE id=$1 AND context_id=$2 FOR UPDATE',
+       [command.payload.intentId,command.contextId])).rows[0];
+      if(!target)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+      if(target.plan_revision!==command.payload.planRevision)throw new Refusal('PLAN_REVISION_MISMATCH');
+      const prior=(await c.query('SELECT state FROM ac_plan_cancellations WHERE intent_id=$1',[command.payload.intentId])).rows[0];
+      if(!prior&&['done','review','failed','canceled','cancelled'].includes(target.state))throw new Refusal('PLAN_ALREADY_TERMINAL');
+      if(!prior&&(await c.query(`SELECT 1 FROM ac_integration_intents x JOIN ac_artifacts a ON a.id=x.artifact_id
+       WHERE a.intent_id=$1 AND x.state IN ('integrated','rejected')`,[command.payload.intentId])).rowCount)throw new Refusal('PLAN_ALREADY_TERMINAL');
+      if(!prior){
+       await c.query('INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,$4)',
+        [command.payload.intentId,command.contextId,principal,command.payload.planRevision]);
+       await c.query("UPDATE ac_intents SET state='cancellation_requested' WHERE id=$1",[command.payload.intentId]);
+      }
+      result={intentId:command.payload.intentId,cancellationState:prior?.state??'requested'};break;
      }
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;
      case 'account.share':await service.shareAccount(principal,command.payload.accountId,context.project_id);result={accountId:command.payload.accountId};break;
@@ -110,6 +127,8 @@ export class Control {
    const grants=(await c.query(`SELECT id,attempt_id,intent_id,profile_id,account_id,role,policy_revision,emergency,state,created_at
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
    const waits=(await c.query('SELECT attempt_id,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
+   const plans=(await c.query(`SELECT i.id,i.run_id,i.plan_revision,i.state,c.state cancellation_state
+    FROM ac_intents i LEFT JOIN ac_plan_cancellations c ON c.intent_id=i.id WHERE i.context_id=$1 ORDER BY i.created_at DESC LIMIT 100`,[contextId])).rows;
    const qualityPolicies=(await c.query('SELECT revision,snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const templates=(await c.query('SELECT revision,snapshot,digest FROM ac_context_templates WHERE context_id=$1 ORDER BY revision',[contextId])).rows;
    const canConfigureCapacity=context.role!=='viewer'&&!!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
@@ -121,7 +140,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,profiles,catalog,policies,grants};
+    accounts,profiles,catalog,policies,grants,plans};
   });
  }
 }

@@ -73,6 +73,7 @@ export class RemoteOperations{
    const context=await this.ledger.authorize(c,principal,input.contextId);
    if(input.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
    await this.ledger.fence(c,authority);
+   if((await c.query("SELECT 1 FROM ac_plan_cancellations WHERE context_id=$1 AND state='requested'",[authority.contextId])).rowCount)throw new Refusal('PLAN_CANCELLATION_REQUESTED');
    const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR UPDATE',[input.hostId,context.project_id])).rows[0];
    if(!host||!host.allowed_tasks.includes(input.taskId))throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
    const hash=digest(input);
@@ -89,6 +90,7 @@ export class RemoteOperations{
   if(admitted.existing)return this.reconcile(principal,input.operationId,authority);
   return this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);
+   if((await c.query("SELECT 1 FROM ac_plan_cancellations WHERE context_id=$1 AND state='requested'",[authority.contextId])).rowCount)throw new Refusal('PLAN_CANCELLATION_REQUESTED');
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
    const response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,

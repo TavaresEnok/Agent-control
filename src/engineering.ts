@@ -82,7 +82,7 @@ export class EngineeringStages{
    const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[intent.id,authority.contextId])).rows[0]?.principal_id;
    if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
    const stage=await this.ledger.tx(async c=>{
-    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
     const frozen=(await c.query('SELECT digest FROM ac_execution_contracts WHERE intent_id=$1 AND project_id=$2',[intent.id,this.projectId])).rows[0];
     if(!frozen||frozen.digest!==contract.digest)throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
     const inserted=await c.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state)
@@ -107,7 +107,7 @@ export class EngineeringStages{
    if(node==='judge')await this.ledger.tx(c=>this.options.quality.assertReady(c,artifact.id,authority,{ignoreJudge:true}));
    if(node==='integrate'){
     const integration=await this.options.quality.prepareIntegration(principal,artifact.id,authority,contract.target_ref);
-    await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);
+    await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
      await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1 AND state='registered'",[stage.id]);});
     const receipt=await new Integrator(this.ledger,this.options.quality,this.options.git,this.projectId,contract.target_ref).integrate(principal,integration.id,authority);
     await this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);
@@ -170,12 +170,12 @@ export class EngineeringStages{
      const verifierPath=join(temporary,'verifier.mjs');await writeFile(verifierPath,script,{mode:0o500});
      const snapshot=await this.options.git.snapshot(source.commit,source.base,join(temporary,'snapshot'));
      if(snapshot.tree!==source.tree)throw new Refusal('ARTIFACT_TREE_MISMATCH');
-     await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);
+     await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       await c.query("UPDATE ac_stage_operations SET state='uncertain',grant_id=$2 WHERE id=$1 AND state='registered'",[stage.id,grant.id]);});
      let completion:Promise<number|null>|undefined;
      let output='',overLimit=false;
      await this.ledger.tx(async c=>{
-      await this.ledger.fence(c,authority);
+      await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
       const eligible=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
        JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'

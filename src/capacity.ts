@@ -161,6 +161,7 @@ export class Capacity {
       const context = await this.ledger.authorize(c, principal, request.contextId);
       if (request.contextId !== authority.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
       await this.ledger.fence(c, authority);
+      await this.ledger.assertIntentActive(c,request.contextId,request.intentId);
       // One lock coordinates all accounts/contexts/processes; no local semaphore is an authority.
       const config = (await c.query('SELECT * FROM ac_capacity_config WHERE id=1 FOR UPDATE')).rows[0];
       if (!config) throw new Refusal('CAPACITY_NOT_CONFIGURED');

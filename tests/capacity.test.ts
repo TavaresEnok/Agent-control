@@ -4,9 +4,11 @@ import { randomUUID } from 'node:crypto';
 import { Ledger } from '../src/ledger.ts';
 import { Capacity, type CapacityPolicy } from '../src/capacity.ts';
 import type { Authority, Command } from '../src/contracts.ts';
+import {isolatedDatabase} from './fixtures/isolated-database.ts';
 const url=process.env.AC_TEST_DATABASE_URL;
 if (!url?.includes('/ac_implementation_test')) throw Error('ISOLATED_DATABASE_REQUIRED');
-const db=new Ledger(url), other=new Ledger(url), service=new Capacity(db), second=new Capacity(other);
+const database=await isolatedDatabase(url,'capacity');
+const db=new Ledger(database.url), other=new Ledger(database.url), service=new Capacity(db), second=new Capacity(other);
 const principal='capacity-'+randomUUID(), project=randomUUID();
 let context:string, authority:Authority, intentId:string;
 const accounts=[randomUUID(),randomUUID(),randomUUID()], profiles=accounts.map(()=>randomUUID());
@@ -34,7 +36,7 @@ before(async()=>{
  action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:capacity-fixture'}};
  intentId=(await db.accept(principal,cmd,authority,'api')).id;
 });
-after(async()=>{await db.close();await other.close();});
+after(async()=>{await db.close();await other.close();await database.close();});
 const request=()=>({attemptId:randomUUID(),intentId,contextId:context,role:'programmer' as const});
 const release=(id:string)=>service.transition(principal,id,authority,'released',{processId:'synthetic-never-started',state:'not_started'});
 

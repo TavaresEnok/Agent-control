@@ -135,6 +135,7 @@ export class SandboxBroker{
     FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
     LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 FOR UPDATE OF g`,[value.grantId,value.authority.contextId])).rows[0];
    if(!grant)throw new Refusal('GRANT_FORBIDDEN',403);
+   if(value.action==='start')await this.ledger.assertIntentActive(c,value.authority.contextId,grant.intent_id);
    const prior=(await c.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[value.jobId])).rows[0];
    if(prior){
     const priorSpec=this.specification(value,work,Number(prior.manager_epoch));
@@ -176,7 +177,7 @@ export class SandboxBroker{
    return this.reconcile(value,admission.prior,admission.priorSpec,work);
   }
   return this.ledger.tx(async c=>{
-   await this.ledger.fence(c,value.authority);
+   await this.ledger.fence(c,value.authority);await this.ledger.assertIntentActive(c,value.authority.contextId,admission.grant.intent_id);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '60 seconds' WHERE context_id=$1",[value.authority.contextId]);
    const grant=(await c.query('SELECT state,manager_epoch FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[value.grantId])).rows[0];
    if(!grant||grant.state!=='reserved'||Number(grant.manager_epoch)!==value.authority.epoch)throw new Refusal('GRANT_NOT_ELIGIBLE');
@@ -212,7 +213,7 @@ export class SandboxBroker{
       [`${work}:/work:rw`,`${executor.path}:/runner/probe.mjs:ro`]}});
    const created=await this.docker.inspect(id);if(!created)throw new Refusal('DOCKER_CREATE_UNCERTAIN');
    this.inspectExpected(created,value,spec,work);
-   await this.ledger.fence(c,value.authority);
+   await this.ledger.fence(c,value.authority);await this.ledger.assertIntentActive(c,value.authority.contextId,admission.grant.intent_id);
    this.active.add(id);await this.docker.start(id);this.monitor(id,value.authority);
    await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[value.grantId]);
    await c.query("UPDATE ac_sandbox_jobs SET state='running',container_id=$2 WHERE id=$1",[value.jobId,id]);

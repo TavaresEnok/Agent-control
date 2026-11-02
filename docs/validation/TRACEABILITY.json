@@ -304,12 +304,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/native-pause-capacity-20261102.log",
-    "files": "src/control.ts;src/ledger.ts;src/cezar.ts;src/engineering.ts;tests/native-pause.test.ts",
+    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/execution-controls-regression-final-20261102.log",
+    "files": "src/control.ts;src/cancellation.ts;src/ledger.ts;src/cezar.ts;tests/native-pause.test.ts;tests/cancellation.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Signed pause/drain and native step-boundary wait verified synthetically; complete cancellation and concurrent effect recovery remain open."
+    "limitation": "Signed pause/drain/cancellation implemented; uncertain grants held and forged receipt rejected. Broker stop uses contract stub in this increment; complete physical cancellation, remote linkage and concurrent recovery remain open."
   },
   {
     "id": "RF-25",

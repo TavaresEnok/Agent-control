@@ -23,6 +23,7 @@ const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.s
  qualityPolicies:z.array(z.object({revision:z.number()})),
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
  activeTemplateRevision:z.number().nullable(),
+ plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
  waits:z.array(z.object({attempt_id:z.string(),role:z.string(),reason:z.string().nullable()})),
  grants:z.array(z.object({id:z.string(),role:z.string(),state:z.string(),profile_id:z.string(),emergency:z.boolean()}))})
 async function request(path:string,body?:unknown,extraHeaders:Record<string,string>={}):Promise<unknown>{
@@ -40,11 +41,11 @@ export function AgentControlSection(){
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
  const identity=useQuery({queryKey:['ac-operator-device'],queryFn:operatorIdentity})
- const contexts=useQuery({queryKey:['ac-contexts'],queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
+ const contexts=useQuery({queryKey:['ac-contexts'],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
  const contextId=selected||contexts.data?.contexts[0]?.id||''
- const resources=useQuery({queryKey:['ac-resources',contextId],enabled:!!contextId,
+ const resources=useQuery({queryKey:['ac-resources',contextId],enabled:!!contextId,refetchInterval:5000,
   queryFn:async()=>resourcesSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/resources`))})
- const usage=useQuery({queryKey:['ac-usage',contextId],enabled:!!contextId,
+ const usage=useQuery({queryKey:['ac-usage',contextId],enabled:!!contextId,refetchInterval:5000,
   queryFn:async()=>usageSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/usage`))})
  const mutate=useMutation({mutationFn:async(command:{action:string;payload:unknown})=>{
    const storageKey=`ac-control-pending:${contextId}`
@@ -59,7 +60,10 @@ export function AgentControlSection(){
    sessionStorage.removeItem(storageKey)
    return result
   },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]});void cache.invalidateQueries({queryKey:['ac-contexts']})},
-  onError:error=>{if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','POLICY_CONFLICT'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})}})
+  onError:error=>{
+   if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','POLICY_CONFLICT','PLAN_ALREADY_TERMINAL','PLAN_REVISION_MISMATCH'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})
+   if(['PAUSE_REVISION_CONFLICT','DRAIN_REVISION_CONFLICT'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-contexts']})
+  }})
  const bootstrap=useMutation({mutationFn:async()=>{
   if(!identity.data)throw Error('DEVICE_KEY_UNAVAILABLE')
   return z.object({state:z.literal('active')}).parse(await request('/api/v1/ac/operator/bootstrap',
@@ -90,6 +94,14 @@ export function AgentControlSection(){
   {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
+  {data&&<SettingsField title="Planos desta conversa" hint="Cancelar bloqueia novas etapas. A confirmação de parada depende da reconciliação física e preserva os artefatos existentes.">
+   {data.plans.length===0&&<p>Nenhum plano aceito nesta conversa.</p>}
+   {data.plans.map(plan=><div key={plan.id} className="flex flex-wrap items-center gap-2 rounded-md border p-2">
+    <span className="break-all text-sm">Plano {plan.plan_revision} — {plan.cancellation_state==='requested'?'cancelamento solicitado; aguardando confirmação':plan.cancellation_state==='confirmed'?'cancelamento confirmado':plan.state}</span>
+    {!plan.cancellation_state&&!['done','review','failed','canceled','cancelled'].includes(plan.state)&&<Button disabled={busy}
+     onClick={()=>mutate.mutate({action:'plan.cancel',payload:{intentId:plan.id,planRevision:plan.plan_revision}})}>Cancelar este plano e solicitar parada</Button>}
+   </div>)}
+  </SettingsField>}
   {identity.error&&<p role="alert">{identity.error.message}</p>}
   {identity.data&&<SettingsField title="Dispositivo de administração" hint="A chave privada permanece neste navegador. O administrador precisa autorizar a chave pública antes da primeira alteração.">
    <p className="break-all text-xs">{identity.data.deviceId}</p>

@@ -18,6 +18,7 @@ import { EngineeringStages,type EngineeringOptions } from './engineering.ts';
 import { Template } from './templates.ts';
 import {IsolatedImplementation} from './isolated-implementation.ts';
 import {IsolatedVerification} from './isolated-verification.ts';
+import {Cancellations} from './cancellation.ts';
 export { baselineWorkflow } from './workflows.ts';
 
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
@@ -111,6 +112,7 @@ export class CezarRuntime {
       {attemptId:identity.execution_attempt_id,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority) : null;
     await this.ledger.tx(async c => {
       await this.ledger.fence(c, authority);
+      await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       if (intent.context_id !== authority.contextId) throw new Refusal('EFFECT_SCOPE_MISMATCH');
       const recorded = (await c.query<Intent>('SELECT * FROM ac_intents WHERE id=$1 FOR UPDATE', [intent.id])).rows[0];
       if (!recorded || recorded.context_id !== intent.context_id || recorded.operation_id !== intent.operation_id ||
@@ -163,10 +165,16 @@ export class CezarRuntime {
       const authority=this.authorities.get(runId);
       if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
       try{
-        await this.ledger.tx(c=>this.ledger.fence(c,authority));
+        await this.ledger.tx(async c=>{
+          await this.ledger.fence(c,authority);
+          const intent=(await c.query('SELECT id FROM ac_intents WHERE run_id=$1 AND context_id=$2',[runId,authority.contextId])).rows[0];
+          if(!intent)throw new Refusal('INTENT_MISSING');
+          await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+        });
         if(waiting){this.store.updateRun(runId,{status:'running',error:undefined});this.store.flush({throwOnError:true});}
         return;
       }catch(error){
+        if(error instanceof Refusal&&error.code==='PLAN_CANCELLATION_REQUESTED'){this.manager.cancel(runId);return;}
         if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
         if(!waiting){
           this.store.updateRun(runId,{status:'waiting',error:`Managed admission waiting before ${nodeId}`});
@@ -174,6 +182,15 @@ export class CezarRuntime {
         }
         await new Promise(resolve=>setTimeout(resolve,250));
       }
+    }
+  }
+  async reconcileCancellations(authority:Authority){
+    if(!this.running||!this.lock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    const service=new Cancellations(this.ledger);
+    await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    if(this.isolated){
+      await service.reconcileSandbox(authority,this.isolated.client);
+      await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     }
   }
   /** Read an already persisted run while admission is paused. This cannot start a run. */
@@ -207,7 +224,7 @@ export class CezarRuntime {
     this.recovering.add(authority.contextId);this.recoveryAt.set(authority.contextId,Date.now());
     try{
       const intents=(await this.ledger.pool.query<Intent>(`SELECT i.* FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
-        WHERE i.context_id=$1 AND x.project_id=$2 ORDER BY i.created_at`,[authority.contextId,this.projectId])).rows;
+        WHERE i.context_id=$1 AND x.project_id=$2 AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id) ORDER BY i.created_at`,[authority.contextId,this.projectId])).rows;
       for(const intent of intents){
         const run=this.store.getRun(intent.run_id);
         if(run?.status!=='waiting'||run.error!=='Managed execution awaiting authoritative reconciliation'||
@@ -297,7 +314,7 @@ export class CezarRuntime {
           const intent = row.rows[0]; if (!intent) throw new Refusal('INTENT_MISSING');
           const receiptPath = join(spec.cwd, `receipt-${intent.operation_id}.json`);
           await runtime.ledger.tx(async c => {
-            await runtime.ledger.fence(c, authority);
+            await runtime.ledger.fence(c, authority);await runtime.ledger.assertIntentActive(c,authority.contextId,intent.id);
             if (!runtime.running || canceled) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
             const state = await c.query('SELECT state FROM ac_operations WHERE id=$1 FOR UPDATE', [intent.operation_id]);
             if (state.rows[0].state !== 'registered') throw new Refusal('OPERATION_UNCERTAIN');
@@ -306,7 +323,7 @@ export class CezarRuntime {
           });
           // Lock the authority across this local spawn: takeover cannot cross the effect boundary.
           await runtime.ledger.tx(async c => {
-            await runtime.ledger.fence(c, authority);
+            await runtime.ledger.fence(c, authority);await runtime.ledger.assertIntentActive(c,authority.contextId,intent.id);
             if (!runtime.running || canceled) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
             const eligible=await c.query(`SELECT g.id FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id
               JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id

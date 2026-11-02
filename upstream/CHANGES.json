@@ -45,8 +45,8 @@
     {
       "path": "packages/cezar/src/workflows/run.ts",
       "upstream_blob": "a0cbeeb9e0bb90c5b58a93d1203b5201d5445abd",
-      "current_blob": "a527dfd96a74c549ce0b47502082eea65f70f86e",
-      "sha256": "9b05345f0e60d83ecc04a60837b7bd2a97c8b1bdbacd248f62c594cf9ebcd391"
+      "current_blob": "f6f6294452f7d442fa95c39ef2a7f65f3f06e0f1",
+      "sha256": "3062f03d68babdca258634606fdc5becb058e14cd72684e5d900845226ef9041"
     },
     {
       "path": "packages/cezar/src/workflows/templates.ts",
@@ -109,7 +109,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "13a34357791c8a464e59397391c4907d9996e7190df200dc10df88285db3533e"
+      "sha256": "37995c8e6b7e7d26e6e8dd501402075daf3037a82f94827f5f0a63e0a9af0930"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-operator.ts",

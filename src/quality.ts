@@ -140,6 +140,7 @@ export class Quality {
       await this.ledger.authorize(c,principal,authority.contextId);
       await this.ledger.fence(c,authority);
       const artifact=await this.assertReady(c,artifactId,authority);
+      await this.ledger.assertIntentActive(c,authority.contextId,artifact.intent_id);
       const policy=QualityPolicy.parse((await c.query('SELECT snapshot FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[artifact.project_id,artifact.policy_revision])).rows[0].snapshot);
       if(policy.requireHumanIntegration&&!(await c.query('SELECT 1 FROM ac_integration_approvals WHERE artifact_id=$1 AND target_ref=$2 AND artifact_digest=$3 AND policy_revision=$4',
         [artifact.id,ref,artifact.identity_digest,artifact.policy_revision])).rowCount)throw new Refusal('INTEGRATION_APPROVAL_REQUIRED');

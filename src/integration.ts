@@ -21,6 +21,7 @@ export class Integrator{
    if(artifact.project_id!==this.projectId||operation.target_ref!==this.targetRef)throw new Refusal('INTEGRATION_SCOPE_MISMATCH',403);
    // Idempotent replay returns the saved outcome without touching a later branch tip.
    if(operation.state==='integrated'||operation.state==='rejected')return {terminal:true as const,result:operation.receipt};
+   await this.ledger.assertIntentActive(c,authority.contextId,artifact.intent_id);
    if(operation.state!=='registered')throw new Refusal('INTEGRATION_UNCERTAIN');
    if(Number(operation.manager_epoch)!==authority.epoch)throw new Refusal('INTEGRATION_RECONCILIATION_REQUIRED');
    await this.quality.assertReady(c,artifact.id,authority);
@@ -36,6 +37,7 @@ export class Integrator{
    const operation=(await c.query('SELECT * FROM ac_integration_intents WHERE id=$1 FOR UPDATE',[id])).rows[0];
    if(operation.state!=='uncertain'||Number(operation.manager_epoch)!==authority.epoch)throw new Refusal('INTEGRATION_RECONCILIATION_REQUIRED');
    const artifact=await this.quality.assertReady(c,admitted.artifact.id,authority);
+   await this.ledger.assertIntentActive(c,authority.contextId,artifact.intent_id);
    const observed=await this.git.identity(artifact.commit_id,artifact.base_id);
    if(observed.tree!==artifact.tree_id)throw new Refusal('ARTIFACT_TREE_MISMATCH');
    // Intention was committed before this effect. The manager row remains fenced through CAS.

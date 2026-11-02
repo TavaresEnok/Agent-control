@@ -20,7 +20,7 @@
     "review",
     "review"
   ],
-  "verifiedTree": "f523633cd76c3b7a8361abe91ecf3eecdb26d691",
+  "verifiedTree": "8b28aab8de5299a21e272e6a0149c0e60aa16a53",
   "denied": [
     "changed artifact",
     "implementation session reused",
@@ -28,5 +28,6 @@
     "moved base"
   ],
   "replayDoesNotRewriteRef": true,
-  "limitation": "Synthetic fixed processes; no LLM reviewer, hostile sandbox, mobile client, or production deployment."
+  "isolatedImplementation": false,
+  "limitation": "Synthetic fixed implementation and reviewers; verification processes remain controller-local. No real provider, mobile client or production deployment."
 }

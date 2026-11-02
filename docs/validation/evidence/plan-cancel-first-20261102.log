@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: signed cancellation blocks effects and confirms only never-started or physically reconciled grants
+ok 1 - signed cancellation blocks effects and confirms only never-started or physically reconciled grants
+  ---
+  duration_ms: 388.097331
+  type: 'test'
+  ...
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 2 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 205.369213
+  type: 'test'
+  ...
+# Subtest: signed pause is deduplicated and stale commands cannot undo a newer decision
+ok 3 - signed pause is deduplicated and stale commands cannot undo a newer decision
+  ---
+  duration_ms: 163.87703
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then resume preserves implementation identity
+ok 4 - human pause holds the next native node, then resume preserves implementation identity
+  ---
+  duration_ms: 3506.860562
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then cancel preserves implementation identity
+ok 5 - human pause holds the next native node, then cancel preserves implementation identity
+  ---
+  duration_ms: 1306.887015
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8733.189595
