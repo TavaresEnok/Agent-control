@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SettingsField } from './settings-field'
 import { operatorIdentity,signControl } from './agent-control-operator'
+import {AgentControlPolicyEditor,policyEditorSchema} from './agent-control-policy-editor'
 
 const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative()}))})
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
@@ -14,7 +15,7 @@ const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlapping
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string()})),
- policies:z.array(z.object({revision:z.number()})),
+ policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
  qualityPolicies:z.array(z.object({revision:z.number()})),
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
  activeTemplateRevision:z.number().nullable(),
@@ -32,7 +33,6 @@ export function AgentControlSection(){
  const cache=useQueryClient()
  const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[account,setAccount]=useState('')
  const [model,setModel]=useState(''),[role,setRole]=useState('programmer'),[effort,setEffort]=useState('medium')
- const [programmer,setProgrammer]=useState(''),[reviewer,setReviewer]=useState('')
  const [requiredReviews,setRequiredReviews]=useState(1),[requireHuman,setRequireHuman]=useState(false),[requireJudge,setRequireJudge]=useState(false)
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
@@ -128,20 +128,8 @@ export function AgentControlSection(){
     </form>
    </SettingsField>
    <SettingsField title="Política" hint={`Revisão atribuída: ${data.assignedPolicyRevision??'nenhuma'}. Publicar não altera tentativas em andamento.`}>
-    <form className="flex flex-col gap-2" onSubmit={e=>{
-     e.preventDefault()
-     const policy={schemaVersion:1,maxProgrammersPerContext:10,maxEvaluatorsPerContext:2,
-      roles:{programmer:{regular:[programmer],emergency:[]},...(reviewer?{reviewer:{regular:[reviewer],emergency:[]}}:{})}}
-     mutate.mutate({action:'policy.publish',payload:{expectedRevision:data.policies.at(-1)?.revision??0,policy}})
-    }}>
-     <select aria-label="Programador regular" className={selectStyle} required value={programmer} onChange={e=>setProgrammer(e.target.value)}>
-      <option value="">Selecione o programador</option>{data.profiles.filter(p=>p.role==='programmer').map(p=><option key={p.id} value={p.id}>{p.model} · {p.effort}</option>)}
-     </select>
-     <select aria-label="Revisor regular" className={selectStyle} value={reviewer} onChange={e=>setReviewer(e.target.value)}>
-      <option value="">Sem revisor configurado</option>{data.profiles.filter(p=>p.role==='reviewer').map(p=><option key={p.id} value={p.id}>{p.model} · {p.effort}</option>)}
-     </select>
-     <Button disabled={busy||!programmer} type="submit">Publicar nova revisão</Button>
-    </form>
+    <AgentControlPolicyEditor profiles={data.profiles} accounts={data.accounts} policies={data.policies} busy={busy}
+     onPublish={payload=>mutate.mutate({action:'policy.publish',payload})}/>
     <div className="flex flex-wrap gap-2">{data.policies.map(p=><Button key={p.revision} disabled={busy||data.assignedPolicyRevision===p.revision}
      onClick={()=>mutate.mutate({action:'policy.assign',payload:{revision:p.revision}})}>Usar revisão {p.revision}</Button>)}</div>
    </SettingsField>

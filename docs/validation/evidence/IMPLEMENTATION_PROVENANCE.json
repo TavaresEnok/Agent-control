@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "7b18177b639799242cb80752fa544907d3385521",
+  "git_head_before_delivery": "21524bebf0e239c3bf14df1a9bcdac96500464f0",
   "worktree_changes_present": true,
   "new_sources": {
     "src/admission.ts": "d615b1dd28fe0de1e4078e9eb9016728d35897da7804d1931db0af4f59c86f65",
@@ -118,8 +118,8 @@
     "scripts/synthetic-worker.mjs": "69fec5c252c65279d60f06ff93ac087438a0a00789dd840a7b5ac76cbb97db1f",
     "scripts/traceability.py": "18e0f3f6290593cad967d214914b23753e47c57c35e6f493bc9f3f532af4a000",
     "scripts/typecheck-happier-ui.mjs": "b417d59fab882126974e40df49b93309e89861af70910381510b7b3b3c106553",
-    "scripts/update-traceability-ssh-isolation.py": "0c8b6344f4806c14fe316c9c04ca093ce2beded73cee4fe205c49c9a652d2ffb",
-    "scripts/upstream-changes.py": "8d5a78f14055a754de42d3c54664f75c7d65e3c094ebb8a8ade417d11b17ae78",
+    "scripts/update-traceability-ssh-isolation.py": "32e3cd4ccfdf39c3398b482421f52a8dc641e2824d3a58974bccd982081132b8",
+    "scripts/upstream-changes.py": "75da602ec4fd958703a9312b1cb3737dd634310860576b948e06b5e6b916a610",
     "scripts/validate-increment.sh": "b1cbbc0da41fcdaddd98626303176c34e6839157a1dcce8721627d95e13f0a91",
     "scripts/verify-canonical-history.mjs": "092c2c3b646c25aae53b89b662f5e8bcc6b521ff113a0974f9fb92b36070a3f4",
     "services/agent-control-git/PROVENANCE.json": "9c35a7690656409aebdcb36d6e4267ee0e57e5b3b771dd1329d458b134a898d4",

@@ -1,0 +1,45 @@
+Command (inside transient runtime, upstream/cezar): Vitest targeted policy editor component
+Exit code: 1
+ANSI styling removed; semantic output preserved.
+
+> test
+> vitest run packages/web/src/routes/settings/agent-control-policy-editor.test.tsx
+
+
+ RUN  v4.1.10 /workspace/upstream/cezar
+
+ ❯  web  src/routes/settings/agent-control-policy-editor.test.tsx (2 tests | 2 failed) 487ms
+   × loads all roles and publishes reordered regular and emergency chains without discarding other functions 200ms
+   × refuses a role with only emergency profiles instead of silently dropping it 285ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL   web  src/routes/settings/agent-control-policy-editor.test.tsx > loads all roles and publishes reordered regular and emergency chains without discarding other functions
+Error: Invalid Chai property: toBeInTheDocument
+ ❯ src/routes/settings/agent-control-policy-editor.test.tsx:17:73
+     15|  render(<AgentControlPolicyEditor profiles={profiles} accounts={accoun…
+     16|  fireEvent.change(screen.getByLabelText('Revisão para editar'),{target…
+     17|  expect(screen.getByText('1. Conta de programação · Modelo 8 · medium'…
+       |                                                                         ^
+     18|  fireEvent.click(screen.getByLabelText('Descer Programação regular 1'))
+     19|  fireEvent.change(screen.getByLabelText('Programadores por conversa'),…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL   web  src/routes/settings/agent-control-policy-editor.test.tsx > refuses a role with only emergency profiles instead of silently dropping it
+Error: Invalid Chai property: toHaveTextContent
+ ❯ src/routes/settings/agent-control-policy-editor.test.tsx:33:74
+     31|  fireEvent.change(screen.getByLabelText('QA — adicionar reserva'),{tar…
+     32|  fireEvent.click(screen.getByText('Publicar nova revisão'))
+     33|  expect(publish).not.toHaveBeenCalled();expect(screen.getByRole('alert…
+       |                                                                          ^
+     34| })
+     35|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed (2)
+   Start at  15:39:57
+   Duration  3.20s (transform 165ms, setup 50ms, import 1.02s, tests 487ms, environment 1.43s)

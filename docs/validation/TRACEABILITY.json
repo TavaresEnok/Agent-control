@@ -80,15 +80,15 @@
   {
     "id": "RF-07",
     "normative_row": "RF-07\tP0\tConfigurar papel, perfil, esforço, conta, prioridade e substituições visualmente\tI3/I6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/policy-editor-final-20261102.log;docs/validation/evidence/policy-editor-types-final-20261102.log",
+    "files": "upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Six roles and ordered regular/emergency chains editable with synthetic profiles; full browser signed write, login, mobile and real accounts pending."
   },
   {
     "id": "RF-08",
@@ -535,15 +535,15 @@
   {
     "id": "RF-42",
     "normative_row": "RF-42\tP0\tValidar edição concorrente de políticas e disponibilizar reversão para uma versão anterior\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/policy-editor-final-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log",
+    "files": "upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;src/capacity.ts;tests/capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Existing revision can be loaded without dropping roles and publications carry expected revision; complete concurrent browser editing and rollback acceptance pending."
   },
   {
     "id": "RF-43",
