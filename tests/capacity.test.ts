@@ -92,6 +92,7 @@ test('original Codex programming reserve is admitted only after other active pro
   await service.observeQuota(principal,accounts[0],{status:'available',source:'synthetic-fixture',ttlSeconds:3600});
   await service.observeQuota(principal,accounts[2],{status:'available',source:'synthetic-fixture',ttlSeconds:3600});
   await assert.rejects(service.reserve(principal,attempt,secondAuthority),/ORIGINAL_RESERVE_NOT_NEEDED/);
+  assert.equal((await db.pool.query('SELECT desired_profile FROM ac_capacity_waits WHERE attempt_id=$1',[attempt.attemptId])).rows[0].desired_profile,null);
   await service.observeQuota(principal,accounts[0],{status:'exhausted',source:'synthetic-fixture',ttlSeconds:3600});
   await service.observeQuota(principal,accounts[1],{status:'exhausted',source:'synthetic-fixture',ttlSeconds:3600});
   const grant=await service.reserve(principal,attempt,secondAuthority);

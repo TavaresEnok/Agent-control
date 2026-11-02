@@ -217,7 +217,7 @@ export class Capacity {
           AND a.eligibility='documented_supported'
           AND q.status='available' AND q.expires_at>clock_timestamp() LIMIT 1`,[selected.account_id,request.role])).rowCount;
         if(other&&request.role==='programmer'){
-          await c.query("UPDATE ac_capacity_waits SET reason='ORIGINAL_RESERVE_NOT_NEEDED' WHERE attempt_id=$1",[request.attemptId]);
+          await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='ORIGINAL_RESERVE_NOT_NEEDED' WHERE attempt_id=$1",[request.attemptId]);
           return {blockedCode:'ORIGINAL_RESERVE_NOT_NEEDED'};
         }
         if(!other)originalLimit=isEvaluation?config.original_evaluation_limit:config.original_programming_limit;

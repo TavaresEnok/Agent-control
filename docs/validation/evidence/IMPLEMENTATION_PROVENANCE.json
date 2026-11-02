@@ -9,12 +9,12 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "9f51a62b91bdc42b9d8c969ab1df4124c3d1c9d6",
+  "git_head_before_delivery": "cc7faff0dc9f7ed5e64cc57250b70d23d8a0194a",
   "worktree_changes_present": true,
   "new_sources": {
     "src/admission.ts": "d615b1dd28fe0de1e4078e9eb9016728d35897da7804d1931db0af4f59c86f65",
     "src/api.ts": "5167ba90227c3481c122ae5944e2f5d87a48d30d04b65ce9ee6fce122526b460",
-    "src/capacity.ts": "72daf05aa4da78ffbaf40333d518c2290f536388984a7a80b50ad554a00350bf",
+    "src/capacity.ts": "bbcaa7e28dad22e9b35fef1cd06693234ab4a6d95d9f7bcdc5f2642a2fb52369",
     "src/cezar.ts": "93e62088bbf523d1966fca22f61cd46617ef08bbecfa7b00bcee9e5c5812c6ea",
     "src/context-keys.ts": "19e118903b2701751ff3c2c5e4da8e707989836a8b95e3891e4e72acb8feed07",
     "src/contracts.ts": "d4f93e41c08f2bf2296168b47321a51ecf2fa44de45c8d5fd25435d003cd8688",
@@ -67,7 +67,7 @@
     "db/migrations/026_sandbox_implementation_profile.sql": "9e620a7c269b236131cbabf8a3bad845b89ffc024e1121655cd13e23910cd385",
     "tests/admission.test.ts": "319422ed701e225f3f39dd37dafd5424e2b629bf8daba25227cf54338b2ea310",
     "tests/broker-recovery.test.ts": "9ece30855e189c122015854e8839468d2127f04113ee94d3f9f0e487262e25d6",
-    "tests/capacity.test.ts": "5437d272e290a7192cf659fd56572e2a67ee847099fd97ee778fbdc58b524e3c",
+    "tests/capacity.test.ts": "7ca73a1e2dda27e0f9c1d5f45b9e79a396d1d5c8c3287b1736f8d283b2d9acbd",
     "tests/context-keys.test.ts": "dad714157cc7c8f87568affc48666645d1ed215188e9df9cb91b3f1de83e9f7c",
     "tests/control.test.ts": "00db395fb827feb82cedb541871e5aea9f8e8b86a0dae4fc198edf0d8d1795a4",
     "tests/engineering.test.ts": "02237ddec9738a1e354085712967e703b5f537b8ee205115312f08596946d023",
