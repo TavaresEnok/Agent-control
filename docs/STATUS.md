@@ -67,12 +67,12 @@ A execução `implementation-continuation-20261102.log` registrou **20 testes ap
 
 ### Limitações e continuação necessária
 
-- A prova Docker usa **exclusivamente um executor sintético fixo**; o executor do workflow ainda não está integrado a essa fronteira. Não executar IAs reais nem alegar isolamento de produção.
+- A prova Docker usa **exclusivamente um executor sintético fixo**. A integração posterior da etapa de implementação está documentada abaixo; QA e revisão continuam fora dessa fronteira. Não executar IAs reais nem alegar isolamento de produção.
 - O executor SSH e as rotinas de backup/importação de banco ainda não foram demonstrados em um ciclo real de interrupção/restauração. Uma importação de conversa sintética ao servidor Happier foi verificada; não há conversor completo de dados Paseo nem autorização de migração.
 - O cookie de sessão possui escopo `/api/`, mas portas não isolam cookies. A instalação definitiva precisa de origem/hostname dedicado, HTTPS, proteção e custódia de chaves independentes; o pareamento de browser e autenticação móvel continuam pendentes.
 - Integração com assinaturas e CLIs reais, análise de elegibilidade dos provedores, autenticação segura, coleta de cotas, QA independente real, hardening de processos, recuperação, observabilidade completa e aceite móvel ainda faltam. O tratamento de fila justa ainda precisa de avaliação com diferentes contas e capacidade global.
 - Dois contêineres de probe que encerraram durante as primeiras provas ficaram como evidência no Docker de laboratório; o teste verde limpa apenas o seu próprio contêiner. O broker de teste e seu banco foram parados; não remover recursos alheios.
-- Antes de nova rodada: ler os documentos normativos, este registro e FINDINGS; construir em cima do commit local, manter as evidências e não tocar Paseos, planos, credenciais ou projetos ativos. A etapa seguinte prioritária é ligar o runtime ao executor isolado sem permitir bypass, seguida de recuperação/SSH e login seguro, com provas pertinentes ao final.
+- Antes de nova rodada: ler os documentos normativos, este registro e FINDINGS; construir em cima do commit local, manter as evidências e não tocar Paseos, planos, credenciais ou projetos ativos. As etapas seguintes são completar a recuperação do grafo nativo, isolar verificadores e homologar autenticação/SSH, com provas pertinentes ao final.
 
 ## Continuação — registro de uso por tentativa
 
@@ -86,7 +86,7 @@ A pausa e a retomada do cockpit passaram a usar comando assinado de operador, id
 
 Em contêiner descartável sem rede, o diário do executor remoto preservou uma única execução ao receber a mesma intenção duas vezes e permitiu consultar o resultado depois da perda simulada de confirmação; diretório de estado com permissões amplas é recusado. É uma prova do processo Python local, não uma prova de SSH, reconexão de rede ou isolamento hostil. Evidências: `guarded-pause-20261102.log`, `remote-journal-private-20261102.log` e os typechecks da rodada. A primeira prova Python falhou porque a imagem antiga da bancada não tem Python; a saída foi preservada. Nenhum servidor ou conta real foi usado.
 
-Ainda faltam a ligação do executor de engenharia à fronteira isolada, SSH real entre fixtures, recuperação física, pareamento mobile e integrações com contas homologadas. As fases permanecem abertas.
+A ligação posterior da implementação ao executor isolado e SSH entre duas fixtures constam abaixo. Ainda faltam isolamento de QA/revisão, recuperação completa do grafo, pareamento mobile e integrações com contas homologadas. As fases permanecem abertas.
 
 ## Continuação — entrega de mensagens com execução pausada ou aguardando capacidade
 
