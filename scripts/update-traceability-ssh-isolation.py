@@ -10,8 +10,9 @@ with path.open(newline='') as stream:
     rows = list(reader)
 
 updates = {
-    'RF-07': ('docs/validation/evidence/policy-editor-final-20261102.log;docs/validation/evidence/policy-editor-types-final-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx', 'Six roles and ordered regular/emergency chains editable with synthetic profiles; full browser signed write, login, mobile and real accounts pending.'),
-    'RF-42': ('docs/validation/evidence/policy-editor-final-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;src/capacity.ts;tests/capacity.test.ts', 'Existing revision can be loaded without dropping roles and publications carry expected revision; complete concurrent browser editing and rollback acceptance pending.'),
+    'RF-07': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-types-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx', 'Six role chains, global limits and reserve account editable with synthetic profiles; full browser signed write, login, mobile and real accounts pending.'),
+    'RF-09': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-control-20261102.log', 'src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx', 'Global/context revisions and wait states displayed; complete per-profile choice explanations and mobile acceptance pending.'),
+    'RF-42': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx;src/capacity.ts', 'Loaded revision retained and stale UI submission blocked until reload; full concurrent browser-to-PG and rollback acceptance pending.'),
     'RF-11': ('docs/validation/evidence/original-reserve-global-20261102.log', 'src/capacity.ts;tests/capacity.test.ts', 'Global original-account reserve admission tested with synthetic quotas; live providers and safe transition of running tasks remain open.'),
     'RF-18': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/engineering.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Independent synthetic verifier sessions in separate containers; real model reviews and provider accounts remain unverified.'),
     'RF-22': ('docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts', 'Native graph resumes after interrupted synthetic implementation; recovery of other nodes and real providers remains open.'),
@@ -36,7 +37,7 @@ for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 21
+assert len(rows) == 111 and len(updates) == 22
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()

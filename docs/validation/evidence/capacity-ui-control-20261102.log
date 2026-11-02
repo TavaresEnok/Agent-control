@@ -1,0 +1,25 @@
+Command (transient runtime): node --import tsx --test tests/control.test.ts
+Exit code: 0
+ANSI styling removed; semantic output preserved.
+TAP version 13
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 1 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 243.6096
+  type: 'test'
+  ...
+# Subtest: signed pause is deduplicated and stale commands cannot undo a newer decision
+ok 2 - signed pause is deduplicated and stale commands cannot undo a newer decision
+  ---
+  duration_ms: 125.073667
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1311.363132

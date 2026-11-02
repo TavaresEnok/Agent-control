@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { SettingsField } from './settings-field'
 import { operatorIdentity,signControl } from './agent-control-operator'
 import {AgentControlPolicyEditor,policyEditorSchema} from './agent-control-policy-editor'
+import {AgentControlCapacityEditor,capacityEditorSchema} from './agent-control-capacity-editor'
 
 const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative()}))})
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
@@ -13,6 +14,7 @@ const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlapping
  counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
  observed_at:z.string().nullable()}))})
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
+ capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string()})),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
@@ -127,8 +129,12 @@ export function AgentControlSection(){
      <Button disabled={busy||!account||!model} type="submit">Cadastrar perfil</Button>
     </form>
    </SettingsField>
+   <SettingsField title="Capacidade global" hint="Alterações afetam todas as conversas e exigem administrador da central.">
+    <AgentControlCapacityEditor key={data.principalId} config={data.capacity} canEdit={data.canConfigureCapacity} accounts={data.accounts} busy={busy}
+     onSave={payload=>mutate.mutate({action:'capacity.configure',payload})}/>
+   </SettingsField>
    <SettingsField title="Política" hint={`Revisão atribuída: ${data.assignedPolicyRevision??'nenhuma'}. Publicar não altera tentativas em andamento.`}>
-    <AgentControlPolicyEditor profiles={data.profiles} accounts={data.accounts} policies={data.policies} busy={busy}
+    <AgentControlPolicyEditor key={contextId} profiles={data.profiles} accounts={data.accounts} policies={data.policies} busy={busy}
      onPublish={payload=>mutate.mutate({action:'policy.publish',payload})}/>
     <div className="flex flex-wrap gap-2">{data.policies.map(p=><Button key={p.revision} disabled={busy||data.assignedPolicyRevision===p.revision}
      onClick={()=>mutate.mutate({action:'policy.assign',payload:{revision:p.revision}})}>Usar revisão {p.revision}</Button>)}</div>

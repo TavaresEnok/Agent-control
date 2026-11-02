@@ -21,6 +21,7 @@ type Props={profiles:{id:string;account_id:string;model:string;effort:string;rol
 export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPublish}:Props){
  const [roles,setRoles]=useState<Draft>(empty),[programmers,setProgrammers]=useState(10),[evaluators,setEvaluators]=useState(2)
  const [loaded,setLoaded]=useState(''),[error,setError]=useState('')
+ const [baseRevision,setBaseRevision]=useState(policies.at(-1)?.revision??0)
  const describe=(id:string)=>{const profile=profiles.find(p=>p.id===id);return profile
   ?`${accounts.find(a=>a.id===profile.account_id)?.label??'Conta'} · ${profile.model} · ${profile.effort}`:id}
  const add=(role:Role,kind:'regular'|'emergency',id:string)=>{
@@ -40,7 +41,7 @@ export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPubl
   const parsed=policyEditorSchema.safeParse(policies.find(p=>String(p.revision)===loaded)?.snapshot)
   if(!parsed.success){setError('Não foi possível carregar essa revisão.');return}
   const next=empty();for(const role of roleSchema.options){const chain=parsed.data.roles[role];if(chain)next[role]={regular:[...chain.regular],emergency:[...chain.emergency]}}
-  setRoles(next);setProgrammers(parsed.data.maxProgrammersPerContext);setEvaluators(parsed.data.maxEvaluatorsPerContext);setError('')
+  setRoles(next);setProgrammers(parsed.data.maxProgrammersPerContext);setEvaluators(parsed.data.maxEvaluatorsPerContext);setBaseRevision(policies.at(-1)?.revision??0);setError('')
  }
  return <form className="flex min-w-0 flex-col gap-4" onSubmit={event=>{
   event.preventDefault();setError('')
@@ -51,7 +52,7 @@ export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPubl
   for(const role of roleSchema.options)for(const id of [...roles[role].regular,...roles[role].emergency]){
    if(!profiles.some(p=>p.id===id&&p.role===role)){setError('Uma função contém perfil ausente ou incompatível. Recarregue a revisão e confira os perfis.');return}
   }
-  onPublish({expectedRevision:policies.at(-1)?.revision??0,policy:parsed.data})
+  onPublish({expectedRevision:baseRevision,policy:parsed.data})
  }}>
   <div className="flex flex-wrap items-end gap-2">
    <label className="flex min-w-0 flex-col gap-1">Revisão para editar
@@ -66,6 +67,7 @@ export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPubl
    <label>Avaliações por conversa<Input aria-label="Avaliações por conversa" type="number" min={1} max={10} value={evaluators} onChange={e=>setEvaluators(Number(e.target.value))}/></label>
   </div>
   <p className="text-xs text-muted-foreground">A ordem regular define a seleção inicial. Um trabalhador regular saudável permanece; a reserva recebe novas tarefas somente enquanto os regulares estão indisponíveis. As vagas globais continuam limitando esta conversa.</p>
+  {baseRevision!==(policies.at(-1)?.revision??0)&&<p role="status">Uma nova revisão foi publicada. Carregue a revisão desejada antes de publicar outra alteração.</p>}
   {roleSchema.options.map(role=><fieldset key={role} className="min-w-0 rounded-md border p-3">
    <legend className="px-1 font-medium">{labels[role]}</legend>
    {(['regular','emergency'] as const).map(kind=><div key={kind} className="mb-3 flex min-w-0 flex-col gap-2">
@@ -83,6 +85,6 @@ export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPubl
    </div>)}
   </fieldset>)}
   {error&&<p role="alert">{error}</p>}
-  <Button type="submit" disabled={busy}>Publicar nova revisão</Button>
+  <Button type="submit" disabled={busy||baseRevision!==(policies.at(-1)?.revision??0)}>Publicar nova revisão</Button>
  </form>
 }

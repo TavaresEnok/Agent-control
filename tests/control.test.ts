@@ -29,6 +29,10 @@ test('control intent, mutation and delivery are atomic across retries and confli
   const conflicting={...command,intentId:randomUUID(),payload:{...command.payload,id:randomUUID(),resourceIdentity:'another-'+randomUUID()}};
   await assert.rejects(control.execute(principal,conflicting,proof(conflicting)),/CONTROL_DELIVERY_CONFLICT/);
   const view=await control.view(principal,context);assert.equal(view.accounts.length,1);
+  assert.equal(view.canConfigureCapacity,true);
+  const viewer='viewer-'+randomUUID();await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'viewer')",[project,viewer]);
+  const readonly=await control.view(viewer,context);assert.equal(readonly.canConfigureCapacity,false);
+  assert.equal(readonly.capacity?.originalFallback??null,null);
   assert.equal((await ledger.pool.query('SELECT count(*) n FROM ac_control_intents WHERE context_id=$1',[context])).rows[0].n,'1');
   assert(!JSON.stringify(view).includes('resource_identity'),'private resource identifiers are not exposed in the view');
  }finally{await ledger.close();}

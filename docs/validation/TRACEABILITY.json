@@ -83,12 +83,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/policy-editor-final-20261102.log;docs/validation/evidence/policy-editor-types-final-20261102.log",
-    "files": "upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx",
+    "evidence": "docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-types-20261102.log",
+    "files": "upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Six roles and ordered regular/emergency chains editable with synthetic profiles; full browser signed write, login, mobile and real accounts pending."
+    "limitation": "Six role chains, global limits and reserve account editable with synthetic profiles; full browser signed write, login, mobile and real accounts pending."
   },
   {
     "id": "RF-08",
@@ -106,15 +106,15 @@
   {
     "id": "RF-09",
     "normative_row": "RF-09\tP0\tExibir versão aplicada e explicar por que um perfil foi escolhido ou recusado\tI3/I6",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-control-20261102.log",
+    "files": "src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Global/context revisions and wait states displayed; complete per-profile choice explanations and mobile acceptance pending."
   },
   {
     "id": "RF-10",
@@ -538,12 +538,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/policy-editor-final-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log",
-    "files": "upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;src/capacity.ts;tests/capacity.test.ts",
+    "evidence": "docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log",
+    "files": "upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx;src/capacity.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Existing revision can be loaded without dropping roles and publications carry expected revision; complete concurrent browser editing and rollback acceptance pending."
+    "limitation": "Loaded revision retained and stale UI submission blocked until reload; full concurrent browser-to-PG and rollback acceptance pending."
   },
   {
     "id": "RF-43",

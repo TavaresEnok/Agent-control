@@ -92,10 +92,15 @@ export class Control {
    const waits=(await c.query('SELECT attempt_id,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
    const qualityPolicies=(await c.query('SELECT revision,snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const templates=(await c.query('SELECT revision,snapshot,digest FROM ac_context_templates WHERE context_id=$1 ORDER BY revision',[contextId])).rows;
+   const canConfigureCapacity=context.role!=='viewer'&&!!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
+   const config=(await c.query('SELECT * FROM ac_capacity_config WHERE id=1')).rows[0];
+   const capacity=config?{revision:config.revision,programmingLimit:config.programming_limit,evaluationLimit:config.evaluation_limit,
+    originalFallback:canConfigureCapacity&&config.original_account_id?{accountId:config.original_account_id,programmingLimit:config.original_programming_limit,
+     evaluationLimit:config.original_evaluation_limit}:null}:null;
    const installation=(await c.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
-   return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
+   return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
     accounts,profiles,policies,grants};
   });
  }

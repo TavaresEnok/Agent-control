@@ -1,0 +1,17 @@
+Command (transient runtime): Vitest: agent-control-capacity-editor.test.tsx and agent-control-policy-editor.test.tsx
+Exit code: 0
+ANSI styling removed; semantic output preserved.
+
+> test
+> vitest run packages/web/src/routes/settings/agent-control-capacity-editor.test.tsx packages/web/src/routes/settings/agent-control-policy-editor.test.tsx
+
+
+ RUN  v4.1.10 /workspace/upstream/cezar
+
+ ✓  web  src/routes/settings/agent-control-capacity-editor.test.tsx (2 tests) 132ms
+ ✓  web  src/routes/settings/agent-control-policy-editor.test.tsx (2 tests) 476ms
+
+ Test Files  2 passed (2)
+      Tests  4 passed (4)
+   Start at  15:45:26
+   Duration  2.57s (transform 179ms, setup 52ms, import 1.16s, tests 608ms, environment 2.48s)

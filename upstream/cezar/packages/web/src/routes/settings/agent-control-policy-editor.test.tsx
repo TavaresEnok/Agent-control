@@ -12,7 +12,7 @@ it('loads all roles and publishes reordered regular and emergency chains without
   manager:{regular:[id(1)],emergency:[]},programmer:{regular:[id(2),id(3)],emergency:[id(8)]},
   reviewer:{regular:[id(4)],emergency:[]},qa:{regular:[id(5)],emergency:[]},
   specialist:{regular:[id(6)],emergency:[]},judge:{regular:[id(7)],emergency:[]}}}
- render(<AgentControlPolicyEditor profiles={profiles} accounts={accounts} policies={[{revision:3,snapshot:policy}]} busy={false} onPublish={publish}/>)
+ const view=render(<AgentControlPolicyEditor profiles={profiles} accounts={accounts} policies={[{revision:3,snapshot:policy}]} busy={false} onPublish={publish}/>)
  fireEvent.change(screen.getByLabelText('Revisão para editar'),{target:{value:'3'}});fireEvent.click(screen.getByText('Carregar revisão'))
  expect(screen.getByText('1. Conta de programação · Modelo 8 · medium')).not.toBeNull()
  fireEvent.click(screen.getByLabelText('Descer Programação regular 1'))
@@ -22,6 +22,10 @@ it('loads all roles and publishes reordered regular and emergency chains without
  expect(publish).toHaveBeenCalledOnce()
  expect(publish).toHaveBeenCalledWith({expectedRevision:3,policy:{...policy,maxProgrammersPerContext:8,
   roles:{...policy.roles,programmer:{regular:[id(3),id(2)],emergency:[id(8)]}}}})
+ view.rerender(<AgentControlPolicyEditor profiles={profiles} accounts={accounts} policies={[{revision:3,snapshot:policy},{revision:4,snapshot:policy}]} busy={false} onPublish={publish}/>)
+ expect((screen.getByText('Publicar nova revisão') as HTMLButtonElement).disabled).toBe(true)
+ fireEvent.click(screen.getByText('Carregar revisão'));fireEvent.click(screen.getByText('Publicar nova revisão'))
+ expect(publish).toHaveBeenLastCalledWith({expectedRevision:4,policy})
 })
 
 it('refuses a role with only emergency profiles instead of silently dropping it',()=>{
