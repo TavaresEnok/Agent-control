@@ -1,0 +1,50 @@
+TAP version 13
+# Subtest: SIGKILL after saved integrate-after-cas result replays receipt and finishes the same graph
+not ok 1 - SIGKILL after saved integrate-after-cas result replays receipt and finishes the same graph
+  ---
+  duration_ms: 3708.281313
+  type: 'test'
+  location: '/workspace/tests/completed-node-recovery.test.ts:1:706'
+  failureType: 'testCodeFailure'
+  error: 'CONTEXT_FORBIDDEN'
+  code: 'CONTEXT_FORBIDDEN'
+  stack: |-
+    Ledger.authorize (/workspace/src/ledger.ts:36:70)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async <anonymous> (/workspace/src/integration.ts:57:4)
+    async Ledger.tx (/workspace/src/ledger.ts:15:45)
+    async EngineeringStages.reconcileIntegrationResult (/workspace/src/engineering.ts:347:17)
+    async CezarRuntime.recoverManaged (/workspace/src/cezar.ts:280:37)
+    async TestContext.<anonymous> (/workspace/tests/completed-node-recovery.test.ts:52:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: SIGKILL after saved integrate-before-cas result replays receipt and finishes the same graph
+not ok 2 - SIGKILL after saved integrate-before-cas result replays receipt and finishes the same graph
+  ---
+  duration_ms: 3078.802328
+  type: 'test'
+  location: '/workspace/tests/completed-node-recovery.test.ts:1:706'
+  failureType: 'testCodeFailure'
+  error: 'CONTEXT_FORBIDDEN'
+  code: 'CONTEXT_FORBIDDEN'
+  stack: |-
+    Ledger.authorize (/workspace/src/ledger.ts:36:70)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async <anonymous> (/workspace/src/integration.ts:57:4)
+    async Ledger.tx (/workspace/src/ledger.ts:15:45)
+    async EngineeringStages.reconcileIntegrationResult (/workspace/src/engineering.ts:347:17)
+    async CezarRuntime.recoverManaged (/workspace/src/cezar.ts:280:37)
+    async TestContext.<anonymous> (/workspace/tests/completed-node-recovery.test.ts:52:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8106.056784

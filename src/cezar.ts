@@ -78,18 +78,27 @@ export class CezarRuntime {
       // Active-agent recovery must reconcile physical handles first (I5); never blindly respawn.
       authorizeRecovery: async run => {
         const current=this.invocation.getStore();
-        if(!current||!this.isolated||!run.workflowDef||run.id!==current.intent.run_id||run.graphState?.cursor!=='implement')return false;
+        if(!current||!run.workflowDef||run.id!==current.intent.run_id)return false;
+        const cursor=run.graphState?.cursor;
+        if(cursor==='implement'){if(!this.isolated)return false;}
+        else{
+          const session=run.steps.find(step=>step.id===cursor)?.sessionId;
+          if(!this.engineering||!cursor||!session)return false;
+          if(!await this.engineering.canReplayCompleted(current.intent,current.authority,cursor,session)&&
+             !await this.engineering.prepareUnstartedNode(current.intent,current.authority,cursor,session))return false;
+        }
         return this.ledger.tx(async c=>{
           await this.ledger.fence(c,current.authority);
+          await this.ledger.assertIntentActive(c,current.authority.contextId,current.intent.id);
           const bound=(await c.query(`SELECT i.principal_id,i.command,i.plan_revision,o.state,g.state grant_state,j.state job_state,f.digest
             FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id
-            JOIN ac_capacity_grants g ON g.id=o.grant_id JOIN ac_sandbox_jobs j ON j.id=o.id
+            JOIN ac_capacity_grants g ON g.id=o.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=o.id
             JOIN ac_frozen_plans f ON f.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id
             WHERE i.id=$1 AND i.run_id=$2 AND i.context_id=$3 AND x.project_id=$4 AND o.id=$5`,
             [current.intent.id,run.id,current.authority.contextId,this.projectId,current.intent.operation_id])).rows[0];
           if(!bound)return false;
           await this.ledger.authorize(c,bound.principal_id,current.authority.contextId);
-          return bound.state==='completed'&&bound.grant_state==='released'&&bound.job_state==='completed'&&
+          return bound.state==='completed'&&bound.grant_state==='released'&&(cursor!=='implement'||bound.job_state==='completed')&&
             bound.plan_revision===current.intent.plan_revision&&digest(bound.command)===digest(current.intent.command)&&
             bound.digest===digest(workflowFor(current.intent.command.payload.workflow))&&
             digest(run.workflowDef)===bound.digest;
@@ -209,6 +218,12 @@ export class CezarRuntime {
     if(!this.running||!this.lock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
     const service=new Cancellations(this.ledger);
     await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    if(this.engineering){
+      const canceled=(await this.ledger.pool.query<Intent>(`SELECT i.* FROM ac_intents i JOIN ac_plan_cancellations k ON k.intent_id=i.id
+        WHERE i.context_id=$1 AND k.state='requested'`,[authority.contextId])).rows;
+      for(const intent of canceled)await this.engineering.reconcileIntegrationResult(intent,authority);
+      await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    }
     if(this.isolated){
       await service.reconcileSandbox(authority,this.isolated.client);
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
@@ -245,7 +260,7 @@ export class CezarRuntime {
   /** Rejoin the native graph only after reconciling the interrupted implementation.
    * Called by the existing conversation heartbeat, never by a second scheduler. */
   async recoverManaged(authority:Authority){
-    if(!this.isolated||!this.running||!this.lock||this.recovering.has(authority.contextId)||
+    if((!this.isolated&&!this.engineering)||!this.running||!this.lock||this.recovering.has(authority.contextId)||
        Date.now()-(this.recoveryAt.get(authority.contextId)??0)<1000)return;
     this.recovering.add(authority.contextId);this.recoveryAt.set(authority.contextId,Date.now());
     try{
@@ -253,10 +268,22 @@ export class CezarRuntime {
         WHERE i.context_id=$1 AND x.project_id=$2 AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id) ORDER BY i.created_at`,[authority.contextId,this.projectId])).rows;
       for(const intent of intents){
         const run=this.store.getRun(intent.run_id);
-        if(run?.status!=='waiting'||run.error!=='Managed execution awaiting authoritative reconciliation'||
-           run.graphState?.cursor!=='implement'||run.askParked||run.attentionRequest)continue;
+        if(run?.status!=='waiting'||run.error!=='Managed execution awaiting authoritative reconciliation'||run.askParked||run.attentionRequest)continue;
         try{
-          if(await this.reconcileIsolated(intent,authority)!=='completed')continue;
+          const cursor=run.graphState?.cursor;
+          if(cursor==='implement'){
+            if(!this.isolated||await this.reconcileIsolated(intent,authority)!=='completed')continue;
+          }else{
+            if(!run.worktreePath)throw new Refusal('RECOVERY_WORKTREE_MISSING');
+            const root=await realpath(join(this.repo,'.ai/cezar/worktrees')),worktree=await realpath(run.worktreePath);
+            if(!worktree.startsWith(root+sep))throw new Refusal('RECOVERY_WORKTREE_FORBIDDEN',403);
+            const session=run.steps.find(step=>step.id===cursor)?.sessionId;
+            if(!cursor||!session||!this.engineering)continue;
+            if(cursor==='integrate')await this.engineering.reconcileIntegrationResult(intent,authority);
+            await this.engineering.reconcileVerifierResults(intent,authority,cursor,session);
+            if(!await this.engineering.canReplayCompleted(intent,authority,cursor,session)&&
+               !await this.engineering.prepareUnstartedNode(intent,authority,cursor,session))continue;
+          }
           this.authorities.set(intent.run_id,authority);
           await this.invocation.run({intent,authority},()=>this.manager.resumeConfirmedNode(intent.run_id));
         }catch(error){

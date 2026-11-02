@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: native Cezar graph resumes after SIGKILL at implementation, preserving pause
+ok 1 - native Cezar graph resumes after SIGKILL at implementation, preserving pause
+  ---
+  duration_ms: 7385.635708
+  type: 'test'
+  ...
+# Subtest: native Cezar graph resumes after SIGKILL at qa-physical, preserving pause
+ok 2 - native Cezar graph resumes after SIGKILL at qa-physical, preserving pause
+  ---
+  duration_ms: 7428.617149
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 16627.143922

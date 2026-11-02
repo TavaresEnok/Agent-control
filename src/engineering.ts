@@ -7,9 +7,9 @@ import { Authority, canonical, digest, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
 import { GitArtifacts } from './git.ts';
-import { Quality,QualityPolicy, type VerificationReceipt } from './quality.ts';
+import { Quality,QualityPolicy, type VerificationReceipt,type ArtifactRow } from './quality.ts';
 import { Integrator } from './integration.ts';
-import {IsolatedVerification} from './isolated-verification.ts';
+import {IsolatedVerification,type IsolatedVerificationResult} from './isolated-verification.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;
  onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void};
@@ -27,6 +27,115 @@ export class EngineeringStages{
  constructor(readonly ledger:Ledger,readonly projectId:string,readonly options:EngineeringOptions){
   if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
+ }
+ /** Reattach a completed node after controller loss. Only saved, authenticated
+  * results are replayable here; uncertain or absent effects are never relaunched. */
+ async canReplayCompleted(intent:Intent,authority:Authority,nodeId:string,sessionId:string){
+  const parsed=nodeSchema.safeParse(nodeId);if(!parsed.success||!z.uuid().safeParse(sessionId).success)return false;
+  const node=parsed.data;
+  const saved=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const bound=(await c.query(`SELECT i.principal_id,x.quality_revision,x.target_ref,x.digest,p.snapshot,p.digest policy_digest
+    FROM ac_intents i JOIN ac_execution_contracts x ON x.intent_id=i.id
+    JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision
+    WHERE i.id=$1 AND i.run_id=$2 AND i.context_id=$3 AND x.project_id=$4`,[intent.id,intent.run_id,authority.contextId,this.projectId])).rows[0];
+   if(!bound)return null;
+   await this.ledger.authorize(c,bound.principal_id,authority.contextId);
+   if(bound.digest!==digest({qualityRevision:bound.quality_revision,targetRef:bound.target_ref})||digest(bound.snapshot)!==bound.policy_digest)
+    throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
+   const allowed=this.options.allowedTargets??(this.options.targetRef?[this.options.targetRef]:[]);
+   if(!allowed.includes(bound.target_ref))throw new Refusal('INTEGRATION_TARGET_FORBIDDEN',403);
+   const policy=QualityPolicy.parse(bound.snapshot);
+   if((await c.query("SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released' LIMIT 1",[intent.id])).rowCount)return null;
+   const sessions=node==='review'&&policy.requiredReviews>1?Array.from({length:policy.requiredReviews},(_,index)=>reviewSession(sessionId,index)):[sessionId];
+   const stages=(await c.query(`SELECT s.*,g.state grant_state,g.physical_receipt,j.state job_state FROM ac_stage_operations s
+    LEFT JOIN ac_capacity_grants g ON g.id=s.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=s.id
+    WHERE s.intent_id=$1 AND s.node_id=$2 AND s.session_id=ANY($3::uuid[])`,[intent.id,node,sessions])).rows;
+   if(node==='judge'&&!policy.requireJudge)return {principal:bound.principal_id,stages:[],skip:true};
+   if(stages.length!==sessions.length||stages.some(s=>s.state!=='completed'||Number(s.manager_epoch)>authority.epoch))return null;
+   for(const stage of stages){
+    if(node==='integrate'){
+     const applied=(await c.query(`SELECT x.receipt FROM ac_integration_intents x JOIN ac_artifacts a ON a.id=x.artifact_id
+      WHERE a.intent_id=$1 AND x.target_ref=$2 AND x.state IN ('integrated','rejected')`,[intent.id,bound.target_ref])).rows[0];
+     if(!applied||!stage.receipt?.integration||digest(applied.receipt)!==digest(stage.receipt.integration))return null;
+    }else if(stage.grant_state!=='released'||!stage.physical_receipt||
+      (stage.job_state!==null&&!['completed','failed'].includes(stage.job_state))||
+      stage.receipt?.verification?.sessionId!==stage.session_id||stage.receipt?.verification?.grantId!==stage.grant_id||
+      stage.receipt?.verification?.policyRevision!==bound.quality_revision||
+      stage.receipt?.verification?.kind!==(node==='review'?'review':node))return null;
+   }
+   return {principal:bound.principal_id,stages,skip:false};
+  });
+  if(!saved)return false;
+  for(const stage of saved.stages){
+   if(node==='integrate')continue;
+   await this.options.quality.record(saved.principal,stage.receipt.verification,stage.receipt.signature,authority);
+  }
+  return true;
+ }
+ /** Adopt only preparations whose durable state proves no executor launched.
+  * Running/uncertain effects remain owned by physical reconciliation. */
+ async prepareUnstartedNode(intent:Intent,authority:Authority,nodeId:string,sessionId:string){
+  const parsed=nodeSchema.safeParse(nodeId);if(!parsed.success||!z.uuid().safeParse(sessionId).success)return false;
+  const node=parsed.data;
+  const saved=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const bound=(await c.query(`SELECT i.principal_id,x.quality_revision,x.target_ref,x.digest,p.snapshot,p.digest policy_digest
+    FROM ac_intents i JOIN ac_execution_contracts x ON x.intent_id=i.id
+    JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision
+    WHERE i.id=$1 AND i.run_id=$2 AND i.context_id=$3 AND x.project_id=$4`,[intent.id,intent.run_id,authority.contextId,this.projectId])).rows[0];
+   if(!bound)return null;
+   await this.ledger.authorize(c,bound.principal_id,authority.contextId);
+   if(bound.digest!==digest({qualityRevision:bound.quality_revision,targetRef:bound.target_ref})||digest(bound.snapshot)!==bound.policy_digest)throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
+   const allowed=this.options.allowedTargets??(this.options.targetRef?[this.options.targetRef]:[]);
+   if(!allowed.includes(bound.target_ref))throw new Refusal('INTEGRATION_TARGET_FORBIDDEN',403);
+   const policy=QualityPolicy.parse(bound.snapshot);
+   const sessions=node==='review'&&policy.requiredReviews>1?Array.from({length:policy.requiredReviews},(_,index)=>reviewSession(sessionId,index)):[sessionId];
+   const stages=(await c.query(`SELECT s.*,g.id old_grant,g.state grant_state,g.physical_receipt,
+    EXISTS(SELECT 1 FROM ac_stage_execution_launches l WHERE l.stage_id=s.id) launched,
+    EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.id=s.id) has_job
+    FROM ac_stage_operations s LEFT JOIN ac_capacity_grants g ON g.attempt_id=s.attempt_id
+    WHERE s.intent_id=$1 AND s.node_id=$2 FOR UPDATE OF s`,[intent.id,node])).rows;
+   if(stages.some(s=>!sessions.includes(s.session_id)||Number(s.manager_epoch)>authority.epoch))return null;
+   const integration=node==='integrate'?(await c.query(`SELECT t.* FROM ac_integration_intents t JOIN ac_artifacts a ON a.id=t.artifact_id
+    WHERE a.intent_id=$1`,[intent.id])).rows[0]:null;
+   if(integration&&(integration.state!=='registered'||Number(integration.manager_epoch)>authority.epoch))return null;
+   const preparations=stages.filter(s=>s.state!=='completed');
+   for(const stage of preparations){
+    const beforeCas=node==='integrate'&&integration?.state==='registered';
+    if((stage.state!=='registered'&&!beforeCas)||stage.handle||stage.started_at||stage.launched||stage.has_job)return null;
+    if(stage.old_grant&&(stage.grant_state!=='reserved'&&!(stage.grant_state==='released'&&stage.physical_receipt?.state==='not_started')))return null;
+    if(stage.grant_state==='reserved'&&stage.physical_receipt)return null;
+   }
+   const safeGrants=preparations.filter(s=>s.old_grant).map(s=>s.old_grant);
+   if((await c.query("SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released' AND NOT(id=ANY($2::uuid[])) LIMIT 1",[intent.id,safeGrants])).rowCount)return null;
+   if((await c.query(`SELECT 1 FROM ac_sandbox_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE g.intent_id=$1 AND j.state NOT IN ('completed','failed') LIMIT 1`,[intent.id])).rowCount)return null;
+   if((await c.query(`SELECT 1 FROM ac_remote_operations WHERE intent_id=$1 AND state NOT IN ('completed','failed','canceled_confirmed') LIMIT 1`,[intent.id])).rowCount)return null;
+   const completed=stages.filter(s=>s.state==='completed');
+   if(node==='integrate'&&completed.length)return null; // terminal path belongs to canReplayCompleted
+   for(const stage of completed){
+    if(stage.grant_state!=='released'||!stage.physical_receipt||stage.receipt?.verification?.sessionId!==stage.session_id||
+     stage.receipt?.verification?.grantId!==stage.old_grant||stage.receipt?.verification?.policyRevision!==bound.quality_revision||
+     stage.receipt?.verification?.kind!==(node==='review'?'review':node))return null;
+   }
+   for(const stage of preparations){
+    if(Number(stage.manager_epoch)===authority.epoch&&stage.state==='registered'&&!stage.old_grant)continue;
+    if(stage.grant_state==='reserved')await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state='reserved'",
+     [stage.old_grant,{state:'not_started',source:'fenced-stage-adoption',stageId:stage.id}]);
+    const nextAttempt=randomUUID();
+    await c.query('DELETE FROM ac_capacity_waits WHERE attempt_id=$1',[stage.attempt_id]);
+    await c.query("UPDATE ac_stage_operations SET manager_epoch=$2,attempt_id=$3,grant_id=NULL,state='registered' WHERE id=$1",[stage.id,authority.epoch,nextAttempt]);
+    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'stage.adopted_before_launch',$2)",
+     [authority.contextId,{stageId:stage.id,oldEpoch:Number(stage.manager_epoch),oldAttemptId:stage.attempt_id,attemptId:nextAttempt}]);
+   }
+   if(integration&&Number(integration.manager_epoch)<authority.epoch)await c.query("UPDATE ac_integration_intents SET manager_epoch=$2 WHERE id=$1 AND state='registered'",[integration.id,authority.epoch]);
+   return {principal:bound.principal_id,completed};
+  });
+  if(!saved)return false;
+  for(const stage of saved.completed)await this.options.quality.record(saved.principal,stage.receipt.verification,stage.receipt.signature,authority);
+  return true;
  }
  start(intent:Intent,authority:Authority,nodeId:string,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void),internalReview=false):AgentSession{
   const node=nodeSchema.parse(nodeId),sessionId=z.uuid().parse(spec.sessionId);
@@ -92,7 +201,7 @@ export class EngineeringStages{
      [randomUUID(),intent.id,node,sessionId,randomUUID(),authority.epoch]);
     return inserted.rows[0]??(await c.query('SELECT * FROM ac_stage_operations WHERE intent_id=$1 AND node_id=$2 AND session_id=$3',[intent.id,node,sessionId])).rows[0];
    });
-   if(Number(stage.manager_epoch)!==authority.epoch)throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
+   if(Number(stage.manager_epoch)>authority.epoch||(stage.state!=='completed'&&Number(stage.manager_epoch)!==authority.epoch))throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
    if(stage.state==='completed'){
     if(node==='integrate'){
      if(stage.receipt?.integration?.status!=='integrated')throw new Refusal('INTEGRATION_REJECTED');
@@ -157,25 +266,7 @@ export class EngineeringStages{
      if(digest(policy)!==qualityRow.digest||policy.verifierDigest!==verifierDigest)throw new Refusal('VERIFIER_VERSION_MISMATCH');
      const verified=await this.options.isolatedVerification.run(principal,stage.id,grant.id,authority,spec.cwd,
       {id:artifact.id,commit:source.commit,tree:source.tree,base:source.base},intent.operation_id,node,verifierDigest,()=>canceled||!this.running);
-     const logs=resolve('.state/verification-logs');await mkdir(logs,{recursive:true,mode:0o700});
-     await writeFile(join(logs,stage.id+'.log'),verified.output,{mode:0o600});
-     const receipt:VerificationReceipt={schemaVersion:1,id:randomUUID(),artifactId:artifact.id,kind:node==='review'?'review':node,sessionId,
-      grantId:grant.id,policyRevision:contract.quality_revision,commit:source.commit,tree:source.tree,base:source.base,
-      status:verified.exitCode===0?'passed':'failed',exitCode:verified.exitCode,verifierDigest,
-      logSha256:createHash('sha256').update(verified.output).digest('hex'),
-      commandDigest:digest({executor:'isolated-fixed-verifier-v1',verifierDigest,node,commit:source.commit,tree:source.tree,base:source.base}),
-      verifierVersion:'synthetic-isolated-verifier-v1/'+verified.nodeVersion};
-     const signature=createHmac('sha256',this.key).update(canonical(receipt)).digest('hex');
-     await this.ledger.tx(async c=>{
-      await this.ledger.fence(c,authority,true);
-      const physical=(await c.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grant.id])).rows[0];
-      if(physical?.state!=='released'||physical.physical_receipt?.jobId!==stage.id||physical.physical_receipt?.containerId!==verified.containerId)
-       throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
-      await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND manager_epoch=$3",
-       [stage.id,{verification:receipt,signature},authority.epoch]);
-     });
-     await this.options.quality.record(principal,receipt,signature,authority);
-     await this.options.isolatedVerification.cleanup(stage.id,grant.id,authority);
+     await this.saveIsolatedResult(principal,intent,authority,stage,grant.id,artifact,node,verified);
      if(verified.exitCode!==0)throw new Refusal('VERIFICATION_FAILED');
     }else{
     const parent=resolve('.state/verifier-workspaces');await mkdir(parent,{recursive:true,mode:0o700});
@@ -243,6 +334,89 @@ export class EngineeringStages{
    return {text,toolCalls:[],tokensUsed:0};
   })().finally(()=>{open=false;admissionWait(null);});
   return {result,get open(){return open;},get pid(){return child?.pid;},sendMessage(){return false;},end(){},interrupt(){canceled=true;stop(child);for(const reviewer of nested)reviewer.interrupt();},hardStop(){canceled=true;stop(child);for(const reviewer of nested)reviewer.hardStop?.();}};
+ }
+ private async saveIsolatedResult(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,
+  artifact:ArtifactRow,node:'qa'|'review'|'judge',verified:IsolatedVerificationResult){
+  if(verified.artifactId!==artifact.id||verified.operationId!==intent.operation_id||verified.kind!==node||verified.commit!==artifact.commit_id||
+   verified.tree!==artifact.tree_id||verified.base!==artifact.base_id)throw new Refusal('SANDBOX_VERIFICATION_INVALID');
+  const logs=resolve('.state/verification-logs');await mkdir(logs,{recursive:true,mode:0o700});
+  await writeFile(join(logs,stage.id+'.log'),verified.output,{mode:0o600});
+  const receipt:VerificationReceipt={schemaVersion:1,id:randomUUID(),artifactId:artifact.id,kind:node,sessionId:stage.session_id,
+   grantId,policyRevision:artifact.policy_revision,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,
+   status:verified.exitCode===0?'passed':'failed',exitCode:verified.exitCode,verifierDigest:verified.verifierDigest,
+   logSha256:createHash('sha256').update(verified.output).digest('hex'),
+   commandDigest:digest({executor:'isolated-fixed-verifier-v1',verifierDigest:verified.verifierDigest,node,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id}),
+   verifierVersion:'synthetic-isolated-verifier-v1/'+verified.nodeVersion};
+  const signature=createHmac('sha256',this.key).update(canonical(receipt)).digest('hex');
+  await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   const physical=(await c.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
+   if(physical?.state!=='released'||physical.physical_receipt?.jobId!==stage.id||physical.physical_receipt?.containerId!==verified.containerId||
+    physical.physical_receipt?.exitCode!==verified.exitCode)throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
+   const updated=await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND intent_id=$3 AND manager_epoch<=$4 AND state IN ('uncertain','running') RETURNING id",
+    [stage.id,{verification:receipt,signature},intent.id,authority.epoch]);
+   if(!updated.rowCount)throw new Refusal('STAGE_RESULT_CONFLICT');
+  });
+  await this.options.quality.record(principal,receipt,signature,authority);
+  try{await this.options.isolatedVerification!.cleanup(stage.id,grantId,authority);}
+  catch(error){
+   await this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);
+    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'sandbox.cleanup_pending',$2)",[authority.contextId,{stageId:stage.id,reason:error instanceof Refusal?error.code:'TRANSPORT_UNCERTAIN'}]);});
+  }
+ }
+ async reconcileVerifierResults(intent:Intent,authority:Authority,nodeId:string,sessionId:string){
+  if(!this.options.isolatedVerification||(nodeId!=='qa'&&nodeId!=='review'&&nodeId!=='judge'))return;
+  const node=nodeId;
+  const saved=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const bound=(await c.query(`SELECT i.principal_id,p.snapshot,p.digest FROM ac_intents i JOIN ac_execution_contracts x ON x.intent_id=i.id
+    JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision
+    WHERE i.id=$1 AND i.context_id=$2 AND x.project_id=$3`,[intent.id,authority.contextId,this.projectId])).rows[0];
+   if(!bound)return null;
+   await this.ledger.authorize(c,bound.principal_id,authority.contextId);
+   const policy=QualityPolicy.parse(bound.snapshot);if(digest(policy)!==bound.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
+   const sessions=node==='review'&&policy.requiredReviews>1?Array.from({length:policy.requiredReviews},(_,index)=>reviewSession(sessionId,index)):[sessionId];
+   const stages=(await c.query(`SELECT s.* FROM ac_stage_operations s JOIN ac_stage_execution_launches l ON l.stage_id=s.id
+    WHERE s.intent_id=$1 AND s.node_id=$2 AND s.session_id=ANY($3::uuid[]) AND s.state IN ('uncertain','running') AND s.manager_epoch<$4`,
+    [intent.id,node,sessions,authority.epoch])).rows;
+   const artifact=(await c.query<ArtifactRow>(`SELECT a.* FROM ac_artifacts a JOIN ac_operations o ON o.intent_id=a.intent_id
+    WHERE a.intent_id=$1 AND a.commit_id=o.receipt->>'commit' AND a.tree_id=o.receipt->>'tree'`,[intent.id])).rows[0];
+   if(!artifact)return null;
+   return {principal:bound.principal_id,stages,artifact,verifierDigest:policy.verifierDigest};
+  });
+  if(!saved?.verifierDigest)return;
+  for(const stage of saved.stages){
+   const result=await this.options.isolatedVerification.reconcile(saved.principal,stage.id,stage.grant_id,authority,
+    {id:saved.artifact.id,commit:saved.artifact.commit_id,tree:saved.artifact.tree_id,base:saved.artifact.base_id},intent.operation_id,node,saved.verifierDigest);
+   if(result)await this.saveIsolatedResult(saved.principal,intent,authority,stage,stage.grant_id,saved.artifact,node,result);
+  }
+ }
+ async reconcileIntegrationResult(intent:Intent,authority:Authority){
+  const saved=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   const bound=(await c.query<{principal_id:string;quality_revision:number;target_ref:string;digest:string;stage_id:string;integration_id:string}>(`SELECT i.principal_id,x.quality_revision,x.target_ref,x.digest,s.id stage_id,t.id integration_id
+    FROM ac_intents i JOIN ac_execution_contracts x ON x.intent_id=i.id
+    JOIN ac_stage_operations s ON s.intent_id=i.id AND s.node_id='integrate'
+    JOIN ac_operations o ON o.intent_id=i.id
+    JOIN ac_artifacts a ON a.intent_id=i.id AND a.commit_id=o.receipt->>'commit' AND a.tree_id=o.receipt->>'tree'
+    JOIN ac_integration_intents t ON t.artifact_id=a.id AND t.target_ref=x.target_ref
+    WHERE i.id=$1 AND i.context_id=$2 AND x.project_id=$3 AND s.state IN ('uncertain','running') AND s.manager_epoch<=$4`,
+    [intent.id,authority.contextId,this.projectId,authority.epoch])).rows[0];
+   if(!bound)return null;
+   await this.ledger.authorize(c,bound.principal_id,authority.contextId);
+   if(bound.digest!==digest({qualityRevision:bound.quality_revision,targetRef:bound.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
+   const allowed=this.options.allowedTargets??(this.options.targetRef?[this.options.targetRef]:[]);
+   if(!allowed.includes(bound.target_ref))throw new Refusal('INTEGRATION_TARGET_FORBIDDEN',403);
+   return bound;
+  });
+  if(!saved)return;
+  const receipt=await new Integrator(this.ledger,this.options.quality,this.options.git,this.projectId,saved.target_ref)
+   .reconcile(saved.principal_id,saved.integration_id,authority);
+  if(!receipt)return;
+  await this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);
+   await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND state IN ('uncertain','running') AND manager_epoch<=$3",
+    [saved.stage_id,{integration:receipt},authority.epoch]);
+  });
  }
  close(){this.running=false;for(const child of this.children)stop(child);this.options.isolatedVerification?.close();}
 }

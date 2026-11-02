@@ -12,6 +12,16 @@ const Launch=z.object({profile:z.literal('synthetic-verification-v1'),source:z.o
 const Result=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),verification:z.object({
  artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge']),commit:GitId,tree:GitId,base:GitId,
  verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),output:z.string().max(65536),nodeVersion:z.string()}).strict().nullable()}).passthrough();
+export type VerificationArtifact={id:string;commit:string;tree:string;base:string};
+export type IsolatedVerificationResult=NonNullable<z.infer<typeof Result>['verification']>&{exitCode:number;containerId:string};
+function verifiedResult(response:unknown,stageId:string,artifact:VerificationArtifact,operationId:string,kind:'qa'|'review'|'judge',verifierDigest:string):IsolatedVerificationResult|null{
+ const parsed=Result.safeParse(response);if(!parsed.success)return null;
+ const result=parsed.data,verification=result.verification;
+ if(result.jobId!==stageId||!verification||verification.artifactId!==artifact.id||verification.operationId!==operationId||
+   verification.kind!==kind||verification.commit!==artifact.commit||verification.tree!==artifact.tree||verification.base!==artifact.base||verification.verifierDigest!==verifierDigest)
+  throw new Refusal('SANDBOX_VERIFICATION_INVALID');
+ return {...verification,exitCode:result.exitCode,containerId:result.containerId};
+}
 async function git(cwd:string,args:string[]){
  const result=await exec('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,...args],{
   env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000,maxBuffer:2000000});
@@ -60,19 +70,29 @@ export class IsolatedVerification{
      [stageId,{containerId:started.data.containerId,synthetic:true},authority.epoch]);
    });
    for(let i=0;i<240;i++){
-    const terminal=Result.safeParse(response);
-    if(terminal.success){
-     const result=terminal.data,verification=result.verification;
-     if(result.jobId!==stageId||!verification||verification.artifactId!==artifact.id||verification.operationId!==operationId||
-       verification.kind!==kind||verification.commit!==artifact.commit||verification.tree!==artifact.tree||verification.base!==artifact.base||verification.verifierDigest!==verifierDigest)
-      throw new Refusal('SANDBOX_VERIFICATION_INVALID');
-     return {...verification,exitCode:result.exitCode,containerId:result.containerId};
-    }
+    const terminal=verifiedResult(response,stageId,artifact,operationId,kind,verifierDigest);
+    if(terminal)return terminal;
     if(!this.active||isCanceled()){stop();throw new Refusal('STAGE_CANCELED');}
     await new Promise(r=>setTimeout(r,250));response=await this.client.perform('reconcile',stageId,grantId,authority,launch);
    }
    throw new Refusal('SANDBOX_RESULT_UNCERTAIN');
   }finally{this.stops.delete(stop);await rm(temporary,{recursive:true,force:true});}
+ }
+ async reconcile(principal:string,stageId:string,grantId:string,authority:Authority,artifact:VerificationArtifact,
+  operationId:string,kind:'qa'|'review'|'judge',verifierDigest:string){
+  const row=await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const stage=(await c.query(`SELECT s.intent_id,s.manager_epoch,s.node_id,l.snapshot,l.digest FROM ac_stage_operations s
+    JOIN ac_stage_execution_launches l ON l.stage_id=s.id WHERE s.id=$1 AND s.grant_id=$2 AND l.context_id=$3`,[stageId,grantId,authority.contextId])).rows[0];
+   if(!stage||Number(stage.manager_epoch)>authority.epoch||stage.node_id!==kind)throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
+   await this.ledger.assertIntentActive(c,authority.contextId,stage.intent_id);
+   return stage;
+  });
+  const launch=Launch.parse(row.snapshot);
+  if(digest(launch)!==row.digest||launch.source.base!==artifact.commit||launch.verification.artifactId!==artifact.id||
+    launch.verification.operationId!==operationId||launch.verification.kind!==kind)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
+  const response=await this.client.perform('reconcile',stageId,grantId,authority,launch);
+  return verifiedResult(response,stageId,artifact,operationId,kind,verifierDigest);
  }
  async cleanup(stageId:string,grantId:string,authority:Authority){
   const row=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=$1 AND context_id=$2',[stageId,authority.contextId])).rows[0];

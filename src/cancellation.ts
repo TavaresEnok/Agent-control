@@ -63,6 +63,7 @@ export class Cancellations{
      EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released') OR
      EXISTS(SELECT 1 FROM ac_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_stage_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
+     EXISTS(SELECT 1 FROM ac_integration_intents t JOIN ac_artifacts a ON a.id=t.artifact_id WHERE a.intent_id=$1 AND t.state='uncertain') OR
      EXISTS(SELECT 1 FROM ac_sandbox_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE g.intent_id=$1 AND j.state NOT IN ('completed','failed')) OR
      EXISTS(SELECT 1 FROM ac_remote_operations r WHERE (r.intent_id=$1 OR (r.intent_id IS NULL AND r.context_id=$2)) AND r.state NOT IN ('completed','failed','canceled_confirmed'))
      pending`,[request.intent_id,authority.contextId])).rows[0].pending;

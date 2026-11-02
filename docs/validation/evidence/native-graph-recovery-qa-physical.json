@@ -1,0 +1,17 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "controllerSignal": "SIGKILL",
+  "pausePreserved": true,
+  "physicalLaunches": 1,
+  "recoveryLaunches": 0,
+  "stages": [
+    "integrate",
+    "judge",
+    "qa",
+    "review",
+    "review"
+  ],
+  "boundary": "qa-physical",
+  "limitation": "Recovery covers the specified synthetic physical receipt boundary; missing verifier output, active old writers and real providers remain unverified."
+}

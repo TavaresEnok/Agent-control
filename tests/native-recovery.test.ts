@@ -17,7 +17,7 @@ class CountStarts extends SandboxClient{
  starts=0;
  override async perform(...args:Parameters<SandboxClient['perform']>){if(args[0]==='start'&&args[4]?.profile==='synthetic-implementation-v1')this.starts++;return super.perform(...args);}
 }
-test('native Cezar graph resumes after SIGKILL and physical reconciliation, preserving pause',
+for(const boundary of ['implementation','qa-physical'])test(`native Cezar graph resumes after SIGKILL at ${boundary}, preserving pause`,
  {timeout:60000,skip:!process.env.AC_SANDBOX_DATABASE_URL},async()=>{
  const url=process.env.AC_SANDBOX_DATABASE_URL!;
  if(!url.endsWith('/ac_sandbox_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
@@ -40,7 +40,7 @@ test('native Cezar graph resumes after SIGKILL and physical reconciliation, pres
  const intent=await db.accept(principal,command,authority,'api');
  const marker=join(repo,'physical-complete.json'),configPath=join(repo,'controller-fixture.json');
  await writeFile(configPath,JSON.stringify({scope:'isolated-native-recovery',repo,project,intent,authority,marker,
-  verifierKey:Buffer.from(options.verifierKey).toString('base64'),qualityRevision:options.qualityRevision}),{mode:0o600});
+  verifierKey:Buffer.from(options.verifierKey).toString('base64'),qualityRevision:options.qualityRevision,stopAfterVerifier:boundary==='qa-physical'}),{mode:0o600});
  let child:ChildProcess|undefined,runtime:CezarRuntime|undefined,output='';
  try{
   child=spawn(process.execPath,['--import','tsx','tests/fixtures/interrupted-engineering.ts',configPath],{stdio:['ignore','pipe','pipe']});
@@ -61,7 +61,7 @@ test('native Cezar graph resumes after SIGKILL and physical reconciliation, pres
   assert.equal(runtime.store.getRun(intent.run_id)?.status,'waiting');
   await runtime.recoverManaged(successor);
   assert.equal(runtime.store.getRun(intent.run_id)?.status,'waiting','human pause survives physical reconciliation');
-  assert.equal((await db.pool.query('SELECT count(*) n FROM ac_stage_operations WHERE intent_id=$1',[intent.id])).rows[0].n,'0');
+  assert.equal((await db.pool.query('SELECT count(*) n FROM ac_stage_operations WHERE intent_id=$1',[intent.id])).rows[0].n,boundary==='qa-physical'?'1':'0');
   await db.pause(principal,context,false);await new Promise(r=>setTimeout(r,1050));await runtime.recoverManaged(successor);
   let done=false;
   for(let i=0;i<200;i++){
@@ -76,8 +76,8 @@ test('native Cezar graph resumes after SIGKILL and physical reconciliation, pres
   assert.equal(client.starts,0,'replayed implementation must not launch another container');
   const stages=(await db.pool.query('SELECT node_id,state FROM ac_stage_operations WHERE intent_id=$1 ORDER BY node_id',[intent.id])).rows;
   assert.deepEqual(stages.map(s=>s.node_id),['integrate','judge','qa','review','review']);assert(stages.every(s=>s.state==='completed'));
-  await writeFile('docs/validation/evidence/native-graph-recovery.json',JSON.stringify({result:'passed',synthetic:true,controllerSignal:'SIGKILL',
+  await writeFile(`docs/validation/evidence/native-graph-recovery-${boundary}.json`,JSON.stringify({result:'passed',synthetic:true,controllerSignal:'SIGKILL',
    pausePreserved:true,physicalLaunches:1,recoveryLaunches:client.starts,stages:stages.map(s=>s.node_id),
-   limitation:'Recovery covers interrupted synthetic implementation before QA; other node types and real providers remain unverified.'},null,2)+'\n');
+   boundary,limitation:'Recovery covers the specified synthetic physical receipt boundary; missing verifier output, active old writers and real providers remain unverified.'},null,2)+'\n');
  }finally{if(child&&child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await runtime?.close();await db.close();await rm(configPath,{force:true});}
 });

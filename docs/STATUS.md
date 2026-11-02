@@ -12,7 +12,7 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 | Conversa | Happier real como histórico cifrado canônico, relay/RPC/pending queue, paginação e checkpoint; Cezar sem segundo composer. Duas conversas/contextos no mesmo projeto foram exercitados. |
 | Contas e capacidade | Contas **sintéticas**, catálogo, papéis e cadeias versionadas, concessões globais, filas, quotas com TTL, seleção regular e reserva da conta original. Contas/perfis podem ser desativados sem liberar efeitos incertos. |
 | Engenharia | Grafo nativo sintético: implementação, QA, revisores independentes por sessão, juiz e integração CAS do commit/árvore/base. Implementação e verificadores têm perfil Docker isolado no runtime configurado para broker. |
-| Recuperação | SIGKILL após implementação física, reconciliação do sucessor e continuação do mesmo grafo sem segundo worker. Não cobre todos os nós/intervalos. |
+| Recuperação | SIGKILL após implementação física e QA físico; replay de QA/revisão/julgador/integração concluídos; observação de CAS aplicado sem repetir escrita. Preparações comprovadamente não lançadas podem ser adotadas; efeitos sem prova e outros intervalos permanecem abertos. |
 | Operação | Pausa no limite de nós, drenagem de planos aceitos, espera por capacidade na mesma tentativa, cancelamento pedido/confirmado com bloqueio de novos efeitos e preservação de grants incertos. ADR-004/005. |
 | SSH | Dois hosts descartáveis, fingerprints fixados, diário idempotente, confirmação perdida e recibo concluído após reinício. Operação em trânsito permanece conservadoramente incerta. |
 | Administração | Settings Cezar: seis papéis, cadeias ordenadas, limites globais/locais, catálogo, perfis, estados de conta, pausa/drenagem/cancelamento, templates, políticas de qualidade, aprovação assinada com diff do artefato e uso observado. Comandos assinados por dispositivo. Atualização periódica de estado não substitui CAS/assinatura. |
@@ -23,7 +23,7 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 1. Bootstrap de produto e login/pareamento integrado sem fixtures; custódia/rotação/revogação completa e acesso móvel autenticado. O cookie e a assinatura já existem, mas não equivalem ao percurso completo.
 2. Adaptadores e elegibilidade de provedores/CLIs, coletores de cota e gestão de credenciais. Uso real depende das autorizações específicas previstas na diretriz; não habilitar contas silenciosamente.
 3. Planejamento semântico de gerente e autoria de workflows além dos templates sintéticos congelados; fork/join útil com correção limitada, novo artefato após reprovação e políticas completas.
-4. Recuperação de QA/revisão/juiz/integração e todos os intervalos entre efeitos. Pausa concorrente depois do hook pode exigir reconciliação. Parada pelo broker de sucessor tem validação de contrato com stub, ainda sem prova física completa em todos os intervalos.
+4. Recuperação de efeitos sem resultado válido e dos intervalos restantes, incluindo fork/join/correção. Resultados concluídos e preparações com prova de não início já têm recuperação sintética; ADR-009/010. Pausa concorrente depois do hook pode exigir reconciliação. Parada pelo broker de sucessor tem validação de contrato com stub, ainda sem prova física completa em todos os intervalos.
 5. Homologar cancelamento pelo SSH real, queda durante efeito e morte do supervisor. Novas operações já têm vínculo de plano obrigatório/imutável; somente histórico sem vínculo conserva a restrição de contexto. O pedido de parada tem prova local de supervisor, não homologação de rede.
 6. Experiência administrativa essencial completa no celular, login real, navegador em identidades de build atuais e revisão independente. Provas de viewport anteriores não homologam as telas acrescentadas depois.
 7. Restore completo de conversa/UI, efeitos externos posteriores ao backup, ensaio em outro host, métricas/SLOs, retenção/disco cheio, piloto e migração autorizados.
@@ -40,6 +40,12 @@ O runtime não usa mais silenciosamente o teto standalone de dois fluxos: o sema
 ## SSH vinculado ao plano
 
 Novos despachos exigem intenção do mesmo contexto, sem bloquear planos vizinhos por cancelamento. O pedido remoto de parada só vira confirmação após o supervisor observar saída física. O cockpit expõe estado e vínculos antigos. A fronteira está disponível para injeção explícita no runtime; nenhum host/credencial real foi habilitado. ADR-008 distingue a prova Python local e o contrato PG de uma homologação SSH completa.
+
+## Recuperação ampliada
+
+Resultados concluídos de QA, conselho, julgador e integração podem ser relidos pelo sucessor sem repetir seus executores. O recibo físico de QA também pode ser conciliado antes da gravação do controlador. CAS aplicado com confirmação PG perdida é observado sem nova escrita; destino que não prova a pós-condição permanece incerto. Pausas continuam preservadas. ADR-009 registra as provas, os negativos e os limites.
+
+A retomada cobre também cursor anterior ao registro de QA, QA registrado aguardando cota e integração registrada antes de admitir CAS. Exige prova de não início, preserva IDs e audita a tentativa/época nova, sem liberar writers incertos. ADR-010.
 
 ## Evidências recentes
 

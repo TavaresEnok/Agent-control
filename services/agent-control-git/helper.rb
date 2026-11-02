@@ -16,12 +16,13 @@ begin
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
   expected = case input['action']
     when 'identity', 'diff' then %w[action base candidate repo]
+    when 'observe' then %w[action base candidate repo targetRef]
     when 'snapshot' then %w[action base candidate destination repo]
     when 'cas' then %w[action base candidate operationId repo targetRef]
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[identity diff snapshot cas].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[identity diff observe snapshot cas].include?(input['action'])
   %w[base candidate].each do |key|
     raise 'INVALID_GIT_ID' unless input[key].is_a?(String) && input[key].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
   end
@@ -35,6 +36,10 @@ begin
     source: 'AcSafeGit+AcArtifactIdentity'}
   if input['action'] == 'identity'
     puts JSON.generate(identity)
+  elsif input['action'] == 'observe'
+    ref = input.fetch('targetRef')
+    raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
+    puts JSON.generate(identity.merge({targetRef: ref, head: git(repo, 'rev-parse', '--verify', ref)}))
   elsif input['action'] == 'diff'
     diff = git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', base, candidate, '--')
     puts JSON.generate(identity.merge({diff: diff.byteslice(0, 20_000).force_encoding('UTF-8').scrub,

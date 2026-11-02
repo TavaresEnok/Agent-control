@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: SIGKILL at integrate-after-cas: replay receipt and finish the same graph
+ok 1 - SIGKILL at integrate-after-cas: replay receipt and finish the same graph
+  ---
+  duration_ms: 5075.121427
+  type: 'test'
+  ...
+# Subtest: SIGKILL at integrate-before-cas: preserve uncertainty without writing Git
+ok 2 - SIGKILL at integrate-before-cas: preserve uncertainty without writing Git
+  ---
+  duration_ms: 4672.132285
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11123.371054

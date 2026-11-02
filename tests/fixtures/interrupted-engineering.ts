@@ -14,7 +14,8 @@ let runtime:CezarRuntime;
 class InterruptedReceipt extends SandboxClient{
  override async perform(...args:Parameters<SandboxClient['perform']>){
   const value=await super.perform(...args);
-  if(args[0]==='reconcile'&&(value as {exitCode?:number}).exitCode===0){
+  if(args[0]==='reconcile'&&(value as {exitCode?:number}).exitCode===0&&
+    args[4]?.profile===(config.stopAfterVerifier?'synthetic-verification-v1':'synthetic-implementation-v1')){
    runtime.store.flush({throwOnError:true});
    await writeFile(config.marker,JSON.stringify({physicalComplete:true,operationId:config.intent.operation_id}));
    await new Promise(()=>{});

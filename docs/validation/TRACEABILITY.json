@@ -283,7 +283,7 @@
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native graph resumes after interrupted synthetic implementation; recovery of other nodes and real providers remains open."
+    "limitation": "Native graph resumes from completed QA/review/judge/integration and physical implementation/QA receipts; Prepared QA/integration adopted only with proof of no launch; missing output, other uncertain effects and real providers remain open."
   },
   {
     "id": "RF-23",
@@ -296,7 +296,7 @@
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Controller SIGKILL after physical implementation result, successor reconciliation and native DAG continuation tested; other crash positions remain open."
+    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open."
   },
   {
     "id": "RF-24",
