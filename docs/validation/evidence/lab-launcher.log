@@ -1,0 +1,18 @@
+
+> agent-control@0.1.0 start:built
+> node dist/src/lab-main.js
+
+file:///workspace/dist/src/ledger.js:72
+                throw new Refusal('MANAGER_ACTIVE');
+                      ^
+
+Refusal [Error]: MANAGER_ACTIVE
+    at file:///workspace/dist/src/ledger.js:72:23
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Ledger.tx (file:///workspace/dist/src/ledger.js:12:23)
+    at async file:///workspace/dist/src/lab-main.js:25:23 {
+  code: 'MANAGER_ACTIVE',
+  status: 409
+}
+
+Node.js v22.23.3

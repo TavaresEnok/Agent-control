@@ -1,0 +1,14 @@
+{"id":"adapter-build","command":["npm","run","build"],"startedAt":"2026-11-02T03:58:07.652Z","finishedAt":"2026-11-02T03:58:13.942Z","exitCode":0,"signal":null}
+{"id":"browser-acceptance","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:04:31.794Z","finishedAt":"2026-11-02T04:06:12.599Z","exitCode":1,"signal":null}
+{"id":"adapter-build","command":["npm","run","build"],"startedAt":"2026-11-02T04:07:01.307Z","finishedAt":"2026-11-02T04:07:09.772Z","exitCode":0,"signal":null}
+{"id":"browser-acceptance","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:07:13.672Z","finishedAt":"2026-11-02T04:08:16.509Z","exitCode":1,"signal":null}
+{"id":"adapter-build","command":["npm","run","build"],"startedAt":"2026-11-02T04:09:53.317Z","finishedAt":"2026-11-02T04:10:00.769Z","exitCode":0,"signal":null}
+{"id":"browser-acceptance","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:10:10.413Z","finishedAt":"2026-11-02T04:11:23.343Z","exitCode":1,"signal":null}
+{"id":"browser-acceptance","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:13:02.459Z","finishedAt":"2026-11-02T04:14:53.974Z","exitCode":1,"signal":null}
+{"id":"adapter-build","command":["npm","run","build"],"startedAt":"2026-11-02T04:17:47.359Z","finishedAt":"2026-11-02T04:17:50.849Z","exitCode":0,"signal":null}
+{"id":"ledger-runtime-tests","command":["node","--import","tsx","--test","tests/ledger.test.ts","tests/runtime.test.ts"],"startedAt":"2026-11-02T04:18:07.184Z","finishedAt":"2026-11-02T04:18:12.530Z","exitCode":0,"signal":null}
+{"id":"browser-acceptance","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:19:22.241Z","finishedAt":"2026-11-02T04:20:31.271Z","exitCode":0,"signal":null}
+{"id":"cezar-types-build-package","command":["sh","scripts/check-packaged-cezar.sh"],"startedAt":"2026-11-02T04:26:43.355Z","finishedAt":"2026-11-02T04:28:44.469Z","exitCode":1,"signal":null}
+{"id":"adapter-final-build-and-tests","command":["sh","-c","npm run typecheck && npm run build && npm test"],"startedAt":"2026-11-02T04:30:21.553Z","finishedAt":"2026-11-02T04:30:42.642Z","exitCode":0,"signal":null}
+{"id":"browser-final-candidate","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:39:58.705Z","finishedAt":"2026-11-02T04:40:38.322Z","exitCode":0,"signal":null}
+{"id":"final-image-contracts","command":["sh","-c","npm run typecheck && npm run build && node --import tsx --test tests/ledger.test.ts tests/runtime.test.ts"],"startedAt":"2026-11-02T04:58:57.905Z","finishedAt":"2026-11-02T04:59:09.702Z","exitCode":0,"signal":null}

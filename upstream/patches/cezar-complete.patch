@@ -1,0 +1,331 @@
+diff --git a/packages/cezar/src/core/runner-factory.ts b/packages/cezar/src/core/runner-factory.ts
+--- a/packages/cezar/src/core/runner-factory.ts
++++ b/packages/cezar/src/core/runner-factory.ts
+@@ -16,7 +16,12 @@
+  * goes through here so switching the agent backend is one function call.
+  * `claude-cli` is the legacy id for `claude`.
+  */
++let managedRunnerBoundary = false;
++/** Bootstrap-only restriction: managed sessions receive an explicit factory from their authority. */
++export function requireManagedRunnerBoundary(): void { managedRunnerBoundary = true; }
++
+ export function createRunner(backend: AgentBackend | RunnerId | undefined): AgentRunner {
++  if (managedRunnerBoundary) throw new Error('MANAGED_RUNNER_GRANT_REQUIRED');
+   return guardWorkingDirectory(createBareRunner(backend));
+ }
+ 
+diff --git a/packages/cezar/src/git-worktree.ts b/packages/cezar/src/git-worktree.ts
+--- a/packages/cezar/src/git-worktree.ts
++++ b/packages/cezar/src/git-worktree.ts
+@@ -81,7 +81,8 @@
+ }
+ 
+ export function branchFor(runId: string): string {
+-  return `cez/${runId.slice(0, 8)}`;
++  // Durable external identifiers may share a prefix. Preserve the full safe run identity.
++  return `cez/${runId}`;
+ }
+ 
+ /**
+diff --git a/packages/cezar/src/workflows/run.ts b/packages/cezar/src/workflows/run.ts
+--- a/packages/cezar/src/workflows/run.ts
++++ b/packages/cezar/src/workflows/run.ts
+@@ -1478,10 +1478,14 @@
+   }
+ 
+ 
++  private offManagedPersistence = () => {};
++  private readonly managed: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean> } | undefined;
++
+   constructor(
+     private readonly store: RunStore,
+     private readonly repoRoot: string,
+     options: {
++      managed?: { runnerFactory: typeof createRunner; authorizeStart: (workflow: WorkflowDef, input: StartRunInput) => string; authorizeRecovery?: (run: RunRecord) => Promise<boolean> };
+       semaphore?: WorkspaceSemaphore;
+       projectId?: string;
+       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
+@@ -1492,6 +1496,14 @@
+       branchNameWaitMs?: number;
+     } = {},
+   ) {
++    this.managed = options.managed;
++    if (this.managed) {
++      const persistBoundary = (run: RunRecord) => {
++        if (['done', 'review', 'failed', 'cancelled'].includes(run.status) || run.askParked) this.store.flush({ throwOnError: true });
++      };
++      this.store.on('run', persistBoundary);
++      this.offManagedPersistence = () => this.store.off('run', persistBoundary);
++    }
+     this.dataDir = join(repoRoot, '.ai/cezar');
+     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
+     this.projectId = options.projectId;
+@@ -1573,6 +1585,7 @@
+     this.store.off('run', this.onRunHoldInputs);
+     this.store.off('deleted', this.onRunDeletedHolds);
+     this.lifecycle.dispose();
++    this.offManagedPersistence();
+     this.offUsage();
+     this.offStoreLifecycle();
+     this.offSemaphore();
+@@ -1862,6 +1875,8 @@
+     input: StartRunInput,
+     group?: { groupId: string; variant: string },
+   ): RunRecord {
++    const managedId = this.managed?.authorizeStart(workflow, input);
++    if (managedId && this.store.getRun(managedId)) return this.store.getRun(managedId)!;
+     if (input.readOnly && !group) {
+       input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
+     }
+@@ -1877,7 +1892,7 @@
+       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
+     };
+     const run = this.store.createRun({
+-      id: input.scheduledLaunch?.id,
++      id: managedId ?? input.scheduledLaunch?.id,
+       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
+       workflow: workflow.name,
+       task: input.task,
+@@ -1887,7 +1902,7 @@
+       // so a queued run picks it up at dequeue and every later resume reads the same answer.
+       agentProfile: input.agentProfile,
+       // Snapshotted only when on: an absent snapshot already means "this task never uses fallback".
+-      fallbackPolicy: ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
++      fallbackPolicy: this.managed ? undefined : ((policy) => (policy.enabled ? policy : undefined))(getAgentFallbackPolicySync(this.repoRoot)),
+       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
+       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
+       // startRun directly — a route-level gate would leave those writing todos.json.
+@@ -1965,6 +1980,7 @@
+       // their own fresh id and never masquerade as the scheduler's idempotent launch.
+       this.store.flushCreatedRun(run);
+     }
++    if (this.managed) this.store.flushCreatedRun(run);
+     // Fire-and-forget LLM naming (task auto-naming spec): the heuristic title
+     // above shows instantly; the namer's short title replaces it when (and if)
+     // the model answers. Never awaited here, never fails the run. The same call
+@@ -2420,6 +2436,11 @@
+       'left running by a settled task (found at startup)',
+     );
+     for (const run of live) {
++      if (this.managed && !await this.managed.authorizeRecovery?.(run)) {
++        this.store.updateRun(run.id, { status: 'waiting', error: 'Managed execution awaiting authoritative reconciliation' });
++        this.store.flush({ throwOnError: true });
++        continue;
++      }
+       if (this.lifecycle.isBlocked(run.id)) {
+         this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
+         continue;
+@@ -2583,7 +2604,7 @@
+    */
+   private refreshQueuedWorkflow(runId: string, snapshot: WorkflowDef, catalog: readonly WorkflowDef[]): WorkflowDef {
+     // Scheduled tasks were confirmed against this exact workflow and account binding.
+-    if (this.store.getRun(runId)?.deferredBinding) return snapshot;
++    if (this.managed || this.store.getRun(runId)?.deferredBinding) return snapshot;
+     const current = newerCatalogWorkflow(snapshot, catalog);
+     if (!current) return snapshot;
+     const steps = current.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) }));
+@@ -3140,7 +3161,7 @@
+     input: DispatchInput,
+     /** Internal only (graph nodes — never the route): run the child as this workflow instead of
+      *  the single synthetic step an agent's order gets. */
+-    opts: { workflow?: WorkflowDef } = {},
++    opts: { workflow?: WorkflowDef; graphOwned?: boolean } = {},
+   ): { id: string; branch?: string } | { refused: string } {
+     if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
+     const parent = this.store.getRun(parentId);
+@@ -3263,9 +3284,9 @@
+     });
+     const child = this.store.getRun(record.id) ?? record;
+     note(`dispatched "${title}" (${input.kind ?? 'implement'}, ${record.id})${budget.budgetUsd !== undefined ? ` with ${usd(budget.budgetUsd)}` : ''}`);
+-    // This turn parks as a monitor for the child when it ends (see `handleDispatchTurn`).
++    // Only agent-originated dispatch parks its turn; graph nodes await their own children.
+     const state = this.active.get(parentId);
+-    if (state) state.dispatchedThisTurn = true;
++    if (state && !opts.graphOwned) state.dispatchedThisTurn = true;
+     return { id: child.id, ...(child.branch ? { branch: child.branch } : {}) };
+   }
+ 
+@@ -5689,7 +5710,7 @@
+     }
+     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
+ 
+-    const runner = createRunner(continueBackend);
++    const runner = (this.managed?.runnerFactory ?? createRunner)(continueBackend);
+     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
+     if (state.cancelled) return;
+     state.currentStepId = stepId;
+@@ -6743,6 +6764,7 @@
+             ...(a.review ? { kind: 'review' as const, review_of: [reviewOf] } : {}),
+           },
+           {
++            graphOwned: true,
+             // The branch's own skill and tool limits ride on the child's single step.
+             workflow: {
+               name: '(fork branch)',
+@@ -6883,7 +6905,7 @@
+           ...(node.runner ? { runner: node.runner } : {}),
+           ...(node.model ? { model: node.model } : {}),
+           ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
+-        });
++        }, { graphOwned: true });
+         if ('refused' in spawned) {
+           note(`dispatch refused — ${spawned.refused}`, 'danger');
+           return 'failed';
+@@ -6982,7 +7004,7 @@
+               ...(node.runner ? { runner: node.runner } : {}),
+               ...(node.budgetUsd ? { max_cost: node.budgetUsd } : {}),
+             },
+-            { workflow: def },
++            { workflow: def, graphOwned: true },
+           );
+           if ('refused' in spawned) {
+             note(`sub-workflow refused — ${spawned.refused}`, 'danger');
+@@ -7880,7 +7902,7 @@
+     }
+     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
+ 
+-    const runner = createRunner(stepBackend);
++    const runner = (this.managed?.runnerFactory ?? createRunner)(stepBackend);
+     const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
+     let session: AgentSession;
+     state.currentStepId = step.id;
+@@ -8499,6 +8521,7 @@
+ 
+   /** Land now and record the outcome on the run. A `nothing` never overwrites an earlier result. */
+   private async landNow(runId: string, policy: NonNullable<ActiveRun['autoLand']>): Promise<LandResult> {
++    if (this.managed) throw new Error('MANAGED_INTEGRATION_REQUIRES_AUTHORIZED_ARTIFACT');
+     const canLand = this.landingFence(runId);
+     const run = this.store.getRun(runId);
+     this.store.appendEvent(runId, {
+@@ -9451,6 +9474,7 @@
+     step: WorkflowStepDef,
+     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
+   ): Promise<{ ok: boolean; output: string; exitCode: number }> {
++    if (this.managed) throw new Error('MANAGED_CHECK_REQUIRES_SUPERVISOR');
+     const command = step.command as string;
+     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
+     const env = await this.checkStepEnv(runId, state, step, emit);
+diff --git a/packages/cezar/src/workflows/templates.ts b/packages/cezar/src/workflows/templates.ts
+--- a/packages/cezar/src/workflows/templates.ts
++++ b/packages/cezar/src/workflows/templates.ts
+@@ -185,9 +185,9 @@
+       { from: 'correctness.done', to: 'verdicts' },
+       { from: 'security.done', to: 'verdicts' },
+       { from: 'tests.done', to: 'verdicts' },
+-      // A reviewer that crashed still reaches the judge, who sees its status.
++      // Every reviewer is mandatory; missing or failed review cannot be waived by the judge.
+       { from: 'verdicts.done', to: 'judge' },
+-      { from: 'verdicts.failed', to: 'judge' },
++      { from: 'verdicts.failed', to: 'stopped' },
+       { from: 'judge.ship', to: 'pr' },
+       { from: 'judge.fix', to: 'rounds' },
+       { from: 'rounds.repeat', to: 'address' },
+diff --git a/packages/web/src/api/client.test.ts b/packages/web/src/api/client.test.ts
+--- a/packages/web/src/api/client.test.ts
++++ b/packages/web/src/api/client.test.ts
+@@ -841,3 +841,37 @@
+     expect(error.message).toBe('run not found')
+   })
+ })
++
++describe('createRun idempotency across ambiguous responses', () => {
++  it('retains the key for retry and persisted browser state, then rotates on success', async () => {
++    setApiScope('proof-retry')
++    const input = { task: 'same intent', workflow: 'quick-task' }
++    fetchMock.mockRejectedValueOnce(new TypeError('connection lost'))
++    await expect(createRun(input)).rejects.toThrow()
++    const first = lastCall().headers.get('Idempotency-Key')
++    expect(first).toBeTruthy()
++    const saved = JSON.parse(sessionStorage.getItem('cezar.pending-create:proof-retry')!)
++    expect(saved.key).toBe(first)
++    // Simulate a persisted browser retry key loaded by another page/module instance.
++    saved.key = 'persisted-reload-key'
++    sessionStorage.setItem('cezar.pending-create:proof-retry', JSON.stringify(saved))
++    reply({ id: 'accepted' })
++    await createRun(input)
++    expect(lastCall().headers.get('Idempotency-Key')).toBe('persisted-reload-key')
++    expect(sessionStorage.getItem('cezar.pending-create:proof-retry')).toBeNull()
++    reply({ id: 'next-accepted' })
++    await createRun(input)
++    expect(lastCall().headers.get('Idempotency-Key')).not.toBe('persisted-reload-key')
++  })
++  it('does not reuse an ambiguous key for a changed payload or another project', async () => {
++    setApiScope('proof-first')
++    fetchMock.mockRejectedValue(new TypeError('connection lost'))
++    await createRun({ task: 'one', workflow: 'quick-task' }).catch(() => {})
++    const first = lastCall().headers.get('Idempotency-Key')
++    await createRun({ task: 'two', workflow: 'quick-task' }).catch(() => {})
++    expect(lastCall().headers.get('Idempotency-Key')).not.toBe(first)
++    setApiScope('proof-second')
++    await createRun({ task: 'one', workflow: 'quick-task' }).catch(() => {})
++    expect(lastCall().headers.get('Idempotency-Key')).not.toBe(first)
++  })
++})
+diff --git a/packages/web/src/api/client.ts b/packages/web/src/api/client.ts
+--- a/packages/web/src/api/client.ts
++++ b/packages/web/src/api/client.ts
+@@ -1555,11 +1555,39 @@
+ // ---- run mutations ------------------------------------------------------------------------
+ 
+ /** ×1 answers the run record; ×2/×3 answers `{ runs }` — narrow on `'runs' in result`. */
++const pendingCreateRuns = new Map<string, { body: string; key: string }>()
++
+ export async function createRun(input: CreateRunInput): Promise<CreateRunResponse> {
+-  return unwrap(
+-    await cez.api.v1.p[':projectId'].runs.$post({ param: { projectId: queryScope() }, json: input }),
++  const projectId = queryScope()
++  const storageKey = `cezar.pending-create:${projectId}`
++  const body = JSON.stringify(input)
++  let pending = pendingCreateRuns.get(storageKey)
++  try {
++    const saved = sessionStorage.getItem(storageKey)
++    if (saved) pending = JSON.parse(saved)
++  } catch { /* Storage can be unavailable; retain the in-process retry key. */ }
++  if (!pending || pending.body !== body || typeof pending.key !== 'string') {
++    pending = { body, key: crypto.randomUUID() }
++  }
++  const key = pending.key
++  pendingCreateRuns.set(storageKey, pending)
++  try { sessionStorage.setItem(storageKey, JSON.stringify(pending)) } catch { /* best effort */ }
++  const created = await unwrap(
++    await cez.api.v1.p[':projectId'].runs.$post(
++      { param: { projectId }, json: input },
++      { headers: { 'Idempotency-Key': key } },
++    ),
+     '/runs',
+   )
++  // An ambiguous failure deliberately retains the key across retry and browser reload.
++  if (pendingCreateRuns.get(storageKey)?.key === key) {
++    pendingCreateRuns.delete(storageKey)
++    try {
++      const saved = sessionStorage.getItem(storageKey)
++      if (saved && JSON.parse(saved).key === key) sessionStorage.removeItem(storageKey)
++    } catch { /* best effort */ }
++  }
++  return created
+ }
+ 
+ export async function cancelRun(id: string): Promise<CancelResponse> {
+diff --git a/packages/web/src/routes/workflow-graph/workflow-graph.tsx b/packages/web/src/routes/workflow-graph/workflow-graph.tsx
+--- a/packages/web/src/routes/workflow-graph/workflow-graph.tsx
++++ b/packages/web/src/routes/workflow-graph/workflow-graph.tsx
+@@ -661,8 +661,8 @@
+   const shadowsBuiltIn = Boolean(workflows.data?.workflows.some((w) => w.name === name.trim() && w.source === 'built-in'))
+ 
+   return (
+-    <div data-route="workflows" className="flex h-full min-h-0 flex-col">
+-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
++    <div data-route="workflows" className="flex h-full min-h-0 min-w-0 flex-col">
++      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
+         <select
+           aria-label="Open workflow"
+           className="h-8 max-w-44 rounded-md border border-transparent bg-transparent px-1.5 text-ui font-medium outline-none hover:border-border focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+@@ -719,7 +719,7 @@
+           {issues.length ? <AlertTriangleIcon className="size-3.5" /> : <CheckCircle2Icon className="size-3.5" />}
+           {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'valid'}
+         </button>
+-        <div className="ml-auto flex items-center gap-1">
++        <div className="flex flex-wrap items-center gap-1 sm:ml-auto">
+           <Button
+             size="sm"
+             variant={paletteOpen ? 'primary' : 'ghost'}

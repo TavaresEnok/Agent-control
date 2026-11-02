@@ -1,0 +1,42 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+TAP version 13
+# Subtest: RF-03/04: same project has independent context and session identities
+ok 1 - RF-03/04: same project has independent context and session identities
+  ---
+  duration_ms: 148.656414
+  type: 'test'
+  ...
+# Subtest: RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+ok 2 - RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+  ---
+  duration_ms: 110.540952
+  type: 'test'
+  ...
+# Subtest: RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+ok 3 - RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+  ---
+  duration_ms: 237.646859
+  type: 'test'
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 4 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 2706.98412
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4583.182599

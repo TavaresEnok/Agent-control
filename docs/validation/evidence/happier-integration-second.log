@@ -1,0 +1,32 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+TAP version 13
+# Subtest: C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+not ok 1 - C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+  ---
+  duration_ms: 1699.738602
+  type: 'test'
+  location: '/workspace/tests/happier.test.ts:1:603'
+  failureType: 'testCodeFailure'
+  error: "Class constructor RpcHandlerManager cannot be invoked without 'new'"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    new <anonymous> (file:///workspace/node_modules/zod/v4/core/schemas.js:2114:36)
+    new HappierEndpoint (/workspace/src/happier.ts:69:16)
+    TestContext.<anonymous> (/workspace/tests/happier.test.ts:55:24)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2971.882774

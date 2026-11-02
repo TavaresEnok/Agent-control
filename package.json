@@ -1,0 +1,30 @@
+{
+  "name": "agent-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.23.3 <23"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/prepare-build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "start": "node --import tsx src/lab-main.ts",
+    "start:built": "node dist/src/lab-main.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.9",
+    "hono": "4.12.0",
+    "pg": "8.16.3",
+    "zod": "4.4.3",
+    "socket.io-client": "4.8.3",
+    "tweetnacl": "1.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.15",
+    "@types/pg": "8.15.6",
+    "tsx": "4.21.0",
+    "typescript": "7.0.2"
+  }
+}

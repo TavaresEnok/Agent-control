@@ -1,0 +1,38 @@
+
+> test
+> vitest run packages/cezar/src/worktree-lifecycle/coordinator.test.ts packages/cezar/src/git-worktree-identity.test.ts
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/workspace/upstream/cezar[39m
+
+ [32m✓[39m [30m[42m server [49m[39m src/git-worktree-identity.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+Preparing worktree (checking out 'cez/333d7bda-9c55-443f-bbd9-e2819dd28d8b')
+ [32m✓[39m [30m[42m server [49m[39m src/worktree-lifecycle/coordinator.test.ts [2m([22m[2m34 tests[22m[2m)[22m[33m 22074[2mms[22m[39m
+     [33m[2m✓[22m[39m shutdown drains the script process group before persisting stopped recovery state [33m 426[2mms[22m[39m
+     [33m[2m✓[22m[39m reconciles without rewriting a script still owned by another coordinator [33m 651[2mms[22m[39m
+     [33m[2m✓[22m[39m does not replace an existing teardown intent when a variant is discarded [33m 1012[2mms[22m[39m
+     [33m[2m✓[22m[39m retains interrupted setup with an unverifiable process rather than converting it to variant removal [33m 456[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps a crashed variant cancellation blocked when the prior agent exit cannot be verified [33m 708[2mms[22m[39m
+     [33m[2m✓[22m[39m lists a missing active operation as persistent attention rather than a prepared worktree [33m 358[2mms[22m[39m
+     [33m[2m✓[22m[39m runs setup before ready, reuses prepared directories, and preserves identity across reclamation [33m 1077[2mms[22m[39m
+     [33m[2m✓[22m[39m retries current edited/reordered commands while crediting durable unchanged successes [33m 1594[2mms[22m[39m
+     [33m[2m✓[22m[39m reruns an edited successful entry and omits removed entries on current-list retry [33m 629[2mms[22m[39m
+     [33m[2m✓[22m[39m requires explicit retry after clearing current scripts [33m 492[2mms[22m[39m
+     [33m[2m✓[22m[39m reacquires preparation from the resume callback without holding the worktree lock [33m 705[2mms[22m[39m
+     [33m[2m✓[22m[39m projects bypassed current entries as skipped while preserving completed credits and failed history [33m 767[2mms[22m[39m
+     [33m[2m✓[22m[39m explicit setup bypass does not require corrected templates, while cancel retains resources [33m 632[2mms[22m[39m
+     [33m[2m✓[22m[39m Force preserves reclamation scope, while delete-task removes the record and branch [33m 544[2mms[22m[39m
+     [33m[2m✓[22m[39m prepares and removes a named task branch (spec 2026-10-11-branch-naming-instructions) [33m 342[2mms[22m[39m
+     [33m[2m✓[22m[39m dry run mocks scripts only: the worktree is real and delete-task really deletes [33m 652[2mms[22m[39m
+     [33m[2m✓[22m[39m a second agent lease keeps the worktree locked after the first is released [33m 5821[2mms[22m[39m
+     [33m[2m✓[22m[39m makes duplicate removal requests idempotent and rejects stale action revisions [33m 334[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects reusing one request ID for a different worktree in the same project [33m 455[2mms[22m[39m
+     [33m[2m✓[22m[39m shares one admission slot across projects and releases it when scripts fail [33m 674[2mms[22m[39m
+     [33m[2m✓[22m[39m replans edits made during a running command before declaring the worktree ready [33m 562[2mms[22m[39m
+     [33m[2m✓[22m[39m retains task and branch metadata when physical removal cannot finish its branch commit [33m 994[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m35 passed[39m[22m[90m (35)[39m
+[2m   Start at [22m 03:56:29
+[2m   Duration [22m 26.11s[2m (transform 2.97s, setup 218ms, import 3.98s, tests 22.08s, environment 1ms)[22m
+

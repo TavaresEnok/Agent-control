@@ -1,0 +1,697 @@
+import * as React from 'react';
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
+import { Pressable, View } from 'react-native';
+import { listActionSpecs } from '@happier-dev/protocol';
+import { useUnistyles } from 'react-native-unistyles';
+import { useRouter } from 'expo-router';
+
+import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
+import { useSessionActionNavigation } from '@/hooks/session/useSessionActionNavigation';
+
+import { storage, useSessionOrganizationProjection, useSetting, useSettings } from '@/sync/domains/state/storage';
+import { useSessionAttentionStandingInputs } from '@/hooks/session/useSessionAttentionStandingInputs';
+import { resolveSessionAttentionStanding } from '@/sync/domains/session/organization/attentionStanding';
+import { buildSessionOrganizationListViewState } from '@/sync/domains/session/organization/viewState';
+import { sessionTagKey } from '@/components/sessions/shell/sessionTagUtils';
+import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
+import type { Session } from '@/sync/domains/state/storageTypes';
+import type { StorageState } from '@/sync/store/types';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { isActionEnabledInState } from '@/sync/domains/settings/actionsSettings';
+import { buildExecutionRunActionDraftInputForUi } from '@/sync/domains/actions/buildExecutionRunActionDraftInputForUi';
+import { t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+import { Modal } from '@/modal';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
+import { canForkConversation } from '@/sync/domains/sessionFork/forkUiSupport';
+import { openSessionForkStrategyFlow } from '@/components/sessions/fork/openSessionForkStrategyFlow';
+import { runSessionHandoffPickerFlow } from '@/sync/domains/sessionHandoff/runSessionHandoffPickerFlow';
+import { resolveSessionHandoffSourceMachineId } from '@/sync/domains/sessionHandoff/resolveSessionHandoffSourceMachineId';
+import {
+  resolveSessionHandoffUiAvailability,
+} from '@/sync/domains/sessionHandoff/resolveSessionHandoffUiAvailability';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
+import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
+import { getVoiceAgentSessionTeleportAvailability } from '@/voice/agent/getVoiceAgentSessionTeleportAvailability';
+import { teleportVoiceAgentToSessionRoot } from '@/voice/agent/teleportVoiceAgentToSessionRoot';
+import { useHasGlobalVoiceAgentConversation } from '@/voice/agent/useHasGlobalVoiceAgentConversation';
+import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
+import { deferOnWeb } from '@/utils/platform/deferOnWeb';
+import { useSessionHandoffSourceReachability } from '@/sync/domains/sessionHandoff/useSessionHandoffSourceReachability';
+import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
+import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
+import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
+import { confirmSessionStop, executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
+import { listVisibleSessionActionIds } from '@/components/sessions/actions/sessionActionAvailability';
+import {
+  buildSessionAppearanceColorMenuItem,
+  resolveSessionAppearanceColorMenuChoice,
+} from '@/components/sessions/shell/appearance/sessionAppearanceColorMenu';
+import {
+  useCustomSessionAppearanceColors,
+  useEffectiveSessionAppearanceColor,
+  useSessionAppearancesSupported,
+  useSessionOwnAppearanceColor,
+} from '@/hooks/session/useSessionAppearance';
+import { setSessionAppearanceForServer } from '@/sync/ops/sessionOrganization';
+import type { SessionWorkspacePresentationMetadata } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
+import { createSessionActionDropdownItem } from '@/components/sessions/actions/sessionActionPresentation';
+import {
+  resolveAttentionStandingFromSessionActionId,
+  resolveManualReadStateFromSessionActionId,
+  SESSION_ACTION_ARCHIVE_ID,
+  SESSION_ACTION_DELETE_ID,
+  SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID,
+  SESSION_ACTION_MARK_READ_ID,
+  SESSION_ACTION_MARK_UNREAD_ID,
+  SESSION_ACTION_PIN_ID,
+  SESSION_ACTION_RENAME_ID,
+  SESSION_ACTION_RESUME_ID,
+  SESSION_ACTION_SET_APPEARANCE_COLOR_ID,
+  SESSION_ACTION_SET_ATTENTION_STANDING_ID,
+  SESSION_ACTION_STOP_ID,
+  SESSION_ACTION_UNARCHIVE_ID,
+  SESSION_ACTION_UNPIN_ID,
+} from '@/components/sessions/actions/sessionActionIds';
+import { buildSessionMetadataStabilitySignature } from '@/sync/domains/session/metadata/sessionMetadataStability';
+import { getSessionName, getSessionStatus } from '@/utils/sessions/sessionUtils';
+import { nowServerMs } from '@/sync/runtime/time';
+import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { resolveSessionHeaderActionTargetPx, SESSION_HEADER_ICON_SIZE_PX } from '@/components/sessions/actions/sessionHeaderIconMetrics';
+import { Icon } from '@/components/ui/icons/Icon';
+import { emitSessionResumeRequest } from '@/components/sessions/model/sessionResumeRequests';
+import { buildSessionDebugInformationForSession } from '@/components/sessions/debug/sessionDebugInformation';
+import { copySessionDebugInformationToClipboard, isSessionCopyActionId } from '@/components/sessions/debug/sessionDebugClipboard';
+import { createSessionCopyMenuItem, SESSION_COPY_MENU_ITEM_ID } from '@/components/sessions/debug/sessionDebugMenuItem';
+import { resolveBugReportAccountIdForServer } from '@/components/settings/bugReports/bugReportSessionTarget';
+
+type SessionHeaderActionMenuProps = Readonly<{
+  sessionId: string;
+  session: Session;
+  /**
+   * Optional extra items to include in the action menu (typically from adjacent header icon actions
+   * that are folded into the three-dots menu on narrow layouts).
+   *
+   * Extra item IDs must not collide with protocol action spec IDs.
+   */
+  extraItems?: ReadonlyArray<DropdownMenuItem>;
+  /**
+   * Optional handler for selecting extra items. Return `true` when the selection was handled.
+   * This is primarily used to bridge extra items that need access to parent-owned state (e.g.
+   * opening a pane tab) without adding new cross-cutting dependencies here.
+   */
+  onSelectExtraItem?: (actionId: string) => boolean;
+}>;
+
+function readCurrentSessionForOpenMenu(sessionId: string, fallback: Session): Session {
+  return storage.getState().sessions[sessionId] ?? fallback;
+}
+
+function signatureValue(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(Math.trunc(value));
+  if (typeof value === 'string' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+function readLegacyReadStateMetadata(metadata: unknown): Readonly<{
+  sessionSeq: unknown;
+  pendingActivityAt: unknown;
+}> {
+  if (!metadata || typeof metadata !== 'object') {
+    return { sessionSeq: null, pendingActivityAt: null };
+  }
+  const readStateV1 = (metadata as { readStateV1?: unknown }).readStateV1;
+  if (!readStateV1 || typeof readStateV1 !== 'object') {
+    return { sessionSeq: null, pendingActivityAt: null };
+  }
+  return {
+    sessionSeq: (readStateV1 as { sessionSeq?: unknown }).sessionSeq,
+    pendingActivityAt: (readStateV1 as { pendingActivityAt?: unknown }).pendingActivityAt,
+  };
+}
+
+function buildSessionHeaderReadStateSignature(
+  state: Pick<StorageState, 'sessions' | 'sessionListRenderables' | 'sessionMessages'>,
+  sessionId: string,
+): string {
+  const session = state.sessions[sessionId];
+  const renderable = state.sessionListRenderables[sessionId];
+  const messages = state.sessionMessages[sessionId] as Readonly<{
+    messageIdsOldestFirst?: ReadonlyArray<unknown>;
+    messagesVersion?: unknown;
+    reducerVersion?: unknown;
+    latestReadyEventSeq?: unknown;
+    latestReadyEventAt?: unknown;
+  }> | undefined;
+  const readStateV1 = readLegacyReadStateMetadata(session?.metadata);
+
+  return [
+    signatureValue(session?.seq),
+    signatureValue(session?.lastViewedSessionSeq),
+    signatureValue(session?.latestReadyEventSeq),
+    signatureValue((session as { latestMessageSeq?: unknown } | undefined)?.latestMessageSeq),
+    signatureValue(session?.latestTurnStatus),
+    signatureValue(session?.accessLevel),
+    signatureValue(readStateV1.sessionSeq),
+    signatureValue(readStateV1.pendingActivityAt),
+    signatureValue(renderable?.hasUnreadMessages),
+    signatureValue(renderable?.seq),
+    signatureValue(renderable?.lastViewedSessionSeq),
+    signatureValue(messages?.messagesVersion),
+    signatureValue(messages?.reducerVersion),
+    signatureValue(messages?.latestReadyEventSeq),
+    signatureValue(messages?.latestReadyEventAt),
+    signatureValue(messages?.messageIdsOldestFirst?.length),
+  ].join('|');
+}
+
+function areSessionActionMenuMetadataSemanticallyEqual(
+  prev: Session['metadata'],
+  next: Session['metadata'],
+): boolean {
+  if (prev === next) return true;
+  return buildSessionMetadataStabilitySignature(prev) === buildSessionMetadataStabilitySignature(next);
+}
+
+function didSessionHeaderActionMenuPropsChange(
+  prev: SessionHeaderActionMenuProps,
+  next: SessionHeaderActionMenuProps,
+): boolean {
+  if (prev.sessionId !== next.sessionId) return true;
+  if (prev.extraItems !== next.extraItems) return true;
+  if (prev.onSelectExtraItem !== next.onSelectExtraItem) return true;
+  if (!areSessionActionMenuMetadataSemanticallyEqual(prev.session.metadata, next.session.metadata)) return true;
+  if (prev.session.active !== next.session.active) return true;
+  if (prev.session.owner !== next.session.owner) return true;
+  if (prev.session.archivedAt !== next.session.archivedAt) return true;
+  if (prev.session.accessLevel !== next.session.accessLevel) return true;
+  return (prev.session.seq > 0) !== (next.session.seq > 0);
+}
+
+function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
+  const { theme } = useUnistyles();
+  const router = useRouter();
+  const navigateToSession = useNavigateToSession();
+  const enabledAgentIds = useEnabledAgentIds();
+  const settings = useSettings();
+  const sessionReplayEnabled = useSetting('sessionReplayEnabled');
+  const voice = useSetting('voice');
+  const hasGlobalVoiceAgentConversation = useHasGlobalVoiceAgentConversation();
+  const sessionHandoffEnabled = useFeatureEnabled('sessions.handoff');
+  const executionRunsEnabled = useFeatureEnabled('execution.runs');
+  const sessionServerId = usePreferredServerIdForSession(props.sessionId);
+  const navigateAfterDelete = useSessionActionNavigation({
+    sessionId: props.sessionId,
+    serverId: sessionServerId ?? null,
+    onNavigate: React.useCallback(() => safeRouterBack({ router, fallbackHref: '/' }), [router]),
+  });
+  const archivePending = useSessionArchivePending(props.sessionId, sessionServerId);
+  // Scoped to THIS Session's server, like the in-Session picker: the child is
+  // created on that server, so an unrelated selected server must not decide
+  // whether this conversation may continue with another Agent.
+  const agentSwitchingEnabled = useFeatureEnabled('sessions.agentSwitching', {
+    scopeKind: 'spawn',
+    serverId: sessionServerId,
+  });
+  const readStateSignature = storage((state) =>
+    buildSessionHeaderReadStateSignature(state, props.sessionId),
+  );
+  const [open, setOpen] = React.useState(false);
+  const session = React.useMemo(
+    () => open ? readCurrentSessionForOpenMenu(props.sessionId, props.session) : props.session,
+    [open, props.session, props.sessionId],
+  );
+  const organizationProjection = useSessionOrganizationProjection(sessionServerId ?? null);
+  const organizationListViewState = React.useMemo(() => buildSessionOrganizationListViewState({
+    serverId: sessionServerId ?? '',
+    projection: organizationProjection,
+  }), [organizationProjection, sessionServerId]);
+  const attentionStanding = useSessionAttentionStandingInputs(
+    organizationListViewState.attentionStandingOverridesBySessionKey,
+  );
+  const sessionOrganizationKey = typeof sessionServerId === 'string' && sessionServerId.trim()
+    ? sessionTagKey(sessionServerId, props.sessionId)
+    : null;
+  const attentionStandingEnabled = attentionStanding.actionEnabled && sessionOrganizationKey != null;
+  const isAttentionStandingSession = sessionOrganizationKey != null
+    && resolveSessionAttentionStanding(attentionStanding.policy, sessionOrganizationKey);
+  const isPinnedSession = sessionOrganizationKey != null
+    && organizationListViewState.pinnedSessionKeysV1.includes(sessionOrganizationKey);
+  // Colour data is detail: read only while this menu is open (closed-popover rule).
+  const sessionAppearancesSupported = useSessionAppearancesSupported(sessionServerId, { enabled: open });
+  const appearanceDataActive = open && sessionAppearancesSupported;
+  const ownAppearanceColor = useSessionOwnAppearanceColor(sessionServerId, props.sessionId, { enabled: appearanceDataActive });
+  const effectiveAppearanceColor = useEffectiveSessionAppearanceColor(
+    sessionServerId,
+    props.sessionId,
+    session.metadata as SessionWorkspacePresentationMetadata,
+    { enabled: appearanceDataActive },
+  );
+  const customAppearanceColors = useCustomSessionAppearanceColors(sessionServerId, { enabled: appearanceDataActive });
+  const [customColorPickerLoading, setCustomColorPickerLoading] = React.useState(false);
+  const sessionActionTarget = React.useMemo(
+    () => createSessionActionTarget({
+      session,
+      serverId: sessionServerId ?? null,
+      currentUserId: !session.accessLevel && typeof session.owner === 'string' ? session.owner : null,
+      isConnected: getSessionStatus(session, nowServerMs()).isConnected,
+      isPinned: isPinnedSession,
+      attentionStandingEnabled,
+      attentionStanding: isAttentionStandingSession,
+      resumeCapabilityOptions: { accountSettings: settings },
+    }),
+    [attentionStandingEnabled, isAttentionStandingSession, isPinnedSession, readStateSignature, session, sessionServerId, settings],
+  );
+  const reachableMachineId = useSessionMachineTarget(props.sessionId)?.machineId ?? null;
+  const sourceMachineId = React.useMemo(
+    () => resolveSessionHandoffSourceMachineId({
+      reachableMachineId,
+      sessionMetadata: session.metadata as any,
+    }),
+    [session.metadata, reachableMachineId],
+  );
+  const serverSnapshot = useServerFeaturesSnapshotForServerId(sessionServerId, { enabled: Boolean(sessionServerId) });
+  const runtimeAvailability = useSessionHandoffSourceReachability({
+    serverId: sessionServerId,
+    sourceMachineId,
+  });
+  const handoffAvailability = resolveSessionHandoffUiAvailability({
+    sessionId: props.sessionId,
+    session,
+    sessionHandoffFeatureEnabled: sessionHandoffEnabled,
+    serverSnapshot,
+    runtimeAvailability,
+  });
+  const executor = React.useMemo(
+    () => createDefaultActionExecutor({
+      resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
+      openSession: (childSessionId: string) => completeSessionForkNavigation({
+        childSessionId,
+        parentSessionId: props.sessionId,
+        serverId: sessionServerId ?? null,
+        navigate: (targetSessionId, options) => {
+          void navigateToSession(targetSessionId, { serverId: options?.serverId ?? sessionServerId ?? null });
+        },
+      }),
+    }),
+    [navigateToSession, props.sessionId, sessionServerId],
+  );
+  const teleportAvailability = React.useMemo(
+    () => getVoiceAgentSessionTeleportAvailability({ voice, sessionId: props.sessionId }),
+    [props.sessionId, voice],
+  );
+  const showTeleportAction = teleportAvailability.ok && hasGlobalVoiceAgentConversation;
+  const actions = React.useMemo(() => {
+    const actionItems: DropdownMenuItem[] = listActionSpecs()
+      .filter((spec) => spec.surfaces.ui_button === true)
+      .filter((spec) => isActionEnabledInState({ settings } as any, spec.id, { surface: 'ui_button', placement: 'session_action_menu' } as any))
+      .filter((spec) => Array.isArray(spec.placements) && spec.placements.includes('session_action_menu' as any))
+      .filter((spec) => spec.id !== 'session.fork' || canForkConversation({ session, replayEnabled: sessionReplayEnabled, agentSwitchingEnabled }) === true)
+      .filter((spec) => spec.id !== 'session.handoff' || handoffAvailability.available)
+      .map((spec) => ({
+        id: spec.id,
+        title: spec.title,
+        subtitle: spec.description,
+      }));
+
+    const out: DropdownMenuItem[] = [];
+
+    if (Array.isArray(props.extraItems) && props.extraItems.length > 0) {
+      out.push(...props.extraItems);
+    }
+
+    const existingActionIds = new Set(out.map((item) => item.id));
+    for (const actionId of listVisibleSessionActionIds({
+      target: sessionActionTarget,
+      surface: 'sessionHeader',
+      sessionAppearancesSupported,
+    })) {
+      if (existingActionIds.has(actionId)) continue;
+      if (actionId === SESSION_ACTION_SET_APPEARANCE_COLOR_ID) {
+        out.push(buildSessionAppearanceColorMenuItem({
+          menuId: SESSION_ACTION_SET_APPEARANCE_COLOR_ID,
+          iconColor: theme.colors.chrome.header.foreground,
+          base: createSessionActionDropdownItem({ actionId, iconColor: theme.colors.chrome.header.foreground }),
+          current: ownAppearanceColor,
+          inherited: effectiveAppearanceColor,
+          customColors: customAppearanceColors,
+          theme,
+          customPickerLoading: customColorPickerLoading,
+        }));
+        existingActionIds.add(actionId);
+        continue;
+      }
+      const actionItem = createSessionActionDropdownItem({
+        actionId,
+        iconColor: theme.colors.chrome.header.foreground,
+      });
+      if (actionItem) {
+        out.push(archivePending && (actionId === SESSION_ACTION_ARCHIVE_ID || actionId === SESSION_ACTION_STOP_ID)
+          ? { ...actionItem, disabled: true }
+          : actionItem);
+        existingActionIds.add(actionId);
+      }
+    }
+
+    if (showTeleportAction) {
+      out.push({
+        id: 'voice.teleport',
+        title: t('voiceSurface.a11y.teleport'),
+        subtitle: undefined,
+      });
+    }
+
+    out.push(...actionItems);
+    out.push({ id: 'header.reportIssue', title: t('bugReports.reportSession') });
+    if (open && !existingActionIds.has(SESSION_COPY_MENU_ITEM_ID)) {
+      out.push(createSessionCopyMenuItem({
+        iconColor: theme.colors.chrome.header.foreground,
+        information: buildSessionDebugInformationForSession(readCurrentSessionForOpenMenu(props.sessionId, session)),
+      }));
+    }
+    return out;
+  }, [
+    props.extraItems,
+    props.sessionId,
+    open,
+    archivePending,
+    agentSwitchingEnabled,
+    session,
+    sessionActionTarget,
+    sessionHandoffEnabled,
+    sessionReplayEnabled,
+    settings,
+    showTeleportAction,
+    handoffAvailability.available,
+    theme,
+    sessionAppearancesSupported,
+    ownAppearanceColor,
+    effectiveAppearanceColor,
+    customAppearanceColors,
+    customColorPickerLoading,
+  ]);
+
+  if (actions.length === 0) return null;
+
+  return (
+    <DropdownMenu
+      open={open}
+      onOpenChange={setOpen}
+      items={actions}
+      onSelect={(actionId) => {
+        if (actionId.startsWith(`${SESSION_ACTION_SET_APPEARANCE_COLOR_ID}:`)) {
+          // Custom color… keeps the menu open while the picker loads; the choice closes it when ready.
+          fireAndForget((async () => {
+            const color = await resolveSessionAppearanceColorMenuChoice({
+              menuId: SESSION_ACTION_SET_APPEARANCE_COLOR_ID,
+              itemId: actionId,
+              current: ownAppearanceColor,
+              inherited: effectiveAppearanceColor,
+              serverId: sessionServerId ?? null,
+              onPickerLoading: setCustomColorPickerLoading,
+              closeMenus: () => setOpen(false),
+            });
+            if (color === undefined) return;
+            setOpen(false);
+            await setSessionAppearanceForServer({ serverId: sessionServerId ?? null, sessionId: props.sessionId, color });
+          })(), {
+            tag: 'SessionHeaderActionMenu.execute.sessionAppearance',
+            onError: () => Modal.alert(t('common.error'), t('errors.unknownError')),
+          });
+          return;
+        }
+        setOpen(false);
+        if (props.onSelectExtraItem?.(actionId) === true) return;
+        if (actionId === 'header.reportIssue') {
+          fireAndForget((async () => {
+            const serverId = sessionServerId ?? '';
+            const accountId = await resolveBugReportAccountIdForServer(serverId);
+            navigateWithBlurOnWeb(() => router.push({
+              pathname: '/settings/report-issue',
+              params: { sessionId: props.sessionId, serverId, accountId: accountId ?? '' },
+            }));
+          })(), { tag: 'SessionHeaderActionMenu.execute.reportIssue' });
+          return;
+        }
+        if (isSessionCopyActionId(actionId)) {
+          const currentSession = readCurrentSessionForOpenMenu(props.sessionId, session);
+          fireAndForget(copySessionDebugInformationToClipboard(buildSessionDebugInformationForSession(currentSession), actionId), {
+            tag: 'SessionHeaderActionMenu.execute.copyInformation',
+          });
+          return;
+        }
+        if (actionId === SESSION_ACTION_PIN_ID || actionId === SESSION_ACTION_UNPIN_ID) {
+          fireAndForget(executeSessionAction({ actionId, target: sessionActionTarget }), {
+            tag: 'SessionHeaderActionMenu.execute.sessionPin',
+            onError: (error) => Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError')),
+          });
+          return;
+        }
+        if (actionId === 'header.openRuns') {
+          router.push((`/session/${props.sessionId}/runs`) as any);
+          return;
+        }
+        if (actionId === 'header.openAutomations') {
+          navigateWithBlurOnWeb(() => router.push((`/session/${props.sessionId}/automations`) as any));
+          return;
+        }
+        if (actionId === 'voice.teleport') {
+          fireAndForget(teleportVoiceAgentToSessionRoot({ sessionId: props.sessionId }), {
+            tag: 'SessionHeaderActionMenu.execute.voiceTeleport',
+          });
+          return;
+        }
+        const manualReadState = resolveManualReadStateFromSessionActionId(actionId);
+        if (manualReadState) {
+          const sessionActionId = manualReadState === 'read'
+            ? SESSION_ACTION_MARK_READ_ID
+            : SESSION_ACTION_MARK_UNREAD_ID;
+          fireAndForget((async () => {
+            try {
+              await executeSessionAction({
+                actionId: sessionActionId,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : t(
+                  manualReadState === 'read'
+                    ? 'sessionInfo.failedToMarkSessionRead'
+                    : 'sessionInfo.failedToMarkSessionUnread',
+                ),
+              );
+            }
+          })(), { tag: 'SessionHeaderActionMenu.execute.sessionReadState' });
+          return;
+        }
+        const nextAttentionStanding = resolveAttentionStandingFromSessionActionId(actionId);
+        if (nextAttentionStanding !== null) {
+          const attentionStandingActionId = nextAttentionStanding
+            ? SESSION_ACTION_SET_ATTENTION_STANDING_ID
+            : SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID;
+          fireAndForget((async () => {
+            try {
+              await executeSessionAction({
+                actionId: attentionStandingActionId,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : t('errors.unknownError'),
+              );
+            }
+          })(), { tag: 'SessionHeaderActionMenu.execute.sessionAttentionStanding' });
+          return;
+        }
+        if (actionId === SESSION_ACTION_RENAME_ID) {
+          fireAndForget((async () => {
+            const title = await Modal.prompt(
+              t('sessionInfo.renameSession'),
+              t('sessionInfo.renameSessionSubtitle'),
+              {
+                defaultValue: getSessionName(session),
+                placeholder: t('sessionInfo.renameSessionPlaceholder'),
+                confirmText: t('common.save'),
+                cancelText: t('common.cancel'),
+              },
+            );
+            if (!title?.trim()) return;
+            try {
+              await executeSessionAction({
+                actionId: SESSION_ACTION_RENAME_ID,
+                target: sessionActionTarget,
+                input: { title },
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : t('sessionInfo.failedToRenameSession'),
+              );
+            }
+          })(), { tag: 'SessionHeaderActionMenu.execute.sessionRename' });
+          return;
+        }
+        if (actionId === SESSION_ACTION_RESUME_ID) {
+          fireAndForget(executeSessionAction({
+            actionId: SESSION_ACTION_RESUME_ID,
+            target: sessionActionTarget,
+            context: {
+              operations: {
+                resumeSession: async (sessionId) => {
+                  await emitSessionResumeRequest(sessionId);
+                },
+              },
+            },
+          }), {
+            tag: 'SessionHeaderActionMenu.execute.sessionResume',
+            onError: () => {
+              Modal.alert(t('common.error'), t('session.resumeFailed'));
+            },
+          });
+          return;
+        }
+        if (actionId === SESSION_ACTION_DELETE_ID) {
+          fireAndForget((async () => {
+            const result = await executeSessionAction({ actionId, target: sessionActionTarget });
+            if (result !== false) navigateAfterDelete();
+          })(), {
+            tag: 'SessionHeaderActionMenu.execute.sessionDelete',
+            onError: (error) => Modal.alert(t('common.error'), error instanceof Error ? error.message : t('sessionInfo.failedToDeleteSession')),
+          });
+          return;
+        }
+        if (actionId === SESSION_ACTION_STOP_ID || actionId === SESSION_ACTION_ARCHIVE_ID) {
+          fireAndForget((async () => {
+            const isArchive = actionId === SESSION_ACTION_ARCHIVE_ID;
+            if (!isArchive) {
+              if (!await confirmSessionStop()) return;
+            }
+            try {
+              await executeSessionAction({
+                actionId: isArchive ? SESSION_ACTION_ARCHIVE_ID : SESSION_ACTION_STOP_ID,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error
+                  ? error.message
+                  : isArchive
+                    ? t('sessionInfo.failedToArchiveSession')
+                    : t('sessionInfo.failedToStopSession'),
+              );
+            }
+          })(), { tag: `SessionHeaderActionMenu.execute.${actionId}` });
+          return;
+        }
+        if (actionId === SESSION_ACTION_UNARCHIVE_ID) {
+          fireAndForget((async () => {
+            try {
+              await executeSessionAction({
+                actionId: SESSION_ACTION_UNARCHIVE_ID,
+                target: sessionActionTarget,
+              });
+            } catch (error) {
+              Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : t('sessionInfo.failedToUnarchiveSession'),
+              );
+            }
+          })(), { tag: 'SessionHeaderActionMenu.execute.sessionUnarchive' });
+          return;
+        }
+        if (actionId === 'session.fork') {
+          // A launcher only. The header must not also run the old auto-strategy
+          // path behind the modal: the user chooses Native, Replay or Configure
+          // before any fork effect is issued.
+          deferOnWeb(() => {
+            openSessionForkStrategyFlow({
+              sessionId: props.sessionId,
+              forkSupportSource: session,
+              serverId: sessionServerId ?? null,
+              machineId: reachableMachineId ?? session.metadata?.machineId ?? null,
+              forkPoint: { type: 'latest' },
+              settings,
+              replayEnabled: sessionReplayEnabled,
+              executionRunsEnabled: executionRunsEnabled === true,
+              agentSwitchingEnabled,
+              navigateToSession: (childSessionId, options) => {
+                void navigateToSession(childSessionId, { serverId: options?.serverId ?? sessionServerId ?? null });
+              },
+              navigateToNewSession: (route) => {
+                router.push(route as any);
+              },
+            });
+          });
+          return;
+        }
+        if (actionId === 'session.handoff') {
+          // Defer opening the modal on web so the dropdown press/unmount cycle completes before we
+          // mount another portal-backed surface (avoids flakey immediate dismissals in e2e).
+          deferOnWeb(() => {
+            fireAndForget((async () => {
+              const serverId = sessionServerId;
+              const res = await runSessionHandoffPickerFlow({
+                execute: executor.execute as any,
+                sessionId: props.sessionId,
+                sourceMachineId: sourceMachineId ?? null,
+                serverId,
+                placement: 'session_action_menu',
+              });
+              if (!res?.ok) return;
+            })(), { tag: 'SessionHeaderActionMenu.execute.sessionHandoff' });
+          });
+          return;
+        }
+        const defaultBackend = resolveSessionActionDefaultBackend({
+          session,
+          enabledAgentIds,
+        });
+        if (!defaultBackend) return;
+        const input = buildExecutionRunActionDraftInputForUi({
+          actionId: actionId as any,
+          sessionId: props.sessionId,
+          defaultBackendTarget: defaultBackend.backendTarget,
+          defaultBackendId: defaultBackend.defaultBackendId,
+          instructions: '',
+        });
+        storage.getState().createSessionActionDraft(props.sessionId, { actionId, input });
+      }}
+      trigger={({ toggle }) => (
+            <Pressable
+              onPress={toggle}
+              testID="session-header-action-menu-trigger"
+              accessibilityRole="button"
+              accessibilityLabel={t('session.actionMenu.openA11y')}
+              style={({ pressed }) => ({
+                width: resolveSessionHeaderActionTargetPx(),
+                height: resolveSessionHeaderActionTargetPx(),
+                alignItems: 'center',
+            justifyContent: 'center',
+            opacity: pressed ? 0.7 : 1,
+          })}
+        >
+          <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="dots-three" size={SESSION_HEADER_ICON_SIZE_PX} color={theme.colors.chrome.header.foreground} />
+          </View>
+        </Pressable>
+      )}
+      placement="bottom"
+      variant="slim"
+      rowKind="selectableRow"
+      search={false}
+      matchTriggerWidth={false}
+      maxWidthCap={320}
+    />
+  );
+}
+
+export const SessionHeaderActionMenu = React.memo(
+  SessionHeaderActionMenuInner,
+  (prev, next) => !didSessionHeaderActionMenuPropsChange(prev, next),
+);

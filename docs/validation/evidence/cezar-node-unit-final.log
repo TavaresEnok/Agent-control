@@ -1,0 +1,299 @@
+TAP version 13
+# Subtest: reasoningSummary defaults to auto so codex reasoning is visible out of the box
+ok 1 - reasoningSummary defaults to auto so codex reasoning is visible out of the box
+  ---
+  duration_ms: 2.307408
+  type: 'test'
+  ...
+# Subtest: reasoningSummary honors a recognized override, case- and space-insensitively
+ok 2 - reasoningSummary honors a recognized override, case- and space-insensitively
+  ---
+  duration_ms: 0.374869
+  type: 'test'
+  ...
+# Subtest: reasoningSummary falls back to auto for an unrecognized value
+ok 3 - reasoningSummary falls back to auto for an unrecognized value
+  ---
+  duration_ms: 0.309849
+  type: 'test'
+  ...
+# Subtest: proposeWorkflowName slugs a title to the file-name form
+ok 4 - proposeWorkflowName slugs a title to the file-name form
+  ---
+  duration_ms: 2.148999
+  type: 'test'
+  ...
+# Subtest: proposeWorkflowName degrades a blank / slug-less title to undefined
+ok 5 - proposeWorkflowName degrades a blank / slug-less title to undefined
+  ---
+  duration_ms: 0.710163
+  type: 'test'
+  ...
+# Subtest: parseStructured reads the optional planner title alongside the steps
+ok 6 - parseStructured reads the optional planner title alongside the steps
+  ---
+  duration_ms: 6.01507
+  type: 'test'
+  ...
+# Subtest: detectVerifyCommands offers the repo's end-to-end suite, after the cheap checks
+ok 7 - detectVerifyCommands offers the repo's end-to-end suite, after the cheap checks
+  ---
+  duration_ms: 18.480776
+  type: 'test'
+  ...
+# Subtest: detectVerifyCommands falls back to `npx e2e run` on a config with no script
+ok 8 - detectVerifyCommands falls back to `npx e2e run` on a config with no script
+  ---
+  duration_ms: 7.317463
+  type: 'test'
+  ...
+# Subtest: detectVerifyCommands names nothing when the repo has no suite
+ok 9 - detectVerifyCommands names nothing when the repo has no suite
+  ---
+  duration_ms: 11.027052
+  type: 'test'
+  ...
+# Subtest: the project skill dirs the hint promises are the ones discovery actually scans
+ok 10 - the project skill dirs the hint promises are the ones discovery actually scans
+  ---
+  duration_ms: 2.652757
+  type: 'test'
+  ...
+# [cez] ignoring skills repo "ext::sh -c 'touch /tmp/pwn'" — not an accepted source shape (owner/name, an https/http/ssh/git URL, git@host:path, or a local/file:// path). Check "skillsRepos" in .ai/cezar/config.json.
+# Subtest: safeRemoteFor rejects the git remote-helper RCE surface
+ok 11 - safeRemoteFor rejects the git remote-helper RCE surface
+  ---
+  duration_ms: 1.688531
+  type: 'test'
+  ...
+# Subtest: safeRemoteFor accepts the documented safe source shapes
+ok 12 - safeRemoteFor accepts the documented safe source shapes
+  ---
+  duration_ms: 0.495412
+  type: 'test'
+  ...
+# Subtest: safeRemoteFor keeps Windows local paths working (BC §5: local path)
+ok 13 - safeRemoteFor keeps Windows local paths working (BC §5: local path)
+  ---
+  duration_ms: 0.152463
+  type: 'test'
+  ...
+# Subtest: safeRemoteFor expands ~/ so git (no shell) can actually find it
+ok 14 - safeRemoteFor expands ~/ so git (no shell) can actually find it
+  ---
+  duration_ms: 0.202969
+  type: 'test'
+  ...
+# Subtest: isSafeRef rejects argument-injection and range refs
+ok 15 - isSafeRef rejects argument-injection and range refs
+  ---
+  duration_ms: 0.365256
+  type: 'test'
+  ...
+# Subtest: isSafeRef accepts real branches, tags and SHAs
+ok 16 - isSafeRef accepts real branches, tags and SHAs
+  ---
+  duration_ms: 0.293806
+  type: 'test'
+  ...
+# Subtest: isPinnedSha recognises full sha-1 and sha-256 commit ids
+ok 17 - isPinnedSha recognises full sha-1 and sha-256 commit ids
+  ---
+  duration_ms: 0.481866
+  type: 'test'
+  ...
+# Subtest: ensureBareClone throws on an unsafe remote instead of shelling out
+ok 18 - ensureBareClone throws on an unsafe remote instead of shelling out
+  ---
+  duration_ms: 2.26393
+  type: 'test'
+  ...
+# Subtest: listRemoteSkills clones a local repo, pins the SHA, and refuses a bad ref
+ok 19 - listRemoteSkills clones a local repo, pins the SHA, and refuses a bad ref
+  ---
+  duration_ms: 163.614575
+  type: 'test'
+  ...
+# Subtest: team-skills cache is keyed by repoRoot — projects never see each other's skills
+ok 20 - team-skills cache is keyed by repoRoot — projects never see each other's skills
+  ---
+  duration_ms: 155.715137
+  type: 'test'
+  ...
+# Subtest: workspace org skills repos join every project's team skills; invalidation re-reads them
+ok 21 - workspace org skills repos join every project's team skills; invalidation re-reads them
+  ---
+  duration_ms: 139.837344
+  type: 'test'
+  ...
+# Subtest: skillsDirOnly: only files under a skills/ folder are skills, at any depth
+ok 22 - skillsDirOnly: only files under a skills/ folder are skills, at any depth
+  ---
+  duration_ms: 130.113391
+  type: 'test'
+  ...
+# Subtest: an org entry for the implicit default repo overrides its ref, and ungates it
+ok 23 - an org entry for the implicit default repo overrides its ref, and ungates it
+  ---
+  duration_ms: 15.259096
+  type: 'test'
+  ...
+# Subtest: implicit default is detected like loadConfig: an invalid skillsRepos is not explicit
+ok 24 - implicit default is detected like loadConfig: an invalid skillsRepos is not explicit
+  ---
+  duration_ms: 5.931506
+  type: 'test'
+  ...
+# Subtest: a project listing one repo at two refs keeps both; org repos only drop duplicates by identity
+ok 25 - a project listing one repo at two refs keeps both; org repos only drop duplicates by identity
+  ---
+  duration_ms: 127.49149
+  type: 'test'
+  ...
+# Subtest: sourceIdentity folds GitHub case and spelling, but not local paths
+ok 26 - sourceIdentity folds GitHub case and spelling, but not local paths
+  ---
+  duration_ms: 0.782015
+  type: 'test'
+  ...
+# Subtest: generated launcher survives its caller and stops by descriptor PID (setsid)
+ok 27 - generated launcher survives its caller and stops by descriptor PID (setsid)
+  ---
+  duration_ms: 3072.628158
+  type: 'test'
+  ...
+# Subtest: generated launcher survives its caller and stops by descriptor PID (nohup fallback)
+ok 28 - generated launcher survives its caller and stops by descriptor PID (nohup fallback)
+  ---
+  duration_ms: 2815.356181
+  type: 'test'
+  ...
+# Subtest: the shared fixture is the whole contract, not a token case
+ok 29 - the shared fixture is the whole contract, not a token case
+  ---
+  duration_ms: 2.148621
+  type: 'test'
+  ...
+# Subtest: todoTaskText: summary only
+ok 30 - todoTaskText: summary only
+  ---
+  duration_ms: 0.432238
+  type: 'test'
+  ...
+# Subtest: todoTaskText: the suggested prompt wins over the summary
+ok 31 - todoTaskText: the suggested prompt wins over the summary
+  ---
+  duration_ms: 0.15429
+  type: 'test'
+  ...
+# Subtest: todoTaskText: a blank suggested prompt falls back to the summary
+ok 32 - todoTaskText: a blank suggested prompt falls back to the summary
+  ---
+  duration_ms: 0.101405
+  type: 'test'
+  ...
+# Subtest: todoTaskText: the suggested prompt is trimmed
+ok 33 - todoTaskText: the suggested prompt is trimmed
+  ---
+  duration_ms: 0.106787
+  type: 'test'
+  ...
+# Subtest: todoTaskText: suggested args become a trailing Arguments line
+ok 34 - todoTaskText: suggested args become a trailing Arguments line
+  ---
+  duration_ms: 0.108615
+  type: 'test'
+  ...
+# Subtest: todoTaskText: args attach to the summary fallback too
+ok 35 - todoTaskText: args attach to the summary fallback too
+  ---
+  duration_ms: 0.14833
+  type: 'test'
+  ...
+# Subtest: todoTaskText: an empty summary with no prompt stays empty
+ok 36 - todoTaskText: an empty summary with no prompt stays empty
+  ---
+  duration_ms: 0.121095
+  type: 'test'
+  ...
+# Subtest: portable skill stacks normalize into unique agent steps
+ok 37 - portable skill stacks normalize into unique agent steps
+  ---
+  duration_ms: 8.15813
+  type: 'test'
+  ...
+# Subtest: workflow files require exactly one step representation
+ok 38 - workflow files require exactly one step representation
+  ---
+  duration_ms: 3.072169
+  type: 'test'
+  ...
+# Subtest: retry targets must refer to an earlier unique step
+ok 39 - retry targets must refer to an earlier unique step
+  ---
+  duration_ms: 0.840557
+  type: 'test'
+  ...
+# Subtest: only plain agent skill steps compact back to a portable stack
+ok 40 - only plain agent skill steps compact back to a portable stack
+  ---
+  duration_ms: 0.479483
+  type: 'test'
+  ...
+# Subtest: chainStepNote is absent for a single-step run (the common case, unchanged)
+ok 41 - chainStepNote is absent for a single-step run (the common case, unchanged)
+  ---
+  duration_ms: 0.496819
+  type: 'test'
+  ...
+# Subtest: chainStepNote counts AGENT steps only — a lone agent step plus checks is not a chain
+ok 42 - chainStepNote counts AGENT steps only — a lone agent step plus checks is not a chain
+  ---
+  duration_ms: 0.350361
+  type: 'test'
+  ...
+# Subtest: chainStepNote numbers agent steps, skipping the checks between them
+ok 43 - chainStepNote numbers agent steps, skipping the checks between them
+  ---
+  duration_ms: 0.421698
+  type: 'test'
+  ...
+# Subtest: chainStepNote names the step position, total, and skill for every step of a chain
+ok 44 - chainStepNote names the step position, total, and skill for every step of a chain
+  ---
+  duration_ms: 0.31367
+  type: 'test'
+  ...
+# Subtest: chainStepNote labels a step by its name first, then its skill, then generically
+ok 45 - chainStepNote labels a step by its name first, then its skill, then generically
+  ---
+  duration_ms: 0.625395
+  type: 'test'
+  ...
+# Subtest: retryableExit treats no list and an empty list as "any failure retries"
+ok 46 - retryableExit treats no list and an empty list as "any failure retries"
+  ---
+  duration_ms: 0.83542
+  type: 'test'
+  ...
+# Subtest: retryableExit loops only on the listed codes
+ok 47 - retryableExit loops only on the listed codes
+  ---
+  duration_ms: 0.255689
+  type: 'test'
+  ...
+# Subtest: a retryOn of 0 is a load-time error, not a silent no-op
+ok 48 - a retryOn of 0 is a load-time error, not a silent no-op
+  ---
+  duration_ms: 1.958941
+  type: 'test'
+  ...
+1..48
+# tests 48
+# suites 0
+# pass 48
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9837.112041

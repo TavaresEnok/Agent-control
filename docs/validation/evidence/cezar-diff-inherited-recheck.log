@@ -1,0 +1,91 @@
+
+> test
+> vitest run packages/web/src/components/diff/diff.test.tsx
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/workspace/upstream/cezar[39m
+
+ [31m❯[39m [30m[46m web [49m[39m src/components/diff/diff.test.tsx [2m([22m[2m35 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 3262[2mms[22m[39m
+[31m     [31m×[31m keeps the sticky file header fully opaque over the rows scrolling beneath it[39m[33m 1094[2mms[22m[39m
+     [32m✓[39m renders every file with its path, per-file ± and status badge[32m 294[2mms[22m[39m
+     [32m✓[39m shows the aggregate ± stat across files[32m 81[2mms[22m[39m
+     [32m✓[39m defaults to unified mode and flips to split on the mode prop[32m 127[2mms[22m[39m
+     [33m[2m✓[22m[39m contains unwrapped lines within each split pane [33m 447[2mms[22m[39m
+     [32m✓[39m marks the word-level change on both sides of a paired edit[32m 21[2mms[22m[39m
+     [32m✓[39m renders the empty state synchronously for an empty file list[32m 5[2mms[22m[39m
+     [32m✓[39m renders a remount synchronously once the renderer has loaded — no "Loading diff…" flash[32m 38[2mms[22m[39m
+     [32m✓[39m re-highlights a changed file in the same render, never flashing it back to plain text[32m 32[2mms[22m[39m
+       [32m✓[39m opens collapsed behind "Load diff", rendering none of its rows[32m 111[2mms[22m[39m
+       [32m✓[39m renders its rows on "Load diff", and a reader can close it again[32m 284[2mms[22m[39m
+       [32m✓[39m opens anyway when it carries a comment — the reader must see it[32m 21[2mms[22m[39m
+     [32m✓[39m soft-wraps line content when wrap is set[32m 15[2mms[22m[39m
+     [32m✓[39m collapses a file body from its sticky header[32m 39[2mms[22m[39m
+     [32m✓[39m expands a context gap through the loadFileText seam[32m 90[2mms[22m[39m
+     [32m✓[39m renders static gap separators when no loader is wired[32m 25[2mms[22m[39m
+     [32m✓[39m explains binary and metadata-only files instead of rendering rows[32m 18[2mms[22m[39m
+     [32m✓[39m renders an inline <img> from imageSrc instead of the binary note, tagged "image" not "binary"[32m 20[2mms[22m[39m
+     [32m✓[39m falls back to the plain binary note when no imageSrc resolver is wired[32m 13[2mms[22m[39m
+     [32m✓[39m shows "Open in default app" only when onOpenInApp is provided, and calls it with the path[32m 22[2mms[22m[39m
+     [32m✓[39m never renders a preview for a deleted image without oldImageSrc[32m 55[2mms[22m[39m
+     [32m✓[39m previews a deleted image from its old side when oldImageSrc is wired[32m 19[2mms[22m[39m
+     [32m✓[39m shows before | after for a modified image, and the new side alone for an added one[32m 24[2mms[22m[39m
+     [32m✓[39m a side the server refuses shows a note instead of a broken image[32m 18[2mms[22m[39m
+     [32m✓[39m renders the text diff for a modified SVG when no imageSrc is wired (repo/commit views)[32m 23[2mms[22m[39m
+     [32m✓[39m still renders the text diff for a modified SVG when imageSrc IS wired (Changes tab)[32m 28[2mms[22m[39m
+     [32m✓[39m previews an SVG that carries no text patch at all (nothing to lose)[32m 15[2mms[22m[39m
+     [32m✓[39m agrees with the zero-dependency fallback renderer on the same SVG[32m 24[2mms[22m[39m
+       [32m✓[39m renders an added Markdown file as a document from its patch[32m 96[2mms[22m[39m
+       [32m✓[39m renders the full worktree text when a loader is wired[32m 38[2mms[22m[39m
+       [32m✓[39m says so when only the changed sections are available[32m 18[2mms[22m[39m
+       [32m✓[39m keeps the last text up while a changed file reloads[32m 30[2mms[22m[39m
+       [32m✓[39m loads relative images through imageSrc, resolved against the file[32m 26[2mms[22m[39m
+       [32m✓[39m never renders a javascript: link from a previewed file[32m 29[2mms[22m[39m
+       [32m✓[39m leaves Markdown as a diff when preview is off[32m 19[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m [30m[46m web [49m[39m src/components/diff/diff.test.tsx[2m > [22mDiff facade[2m > [22mkeeps the sticky file header fully opaque over the rows scrolling beneath it
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: src/a.ts. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<p[31m
+      [33mclass[31m=[32m"px-1 text-xs text-soft-foreground"[31m
+      [33mdata-slot[31m=[32m"diff-loading"[31m
+    [36m>[31m
+      [0mLoading diff…[0m
+    [36m</p>[31m
+  [36m</div>[31m
+[36m</body>[31m
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<p[31m
+      [33mclass[31m=[32m"px-1 text-xs text-soft-foreground"[31m
+      [33mdata-slot[31m=[32m"diff-loading"[31m
+    [36m>[31m
+      [0mLoading diff…[0m
+    [36m</p>[31m
+  [36m</div>[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:[2m163:27[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m86:33[22m[39m
+[36m [2m❯[22m renderDiff src/components/diff/diff.test.tsx:[2m41:16[22m[39m
+    [90m 39|[39m async function renderDiff(ui: React.ReactElement, settleText = 'src/a.…
+    [90m 40|[39m   [35mconst[39m view [33m=[39m [34mrender[39m(ui)
+    [90m 41|[39m   [35mawait[39m screen[33m.[39m[34mfindByText[39m(settleText)
+    [90m   |[39m                [31m^[39m
+    [90m 42|[39m   [35mreturn[39m view
+    [90m 43|[39m }
+[90m [2m❯[22m src/components/diff/diff.test.tsx:[2m52:11[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m34 passed[39m[22m[90m (35)[39m
+[2m   Start at [22m 04:19:35
+[2m   Duration [22m 9.36s[2m (transform 2.50s, setup 194ms, import 3.12s, tests 3.26s, environment 2.50s)[22m
+

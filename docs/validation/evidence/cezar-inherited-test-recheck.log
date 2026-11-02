@@ -1,0 +1,266 @@
+
+> test
+> vitest run packages/cezar/src/workflows/run.test.ts -t writes no skill copies
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/workspace/upstream/cezar[39m
+
+ [31m❯[39m [30m[42m server [49m[39m src/workflows/run.test.ts [2m([22m[2m178 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m177 skipped[39m[2m)[22m[32m 279[2mms[22m[39m
+     [2m[90m↓[39m[22m preserves a marker boundary before later commentary during initial execution
+     [2m[90m↓[39m[22m preserves a marker boundary before later commentary during resumed execution
+     [2m[90m↓[39m[22m matches runner result assembly for empty blocks and multiple complete text blocks
+     [2m[90m↓[39m[22m normalizes DONE before trailing references: finished
+CEZ:DONE
+CEZ:PR=42
+     [2m[90m↓[39m[22m normalizes DONE before trailing references: finished
+CEZ:DONE
+CEZ:ISSUE=997
+     [2m[90m↓[39m[22m normalizes DONE before trailing references: finished
+CEZ:DONE
+CEZ:TITLE=closing the issue
+     [2m[90m↓[39m[22m normalizes ASK before trailing references so the card parser still sees it
+     [2m[90m↓[39m[22m does not strip or promote marker-like prose: finished
+CEZ:DONE
+then continued working
+     [2m[90m↓[39m[22m does not strip or promote marker-like prose: Need a decision.
+CEZ:ASK {"questions":[]}
+CEZ:ISSUE=997
+then continued working
+     [2m[90m↓[39m[22m does not strip or promote marker-like prose: I will emit CEZ:DONE and CEZ:PR=42 in the next turn.
+     [2m[90m↓[39m[22m deduplicates starts and completions while summing multiple turns in one invocation
+     [2m[90m↓[39m[22m keeps the run aggregate absent after a pre-turn failure even when a later invocation is metered
+     [2m[90m↓[39m[22m writes each completeness checkpoint before launching or forwarding its boundary event
+     [2m[90m↓[39m[22m tracks an unmetered turn without recording it and ignores a completion that never started
+   [2m[90m↓[39m[22m parallel variants ignore a worktree opt-out and retain isolated mode
+     [2m[90m↓[39m[22m computes a real diffStat and never derives a title from turn text
+     [2m[90m↓[39m[22m stores only the uncommitted diff when the agent repointed the worktree HEAD
+     [2m[90m↓[39m[22m drops the repointed flag again once HEAD returns to the task branch
+     [2m[90m↓[39m[22m never overwrites a user-edited title (PATCH sets titleSummary too)
+     [2m[90m↓[39m[22m skips diffStat for a worktree-less run, and never throws
+     [2m[90m↓[39m[22m is a quiet no-op for an unknown run
+     [2m[90m↓[39m[22m applies in-band CEZ markers from the turn text (spec 2026-07-18-task-ref-markers)
+     [2m[90m↓[39m[22m a marker title never overwrites a user rename — but the numbers still land
+     [2m[90m↓[39m[22m a junk CEZ:TITLE never blanks the title
+     [2m[90m↓[39m[22m prose that merely mentions a marker changes nothing
+     [2m[90m↓[39m[22m persists a runner + model override as the run current backend
+     [2m[90m↓[39m[22m starts fresh when Continue switches to a backend that does not own the session
+     [2m[90m↓[39m[22m resumes when Continue stays on the backend that owns the session
+     [2m[90m↓[39m[22m an omitted override preserves the run current backend/model (backward compat)
+     [2m[90m↓[39m[22m an empty model clears the pin so the runner picks the model (auto)
+     [2m[90m↓[39m[22m rejects a model that is recognizably another runner's preset (no corruption persisted)
+     [2m[90m↓[39m[22m a runner-only switch clears the previous backend model pin instead of carrying it over
+     [2m[90m↓[39m[22m a runner-only switch drops a pin that is not provably the target's (telemetry 8e1173b1)
+     [2m[90m↓[39m[22m a runner-only switch keeps a pin native to the target, and an explicit pick always wins
+     [2m[90m↓[39m[22m a runner-only switch never carries an Antigravity model name to another backend, or back
+     [2m[90m↓[39m[22m a runner-only continue on the SAME backend keeps the pin (no spurious clear)
+     [2m[90m↓[39m[22m guards legacy records too — no persisted runner resolves to claude, like runContinuation
+     [2m[90m↓[39m[22m keeps free-form model ids working — only cross-runner presets are rejected
+     [2m[90m↓[39m[22m persists the picked account as the run current one
+     [2m[90m↓[39m[22m starts fresh when Continue switches to another login of the same agent
+     [2m[90m↓[39m[22m resumes when the picked account is the one that owns the session
+     [2m[90m↓[39m[22m treats a step that recorded no account as the discovered one
+     [2m[90m↓[39m[22m an omitted account never resumes a session another login owns
+     [2m[90m↓[39m[22m an omitted account preserves the one the run is on (backward compat)
+     [2m[90m↓[39m[22m a runner switch drops the previous agent account instead of carrying it over
+     [2m[90m↓[39m[22m keeps the account when the continuation stays on the same agent
+     [2m[90m↓[39m[22m refuses to continue a run with no resumable session (no override persisted)
+     [2m[90m↓[39m[22m gate off (default) + changes → done, diff left in the worktree
+     [2m[90m↓[39m[22m gate on (env) + non-autonomous + changes → review
+     [2m[90m↓[39m[22m gate on + autonomous + changes → done (autonomous wins — the #489 fix)
+     [2m[90m↓[39m[22m gate on + no changes → done (the diff check stays first)
+     [2m[90m↓[39m[22m runs both skill steps to completion, and the second step's prompt carries the chain guard
+     [2m[90m↓[39m[22m leaves the lone agent step's prompt untouched
+     [2m[90m↓[39m[22m creates the named branch from base, records it, and keeps it out of the worktree path
+     [2m[90m↓[39m[22m without newBranch an in-place run leaves the checkout where it is
+     [2m[90m↓[39m[22m keeps the tracked check artifact out of the autosave commit
+     [2m[90m↓[39m[22m a CEZ:MONITORING turn-end parks the run as running/monitoring
+     [2m[90m↓[39m[22m a parked monitor schedules its own re-check under the zero-config default (#810)
+     [2m[90m↓[39m[22m park mode remains reachable as an explicit operator choice (#810)
+     [2m[90m↓[39m[22m optionally wakes a parked monitor without fabricating a user message
+     [2m[90m↓[39m[22m a markerless turn-end still parks as waiting with no activity
+     [2m[90m↓[39m[22m strips the CEZ:MONITORING marker from server-emitted v1 text events
+     [2m[90m↓[39m[22m resuming a monitoring run clears the activity
+     [2m[90m↓[39m[22m detects the plain marker
+     [2m[90m↓[39m[22m detects the marker with trailing whitespace
+     [2m[90m↓[39m[22m detects the marker followed by a PR declaration
+     [2m[90m↓[39m[22m detects the marker followed by every task-reference marker
+     [2m[90m↓[39m[22m detects a blank line between the marker and the references
+     [2m[90m↓[39m[22m still parks waiting for a markerless turn
+     [2m[90m↓[39m[22m still parks waiting for task references with no marker at all
+     [2m[90m↓[39m[22m still parks waiting for a marker with prose after it
+     [2m[90m↓[39m[22m still parks waiting for the marker merely mentioned in prose
+     [2m[90m↓[39m[22m is a strict superset of the pre-#933 predicate
+     [2m[90m↓[39m[22m only peels task-reference lines off the END of the turn
+     [2m[90m↓[39m[22m parks running/monitoring at the first-session turn-end (runAgentStep)
+     [2m[90m↓[39m[22m parks running/monitoring at the continuation turn-end (runContinuation)
+     [2m[90m↓[39m[22m keeps the marker out of the v1 transcript when references follow it
+     [2m[90m↓[39m[22m a CEZ:ASK turn-end parks the run as waiting (attention) and emits ask.requested
+     [2m[90m↓[39m[22m preserves the default 15-minute plain-wait expiry safeguard (#992)
+     [2m[90m↓[39m[22m honors a configured 30-minute timeout instead of the old hard-coded 15 (#992)
+     [2m[90m↓[39m[22m explicit Finish wins when ordinary inactivity already fired
+     [2m[90m↓[39m[22m explicit Finish wins when an ASK park watchdog already fired
+       [2m[90m↓[39m[22m a closed-but-unsettled session takes Finish as the settlement intent instead of a 409
+       [2m[90m↓[39m[22m also covers the gap after teardown cleared the session object
+       [2m[90m↓[39m[22m accepts a review that is still unwinding once the engine lets go
+       [2m[90m↓[39m[22m a repeated End session that lands after the review settle does not accept the review
+       [2m[90m↓[39m[22m still refuses a cancelled run and a run that never opened a session
+       [2m[90m↓[39m[22m a Finish that lands while the idle settle checks the review gate still wins
+     [2m[90m↓[39m[22m keeps the configured timeout armed at both new-run and reply continuation parks (#992)
+     [2m[90m↓[39m[22m does not arm the plain-wait timeout when configured as 0 (#992)
+     [2m[90m↓[39m[22m does not arm the plain-wait timeout when configured as null (#992)
+     [2m[90m↓[39m[22m an intermediate CEZ:ASK pauses before the following check
+     [2m[90m↓[39m[22m answering an intermediate CEZ:ASK resumes the workflow through the following check
+     [2m[90m↓[39m[22m a self-woken intermediate monitoring park that ends with CEZ:DONE resumes the workflow
+     [2m[90m↓[39m[22m cancelling a run parked at an intermediate ask settles it as cancelled and frees the slot
+     [2m[90m↓[39m[22m cancelling a run parked at a final interactive ask still settles as cancelled
+     [2m[90m↓[39m[22m settles an unanswered final interactive ask as failed when its idle session closes
+     [2m[90m↓[39m[22m settles an ordinary final wait as failed when inactivity closes the session
+     [2m[90m↓[39m[22m keeps the review gate for an idle-closed final wait whose worktree holds changes
+     [2m[90m↓[39m[22m keeps an unanswered final ask awaiting the user after the idle close, until Continue answers it
+     [2m[90m↓[39m[22m keeps an unanswered ask awaiting the user when the parked session fails instead of idling out
+     [2m[90m↓[39m[22m keeps an ask raised on a continuation awaiting the user after its idle close
+     [2m[90m↓[39m[22m a self-woken continuation turn that asks nothing retires the earlier question
+     [2m[90m↓[39m[22m clears stale inactivity evidence when a continuation answer arrives
+     [2m[90m↓[39m[22m cancelling an active run before its session opens is durable and releases the slot
+     [2m[90m↓[39m[22m does not let late cleanup from a cancelled owner remove a replacement owner
+     [2m[90m↓[39m[22m keeps a live hanging session counted until interrupt teardown, then reaps it
+     [2m[90m↓[39m[22m finishing a run parked at an intermediate ask ends it like any other Finish
+     [2m[90m↓[39m[22m a parked session that closes unanswered settles as failed, not as a success
+     [2m[90m↓[39m[22m a malformed intermediate CEZ:ASK leaves the workflow running
+     [2m[90m↓[39m[22m an autonomous run is nudged past an intermediate ask instead of parking on it
+     [2m[90m↓[39m[22m an autonomous run parks on an intermediate ask it is nudged past and repeats
+     [2m[90m↓[39m[22m a markerless intermediate step still closes its session and advances
+     [2m[90m↓[39m[22m strips the CEZ:ASK marker from server-emitted v1 text events
+     [2m[90m↓[39m[22m normalizes a near-valid presentation-only marker into exactly one ask card
+     [2m[90m↓[39m[22m renders a card past the old 4/4 caps — six questions, six options
+     [2m[90m↓[39m[22m a markerless turn-end raises no ask.requested
+     [2m[90m↓[39m[22m a malformed CEZ:ASK degrades gracefully: parks waiting, no ask card
+     [2m[90m↓[39m[22m a schema-invalid CEZ:ASK stays visible in v1 text — no card will ever render it
+     [2m[90m↓[39m[22m a CEZ:ASK missing its final brace still renders one card, notes the recovery, and strips the marker
+     [2m[90m↓[39m[22m recovers a truncated CEZ:ASK on a continuation turn identically
+     [2m[90m↓[39m[22m does not report the interrupted workflow as a successful run
+     [2m[90m↓[39m[22m reads the park back off disk and still does not report success
+     [2m[90m↓[39m[22m still settles an ordinary waiting run as a success
+     [2m[90m↓[39m[22m reads a pre-#917 record with no askParked key unchanged
+     [2m[90m↓[39m[22m persists two attachments with no ActiveRun and gives them distinct names
+     [2m[90m↓[39m[22m seeds from the highest existing suffix, not the file count
+     [2m[90m↓[39m[22m shares one numbering space across screenshot- and pasted- prefixes
+     [2m[90m↓[39m[22m retries past a pre-existing file rather than overwriting it
+     [2m[90m↓[39m[22m appends messages in order while queued
+     [2m[90m↓[39m[22m persists attached images and records their URLs
+     [2m[90m↓[39m[22m hydrates edits and stacked messages into a queued restart continuation
+     [2m[90m↓[39m[22m refuses every mutation once the run has been dequeued
+     [2m[90m↓[39m[22m edits a message in place, keeping its id and createdAt
+     [2m[90m↓[39m[22m keeps existing attachments when an edit only changes the text
+     [2m[90m↓[39m[22m returns null when the message id is unknown
+     [2m[90m↓[39m[22m removes a message and unlinks its orphaned images
+     [2m[90m↓[39m[22m keeps an image that a surviving message still references
+     [2m[90m↓[39m[22m keeps an image still referenced by taskImages
+     [2m[90m↓[39m[22m edits the task and re-derives the heuristic title and refs
+     [2m[90m↓[39m[22m leaves a user-owned title alone when the task is edited
+     [2m[90m↓[39m[22m defers a message only while the run is starting up
+     [2m[90m↓[39m[22m still defers after `starting` is cleared but before the session opens
+     [2m[90m↓[39m[22m re-buffers a deferred message the session refuses, instead of dropping it
+     [2m[90m↓[39m[22m defers across a session gap, never past an open session or a cancel
+     [2m[90m↓[39m[22m folds the task and every stacked message, in order, blank-line joined
+     [2m[90m↓[39m[22m leaves the input untouched when nothing is stacked
+     [2m[90m↓[39m[22m never writes the folded prompt back to the record, and is idempotent
+     [2m[90m↓[39m[22m re-encodes stacked attachments from disk into stackedImages
+     [2m[90m↓[39m[22m re-encodes initial task images from disk after a queued-run restart (#612)
+     [2m[90m↓[39m[22m never re-encodes a non-image attachment into an image block on restart
+     [2m[90m↓[39m[22m skips an unreadable attachment, notes it, and still starts
+     [2m[90m↓[39m[22m notes a non-image attachment whose file is gone instead of naming a dead path
+     [2m[90m↓[39m[22m delivers the task plus every stacked message, with the edit applied
+     [2m[90m↓[39m[22m folds once across repeated recoveries
+     [2m[90m↓[39m[22m persists the ask, parks immediately, then routes the answer to the pending RPC
+     [2m[90m↓[39m[22m stays Working and continues ONCE instead of parking under Needs you
+     [2m[90m↓[39m[22m a successful post-compaction turn finishes the run with no human in the loop
+     [2m[90m↓[39m[22m an ordinary markerless codex turn still parks as waiting
+     [2m[90m↓[39m[22m CEZ:DONE before the compaction still closes the session
+     [2m[90m↓[39m[22m CEZ:MONITORING before the compaction still parks as running/monitoring
+     [2m[90m↓[39m[22m CEZ:MONITORING followed by a task-reference line still parks as monitoring (#933)
+     [2m[90m↓[39m[22m a MALFORMED CEZ:ASK before the compaction still parks, so the question is not buried
+     [2m[90m↓[39m[22m bounds repeated compaction and then parks for the user
+     [2m[90m↓[39m[22m a refused post-compaction follow-up fails the run visibly instead of leaving a zombie
+     [2m[90m↓[39m[22m cancellation still wins over a continued turn
+     [2m[90m↓[39m[22m a CHILD thread's compaction never continues the parent (#600 holds)
+     [2m[90m↓[39m[22m applies on the CONTINUATION turn-end too, not just a fresh run
+     [2m[90m↓[39m[22m expands the continuation's OPENING prompt before it becomes the session userPrompt
+     [2m[90m↓[39m[22m an account-switching Continue records its session, so the NEXT Continue stays on that account
+     [2m[90m↓[39m[22m a fresh Continue that fails before spawning leaves no session id to resume
+     [2m[90m↓[39m[22m expands a FOLLOW-UP delivered into the reopened continuation session
+     [2m[90m↓[39m[22m leaves an unknown slash command untouched so backend-native commands still work
+     [2m[90m↓[39m[22m expands the opening prompt before it reaches the backend
+     [2m[90m↓[39m[22m installs the slash skill and the companion it names into the task's worktree
+     [2m[90m↓[39m[22m reports where a task came from and which workflow it ran, never a custom name
+[31m     [31m×[31m writes no skill copies into the user's own checkout on an in-place run[39m[32m 275[2mms[22m[39m
+     [2m[90m↓[39m[22m leaves an unknown slash command untouched so backend-native commands still work
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m [30m[42m server [49m[39m src/workflows/run.test.ts[2m > [22mregistry /skill expansion on a fresh run's opening prompt (#278)[2m > [22mwrites no skill copies into the user's own checkout on an in-place run
+[31m[1mAssertionError[22m: expected "vi.fn()" to be called with arguments: [ 'skill_used', …(1) ][90m
+
+Received:
+
+[1m  1st vi.fn() call:
+
+[22m[2m  [[22m
+[32m-   "skill_used",[90m
+[31m+   "task_start",[90m
+[31m+   {[90m
+[31m+     "label": "default/default",[90m
+[31m+   },[90m
+[2m    {[22m
+[32m-     "label": "create-cezar-automation",[90m
+[31m+     "sid": undefined,[90m
+[2m    },[22m
+[2m  ][22m
+
+[1m  2nd vi.fn() call:
+
+[22m[2m  [[22m
+[32m-   "skill_used",[90m
+[31m+   "task_origin",[90m
+[31m+   {[90m
+[31m+     "label": "api",[90m
+[31m+   },[90m
+[2m    {[22m
+[32m-     "label": "create-cezar-automation",[90m
+[31m+     "sid": undefined,[90m
+[2m    },[22m
+[2m  ][22m
+
+[1m  3rd vi.fn() call:
+
+[22m[2m  [[22m
+[32m-   "skill_used",[90m
+[31m+   "workflow_used",[90m
+[31m+   {[90m
+[31m+     "label": "quick-task",[90m
+[31m+   },[90m
+[2m    {[22m
+[32m-     "label": "create-cezar-automation",[90m
+[31m+     "sid": undefined,[90m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m3[22m
+[31m[39m
+[36m [2m❯[22m src/workflows/run.test.ts:[2m3818:32[22m[39m
+    [90m3816|[39m       }
+    [90m3817|[39m       // cezar's own skill is public, so it is counted by name.
+    [90m3818|[39m       expect(vi.mocked(track)).toHaveBeenCalledWith('skill_used', { la…
+    [90m   |[39m                                [31m^[39m
+    [90m3819|[39m     } finally {
+    [90m3820|[39m       if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m177 skipped[39m[90m (178)[39m
+[2m   Start at [22m 03:33:08
+[2m   Duration [22m 3.99s[2m (transform 2.56s, setup 96ms, import 3.34s, tests 279ms, environment 0ms)[22m
+

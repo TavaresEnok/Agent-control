@@ -1,0 +1,55 @@
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -142,16 +142,16 @@
+     "test:providers:all:extended": "yarn workspace @happier-dev/tests providers:all:extended",
+     "typecheck:inner": "node --experimental-strip-types scripts/testing/runTypecheck.ts",
+     "typecheck": "node scripts/runWithHeartbeat.mjs --label typecheck -- yarn -s typecheck:inner",
+-  "ui": "yarn workspace @happier-dev/app start",
+-  "ui:web": "yarn workspace @happier-dev/app web",
+-  "ui:ios": "yarn workspace @happier-dev/app ios",
+-  "ui:android": "yarn workspace @happier-dev/app android",
+-  "ui:tauri": "node ./apps/stack/scripts/tauri_dev.mjs",
+-  "tauri:qa": "yarn --cwd apps/ui tauri:qa",
+-  "tauri:mcp:server": "yarn --cwd apps/ui tauri:mcp:server",
+-  "tauri:mcp:cli": "yarn --cwd apps/ui tauri:mcp:cli",
+-  "tauri:mcp:session:start": "yarn --cwd apps/ui tauri:mcp:session:start",
+-  "server": "yarn --cwd apps/server dev",
++    "ui": "yarn workspace @happier-dev/app start",
++    "ui:web": "yarn workspace @happier-dev/app web",
++    "ui:ios": "yarn workspace @happier-dev/app ios",
++    "ui:android": "yarn workspace @happier-dev/app android",
++    "ui:tauri": "node ./apps/stack/scripts/tauri_dev.mjs",
++    "tauri:qa": "yarn --cwd apps/ui tauri:qa",
++    "tauri:mcp:server": "yarn --cwd apps/ui tauri:mcp:server",
++    "tauri:mcp:cli": "yarn --cwd apps/ui tauri:mcp:cli",
++    "tauri:mcp:session:start": "yarn --cwd apps/ui tauri:mcp:session:start",
++    "server": "yarn --cwd apps/server dev",
+     "server:light": "yarn --cwd apps/server dev:light",
+     "server:build": "yarn --cwd apps/server build",
+     "server:start": "yarn --cwd apps/server start",
+@@ -177,13 +177,8 @@
+   },
+   "workspaces": {
+     "packages": [
+-      "apps/bootstrap",
+       "apps/ui",
+-      "apps/cli",
+       "apps/server",
+-      "apps/stack",
+-      "apps/website",
+-      "apps/docs",
+       "packages/agents",
+       "packages/cli-common",
+       "packages/connection-supervisor",
+@@ -192,9 +187,7 @@
+       "packages/protocol",
+       "packages/transfers",
+       "packages/audio-stream-native",
+-      "packages/sherpa-native",
+-      "packages/relay-server",
+-      "packages/tests"
++      "packages/sherpa-native"
+     ],
+     "nohoist": [
+       "**/zod",

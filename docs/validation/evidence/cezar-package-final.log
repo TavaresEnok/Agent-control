@@ -1,0 +1,214 @@
+TAP version 13
+# Subtest: /workspace/upstream/cezar/alias-cezar/bin.js imports a specifier the exports map exposes
+ok 1 - /workspace/upstream/cezar/alias-cezar/bin.js imports a specifier the exports map exposes
+  ---
+  duration_ms: 199.938957
+  type: 'test'
+  ...
+# Subtest: /workspace/upstream/cezar/alias-cezar-run/bin.js imports a specifier the exports map exposes
+ok 2 - /workspace/upstream/cezar/alias-cezar-run/bin.js imports a specifier the exports map exposes
+  ---
+  duration_ms: 105.384228
+  type: 'test'
+  ...
+# Subtest: the build repointed something — otherwise every assertion below is vacuous
+ok 3 - the build repointed something — otherwise every assertion below is vacuous
+  ---
+  duration_ms: 803.445133
+  type: 'test'
+  ...
+# Subtest: the bundled contract ships declarations, not just JavaScript
+ok 4 - the bundled contract ships declarations, not just JavaScript
+  ---
+  duration_ms: 552.248639
+  type: 'test'
+  ...
+# Subtest: a repointed declaration type-checks with skipLibCheck OFF
+ok 5 - a repointed declaration type-checks with skipLibCheck OFF
+  ---
+  duration_ms: 5212.261225
+  type: 'test'
+  ...
+# Subtest: the release tarball installs and runs the dry-run CLI workflow
+ok 6 - the release tarball installs and runs the dry-run CLI workflow
+  ---
+  duration_ms: 44244.718161
+  type: 'test'
+  ...
+# Subtest: prepare bumps a released line to its next patch, everywhere
+ok 7 - prepare bumps a released line to its next patch, everywhere
+  ---
+  duration_ms: 419.309235
+  type: 'test'
+  ...
+# Subtest: prepare ships a fresh line's x.y.0 without a bump
+ok 8 - prepare ships a fresh line's x.y.0 without a bump
+  ---
+  duration_ms: 346.411759
+  type: 'test'
+  ...
+# Subtest: prepare refuses a branch that is not a release line, touching nothing
+ok 9 - prepare refuses a branch that is not a release line, touching nothing
+  ---
+  duration_ms: 607.831038
+  type: 'test'
+  ...
+# Subtest: prepare commits the bump to the line without forcing, and leaves tagging to `tag`
+ok 10 - prepare commits the bump to the line without forcing, and leaves tagging to `tag`
+  ---
+  duration_ms: 796.469587
+  type: 'test'
+  ...
+# Subtest: prepare resumes a tagged-but-unreleased version instead of cutting a newer one
+ok 11 - prepare resumes a tagged-but-unreleased version instead of cutting a newer one
+  ---
+  duration_ms: 680.710046
+  type: 'test'
+  ...
+# Subtest: prepare refuses an untagged version that already has packages on npm
+ok 12 - prepare refuses an untagged version that already has packages on npm
+  ---
+  duration_ms: 494.176216
+  type: 'test'
+  ...
+# Subtest: tag creates the release tag once, and refuses to move it
+ok 13 - tag creates the release tag once, and refuses to move it
+  ---
+  duration_ms: 1030.522745
+  type: 'test'
+  ...
+# Subtest: verify judges latest across every published package and passes a tag on its line
+ok 14 - verify judges latest across every published package and passes a tag on its line
+  ---
+  duration_ms: 321.184952
+  type: 'test'
+  ...
+# Subtest: verify skips a version that already has its GitHub Release
+ok 15 - verify skips a version that already has its GitHub Release
+  ---
+  duration_ms: 298.392915
+  type: 'test'
+  ...
+# Subtest: verify refuses a tag off its line, or one that does not name the manifests
+ok 16 - verify refuses a tag off its line, or one that does not name the manifests
+  ---
+  duration_ms: 579.890593
+  type: 'test'
+  ...
+# Subtest: announce opens the changelog PR before creating the GitHub Release
+ok 17 - announce opens the changelog PR before creating the GitHub Release
+  ---
+  duration_ms: 409.787809
+  type: 'test'
+  ...
+# Subtest: announce dry run previews the release body
+ok 18 - announce dry run previews the release body
+  ---
+  duration_ms: 259.604235
+  type: 'test'
+  ...
+# Subtest: cut names the line after main and moves main to the next minor
+ok 19 - cut names the line after main and moves main to the next minor
+  ---
+  duration_ms: 401.369725
+  type: 'test'
+  ...
+# Subtest: cut hands main's Unreleased section to the line
+ok 20 - cut hands main's Unreleased section to the line
+  ---
+  duration_ms: 217.350363
+  type: 'test'
+  ...
+# Subtest: cut finishes a re-run from the same main commit, and refuses once main has moved
+ok 21 - cut finishes a re-run from the same main commit, and refuses once main has moved
+  ---
+  duration_ms: 650.162693
+  type: 'test'
+  ...
+# Subtest: dry-run publish stamps every manifest, pins each sibling exact, and emits the result JSON
+ok 22 - dry-run publish stamps every manifest, pins each sibling exact, and emits the result JSON
+  ---
+  duration_ms: 2062.970831
+  type: 'test'
+  ...
+# Subtest: a missing NPM token forces a dry run instead of failing the job
+ok 23 - a missing NPM token forces a dry run instead of failing the job
+  ---
+  duration_ms: 2494.195561
+  type: 'test'
+  ...
+# Subtest: the nightly channel stamps a dated version and publishes under the nightly tag
+ok 24 - the nightly channel stamps a dated version and publishes under the nightly tag
+  ---
+  duration_ms: 3370.341114
+  type: 'test'
+  ...
+# Subtest: a nightly re-run stamps the attempt onto the version so it cannot collide
+ok 25 - a nightly re-run stamps the attempt onto the version so it cannot collide
+  ---
+  duration_ms: 3880.842561
+  type: 'test'
+  ...
+# Subtest: the same schedule event without the channel request publishes nothing
+ok 26 - the same schedule event without the channel request publishes nothing
+  ---
+  duration_ms: 98.61211
+  type: 'test'
+  ...
+# Subtest: a non-publishable event exits 0 without touching the manifests
+ok 27 - a non-publishable event exits 0 without touching the manifests
+  ---
+  duration_ms: 187.430168
+  type: 'test'
+  ...
+# Subtest: a patch bump stamps every manifest, keeps the caret ranges, and emits the version
+ok 28 - a patch bump stamps every manifest, keeps the caret ranges, and emits the version
+  ---
+  duration_ms: 4039.029478
+  type: 'test'
+  ...
+# Subtest: a private package is stamped but never published
+ok 29 - a private package is stamped but never published
+  ---
+  duration_ms: 3090.427006
+  type: 'test'
+  ...
+# Subtest: the existing bump publishes the committed version verbatim
+ok 30 - the existing bump publishes the committed version verbatim
+  ---
+  duration_ms: 3088.529887
+  type: 'test'
+  ...
+# Subtest: a missing NPM token forces a dry run instead of publishing
+ok 31 - a missing NPM token forces a dry run instead of publishing
+  ---
+  duration_ms: 3576.077086
+  type: 'test'
+  ...
+# Subtest: an unknown bump exits non-zero without touching the manifests
+ok 32 - an unknown bump exits non-zero without touching the manifests
+  ---
+  duration_ms: 312.726806
+  type: 'test'
+  ...
+# Subtest: --dist-tag publishes an older line without moving latest
+ok 33 - --dist-tag publishes an older line without moving latest
+  ---
+  duration_ms: 3750.314683
+  type: 'test'
+  ...
+# Subtest: the packaged CLI reuses one cockpit, registers a second CWD, and recovers a crash
+ok 34 - the packaged CLI reuses one cockpit, registers a second CWD, and recovers a crash
+  ---
+  duration_ms: 2694.973487
+  type: 'test'
+  ...
+1..34
+# tests 34
+# suites 0
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 49062.875163

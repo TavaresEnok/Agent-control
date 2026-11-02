@@ -1,0 +1,143 @@
+patch-package 8.0.1
+Applying patches...
+@expo/metro-config@54.0.14 ✔
+expo-router@6.0.22 ✔
+expo-task-manager@14.0.9 ✔
+metro@0.83.3 ✔
+metro-runtime@0.83.3 ✔
+react-native@0.81.5 ✔
+patch-package 8.0.1
+Applying patches...
+@expo/metro-config@54.0.14 ✔
+@legendapp/list@3.3.3 ✔
+@sentry/react-native@8.1.0 ✔
+@shopify/flash-list@2.3.2 ✔
+expo-notifications@0.32.16 ✔
+expo-router@6.0.22 ✔
+expo-updates@29.0.16 ✔
+metro@0.83.3 ✔
+metro-runtime@0.83.3 ✔
+react-native@0.81.5 ✔
+react-native-audio-api@0.8.4 ✔
+react-native-enriched-markdown@0.5.0 ✔
+react-native-reanimated@4.3.0 ✔
+react-native-unistyles@3.5.3 ✔
+react-native-worklets@0.8.1 ✔
+› Reading Expo settings from (if any):
+  [90m/workspace/upstream/happier/apps/ui/app.json[0m
+  [90mNo Expo settings found[0m
+
+› Copying 'canvaskit.wasm' file to public folder:
+  [90m/workspace/upstream/happier/apps/ui/public/canvaskit.wasm[0m
+
+[32m› Success! You are almost there:[0m
+[90m› To load React Native Skia Web, follow these instructions : https://shopify.github.io/react-native-skia/docs/getting-started/web[0m
+[pierre] worker assets ready: public/pierre-diff-worker.js
+[codemirror] webview bundle up to date: sources/components/ui/code/editor/bridge/codemirrorWebViewBundle.generated.ts (958kb)
+[xterm] webview bundle up to date: sources/components/terminal/xterm/webview/xtermWebViewAssets.generated.ts (287kb js, 5kb css)
+[tiptap] webview bundle up to date: sources/components/ui/markdown/editor/bridge/tiptapWebViewBundle.generated.ts (422kb js, 2kb css)
+[mermaid] webview bundle up to date: sources/components/markdown/mermaidWebViewBundle.generated.ts (2673kb)
+1.22.22
+1.22.22
+Starting Metro Bundler
+Web apps/ui/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% ( 27/173)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% ( 32/184)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% ( 99/538)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% (182/675)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% (221/764)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% (267/810)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% (337/829)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% (381/840)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% (472/958)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 31.4% ( 534/1019)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 32.0% ( 604/1067)
+Web apps/ui/index.ts ▓▓▓▓▓░░░░░░░░░░░ 37.1% ( 682/1120)
+ WARN  Attempted to import the module "/workspace/upstream/happier/node_modules/@noble/hashes/crypto.js" which is not listed in the "exports" of "/workspace/upstream/happier/node_modules/@noble/hashes" under the requested subpath "./crypto.js". Falling back to file-based resolution. Consider updating the call site or asking the package maintainer(s) to expose this API.
+Web apps/ui/index.ts ▓▓▓▓▓▓░░░░░░░░░░ 40.6% ( 719/1128)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1090/1810)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1175/1824)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1219/1824)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1310/1848)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1385/1858)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1454/1883)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1485/1888)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.7% (1526/1908)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.9% (1569/1955)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.1% (1612/1998)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1641/2120)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1666/2180)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1700/2299)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1767/2433)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1836/2577)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1917/2748)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (1964/2831)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2038/2917)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2061/2998)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2119/3207)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2135/3262)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2172/3353)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2206/3400)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2229/3481)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2268/3577)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2293/3651)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2342/3866)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2383/3926)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2409/4006)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2425/4066)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2454/4100)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2474/4116)
+Browserslist: browsers data (caniuse-lite) is 10 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2513/4170)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2574/4288)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2658/4314)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2747/4351)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2808/4413)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2878/4481)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (2937/4562)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3001/4626)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3038/4669)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3078/4696)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3186/4750)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3246/4818)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3291/4843)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3320/4884)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3350/4949)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3407/4987)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3462/5051)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3506/5074)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3595/5123)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3642/5171)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3706/5212)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3778/5250)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3835/5275)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3907/5823)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (3965/5873)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4011/5900)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4074/5932)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4121/5972)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4196/6064)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4290/6137)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4402/6171)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4459/6233)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4527/6263)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4539/6268)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4541/6268)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4543/6268)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4545/6268)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4548/6268)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4550/6268)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 65.6% (4636/6293)
+
+<--- Last few GCs --->
+
+[5412:0x795ad1de4000]   396987 ms: Scavenge (interleaved) 1523.0 (1562.7) -> 1520.4 (1571.7) MB, pooled: 0 MB, 10.04 / 0.00 ms  (average mu = 0.213, current mu = 0.153) allocation failure; 
+[5412:0x795ad1de4000]   399442 ms: Mark-Compact (reduce) 1524.4 (1571.7) -> 1521.4 (1558.4) MB, pooled: 0 MB, 1939.96 / 0.00 ms  (+ 473.6 ms in 0 steps since start of marking, biggest step 0.0 ms, walltime since start of marking 2455 ms) (average mu = 0.1
+
+<--- JS stacktrace --->
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+

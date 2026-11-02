@@ -1,0 +1,20 @@
+(node:4572) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Error: Could not load the "sharp" module using the linuxmusl-x64 runtime
+Possible solutions:
+- Ensure optional dependencies can be installed:
+    npm install --include=optional sharp
+- Ensure your package manager supports multi-platform installation:
+    See https://sharp.pixelplumbing.com/install#cross-platform
+- Add platform-specific dependencies:
+    npm install --os=linux --libc=musl --cpu=x64 sharp
+- Consult the installation documentation:
+    See https://sharp.pixelplumbing.com/install
+    at file:///workspace/upstream/happier/apps/server/node_modules/sharp/dist/sharp.mjs:171:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)
+    at async runLightServerMain (/workspace/upstream/happier/apps/server/sources/flavors/light/main.ts:35:29)
+[03:35:33.165] [31mERROR[39m: [36mundefined Process exiting with code: 1 | [1793590533165][39m
+    [35mlocalTime[39m: "03:35:33.165"
+    [35mmodule[39m: "process-exit"
+    [35mexitCode[39m: 1

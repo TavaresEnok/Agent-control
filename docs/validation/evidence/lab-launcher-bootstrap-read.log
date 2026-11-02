@@ -1,0 +1,5 @@
+
+> agent-control@0.1.0 start:built
+> node dist/src/lab-main.js
+
+ISOLATED_AGENT_CONTROL_READY

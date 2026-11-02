@@ -1,0 +1,292 @@
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { once } from 'node:events'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+
+/**
+ * The Changes tab (R5 Step 1.5) end-to-end against a LIVE dry run, same doctrine as
+ * review-gate.e2e.ts: the mock claude's first turn appends `notes.md` in the run's REAL
+ * worktree, so `/api/v1/runs/:id/changes` answers a genuine one-file diff (the diff is anchored
+ * at the merge-base, so it survives the engine's settle-time autosave commit). The fixture
+ * repo carries a github.com `origin`, so the forge resolves (dry-run `detect()` answers
+ * available without the network) and the git surface is fully lit.
+ *
+ * What the dry-run backend honestly provides — verified, not assumed:
+ *  - the fixture has no PR URL, so the run header's one next-step button deterministically
+ *    offers Create PR (the Changes tab's own toolbar carries no git actions anymore — the run
+ *    header owns the single step, title row on desktop). The create → View PR transition is
+ *    pinned in task-changes.test.tsx.
+ *  - the settle autosave leaves the worktree clean; the Commit test dirties it again from
+ *    the outside (as a user editing in the worktree would) so the commit is REAL. It also drops
+ *    the fixture's `origin` first — with a GitHub remote the policy's next step is always
+ *    Create PR regardless of uncommitted work (deliberately, so a finished task never hides the
+ *    one way to publish it); only once there is no supported forge does the step become Commit.
+ *
+ * Also not covered here, on purpose: the "No changes yet" empty state (every dry run touches
+ * notes.md — unreachable live; unit-tested), and Push (the fake remote would stall on ssh
+ * auth; the policy rules are pinned in git-actions.test.ts).
+ */
+
+const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
+const sessionId = `e2e-changes-${process.pid}`
+
+function freePort(): Promise<number> {
+  return new Promise((done, fail) => {
+    const probe = createServer()
+    probe.once('error', fail)
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      probe.close(() => done(port))
+    })
+  })
+}
+
+async function waitForHealth(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    try {
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  throw new Error(`cezar e2e: the changes-tab server never answered at ${url}`)
+}
+
+async function waitForStatus(url: string, id: string, wanted: string[]): Promise<string> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const record = (await (await fetch(`${url}/api/v1/runs/${id}`)).json()) as { status: string }
+    if (wanted.includes(record.status)) return record.status
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  throw new Error(`cezar e2e: run ${id} never reached status "${wanted.join('/')}"`)
+}
+
+/** `health.forge` is recomputed on an interval (server.ts `HEALTH_TTL_MS`), not per request —
+ *  after removing the fixture's remote, wait for the server to have actually noticed. */
+async function waitForUserMessage(eventsFile: string, text: RegExp): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    const lines = existsSync(eventsFile) ? readFileSync(eventsFile, 'utf8').split('\n') : []
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event = JSON.parse(line) as { type?: string; text?: string }
+      if (event.type === 'user-message' && text.test(event.text ?? '')) return
+    }
+    await new Promise((done) => setTimeout(done, 250))
+  }
+  throw new Error(`no user-message matching ${text} in ${eventsFile}`)
+}
+
+async function waitForNoForge(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const health = (await (await fetch(`${url}/api/v1/health`)).json()) as { forge: unknown }
+    if (health.forge === null) return
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  throw new Error(`cezar e2e: health.forge never cleared at ${url}`)
+}
+
+let browser: AgentBrowser
+let server: ChildProcess
+let dataRoot: string
+let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
+
+let runId: string
+let worktreePath: string
+
+beforeAll(async () => {
+  dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-changes-'))
+  const git = (...args: string[]) => execFileSync('git', ['-C', dataRoot, ...args])
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.email', 'e2e@cezar.test')
+  git('config', 'user.name', 'cezar e2e')
+  writeFileSync(join(dataRoot, 'README.md'), '# changes-tab e2e fixture repo\n', 'utf8')
+  git('add', '.')
+  git('commit', '-qm', 'init')
+  // A github.com remote makes `resolveForge` return the GitHub driver; under CEZ_DRY_RUN its
+  // detect() answers available without touching the network. Nothing ever pushes to it.
+  git('remote', 'add', 'origin', 'git@github.com:acme/changes-e2e.git')
+
+  const port = await freePort()
+  baseUrl = `http://localhost:${port}`
+  server = spawn(
+    process.execPath,
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    // CEZ_REVIEW_GATE=1 because this spec is ABOUT the gate: it is opt-in (#489, default OFF),
+    // so pinning it here is what makes the parked-at-review fixture reproducible instead of
+    // depending on whatever the operator happens to export.
+    { env: fixtureServeEnv(dataRoot, { CEZ_REVIEW_GATE: '1' }), stdio: 'ignore' },
+  )
+  await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
+
+  const created = (await (
+    await fetch(`${baseUrl}/api/v1/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task: 'Improve the project notes.', workflow: 'quick-task' }),
+    })
+  ).json()) as { id: string }
+  runId = created.id
+
+  // Park the run at review (the same settle rule review-gate.e2e.ts rides): the worktree
+  // diff is non-empty because the mock touched notes.md.
+  await waitForStatus(baseUrl, runId, ['waiting'])
+  await fetch(`${baseUrl}/api/v1/runs/${runId}/finish`, { method: 'POST' })
+  const parked = await waitForStatus(baseUrl, runId, ['review', 'done'])
+  if (parked !== 'review') throw new Error('cezar e2e: the dry run settled as done — no diff to review?')
+
+  const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as { worktreePath: string }
+  worktreePath = record.worktreePath
+
+  browser = AgentBrowser.open(sessionId)
+  browser.setViewport(1440, 900)
+}, 180_000)
+
+afterAll(async () => {
+  browser?.close()
+  if (server && server.exitCode === null) {
+    server.kill()
+    await once(server, 'exit')
+  }
+  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+})
+
+describe('the Changes tab against a live dry run', () => {
+  it('the Changes card shows tree, toolbar and the real diff', () => {
+    browser.goto(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="layout-card"][data-fixed="changes"]') !== null`)
+    browser.click(`[data-slot="layout-card"][data-fixed="changes"]`)
+
+    // A layout is not a URL (spec §5.3): the card swaps the stage in place.
+    browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
+
+    // The Changes card is the active one now.
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
+      ),
+    ).toBe('Changes')
+
+    // The tree shows the mock's real change: notes.md, one added line.
+    browser.waitForFunction(`document.querySelector('[data-slot="changes-tree"]') !== null`)
+    const fileRow = browser.evaluate(
+      `document.querySelector('[data-slot="tree-file"][data-path="notes.md"]').textContent`,
+    ) as string
+    expect(fileRow).toContain('notes.md')
+    expect(fileRow).toContain('+1')
+
+    // The diff facade renders the same file (engine chunk is lazy — wait).
+    browser.waitForFunction(`document.querySelector('[data-slot="diff-file"][data-path="notes.md"]') !== null`)
+    // The aggregate stat agrees.
+    expect(browser.text('[data-slot="changes-stat"]')).toContain('+1')
+  })
+
+  it('the one next-step button comes from the policy: Create PR, its draft alternative — and no toolbar actions', () => {
+    // Create PR's enablement rides the /api/v1/health answer (forge), and health probes the
+    // real codex/opencode/gh CLIs — slow. Wait for the policy to settle rather than sample.
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="git-button"] [data-action="create-pr"]:not([aria-disabled="true"])')?.disabled === false`,
+    )
+    expect(browser.evaluate(`document.querySelector('[data-slot="git-button"] [data-action]').dataset.action`)).toBe(
+      'create-pr',
+    )
+    // The same step said differently, under the chevron — never a second, different step.
+    browser.click('[data-slot="git-button"] [aria-label="More ways to create pr"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="git-button-menu"]') !== null`)
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="git-button-menu"] [data-action="create-draft-pr"]')?.textContent`,
+      ),
+    ).toBe('Create draft PR')
+    browser.press('Escape')
+
+    // The Changes tab's own toolbar is dumb about git now — the run header carries the one step.
+    expect(browser.count('[data-slot="git-toolbar"] [data-action]')).toBe(0)
+    // The branch chip still names the run's real branch, in the toolbar.
+    expect(browser.text('[data-slot="git-toolbar"] [data-slot="branch-chip"]')).toContain('cez/')
+
+    browser.screenshot(`${artifactsDir}/changes-desktop.png`)
+  })
+
+  it('deep-linking /tasks/:id/changes cold-loads the same surface', () => {
+    browser.goto(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="diff-file"][data-path="notes.md"]') !== null`)
+    expect(browser.count('[data-route="task-changes"]')).toBe(1)
+    expect(browser.count('[data-slot="changes-tree"]')).toBe(1)
+  })
+
+  it('Commit goes to the task’s agent — it runs git itself, so no commit dialog opens', async () => {
+    // With a GitHub remote the policy's next step is always Create PR (above) — plain Commit
+    // only surfaces once there is no supported forge. Drop the fixture's origin so the policy
+    // degrades there instead of risking a real push against it (no remote, no push to stall on).
+    execFileSync('git', ['-C', dataRoot, 'remote', 'remove', 'origin'])
+    // The settle autosave left the tree clean — dirty it the way a user editing in the
+    // worktree would, so the commit below has something real to commit.
+    writeFileSync(join(worktreePath, 'edited-by-e2e.md'), 'a change made outside the agent\n', 'utf8')
+    // `health.forge` is cached server-side for up to HEALTH_TTL_MS — reloading before it has
+    // reread the now-remote-less repo would just hand the browser the same stale "github" answer.
+    // Poll the API (cheap) rather than the page, then reload once there is something new to load.
+    await waitForNoForge(baseUrl)
+    browser.reload()
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="git-button"] [data-action="commit"]:not([aria-disabled="true"])')?.disabled === false`,
+    )
+
+    browser.click('[data-slot="git-button"] [data-action="commit"]')
+    // The prompt reached the task — a live message or a continue both land as a `user-message` in
+    // the run's event log. The mock agent does not run git, so the commit itself is unit-tested.
+    await waitForUserMessage(join(dataRoot, '.ai/cezar/runs', `${runId}.ndjson`), /^Commit$/)
+    // The commit dialog is the server fallback for a task with no agent to ask — not this one.
+    expect(browser.count('[data-slot="commit-message"]')).toBe(0)
+  })
+
+  it('the Code card opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
+    browser.click(`[data-slot="layout-card"][data-fixed="files"]`)
+    browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
+      ),
+    ).toBe('Files')
+  })
+
+  it('below md the segments stay tappable and the diff forces unified+wrap (toggles gone)', () => {
+    browser.setViewport(390, 844)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="diff"]') !== null`)
+
+    // Forced mobile combination, no matter what the desktop toggles said.
+    expect(browser.evaluate(`document.querySelector('[data-slot="diff"]').dataset.mode`)).toBe('unified')
+    // The mode/wrap toggles are hidden below md (`md:flex`).
+    expect(
+      browser.evaluate(
+        `getComputedStyle(document.querySelector('[data-slot="diff-mode-toggle"]').parentElement).display`,
+      ),
+    ).toBe('none')
+    // The tree column yields to the diff on phones.
+    expect(
+      browser.evaluate(
+        `(() => { const el = document.querySelector('[data-slot="changes-tree"]'); return el === null || el.offsetParent === null })()`,
+      ),
+    ).toBe(true)
+    // The layout strip folds what does not fit into `…` rather than widening the page.
+    expect(browser.count('[data-slot="layout-card"]')).toBeGreaterThan(0)
+    expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
+
+    browser.screenshot(`${artifactsDir}/changes-mobile.png`)
+    browser.setViewport(1440, 900)
+  })
+})

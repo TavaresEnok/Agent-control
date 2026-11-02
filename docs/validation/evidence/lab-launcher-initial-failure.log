@@ -1,0 +1,22 @@
+
+> agent-control@0.1.0 start:built
+> node dist/src/lab-main.js
+
+file:///workspace/dist/src/lab-main.js:21
+const metadataBody = z.object({ session: z.object({ metadata: z.string() }).passthrough() }).passthrough().parse(await metadataResponse.json());
+                                                                                                           ^
+
+ZodError: [
+  {
+    "expected": "object",
+    "code": "invalid_type",
+    "path": [
+      "session"
+    ],
+    "message": "Invalid input: expected object, received undefined"
+  }
+]
+    at file:///workspace/dist/src/lab-main.js:21:108
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+Node.js v22.23.3

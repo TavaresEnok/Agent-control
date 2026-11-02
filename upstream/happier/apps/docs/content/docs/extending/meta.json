@@ -1,0 +1,14 @@
+{
+  "title": "Extending Happier",
+  "pages": [
+    "index",
+    "mcp-servers",
+    "happier-as-mcp-server",
+    "grok-bot-integration",
+    "happier-tools",
+    "prompts-and-skills",
+    "installables",
+    "subagents",
+    "agent-autonomy"
+  ]
+}

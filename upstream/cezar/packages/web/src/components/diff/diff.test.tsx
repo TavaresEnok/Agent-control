@@ -1,0 +1,478 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { Diff, DiffFallback } from './diff'
+import type { DiffFileChange } from './types'
+
+// Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
+afterEach(cleanup)
+
+/** The server's `/api/v1/runs/:id/changes` file shape — the facade's input contract. */
+const MODIFIED: DiffFileChange = {
+  path: 'src/a.ts',
+  status: 'modified',
+  adds: 1,
+  dels: 1,
+  patch: [
+    'diff --git a/src/a.ts b/src/a.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -3,3 +3,3 @@',
+    ' const one = 1',
+    '-const two = 2',
+    '+const two = 3',
+    ' const three = 3',
+    '',
+  ].join('\n'),
+}
+
+const ADDED: DiffFileChange = {
+  path: 'README.md',
+  status: 'added',
+  adds: 2,
+  dels: 0,
+  patch: ['diff --git a/README.md b/README.md', '@@ -0,0 +1,2 @@', '+# Title', '+Body', ''].join('\n'),
+}
+
+/** The engine chunk loads lazily — settle on a rendered file header before asserting. */
+async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
+  const view = render(ui)
+  await screen.findByText(settleText, {}, { timeout: 5_000 })
+  return view
+}
+
+describe('Diff facade', () => {
+  // Rows scroll UNDER a stuck file header, so it must hide them completely. A rounded header
+  // showed rows through its corners once stuck mid-card, a 50%-alpha divider let text show
+  // through, and in WKWebView (the desktop app) a sub-pixel seam above it showed one row of text
+  // that the 1px card-coloured shadow covers. The seam itself is WebKit-only and does not occur
+  // in a test browser, so these classes are the regression guard.
+  it('keeps the sticky file header fully opaque over the rows scrolling beneath it', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+
+    const header = document.querySelector('[data-slot="diff-file"] > header') as HTMLElement
+    expect(header.className).toContain('sticky')
+    expect(header.className).toContain('bg-card')
+    expect(header.className).not.toMatch(/\brounded/)
+    expect(header.className).not.toContain('border-border/50')
+    expect(header.className).toContain('border-[color-mix(in_oklab,var(--border)_50%,var(--card))]')
+    expect(header.className).toContain('shadow-[0_-1px_0_var(--card)]')
+  })
+
+  it('renders every file with its path, per-file ± and status badge', async () => {
+    await renderDiff(<Diff files={[MODIFIED, ADDED]} />)
+
+    expect(screen.getByText('src/a.ts')).not.toBeNull()
+    expect(screen.getByText('README.md')).not.toBeNull()
+    expect(screen.getByText('added')).not.toBeNull()
+    const files = document.querySelectorAll('[data-slot="diff-file"]')
+    expect(files).toHaveLength(2)
+  })
+
+  it('shows the aggregate ± stat across files', async () => {
+    await renderDiff(<Diff files={[MODIFIED, ADDED]} />)
+
+    const totals = document.querySelector('[data-slot="diff-totals"]')!
+    expect(totals.textContent).toContain('2 files changed')
+    expect(totals.textContent).toContain('+3')
+    expect(totals.textContent).toContain('−1')
+  })
+
+  it('defaults to unified mode and flips to split on the mode prop', async () => {
+    const { rerender } = await renderDiff(<Diff files={[MODIFIED]} />)
+
+    expect(document.querySelector('[data-slot="diff"]')?.getAttribute('data-mode')).toBe('unified')
+    expect(document.querySelector('[data-slot="diff-line"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="diff-pair"]')).toBeNull()
+
+    rerender(<Diff files={[MODIFIED]} mode="split" />)
+    expect(document.querySelector('[data-slot="diff"]')?.getAttribute('data-mode')).toBe('split')
+    expect(document.querySelector('[data-slot="diff-pair"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="diff-line"]')).toBeNull()
+    // The del/add pair shares one row: left cell del, right cell add.
+    const pair = Array.from(document.querySelectorAll('[data-slot="diff-pair"]')).find((row) =>
+      row.querySelector('[data-line="del"]'),
+    )!
+    expect(pair.querySelector('[data-line="add"]')).not.toBeNull()
+  })
+
+  it('contains unwrapped lines within each split pane', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} mode="split" />)
+
+    const cells = document.querySelectorAll('[data-slot="diff-cell"]')
+    expect(cells.length).toBeGreaterThan(0)
+    for (const cell of cells) expect(cell.className).toContain('overflow-x-auto')
+  })
+
+  it('marks the word-level change on both sides of a paired edit', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+
+    const delMarks = Array.from(document.querySelectorAll('[data-word="del"]'))
+    const addMarks = Array.from(document.querySelectorAll('[data-word="add"]'))
+    expect(delMarks.map((mark) => mark.textContent)).toEqual(['2'])
+    expect(addMarks.map((mark) => mark.textContent)).toEqual(['3'])
+    expect(addMarks[0]!.className).toContain('bg-diff-add-strong')
+  })
+
+  it('renders the empty state synchronously for an empty file list', () => {
+    render(<Diff files={[]} />)
+
+    expect(document.querySelector('[data-slot="diff-empty"]')?.textContent).toBe('No changes.')
+    expect(document.querySelector('[data-slot="diff-loading"]')).toBeNull()
+  })
+
+  it('renders a remount synchronously once the renderer has loaded — no "Loading diff…" flash', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+    cleanup()
+
+    render(<Diff files={[MODIFIED]} />)
+    expect(document.querySelector('[data-slot="diff-loading"]')).toBeNull()
+    expect(document.querySelector('[data-slot="diff-file-body"]')).not.toBeNull()
+  })
+
+  it('re-highlights a changed file in the same render, never flashing it back to plain text', async () => {
+    const colored = () =>
+      [...document.querySelectorAll('[data-slot="diff-file-body"] span[style]')].some((el) =>
+        (el.getAttribute('style') ?? '').includes('var(--syn'),
+      )
+    const view = render(<Diff files={[MODIFIED]} />)
+    await waitFor(() => expect(colored()).toBe(true), { timeout: 5000 })
+
+    // A polled patch (or expanded context) gives the mounted file new lines — and a new cache key.
+    view.rerender(<Diff files={[{ ...MODIFIED, patch: MODIFIED.patch.replace('const two = 3', 'const two = 7') }]} />)
+    expect(document.querySelector('[data-slot="diff-file-body"]')?.textContent).toContain('const two = 7')
+    expect(colored()).toBe(true)
+  })
+
+  describe('a large file', () => {
+    // Past LARGE_DIFF_LINES changed lines: one file's rows are a single virtualized item, so a
+    // big one rendered in full is what froze the cockpit on opening a large change.
+    const LARGE: DiffFileChange = { ...MODIFIED, path: 'src/big.ts', adds: 900, dels: 300 }
+
+    it('opens collapsed behind "Load diff", rendering none of its rows', async () => {
+      await renderDiff(<Diff files={[LARGE, ADDED]} />, 'src/big.ts')
+      const card = [...document.querySelectorAll<HTMLElement>('[data-slot="diff-file"]')].find((el) => el.dataset.path === 'src/big.ts')!
+      expect(card.querySelector('[data-slot="diff-file-held"]')?.textContent).toContain('1,200 changed lines')
+      expect(card.querySelector('[data-slot="diff-line"]')).toBeNull()
+      expect(card.querySelector('[data-slot="diff-file-header"]')?.getAttribute('aria-expanded')).toBe('false')
+      // The small file beside it renders as before.
+      expect(document.querySelectorAll('[data-slot="diff-file-held"]')).toHaveLength(1)
+    })
+
+    it('renders its rows on "Load diff", and a reader can close it again', async () => {
+      await renderDiff(<Diff files={[LARGE]} />, 'src/big.ts')
+      fireEvent.click(screen.getByRole('button', { name: 'Load diff' }))
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-line"]')).not.toBeNull())
+      expect(document.querySelector('[data-slot="diff-file-held"]')).toBeNull()
+
+      fireEvent.click(document.querySelector('[data-slot="diff-file-header"]')!)
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-line"]')).toBeNull())
+      // Closed by the reader, it is not "held back" — no Load diff note comes back.
+      expect(document.querySelector('[data-slot="diff-file-held"]')).toBeNull()
+    })
+
+    it('opens anyway when it carries a comment — the reader must see it', async () => {
+      const comment = { id: 'c1', path: 'src/big.ts', side: 'new' as const, line: 4, body: 'look here' }
+      await renderDiff(<Diff files={[LARGE]} comments={[comment]} />, 'src/big.ts')
+      expect(document.querySelector('[data-slot="diff-file-held"]')).toBeNull()
+      expect(document.querySelector('[data-slot="diff-line"]')).not.toBeNull()
+    })
+  })
+
+  it('soft-wraps line content when wrap is set', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} wrap />)
+
+    const body = document.querySelector('[data-slot="diff-file-body"]')!
+    expect(body.getAttribute('data-wrap')).toBe('true')
+    expect(body.innerHTML).toContain('whitespace-pre-wrap')
+  })
+
+  it('collapses a file body from its sticky header', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /src\/a\.ts/ }))
+    expect(document.querySelector('[data-slot="diff-file-body"]')).toBeNull()
+  })
+
+  it('expands a context gap through the loadFileText seam', async () => {
+    const fileText = Array.from({ length: 6 }, (_, i) => `line ${i + 1}`).join('\n')
+    const loadFileText = vi.fn().mockResolvedValue(fileText)
+    await renderDiff(<Diff files={[MODIFIED]} loadFileText={loadFileText} />)
+
+    // The hunk starts at line 3 — a 2-line leading gap renders as an expander.
+    const gap = screen.getByRole('button', { name: /2 unchanged lines/ })
+    fireEvent.click(gap)
+    // Expanded lines render as syntax-token spans — assert on whole-row text, not one node.
+    const contextRows = () => Array.from(document.querySelectorAll('[data-line="context"]'))
+    await waitFor(() => expect(contextRows().some((row) => row.textContent?.includes('line 1'))).toBe(true))
+    expect(loadFileText).toHaveBeenCalledWith('src/a.ts')
+    expect(contextRows().some((row) => row.textContent?.includes('line 2'))).toBe(true)
+    expect(screen.queryByRole('button', { name: /2 unchanged lines/ })).toBeNull()
+  })
+
+  it('renders static gap separators when no loader is wired', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+
+    const gap = document.querySelector('[data-slot="diff-gap"]')!
+    expect(gap.tagName).toBe('DIV')
+    expect(gap.textContent).toContain('2 unchanged lines')
+  })
+
+  it('explains binary and metadata-only files instead of rendering rows', async () => {
+    const binary: DiffFileChange = { path: 'logo.png', status: 'modified', adds: 0, dels: 0, binary: true, patch: '' }
+    const metaOnly: DiffFileChange = { path: 'src/a.ts', status: 'modified', adds: 0, dels: 0, patch: '' }
+    await renderDiff(<Diff files={[metaOnly, binary]} />)
+
+    expect(screen.getByText('Binary file — no text diff.')).not.toBeNull()
+    expect(screen.getByText('No content changes (metadata only).')).not.toBeNull()
+  })
+})
+
+describe('Diff facade — image previews (#365)', () => {
+  const IMAGE: DiffFileChange = {
+    path: 'assets/logo.png',
+    status: 'modified',
+    adds: 0,
+    dels: 0,
+    binary: true,
+    image: true,
+    patch: '',
+  }
+  const DELETED_IMAGE: DiffFileChange = { ...IMAGE, path: 'assets/gone.png', status: 'deleted' }
+
+  it('renders an inline <img> from imageSrc instead of the binary note, tagged "image" not "binary"', async () => {
+    const imageSrc = vi.fn((path: string) => `/api/v1/runs/r1/files?path=${path}&raw=1`)
+    await renderDiff(<Diff files={[IMAGE]} imageSrc={imageSrc} />, 'assets/logo.png')
+
+    const img = document.querySelector('[data-slot="diff-image-preview"] img')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe('/api/v1/runs/r1/files?path=assets/logo.png&raw=1')
+    expect(imageSrc).toHaveBeenCalledWith('assets/logo.png')
+    expect(screen.queryByText('Binary file — no text diff.')).toBeNull()
+    // Status badge reads "image", not "binary".
+    expect(screen.getByText('image')).not.toBeNull()
+    expect(screen.queryByText('binary')).toBeNull()
+  })
+
+  it('falls back to the plain binary note when no imageSrc resolver is wired', async () => {
+    await renderDiff(<Diff files={[IMAGE]} />, 'assets/logo.png')
+
+    expect(screen.getByText('Binary file — no text diff.')).not.toBeNull()
+    expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
+  })
+
+  it('shows "Open in default app" only when onOpenInApp is provided, and calls it with the path', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const onOpenInApp = vi.fn()
+    const { rerender } = await renderDiff(<Diff files={[IMAGE]} imageSrc={imageSrc} />, 'assets/logo.png')
+    expect(screen.queryByText('Open in default app')).toBeNull()
+
+    rerender(<Diff files={[IMAGE]} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />)
+    const button = screen.getByText('Open in default app')
+    fireEvent.click(button)
+    expect(onOpenInApp).toHaveBeenCalledWith('assets/logo.png')
+  })
+
+  it('never renders a preview for a deleted image without oldImageSrc', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} />, 'assets/gone.png')
+
+    expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+    expect(screen.getByText(/only the new side can be previewed/)).not.toBeNull()
+  })
+
+  it('previews a deleted image from its old side when oldImageSrc is wired', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    const sides = document.querySelectorAll('[data-slot="diff-image-side"]')
+    expect(sides).toHaveLength(1)
+    expect(sides[0]?.getAttribute('data-side')).toBe('old')
+    expect(sides[0]?.querySelector('img')?.getAttribute('src')).toBe('/old/assets/gone.png')
+    expect(sides[0]?.querySelector('figcaption')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+  })
+
+  it('shows before | after for a modified image, and the new side alone for an added one', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    const { rerender } = await renderDiff(
+      <Diff files={[IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />,
+      'assets/logo.png',
+    )
+    const srcs = [...document.querySelectorAll('[data-slot="diff-image-side"] img')].map((img) => img.getAttribute('src'))
+    expect(srcs).toEqual(['/old/assets/logo.png', '/raw/assets/logo.png'])
+
+    rerender(<Diff files={[{ ...IMAGE, status: 'added' }]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />)
+    expect(document.querySelectorAll('[data-slot="diff-image-side"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="diff-image-preview"] img')?.getAttribute('src')).toBe('/raw/assets/logo.png')
+  })
+
+  it('a side the server refuses shows a note instead of a broken image', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    fireEvent.error(document.querySelector('[data-slot="diff-image-side"] img')!)
+    expect(document.querySelector('[data-slot="diff-image-side"] img')).toBeNull()
+    expect(screen.getByText(/can’t be previewed/)).not.toBeNull()
+  })
+})
+
+/**
+ * The regression this file's PNG-only fixtures let through: `image` is set from the path's
+ * EXTENSION, so an SVG git diffs as TEXT (`binary: false`, real +N/−M) arrives flagged
+ * `image: true`. Swapping its rows for a picture — or worse, for the "Binary file" note when
+ * no `imageSrc` is wired (Repo → Changes, repo commits, task commits) — destroys the diff.
+ */
+describe('Diff facade — an SVG is text, not a picture (#365 regression)', () => {
+  const SVG: DiffFileChange = {
+    path: 'assets/icon.svg',
+    status: 'modified',
+    adds: 1,
+    dels: 1,
+    binary: false,
+    image: true,
+    patch: [
+      'diff --git a/assets/icon.svg b/assets/icon.svg',
+      'index 1111111..2222222 100644',
+      '--- a/assets/icon.svg',
+      '+++ b/assets/icon.svg',
+      '@@ -1,3 +1,3 @@',
+      ' <svg viewBox="0 0 16 16">',
+      '-  <path d="M1 1h14v14H1z" />',
+      '+  <path d="M2 2h12v12H2z" />',
+      ' </svg>',
+      '',
+    ].join('\n'),
+  }
+
+  it('renders the text diff for a modified SVG when no imageSrc is wired (repo/commit views)', async () => {
+    await renderDiff(<Diff files={[SVG]} />, 'assets/icon.svg')
+
+    expect(screen.queryByText('Binary file — no text diff.')).toBeNull()
+    expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
+    const rows = Array.from(document.querySelectorAll('[data-slot="diff-line"]'))
+    expect(rows.some((row) => row.textContent?.includes('M1 1h14v14H1z'))).toBe(true)
+    expect(rows.some((row) => row.textContent?.includes('M2 2h12v12H2z'))).toBe(true)
+  })
+
+  it('still renders the text diff for a modified SVG when imageSrc IS wired (Changes tab)', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    await renderDiff(<Diff files={[SVG]} imageSrc={imageSrc} onOpenInApp={vi.fn()} />, 'assets/icon.svg')
+
+    // The text diff is the review surface — a lone new-side picture would lose the change.
+    expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+    expect(document.querySelectorAll('[data-slot="diff-line"]').length).toBeGreaterThan(0)
+  })
+
+  it('previews an SVG that carries no text patch at all (nothing to lose)', async () => {
+    const noPatch: DiffFileChange = { ...SVG, adds: 0, dels: 0, patch: '' }
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    await renderDiff(<Diff files={[noPatch]} imageSrc={imageSrc} />, 'assets/icon.svg')
+
+    expect(document.querySelector('[data-slot="diff-image-preview"] img')?.getAttribute('src')).toBe(
+      '/raw/assets/icon.svg',
+    )
+  })
+
+  it('agrees with the zero-dependency fallback renderer on the same SVG', () => {
+    render(<DiffFallback files={[SVG]} imageSrc={(path) => `/raw/${path}`} />)
+
+    expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
+    expect(screen.queryByText('Binary file — no text diff.')).toBeNull()
+    expect(document.querySelector('pre')?.textContent).toContain('M2 2h12v12H2z')
+  })
+
+  describe('Markdown preview', () => {
+    const EDITED_MD: DiffFileChange = {
+      path: 'docs/guide.md',
+      status: 'modified',
+      adds: 1,
+      dels: 1,
+      patch: ['diff --git a/docs/guide.md b/docs/guide.md', '@@ -1,2 +1,2 @@', ' # Guide', '-old line', '+**new** line', ''].join(
+        '\n',
+      ),
+    }
+
+    it('renders an added Markdown file as a document from its patch', async () => {
+      await renderDiff(<Diff files={[MODIFIED, ADDED]} preview />)
+
+      const preview = await waitFor(() => {
+        const element = document.querySelector('[data-slot="diff-markdown-preview"]')
+        expect(element).not.toBeNull()
+        return element!
+      })
+      expect(preview.querySelector('h1')?.textContent).toBe('Title')
+      // Reading scale, not the chat's compact one.
+      expect(preview.querySelector('.thread-markdown.markdown-document')).not.toBeNull()
+      expect(preview.textContent).not.toContain('Showing the changed sections only')
+      // Non-Markdown files keep their rows.
+      expect(document.querySelector('[data-slot="diff-file-body"]')).not.toBeNull()
+    })
+
+    it('renders the full worktree text when a loader is wired', async () => {
+      const loadFileText = vi.fn().mockResolvedValue('# Guide\n\nWhole **document**')
+      await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} />, 'docs/guide.md')
+
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"] [data-streamdown="strong"]')?.textContent).toBe('document'))
+      expect(loadFileText).toHaveBeenCalledWith('docs/guide.md')
+    })
+
+    it('says so when only the changed sections are available', async () => {
+      await renderDiff(<Diff files={[EDITED_MD]} preview />, 'docs/guide.md')
+
+      await screen.findByText('Showing the changed sections only.')
+      expect(document.querySelector('[data-slot="diff-markdown-preview"]')?.textContent).not.toContain('old line')
+    })
+
+    it('keeps the last text up while a changed file reloads', async () => {
+      let resolveSecond: (text: string) => void = () => {}
+      const loadFileText = vi
+        .fn()
+        .mockResolvedValueOnce('# First')
+        .mockReturnValueOnce(new Promise<string>((resolve) => (resolveSecond = resolve)))
+      const { rerender } = await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} />, 'docs/guide.md')
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('First'))
+
+      // The poll saw another write: a new patch for the same path.
+      rerender(<Diff files={[{ ...EDITED_MD, patch: `${EDITED_MD.patch}+more\n` }]} preview loadFileText={loadFileText} />)
+      await waitFor(() => expect(loadFileText).toHaveBeenCalledTimes(2))
+      expect(screen.queryByText('Loading preview…')).toBeNull()
+      expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('First')
+
+      resolveSecond('# Second')
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"] h1')?.textContent).toBe('Second'))
+    })
+
+    it('loads relative images through imageSrc, resolved against the file', async () => {
+      const loadFileText = vi.fn().mockResolvedValue('![logo](../assets/logo.png)')
+      const imageSrc = (path: string) => `/raw?path=${path}`
+      await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} imageSrc={imageSrc} />, 'docs/guide.md')
+
+      await waitFor(() =>
+        expect(document.querySelector('[data-slot="diff-markdown-preview"] img')?.getAttribute('src')).toBe('/raw?path=assets/logo.png'),
+      )
+    })
+
+    it('never renders a javascript: link from a previewed file', async () => {
+      const loadFileText = vi.fn().mockResolvedValue('[click](javascript:void(0)) and [docs](https://example.com)')
+      await renderDiff(<Diff files={[EDITED_MD]} preview loadFileText={loadFileText} />, 'docs/guide.md')
+
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"]')?.textContent).toContain('docs'))
+      const hrefs = [...document.querySelectorAll('[data-slot="diff-markdown-preview"] [href]')].map((a) => a.getAttribute('href'))
+      expect(hrefs.some((href) => href?.startsWith('javascript:'))).toBe(false)
+    })
+
+    it('leaves Markdown as a diff when preview is off', async () => {
+      await renderDiff(<Diff files={[EDITED_MD]} />, 'docs/guide.md')
+
+      expect(document.querySelector('[data-slot="diff-markdown-preview"]')).toBeNull()
+      expect(document.querySelector('[data-slot="diff-file-body"]')).not.toBeNull()
+    })
+  })
+})

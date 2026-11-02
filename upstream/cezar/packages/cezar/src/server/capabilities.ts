@@ -1,0 +1,255 @@
+/**
+ * Server capabilities reported by `/api/health` — the UI hides what the server
+ * says isn't there, and the matching endpoints refuse as defense in depth.
+ *
+ * `localHandoff` (cockpit-ui redesign spec §"Deployment modes — local vs
+ * hosted"): the default deployment is `npx cezar-cli` on localhost, where
+ * handing a session off to a local terminal/editor makes sense. On a VPS/remote
+ * box it doesn't: `CEZ_REMOTE=1` (or binding a non-loopback host) switches to
+ * hosted mode — the UI hides every local-machine affordance and the open-in-*
+ * endpoints 409.
+ *
+ * `followups` (spec 007, #444, #471): the global follow-up inbox is **opt-in**
+ * via `CEZ_FOLLOWUPS=1` and off by default. Off, agents are never told to write
+ * `todos.json` (they get `HANDOFF_ONLY_INSTRUCTIONS` and an empty
+ * `CEZ_TODOS_FILE`), the Inbox nav item is gone and the inbox endpoints refuse.
+ * The per-task handoff journal is independent and runs either way.
+ *
+ * `singleProject` (spec 2026-07-21-cez-single-project): the workspace is
+ * deliberately constrained to the launch project when `CEZ_SINGLE_PROJECT=1`.
+ * Like the other opt-in capabilities, activation is strict: no other spelling
+ * enables it.
+ *
+ * `automations` (spec 2026-07-25-github-automations, #801): GitHub automations
+ * are **opt-in** via `CEZ_AUTOMATIONS=1` and off by default. Off, the
+ * `Automations` nav item is gone everywhere it is rendered, the
+ * `/automations*` endpoints refuse, and the workspace scheduler never polls
+ * GitHub — the flag removes the behavior, not only the UI. Activation is
+ * strict, like the two capabilities above. Nothing on disk is touched:
+ * definitions, receipts and high-watermarks survive the flag being off, so
+ * unsetting it and restarting restores the feature wholesale. On, and with a
+ * cockpit to reach (`CEZ_API_URL`), a task may also CREATE automations from a
+ * prompt (spec 2026-09-13-automations-from-prompt): the `cez automation` CLI,
+ * an automations part in every task's system prompt, the built-in
+ * `create-cezar-automation` skill and the composer's "Create an automation"
+ * template all hang off this one capability.
+ *
+ * `agentAccountsEnabled` keeps account folders local by default. An operator may explicitly set
+ * `CEZ_REMOTE_AGENT_ACCOUNTS=1` for an authenticated remote deployment; this does not change
+ * `localHandoff`, so desktop-only actions remain unavailable.
+ *
+ * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
+ * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
+ * AGENTS.md § Zero config, recorded there: the brakes live in the engine — four children in
+ * flight, a child's budget carved out of its parent's — and a default-off dispatch left the
+ * agent fanning out through its own sub-agents instead, unbudgeted and invisible). Off, the
+ * `/runs/:id/{dispatch,report}` routes answer 409 and no task's system prompt mentions
+ * dispatching; the `dispatch` field on existing run records survives the flag being off.
+ *
+ * Usage presentation: token counts and monetary cost stay visible by default.
+ * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
+ * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
+ * changes collection, persistence, events, or API run records.
+ */
+
+import { webhookPlatformSupported } from '../webhooks/platform.ts';
+import { followupsEnabled } from '../handoff.ts';
+import type { Capabilities } from '@open-mercato/cezar-contract';
+
+/** Every IPv4 address in 127.0.0.0/8, anchored. Anchoring is load-bearing: a
+ *  `startsWith('127.')` test also matches attacker-controlled *hostnames* like
+ *  `127.0.0.1.evil.com`, which is exactly the DNS-rebinding bypass #426 is
+ *  about — see `isLoopbackHostHeader`. */
+const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+/** The IPv6 loopback in the canonical form `expandIpv6` emits. */
+const LOOPBACK_V6 = '0:0:0:0:0:0:0:1';
+
+/** Expand an IPv6 literal to all 8 groups, lowercase and without leading zeros
+ *  (`::1` → `0:0:0:0:0:0:0:1`), or `null` when it is not a valid literal.
+ *
+ *  Canonicalizing rather than merely *recognizing* matters: `Host` carries
+ *  whatever spelling the client sent, but `new URL().hostname` compresses
+ *  (`[0:0:0:0:0:0:0:1]` → `[::1]`), so the two only compare equal on a common
+ *  form. */
+function expandIpv6(h: string): string | null {
+  const halves = h.split('::');
+  if (halves.length > 2) return null;
+  let groups: string[];
+  if (halves.length === 2) {
+    const head = halves[0] ? halves[0].split(':') : [];
+    const tail = halves[1] ? halves[1].split(':') : [];
+    const dotted = tail.findIndex((group) => group.includes('.'));
+    if (dotted !== -1) {
+      if (dotted !== tail.length - 1) return null;
+      const ipv4 = expandIpv4(tail[dotted]!);
+      if (!ipv4) return null;
+      tail.splice(dotted, 1, ...ipv4);
+    }
+    if (head.length + tail.length > 7) return null;
+    groups = [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail];
+  } else {
+    groups = h.split(':');
+    const dotted = groups.findIndex((group) => group.includes('.'));
+    if (dotted !== -1) {
+      if (dotted !== groups.length - 1) return null;
+      const ipv4 = expandIpv4(groups[dotted]!);
+      if (!ipv4) return null;
+      groups.splice(dotted, 1, ...ipv4);
+    }
+  }
+  if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.map((g) => parseInt(g, 16).toString(16)).join(':');
+}
+
+/** Convert a strict dotted-quad IPv4 tail to the two IPv6 groups it occupies. */
+function expandIpv4(value: string): [string, string] | null {
+  const octets = value.split('.');
+  // Keep the dotted form unambiguous. WHATWG URL and node:net reject
+  // multi-digit leading-zero octets, so accepting them here would let a
+  // malformed Host authority through a security boundary that rejects the
+  // equivalent URL spelling.
+  if (octets.length !== 4 || !octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet))) return null;
+  const numbers = octets.map(Number);
+  if (numbers.some((octet) => octet > 255)) return null;
+  return [((numbers[0]! << 8) | numbers[1]!).toString(16), ((numbers[2]! << 8) | numbers[3]!).toString(16)];
+}
+
+/** Canonical hostname of an authority: port and IPv6 brackets removed, IPv6
+ *  expanded, zone id and FQDN trailing dot dropped, lowercased.
+ *  `[::1]:4321` → `0:0:0:0:0:0:0:1`, `localhost.:4321` → `localhost`.
+ *
+ *  Strict by construction: an authority that does not parse as one of the three
+ *  legal shapes returns `''`, which no allowlist matches. Being lax here is a
+ *  security bug, not a convenience — a parser that merely *finds* a loopback
+ *  name inside the header would accept `[::1]@evil.com` or `127.0.0.1:evil.com`. */
+export function normalizeHostname(host: string): string {
+  // 1. Bracketed IPv6, optionally with a port: `[::1]`, `[::1%25eth0]:4321`.
+  //    The end anchor is load-bearing — without it `[::1]@evil.com` → `::1`.
+  const bracketed = host.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return expandIpv6(stripZone(bracketed[1]!.toLowerCase())) ?? '';
+
+  // 2. A bare IPv6 literal cannot carry a port (no brackets ⇒ every colon
+  //    belongs to the address), so anything with >1 colon is taken whole.
+  if (host.split(':').length > 2) return expandIpv6(stripZone(host.toLowerCase())) ?? '';
+
+  // 3. `name` or `name:port`, where the port must actually be digits.
+  const plain = host.match(/^([^:[\]]*)(?::(\d+))?$/);
+  if (plain) return plain[1]!.toLowerCase().replace(/\.$/, '');
+
+  return ''; // unparseable ⇒ matches no allowlist
+}
+
+/** Drop an IPv6 zone id (`fe80::1%eth0`), anchored to the end so a `%` inside a
+ *  registrable hostname can never truncate it down to a loopback name. */
+function stripZone(h: string): string {
+  return h.replace(/%[a-z0-9._~-]+$/, '');
+}
+
+/** True when the hostname names this machine and nothing else. Expects the
+ *  canonical output of `normalizeHostname`. */
+function isLoopbackName(hostname: string): boolean {
+  if (hostname === 'localhost' || LOOPBACK_V4.test(hostname) || hostname === LOOPBACK_V6) return true;
+
+  // An IPv4-mapped IPv6 address has the fixed first six groups followed by
+  // the IPv4 value in the final two groups. Only mapped 127/8 values are
+  // loopback; do not treat other mapped private/public addresses as local.
+  const mapped = hostname.match(/^0:0:0:0:0:ffff:([0-9a-f]+):([0-9a-f]+)$/);
+  if (!mapped) return false;
+  const high = Number.parseInt(mapped[1]!, 16);
+  return (high >>> 8) === 0x7f;
+}
+
+/** True for bind hosts that only the local machine can reach. Undefined = the
+ *  default bind (127.0.0.1), hence trusted — this is a *configuration* value we
+ *  chose, not a request header. Do NOT use this on attacker-controlled input;
+ *  use `isLoopbackHostHeader`, which fails closed on a missing host. */
+export function isLoopbackHost(host: string | undefined): boolean {
+  if (!host) return true;
+  return isLoopbackName(normalizeHostname(host));
+}
+
+/** True for a request's `Host`/`Origin` hostname when it names this machine.
+ *  The untrusted-input twin of `isLoopbackHost`: a missing or unparseable host
+ *  is **untrusted** (false), because absent is not the same as "we defaulted to
+ *  loopback" once the value arrives over the wire (#426). */
+export function isLoopbackHostHeader(host: string | null | undefined): boolean {
+  if (!host) return false;
+  return isLoopbackName(normalizeHostname(host));
+}
+
+/**
+ * Whether the agent-account store may cross the HTTP boundary.
+ *
+ * Local cockpits retain the zero-config behaviour. A remote cockpit can opt in when its operator
+ * has put the server behind an authenticated perimeter; the exact-value flag is deliberately
+ * separate from `localHandoff`, since opening a desktop app still makes no sense on a VPS.
+ */
+export function agentAccountsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  bindHost?: string,
+): boolean {
+  return localHandoffEnabled(env, bindHost) || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+}
+
+/** One spelling of the local-machine boundary, shared by every capability derived from it. */
+function localHandoffEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
+/**
+ * Whether the Preview tab may offer Design Mode (spec `2026-10-09-design-mode`). Only on a local
+ * cockpit: the picker proxy listens on loopback, which a hosted cockpit's viewer cannot reach.
+ * `CEZ_DESIGN_MODE=0` is the off switch; there is deliberately no `=1` for hosted mode.
+ */
+function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_DESIGN_MODE !== '0' && localHandoffEnabled(env, bindHost);
+}
+
+/** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
+ *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
+ *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
+ *  `CEZ_DISPATCH=0` ⇒ task dispatch is OFF (spec 2026-09-10-dispatch); on otherwise.
+ *
+ *  Read per request — cheap, and tests/ops can flip `CEZ_REMOTE` live. `followups` is honest
+ *  per request too, but flipping it ON at runtime is only half a switch: the per-dataDir
+ *  todos watch (step 2.3) is created by an SSE subscription, so connections opened while the
+ *  flag was off never subscribed and get no live inbox updates until they reconnect. Hence
+ *  the UI's "set CEZ_FOLLOWUPS=1 and restart cezar" wording — treat it as a boot-time flag.
+ *
+ *  `automations` carries the same caveat and for the same reason: the workspace scheduler is
+ *  started once, on the server's `listening` event, so flipping the flag on afterwards gates
+ *  the routes open without ever starting the poller. Boot-time flag, same wording.
+ *
+ *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
+ *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
+ *  while every run already in the tree kept its prompt. Set it and restart. */
+/** `CEZ_TERMINAL` tri-state: unset follows `localHandoff` (an interactive shell is the most
+ *  exposure a hosted cockpit can add), `=1` opts a hosted cockpit in, `=0` turns it off everywhere. */
+function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  if (env.CEZ_TERMINAL === '1') return true;
+  if (env.CEZ_TERMINAL === '0') return false;
+  return localHandoffEnabled(env, bindHost);
+}
+
+export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
+  const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
+  const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
+  const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
+  return {
+    localHandoff: localHandoffEnabled(env, bindHost),
+    terminal: terminalEnabled(env, bindHost),
+    designMode: designModeEnabled(env, bindHost),
+    // Deliberately not re-derived here: RunManager enforces the same predicate,
+    // and two spellings of "is the inbox on" would eventually disagree.
+    followups: followupsEnabled(env),
+    singleProject: env.CEZ_SINGLE_PROJECT === '1',
+    automations: env.CEZ_AUTOMATIONS !== '0',
+    webhooks: webhookPlatformSupported() && env.CEZ_WEBHOOKS === '1',
+    ...(!webhookPlatformSupported() ? { webhooksUnavailableReason: 'unsupported_platform' as const } : {}),
+    dispatch: env.CEZ_DISPATCH !== '0',
+    tokenMetrics: tokenUsageMetrics && costMetrics,
+    tokenUsageMetrics,
+    costMetrics,
+  };
+}

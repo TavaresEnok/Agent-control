@@ -1,0 +1,307 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { agentAccountsPath } from '../paths.ts';
+import type { Hono } from 'hono';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
+import {
+  ATTACHMENT_IMAGES_TOO_LARGE,
+  ATTACHMENT_UPLOAD_MISSING,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
+} from '@open-mercato/cezar-contract';
+
+/**
+ * `POST /api/v1/runs/:id/continue` runner/model override (#401) — the follow-up composer lets the
+ * user pick which backend/model reopen the session. Contract: the parsed override is handed to
+ * the manager verbatim; an empty POST omits both (the run's current backend is kept — backward
+ * compat); a bad runner is a 400. A capturing stub is all the boundary needs (start-run pattern).
+ */
+describe('POST /api/v1/runs/:id/continue override', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let app: Hono;
+  let runId: string;
+  type ContinueOpts = {
+    text?: string;
+    images?: Array<{ type: string; source: { media_type: string; data: string } }>;
+    runner?: string;
+    model?: string;
+    agentProfile?: string;
+  };
+  let captured: { id: string; opts: ContinueOpts } | undefined;
+  let calls: number;
+  let refuse: string | undefined;
+  let home: string;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedHome = process.env.CEZ_HOME;
+
+  beforeEach(() => {
+    process.env.CEZ_DRY_RUN = '1';
+    // Agent accounts resolve against `~/.cezar/` — pinned to a temp home so the machine's real
+    // logins can neither be read nor decide the outcome.
+    home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-continue-home-'));
+    process.env.CEZ_HOME = home;
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    captured = undefined;
+    calls = 0;
+    refuse = undefined;
+    runId = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      steps: [],
+    }).id;
+    const manager = {
+      continueRun: (id: string, opts: ContinueOpts = {}) => {
+        calls += 1;
+        if (refuse) return { ok: false, error: refuse };
+        captured = { id, opts };
+        return { ok: true };
+      },
+    } as unknown as RunManager;
+    app = createApp({ repoRoot, store, manager, version: '0.0.0-test' });
+  });
+
+  afterEach(() => {
+    store.flush();
+    for (const dir of [repoRoot, home]) rmSync(dir, { recursive: true, force: true });
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    if (savedHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = savedHome;
+  });
+
+  /** One stored Claude login beside the discovered account. */
+  const writeAccounts = () => {
+    const path = agentAccountsPath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        accounts: [
+          { id: 'klaudiusz', provider: 'claude', configDir: '~/.claude-klaudiusz', label: 'Klaudiusz' },
+        ],
+      }),
+      'utf8',
+    );
+  };
+
+  const post = (body: unknown) =>
+    apiRequest(app, `/api/v1/runs/${runId}/continue`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('plumbs a runner + model override through to the manager', async () => {
+    const res = await post({ runner: 'codex', model: 'gpt-5.1-codex' });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.runner).toBe('codex');
+    expect(captured?.opts.model).toBe('gpt-5.1-codex');
+  });
+
+  it('an empty POST omits both — the run keeps its current backend (backward compat)', async () => {
+    const res = await post({});
+    expect(res.status).toBe(200);
+    expect(captured?.opts.runner).toBeUndefined();
+    expect(captured?.opts.model).toBeUndefined();
+  });
+
+  it('still carries a follow-up text alongside the override', async () => {
+    const res = await post({ text: 'keep going', runner: 'opencode' });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.text).toBe('keep going');
+    expect(captured?.opts.runner).toBe('opencode');
+  });
+
+  it('rejects a model override while locked but still permits switching runners', async () => {
+    writeFileSync(
+      join(repoRoot, '.ai', 'cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+
+    expect((await post({ runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
+    expect((await post({ runner: 'codex' })).status).toBe(200);
+    expect(captured?.opts.runner).toBe('codex');
+    expect(captured?.opts.model).toBeUndefined();
+  });
+
+  /** A Continue taken behind the run's teardown (continueOnDrop) adds no step yet, so the
+   *  cockpit's re-post of a Continue that got no answer is told apart only by its key. */
+  it('continues a re-posted Continue once — a repeated idempotency key answers its first response', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e20';
+    const [first, retry] = await Promise.all([post({ text: 'once', idempotencyKey }), post({ text: 'once', idempotencyKey })]);
+    expect(await first.json()).toEqual({ continued: true });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ continued: true });
+    expect(calls).toBe(1);
+    expect((await post({ text: 'other', idempotencyKey: '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e21' })).status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it('a refused Continue key is judged afresh on retry', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e22';
+    refuse = 'run is still active';
+    expect((await post({ idempotencyKey })).status).toBe(409);
+    refuse = undefined;
+    expect(await (await post({ idempotencyKey })).json()).toEqual({ continued: true });
+    expect(calls).toBe(2);
+  });
+
+  it('rejects an idempotency key that is not a uuid', async () => {
+    expect((await post({ idempotencyKey: 'nope' })).status).toBe(400);
+    expect(calls).toBe(0);
+  });
+
+  /** The follow-up composer is a full composer, so a screenshot pasted into it has to reach the
+   *  reopened session — as content blocks, the same shape `POST /messages` hands the engine. */
+  it('converts pasted images into content blocks for the manager', async () => {
+    const res = await post({ text: 'like this', images: [{ mediaType: 'image/png', data: 'AAAA' }] });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.images).toEqual([
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    ]);
+  });
+
+  it('rejects a media type outside the allowlist, and more attachments than a message may carry', async () => {
+    // Since #950 the follow-up composer takes PDF/TXT/MD too — the refusal is what is left
+    // outside that allowlist, not "anything that is not an image".
+    expect((await post({ images: [{ mediaType: 'application/zip', data: 'AAAA' }] })).status).toBe(400);
+    const tooMany = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE + 1 }, () => ({ mediaType: 'image/png', data: 'AAAA' }));
+    expect((await post({ images: tooMany })).status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
+  /** Telemetry 7054e5f2: a message names staged uploads instead of carrying their bytes, so the
+   *  inline size budget does not apply to them — files travel as paths, so they never count. */
+  const stage = async (mediaType: string, data: string, name: string): Promise<string> => {
+    const res = await apiRequest(app, '/api/v1/workspace/uploads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mediaType, data, name }),
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { uploadId: string }).uploadId;
+  };
+
+  it('resolves staged uploads, past the inline size budget', async () => {
+    // Five of these inline would exceed the budget; each alone is a valid attachment.
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 5 + 4);
+    const staged = [await stage('image/png', 'AAAA', 'shot.png')];
+    for (let i = 0; i < 5; i += 1) staged.push(await stage('application/pdf', big, `doc-${i}.pdf`));
+    const res = await post({ text: 'compare', images: staged.map((uploadId) => ({ uploadId })) });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.images).toHaveLength(6);
+    expect(captured?.opts.images?.[0]?.source.data).toBe('AAAA');
+  });
+
+  /** Images reach the provider inline in one turn, so staging them does not lift their budget. */
+  it('refuses staged images past the image budget', async () => {
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 5 + 4);
+    const staged = [];
+    for (let i = 0; i < 5; i += 1) staged.push(await stage('image/png', big, `shot-${i}.png`));
+    const res = await post({ text: 'compare', images: staged.map((uploadId) => ({ uploadId })) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENT_IMAGES_TOO_LARGE);
+    expect(captured).toBeUndefined();
+  });
+
+  /** #1735: an over-limit body used to answer a bare "Payload Too Large" the cockpit could not explain. */
+  it('answers an over-limit body with a JSON 413 naming the limit', async () => {
+    const res = await post({ text: 'x', pad: 'A'.repeat(33 * 1024 * 1024) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(((await res.json()) as { error: string }).error).toContain('32 MiB');
+  });
+
+  it('refuses a reference to an upload that is gone, with the wording the composer matches', async () => {
+    const res = await post({ images: [{ uploadId: 'a'.repeat(24) }] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENT_UPLOAD_MISSING);
+    expect(captured).toBeUndefined();
+  });
+
+  /** Telemetry 7054e5f2: five screenshots in one message were refused under the old cap of four. */
+  it('accepts five attachments, and refuses a set over the total size budget', async () => {
+    const five = Array.from({ length: 5 }, () => ({ mediaType: 'image/png', data: 'AAAA' }));
+    expect((await post({ images: five })).status).toBe(200);
+    captured = undefined;
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 4 + 4);
+    const heavy = Array.from({ length: 4 }, () => ({ mediaType: 'image/png', data: big }));
+    expect((await post({ images: heavy })).status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
+  /** #950 — a brief pasted into the follow-up composer must reach the reopened session as a file
+   *  block, which the engine turns into a path; the composer is a full composer either way. */
+  it('takes a PDF or a markdown file and hands the manager a file block', async () => {
+    const res = await post({ text: 'read this', images: [{ mediaType: 'application/pdf', data: 'AAAA' }] });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.images).toEqual([{ type: 'file', mediaType: 'application/pdf', data: 'AAAA' }]);
+  });
+
+  it('rejects an unknown runner with a 400 and never reaches the manager', async () => {
+    const res = await post({ runner: 'gemini' });
+    expect(res.status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
+  /* Agent accounts (spec 2026-07-29-agent-profiles): the follow-up pill can name which login
+     reopens the session, on the same terms `POST /runs` takes one at creation. */
+
+  it('plumbs the picked agent account through to the manager', async () => {
+    writeAccounts();
+    const res = await post({ agentProfile: 'klaudiusz' });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.agentProfile).toBe('klaudiusz');
+  });
+
+  it('takes `default` explicitly — the discovered account, whatever the project is set to', async () => {
+    const res = await post({ agentProfile: 'default' });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.agentProfile).toBe('default');
+  });
+
+  it('an empty POST names no account — the run keeps the one it is on', async () => {
+    const res = await post({});
+    expect(res.status).toBe(200);
+    expect(captured?.opts.agentProfile).toBeUndefined();
+  });
+
+  it('rejects an account that no longer exists with a 400, and never reaches the manager', async () => {
+    // A USER just picked this from a menu, so "unknown account" is honest and actionable —
+    // quietly reopening the session on another login would cross a billing boundary.
+    writeAccounts();
+    const res = await post({ agentProfile: 'deleted-one' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'unknown claude account: deleted-one' });
+    expect(captured).toBeUndefined();
+  });
+
+  it('resolves the account against the runner the continuation will USE', async () => {
+    // The claude login is unknown to codex, so a switch that carries it is refused rather than
+    // silently ignored.
+    writeAccounts();
+    const res = await post({ runner: 'codex', agentProfile: 'klaudiusz' });
+    expect(res.status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
+  it('404s for an unknown run before validating the body', async () => {
+    const res = await apiRequest(app, '/api/v1/runs/missing/continue', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(404);
+  });
+});

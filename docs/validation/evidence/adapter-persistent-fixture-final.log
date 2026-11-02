@@ -1,0 +1,52 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+
+> agent-control@0.1.0 test
+> node --import tsx --test --test-concurrency=1 tests/*.test.ts
+
+TAP version 13
+# Subtest: C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+ok 1 - C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+  ---
+  duration_ms: 7619.259055
+  type: 'test'
+  ...
+# Subtest: RF-03/04: same project has independent context and session identities
+ok 2 - RF-03/04: same project has independent context and session identities
+  ---
+  duration_ms: 99.999083
+  type: 'test'
+  ...
+# Subtest: RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+ok 3 - RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+  ---
+  duration_ms: 56.314031
+  type: 'test'
+  ...
+# Subtest: RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+ok 4 - RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+  ---
+  duration_ms: 175.651249
+  type: 'test'
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 5 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 3801.043418
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17252.551516

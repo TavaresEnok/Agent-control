@@ -1,0 +1,106 @@
+{
+  "cezar": [
+    {
+      "path": ".env.example",
+      "upstream_blob": "4138a2d6243a1c777cd9baa3898290b188a14434",
+      "current_blob": "e24fa005d639f9fd3533c50a7c5133a6d5fa9dee",
+      "sha256": "ceb67eebef8b74704591ba8f39f15125c141872bd4a2a449fd3c93d0a3a2ec9a"
+    },
+    {
+      "path": "docs/reference.md",
+      "upstream_blob": "149d6200c75401b75145f247ecd79a94720027bf",
+      "current_blob": "d89a5dd34bb835832358280025e2026c7a482b1a",
+      "sha256": "49470781cc2ef75da3c3488c942c5f2d1aea987dec3f6501704e67154a03a9bb"
+    },
+    {
+      "path": "packages/cezar/src/core/runner-factory.ts",
+      "upstream_blob": "06eb21662859d17afa732d4d6d061e2ac951224f",
+      "current_blob": "176c7d5e02a4b3fb16595b6855a7d9dc5e439985",
+      "sha256": "bf02cf112d51c781c9370b5188024094214a51a90d28a78f17dffc687c505eb4"
+    },
+    {
+      "path": "packages/cezar/src/git-worktree.ts",
+      "upstream_blob": "377e215d974bc950c28bd88a5b9566a06c489305",
+      "current_blob": "f689600f17c2f8ae6dd2626161b709fcc3c8f8b1",
+      "sha256": "2a2f17f92b9d06d09d8e265495b489816e3d8c5f9acd9a0489899ba4d83a5c2c"
+    },
+    {
+      "path": "packages/cezar/src/workflows/branch-naming-fallback.test.ts",
+      "upstream_blob": "9fc0bc41f6b3e386c6d1a251ad85217b0a2df601",
+      "current_blob": "ee2ed9aedfdc56a9f6514b66834c7d2e83563b7c",
+      "sha256": "ea968b9dc68fdfe19dcb91ca95b991d7ee242b15d065b8fd751b61af4cb4da4b"
+    },
+    {
+      "path": "packages/cezar/src/workflows/branch-naming.test.ts",
+      "upstream_blob": "85747804cc0bb525a120c207d83aba9cfc96cf77",
+      "current_blob": "dcd967a4f5ca5f4cd9dfc78759ca6fe5aa0668bc",
+      "sha256": "a773fc6a0c497d53cb7782d8df4e33974c83c4175fd7f343ccfc85fa744e952a"
+    },
+    {
+      "path": "packages/cezar/src/workflows/run.ts",
+      "upstream_blob": "a0cbeeb9e0bb90c5b58a93d1203b5201d5445abd",
+      "current_blob": "a3b4183b169b13490ed59ead9a1a5bc599e22f39",
+      "sha256": "36bf3b8ca605490ab24b1c44b6483cff0ca85b7b9d0274250924d4abdfe00638"
+    },
+    {
+      "path": "packages/cezar/src/workflows/templates.ts",
+      "upstream_blob": "b6ab5911f52248228685de63cce72f218b0d557a",
+      "current_blob": "dc5b002e1f9374413519799096c3bad33dab943e",
+      "sha256": "01cb2c554649184abe378cb0a777e42f57ec6e0864c47768fb5f774e89b935d1"
+    },
+    {
+      "path": "packages/cezar/src/worktree-lifecycle/coordinator.test.ts",
+      "upstream_blob": "a8a0b7098fae8349a9fe31f6e875cc49a2c2c018",
+      "current_blob": "0d368fdf6220bbf6b97196a3a2711c70b6ec1ea7",
+      "sha256": "1539a7cf42e0ee36edc429d40b6f6adc9465392bbc485af23bede8e77f23f0f8"
+    },
+    {
+      "path": "packages/web/src/api/client.test.ts",
+      "upstream_blob": "daa36644f8234fd5f9a75bdb0e3af2f957758a1a",
+      "current_blob": "140c6004fe79fee8eb56376aa01c8de80655e7b3",
+      "sha256": "e5c36ea871546f11bbeb2493ecb76cc651085aed7dd1d1444e21ff6510c606f4"
+    },
+    {
+      "path": "packages/web/src/api/client.ts",
+      "upstream_blob": "bf04232ce280ca56600f3ef13e90e23da5ad8e32",
+      "current_blob": "2c59ed6f08ce637bf57996229d7011e6463f98c0",
+      "sha256": "a8dd8483707b1b0bde5196a0adc24561eeb509f726733d8d2725e0836ce848ff"
+    },
+    {
+      "path": "packages/web/src/components/composer/composer.tsx",
+      "upstream_blob": "a6e51d098eeab8d431bc2cbf3d8b1699a17bfb24",
+      "current_blob": "e0fb50566df1ff48c60ae088dbc43dff5a3ce297",
+      "sha256": "0e3cbbbc0445081c06a0d37e220879ad800598dbd0b14139eb3b007bdf41ff5c"
+    },
+    {
+      "path": "packages/web/src/components/diff/diff.test.tsx",
+      "upstream_blob": "921b8120b6d806f03a84955d058453938a3f3ea3",
+      "current_blob": "a0ce2ad0c30f475fc43534d0804e48bc2deafd7e",
+      "sha256": "442b84181bcdce699746eea35a0b3575f2ec6887216977b39e0f2208c2f4ea5a"
+    },
+    {
+      "path": "packages/web/src/routes/workflow-graph/workflow-graph.tsx",
+      "upstream_blob": "58d80c622ba7f1bb81f2c8eed8a038a9d863c096",
+      "current_blob": "0799dbabfccb096657475b64b007d0b765003b8b",
+      "sha256": "eeea252040c5cb0e9c1ffbe6ebe53965490738c3bf53035c5f347a87a8c9a695"
+    },
+    {
+      "path": "packages/web/src/components/composer/canonical-chat.test.tsx",
+      "change": "added",
+      "sha256": "3d8c9b307b879ac2bd4cac792ffc9c875229f4ba2e840e92d3dadef2a399dbe9"
+    },
+    {
+      "path": "packages/cezar/src/git-worktree-identity.test.ts",
+      "change": "added",
+      "sha256": "80073780f0548ad27aec9ae338d86df4a9d6a6fbef01b0dc041f20a594df4732"
+    }
+  ],
+  "happier": [
+    {
+      "path": "package.json",
+      "upstream_blob": "47b898a56a80d3f05b816c9c9056fcc368a7e5ab",
+      "current_blob": "87afeb42639dfdcebc51aac6d1d6b4700032be9c",
+      "sha256": "df1ee4c53cd277db7a48c873f24db876776aae1e0858d04b86be2103c7f0fc05"
+    }
+  ]
+}

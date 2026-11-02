@@ -1,0 +1,708 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
+import record from './fixtures/thread-run.record.json'
+
+/**
+ * The task thread (`/tasks/:id`, R3 Steps 1.1 + 1.2) in a real browser, against a real cezar
+ * serving a run whose transcript is a REAL NDJSON file — `fixtures/thread-run.ndjson`, the
+ * verbatim output of an R2 dry run (see fixtures/README.md), tool items and all. The server
+ * replays it over the per-run SSE stream exactly as it would for any finished run, so what
+ * this spec sees is the full pipe: store → SSE replay → reducer → grouping → tool cards →
+ * Streamdown → the lazy Shiki singleton.
+ *
+ * Same boot-own-server doctrine as quick-list.e2e.ts: the run store reads `runs.json` once at
+ * startup, so the fixture must exist before boot; a terminal (`done`) status keeps `recover()`
+ * from touching the run.
+ */
+
+const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
+const sessionId = `e2e-thread-${process.pid}`
+
+/** The recorded run (`fixtures/thread-run.record.json`, the store's own zod-checked shape),
+ *  with the one legitimate user edit a run can carry: a PATCHed title summary — so the header
+ *  assertions cover the edited-title path rather than echoing the raw auto-summary. */
+const RUN = { ...record, titleSummary: 'Explain what cezar does' }
+const LOCAL_LINK_RUN = {
+  ...RUN,
+  id: 'abec1200-0000-4000-8000-000000000002',
+  titleSummary: 'Local file link regression',
+  task: 'Prepare a report in temp/report.txt',
+}
+const MERMAID_RUN = {
+  ...RUN,
+  id: 'abec1200-0000-4000-8000-000000000003',
+  titleSummary: 'Mermaid diagram previews',
+}
+const MERMAID_FLOW = `flowchart LR
+    accTitle: Gateway architecture
+    C[Klient / SDK] --> L[HTTPS / ALB]
+    L --> P[ai-gateway :8200]
+    P --> D[(Postgres: klucze API)]
+    P --> Q[Modal: Qwen / vLLM]
+    P --> B[Modal: Basal]
+    O[Operator / ECS Exec] --> A[ai-gateway :8201]
+    A --> D
+    M[Jednorazowy proces migracji] --> D`
+const MERMAID_REPLY = [
+  '## Architecture preview',
+  '```mermaid\n' + MERMAID_FLOW + '\n```',
+  '```mermaid\nsequenceDiagram\n  accTitle: Request sequence\n  Client->>Gateway: Request\n  Gateway-->>Client: Response\n```',
+  '```mermaid\n%%{init: {"securityLevel": "loose"}}%%\nflowchart LR\n  X["<img src=x onerror=window.__mermaidInjected=true>"] --> Y[Safe]\n  click Y "javascript:window.__mermaidInjected=true"\n  click X "https://example.com/diagram-link"\n  Z@{ img: "https://example.com/diagram-image.png", label: "Remote image" }\n```',
+  '```mermaid\ninvalid diagram\n```',
+  'After the diagrams.',
+].join('\n\n')
+const RUN_ID: string = RUN.id
+const OVERFLOW_TOKEN = 'X'.repeat(180) + '_END'
+const OVERFLOW_RUN = {
+  ...RUN,
+  id: 'abec1200-0000-4000-8000-000000000001',
+  task: `Overflow fixture\n\n1) Numbered token:\n${OVERFLOW_TOKEN}\n\n2) Box rule:\n┌${'─'.repeat(140)}┐\n\n- Nested token:\n  - ${OVERFLOW_TOKEN}\n\nStandalone token:\n\n${OVERFLOW_TOKEN}\n\n> ${OVERFLOW_TOKEN}`,
+}
+
+function freePort(): Promise<number> {
+  return new Promise((done, fail) => {
+    const probe = createServer()
+    probe.once('error', fail)
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      probe.close(() => done(port))
+    })
+  })
+}
+
+async function waitForHealth(url: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    try {
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  throw new Error(`cezar e2e: the fixture server never answered at ${url}`)
+}
+
+let browser: AgentBrowser
+let server: ChildProcess
+let dataRoot: string
+let baseUrl: string
+let bootProject: string
+
+/** A flat route target under this server's own project prefix (multi-project spec, step 3.2):
+ *  every cockpit link is scoped, and every legacy flat URL redirects onto its scoped twin. */
+const scoped = (path: string) => `/p/${bootProject}${path}`
+
+beforeAll(async () => {
+  dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-'))
+  mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
+  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN, OVERFLOW_RUN, LOCAL_LINK_RUN, MERMAID_RUN], null, 2), 'utf8')
+  copyFileSync(
+    resolve(import.meta.dirname, 'fixtures/thread-run.ndjson'),
+    join(dataRoot, '.ai/cezar/runs', `${RUN_ID}.ndjson`),
+  )
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${OVERFLOW_RUN.id}.ndjson`), '')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${LOCAL_LINK_RUN.id}.ndjson`), JSON.stringify({
+    type: 'text', stepId: 'task', seq: 1, ts: RUN.createdAt,
+    text: 'Done: [report and validation plan](temp/report.txt).',
+  }) + '\n')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${MERMAID_RUN.id}.ndjson`), JSON.stringify({
+    type: 'text', stepId: 'task', seq: 1, ts: RUN.createdAt, text: MERMAID_REPLY,
+  }) + '\n')
+  // The agent screenshot the transcript's `image` line points at (served by the run itself).
+  cpSync(
+    resolve(import.meta.dirname, 'fixtures/thread-run-images'),
+    join(dataRoot, '.ai/cezar/runs', `${RUN_ID}-images`),
+    { recursive: true },
+  )
+
+  const port = await freePort()
+  baseUrl = `http://localhost:${port}`
+  server = spawn(
+    process.execPath,
+    [cezarCli, 'serve', '--repo', dataRoot, '--port', String(port), '--no-open'],
+    { env: fixtureServeEnv(dataRoot), stdio: 'ignore' },
+  )
+  await waitForHealth(baseUrl)
+  bootProject = await bootProjectId(baseUrl)
+
+  browser = AgentBrowser.open(sessionId)
+  browser.setViewport(1440, 900)
+  browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+  // The thread is async twice over (lazy route chunk, then the SSE replay) — wait for content.
+  browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
+}, 120_000)
+
+afterAll(async () => {
+  browser?.close()
+  await stopFixtureServer(server, dataRoot)
+})
+
+describe('task thread', () => {
+  it('renders the task and the follow-up as right-aligned user bubbles', () => {
+    const bubbles = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="user-bubble"]')].map((el) => el.textContent)`,
+    ) as string[]
+    expect(bubbles).toHaveLength(2)
+    expect(bubbles[0]).toContain('Summarize what this project does.')
+    // The bubble renders a `MessageTime` under its text, so `textContent` ends in a wall clock
+    // that no assertion can pin. Match the message and require that a time follows, rather than
+    // freezing whatever the clock happened to read.
+    expect(bubbles[1]).toMatch(/^Thanks — now show the markdown summary\. mock:md\s*\d{1,2}:\d{2}/)
+
+    // Right-aligned: the bubble hugs the column's right content edge (within its padding),
+    // sits entirely right of the midline, while assistant content starts at the left edge.
+    const geometry = browser.evaluate(`(() => {
+      const bubble = document.querySelector('[data-slot="user-bubble"]')
+      const message = document.querySelector('[data-slot="assistant-message"]')
+      const column = bubble.parentElement
+      const b = bubble.getBoundingClientRect(), c = column.getBoundingClientRect(), m = message.getBoundingClientRect()
+      return { rightGap: c.right - b.right, bubbleLeft: b.left, mid: c.left + c.width / 2, messageLeft: m.left - c.left }
+    })()`) as { rightGap: number; bubbleLeft: number; mid: number; messageLeft: number }
+    expect(geometry.rightGap).toBeLessThan(40) // only the column padding separates them
+    expect(geometry.bubbleLeft).toBeGreaterThan(geometry.mid)
+    expect(geometry.messageLeft).toBeLessThan(40)
+  })
+
+  it('renders the assistant reply as markdown — heading, table, list, no raw ** anywhere', () => {
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="assistant-message"] [data-streamdown="heading-2"]')?.textContent`),
+    ).toBe('Markdown fixture')
+    expect(browser.count('[data-slot="assistant-message"] [data-streamdown="table"]')).toBe(1)
+    expect(browser.count('[data-slot="assistant-message"] [data-streamdown="list-item"]')).toBeGreaterThan(3)
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="assistant-message"]').textContent.includes('**')`),
+    ).toBe(false)
+    // The dedup rule end-to-end: the fixture file carries the v1 `text` twin of this message —
+    // exactly one copy renders.
+    expect(browser.count('[data-slot="assistant-message"] [data-streamdown="heading-2"]')).toBe(1)
+  })
+
+  it('highlights the ts fence through the lazy Shiki singleton, themed by the --syn-* tokens', () => {
+    // Highlighting is async (shiki core + grammar are lazy chunks) — wait for a colored token.
+    browser.waitForFunction(
+      `[...document.querySelectorAll('[data-streamdown="code-block-body"] span')].some((s) => s.style.getPropertyValue('--sdm-c') === 'var(--syn-key)')`,
+    )
+    const block = browser.evaluate(`(() => {
+      const block = document.querySelector('[data-streamdown="code-block"]')
+      const keyword = [...block.querySelectorAll('span')].find((s) => s.style.getPropertyValue('--sdm-c') === 'var(--syn-key)')
+      return {
+        language: block.dataset.language,
+        chip: block.querySelector('[data-streamdown="code-block-header"]').textContent,
+        copy: block.querySelector('[data-streamdown="code-block-copy-button"]') !== null,
+        keywordText: keyword.textContent,
+        keywordToken: keyword.style.getPropertyValue('--sdm-c'),
+        synKey: getComputedStyle(document.documentElement).getPropertyValue('--syn-key').trim(),
+      }
+    })()`) as { language: string; chip: string; copy: boolean; keywordText: string; keywordToken: string; synKey: string }
+
+    expect(block.language).toBe('ts')
+    expect(block.chip).toBe('ts')
+    expect(block.copy).toBe(true)
+    expect(block.keywordText).toBe('const')
+    // Streamdown owns how its custom token variable is painted; our contract is that Shiki
+    // maps the keyword to cezar's theme token and that the active palette defines that token.
+    expect(block.keywordToken).toBe('var(--syn-key)')
+    expect(block.synKey).toMatch(/^#[0-9a-f]{6}$/i)
+  })
+
+  it('keeps Shiki out of the main bundle — its chunks load lazily, after the thread route', () => {
+    const chunks = browser.evaluate(`performance.getEntriesByType('resource')
+      .map((e) => e.name.split('/').pop())
+      .filter((n) => /^(core|engine-javascript|typescript)-/.test(n))`) as string[]
+    // They loaded (the fence above is highlighted)…
+    expect(chunks.length).toBeGreaterThanOrEqual(3)
+    // …as their own files, which is what "not in the main bundle" means at runtime.
+    expect(chunks.every((n) => !n.startsWith('index-'))).toBe(true)
+  })
+
+  it('dims lifecycle lines and shows the closed-session footer for a done run', () => {
+    const notes = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="note-line"]')].map((el) => ({ tone: el.dataset.tone, text: el.textContent }))`,
+    ) as Array<{ tone: string; text: string }>
+    expect(notes.length).toBeGreaterThanOrEqual(3)
+    expect(notes.every((n) => n.tone === 'dim')).toBe(true)
+    expect(notes.some((n) => n.text.includes('worktree ready'))).toBe(true)
+
+    const footer = browser.evaluate(`(() => {
+      const el = document.querySelector('[data-slot="thread-footer"]')
+      const link = el.querySelector('[data-slot="pr-link"]')
+      return { state: el.dataset.state, text: el.textContent, prHref: link?.href ?? null }
+    })()`) as { state: string; text: string; prHref: string | null }
+    expect(footer.state).toBe('closed')
+    expect(footer.text).toContain('Session closed')
+    // The fixture record carries the agent-opened PR (`pullRequestUrl`) — since R3 Step 2.2
+    // the closed footer keeps that link reachable after the review gate is gone.
+    expect(footer.prHref).toBe('https://github.com/open-mercato/demo/pull/123')
+  })
+
+  it('renders the transcript tool calls as cards — and the TodoWrite cards not at all (#382)', () => {
+    const cards = browser.evaluate(`[...document.querySelectorAll('[data-slot="tool-card"]')].map((el) => ({
+      status: el.dataset.status,
+      kind: el.dataset.kind,
+      title: el.querySelector('[data-slot="collapsible-trigger"]').textContent,
+    }))`) as Array<{ status: string; kind: string; title: string }>
+    // Bash + Screenshot + the check-step card. The transcript ALSO carries two TodoWrite
+    // tool items — the plan dock is their surface, so no plan-kind card may render.
+    expect(cards).toHaveLength(3)
+    expect(cards[0]).toMatchObject({ status: 'completed', kind: 'execute' })
+    expect(cards[0]!.title).toContain('Ran')
+    expect(cards[0]!.title).toContain('git status --short')
+    expect(cards[1]).toMatchObject({ status: 'completed', kind: 'other' })
+    expect(cards[1]!.title).toContain('Screenshot')
+    expect(cards[2]).toMatchObject({ status: 'completed', kind: 'execute' })
+    expect(browser.count('[data-slot="tool-card"][data-kind="plan"]')).toBe(0)
+  })
+
+  it('the check step renders as a command card with the pass pill and its output', () => {
+    const card = browser.evaluate(`(() => {
+      const el = [...document.querySelectorAll('[data-slot="tool-card"]')].at(-1)
+      return {
+        kind: el.dataset.kind,
+        status: el.dataset.status,
+        title: el.querySelector('[data-slot="collapsible-trigger"]').textContent,
+        exit: el.querySelector('[data-slot="tool-exit"]')?.textContent,
+      }
+    })()`) as { kind: string; status: string; title: string; exit?: string }
+    expect(card.kind).toBe('execute')
+    expect(card.status).toBe('completed')
+    expect(card.title).toContain('Ran')
+    expect(card.title).toContain('npm test')
+    expect(card.exit).toBe('0') // exit code 0 → the success-tinted pill
+
+    // Expands to the mono output block, like any execute card.
+    browser.evaluate(`[...document.querySelectorAll('[data-slot="tool-card"]')].at(-1)
+      .querySelector('[data-slot="collapsible-trigger"]').click()`)
+    browser.waitForFunction(
+      `[...document.querySelectorAll('[data-slot="tool-card"]')].at(-1).querySelector('[data-slot="tool-output"] pre') !== null`,
+    )
+    expect(
+      browser.evaluate(
+        `[...document.querySelectorAll('[data-slot="tool-card"]')].at(-1).querySelector('[data-slot="tool-output"] pre').textContent`,
+      ),
+    ).toContain('72 passed')
+
+    // Fold it back — the closed-by-default spec below counts open execute outputs.
+    browser.evaluate(`[...document.querySelectorAll('[data-slot="tool-card"]')].at(-1)
+      .querySelector('[data-slot="collapsible-trigger"]').click()`)
+    browser.waitForFunction(
+      `[...document.querySelectorAll('[data-slot="tool-card"]')].at(-1).querySelector('[data-slot="tool-output"]') === null`,
+    )
+  })
+
+  it('the step rail maps the record steps to checklist rows over the progress bar', () => {
+    // The rail is COLLAPSED by default — the trigger shows a one-line summary with its own bar,
+    // and the per-step rows only exist once it is open. Reading straight for the rows threw on
+    // a null progress bar.
+    browser.evaluate(`document.querySelector('[data-slot="workflow-steps"] button')?.click()`)
+    browser.waitForFunction(`document.querySelector('[data-slot="step-progress"] > div') !== null`)
+    const rail = browser.evaluate(`(() => {
+      const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
+      return {
+        rows: rows.map((el) => ({ visual: el.dataset.visual, text: el.textContent })),
+        bar: document.querySelector('[data-slot="step-progress"] > div').style.width,
+      }
+    })()`) as { rows: Array<{ visual: string; text: string }>; bar: string }
+    expect(rail.rows).toHaveLength(2)
+    expect(rail.rows[0]).toMatchObject({ visual: 'done' })
+    expect(rail.rows[0]!.text).toContain('Do the task')
+    expect(rail.rows[0]!.text).toContain('agent · step 1 of 2')
+    expect(rail.rows[1]).toMatchObject({ visual: 'done' })
+    expect(rail.rows[1]!.text).toContain('Verify')
+    expect(rail.rows[1]!.text).toContain('check · step 2 of 2')
+    expect(rail.bar).toBe('100%') // both steps terminal — (1 + 1) / 2
+  })
+
+  it('the plan dock shows the LATEST snapshot (2/4), settled for this finished run, mirrored in the header', () => {
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('open')
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-mirror"]').textContent`)).toBe('Plan 2/4')
+
+    // The turn-2 snapshot won (turn 1 said 0/4 with "Read README and docs" in progress).
+    const items = browser.evaluate(`[...document.querySelectorAll('[data-slot="plan-item"]')].map((el) => ({
+      status: el.dataset.status,
+      text: el.textContent,
+    }))`) as Array<{ status: string; text: string }>
+    expect(items.map((i) => i.status)).toEqual(['completed', 'completed', 'in_progress', 'pending'])
+    expect(items[2]!.text).toContain('Summarize cockpit features')
+
+    // …and the RENDERING settles, because this fixture run's status is `done`: the agent's
+    // reported status survives as data (asserted above), but a closed session is never still
+    // working on it, so the tag and the pulse are gone and the head says 2/4 was as far as it
+    // got. The live counterpart lives in the unit suite (`task-thread.test.tsx`), which has a
+    // running run to render; every run this fixture serves is terminal by design.
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.settled`)).toBe('true')
+    expect(items[2]!.text).not.toContain('in progress')
+    expect(browser.count('[data-slot="plan-tag"]')).toBe(0)
+    expect(browser.count('[data-slot="plan-dock"] .animate-pulse')).toBe(0)
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-unfinished"]').textContent`)).toBe(
+      '· left unfinished',
+    )
+
+    // It sits in the dock region above the composer area, not in the thread flow.
+    expect(browser.evaluate(`document.querySelector('[data-slot="thread-dock"] [data-slot="plan-dock"]') !== null`)).toBe(true)
+  })
+
+  it('collapsing the dock folds it to the odometer — a settled run names no current item', () => {
+    browser.click('[data-slot="plan-dock"] button')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'collapsed'`)
+    expect(browser.count('[data-slot="plan-list"]')).toBe(0)
+    // A live dock folds to "— <activeForm>". This one's session is closed, so there is no current
+    // item to name: the collapsed head is the odometer plus the unfinished note, nothing implying
+    // the agent is still on item 3.
+    expect(browser.count('[data-slot="plan-current"]')).toBe(0)
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-unfinished"]').textContent`)).toBe(
+      '· left unfinished',
+    )
+    // Re-expand so the desktop screenshot below captures the full checklist.
+    browser.click('[data-slot="plan-dock"] button')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'open'`)
+  })
+
+  it('a card is closed by default and expands to its mono output (the #381 behavior)', () => {
+    const bash = '[data-slot="tool-card"][data-kind="execute"]'
+    expect(browser.count(`${bash} [data-slot="tool-output"]`)).toBe(0)
+    browser.click(`${bash} [data-slot="collapsible-trigger"]`)
+    browser.waitForFunction(`document.querySelector('${bash} [data-slot="tool-output"] pre') !== null`)
+    expect(browser.evaluate(`document.querySelector('${bash} [data-slot="tool-output"] pre').textContent`)).toBe(
+      ' M src/example.ts',
+    )
+  })
+
+  it('serves and renders the agent screenshot the transcript persisted', () => {
+    browser.waitForFunction(`document.querySelector('[data-slot="thread-image"]')?.naturalWidth > 0`)
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="thread-image"]').getAttribute('src')`),
+    ).toBe(`/api/v1/runs/${RUN_ID}/images/screenshot-1.png`)
+  })
+
+  it('shows the auto-summary title and the done pill in the header', () => {
+    expect(browser.evaluate(`document.querySelector('[data-route="task-thread"] h1').textContent`)).toBe(
+      'Explain what cezar does',
+    )
+    expect(browser.evaluate(`document.querySelector('[data-slot="pill"]').textContent`)).toBe('done')
+    // The #381 money shot: tool cards (one expanded) + markdown + image, desktop width.
+    browser.screenshot(`${artifactsDir}/thread-desktop.png`)
+  })
+
+  it('the header meta line reads workflow · branch chip · ± · tokens · cost off the record', () => {
+    const meta = browser.evaluate(
+      `document.querySelector('[data-slot="run-meta"]').textContent`,
+    ) as string
+    expect(meta).toContain('quick-task')
+    expect(meta).toContain('cez/fcd519dd')
+    expect(meta).toContain('+1 −0')
+    // Tokens render as the DIRECTIONAL pair (`DirectionalUsage`), not one total — the header
+    // moved to input/output and the fixture never followed, so the token half of this line had
+    // quietly stopped rendering and the assertion was testing its own absence. The fixture now
+    // carries both (2900 + 720 = the 3620 it always claimed).
+    expect(meta).toContain('IN 2.9k')
+    expect(meta).toContain('OUT 720')
+    expect(meta).toContain('$0.04')
+    // The runner stays OUT of the metadata parts — the original claim here, kept rather than
+    // inverted. It does appear inside `run-meta`, but only within the agent badge that #750
+    // (spec 2026-07-29-agent-profiles) added as a right-aligned sibling of the parts, so a bare
+    // `toContain` over the whole container could no longer express it. Subtracting the badge
+    // asks the question the line was written to ask.
+    const parts = browser.evaluate(`(() => {
+      const box = document.querySelector('[data-slot="run-meta"]').cloneNode(true)
+      box.querySelector('[data-slot="agent-badge"]')?.remove()
+      return box.textContent
+    })()`) as string
+    expect(parts).not.toContain('claude')
+    // …and the badge is where naming the agent does belong. It is icon-only now (the chat box's
+    // engine pills carry the words), so the runner lives in its accessible name.
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').getAttribute('aria-label')`),
+    ).toContain('claude')
+    // Branch renders as the mono chip, not plain text.
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="branch-chip"]').textContent`),
+    ).toBe('cez/fcd519dd')
+  })
+
+  it('the layout strip replaces the route tabs (spec 2026-10-07-task-workspace); the done run offers the closed-run actions', () => {
+    const cards = browser.evaluate(`[...document.querySelectorAll('[data-slot="layout-card"]')].map((card) => ({
+      text: card.textContent.trim(),
+      active: card.hasAttribute('data-active'),
+    }))`) as Array<{ text: string; active: boolean }>
+    // A local cockpit allows a shell, so Terminal (the drawer's toggle) is the last tab.
+    expect(cards).toEqual([
+      { text: 'Chat', active: true },
+      { text: 'Changes', active: false },
+      { text: 'Commits', active: false },
+      { text: 'Files', active: false },
+      { text: 'Graph', active: false },
+      { text: 'Preview', active: false },
+      { text: 'Terminal', active: false },
+    ])
+    // Notes keeps its own page, reached from the strip's trailing icon.
+    expect(browser.count(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}/notes`)}"]`)).toBe(1)
+
+    // Read/unread, Pin and Archive are icon toggles now (aria-label, no visible text) — Continue
+    // moved to the composer, Notes to its own tab.
+    const actions = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim() || b.getAttribute('aria-label'))`,
+    ) as string[]
+    expect(actions).toEqual(['Mark unread', 'Pin', 'Archive', 'Delete', 'Open in…'])
+
+    // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
+    const hint = browser.evaluate(
+      `document.querySelector('[data-slot="resume-hint"]').textContent`,
+    ) as string
+    expect(hint).toContain('claude --resume 40169e05-629f-4d7c-853c-8a2a197255e4')
+    expect(hint).toContain('cd /tmp/cezar-fixture-hg7X')
+  })
+
+  it('opens the Notes tab — an unseeded handoff reads as the honest empty state', () => {
+    // Notes is a routed tab now (was a toggle panel over the thread) — follow the tab link.
+    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}/notes`)}"]`)
+    browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') !== null`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="notes-panel"]').textContent.includes('No notes yet')`,
+    )
+    // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + the Notes tab.
+    browser.screenshot(`${artifactsDir}/thread-header-desktop.png`)
+    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${RUN_ID}`)}"]`)
+    browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') === null`)
+  })
+
+  it('renames the task inline and the PATCH persists server-side', async () => {
+    browser.click('[aria-label="Rename task"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="title-input"]') !== null`)
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="title-input"]').value`),
+    ).toBe('Explain what cezar does')
+
+    browser.fill('[data-slot="title-input"]', 'Renamed by the header e2e')
+    browser.press('Enter')
+
+    // The header re-reads the invalidated record — the new title lands in the h1…
+    browser.waitForFunction(
+      `document.querySelector('[data-route="task-thread"] h1')?.textContent === 'Renamed by the header e2e'`,
+    )
+    // …and the API readback proves it persisted rather than living in component state.
+    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}`)).json()) as {
+      title: string
+      titleSummary: string
+    }
+    expect(record.titleSummary).toBe('Renamed by the header e2e')
+    expect(record.title).toBe('Renamed by the header e2e')
+  })
+
+  it('an unknown run id lands on the 404-style state with a way home', () => {
+    browser.goto(`${baseUrl}${scoped('/tasks/no-such-run')}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="centered-state"] h1')?.textContent === 'Task not found'`)
+    expect(browser.evaluate(`document.querySelector('[data-slot="centered-state"] a[href="${scoped('/')}"]').textContent`)).toBe(
+      'Back to tasks',
+    )
+  })
+
+  it('reflows across small phone widths with no horizontal overflow', () => {
+    for (const [width, height] of [[320, 568], [360, 640], [390, 844]] as const) {
+      browser.setViewport(width, height)
+      browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+      browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
+      browser.waitForFunction(`document.querySelector('[data-streamdown="code-block"]') !== null`)
+
+      expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
+      // The wide fixture table/code scroll inside their own boxes, not the page.
+      expect(
+        browser.evaluate(`(() => {
+          const main = document.querySelector('[data-slot="main"]')
+          return main.scrollWidth <= main.clientWidth
+        })()`),
+      ).toBe(true)
+      expect(browser.evaluate(`document.querySelector('[data-slot="mobile-top-bar"] > div').getBoundingClientRect().height`)).toBe(44)
+      expect(browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="run-header"]')).position`)).toBe('relative')
+      expect(browser.evaluate(`document.querySelector('[aria-label="Reply to the agent"]').rows`)).toBe(1)
+
+      // Phone default: the dock collapses to the odometer (the mockup's mobile reflow).
+      expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('collapsed')
+      expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+    }
+
+    browser.screenshot(`${artifactsDir}/thread-mobile.png`)
+    browser.setViewport(1440, 900)
+  })
+
+  it('mobile header: the action bar folds into the kebab next to the pill', () => {
+    browser.setViewport(390, 844)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
+
+    // The desktop action bar is gone (`md:flex`), the kebab is the mobile surface.
+    expect(
+      browser.evaluate(
+        `getComputedStyle(document.querySelector('[data-slot="run-actions"]')).display`,
+      ),
+    ).toBe('none')
+    expect(
+      browser.evaluate(
+        `(() => { const el = document.querySelector('[aria-label="Run actions"]'); return el !== null && el.offsetParent !== null })()`,
+      ),
+    ).toBe(true)
+    // Title + pill still read in one compact row.
+    expect(browser.isVisible('[data-route="task-thread"] h1')).toBe(true)
+    expect(browser.evaluate(`document.querySelector('[data-slot="pill"]').textContent`)).toBe('done')
+
+    browser.screenshot(`${artifactsDir}/thread-header-mobile.png`)
+    browser.setViewport(1440, 900)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
+    expect(browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="run-header"]')).position`)).toBe('sticky')
+  })
+
+  it('contains long list content and lets it scroll horizontally on desktop and mobile', () => {
+    browser.goto(`${baseUrl}${scoped(`/tasks/${OVERFLOW_RUN.id}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="user-bubble"] li') !== null`)
+    for (const width of [1440, 390]) {
+      browser.setViewport(width, 900)
+      const result = browser.evaluate(`(() => {
+        const bubble = document.querySelector('[data-slot="user-bubble"]')
+        const blocks = [...bubble.querySelectorAll('li')].filter(el => !el.querySelector('li'))
+        return {
+          contained: bubble.scrollWidth <= bubble.clientWidth + 1,
+          blocks: blocks.map(block => {
+            let scroller = block
+            while (scroller && scroller !== bubble) {
+              const style = getComputedStyle(scroller)
+              if (['auto', 'scroll'].includes(style.overflowX) && scroller.scrollWidth > scroller.clientWidth) break
+              scroller = scroller.parentElement
+            }
+            if (!scroller || scroller === bubble) return false
+            scroller.scrollLeft = 200
+            const moved = scroller.scrollLeft > 0
+            scroller.scrollLeft = 0
+            return moved
+          }),
+          markers: [...bubble.querySelectorAll('li')].every(el => getComputedStyle(el).display === 'list-item'),
+          quoteOverflow: getComputedStyle(bubble.querySelector('blockquote')).overflowX,
+          quoteScrolls: (() => {
+            const paragraph = bubble.querySelector('blockquote p')
+            paragraph.scrollLeft = 200
+            const moved = paragraph.scrollLeft > 0
+            paragraph.scrollLeft = 0
+            return moved
+          })(),
+        }
+      })()`) as { contained: boolean; blocks: boolean[]; markers: boolean; quoteOverflow: string; quoteScrolls: boolean }
+      expect(result.contained).toBe(true)
+      expect(result.blocks.length).toBeGreaterThan(2)
+      expect(result.blocks.every(Boolean)).toBe(true)
+      expect(result.markers).toBe(true)
+      expect(result.quoteOverflow).toBe('visible')
+      expect(result.quoteScrolls).toBe(true)
+      browser.screenshot(join(artifactsDir, `thread-overflow-${width}.png`), { viewport: true })
+    }
+  })
+
+})
+
+describe('relative file links', () => {
+  it('renders a completed reply with a local file explanation, without a blocked badge', () => {
+    browser.setViewport(1440, 900)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${LOCAL_LINK_RUN.id}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-local-only-link]') !== null`)
+    const link = browser.evaluate(`(() => {
+      const el = document.querySelector('[data-local-only-link]')
+      el.scrollIntoView({ block: 'center' })
+      return { text: el.textContent, title: el.title, tag: el.tagName, message: el.closest('[data-slot="assistant-message"]').textContent }
+    })()`) as { text: string; title: string; tag: string; message: string }
+    expect(link.text).toBe('report and validation plan')
+    expect(link.title).toContain('temp/report.txt')
+    expect(link.title).toContain('Files tab')
+    expect(link.tag).toBe('SPAN')
+    expect(link.message).not.toContain('[blocked]')
+    browser.screenshot(`${artifactsDir}/thread-local-file-link.png`, { viewport: true })
+  })
+})
+
+
+describe('Mermaid conversation previews', () => {
+  it('renders real flowcharts and sequences, keeps errors readable, and blocks unsafe directives', () => {
+    browser.setViewport(1440, 1000)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${MERMAID_RUN.id}`)}`)
+    browser.waitForFunction(`document.querySelectorAll('[data-streamdown="mermaid-block"]').length === 4`)
+    // Keep it in view while lazy SVG layout changes the thread's height.
+    const revealDiagram = (index: number) => browser.waitForFunction(`(() => {
+      const block = document.querySelectorAll('[data-streamdown="mermaid-block"]')[${index}]
+      const main = block.closest('[data-slot="transcript-viewport"], [data-slot="main"]')
+      const box = block.getBoundingClientRect(), viewport = main.getBoundingClientRect()
+      const target = Math.max(0, Math.min(main.scrollHeight - main.clientHeight,
+        main.scrollTop + box.top - viewport.top - Math.max(0, (viewport.height - box.height) / 2)))
+      if (Math.abs(main.scrollTop - target) > 25) {
+        main.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
+        main.scrollTop = target
+        return false
+      }
+      return ${index === 3 ? "block.textContent.includes('Mermaid Error:')" : "block.querySelector('[role=img] svg')?.getBoundingClientRect().width > 0"}
+    })()`)
+    for (let index = 0; index < 4; index++) revealDiagram(index)
+    const result = browser.evaluate(`(() => {
+      const blocks = [...document.querySelectorAll('[data-streamdown="mermaid-block"]')]
+      const diagrams = [...document.querySelectorAll('[data-streamdown="mermaid"] [role="img"] > svg')]
+      return {
+        pele: diagrams.every(svg => svg.classList.contains('pele')),
+        flow: diagrams[0].textContent,
+        sequence: diagrams[1].textContent,
+        uniqueIds: (() => { const ids = diagrams.flatMap(svg => [...svg.querySelectorAll('[id]')].map(el => el.id)); return ids.length > 0 && new Set(ids).size === ids.length })(),
+        unsafe: blocks[2].querySelectorAll('a[href], a[*|href], image, foreignObject, script, [onerror], [onclick]').length + Number(Boolean(window.__mermaidInjected)),
+        source: blocks[3].querySelector('pre').textContent,
+        after: document.body.textContent.includes('After the diagrams.'),
+        copies: document.querySelectorAll('[data-streamdown="mermaid-block-actions"] [data-streamdown="code-block-copy-button"]').length,
+      }
+    })()`) as { pele: boolean; flow: string; sequence: string; uniqueIds: boolean; unsafe: number; source: string; after: boolean; copies: number }
+    expect(result.pele).toBe(true)
+    expect(result.flow).toContain('Klient / SDK')
+    expect(result.flow).toContain('Postgres: klucze API')
+    expect(result.sequence).toContain('Request')
+    expect(result.uniqueIds).toBe(true)
+    expect(result.unsafe).toBe(0)
+    expect(result.source).toContain('invalid diagram')
+    expect(result.after).toBe(true)
+    expect(result.copies).toBe(4)
+
+    let previousFill: string | undefined
+    for (const theme of ['dark', 'light', 'dark']) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (browser.evaluate(`document.querySelector('[data-slot="theme-toggle"]').getAttribute('data-theme-pref')`) === theme) break
+        browser.click('[data-slot="theme-toggle"]')
+      }
+      revealDiagram(0)
+      browser.waitForFunction(`(() => {
+        const node = document.querySelector('[data-streamdown="mermaid"] [role="img"] svg .pele-node rect')
+        return node && getComputedStyle(node).fill !== ${JSON.stringify(previousFill ?? null)}
+      })()`)
+      const palette = browser.evaluate(`(() => {
+        const pane = document.querySelector('[data-streamdown="mermaid"]')
+        return {
+          background: getComputedStyle(pane).backgroundColor,
+          pageBackground: getComputedStyle(document.body).backgroundColor,
+          nodeFill: getComputedStyle(pane.querySelector('[role="img"] svg .pele-node rect')).fill,
+          light: document.documentElement.classList.contains('light'),
+        }
+      })()`) as { background: string; pageBackground: string; nodeFill: string; light: boolean }
+      expect(palette.background).toBe(palette.pageBackground)
+      expect(palette.light).toBe(theme === 'light')
+      previousFill = palette.nodeFill
+      revealDiagram(0)
+      expect(browser.evaluate(`(() => {
+        const pane = document.querySelector('[data-streamdown="mermaid"]')
+        return pane.querySelector('[role="img"] > svg').getBoundingClientRect().width / pane.getBoundingClientRect().width
+      })()`)).toBeGreaterThan(0.5)
+      browser.screenshot(`${artifactsDir}/thread-mermaid-${theme}.png`, { viewport: true })
+    }
+    browser.setViewport(390, 844)
+    revealDiagram(0)
+    browser.waitForFunction(`document.querySelector('[data-streamdown="mermaid"] [role="img"] > svg')?.getBoundingClientRect().width > 0`)
+    expect(browser.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true)
+    browser.screenshot(`${artifactsDir}/thread-mermaid-mobile.png`, { viewport: true })
+  })
+})

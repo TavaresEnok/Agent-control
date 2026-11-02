@@ -1,0 +1,12 @@
+node_modules/
+.state/
+dist/
+*.tsbuildinfo
+upstream/**/node_modules/
+upstream/**/dist/
+upstream/happier/apps/server/generated/
+upstream/happier/.yarn/
+.env
+.env.*
+!upstream/cezar/.env.example
+!upstream/happier/**/.env.example

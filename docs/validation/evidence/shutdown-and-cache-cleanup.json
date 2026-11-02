@@ -1,0 +1,7 @@
+{
+  "action": "removed_own_install_cache_only",
+  "path": "/home/app/projects/agent-control-implementation/.state/yarn-cache",
+  "dependencies_sources_evidence_and_databases_preserved": true,
+  "disk_after": "Filesystem                         Size  Used Avail Use% Mounted on\n/dev/mapper/ubuntu--vg-ubuntu--lv  195G  163G   24G  88% /\n",
+  "running_containers_after_lab_shutdown": 27
+}

@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "sessions": [
+    {
+      "session": "cmvyrgind0064o4ta5kr9l61j",
+      "encryptedMessages": 8,
+      "userMessages": 2,
+      "duplicateUserMessages": 0
+    },
+    {
+      "session": "cmvyrgir10068o4ta28mjclxz",
+      "encryptedMessages": 4,
+      "userMessages": 1,
+      "duplicateUserMessages": 0
+    }
+  ],
+  "scope": "Read-only verification of the actual Happier SQLite transcript after final browser proof, using native Happier decryption."
+}

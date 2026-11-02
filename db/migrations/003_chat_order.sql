@@ -1,0 +1,1 @@
+ALTER TABLE ac_chat_messages ADD COLUMN sequence bigint GENERATED ALWAYS AS IDENTITY;

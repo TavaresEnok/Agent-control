@@ -1,0 +1,45 @@
+name: ac-implementation
+services:
+  db:
+    image: postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2
+    environment:
+      POSTGRES_USER: ac_lab
+      POSTGRES_PASSWORD: synthetic-lab-only
+      POSTGRES_DB: ac_implementation_test
+    networks: [lab]
+    volumes: [pg-data:/var/lib/postgresql/data]
+    mem_limit: 384m
+    cpus: 1
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U ac_lab -d ac_implementation_test']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  runtime:
+    image: agent-control-lab:0.1.0
+    init: true
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 3g
+    cpus: 3
+    networks: [lab]
+    working_dir: /workspace
+    command: [sleep, infinity]
+    environment:
+      HOME: /workspace/.state/home
+      AC_TEST_DATABASE_URL: postgresql://ac_lab:synthetic-lab-only@db:5432/ac_implementation_test
+      CEZ_AUTONAME: '0'
+      CEZ_AUTOMATIONS: '0'
+      CEZ_SKILLS_AUTO_UPDATE: '0'
+      CEZ_TELEMETRY: '0'
+      CEZ_NO_BANNER: '1'
+      DO_NOT_TRACK: '1'
+      CI: '1'
+    volumes: ['..:/workspace']
+    depends_on:
+      db: {condition: service_healthy}
+networks:
+  lab: {internal: true}
+volumes:
+  pg-data:

@@ -1,0 +1,52 @@
+# Reprodução e encerramento da bancada
+
+Requisitos observados: Linux/Docker Compose, Node 22.23.3/Yarn 1.22.22 da imagem de laboratório, PostgreSQL 16 fixado por digest. Dependências são públicas. Nenhuma conta de IA é necessária. Reserve espaço para os fontes e dependências Happier (cache inicial ~7 GiB, removível depois do restore dos opcionais), Cezar, PostgreSQL e builds; os testes não devem disputar recursos sem limites com produção.
+
+A imagem local utilizada foi `ac-proof-v3-complete:20261101`. `deploy/Dockerfile.lab` registra uma receita equivalente a partir de Node fixado; reconstrução em outra VM ainda deve passar GI7. O compose não publica portas, monta apenas este repositório e usa rede interna. Não há socket Docker, SSH administrativo ou homes operacionais no container.
+
+```sh
+cd /home/app/projects/agent-control-implementation
+# Se não houver imagem local, construir explicitamente a imagem da bancada:
+docker build -t agent-control-lab:0.1.0 -f deploy/Dockerfile.lab .
+# Instalar raiz e Cezar; scripts de dependência permanecem desativados:
+docker run --rm --user 1000:1000 -e HOME=/tmp -v "$PWD:/workspace" -w /workspace agent-control-lab:0.1.0 sh scripts/install-baseline.sh
+# Happier: instalar somente o workspace registrado no patch, com lockfile congelado.
+docker run --rm --user 1000:1000 -e HOME=/tmp -e YARN_CACHE_FOLDER=/workspace/.state/yarn-cache -v "$PWD:/workspace" -w /workspace/upstream/happier agent-control-lab:0.1.0 yarn install --frozen-lockfile --ignore-scripts --ignore-engines --ignore-optional --non-interactive
+python3 scripts/restore-linux-optionals.py
+# Construir os pré-requisitos reais do Happier (geração Prisma pode baixar engine pública):
+docker run --rm --user 1000:1000 -e HOME=/tmp -v "$PWD:/workspace" -w /workspace/upstream/happier agent-control-lab:0.1.0 sh -c 'node apps/server/scripts/buildSharedDeps.mjs && cd apps/server && yarn -s generate:providers'
+docker compose -f deploy/compose.lab.yml up -d
+docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'cd upstream/cezar && npm run typecheck && VITE_AGENT_CONTROL_MANAGED=1 npm run build'
+docker compose -f deploy/compose.lab.yml exec -T runtime node scripts/build-happier-boundary.mjs
+docker compose -f deploy/compose.lab.yml exec -T -d runtime sh -c 'sh scripts/start-happier-lab.sh > docs/validation/evidence/happier-server-local.log 2>&1'
+# Aguarde /health do Happier dentro do container antes dos testes.
+docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'npm run typecheck && npm run build && npm test'
+```
+
+O teste integrado cria duas sessões cifradas e salva somente em `.state/browser-fixture.json` a identidade sintética necessária à prova visual. Esse arquivo é privado/gitignored, não deve entrar em ZIP ou Git. O launcher `npm start` é da fixture; exige `.state` e não deve receber contas reais.
+
+Para exportar a UI original, após inspecionar os scripts:
+
+```sh
+docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'cd upstream/happier/apps/ui && node tools/postinstall.mjs && node scripts/ensureWorkspacePackagesBuilt.mjs && NODE_OPTIONS=--max-old-space-size=2048 EXPO_OFFLINE=1 EXPO_NO_TELEMETRY=1 EXPO_PUBLIC_HAPPIER_SERVER_URL=http://127.0.0.1:18401 EXPO_UNSTABLE_WEB_MODAL=1 yarn -s expo export --platform web --output-dir dist --max-workers 1'
+```
+
+UI/launcher escutam somente no loopback do container; não estão publicados para o proprietário/Internet. Acessos de browser desta rodada são feitos de dentro da bancada.
+
+Encerrar somente os recursos desta bancada:
+
+```sh
+docker compose -f deploy/compose.lab.yml down
+```
+
+Esse comando preserva o volume PG da bancada e `.state`. Não usar `down -v`, prune global ou remover volumes/projetos operacionais. Para rollback desta entrega, manter a bancada parada e retornar a um commit deste novo repositório; não há mudança a reverter nos Paseos. Não aplicar rollback SQL de forma cega sobre dados; restauração/migração são gates posteriores.
+
+## Verificações ampliadas da baseline
+
+O export web precisou de heap explícito de 2048 MiB. O typecheck integral UI precisou de executor separado com limite de 4 GiB (8 GiB incluindo swap); tentativas menores terminaram por SIGKILL e estão registradas. Use `scripts/typecheck-happier-ui.mjs`, que chama o resolvedor TypeScript nativo do Happier e registra também o sinal do processo. Nunca substitua SIGKILL/ausência de saída por aprovação.
+
+Os testes Node nativos exigem `curl`; a receita Dockerfile inclui a dependência. `scripts/ensure-curl-lab.sh` foi usado somente para reparar a imagem de bancada já existente, com rede externa temporária removida ao concluir. O teste de pacote requer `npm_execpath` e instalação pública de dependências; foi executado em container descartável separado, sem credenciais operacionais.
+
+A CI em `.github/workflows/isolated-ci.yml` cobre contratos/PG/runtime e tipos/build Cezar. É uma configuração preparada e validada localmente nos comandos equivalentes, não uma execução remota já observada. UID/GID do runner são propagados para evitar depender do usuário 1000 de desenvolvimento. O checkout não persiste credenciais.
+
+A imagem própria `agent-control-lab:0.1.0` foi preparada com a dependência curl para as próximas aberturas. A rodada executada usou a imagem histórica e o reparo equivalente no container. `deploy/Dockerfile.lab` fornece a receita para instalação nova; a reprodução em outra VM permanece GI7.

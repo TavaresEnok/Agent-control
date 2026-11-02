@@ -1,0 +1,216 @@
+import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
+import { cliTargetRunner } from '@/components/open-in-menu'
+import { canBeUnread, isUnread } from '@/lib/read-state'
+import { queuePositions } from '@/lib/task-groups'
+import { isRunActive } from '@/lib/run-status'
+
+export { cliTargetRunner }
+
+
+/**
+ * The run header's action policy — WHICH actions a run offers, as a pure function of the
+ * record, ported from the legacy header (web/app.js `updateDetail`) so both cockpits agree.
+ * The header component only maps these booleans to buttons; every rule lives here where a
+ * table test can pin it per status.
+ */
+
+// Lives in `lib/` so shared components can use it without importing a route module.
+export { isRunActive }
+
+/** Reclaim keeps the task and branch; an in-place checkout never belongs to this action. */
+export function canRemoveTaskWorktree(run: RunRecord): boolean {
+  return !isRunActive(run.status) && run.worktree !== false && !!run.worktreePath
+    && !run.worktreeReclaimedAt && !run.worktreeLifecycle?.activeOperationId
+}
+
+/** The latest agent session across steps — what Continue/Terminal resume. */
+export function lastSessionId(run: RunRecord): string | undefined {
+  return [...run.steps].reverse().find((step) => step.sessionId)?.sessionId
+}
+
+/**
+ * The session id shapes the backends mint — the mirror of the server's `SAFE_SESSION_ID`
+ * (server.ts, #431). Kept in lockstep by hand: the cockpit bundles separately from the
+ * server, so it cannot import it. Widen both or neither.
+ */
+const SAFE_SESSION_ID = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,199}$/
+
+/** The per-backend take-over prefix — mirrors the server's `resumeCommand` (server.ts). A
+ *  `Record<Runner, string>` rather than a `switch`/`default`: the previous shape silently
+ *  mislabelled an unhandled runner as Claude instead of failing to compile, which is exactly
+ *  how the cursor gap here stayed invisible through two reviews and a full green gate (#807) —
+ *  adding a backend without a row here is now a type error, not a silent wrong command. */
+const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
+  claude: 'claude --resume',
+  codex: 'codex resume',
+  opencode: 'opencode --session',
+  cursor: 'agent --resume',
+  // Junie names the session by flag, not positionally — handled in resumeCommand.
+  junie: 'junie --resume',
+  pi: 'pi --session',
+  copilot: 'copilot --resume',
+  antigravity: 'agy --conversation',
+}
+
+/** The per-backend take-over command. Records without a runner recorded predate the runner
+ *  choice and default to Claude, same as the server.
+ *
+ *  Undefined for an id the server would refuse (#431): this string is offered to the user as a
+ *  one-click copy for pasting into a terminal, so it is a shell splice of an agent-recorded id
+ *  exactly like the server's take-over command. Validate rather than quote, for the same reason
+ *  the server does — the paste target may be bash OR cmd.exe, and no charset here is special to
+ *  either. Fails closed: no hint beats a hint that runs `rm -rf ~` on paste. */
+export function resumeCommand(runner: Runner | undefined, sessionId: string): string | undefined {
+  if (!SAFE_SESSION_ID.test(sessionId)) return undefined
+  if (runner === 'junie') return `${RESUME_COMMAND_PREFIX.junie} --session-id=${sessionId}`
+  return `${RESUME_COMMAND_PREFIX[runner ?? 'claude']} ${sessionId}`
+}
+
+/** The copyable "take over interactively" line under the header — only once the engine has
+ *  let go of the session (same gate as the Terminal button). Prefixes the `cd` when the run
+ *  has its own worktree, because the resume only makes sense from in there. Absent for an id
+ *  `resumeCommand` refuses (#431), exactly as for a run that never recorded a session. */
+export function resumeHint(run: RunRecord): string | undefined {
+  if (isRunActive(run.status) || run.worktreeLifecycle?.activeOperationId) return undefined
+  const sessionId = lastSessionId(run)
+  if (sessionId === undefined) return undefined
+  const command = resumeCommand(run.runner, sessionId)
+  if (command === undefined) return undefined
+  return run.worktreePath ? `cd ${run.worktreePath} && ${command}` : command
+}
+
+/** Does picking this "Open in…" CLI target resume THIS run's own session, or start a fresh
+ *  one (#402)? Only the backend that produced the session can resume it — a foreign CLI's
+ *  session id means nothing to a different agent, so cross-runner picks always launch clean.
+ *  Legacy runs with no `runner` recorded predate the runner choice and default to Claude, same
+ *  as `resumeCommand`.
+ *  Active runs never resume, same gate as `resumeHint`/`runActionFlags.terminal`: the engine
+ *  seeds `sessionId` when the step STARTS (workflows/run.ts), so a running run already has one
+ *  and would otherwise offer to attach a second CLI to the transcript the engine is driving.
+ *  Those picks launch a fresh CLI in the worktree instead — what the server does too. */
+export function cliTargetResumes(run: RunRecord, targetId: string): boolean {
+  const runner = cliTargetRunner(targetId)
+  if (!runner) return false
+  if (isRunActive(run.status) || run.worktreeLifecycle?.activeOperationId) return false
+  return runner === (run.runner ?? 'claude') && lastSessionId(run) !== undefined
+}
+
+export interface RunActionFlags {
+  /** waiting → close the session; review → accept the changes without a PR. Both POST /finish. */
+  finish: boolean
+  /** Reopen the last agent session in-process. */
+  continueRun: boolean
+  /** Hand the session to a real terminal (open-in-cli). */
+  terminal: boolean
+  /** The handoff-notes panel — always available; an unseeded file is an honest empty state. */
+  notes: boolean
+  /** Archive when live, unarchive when archived — the record itself says which. */
+  archive: boolean
+  /** Pin to the top of this project's task list, or unpin (#935) — the record says which.
+   *  Offered for every status, because a pin is about what YOU are working on rather than what
+   *  the engine is doing: a queued task you are waiting for is as pin-worthy as a running one.
+   *  Not for an archived run: archiving retires the pin server-side and the archived view is one
+   *  flat bucket, so the button would be an action with nowhere to show its result. */
+  pin: boolean
+  /** Put a read, finished task back into the unread list (#775). Offered only where it would
+   *  MEAN something: the run must be eligible to wear the unread marker at all
+   *  (`canBeUnread` — done/failed, actually finished, not archived) and must currently be
+   *  read. Both halves come from `lib/read-state.ts` so the header can never offer an action
+   *  whose result the marker rule would ignore. */
+  markUnread: boolean
+  /** "Run First" — move a queued task to the front of its queue, so it takes the first free
+   *  slot (brief 2026-09-23-queued-task-run-next). Only while the run is actually waiting in the
+   *  queue; offered again on a promoted run, because promoting again re-stamps it to the top. */
+  promote: boolean
+  /** The inverse: an unread, finished task can be marked read without opening it again —
+   *  offered exactly where `markUnread` is not, so the control flips instead of vanishing. */
+  markRead: boolean
+  /** Stop an active run. Mutually exclusive with delete, by construction below. */
+  cancel: boolean
+  /** Remove the run, its transcript, worktree and branch. Terminal runs only. */
+  deleteRun: boolean
+}
+
+export function runActionFlags(run: RunRecord): RunActionFlags {
+  const active = isRunActive(run.status)
+  const hasSession = lastSessionId(run) !== undefined
+  const gated = !!run.worktreeLifecycle?.activeOperationId
+  return {
+    finish: !gated && (run.status === 'waiting' || run.status === 'review'),
+    continueRun: !gated && !active && hasSession,
+    terminal: !gated && !active && hasSession,
+    notes: true,
+    archive: !active,
+    pin: !run.archived,
+    markUnread: canBeUnread(run) && !isUnread(run),
+    markRead: canBeUnread(run) && isUnread(run),
+    promote: run.status === 'queued' && !run.archived,
+    cancel: !gated && active,
+    deleteRun: !gated && !active,
+  }
+}
+
+/**
+ * What a git step says to the task's agent: the step's own name, nothing more — the agent knows how
+ * to commit, push, open a PR or merge a base branch, and the conversation shows exactly what was
+ * asked. The PR number rides along where a task can point at more than one PR (#901), and the base
+ * branch where the agent could not otherwise know it (a dispatch child, a non-default base).
+ */
+export function resolveConflictsPrompt(prNumber?: number): string {
+  return prNumber ? `Resolve conflicts in PR ${prNumber}` : 'Resolve conflicts'
+}
+
+export function fixChecksPrompt(prNumber?: number): string {
+  return prNumber ? `Fix failing checks in PR ${prNumber}` : 'Fix failing checks'
+}
+
+export function commitPrompt(andPush: boolean): string {
+  return andPush ? 'Commit and push' : 'Commit'
+}
+
+export function pushPrompt(): string {
+  return 'Push'
+}
+
+/** The base branch's name for a message — `origin/x` → `x`; nothing for none or a raw sha (a
+ *  detached fork point has no branch to target). The server's `--base` normalizes the same way. */
+function baseName(base?: string): string | undefined {
+  const name = base?.replace(/^origin\//, '')
+  return name && !/^[0-9a-f]{7,40}$/i.test(name) ? name : undefined
+}
+
+export function createPrPrompt(draft: boolean, base?: string): string {
+  const name = baseName(base)
+  return `${draft ? 'Create draft PR' : 'Create PR'}${name ? ` against ${name}` : ''}`
+}
+
+export function updateBranchPrompt(base?: string): string {
+  const name = baseName(base)
+  return name ? `Update branch from ${name}` : 'Update branch'
+}
+
+/** Create PR from an in-place task (spec 2026-10-20-trunk-based-projects): the work is uncommitted
+ *  in the checkout on the base branch, so the agent moves it to a branch and puts the checkout back. */
+export function inPlacePrPrompt(draft: boolean, base: string): string {
+  return `${draft ? 'Create draft PR' : 'Create PR'} against ${base} instead of landing: move these changes to a new branch, commit and push it, open the PR, then switch the checkout back to ${base}`
+}
+
+/** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */
+export function inPlaceUpdatePrompt(base: string): string {
+  return `Update branch: pull the latest ${base} into the checkout (rebase, keeping these uncommitted changes)`
+}
+
+/** The Finish button's tooltip — review-gate accept reads differently from closing a session. */
+export function finishTitle(status: RunStatus): string {
+  return status === 'review' ? 'Accept the changes without a PR' : 'Close the session'
+}
+
+/**
+ * 1-based position among the queued, unarchived runs, in the engine's start order — the legacy
+ * queued-placeholder math (web/app.js `queuePosition`, spec 006), now `queuePositions` itself so
+ * a "Run First" promotion moves this number and the list's in the same render. Undefined when the
+ * run is not itself queued (or the list doesn't know it yet — SSE races the detail fetch).
+ */
+export function queuePosition(runs: RunRecord[], runId: string): number | undefined {
+  return queuePositions(runs).get(runId)
+}

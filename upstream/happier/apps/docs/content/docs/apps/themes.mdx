@@ -1,0 +1,99 @@
+---
+title: Themes
+description: Pick a built-in theme, clone one to make your own, and move themes between devices or in from your editor.
+---
+
+Happier ships 18 built-in themes and lets you build your own from any of them.
+Colours carry everywhere the app draws — surfaces, text, controls, diffs, syntax
+highlighting, the embedded editors, and the native system chrome around the
+window — so a theme is not just the chat background.
+
+Find them under **Settings → Appearance**.
+
+## Built-in themes
+
+The presets cover the usual dark and light families plus several ports of
+editor themes people already use: Crisp, Pitch, Sunset, Night, Graphite and
+Classic on the dark side, Crisp and Paper on the light side, and Tokyo Night,
+One Dark Pro, Monokai Pro, GitHub Dark and Light, Dark Modern, and the four
+Catppuccin flavours.
+
+Built-in themes are read-only. To change one, clone it — the clone is yours to
+edit and the original stays intact.
+
+## Making your own
+
+A custom theme starts from a preset, so you are adjusting a coherent palette
+rather than assembling one from nothing. From there you can override individual
+colour tokens, grouped by what they affect rather than by variable name.
+
+Two things worth knowing while editing:
+
+- **The preview is a live sandbox.** It shows surfaces, text, controls, state
+  colours and syntax together, so you can judge a change against the parts of
+  the app you do not currently have open.
+- **Changing the preset replaces your draft colours.** Happier asks first,
+  because unsaved edits are discarded when the starting point changes.
+
+A theme also declares whether it uses light or dark app assets, which is what
+keeps icons and images legible against the palette you chose.
+
+## Moving themes around
+
+The current development implementation synchronizes custom themes through account
+settings. Creating, importing, or editing a theme makes it available to other
+clients signed into that account. Your light/dark selections stay on each device.
+Earlier clients keep custom themes locally; synchronization requires a client
+release containing this change.
+
+Existing local themes migrate into the account library when settings synchronize.
+Conflicting profiles are preserved separately, and an interrupted migration keeps
+the local originals for retry.
+
+Export a theme to JSON and import it on another device, or share it. The export
+is versioned, so a file made today keeps working as the token set grows.
+
+Import also accepts **VS Code themes**, which is usually the fastest way to make
+Happier match the editor you already stare at all day. Imports are validated
+rather than trusted: a malformed file is rejected with a reason instead of
+producing a half-applied palette.
+
+## Loading indicator
+
+The spinner that shows while an agent works has its own picker under
+**Settings → Appearance → Loading Indicator**. Eleven styles draw the H of
+Happier in dots and move light through it in different ways: Wave (the
+default), Handwritten, Build and Release, Relay, Twin Stems, Slow Breath,
+Starfield, Sweep, Radar, Ripple and Aurora. **Classic Ring** keeps the original
+rotating ring. Each option in the picker is a live preview.
+
+Two more choices sit under the picker. **Speed** (Slow, Normal or Fast) sets
+how quickly the light moves through the dots. **Pause** (None, Short or Long)
+sets how long the dots rest before each loop starts again; Short is the
+default. The pause stays the same length at every speed. Styles that loop
+without resting, such as Slow Breath, Starfield, Radar and Aurora, ignore the
+pause, and the Classic Ring keeps its own pace, so the settings that do not
+apply are greyed out with a note saying why. The previews play at your chosen
+speed and pause.
+
+Spinners follow your theme's text colour. Aurora uses the theme's indigo,
+purple and orange accents instead, except on tinted surfaces such as a filled
+button, where it falls back to that surface's colour so it stays readable.
+
+With your system's Reduce Motion setting on, no light travels across the
+indicator: the dots hold still and fade gently in and out, and the Classic Ring
+stops turning. These choices are saved per device.
+
+## Limits
+
+| Thing | Limit |
+| --- | --- |
+| Creating or importing custom theme profiles | 50 in the library; migration preserves existing profiles beyond this limit |
+| Size of an imported file | 64 KB |
+| Colour overrides per mode | 300 |
+| Theme name length | 64 characters |
+
+## Related
+
+- [App](/apps/app) — the rest of the client's appearance settings.
+- [Keyboard shortcuts](/apps/keyboard-shortcuts)

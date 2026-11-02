@@ -1,0 +1,37 @@
+[
+  {
+    "requester": "@sentry/cli",
+    "name": "@sentry/cli-linux-x64",
+    "version": "3.2.0"
+  },
+  {
+    "requester": "sharp",
+    "name": "@img/sharp-libvips-linux-x64",
+    "version": "1.3.4"
+  },
+  {
+    "requester": "sharp",
+    "name": "@img/sharp-libvips-linuxmusl-x64",
+    "version": "1.3.4"
+  },
+  {
+    "requester": "sharp",
+    "name": "@img/sharp-linux-x64",
+    "version": "0.35.5"
+  },
+  {
+    "requester": "sharp",
+    "name": "@img/sharp-linuxmusl-x64",
+    "version": "0.35.5"
+  },
+  {
+    "requester": "@img/sharp-linuxmusl-x64",
+    "name": "@img/sharp-libvips-linuxmusl-x64",
+    "version": "1.3.4"
+  },
+  {
+    "requester": "@img/sharp-linux-x64",
+    "name": "@img/sharp-libvips-linux-x64",
+    "version": "1.3.4"
+  }
+]

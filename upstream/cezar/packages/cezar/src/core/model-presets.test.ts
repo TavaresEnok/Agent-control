@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest';
+import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner, modelNativeToRunner, pinSurvivesRunnerSwitch } from './model-presets.ts';
+
+describe('pinSurvivesRunnerSwitch', () => {
+  it('drops any pin crossing into or out of Antigravity', () => {
+    expect(pinSurvivesRunnerSwitch('Gemini 3.8 Flash (High)', 'antigravity', 'claude')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('my-org/custom-tune', 'claude', 'antigravity')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('Gemini 3.8 Flash (High)', 'antigravity', 'antigravity')).toBe(true);
+  });
+
+  it('otherwise keeps only a pin native to the target on a switch', () => {
+    expect(pinSurvivesRunnerSwitch('my-custom-alias', 'codex', 'claude')).toBe(true);
+    expect(pinSurvivesRunnerSwitch('openai/gpt-5.1', 'opencode', 'claude')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('sonnet', 'claude', 'codex')).toBe(false);
+  });
+
+  it('keeps a same-runner pin unless it conflicts', () => {
+    expect(pinSurvivesRunnerSwitch('my-org/custom-tune', 'claude', 'claude')).toBe(true);
+    expect(pinSurvivesRunnerSwitch('gpt-5.1-codex', 'claude', 'claude')).toBe(false);
+  });
+});
+
+describe('modelConflictsWithRunner', () => {
+  it('never rejects auto or a runner\'s own preset', () => {
+    expect(modelConflictsWithRunner('', 'opencode')).toBe(false);
+    expect(modelConflictsWithRunner('opus', 'claude')).toBe(false);
+    expect(modelConflictsWithRunner('gpt-5.1-codex', 'codex')).toBe(false);
+  });
+
+  it('rejects another runner\'s preset', () => {
+    expect(modelConflictsWithRunner('opus', 'codex')).toBe(true);
+    // Run 903d6df4: a `fable` pin survived a switch to codex, which refused every turn with a 400.
+    expect(modelConflictsWithRunner('fable', 'codex')).toBe(true);
+    expect(modelConflictsWithRunner('gpt-5.1-codex', 'claude')).toBe(true);
+    expect(modelConflictsWithRunner('claude-opus-4-8', 'codex')).toBe(true);
+    // …but an unlisted gateway id stays usable on claude, which supports them by design.
+    expect(modelConflictsWithRunner('openai/gpt-5.4', 'claude')).toBe(false);
+  });
+
+  it('rejects a provider the runner cannot serve, without naming any model', () => {
+    expect(modelConflictsWithRunner('anthropic/claude-opus-4-8', 'codex')).toBe(true);
+    // A model that did not exist when this code was written is guarded just the same.
+    expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'codex')).toBe(true);
+    expect(modelConflictsWithRunner('openai/gpt-5.4', 'codex')).toBe(false);
+  });
+
+  it('leaves an unfamiliar prefix alone — it may be the runner\'s configured gateway', () => {
+    // The run-time gate reads the runner's configured provider and can accept this; this
+    // synchronous guard cannot, so it must not pre-empt that decision.
+    expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false);
+  });
+
+  it('never rejects a provider prefix for OpenCode, which serves every provider', () => {
+    expect(modelConflictsWithRunner('anthropic/claude-sonnet-5', 'opencode')).toBe(false);
+    expect(modelConflictsWithRunner('openai/gpt-5.4', 'opencode')).toBe(false);
+    // …while another runner's bare preset is still recognizably not an OpenCode id.
+    expect(modelConflictsWithRunner('opus', 'opencode')).toBe(true);
+  });
+
+  it('accepts every provider-qualified OpenCode id, including ones no release knows (#794)', () => {
+    for (const model of ['openai/gpt-5.5-fast', 'anthropic/claude-sonnet-5', 'zed/some-future-model']) {
+      expect(modelConflictsWithRunner(model, 'opencode')).toBe(false);
+    }
+  });
+
+  it('recognizes a vendor by BARE id shape, so dropping the dated presets cost nothing (#784)', () => {
+    // `claude-opus-4-8` and friends left the preset list when Claude gained host discovery, so
+    // list membership can no longer tell whose id this is. The shape can — including for releases
+    // that do not exist yet, which is the drift the dated list used to suffer.
+    expect(modelConflictsWithRunner('claude-opus-9', 'codex')).toBe(true);
+    expect(modelConflictsWithRunner('claude-opus-9', 'opencode')).toBe(true);
+    expect(modelConflictsWithRunner('gpt-6', 'claude')).toBe(true);
+    // …while a runner's OWN vendor shape, and a gateway id naming its provider, stay usable.
+    expect(modelConflictsWithRunner('claude-opus-9', 'claude')).toBe(false);
+    expect(modelConflictsWithRunner('gpt-6', 'codex')).toBe(false);
+    expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'claude')).toBe(false);
+  });
+
+  it("accepts Copilot's and Cursor's own ids, which are other vendors' ids", () => {
+    for (const model of ['claude-sonnet-4', 'gpt-5.4', 'gpt-5.1-codex']) {
+      expect(modelConflictsWithRunner(model, 'copilot')).toBe(false);
+    }
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false);
+    expect(modelConflictsWithRunner('claude-4-sonnet', 'cursor')).toBe(false);
+    // A tier alias carries no vendor shape: it is still Claude's preset, not theirs.
+    expect(modelConflictsWithRunner('opus', 'copilot')).toBe(true);
+    expect(modelConflictsWithRunner('fable', 'cursor')).toBe(true);
+    // Junie's catalog ids are opaque `v1:…` strings, so a bare vendor id still conflicts there.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'junie')).toBe(true);
+    expect(modelConflictsWithRunner('anthropic/claude-sonnet-5', 'copilot')).toBe(true);
+  });
+
+  it('keeps no dated Claude release to drift, mirroring the picker (#784)', () => {
+    expect(KNOWN_PRESETS_BY_RUNNER.claude).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+  });
+
+  it('keeps no hard-coded OpenCode catalog to drift', () => {
+    expect(KNOWN_PRESETS_BY_RUNNER.opencode).toEqual([]);
+  });
+});
+
+describe('modelNativeToRunner', () => {
+  it("rejects OpenCode's provider ids on Claude, which the conflict guard lets through (8e1173b1)", () => {
+    for (const model of ['openai/gpt-5.1', 'google/gemini-3-pro', 'opencode/big-pickle']) {
+      expect(modelConflictsWithRunner(model, 'claude')).toBe(false);
+      expect(modelNativeToRunner(model, 'claude')).toBe(false);
+    }
+  });
+
+  it("accepts the target's presets, vendor shape, own provider and bare ids", () => {
+    expect(modelNativeToRunner('opus', 'claude')).toBe(true);
+    expect(modelNativeToRunner('claude-opus-9', 'claude')).toBe(true);
+    expect(modelNativeToRunner('anthropic/claude-sonnet-5', 'claude')).toBe(true);
+    expect(modelNativeToRunner('my-custom-alias', 'claude')).toBe(true);
+    expect(modelNativeToRunner('gpt-5.1-codex', 'codex')).toBe(true);
+    expect(modelNativeToRunner('openai/gpt-5.4', 'codex')).toBe(true);
+  });
+
+  it('never calls another vendor\'s id or auto native', () => {
+    expect(modelNativeToRunner('', 'claude')).toBe(false);
+    expect(modelNativeToRunner('opus', 'codex')).toBe(false);
+    expect(modelNativeToRunner('gpt-5.1-codex', 'claude')).toBe(false);
+  });
+
+  it("drops another vendor's inherited id on Copilot and Cursor, keeping their own", () => {
+    expect(modelNativeToRunner('claude-sonnet-4-5', 'copilot')).toBe(false);
+    expect(modelNativeToRunner('gpt-5', 'cursor')).toBe(false);
+    expect(modelNativeToRunner('auto', 'copilot')).toBe(true);
+    expect(modelNativeToRunner('composer-2.5', 'cursor')).toBe(true);
+  });
+
+  it('takes any provider/model on a spanning runner, never a bare id', () => {
+    expect(modelNativeToRunner('anthropic/claude-sonnet-5', 'opencode')).toBe(true);
+    expect(modelNativeToRunner('openai/gpt-5.4', 'pi')).toBe(true);
+    expect(modelNativeToRunner('my-custom-alias', 'opencode')).toBe(false);
+  });
+});

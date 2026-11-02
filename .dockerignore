@@ -1,0 +1,4 @@
+# The laboratory image contains toolchain only. Project and private state are mounted separately.
+*
+!deploy/
+!deploy/Dockerfile.lab

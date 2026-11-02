@@ -1,0 +1,129 @@
+import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { mkdirSync, existsSync } from 'node:fs';
+
+vi.mock('node:readline', async () => {
+  const { EventEmitter } = await import('node:events');
+  return {
+    createInterface: () => Object.assign(new EventEmitter(), {
+      question: (_prompt: string, cb: (answer: string) => void) => cb('y'),
+      close: () => {},
+    }),
+  };
+});
+
+import { reloadConfiguration } from '@/configuration';
+import { readSettings } from '@/persistence';
+import { spawnStoppableHttpDaemon, withConfiguredDaemonTestHome, writeDaemonStateFixture } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+
+import { handleAuthCommand } from './auth';
+import { reserveEphemeralPort, waitForHttpReady } from '@/testkit/http/portUtils';
+
+describe('happier auth logout', () => {
+  it('keeps the home and credentials when logout-all cannot confirm daemon shutdown', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'auth-logout-incomplete-' }, async ({ homeDir }) => {
+      const port = await reserveEphemeralPort();
+      const child = spawnStoppableHttpDaemon(port, 500);
+      const statePath = await writeDaemonStateFixture(homeDir, 'removed', { pid: child.pid, httpPort: port });
+      const credentialsPath = join(homeDir, 'servers', 'removed', 'access.key');
+      await writeFile(credentialsPath, 'preserve-me');
+      try {
+        expect(await waitForHttpReady(port)).toBe(true);
+        await expect(handleAuthCommand(['logout', '--all'])).rejects.toThrow(/daemon stop is incomplete/i);
+        expect(existsSync(statePath)).toBe(true);
+        expect(await readFile(credentialsPath, 'utf8')).toBe('preserve-me');
+        expect(process.kill(child.pid, 0)).toBe(true);
+      } finally {
+        await child.kill();
+      }
+    });
+  });
+
+  it('logs out only from the active server by default', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-auth-logout-'));
+    const prevHome = process.env.HAPPIER_HOME_DIR;
+    const prevServerUrl = process.env.HAPPIER_SERVER_URL;
+    const prevWebappUrl = process.env.HAPPIER_WEBAPP_URL;
+    const prevActiveServerId = process.env.HAPPIER_ACTIVE_SERVER_ID;
+
+    try {
+      process.env.HAPPIER_HOME_DIR = home;
+      delete process.env.HAPPIER_SERVER_URL;
+      delete process.env.HAPPIER_WEBAPP_URL;
+      delete process.env.HAPPIER_ACTIVE_SERVER_ID;
+
+      mkdirSync(join(home, 'servers', 'cloud'), { recursive: true });
+      mkdirSync(join(home, 'servers', 'company'), { recursive: true });
+
+      await writeFile(
+        join(home, 'servers', 'cloud', 'access.key'),
+        JSON.stringify({ token: 'tok_cloud', secret: Buffer.from('x').toString('base64') }, null, 2),
+        'utf-8',
+      );
+      await writeFile(
+        join(home, 'servers', 'company', 'access.key'),
+        JSON.stringify({ token: 'tok_company', secret: Buffer.from('y').toString('base64') }, null, 2),
+        'utf-8',
+      );
+
+      const settings = {
+        schemaVersion: 5,
+        onboardingCompleted: false,
+        activeServerId: 'cloud',
+        servers: {
+          cloud: {
+            id: 'cloud',
+            name: 'Happier Cloud',
+            serverUrl: 'https://api.happier.dev',
+            webappUrl: 'https://app.happier.dev',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+          },
+          company: {
+            id: 'company',
+            name: 'Company',
+            serverUrl: 'https://company.example.test',
+            webappUrl: 'https://company.example.test',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+          },
+        },
+        machineIdByServerId: { cloud: 'mid_cloud', company: 'mid_company' },
+        machineIdConfirmedByServerByServerId: { cloud: true, company: true },
+        lastChangesCursorByServerIdByAccountId: { cloud: { a: 1 }, company: { a: 2 } },
+      };
+      await writeFile(join(home, 'settings.json'), JSON.stringify(settings, null, 2), 'utf-8');
+
+      reloadConfiguration();
+      await handleAuthCommand(['logout']);
+
+      expect(existsSync(join(home, 'servers', 'cloud', 'access.key'))).toBe(false);
+      expect(existsSync(join(home, 'servers', 'company', 'access.key'))).toBe(true);
+
+      const next = await readSettings();
+      expect(next.machineIdByServerId?.cloud).toBeUndefined();
+      expect(next.machineIdByServerId?.company).toBe('mid_company');
+      expect(next.lastChangesCursorByServerIdByAccountId?.cloud).toBeUndefined();
+      expect(next.lastChangesCursorByServerIdByAccountId?.company?.a).toBe(2);
+
+      // Company credentials file content is preserved.
+      const companyRaw = JSON.parse(await readFile(join(home, 'servers', 'company', 'access.key'), 'utf-8'));
+      expect(companyRaw.token).toBe('tok_company');
+    } finally {
+      if (prevHome === undefined) delete process.env.HAPPIER_HOME_DIR;
+      else process.env.HAPPIER_HOME_DIR = prevHome;
+      if (prevServerUrl === undefined) delete process.env.HAPPIER_SERVER_URL;
+      else process.env.HAPPIER_SERVER_URL = prevServerUrl;
+      if (prevWebappUrl === undefined) delete process.env.HAPPIER_WEBAPP_URL;
+      else process.env.HAPPIER_WEBAPP_URL = prevWebappUrl;
+      if (prevActiveServerId === undefined) delete process.env.HAPPIER_ACTIVE_SERVER_ID;
+      else process.env.HAPPIER_ACTIVE_SERVER_ID = prevActiveServerId;
+      reloadConfiguration();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});

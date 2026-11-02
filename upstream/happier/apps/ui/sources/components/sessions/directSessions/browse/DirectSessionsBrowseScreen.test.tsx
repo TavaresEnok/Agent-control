@@ -1,0 +1,874 @@
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import type { DirectSessionCandidateDeleteResponse, DirectSessionsCandidatesListResponse } from '@happier-dev/protocol';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createPassThroughModule } from '@/dev/testkit/mocks/components';
+import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
+import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
+import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import { createTextModuleMock } from '@/dev/testkit/mocks/text';
+import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
+import { installNewSessionComponentsCommonModuleMocks } from '../../new/components/newSessionComponentsTestHelpers';
+
+
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const candidatesListSpy = vi.hoisted(() => vi.fn(async (): Promise<DirectSessionsCandidatesListResponse> => ({
+    ok: true,
+    candidates: [
+        {
+            remoteSessionId: 'codex-session-1',
+            title: 'Existing Codex Session',
+            updatedAtMs: 1_700_000_000_000,
+            activity: 'running',
+            details: {
+                path: '/tmp/worktree',
+                codexBackendMode: 'appServer',
+                source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' },
+            },
+        },
+    ],
+    nextCursor: null,
+})));
+const linkEnsureSpy = vi.hoisted(() => vi.fn(async () => ({
+    ok: true,
+    sessionId: 'happy-session-1',
+    created: true,
+})));
+const candidateDeleteSpy = vi.hoisted(() => vi.fn(async (): Promise<DirectSessionCandidateDeleteResponse> => ({
+    ok: true as const,
+    deleted: true as const,
+})));
+const routerPushSpy = vi.hoisted(() => vi.fn());
+const routerNavigateSpy = vi.hoisted(() => vi.fn());
+const modalAlertSpy = vi.hoisted(() => vi.fn());
+const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => true));
+const profileMock = vi.hoisted(() => ({
+    connectedServicesV2: [
+        {
+            serviceId: 'openai-codex',
+            profiles: [{ profileId: 'work', status: 'connected' }],
+        },
+    ],
+}));
+const settingsMock = vi.hoisted(() => ({
+    connectedServicesProfileLabelByKey: {
+        'openai-codex/work': 'Work Profile',
+    },
+}));
+let machinesState = [
+    { id: 'machine-1', active: true, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
+    { id: 'machine-2', active: false, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
+];
+
+const expoRouterMock = createExpoRouterMock({
+    router: { push: routerPushSpy, navigate: routerNavigateSpy },
+});
+
+installNewSessionComponentsCommonModuleMocks({
+    reactNative: () => createReactNativeWebMock({
+        View: 'View',
+        TextInput: 'TextInput',
+        ActivityIndicator: 'ActivityIndicator',
+        Pressable: 'Pressable',
+        ScrollView: 'ScrollView',
+    }),
+    unistyles: () => createUnistylesMock({
+        theme: {
+            colors: {
+                textSecondary: '#666',
+                textTertiary: '#444',
+                divider: '#ddd',
+                surface: '#fff',
+                surfaceHigh: '#f5f5f5',
+                surfacePressedOverlay: '#eee',
+                success: '#0f0',
+                accent: { orange: '#f90' },
+                modal: { border: '#ddd' },
+                shadow: { color: '#000' },
+                groupped: { background: '#fff' },
+                header: { tint: '#000' },
+            },
+        },
+    }),
+    router: () => expoRouterMock.module,
+    text: () => createTextModuleMock({ translate: (key: string) => key }),
+    modal: () => createModalModuleMock({
+        spies: {
+            alert: modalAlertSpy,
+            confirm: modalConfirmSpy,
+        },
+    }).module,
+    storage: () => createStorageModuleStub({
+        useAllMachines: () => machinesState,
+    }),
+});
+
+vi.mock('@/sync/store/hooks', () => ({
+    useProfile: () => profileMock,
+    useSettings: () => settingsMock,
+    useLocalSetting: (key: string) => key === 'uiItemDensity' ? 'comfortable' : undefined,
+}));
+
+vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemList']));
+vi.mock('@/components/ui/lists/ItemGroup', () => createPassThroughModule(['ItemGroup']));
+vi.mock('@/components/ui/lists/Item', () => createPassThroughModule(['Item']));
+vi.mock('@/components/ui/lists/ItemRowActions', () => ({
+    ItemRowActions: (props: Record<string, unknown>) => React.createElement('ItemRowActions', props),
+}));
+vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => createPassThroughModule(['DropdownMenu']));
+vi.mock('@/components/ui/popover', () => createPassThroughModule(['PopoverScope']));
+vi.mock('@/components/ui/text/Text', () => createPassThroughModule(['Text', 'TextInput']));
+vi.mock('@/components/ui/status/StatusDot', () => ({
+    StatusDot: 'StatusDot',
+}));
+
+vi.mock('@/sync/ops/machineDirectSessions', () => ({
+    machineDirectSessionsCandidatesList: candidatesListSpy,
+    machineDirectSessionCandidateDelete: candidateDeleteSpy,
+    machineDirectSessionLinkEnsure: linkEnsureSpy,
+}));
+
+const directSessionsBrowseScreenModulePromise = import('./DirectSessionsBrowseScreen');
+
+type DropdownTriggerPresentation = Readonly<{
+    title: string;
+    subtitle?: string;
+}>;
+
+type DropdownMenuTestNode = Readonly<{
+    props?: {
+        itemRowProps?: {
+            density?: unknown;
+        };
+        itemTrigger?: {
+            itemProps?: {
+                testID?: string;
+                density?: unknown;
+            };
+            showSelectedDetail?: boolean;
+            subtitleFormatter?: (presentation: DropdownTriggerPresentation) => string;
+        };
+        onSelect?: (value: string) => Promise<void> | void;
+        popoverBoundaryRef?: React.RefObject<unknown> | null;
+        selectedId?: string;
+    };
+}>;
+
+function findDropdownMenuByTriggerTestId(
+    screen: { findAllByType: (type: unknown) => DropdownMenuTestNode[] },
+    testID: string,
+): DropdownMenuTestNode | undefined {
+    return screen.findAllByType('DropdownMenu').find((node) => node.props?.itemTrigger?.itemProps?.testID === testID);
+}
+
+type CandidateActionsProps = Readonly<{
+    deleting: boolean;
+    onDelete: () => void | Promise<void>;
+}>;
+
+function findCandidateActionsProps(
+    screen: { findByTestId: (testID: string) => { props: Record<string, any> } | null },
+    remoteSessionId: string,
+): CandidateActionsProps | undefined {
+    const rightElement = screen.findByTestId(`direct-session-candidate:${remoteSessionId}`)?.props.rightElement;
+    const children = React.Children.toArray(rightElement?.props?.children) as React.ReactElement<CandidateActionsProps>[];
+    return children.find((child) => typeof child?.props?.onDelete === 'function')?.props;
+}
+
+describe('DirectSessionsBrowseScreen', () => {
+    beforeEach(() => {
+        machinesState = [
+            { id: 'machine-1', active: true, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
+            { id: 'machine-2', active: false, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
+        ];
+        candidatesListSpy.mockClear();
+        linkEnsureSpy.mockClear();
+        candidateDeleteSpy.mockClear();
+        routerPushSpy.mockClear();
+        routerNavigateSpy.mockClear();
+        modalAlertSpy.mockClear();
+        modalConfirmSpy.mockClear();
+        modalConfirmSpy.mockResolvedValue(true);
+    });
+
+    it('loads candidates for the default machine and provider', async () => {
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+
+        await flushHookEffects();
+
+        expect(candidatesListSpy).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            providerId: 'codex',
+            source: { kind: 'codexHome', home: 'user' },
+            limit: 50,
+        });
+
+        const machineDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-machine-picker-trigger');
+        const providerDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-provider-picker-trigger');
+        const sourceDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-source-picker-trigger');
+        const popoverScopes = screen.findAllByType('PopoverScope' as any);
+        const popoverBoundaryRef = popoverScopes[0]?.props?.boundaryRef;
+
+        expect(machineDropdown).toBeTruthy();
+        expect(providerDropdown).toBeTruthy();
+        expect(sourceDropdown).toBeTruthy();
+        expect(popoverScopes).toHaveLength(1);
+        expect(popoverBoundaryRef).toBeTruthy();
+        expect(machineDropdown?.props?.popoverBoundaryRef).toBe(popoverBoundaryRef);
+        expect(providerDropdown?.props?.popoverBoundaryRef).toBe(popoverBoundaryRef);
+        expect(sourceDropdown?.props?.popoverBoundaryRef).toBe(popoverBoundaryRef);
+        const itemGroups = screen.findAllByType('ItemGroup' as any);
+        expect(itemGroups[0]?.props.title).toBe('directSessions.browseFiltersTitle');
+        expect(machineDropdown?.props?.itemTrigger?.itemProps?.density).toBeUndefined();
+        expect(providerDropdown?.props?.itemTrigger?.itemProps?.density).toBeUndefined();
+        expect(sourceDropdown?.props?.itemTrigger?.itemProps?.density).toBeUndefined();
+        expect(machineDropdown?.props?.itemTrigger?.showSelectedDetail).toBe(false);
+        expect(providerDropdown?.props?.itemTrigger?.showSelectedDetail).toBe(false);
+        expect(sourceDropdown?.props?.itemTrigger?.showSelectedDetail).toBe(false);
+        expect(machineDropdown?.props?.itemRowProps?.density).toBeUndefined();
+        expect(providerDropdown?.props?.itemRowProps?.density).toBeUndefined();
+        expect(sourceDropdown?.props?.itemRowProps?.density).toBeUndefined();
+        expect(typeof machineDropdown?.props?.itemTrigger?.subtitleFormatter).toBe('function');
+        expect(typeof providerDropdown?.props?.itemTrigger?.subtitleFormatter).toBe('function');
+        expect(typeof sourceDropdown?.props?.itemTrigger?.subtitleFormatter).toBe('function');
+        expect(machineDropdown!.props?.itemTrigger?.subtitleFormatter?.({
+            title: 'Leeroys-MacBook-Pro',
+            subtitle: 'Active now',
+        })).toBe('Leeroys-MacBook-Pro · Active now');
+        expect(providerDropdown!.props?.itemTrigger?.subtitleFormatter?.({
+            title: 'Codex',
+            subtitle: undefined,
+        })).toBe('Codex');
+        expect(sourceDropdown!.props?.itemTrigger?.subtitleFormatter?.({
+            title: 'My Codex home',
+            subtitle: undefined,
+        })).toBe('My Codex home');
+
+        const candidateItem = screen.findByTestId('direct-session-candidate:codex-session-1');
+        expect(candidateItem).toBeTruthy();
+        expect(candidateItem?.props.title).toBe('Existing Codex Session');
+        const candidateSubtitle = candidateItem?.props.subtitle;
+        expect(React.isValidElement(candidateSubtitle)).toBe(true);
+        const candidateSubtitleLines = React.Children.toArray((candidateSubtitle as any).props.children) as any[];
+        expect(String(candidateSubtitleLines[0]?.props?.children)).toContain('directSessions.browseActivityRunningNow');
+        expect(String(candidateSubtitleLines[2]?.props?.children)).toContain('/tmp/worktree');
+        expect(candidateSubtitleLines.map((line) => String(line?.props?.children ?? '')).join('\n')).not.toContain('codex-session-1');
+        expect(candidateItem?.props.density).toBeUndefined();
+        expect(candidateItem?.props.rightElement).toBeTruthy();
+        const badgeChildren = React.Children.toArray(candidateItem!.props.rightElement.props.children);
+        const statusDot = badgeChildren.find((child: any) => child?.type === 'StatusDot');
+        const badgeText = badgeChildren.find((child: any) => typeof child?.props?.children === 'string');
+        expect(String((badgeText as any)?.props?.children)).toBe('directSessions.browseActivityRunning');
+        expect((statusDot as any)?.props?.isPulsing).toBe(true);
+    });
+
+    it('shows last-seen metadata and a recent badge for recently active sessions', async () => {
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [
+                {
+                    remoteSessionId: 'claude-session-1',
+                    title: 'Recent Claude Session',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'active_recently',
+                    details: {
+                        path: '/tmp/claude-project',
+                        codexBackendMode: 'appServer',
+                        source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' },
+                    },
+                },
+            ],
+            nextCursor: null,
+        } as any);
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+
+        await flushHookEffects();
+
+        const candidateItem = screen.findByTestId('direct-session-candidate:claude-session-1');
+        expect(candidateItem).toBeTruthy();
+        const candidateSubtitle = candidateItem?.props.subtitle;
+        expect(React.isValidElement(candidateSubtitle)).toBe(true);
+        const candidateSubtitleLines = React.Children.toArray((candidateSubtitle as any).props.children) as any[];
+        expect(String(candidateSubtitleLines[0]?.props?.children)).toContain('ago');
+        expect(String(candidateSubtitleLines[2]?.props?.children)).toContain('/tmp/claude-project');
+        const badgeChildren = React.Children.toArray(candidateItem!.props.rightElement.props.children);
+        const statusDot = badgeChildren.find((child: any) => child?.type === 'StatusDot');
+        const badgeText = badgeChildren.find((child: any) => typeof child?.props?.children === 'string');
+        expect(String((badgeText as any)?.props?.children)).toBe('directSessions.browseActivityRecent');
+        expect((statusDot as any)?.props?.isPulsing).toBe(false);
+    });
+
+    it('prefers the first active machine over an earlier offline machine when loading candidates', async () => {
+        machinesState = [
+            { id: 'machine-offline', active: false, metadata: { displayName: 'Offline Mac', host: 'offline.local' } },
+            { id: 'machine-active', active: true, metadata: { displayName: 'Active Mac', host: 'active.local' } },
+        ];
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+
+        await flushHookEffects();
+
+        expect(candidatesListSpy).toHaveBeenCalledWith({
+            machineId: 'machine-active',
+            providerId: 'codex',
+            source: { kind: 'codexHome', home: 'user' },
+            limit: 50,
+        });
+
+        const machineDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-machine-picker-trigger');
+        expect(machineDropdown?.props?.selectedId).toBe('machine-active');
+    });
+
+    it('searches provider candidates through the daemon with the search field', async () => {
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [
+                {
+                    remoteSessionId: 'codex-session-1',
+                    title: 'Refactor direct session UX',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'running',
+                    details: { path: '/tmp/happier/dev', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                },
+                {
+                    remoteSessionId: 'codex-session-2',
+                    title: 'Investigate opencode startup',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'idle',
+                    details: { path: '/tmp/opencode', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                },
+            ],
+            nextCursor: null,
+        });
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+
+        await flushHookEffects();
+
+        const searchInput = screen.findByTestId('direct-session-candidates-search-input');
+        expect(searchInput).toBeTruthy();
+        expect(searchInput!.props.placeholder).toBe('directSessions.browseSearchPlaceholder');
+
+        vi.useFakeTimers();
+        try {
+            candidatesListSpy.mockResolvedValueOnce({
+                ok: true,
+                candidates: [
+                    {
+                        remoteSessionId: 'codex-hidden-session-9',
+                        title: 'Fast filesystem result',
+                        updatedAtMs: 1_700_000_000_000,
+                        activity: 'idle',
+                        details: { path: '/tmp/deep-result', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                    },
+                    {
+                        remoteSessionId: 'codex-fast-only-session-8',
+                        title: 'Fast-only filesystem result',
+                        updatedAtMs: 1_699_999_999_000,
+                        activity: 'idle',
+                        details: { path: '/tmp/fast-only-result', codexBackendMode: 'exec', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                    },
+                ],
+                nextCursor: null,
+                searchIncomplete: true,
+            });
+            let resolveAugmentedSearch!: (value: Awaited<ReturnType<typeof candidatesListSpy>>) => void;
+            const augmentedSearchPromise = new Promise<Awaited<ReturnType<typeof candidatesListSpy>>>((resolve) => {
+                resolveAugmentedSearch = resolve;
+            });
+            candidatesListSpy.mockImplementationOnce(() => augmentedSearchPromise);
+
+            await act(async () => {
+                searchInput!.props.onChangeText('codex-hidden-session-9');
+            });
+            expect(candidatesListSpy).toHaveBeenCalledTimes(1);
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(250);
+            });
+            await flushHookEffects();
+
+            expect(candidatesListSpy).toHaveBeenNthCalledWith(2, {
+                machineId: 'machine-1',
+                providerId: 'codex',
+                source: { kind: 'codexHome', home: 'user' },
+                limit: 50,
+                searchTerm: 'codex-hidden-session-9',
+                searchMode: 'fast',
+            });
+            expect(candidatesListSpy).toHaveBeenNthCalledWith(3, {
+                machineId: 'machine-1',
+                providerId: 'codex',
+                source: { kind: 'codexHome', home: 'user' },
+                limit: 50,
+                searchTerm: 'codex-hidden-session-9',
+                searchMode: 'full',
+            });
+            expect(screen.findByTestId('direct-session-candidates-search-augmenting')).toBeTruthy();
+
+            await act(async () => {
+                resolveAugmentedSearch({
+                    ok: true,
+                    candidates: [
+                        {
+                            remoteSessionId: 'codex-hidden-session-9',
+                            title: 'Augmented app-server result',
+                            updatedAtMs: 1_700_000_000_000,
+                            activity: 'idle',
+                            details: { path: '/tmp/deep-result', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                        },
+                        {
+                            remoteSessionId: 'codex-augmented-only-session-7',
+                            title: 'Augmented-only app-server result',
+                            updatedAtMs: 1_699_999_998_000,
+                            activity: 'idle',
+                            details: { path: '/tmp/augmented-only-result', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                        },
+                    ],
+                    nextCursor: null,
+                });
+                await augmentedSearchPromise;
+            });
+            await flushHookEffects();
+
+            const candidateItem = screen.findByTestId('direct-session-candidate:codex-hidden-session-9');
+            expect(candidateItem).toBeTruthy();
+            expect(candidateItem?.props.testID).toBe('direct-session-candidate:codex-hidden-session-9');
+            expect(candidateItem?.props.title).toBe('Augmented app-server result');
+            expect(screen.findByTestId('direct-session-candidate:codex-fast-only-session-8')).toBeTruthy();
+            expect(screen.findByTestId('direct-session-candidate:codex-augmented-only-session-7')).toBeTruthy();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('links the selected provider session and navigates to the Happier session', async () => {
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+
+        await flushHookEffects();
+
+        const candidateItem = screen.findByTestId('direct-session-candidate:codex-session-1');
+        expect(candidateItem).toBeTruthy();
+
+        await screen.pressByTestIdAsync('direct-session-candidate:codex-session-1');
+
+        expect(linkEnsureSpy).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            providerId: 'codex',
+            remoteSessionId: 'codex-session-1',
+            titleHint: 'Existing Codex Session',
+            directoryHint: '/tmp/worktree',
+            codexBackendMode: 'appServer',
+            source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' },
+        });
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/happy-session-1');
+    });
+
+    it('switches to the codex connected-service source before linking', async () => {
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+        const tree = screen.tree;
+
+        await flushHookEffects();
+        candidatesListSpy.mockClear();
+
+        const sourceDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-source-picker-trigger');
+        expect(sourceDropdown).toBeTruthy();
+
+        await act(async () => {
+            await sourceDropdown!.props?.onSelect?.('codex:connected-service:openai-codex:work');
+        });
+
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [
+                {
+                    remoteSessionId: 'codex-session-1',
+                    title: 'Existing Codex Session',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'running',
+                    details: {
+                        path: '/tmp/worktree',
+                        codexBackendMode: 'appServer',
+                        source: {
+                            kind: 'codexHome',
+                            home: 'connectedService',
+                            connectedServiceId: 'openai-codex',
+                            connectedServiceProfileId: 'work',
+                            homePath: '/tmp/codex-work-home',
+                        } as any,
+                    },
+                },
+            ],
+            nextCursor: null,
+        });
+        await act(async () => {
+            tree.update(<DirectSessionsBrowseScreen />);
+        });
+        await flushHookEffects();
+
+        expect(candidatesListSpy).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            providerId: 'codex',
+            source: { kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work' },
+            limit: 50,
+        });
+
+        const candidateItem = screen.findByTestId('direct-session-candidate:codex-session-1');
+        expect(candidateItem).toBeTruthy();
+
+        await screen.pressByTestIdAsync('direct-session-candidate:codex-session-1');
+
+        expect(linkEnsureSpy).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            providerId: 'codex',
+            remoteSessionId: 'codex-session-1',
+            titleHint: 'Existing Codex Session',
+            directoryHint: '/tmp/worktree',
+            codexBackendMode: 'appServer',
+            source: expect.objectContaining({ kind: 'codexHome', home: 'connectedService', connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work' } as any),
+        });
+    });
+
+    it('recovers when the selected machine disappears from the machine list', async () => {
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+        const tree = screen.tree;
+
+        await flushHookEffects();
+
+        const machineDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-machine-picker-trigger');
+
+        await act(async () => {
+            await machineDropdown!.props?.onSelect?.('machine-2');
+        });
+
+        expect(candidatesListSpy).toHaveBeenLastCalledWith({
+            machineId: 'machine-2',
+            providerId: 'codex',
+            source: { kind: 'codexHome', home: 'user' },
+            limit: 50,
+        });
+
+        candidatesListSpy.mockClear();
+        machinesState = [{ id: 'machine-1', active: true, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } }];
+
+        await act(async () => {
+            tree.update(<DirectSessionsBrowseScreen key="rerendered" />);
+        });
+        await flushHookEffects();
+
+        const rerenderedMachineDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-machine-picker-trigger');
+
+        expect(rerenderedMachineDropdown).toBeTruthy();
+        expect(rerenderedMachineDropdown!.props?.selectedId).toBe('machine-1');
+        expect(candidatesListSpy).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            providerId: 'codex',
+            source: { kind: 'codexHome', home: 'user' },
+            limit: 50,
+        });
+    });
+
+    it('does not allow stale requests to overwrite newer candidate state after rapid filter changes', async () => {
+        let slowResolve: ((value: any) => void) | null = null;
+        const slowPromise = new Promise((resolve) => {
+            slowResolve = resolve;
+        });
+
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [
+                {
+                    remoteSessionId: 'initial-session-1',
+                    title: 'Initial Session',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'running',
+                    details: { path: '/tmp/initial', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                },
+            ],
+            nextCursor: null,
+        });
+
+        candidatesListSpy.mockImplementationOnce(async () => {
+            await slowPromise;
+            return {
+                ok: true,
+                candidates: [
+                    {
+                        remoteSessionId: 'stale-session-1',
+                        title: 'Stale Session',
+                        updatedAtMs: 1_700_000_000_000,
+                        activity: 'idle',
+                        details: { path: '/tmp/stale', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                    },
+                ],
+                nextCursor: null,
+            };
+        });
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+
+        const screen = await renderScreen(<DirectSessionsBrowseScreen />);
+        const tree = screen.tree;
+
+        await flushHookEffects();
+
+        const machineDropdown = findDropdownMenuByTriggerTestId(screen, 'direct-session-machine-picker-trigger');
+
+        // Switch to machine-2 (this starts a slow request)
+        await act(async () => {
+            await machineDropdown!.props?.onSelect?.('machine-2');
+        });
+
+        // Immediately switch back to machine-1 (this completes quickly)
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [
+                {
+                    remoteSessionId: 'fresh-session-1',
+                    title: 'Fresh Session',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'running',
+                    details: { path: '/tmp/fresh', codexBackendMode: 'appServer', source: { kind: 'codexHome', home: 'user', homePath: '/tmp/custom-home' } },
+                },
+            ],
+            nextCursor: null,
+        });
+
+        await act(async () => {
+            await machineDropdown!.props?.onSelect?.('machine-1');
+        });
+
+        await flushHookEffects();
+
+        // Now resolve the slow request from machine-2
+        slowResolve!({
+            ok: true,
+            candidates: [
+                {
+                    remoteSessionId: 'stale-session-1',
+                    title: 'Stale Session',
+                    updatedAtMs: 1_700_000_000_000,
+                    activity: 'idle',
+                    details: { path: '/tmp/stale', codexBackendMode: 'appServer' },
+                },
+            ],
+            nextCursor: null,
+        });
+        await flushHookEffects();
+
+        // The displayed candidates should be from machine-1, not the stale machine-2 request
+        const candidateItem = screen.findByTestId('direct-session-candidate:fresh-session-1');
+        expect(candidateItem).toBeTruthy();
+        expect(candidateItem?.props.title).toBe('Fresh Session');
+        expect(candidateItem?.props.testID).toBe('direct-session-candidate:fresh-session-1');
+    });
+
+    it('can be used as a locked picker that returns a remote session id without linking', async () => {
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+
+        const onPickRemoteSessionId = vi.fn();
+
+        const screen = await renderScreen(
+            <DirectSessionsBrowseScreen
+                interaction="pickRemoteSessionId"
+                lockScope={{
+                    machineId: 'machine-2',
+                    serverId: 'server-1',
+                    providerId: 'codex',
+                    source: { kind: 'codexHome', home: 'user' },
+                }}
+                onPickRemoteSessionId={onPickRemoteSessionId}
+            />,
+        );
+
+        await flushHookEffects();
+
+        expect(candidatesListSpy).toHaveBeenCalledWith({
+            machineId: 'machine-2',
+            providerId: 'codex',
+            source: { kind: 'codexHome', home: 'user' },
+            limit: 50,
+        }, { serverId: 'server-1' });
+
+        expect(findDropdownMenuByTriggerTestId(screen, 'direct-session-machine-picker-trigger')).toBeUndefined();
+        expect(findDropdownMenuByTriggerTestId(screen, 'direct-session-provider-picker-trigger')).toBeUndefined();
+        expect(findDropdownMenuByTriggerTestId(screen, 'direct-session-source-picker-trigger')).toBeUndefined();
+
+        const candidateItem = screen.findByTestId('direct-session-candidate:codex-session-1');
+        expect(candidateItem).toBeTruthy();
+        if (!candidateItem) {
+            throw new Error('expected candidate item');
+        }
+
+        await act(async () => {
+            await candidateItem.props.onPress?.();
+        });
+
+        expect(onPickRemoteSessionId).toHaveBeenCalledWith('codex-session-1');
+        expect(routerPushSpy).not.toHaveBeenCalled();
+        expect(linkEnsureSpy).not.toHaveBeenCalled();
+    });
+
+    it('hides provider deletion when the candidate listing did not negotiate it', async () => {
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [{ remoteSessionId: 'remote-1', title: 'Provider session', updatedAtMs: 1 }],
+            nextCursor: null,
+            capabilities: { deleteCandidate: false },
+        });
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(
+            <DirectSessionsBrowseScreen
+                interaction="pickRemoteSessionId"
+                lockScope={{
+                    machineId: 'machine-1',
+                    providerId: 'kimi',
+                    source: { kind: 'acpSessionList', cwd: '/work/repo' },
+                }}
+            />,
+        );
+        await flushHookEffects();
+
+        expect(screen.findAllByType('ItemRowActions')).toHaveLength(0);
+        expect(candidateDeleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('confirms and deletes one provider-owned candidate, showing pending state and removing only after success', async () => {
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [{ remoteSessionId: 'remote-1', title: 'Provider session', updatedAtMs: 1 }],
+            nextCursor: null,
+            capabilities: { deleteCandidate: true },
+        });
+        let resolveDelete!: (value: { ok: true; deleted: true }) => void;
+        const pendingDelete = new Promise<{ ok: true; deleted: true }>((resolve) => { resolveDelete = resolve; });
+        candidateDeleteSpy.mockImplementationOnce(() => pendingDelete);
+
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(
+            <DirectSessionsBrowseScreen
+                interaction="pickRemoteSessionId"
+                lockScope={{
+                    machineId: 'machine-1',
+                    serverId: 'server-1',
+                    providerId: 'kimi',
+                    source: { kind: 'acpSessionList', cwd: '/work/repo' },
+                }}
+            />,
+        );
+        await flushHookEffects();
+
+        const candidateActions = findCandidateActionsProps(screen, 'remote-1');
+        expect(candidateActions).toBeTruthy();
+
+        await act(async () => {
+            candidateActions?.onDelete();
+        });
+        expect(candidateDeleteSpy).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            providerId: 'kimi',
+            source: { kind: 'acpSessionList', cwd: '/work/repo' },
+            remoteSessionId: 'remote-1',
+        }, { serverId: 'server-1' });
+        expect(screen.findByTestId('direct-session-candidate:remote-1')?.props.loading).toBe(true);
+
+        await act(async () => {
+            resolveDelete({ ok: true, deleted: true });
+            await pendingDelete;
+        });
+        expect(screen.findByTestId('direct-session-candidate:remote-1')).toBeNull();
+        expect(candidateDeleteSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('disables every provider delete action while keeping pending loading on only the deleting row', async () => {
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [
+                { remoteSessionId: 'remote-1', title: 'First provider session', updatedAtMs: 2 },
+                { remoteSessionId: 'remote-2', title: 'Second provider session', updatedAtMs: 1 },
+            ],
+            nextCursor: null,
+            capabilities: { deleteCandidate: true },
+        });
+        let resolveDelete!: (value: { ok: true; deleted: true }) => void;
+        const pendingDelete = new Promise<{ ok: true; deleted: true }>((resolve) => { resolveDelete = resolve; });
+        candidateDeleteSpy.mockImplementationOnce(() => pendingDelete);
+
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(
+            <DirectSessionsBrowseScreen
+                interaction="pickRemoteSessionId"
+                lockScope={{
+                    machineId: 'machine-1',
+                    providerId: 'kimi',
+                    source: { kind: 'acpSessionList', cwd: '/work/repo' },
+                }}
+            />,
+        );
+        await flushHookEffects();
+
+        await act(async () => {
+            findCandidateActionsProps(screen, 'remote-1')?.onDelete();
+        });
+
+        expect(findCandidateActionsProps(screen, 'remote-1')?.deleting).toBe(true);
+        expect(findCandidateActionsProps(screen, 'remote-2')?.deleting).toBe(true);
+        expect(screen.findByTestId('direct-session-candidate:remote-1')?.props.loading).toBe(true);
+        expect(screen.findByTestId('direct-session-candidate:remote-2')?.props.loading).toBe(false);
+
+        await act(async () => {
+            resolveDelete({ ok: true, deleted: true });
+            await pendingDelete;
+        });
+        expect(findCandidateActionsProps(screen, 'remote-2')?.deleting).toBe(false);
+        expect(screen.findByTestId('direct-session-candidate:remote-2')?.props.loading).toBe(false);
+    });
+
+    it('preserves a provider candidate and makes retry available after deletion fails', async () => {
+        candidatesListSpy.mockResolvedValueOnce({
+            ok: true,
+            candidates: [{ remoteSessionId: 'remote-1', title: 'Provider session', updatedAtMs: 1 }],
+            nextCursor: null,
+            capabilities: { deleteCandidate: true },
+        });
+        candidateDeleteSpy.mockResolvedValueOnce({
+            ok: false,
+            errorCode: 'internal_error',
+            error: 'provider refused deletion',
+        });
+
+        const { DirectSessionsBrowseScreen } = await directSessionsBrowseScreenModulePromise;
+        const screen = await renderScreen(
+            <DirectSessionsBrowseScreen
+                interaction="pickRemoteSessionId"
+                lockScope={{
+                    machineId: 'machine-1',
+                    providerId: 'kimi',
+                    source: { kind: 'acpSessionList', cwd: '/work/repo' },
+                }}
+            />,
+        );
+        await flushHookEffects();
+
+        const candidateActions = findCandidateActionsProps(screen, 'remote-1');
+        await act(async () => {
+            candidateActions?.onDelete();
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        expect(screen.findByTestId('direct-session-candidate:remote-1')).toBeTruthy();
+        expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'provider refused deletion');
+        expect(findCandidateActionsProps(screen, 'remote-1')?.deleting).toBe(false);
+    });
+});

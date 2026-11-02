@@ -1,0 +1,62 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+TAP version 13
+# Subtest: RF-03/04: same project has independent context and session identities
+ok 1 - RF-03/04: same project has independent context and session identities
+  ---
+  duration_ms: 113.075004
+  type: 'test'
+  ...
+# Subtest: RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+ok 2 - RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+  ---
+  duration_ms: 57.109254
+  type: 'test'
+  ...
+# Subtest: RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+ok 3 - RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+  ---
+  duration_ms: 220.176147
+  type: 'test'
+  ...
+# Subtest: checkpoint tracks new plans atomically and rejects an older snapshot
+not ok 4 - checkpoint tracks new plans atomically and rejects an older snapshot
+  ---
+  duration_ms: 44.762175
+  type: 'test'
+  location: '/workspace/tests/ledger.test.ts:1:4254'
+  failureType: 'testCodeFailure'
+  error: 'new row for relation "ac_deliveries" violates check constraint "ac_deliveries_channel_check"'
+  code: '23514'
+  name: 'error'
+  stack: |-
+    /workspace/node_modules/pg/lib/client.js:545:17
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async <anonymous> (/workspace/src/ledger.ts:123:7)
+    async Ledger.tx (/workspace/src/ledger.ts:13:45)
+    async Promise.all (index 0)
+    async TestContext.<anonymous> (/workspace/tests/ledger.test.ts:63:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 5 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 2340.871944
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 4
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4001.018221

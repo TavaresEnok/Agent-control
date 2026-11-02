@@ -1,0 +1,43 @@
+
+> test
+> vitest run packages/web/src/components/composer/canonical-chat.test.tsx
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/workspace/upstream/cezar[39m
+
+ [31m❯[39m [30m[46m web [49m[39m src/components/composer/canonical-chat.test.tsx [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 287[2mms[22m[39m
+[31m   [31m×[31m managed product cannot open a second native conversation[39m[32m 285[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m [30m[46m web [49m[39m src/components/composer/canonical-chat.test.tsx[2m > [22mmanaged product cannot open a second native conversation
+[31m[1mAssertionError[22m: expected <textarea rows="1" …(4)></textarea> to be null[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+<textarea
+  aria-label="Reply to the agent"
+  class="block max-h-[220px] min-h-11 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:min-h-[54px] md:px-4 md:pt-3 md:text-sm"
+  placeholder="Reply — / for skills, @ for files…"
+  rows="1"
+  style="height: 0px;"
+/>
+
+[36m [2m❯[22m src/components/composer/canonical-chat.test.tsx:[2m9:41[22m[39m
+    [90m  7|[39m   vi[33m.[39m[34mstubEnv[39m([32m'VITE_AGENT_CONTROL_MANAGED'[39m[33m,[39m [32m'1'[39m)
+    [90m  8|[39m   render(<QueryClientProvider client={new QueryClient()}><Composer aut…
+    [90m  9|[39m   [34mexpect[39m(screen[33m.[39m[34mqueryByRole[39m([32m'textbox'[39m))[33m.[39m[34mtoBeNull[39m()
+    [90m   |[39m                                         [31m^[39m
+    [90m 10|[39m   [34mexpect[39m(screen[33m.[39m[34mgetByText[39m([36m/Happier/[39m))[33m.[39m[34mtoBeDefined[39m()
+    [90m 11|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 03:31:47
+[2m   Duration [22m 4.36s[2m (transform 1.64s, setup 50ms, import 2.53s, tests 287ms, environment 1.20s)[22m
+

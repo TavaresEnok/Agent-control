@@ -1,0 +1,21 @@
+name: isolated-synthetic-regression
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  contracts-and-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          printf 'AC_LAB_UID=%s\nAC_LAB_GID=%s\n' "$(id -u)" "$(id -g)" >> "$GITHUB_ENV"
+      - run: docker build -t agent-control-lab:0.1.0 -f deploy/Dockerfile.lab .
+      - run: docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/workspace" -w /workspace agent-control-lab:0.1.0 sh scripts/install-baseline.sh
+      - run: docker compose -f deploy/compose.lab.yml up -d
+      - run: docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'cd upstream/cezar && npm run typecheck && VITE_AGENT_CONTROL_MANAGED=1 npm run build'
+      - run: docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'npm run typecheck && node --import tsx --test tests/ledger.test.ts tests/runtime.test.ts'
+      - if: always()
+        run: docker compose -f deploy/compose.lab.yml down

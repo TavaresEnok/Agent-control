@@ -1,0 +1,3273 @@
+{
+  "error": "TimeoutError: locator.waitFor: Timeout 45000ms exceeded.\nCall log:\n  - waiting for locator('.react-flow__node').first() to be visible\n",
+  "failedRequests": [
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/telemetry/consent",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/telemetry/page",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/skills-update",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/events",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/repo",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/config",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/git/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/providers/status",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/open-targets",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/workspace/ui-state",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/read",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/health",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/projects",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/p/default/runs/c88cd0b9-47d8-4f7f-b54b-9f8706affbfb/layouts",
+      "status": 403
+    }
+  ]
+}

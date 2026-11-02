@@ -1,0 +1,739 @@
+import { z } from 'zod';
+import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
+import { type Runner, runnerSchema } from './health.ts';
+import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
+
+/**
+ * The workspace + settings families: `~/.cezar/config.json`'s settings slice, both GUI-pref bags
+ * (per-repo and workspace), the per-repo agent knobs, provider auth status, the host model
+ * catalog, the skills-update state, and the "Open in…" targets.
+ *
+ * Node-free by construction (see README rule 1) — `zod` and the sibling contract modules only.
+ */
+
+// ---- workspace settings (`GET/PUT /api/v1/workspace/config`) --------------------------------
+
+/**
+ * `GET/PUT /api/v1/workspace/config` — the settings slice of `~/.cezar/config.json` (step 2.7).
+ *
+ * Global knobs only: the registry itself is `GET /api/v1/projects`, and `schemaVersion` (a
+ * migration cursor, not a setting) is deliberately absent. `resources` is the workspace's
+ * host-protection budget — the ONLY effective `maxParallel`/`memoryLimitMb` since Phase 2;
+ * `worktreeRetentionDefault` seeds projects that set none.
+ *
+ * `composerDefaults` and every `resources` key are REQUIRED: `workspaceConfigBody`
+ * (src/server/server.ts:1888) materializes all of them from schema defaults on every answer,
+ * including the degraded path. The hand-written DTO declared `composerDefaults`,
+ * `resources.maxMonitoringSessions` and `resources.monitoringWakeIntervalMinutes` optional, which
+ * was wider than the server has ever been.
+ */
+export const workspaceConfigResponseSchema = z.object({
+  branding: z.object({
+    name: z.string(),
+    logoUrl: z.string().nullable(),
+  }),
+  /** Root exposed by the Add-project directory browser — stored as written (`~` kept). */
+  browseRoot: z.string(),
+  /** Checkout root for GUI-cloned projects — stored as written (`~` kept). */
+  projectsDir: z.string(),
+  /** Stored override; `null` means inherit `CEZ_SKILLS_AUTO_UPDATE`, then true. */
+  skillsAutoUpdate: z.boolean().nullable(),
+  effectiveSkillsAutoUpdate: z.boolean(),
+  /** Skills repos added in Global settings; every project loads them as team skills. */
+  orgSkillsRepos: z.array(z.object({ repo: z.string(), ref: z.string() })),
+  /** Global instructions for every task in every project; `null` = none. A project's own system
+   *  prompt is appended after it and wins where they conflict. */
+  systemPrompt: z.string().nullable(),
+  composerDefaults: z.object({
+    autonomous: z.boolean().nullable(),
+    worktree: z.boolean().nullable(),
+    /** `'source-dependent'` when no `CEZ_AUTONOMOUS_DEFAULT` pins it either way. */
+    inheritedAutonomous: z.union([z.boolean(), z.literal('source-dependent')]),
+    inheritedWorktree: z.boolean(),
+  }),
+  resources: z.object({
+    maxParallel: z.number(),
+    maxMonitoringSessions: z.number(),
+    idleTimeoutMinutes: z.number().nullable(),
+    monitoringWakeIntervalMinutes: z.number().nullable(),
+    /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
+    autoResumeOnUsageLimit: z.boolean(),
+    memoryLimitMb: z.number().nullable(),
+    worktreeRetentionDefault: z.number(),
+  }),
+  /**
+   * What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles).
+   *
+   * Both keys are OPTIONAL on the wire, and that is load-bearing rather than lax: absent means
+   * "this machine has no opinion, the built-in default applies", and it has to stay distinguishable
+   * from a value someone chose or the fallback collapses into "always claude". Consulted only where
+   * the repo's own `.ai/cezar/config.json` is silent — a repo that chose is never overruled.
+   */
+  agentDefaults: z.object({
+    runner: runnerSchema.optional(),
+    models: z.object({
+      claude: z.string().optional(),
+      codex: z.string().optional(),
+      opencode: z.string().optional(),
+      cursor: z.string().optional(),
+      pi: z.string().optional(),
+      junie: z.string().optional(),
+      copilot: z.string().optional(),
+      antigravity: z.string().optional(),
+    }).optional(),
+  }),
+});
+export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSchema>;
+
+/**
+ * `PUT /api/v1/workspace/config` body — partial: absent keys stay untouched. A rejected workspace
+ * root (not writable) 400s with the reason and persists NOTHING, resources included, so callers
+ * may send both in one request only if they want that atomicity. Bounds mirror
+ * `src/workspace/config.ts` exactly, so a value this schema accepts can never be degraded away by
+ * the next load's `.catch`.
+ */
+export const setWorkspaceConfigInputSchema = z.object({
+  branding: z.object({
+    name: z.string().trim().min(1).max(80).nullable().optional(),
+  }).optional(),
+  browseRoot: z.string().trim().min(1).max(4096).optional(),
+  projectsDir: z.string().trim().min(1).max(4096).optional(),
+  skillsAutoUpdate: z.boolean().nullable().optional(),
+  /** Replaces the whole list; entries keep unknown keys (a newer cezar's metadata). The server
+   *  rejects an unsafe `repo`/`ref` with a 400. */
+  orgSkillsRepos: z
+    .array(z.object({ repo: z.string().trim().min(1).max(500), ref: z.string().trim().min(1).max(200).default('main') }).passthrough())
+    .max(20)
+    .optional(),
+  /** Clears on `null` or `''`, like the project `systemPrompt`. */
+  systemPrompt: z.string().trim().max(20_000).nullable().optional(),
+  composerDefaults: z
+    .object({
+      autonomous: z.boolean().nullable().optional(),
+      worktree: z.boolean().nullable().optional(),
+    })
+    .optional(),
+  /** Machine-wide agent defaults. `null` on a key CLEARS it back to "no opinion", which a bare
+   *  absent key cannot say in a partial patch. */
+  agentDefaults: z
+    .object({
+      runner: runnerSchema.nullable().optional(),
+      models: z
+        .object({
+          claude: z.string().trim().min(1).max(200).nullable().optional(),
+          codex: z.string().trim().min(1).max(200).nullable().optional(),
+          opencode: z.string().trim().min(1).max(200).nullable().optional(),
+          junie: z.string().trim().min(1).max(200).nullable().optional(),
+          cursor: z.string().trim().min(1).max(200).nullable().optional(),
+          pi: z.string().trim().min(1).max(200).nullable().optional(),
+          copilot: z.string().trim().min(1).max(200).nullable().optional(),
+          antigravity: z.string().trim().min(1).max(200).nullable().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  resources: z
+    .object({
+      maxParallel: z.number().int().min(1).max(16).optional(),
+      maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
+      idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
+      monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+      autoResumeOnUsageLimit: z.boolean().optional(),
+      memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+      worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
+    })
+    .optional(),
+});
+export type SetWorkspaceConfigInput = z.infer<typeof setWorkspaceConfigInputSchema>;
+
+/** Multipart upload result for the workspace's local instance logo. */
+export const workspaceBrandingLogoResponseSchema = z.object({ logoUrl: z.string().nullable() });
+export type WorkspaceBrandingLogoResponse = z.infer<typeof workspaceBrandingLogoResponseSchema>;
+
+// ---- GUI prefs — the two open bags ----------------------------------------------------------
+
+/** Settings → Appearance: accent + density + reading width. ONE shape for both ui-state files. */
+const appearanceSchema = z.object({
+  accent: z.enum(['lime', 'violet']).optional(),
+  density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
+  width: z.enum(['narrow', 'wide']).optional(),
+});
+
+const taskTableUiStateSchema = z.looseObject({
+  /** Explicit user choices only. Missing ids keep the registry-owned default. */
+  expandedColumns: z.record(z.string(), z.boolean()).optional(),
+});
+
+export const AUTOMATION_ORDER_LIMIT = 200;
+export const automationListPreferencesSchema = z.looseObject({
+  sort: z.enum(['manual', 'name', 'nextRun']).optional(),
+  order: z.array(z.string().trim().min(1).max(200)).max(AUTOMATION_ORDER_LIMIT).optional(),
+});
+export type AutomationListPreferences = z.infer<typeof automationListPreferencesSchema>;
+
+/**
+ * `GET/PUT /api/v1/ui-state` — the per-repo GUI prefs in `.ai/cezar/ui-state.json`.
+ *
+ * An OPEN bag on purpose (BACKWARD_COMPATIBILITY.md §3): unknown keys round-trip untouched, so a
+ * newer cockpit's prefs survive an older server and a future pref needs no server change. Hence
+ * `z.looseObject`, not a closed object — the keys below are the ones the server's schema *names*,
+ * never the ones it *permits*. The write side caps the TOP-LEVEL key count at 200 (#429); that cap
+ * is a request-body refinement in `src/server/server.ts` (`capUiStateKeys`, :756) and is not part
+ * of the response shape.
+ *
+ * `notifications` is deliberately NOT here: it moved to `WorkspaceUiState` at step 3.5 and the
+ * per-repo schema (src/server/server.ts:550) has not named it since. The hand-written DTO still
+ * listed it, which made it wider than the route.
+ */
+export const uiStateSchema = z.looseObject({
+  /** What the last started run used. `null` is a VALUE, not an absence: it records a run that
+   *  chose neither a skill nor a workflow (the plain built-in `quick-task`), which the composer
+   *  can now express since the source picker grew an empty state. Absent still means "no
+   *  run has been recorded here" — a cockpit reading either one selects nothing. */
+  lastTask: z
+    .object({ source: z.enum(['workflow', 'skill']), ref: z.string() })
+    .nullable()
+    .optional(),
+  /** Most-recently-run sources, newest first (deduped, capped). Feeds the composer picker's
+   *  recency sort. */
+  recentSources: z
+    .array(z.object({ source: z.enum(['workflow', 'skill']), ref: z.string() }))
+    .optional(),
+  /** The last worktree choice for a single-skill run. Absent → the default (isolated worktree). */
+  lastWorktree: z.boolean().optional(),
+  /** The last autonomous choice — remembered like `lastWorktree`. Absent → off. */
+  lastAutonomous: z.boolean().optional(),
+  /** Whether new runs should ask agents to append follow-up work. Absent → on. */
+  lastGenerateFollowups: z.boolean().optional(),
+  /** The selected default team skills for this repo. Absent means all default skills remain available. */
+  importedSkills: z.array(z.string().min(1).max(200)).max(200).optional(),
+  /** Skill selection frequency (#408): name → times chosen, across BOTH composers. */
+  skillUsage: z.record(z.string(), z.number()).optional(),
+  runsView: z.enum(['list', 'table']).optional(),
+  /** The GitHub tab's last-selected sub-tab (#417). Absent → issues. */
+  githubView: z.enum(['issues', 'prs']).optional(),
+  /** The GitHub tab's list order. Absent → newest first, which is what `gh` already returns. */
+  githubSort: z.enum(['newest', 'oldest']).optional(),
+  /** List presentation only (#1819); absent preserves alphabetical order. */
+  automationList: automationListPreferencesSchema.optional(),
+  /** Settings → Appearance. The theme itself stays in localStorage (`cez-theme`) — it must
+   *  pre-paint, and it is per-browser by design. */
+  appearance: appearanceSchema.optional(),
+  /** Follow-up prompt templates (#413). Absent → the built-in defaults; present (even `[]`) is
+   *  the user's own edited list. `skills` are the skill names the template auto-applies for. */
+  promptTemplates: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        text: z.string(),
+        skills: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
+  /** The open-mercato/skills promo banner (#391), dismissed for good. Legacy — retained so old files round-trip. */
+  dismissedSkillsBanner: z.boolean().optional(),
+});
+export type UiState = z.infer<typeof uiStateSchema>;
+
+/** Maximum persisted text for one reusable prompt template (#908).
+ *
+ * 20,000 characters accommodates long skills while keeping each ui-state entry bounded. The
+ * server write schema and cockpit editor mirror this documented value; the response schema above
+ * remains intentionally permissive so older/newer ui-state files round-trip safely.
+ */
+export const PROMPT_TEMPLATE_TEXT_MAX = 20_000;
+
+/**
+ * `GET/PUT /api/v1/workspace/ui-state` — cross-project GUI prefs in `~/.cezar/ui-state.json`
+ * (multi-project spec, step 2.7).
+ *
+ * The same open bag as its per-repo twin above, and open for the same reason. The PUT merges
+ * SHALLOWLY at the top level server-side, so a writer must send the whole `sidebar` object, never a
+ * leaf.
+ */
+export const workspaceLastLocationSchema = z.strictObject({
+  projectId: z.string().min(1).max(64),
+  pathname: z.string().min(1).max(2048).startsWith('/p/'),
+  search: z.string().max(4096).startsWith('?').optional(),
+  hash: z.string().max(2048).startsWith('#').optional(),
+});
+export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
+
+/** Optional dashboard preferences; old/new clients preserve unknown keys. */
+// Reserve room for every supported widget in addition to the future-ID budget.
+const dashboardKnownTileIds = new Set(['fleet', 'needsYou', 'recent', 'usage', 'trends', 'overview', 'portfolio', 'automations']);
+const dashboardTileOrderSchema = z.array(z.string().min(1).max(64))
+  .max(200 + dashboardKnownTileIds.size)
+  .refine(items => items.filter(id => !dashboardKnownTileIds.has(id)).length <= 200, 'Too many unknown dashboard tiles')
+  .refine(items => new Set(items).size === items.length, 'Duplicate dashboard tile');
+export const dashboardPreferencesInputSchema = z.looseObject({
+  order: dashboardTileOrderSchema.optional(),
+  tiles: z.looseObject({ automations: z.boolean().optional(), fleet: z.boolean().optional(), needsYou: z.boolean().optional(), recent: z.boolean().optional(), usage: z.boolean().optional(), trends: z.boolean().optional() }).optional(),
+});
+export const dashboardPreferencesSchema = z.looseObject({
+  order: dashboardTileOrderSchema.catch([]).optional(),
+  tiles: z.looseObject({
+    automations: z.boolean().catch(true).optional(),
+    fleet: z.boolean().catch(true).optional(),
+    needsYou: z.boolean().catch(true).optional(),
+    recent: z.boolean().catch(true).optional(),
+    usage: z.boolean().catch(true).optional(),
+    trends: z.boolean().catch(true).optional(),
+  }).catch({}).optional(),
+}).catch({});
+
+export const workspaceUiStateSchema = z.looseObject({
+  dashboard: dashboardPreferencesSchema.optional(),
+  sidebar: z
+    .looseObject({
+      /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
+       *  round-tripped so an older cockpit sharing this home keeps working, but the current
+       *  cockpit neither reads nor writes it: which groups are shut describes the WINDOW, not the
+       *  workspace, so it lives in that browser's localStorage
+       *  (`packages/web/src/lib/sidebar-collapse.ts`). One shared answer meant a phone collapsing
+       *  a group collapsed it on the desktop too. */
+      collapsed: z.record(z.string(), z.boolean()).optional(),
+      /** The user's hand-picked project-group order (#952), most-wanted first — WORKSPACE state
+       *  on purpose, unlike `collapsed` above. Which order your repos sit in is a considered
+       *  choice made once, so redoing it on the phone is the annoyance; which groups are shut
+       *  changes many times an hour and belongs to the window.
+       *
+       *  Absent (or `[]`) means "never reordered" and the sidebar keeps its `lastOpenedAt` sort.
+       *  Ids that are no longer registered are ignored on read; registered projects missing from
+       *  the list are not dropped — they sort in by `lastOpenedAt` ahead of the picked ones
+       *  (`packages/web/src/lib/project-order.ts`). */
+      projectOrder: z.array(z.string()).optional(),
+    })
+    .optional(),
+  /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
+   *  provider reports a different incident, so this stays workspace-global with the browser
+   *  rather than one project checkout. */
+  dismissedProviderAuthFailures: z
+    .object({
+      claude: z.string().optional(),
+      codex: z.string().optional(),
+      opencode: z.string().optional(),
+      cursor: z.string().optional(),
+      pi: z.string().optional(),
+      junie: z.string().optional(),
+      copilot: z.string().optional(),
+      antigravity: z.string().optional(),
+    })
+    .optional(),
+  /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
+   *  keyboard, not a repo. */
+  appearance: appearanceSchema.optional(),
+  /** Settings → Notifications, GLOBAL since step 3.5 — one answer for the whole workspace, since
+   *  the delivering browser is one browser whichever project you are looking at. */
+  notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
+  /** Desktop Tasks-table density, shared across every project in this workspace. */
+  taskTable: taskTableUiStateSchema.optional(),
+  /** Keyboard shortcuts the user changed (spec 2026-10-17-task-palette): task-palette command id →
+   *  chord (`Mod+Shift+P`), or `null` to unbind a default. Absent ids keep the shipped default. */
+  keybindings: z.record(z.string(), z.string().nullable()).optional(),
+  /** LEGACY, exactly like `sidebar` above — the last settled project-scoped page, restored when
+   *  entering at the exact bare root. The shape is unchanged and still accepted, but the current
+   *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
+   *  last client to navigate decided where every OTHER client's next launch landed. */
+  lastLocation: workspaceLastLocationSchema.optional(),
+  /** Legacy source for default team-skill selections. New choices are project-scoped; this stays
+   *  typed so projects without a local choice preserve selections from older cockpit versions. */
+  importedSkills: z.array(z.string()).optional(),
+  /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
+   *  project. One bad entry drops the list rather than the whole file. */
+  savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
+   *  person sets up every project. */
+  onboarding: z
+    .looseObject({
+      setupDismissed: z.boolean().optional(),
+      /** "Continue anyway" past the sign-in screen: provider detection can miss a working login. */
+      agentCheckSkipped: z.boolean().optional(),
+      /** Feature announcements the user closed, by id — a new announcement shows once. */
+      dismissedAnnouncements: z.array(z.string().max(64)).max(50).optional(),
+      /** Coming back after a while: the first and the latest visit, written at most hourly. */
+      firstVisitAt: z.string().max(40).optional(),
+      lastVisitAt: z.string().max(40).optional(),
+      /** Set when a visit follows a long absence: the visit before it, and when the user came
+       *  back. The tasks page greets them with what they left and what changed since. */
+      returnedFrom: z.string().max(40).optional(),
+      returnedAt: z.string().max(40).optional(),
+      welcomeBackClosedAt: z.string().max(40).optional(),
+      /** The last time the user opened "What's new" — its sidebar dot counts from here. */
+      whatsNewSeenAt: z.string().max(40).optional(),
+      /** Composer tips on `/new` (one or two controls explained per visit): the ones already
+       *  shown, by id, and whether the user turned them off. */
+      composerTipsSeen: z.array(z.string().max(64)).max(50).optional(),
+      composerTipsOff: z.boolean().optional(),
+    })
+    .optional(),
+});
+export type WorkspaceUiState = z.infer<typeof workspaceUiStateSchema>;
+
+const WORKSPACE_UI_STATE_MAX_KEYS = 200;
+const TASK_TABLE_MAX_COLUMNS = 50;
+
+/**
+ * `PUT /api/v1/workspace/ui-state` body. The response remains an open, tolerant bag so data from
+ * a newer cockpit survives an older server; this write-side schema adds bounded known fields so
+ * the current cockpit cannot grow the user-owned file without limit.
+ */
+export const setWorkspaceUiStateInputSchema = z
+  .looseObject({
+    ...workspaceUiStateSchema.shape,
+    dashboard: dashboardPreferencesInputSchema.optional(),
+    sidebar: z
+      .looseObject({
+        collapsed: z
+          .record(z.string().min(1).max(64), z.boolean())
+          .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+            message: `sidebar.collapsed must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+          })
+          .optional(),
+        // Project ids, so the same 64-char bound the registry's slug rule and `collapsed`'s keys
+        // already use. Duplicates are not rejected — the cockpit dedupes on read, and a 400 on a
+        // sidebar drag would be a worse answer than a self-healing one.
+        projectOrder: z
+          .array(z.string().min(1).max(64))
+          .max(WORKSPACE_UI_STATE_MAX_KEYS)
+          .optional(),
+      })
+      .optional(),
+    dismissedProviderAuthFailures: z
+      .strictObject({
+        claude: z.string().min(1).max(128).optional(),
+        codex: z.string().min(1).max(128).optional(),
+        opencode: z.string().min(1).max(128).optional(),
+        pi: z.string().min(1).max(128).optional(),
+        junie: z.string().min(1).max(128).optional(),
+        copilot: z.string().min(1).max(128).optional(),
+        antigravity: z.string().min(1).max(128).optional(),
+      })
+      .optional(),
+    importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
+    savedLayouts: z.array(savedWorkspaceLayoutSchema).max(MAX_SAVED_WORKSPACE_LAYOUTS).optional(),
+    keybindings: z
+      .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())
+      .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+        message: `keybindings must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+      })
+      .optional(),
+    taskTable: taskTableUiStateSchema
+      .extend({
+        expandedColumns: z
+          .record(z.string().min(1).max(64), z.boolean())
+          .refine((map) => Object.keys(map).length <= TASK_TABLE_MAX_COLUMNS, {
+            message: `taskTable.expandedColumns must have at most ${TASK_TABLE_MAX_COLUMNS} entries`,
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length > WORKSPACE_UI_STATE_MAX_KEYS) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `ui-state has too many keys (max ${WORKSPACE_UI_STATE_MAX_KEYS})`,
+      });
+    }
+  });
+export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSchema>;
+
+// ---- per-repo agent knobs (`GET/PUT /api/v1/config`) ----------------------------------------
+
+/** Per-runner default model preset (Settings → Agents): the composer preselects this model id for
+ *  the runner. Absent = auto (the runner decides), and so is `''` — the explicit auto a
+ *  `defaultModelsAuto` override answers with (#906), which is why it beats the coding agent's own
+ *  configured default instead of being indistinguishable from "nothing set". Keyed by runner name
+ *  rather than derived from `runnerSchema` because the server's own `defaultModels` object
+ *  (src/config.ts) is spelled the same way — one key per runner, each independently optional. */
+export const runnerModelsSchema = z.object({
+  claude: z.string().optional(),
+  codex: z.string().optional(),
+  junie: z.string().optional(),
+  opencode: z.string().optional(),
+  cursor: z.string().optional(),
+  pi: z.string().optional(),
+  copilot: z.string().optional(),
+  antigravity: z.string().optional(),
+});
+export type RunnerModels = z.infer<typeof runnerModelsSchema>;
+
+/** `GET /api/v1/config` — every Settings → Agents knob in one read. */
+export const configResponseSchema = z.object({
+  worktreeLifecycle: worktreeLifecycleConfigSchema.optional(),
+  worktreeLifecycleRevision: z.string().optional(),
+  baseBranch: z.string().nullable(),
+  defaultRunner: runnerSchema,
+  systemPrompt: z.string().nullable(),
+  /** Free-text branch naming instructions (spec 2026-10-11-branch-naming-instructions); null =
+   *  task branches stay `cez/<id8>`. */
+  branchNaming: z.string().nullable(),
+  defaultModels: runnerModelsSchema,
+  /** True when native coding-agent settings are authoritative and model picks are read-only. */
+  modelsLocked: z.boolean(),
+  /** How many tasks run at once (1–16). */
+  maxParallel: z.number(),
+  /** Per-task memory ceiling in MiB (whole process tree); null = no limit. */
+  memoryLimitMb: z.number().nullable(),
+  /** Keep the last N finished worktrees on disk (#483); 0 = unlimited. Older ones are reclaimed
+   *  (directory only — branch kept, so work is recoverable). */
+  worktreeRetention: z.number(),
+  /** Live title updates: null = no config key, the `CEZ_TITLE_UPDATES` env default (ON) decides. */
+  liveTitleUpdates: z.boolean().nullable(),
+  /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
+   *  decides. */
+  reviewGate: z.boolean().nullable(),
+  /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
+   *  and the branch-per-task default applies. */
+  profile: z.enum(['branches', 'trunk']).nullable(),
+  taskWorkspace: z.enum(['worktree', 'in-place']).nullable(),
+  landing: z.enum(['review', 'auto']).nullable(),
+  /** Why `landing: auto` is not honored here (a git-tracked config.json), or null. */
+  landingBlocked: z.string().nullable(),
+  requiredChecks: z.array(z.string()),
+  defaultSkill: z.string().nullable(),
+  askSkill: z.string().nullable(),
+  /** False when `skillsRepos` is `[]` — team skill repositories are off for this project. */
+  teamSkills: z.boolean(),
+});
+export type ConfigResponse = z.infer<typeof configResponseSchema>;
+
+/** The `PUT /api/v1/config` answer: the same shape GET serves (`configAnswer` builds both). */
+export const setConfigResponseSchema = configResponseSchema;
+export type SetConfigResponse = z.infer<typeof setConfigResponseSchema>;
+
+/**
+ * `PUT /api/v1/config` body (Settings → Agents; the Repo tab's base-branch picker).
+ * `baseBranch: null` clears the setting back to "follow checked-out branch"; `systemPrompt` and
+ * per-runner `defaultModels` entries clear on `null` (or `''`) too. Merged into the raw
+ * config.json server-side — `defaultModels` merges per runner, so one write never clobbers
+ * another runner's preset.
+ */
+export const setConfigInputSchema = z.object({
+  worktreeLifecycle: worktreeLifecycleConfigSchema.nullable().optional(),
+  worktreeLifecycleRevision: z.string().nullable().optional(),
+  baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
+  defaultRunner: runnerSchema.optional(),
+  systemPrompt: z.string().trim().max(20_000).nullable().optional(),
+  /** Clears on `null` or `''` like `systemPrompt`. */
+  branchNaming: z.string().trim().max(4_000).nullable().optional(),
+  defaultModels: z
+    .object({
+      claude: z.string().trim().max(200).nullable().optional(),
+      codex: z.string().trim().max(200).nullable().optional(),
+      opencode: z.string().trim().max(200).nullable().optional(),
+      cursor: z.string().trim().max(200).nullable().optional(),
+      pi: z.string().trim().max(200).nullable().optional(),
+      copilot: z.string().trim().max(200).nullable().optional(),
+      antigravity: z.string().trim().max(200).nullable().optional(),
+    })
+    .optional(),
+  /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
+   *  cannot express an explicit auto, because the answer then falls through to the coding agent's
+   *  own settings file. `true` sets auto; `false`/`null` clears the override back to no opinion.
+   *  Merges per runner exactly like `defaultModels`. */
+  defaultModelsAuto: z
+    .object({
+      claude: z.boolean().nullable().optional(),
+      codex: z.boolean().nullable().optional(),
+      opencode: z.boolean().nullable().optional(),
+      pi: z.boolean().nullable().optional(),
+    })
+    .optional(),
+  maxParallel: z.number().int().min(1).max(16).optional(),
+  /** null or 0 clears the ceiling back to "no limit". */
+  memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+  /** Keep last N finished worktrees (#483); 0 = unlimited, null clears back to the default (10). */
+  worktreeRetention: z.number().int().min(0).max(1000).nullable().optional(),
+  /** null clears the key back to the env-default behavior. */
+  liveTitleUpdates: z.boolean().nullable().optional(),
+  /** null clears the key back to the env-default behavior (OFF). */
+  reviewGate: z.boolean().nullable().optional(),
+  /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
+   *  the branch-per-task default. */
+  profile: z.enum(['branches', 'trunk']).nullable().optional(),
+  taskWorkspace: z.enum(['worktree', 'in-place']).nullable().optional(),
+  landing: z.enum(['review', 'auto']).nullable().optional(),
+  requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).nullable().optional(),
+  defaultSkill: z.string().trim().max(200).nullable().optional(),
+  askSkill: z.string().trim().max(200).nullable().optional(),
+  /** `false` writes `skillsRepos: []`; `true` drops that override back to the default repos. */
+  teamSkills: z.boolean().optional(),
+});
+export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
+
+// ---- skills updates (`/api/v1/workspace/skills-update`) --------------------------------------
+
+export const skillsUpdateStatusSchema = z.enum([
+  'idle',
+  'checking',
+  'available',
+  'updating',
+  'current',
+  'unavailable',
+  'error',
+]);
+export type SkillsUpdateStatus = z.infer<typeof skillsUpdateStatusSchema>;
+
+export const skillsUpdateScopeStateSchema = z.object({
+  scope: z.enum(['project', 'global']),
+  status: skillsUpdateStatusSchema,
+  available: z.boolean(),
+  skills: z.array(z.string()),
+  checkedAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  reason: z.string().optional(),
+});
+export type SkillsUpdateScopeState = z.infer<typeof skillsUpdateScopeStateSchema>;
+
+/** `GET /api/v1/workspace/skills-update` (and the check/apply POSTs) — the merged project+global
+ *  skills-update state. `autoUpdateEnabled`/`inherited` are re-stamped from the workspace config
+ *  on the way out (`skillsUpdateResponse`, src/server/server.ts:1818). */
+export const skillsUpdateStateSchema = z.object({
+  status: skillsUpdateStatusSchema,
+  available: z.boolean(),
+  autoUpdateEnabled: z.boolean(),
+  inherited: z.boolean(),
+  checkedAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  scopes: z.array(skillsUpdateScopeStateSchema),
+  needsUpgradeNotes: z.boolean(),
+});
+export type SkillsUpdateState = z.infer<typeof skillsUpdateStateSchema>;
+
+// ---- provider auth (`/api/v1/providers/*`) ---------------------------------------------------
+
+/** The agent backends are the providers — one alias, never a second enum. */
+export const providerIdSchema = runnerSchema;
+export type ProviderId = Runner;
+
+/** Coarse host authentication state. Credentials, account identity, and raw CLI output never
+ *  cross this boundary. */
+export const providerConnectionStateSchema = z.enum([
+  'connected',
+  'disconnected',
+  'not-installed',
+  'unknown',
+]);
+export type ProviderConnectionState = z.infer<typeof providerConnectionStateSchema>;
+
+/**
+ * One provider row.
+ *
+ * `enabled` is OPTIONAL: `ProviderAuth.status()` (src/core/provider-auth.ts:12) builds rows
+ * without it and only `applyProviderEnablement` stamps it in, so the type the routes answer keeps
+ * the key optional. The hand-written DTO declared it required — narrower than the route.
+ */
+export const providerStatusSchema = z.object({
+  provider: providerIdSchema,
+  status: providerConnectionStateSchema,
+  enabled: z.boolean().optional(),
+  hint: z.string().optional(),
+  authFailureId: z.string().optional(),
+  /** Which agent account this row describes (spec 2026-07-29-agent-profiles). ABSENT on
+   *  `GET /api/v1/providers/status`, which deliberately keeps answering exactly one row per
+   *  provider — the discovered default — so an older client sees no change at all. Per-account
+   *  rows are carried by `GET /api/v1/workspace/agent-profiles` instead. */
+  profileId: z.string().optional(),
+});
+export type ProviderStatus = z.infer<typeof providerStatusSchema>;
+
+/** `GET /api/v1/providers/status`, and the answer of the enabled/retry mutators. */
+export const providerStatusResponseSchema = z.object({
+  providers: z.array(providerStatusSchema),
+});
+export type ProviderStatusResponse = z.infer<typeof providerStatusResponseSchema>;
+
+/** `POST /api/v1/providers/connect` — either a terminal was handed the login command, or the
+ *  provider turned out to be connected already. Every other outcome is a 409/500 carrying the
+ *  same `command` for the clipboard fallback. */
+export const providerConnectResponseSchema = z.discriminatedUnion('opened', [
+  z.object({ opened: z.literal(true), command: z.string() }),
+  z.object({ opened: z.literal(false), connected: z.literal(true), command: z.string() }),
+]);
+export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSchema>;
+
+/** `POST /api/v1/providers/:provider/update` — a terminal was handed the agent CLI's own update
+ *  command (`opencode upgrade`). Every other outcome is a 409 `{error, command?}`: `command` for
+ *  the clipboard fallback, absent when the CLI has no self-update. */
+export const providerUpdateResponseSchema = z.object({ opened: z.literal(true), command: z.string() });
+export type ProviderUpdateResponse = z.infer<typeof providerUpdateResponseSchema>;
+
+// ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
+
+/**
+ * The runners whose model list is discovered from the host rather than hard-coded: Codex through
+ * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
+ * CLI's `list_models` control request (#784), Cursor through its CLI model listing, Junie through ACP session config options, and Antigravity through `agy models`. A runner absent here has no discovery path and
+ * 400s, so the client compiles against exactly what the route accepts. One definition, used by
+ * the route's query validator and by the cockpit's picker.
+ */
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity']);
+export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
+export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
+  modelDiscoveryRunnerSchema.options;
+
+/** True when `runner` has a host-discovered catalog (and therefore a `/models` answer). */
+export function runnerDiscoversModels(runner: Runner): runner is ModelDiscoveryRunner {
+  return (MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner);
+}
+
+export const runnerModelOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  description: z.string(),
+});
+export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
+
+/** `GET /api/v1/models?runner=claude|codex|opencode|cursor|junie` — the models discovered from that runner's
+ *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
+ *  degrades to `source: 'unavailable'` with a `reason`. */
+export const runnerModelCatalogResponseSchema = z.object({
+  runner: runnerSchema,
+  models: z.array(runnerModelOptionSchema),
+  source: z.enum(['live', 'cache', 'unavailable']),
+  stale: z.boolean(),
+  reason: z.string().optional(),
+});
+export type RunnerModelCatalogResponse = z.infer<typeof runnerModelCatalogResponseSchema>;
+
+// ---- "Open in…" targets (`GET /api/v1/open-targets`) -----------------------------------------
+
+/** A local app a worktree can be opened in (#open-in): editor, file manager, or terminal. */
+export const openTargetSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  /** A stable icon key (#361) the UI maps to a concrete icon. Optional: an older server omitting
+   *  it just renders the generic fallback icon. */
+  icon: z.string().optional(),
+});
+export type OpenTarget = z.infer<typeof openTargetSchema>;
+
+/** `GET /api/v1/open-targets` — the detected local apps; empty in hosted mode (CEZ_REMOTE). */
+export const openTargetsResponseSchema = z.object({
+  targets: z.array(openTargetSchema),
+});
+export type OpenTargetsResponse = z.infer<typeof openTargetsResponseSchema>;
+
+/**
+ * `POST /api/v1/open-in` — open THIS PROJECT'S root in a detected app (Settings → the project
+ * folder row). The path is never sent: it is the scoped project's own registered root, resolved
+ * server-side, so the route has no traversal surface at all. `target` is an
+ * `/api/v1/open-targets` id; unlike the run route there is no `default`/`cli:` handling, because
+ * a repo root is a directory and an agent CLI belongs in a task worktree.
+ */
+export const openProjectInSchema = z.object({
+  // A short bound (#429): matched against a downstream allowlist, so an app id is never long.
+  target: z.string().trim().min(1, 'target required').max(200),
+});
+export type OpenProjectInRequest = z.infer<typeof openProjectInSchema>;
+
+/** The 200 for the above — `opened` is a literal because every failure is a 409 with `{ error }`,
+ *  so a `false` would be unreachable and would only invite a client to branch on it. */
+export const openProjectInResponseSchema = z.object({
+  opened: z.literal(true),
+  path: z.string(),
+});
+export type OpenProjectInResponse = z.infer<typeof openProjectInResponseSchema>;

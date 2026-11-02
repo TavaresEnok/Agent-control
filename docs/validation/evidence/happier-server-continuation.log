@@ -1,0 +1,538 @@
+(node:416) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[05:06:28.389] [32mINFO[39m: [36mundefined SQLite startup diagnostics | [1793595988389][39m
+    [35mlocalTime[39m: "05:06:28.389"
+    [35mmodule[39m: "storage"
+    [35mevent[39m: "sqlite-startup-diagnostics"
+    [35msqlite[39m: {
+      "provider": "sqlite",
+      "journalMode": "WAL",
+      "synchronous": "NORMAL",
+      "busyTimeoutMs": 30000,
+      "journalSizeLimitBytes": 67108864,
+      "databaseUrlSocketTimeoutSeconds": 30,
+      "databaseUrlConnectionLimit": 1,
+      "databaseUrlConnectionLimitStatus": "configured",
+      "databaseUrlPoolAcquisitionTimeoutStatus": "unbounded",
+      "ignoredDatabaseUrlQueryParameters": []
+    }
+[05:06:28.522] [32mINFO[39m: [36mundefined Initializing auth module... | [1793595988522][39m
+    [35mlocalTime[39m: "05:06:28.522"
+    [35mmodule[39m: "auth"
+[05:06:28.970] [33mWARN[39m: [36mundefined Historical Bun auth-token verification enabled (attempt=1) | [1793595988970][39m
+    [35mlocalTime[39m: "05:06:28.970"
+    [35mmodule[39m: "auth"
+[05:06:28.971] [32mINFO[39m: [36mundefined Auth module initialized | [1793595988971][39m
+    [35mlocalTime[39m: "05:06:28.971"
+    [35mmodule[39m: "auth"
+[05:06:28.971] [32mINFO[39m: [36mundefined Metrics server disabled | [1793595988971][39m
+    [35mlocalTime[39m: "05:06:28.971"
+    [35mmodule[39m: "metrics"
+[05:06:28.979] [32mINFO[39m: [36mundefined Starting API... | [1793595988979][39m
+    [35mlocalTime[39m: "05:06:28.979"
+[05:06:29.550] [32mINFO[39m: [36mundefined Server listening at http://127.0.0.1:18401 | [1793595989550][39m
+    [35mlocalTime[39m: "05:06:29.550"
+[05:06:29.610] [32mINFO[39m: [36mundefined API ready on port http://localhost:18401 | [1793595989610][39m
+    [35mlocalTime[39m: "05:06:29.611"
+[05:06:29.613] [32mINFO[39m: [36mundefined Ready | [1793595989613][39m
+    [35mlocalTime[39m: "05:06:29.613"
+[05:06:38.434] [32mINFO[39m: [36mundefined incoming request | [1793595998434][39m
+    [35mlocalTime[39m: "05:06:38.435"
+    [35mreqId[39m: "req-1"
+    [35mreq[39m: {
+      "method": "POST",
+      "url": "/v1/auth",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.509] [32mINFO[39m: [36mundefined request completed | [1793595998509][39m
+    [35mlocalTime[39m: "05:06:38.509"
+    [35mreqId[39m: "req-1"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 73.13922100000127
+[05:06:38.517] [32mINFO[39m: [36mundefined incoming request | [1793595998517][39m
+    [35mlocalTime[39m: "05:06:38.517"
+    [35mreqId[39m: "req-2"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56422
+    }
+[05:06:38.534] [32mINFO[39m: [36mundefined request completed | [1793595998534][39m
+    [35mlocalTime[39m: "05:06:38.534"
+    [35mreqId[39m: "req-2"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 16.181626000001415
+[05:06:38.541] [32mINFO[39m: [36mundefined incoming request | [1793595998541][39m
+    [35mlocalTime[39m: "05:06:38.541"
+    [35mreqId[39m: "req-3"
+    [35mreq[39m: {
+      "method": "POST",
+      "url": "/v1/machines",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.550] [32mINFO[39m: [36mundefined Creating new machine | [1793595998550][39m
+    [35mlocalTime[39m: "05:06:38.550"
+    [35mmodule[39m: "machines"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+[05:06:38.558] [32mINFO[39m: [36mundefined request completed | [1793595998558][39m
+    [35mlocalTime[39m: "05:06:38.558"
+    [35mreqId[39m: "req-3"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 16.977854999997362
+[05:06:38.657] [32mINFO[39m: [36mundefined New connection attempt from socket: wtGNYWrs5daueBx2AAAA (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998657][39m
+    [35mlocalTime[39m: "05:06:38.657"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "wtGNYWrs5daueBx2AAAA"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.657] [32mINFO[39m: [36mundefined Token verified: cmvysqxpf0000qnf64fx99692, clientType: user-scoped, purpose: unknown, sessionId: none, machineId: none, socketId: wtGNYWrs5daueBx2AAAA (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998657][39m
+    [35mlocalTime[39m: "05:06:38.657"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "wtGNYWrs5daueBx2AAAA"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "user-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "none"
+    [35mmachineId[39m: "none"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.662] [32mINFO[39m: [36mundefined User connected: cmvysqxpf0000qnf64fx99692 (socketId=wtGNYWrs5daueBx2AAAA, clientType=user-scoped, purpose=unknown, remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998662][39m
+    [35mlocalTime[39m: "05:06:38.662"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "wtGNYWrs5daueBx2AAAA"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "user-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "none"
+    [35mmachineId[39m: "none"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.663] [32mINFO[39m: [36mundefined incoming request | [1793595998663][39m
+    [35mlocalTime[39m: "05:06:38.663"
+    [35mreqId[39m: "req-4"
+    [35mreq[39m: {
+      "method": "POST",
+      "url": "/v1/sessions",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.673] [32mINFO[39m: [36mundefined Creating new session for user cmvysqxpf0000qnf64fx99692 with tag ac-implementation-182261b1-6896-4456-a33b-58ae142a1baf | [1793595998673][39m
+    [35mlocalTime[39m: "05:06:38.673"
+    [35mmodule[39m: "session-create"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mtag[39m: "ac-implementation-182261b1-6896-4456-a33b-58ae142a1baf"
+[05:06:38.684] [32mINFO[39m: [36mundefined Emitting new-session update to user-scoped connections | [1793595998684][39m
+    [35mlocalTime[39m: "05:06:38.684"
+    [35mmodule[39m: "session-create"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mupdateType[39m: "new-session"
+    [35mupdateId[39m: "oGrNRqgxGIr4"
+    [35mupdateSeq[39m: 2
+[05:06:38.685] [32mINFO[39m: [36mundefined Session resolved: cmvysqxuc0002qnf6kcuq0gyi | [1793595998685][39m
+    [35mlocalTime[39m: "05:06:38.685"
+    [35mmodule[39m: "session-create"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+[05:06:38.687] [32mINFO[39m: [36mundefined request completed | [1793595998687][39m
+    [35mlocalTime[39m: "05:06:38.687"
+    [35mreqId[39m: "req-4"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 23.791417000000365
+[05:06:38.728] [32mINFO[39m: [36mundefined incoming request | [1793595998728][39m
+    [35mlocalTime[39m: "05:06:38.728"
+    [35mreqId[39m: "req-5"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.744] [32mINFO[39m: [36mundefined request completed | [1793595998744][39m
+    [35mlocalTime[39m: "05:06:38.744"
+    [35mreqId[39m: "req-5"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 14.951282999998512
+[05:06:38.749] [32mINFO[39m: [36mundefined incoming request | [1793595998749][39m
+    [35mlocalTime[39m: "05:06:38.749"
+    [35mreqId[39m: "req-6"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/sessions/cmvysqxuc0002qnf6kcuq0gyi/messages?scope=main&limit=150",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.758] [32mINFO[39m: [36mundefined request completed | [1793595998758][39m
+    [35mlocalTime[39m: "05:06:38.759"
+    [35mreqId[39m: "req-6"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 9.27299900000071
+[05:06:38.768] [32mINFO[39m: [36mundefined incoming request | [1793595998768][39m
+    [35mlocalTime[39m: "05:06:38.769"
+    [35mreqId[39m: "req-7"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/access-keys/cmvysqxuc0002qnf6kcuq0gyi/ba07bcbc-d514-4642-b097-338b78800aff",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56446
+    }
+[05:06:38.777] [32mINFO[39m: [36mundefined request completed | [1793595998777][39m
+    [35mlocalTime[39m: "05:06:38.777"
+    [35mreqId[39m: "req-7"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 8.537564000002021
+[05:06:38.784] [32mINFO[39m: [36mundefined incoming request | [1793595998784][39m
+    [35mlocalTime[39m: "05:06:38.784"
+    [35mreqId[39m: "req-8"
+    [35mreq[39m: {
+      "method": "POST",
+      "url": "/v1/access-keys/cmvysqxuc0002qnf6kcuq0gyi/ba07bcbc-d514-4642-b097-338b78800aff",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56446
+    }
+[05:06:38.793] [32mINFO[39m: [36mundefined Created new access key | [1793595998793][39m
+    [35mlocalTime[39m: "05:06:38.793"
+    [35mmodule[39m: "access-keys"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+[05:06:38.795] [32mINFO[39m: [36mundefined request completed | [1793595998795][39m
+    [35mlocalTime[39m: "05:06:38.795"
+    [35mreqId[39m: "req-8"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 11.05111400000169
+[05:06:38.812] [32mINFO[39m: [36mundefined New connection attempt from socket: nBfEGJ4bYmnyEos6AAAB (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998812][39m
+    [35mlocalTime[39m: "05:06:38.812"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "nBfEGJ4bYmnyEos6AAAB"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.812] [32mINFO[39m: [36mundefined Token verified: cmvysqxpf0000qnf64fx99692, clientType: session-scoped, purpose: unknown, sessionId: cmvysqxuc0002qnf6kcuq0gyi, machineId: ba07bcbc-d514-4642-b097-338b78800aff, socketId: nBfEGJ4bYmnyEos6AAAB (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998812][39m
+    [35mlocalTime[39m: "05:06:38.812"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "nBfEGJ4bYmnyEos6AAAB"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.813] [32mINFO[39m: [36mundefined User connected: cmvysqxpf0000qnf64fx99692 (socketId=nBfEGJ4bYmnyEos6AAAB, clientType=session-scoped, purpose=unknown, remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998813][39m
+    [35mlocalTime[39m: "05:06:38.813"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "nBfEGJ4bYmnyEos6AAAB"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.820] [32mINFO[39m: [36mundefined incoming request | [1793595998820][39m
+    [35mlocalTime[39m: "05:06:38.820"
+    [35mreqId[39m: "req-9"
+    [35mreq[39m: {
+      "method": "POST",
+      "url": "/v1/sessions",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.826] [32mINFO[39m: [36mundefined Creating new session for user cmvysqxpf0000qnf64fx99692 with tag ac-implementation-32bcdb9f-1002-44fd-8e10-46b38aa3e33d | [1793595998826][39m
+    [35mlocalTime[39m: "05:06:38.826"
+    [35mmodule[39m: "session-create"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mtag[39m: "ac-implementation-32bcdb9f-1002-44fd-8e10-46b38aa3e33d"
+[05:06:38.834] [32mINFO[39m: [36mundefined Emitting new-session update to user-scoped connections | [1793595998834][39m
+    [35mlocalTime[39m: "05:06:38.834"
+    [35mmodule[39m: "session-create"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35msessionId[39m: "cmvysqxyl0006qnf6tqeo93mq"
+    [35mupdateType[39m: "new-session"
+    [35mupdateId[39m: "YrqV5dKGD5Mw"
+    [35mupdateSeq[39m: 3
+[05:06:38.835] [32mINFO[39m: [36mundefined Session resolved: cmvysqxyl0006qnf6tqeo93mq | [1793595998835][39m
+    [35mlocalTime[39m: "05:06:38.835"
+    [35mmodule[39m: "session-create"
+    [35msessionId[39m: "cmvysqxyl0006qnf6tqeo93mq"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+[05:06:38.837] [32mINFO[39m: [36mundefined request completed | [1793595998837][39m
+    [35mlocalTime[39m: "05:06:38.837"
+    [35mreqId[39m: "req-9"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 15.883364000001166
+[05:06:38.855] [32mINFO[39m: [36mundefined incoming request | [1793595998855][39m
+    [35mlocalTime[39m: "05:06:38.855"
+    [35mreqId[39m: "req-a"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.869] [32mINFO[39m: [36mundefined request completed | [1793595998869][39m
+    [35mlocalTime[39m: "05:06:38.869"
+    [35mreqId[39m: "req-a"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 14.499138999999559
+[05:06:38.874] [32mINFO[39m: [36mundefined incoming request | [1793595998874][39m
+    [35mlocalTime[39m: "05:06:38.874"
+    [35mreqId[39m: "req-b"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/sessions/cmvysqxyl0006qnf6tqeo93mq/messages?scope=main&limit=150",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:38.881] [32mINFO[39m: [36mundefined request completed | [1793595998881][39m
+    [35mlocalTime[39m: "05:06:38.881"
+    [35mreqId[39m: "req-b"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 7.024427000000287
+[05:06:38.887] [32mINFO[39m: [36mundefined incoming request | [1793595998887][39m
+    [35mlocalTime[39m: "05:06:38.887"
+    [35mreqId[39m: "req-c"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/access-keys/cmvysqxyl0006qnf6tqeo93mq/ba07bcbc-d514-4642-b097-338b78800aff",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56446
+    }
+[05:06:38.895] [32mINFO[39m: [36mundefined request completed | [1793595998895][39m
+    [35mlocalTime[39m: "05:06:38.895"
+    [35mreqId[39m: "req-c"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 7.927059999998164
+[05:06:38.897] [32mINFO[39m: [36mundefined incoming request | [1793595998897][39m
+    [35mlocalTime[39m: "05:06:38.897"
+    [35mreqId[39m: "req-d"
+    [35mreq[39m: {
+      "method": "POST",
+      "url": "/v1/access-keys/cmvysqxyl0006qnf6tqeo93mq/ba07bcbc-d514-4642-b097-338b78800aff",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56446
+    }
+[05:06:38.904] [32mINFO[39m: [36mundefined Created new access key | [1793595998904][39m
+    [35mlocalTime[39m: "05:06:38.904"
+    [35mmodule[39m: "access-keys"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35msessionId[39m: "cmvysqxyl0006qnf6tqeo93mq"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+[05:06:38.905] [32mINFO[39m: [36mundefined request completed | [1793595998905][39m
+    [35mlocalTime[39m: "05:06:38.905"
+    [35mreqId[39m: "req-d"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 7.466601000000082
+[05:06:38.916] [32mINFO[39m: [36mundefined New connection attempt from socket: yzC8MZYaMoCUlD49AAAC (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998916][39m
+    [35mlocalTime[39m: "05:06:38.916"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "yzC8MZYaMoCUlD49AAAC"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.916] [32mINFO[39m: [36mundefined Token verified: cmvysqxpf0000qnf64fx99692, clientType: session-scoped, purpose: unknown, sessionId: cmvysqxyl0006qnf6tqeo93mq, machineId: ba07bcbc-d514-4642-b097-338b78800aff, socketId: yzC8MZYaMoCUlD49AAAC (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998916][39m
+    [35mlocalTime[39m: "05:06:38.916"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "yzC8MZYaMoCUlD49AAAC"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxyl0006qnf6tqeo93mq"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:38.917] [32mINFO[39m: [36mundefined User connected: cmvysqxpf0000qnf64fx99692 (socketId=yzC8MZYaMoCUlD49AAAC, clientType=session-scoped, purpose=unknown, remote=127.0.0.1, transport=websocket, ua=unknown) | [1793595998917][39m
+    [35mlocalTime[39m: "05:06:38.917"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "yzC8MZYaMoCUlD49AAAC"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxyl0006qnf6tqeo93mq"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:42.039] [32mINFO[39m: [36mundefined incoming request | [1793596002039][39m
+    [35mlocalTime[39m: "05:06:42.039"
+    [35mreqId[39m: "req-e"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/sessions/cmvysqxuc0002qnf6kcuq0gyi/messages?scope=main&limit=150",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:42.044] [32mINFO[39m: [36mundefined request completed | [1793596002044][39m
+    [35mlocalTime[39m: "05:06:42.044"
+    [35mreqId[39m: "req-e"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 4.310319000000163
+[05:06:42.049] [32mINFO[39m: [36mundefined incoming request | [1793596002049][39m
+    [35mlocalTime[39m: "05:06:42.049"
+    [35mreqId[39m: "req-f"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/sessions/cmvysqxyl0006qnf6tqeo93mq/messages?scope=main&limit=150",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:42.054] [32mINFO[39m: [36mundefined request completed | [1793596002054][39m
+    [35mlocalTime[39m: "05:06:42.054"
+    [35mreqId[39m: "req-f"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 5.06022799999846
+[05:06:42.064] [32mINFO[39m: [36mundefined User disconnected: cmvysqxpf0000qnf64fx99692 (reason=client namespace disconnect, durationMs=3252, socketId=nBfEGJ4bYmnyEos6AAAB, clientType=session-scoped, purpose=unknown) | [1793596002064][39m
+    [35mlocalTime[39m: "05:06:42.064"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "nBfEGJ4bYmnyEos6AAAB"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mreason[39m: "client namespace disconnect"
+    [35mdurationMs[39m: 3252
+[05:06:42.570] [32mINFO[39m: [36mundefined incoming request | [1793596002570][39m
+    [35mlocalTime[39m: "05:06:42.570"
+    [35mreqId[39m: "req-g"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/account/profile",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:42.584] [32mINFO[39m: [36mundefined request completed | [1793596002584][39m
+    [35mlocalTime[39m: "05:06:42.584"
+    [35mreqId[39m: "req-g"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 14.515079000000696
+[05:06:42.587] [32mINFO[39m: [36mundefined incoming request | [1793596002587][39m
+    [35mlocalTime[39m: "05:06:42.587"
+    [35mreqId[39m: "req-h"
+    [35mreq[39m: {
+      "method": "GET",
+      "url": "/v1/sessions/cmvysqxuc0002qnf6kcuq0gyi/messages?scope=main&limit=150",
+      "host": "127.0.0.1:18401",
+      "remoteAddress": "127.0.0.1",
+      "remotePort": 56408
+    }
+[05:06:42.592] [32mINFO[39m: [36mundefined request completed | [1793596002592][39m
+    [35mlocalTime[39m: "05:06:42.592"
+    [35mreqId[39m: "req-h"
+    [35mres[39m: {
+      "statusCode": 200
+    }
+    [35mresponseTime[39m: 4.9215969999968365
+[05:06:42.602] [32mINFO[39m: [36mundefined New connection attempt from socket: gxXvVr4HbwvRv4sVAAAD (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793596002602][39m
+    [35mlocalTime[39m: "05:06:42.602"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "gxXvVr4HbwvRv4sVAAAD"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:42.602] [32mINFO[39m: [36mundefined Token verified: cmvysqxpf0000qnf64fx99692, clientType: session-scoped, purpose: unknown, sessionId: cmvysqxuc0002qnf6kcuq0gyi, machineId: ba07bcbc-d514-4642-b097-338b78800aff, socketId: gxXvVr4HbwvRv4sVAAAD (remote=127.0.0.1, transport=websocket, ua=unknown) | [1793596002602][39m
+    [35mlocalTime[39m: "05:06:42.602"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "gxXvVr4HbwvRv4sVAAAD"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:42.602] [32mINFO[39m: [36mundefined User connected: cmvysqxpf0000qnf64fx99692 (socketId=gxXvVr4HbwvRv4sVAAAD, clientType=session-scoped, purpose=unknown, remote=127.0.0.1, transport=websocket, ua=unknown) | [1793596002602][39m
+    [35mlocalTime[39m: "05:06:42.602"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "gxXvVr4HbwvRv4sVAAAD"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:42.618] [32mINFO[39m: [36mundefined User disconnected: cmvysqxpf0000qnf64fx99692 (reason=client namespace disconnect, durationMs=16, socketId=gxXvVr4HbwvRv4sVAAAD, clientType=session-scoped, purpose=unknown, remote=127.0.0.1, transport=websocket, ua=unknown) | [1793596002618][39m
+    [35mlocalTime[39m: "05:06:42.618"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "gxXvVr4HbwvRv4sVAAAD"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxuc0002qnf6kcuq0gyi"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mreason[39m: "client namespace disconnect"
+    [35mdurationMs[39m: 16
+    [35mremoteAddress[39m: "127.0.0.1"
+    [35mtransport[39m: "websocket"
+[05:06:42.619] [32mINFO[39m: [36mundefined User disconnected: cmvysqxpf0000qnf64fx99692 (reason=client namespace disconnect, durationMs=3703, socketId=yzC8MZYaMoCUlD49AAAC, clientType=session-scoped, purpose=unknown) | [1793596002619][39m
+    [35mlocalTime[39m: "05:06:42.619"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "yzC8MZYaMoCUlD49AAAC"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "session-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "cmvysqxyl0006qnf6tqeo93mq"
+    [35mmachineId[39m: "ba07bcbc-d514-4642-b097-338b78800aff"
+    [35mreason[39m: "client namespace disconnect"
+    [35mdurationMs[39m: 3703
+[05:06:42.619] [32mINFO[39m: [36mundefined User disconnected: cmvysqxpf0000qnf64fx99692 (reason=client namespace disconnect, durationMs=3962, socketId=wtGNYWrs5daueBx2AAAA, clientType=user-scoped, purpose=unknown) | [1793596002619][39m
+    [35mlocalTime[39m: "05:06:42.619"
+    [35mmodule[39m: "websocket"
+    [35msocketId[39m: "wtGNYWrs5daueBx2AAAA"
+    [35muserId[39m: "cmvysqxpf0000qnf64fx99692"
+    [35mclientType[39m: "user-scoped"
+    [35mclientPurpose[39m: "unknown"
+    [35msessionId[39m: "none"
+    [35mmachineId[39m: "none"
+    [35mreason[39m: "client namespace disconnect"
+    [35mdurationMs[39m: 3962

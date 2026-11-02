@@ -1,0 +1,39 @@
+
+> test
+> vitest run packages/web/src/components/composer/canonical-chat.test.tsx
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/workspace/upstream/cezar[39m
+
+ [31m❯[39m [30m[46m web [49m[39m src/components/composer/canonical-chat.test.tsx [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 78[2mms[22m[39m
+[31m   [31m×[31m managed product cannot open a second native conversation[39m[32m 75[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m [30m[46m web [49m[39m src/components/composer/canonical-chat.test.tsx[2m > [22mmanaged product cannot open a second native conversation
+[31m[1mError[22m: No QueryClient set, use QueryClientProvider to set one[39m
+[90m [2m❯[22m useQueryClient ../../node_modules/@tanstack/react-query/src/QueryClientProvider.tsx:[2m18:10[22m[39m
+[36m [2m❯[22m useSkills src/api/queries.ts:[2m1508:23[22m[39m
+    [90m1506|[39m  *  palette gets the same laziness structurally: its content mounts on…
+    [90m1507|[39m export function useSkills(enabled = true) {
+    [90m1508|[39m   const queryClient = useQueryClient()
+    [90m   |[39m                       [31m^[39m
+    [90m1509|[39m   const skillsKey = queryKeys.skills
+    [90m1510|[39m   const skillsScope = skillsKey[0]
+[90m [2m❯[22m Composer src/components/composer/composer.tsx:[2m236:18[22m[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25904:20[22m[39m
+[90m [2m❯[22m renderWithHooks ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m7662:22[22m[39m
+[90m [2m❯[22m updateFunctionComponent ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m10166:19[22m[39m
+[90m [2m❯[22m beginWork ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m11778:18[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m performUnitOfWork ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m17641:22[22m[39m
+[90m [2m❯[22m workLoopSync ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m17469:41[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 03:31:22
+[2m   Duration [22m 4.46s[2m (transform 1.71s, setup 39ms, import 2.90s, tests 78ms, environment 1.10s)[22m
+

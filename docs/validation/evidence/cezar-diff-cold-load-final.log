@@ -1,0 +1,15 @@
+
+> test
+> vitest run packages/web/src/components/diff/diff.test.tsx
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/workspace/upstream/cezar[39m
+
+ [32m✓[39m [30m[46m web [49m[39m src/components/diff/diff.test.tsx [2m([22m[2m35 tests[22m[2m)[22m[33m 2789[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps the sticky file header fully opaque over the rows scrolling beneath it [33m 1332[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m35 passed[39m[22m[90m (35)[39m
+[2m   Start at [22m 04:22:16
+[2m   Duration [22m 7.39s[2m (transform 1.47s, setup 51ms, import 1.98s, tests 2.79s, environment 2.11s)[22m
+

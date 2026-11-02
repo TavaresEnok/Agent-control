@@ -1,0 +1,708 @@
+---
+title: Docker
+description: Deploy the Happier Server using Docker / Docker Compose.
+---
+
+This page explains how to deploy **your own Happier Server** with Docker. It focuses on the server only.
+
+Use `/apps/server/.env.example` as your base env template and load the same values in Docker/Compose.
+
+## Prebuilt images (recommended)
+
+We publish preview Docker images on Docker Hub (recommended):
+
+```bash
+docker pull happierdev/relay-server:preview
+```
+
+We also publish the same images to GitHub Container Registry (GHCR):
+
+```bash
+docker pull ghcr.io/happier-dev/relay-server:preview
+```
+
+Published images:
+
+- `relay-server`: Happier Server + embedded web UI (this page)
+- `dev-box`: Happier CLI + daemon in Docker (see: [Dev box](/development/devcontainers))
+
+The published `relay-server` image is built from signed server-runtime and UI-web release artifacts. It runs as the non-root `happier` user, embeds the UI bundle at image build time, and does not need a source checkout or `hstack`.
+
+For Kubernetes, use the [plain-manifest recipe](#kubernetes) below. It uses an external Postgres database and S3-compatible storage, with one replica and no Redis by default.
+
+Prebuilt `relay-server` images support the default SQLite setup and the documented Postgres override. They intentionally do not include the generated MySQL Prisma client. To run Happier with MySQL, build a source-based `server` image from this repository with MySQL included at build time.
+
+Tags:
+
+- `:preview` (floating preview tag)
+- `:preview-<short-sha>` (immutable preview build)
+- `:stable` / `:latest` (stable channel, when enabled)
+
+## Updates
+
+Docker images do **not** update themselves. To upgrade, pull a newer tag and restart/recreate your container:
+
+```bash
+docker pull happierdev/relay-server:preview
+docker compose up -d --force-recreate
+```
+
+For strict control, pin to an immutable tag (for example `:preview-<short-sha>`) or a digest.
+
+Full matrix (all apps/assets): [Updates](/releases/updates).
+
+The `relay-server` image defaults to the **light flavor + SQLite**, with all data stored under `/data`. Mount it as a volume so upgrades and restarts are safe.
+
+```bash
+docker run --rm -p 3005:3005 \
+  -v happier-server-data:/data \
+  happierdev/relay-server:preview
+```
+
+Configuration docs:
+
+- Server env var reference: [Environment variables](/self-hosting/env)
+- Server auth policy (GitHub/OIDC/anonymous, etc): [Server Auth](/self-hosting/auth)
+- If you’re running a headless machine and want to pair/authenticate without a browser: [Daemon auth (headless)](/apps/daemon#headless-authentication-no-tty)
+
+Notes:
+
+- This Docker image runs the Happier Server directly (a self-host-friendly default config).
+- It embeds the web UI bundle and serves it at `/` by default.
+  - Disable UI serving: set `HAPPIER_SERVER_UI_DIR=` (empty).
+  - Serve UI under `/ui`: set `HAPPIER_SERVER_UI_PREFIX=/ui`.
+- It does not install a managed host service. Upgrades happen when the container is restarted after pulling a new image tag.
+
+### Prebuilt image: use Postgres (full flavor)
+
+The `relay-server` image is built from the same server code and can run full flavor too — you just override the defaults. Postgres is the external database supported by the prebuilt image. On startup, the image applies its bundled Postgres migrations before starting the server. Health-managed or multi-replica deployments should instead use the dedicated migration step described under [Migrations](#migrations).
+
+Example `docker-compose.yml` (Postgres + local files backend):
+
+```yaml
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: happier
+      POSTGRES_USER: happier
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  relay:
+    image: happierdev/relay-server:preview
+    ports:
+      - "3005:3005"
+    environment:
+      PORT: "3005"
+      HAPPIER_SERVER_FLAVOR: full
+      HAPPIER_DB_PROVIDER: postgres
+      DATABASE_URL: postgresql://happier:change-me@db:5432/happier
+      HANDY_MASTER_SECRET: change-me-to-a-long-random-string
+      HAPPIER_FILES_BACKEND: local
+      HAPPIER_SERVER_LIGHT_DATA_DIR: /data/happier
+    volumes:
+      - happier-relay-data:/data/happier
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
+  happier-relay-data:
+```
+
+For S3/Minio instead of local files, set `HAPPIER_FILES_BACKEND=s3` and the `S3_*` env vars (see [Environment variables](/self-hosting/env)).
+
+## Optional: expose a relay securely with Tailscale
+
+If you want to access your self-hosted relay from a phone or remote machine without opening inbound ports, we recommend using **Tailscale** as a sidecar and publishing the server via **Tailscale Serve**.
+
+This approach:
+
+- avoids public ingress and TLS setup
+- gives you a stable HTTPS URL inside your tailnet
+- keeps the Happier server image unprivileged (Tailscale runs in its own container)
+
+Minimal `docker-compose.yml` example (preview channel):
+
+```yaml
+services:
+  relay:
+    image: happierdev/relay-server:preview
+    environment:
+      PORT: "3005"
+      # Optional:
+      # Disable UI serving:
+      # HAPPIER_SERVER_UI_DIR: ""
+    volumes:
+      - happier-relay-data:/data
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    network_mode: service:relay
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_HOSTNAME: happier-relay
+      TS_STATE_DIR: /var/lib/tailscale
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    command: >
+      sh -lc '
+        tailscaled --state=${TS_STATE_DIR}/tailscaled.state &
+        sleep 2
+        tailscale up --authkey="${TS_AUTHKEY}" --hostname="${TS_HOSTNAME}" --accept-dns=false
+        tailscale serve --bg --https=443 http://127.0.0.1:3005
+        tail -f /dev/null
+      '
+
+volumes:
+  happier-relay-data:
+  tailscale-state:
+```
+
+Notes:
+
+- Use an **ephemeral**, **one-time** pre-auth key for `TS_AUTHKEY` when possible.
+- `tailscale serve` publishes the Happier UI + API (including WebSockets) behind the Tailscale HTTPS endpoint.
+- If your environment can’t use `/dev/net/tun` (some restricted hosts), fall back to a normal reverse proxy (Caddy/Traefik/nginx) or run Tailscale on the host OS and proxy to the container.
+  - Make sure your proxy supports **WebSocket upgrades** for Socket.IO realtime at `/v1/updates` (otherwise machines can stay offline).
+  - See: [Deployment → Environment variables → Networking / reverse proxy](/self-hosting/env#websockets-required-for-realtime--machine-online)
+
+## Build images
+
+This repo includes a top-level `Dockerfile` with multiple targets.
+
+```bash
+# Server image (defaults to the full flavor; role defaults to "all" unless SERVER_ROLE is set at runtime)
+docker build -t happier-server --target server .
+
+# Worker image (sets SERVER_ROLE=worker in the image)
+docker build -t happier-server-worker --target server-worker .
+```
+
+The `server` and `server-worker` targets build from the source tree. The `relay-server` target is the same artifact-based shape used by published Docker images, so it expects explicit release artifact inputs:
+
+```bash
+docker build -t happier-relay-server --target relay-server \
+  --build-arg HAPPIER_RELAY_SERVER_RELEASE_TAG=server-preview \
+  --build-arg HAPPIER_RELAY_SERVER_VERSION=<server-runtime-version> \
+  --build-arg HAPPIER_RELAY_UI_WEB_RELEASE_TAG=ui-web-preview \
+  --build-arg HAPPIER_RELAY_UI_WEB_VERSION=<ui-web-version> \
+  .
+```
+
+The release pipeline resolves these build args from GitHub releases automatically. For local source iteration, build the `server` target instead.
+
+### Optional: build only selected DB providers
+
+By default, source-built `server` and `server-worker` images include generated Prisma clients for all supported DB providers. The prebuilt `relay-server` image is artifact-based and prunes the generated MySQL Prisma client; use the `server` target below when you need MySQL.
+
+If you want a smaller, provider-specific image, you can limit which Prisma clients are generated at build time:
+
+```bash
+# Build with only Postgres (includes pglite support since it uses the Postgres client)
+docker build -t happier-server --target server \
+  --build-arg HAPPIER_BUILD_DB_PROVIDERS='postgres' \
+  .
+
+# Build with Postgres + MySQL (no SQLite client)
+docker build -t happier-server --target server \
+  --build-arg HAPPIER_BUILD_DB_PROVIDERS='postgres|mysql' \
+  .
+```
+
+Notes:
+
+- `pglite` uses the Postgres Prisma client, so include `postgres` if you intend to run light mode on PGlite. The light flavor's own default is `sqlite`.
+- If you build without `mysql` (or `sqlite`) and later run with `HAPPIER_DB_PROVIDER=mysql` (or `sqlite`), the server will fail at startup with a clear error telling you to rebuild with the missing provider included.
+
+## Full vs light presets
+
+Happier Server supports two presets that share the same API and runtime. A preset supplies topology and backend defaults; `HAPPIER_DB_PROVIDER` independently selects the database under either preset.
+
+### Full flavor (recommended for production)
+
+Use this if you want a production setup: an external database, and optional Redis for multi-replica Socket.IO. By default, full flavor uses S3/Minio for public files, but you can opt into local disk storage with `HAPPIER_FILES_BACKEND=local`.
+
+**You will need:**
+
+- A database (`DATABASE_URL`)
+- Public files backend (choose one):
+  - S3/Minio-compatible storage (the `S3_*` env vars) with `HAPPIER_FILES_BACKEND=s3` (default)
+  - Local disk with `HAPPIER_FILES_BACKEND=local` (stores files under `HAPPIER_SERVER_LIGHT_DATA_DIR`)
+- A stable secret (`HANDY_MASTER_SECRET`)
+- Optional: Redis for scaling realtime across multiple API replicas (`REDIS_URL` + `HAPPIER_SOCKET_ADAPTER=redis-streams`)
+
+### Light flavor (single-node / testing)
+
+Use this if you want the simplest self-hosted setup: a single-node DB stored on disk (SQLite by default, or embedded Postgres via PGlite) and local file storage served by the server at `GET /files/*`.
+
+**You will need:**
+
+- Persistent disk for the light data directory (DB + files + persisted secrets)
+- Optional `HANDY_MASTER_SECRET` for a stable secret (otherwise one is generated and persisted)
+
+## Database providers
+
+The DB provider is selected via:
+
+- `HAPPIER_DB_PROVIDER` (preferred) or `HAPPY_DB_PROVIDER`
+
+Supported values under either preset are `postgres`, `mysql` (MySQL 8.0.16+), `sqlite`, and `pglite`. Full defaults to Postgres; light defaults to SQLite.
+
+Image support depends on how the image was built. Prebuilt `relay-server` images include SQLite and Postgres runtime support; MySQL requires a source-built `server` image with MySQL included.
+
+## Quick start (single container)
+
+This is useful for quick experiments. For production, prefer Docker Compose (next section) or set a restart policy and use an env file.
+
+### Full flavor (Postgres)
+
+```bash
+docker run --rm -p 3005:3005 \
+  -e PORT=3005 \
+  -e DATABASE_URL='postgresql://user:pass@db:5432/happier?sslmode=require' \
+  -e HANDY_MASTER_SECRET='change-me-to-a-long-random-string' \
+  -e HAPPIER_FILES_BACKEND=s3 \
+  -e S3_HOST='minio' \
+  -e S3_PORT='9000' \
+  -e S3_USE_SSL='false' \
+  -e S3_BUCKET='happier-public' \
+  -e S3_PUBLIC_URL='https://files.example.com/happier-public' \
+  -e S3_ACCESS_KEY='...' \
+  -e S3_SECRET_KEY='...' \
+  happier-server
+```
+
+### Full flavor (MySQL 8.0.16+)
+
+```bash
+docker run --rm -p 3005:3005 \
+  -e PORT=3005 \
+  -e HAPPIER_DB_PROVIDER=mysql \
+  -e DATABASE_URL='mysql://user:pass@db:3306/happier' \
+  -e HANDY_MASTER_SECRET='change-me-to-a-long-random-string' \
+  -e HAPPIER_FILES_BACKEND=s3 \
+  -e S3_HOST='minio' \
+  -e S3_PORT='9000' \
+  -e S3_USE_SSL='false' \
+  -e S3_BUCKET='happier-public' \
+  -e S3_PUBLIC_URL='https://files.example.com/happier-public' \
+  -e S3_ACCESS_KEY='...' \
+  -e S3_SECRET_KEY='...' \
+  happier-server
+```
+
+Production note: remove `--rm` and add `--restart unless-stopped` (or your platform’s equivalent), and prefer `--env-file` over long `-e ...` lists.
+
+Example:
+
+```bash
+cp apps/server/.env.example .env
+docker run --env-file .env -p 3005:3005 happier-server
+```
+
+### Full flavor (local files backend)
+
+If you don’t want S3/Minio, you can store public files on local disk:
+
+```bash
+docker run --rm -p 3005:3005 \
+  -e PORT=3005 \
+  -e DATABASE_URL='postgresql://user:pass@db:5432/happier?sslmode=require' \
+  -e HANDY_MASTER_SECRET='change-me-to-a-long-random-string' \
+  -e HAPPIER_FILES_BACKEND=local \
+  -e HAPPIER_SERVER_LIGHT_DATA_DIR=/data/happier \
+  -v happier-server-data:/data/happier \
+  happier-server
+```
+
+### Light flavor (PGlite)
+
+The default `server` image starts the **full** flavor. To run light in Docker, you can either:
+
+- use the `relay-server` target (recommended for self-host), or
+- run the `server` target with `HAPPIER_SERVER_FLAVOR=light`.
+
+The image entrypoint runs the packaged PGlite migration owner before startup, just as it does for external Postgres. Persist the local data directory.
+
+```bash
+docker run --rm -p 3005:3005 \
+  -e PORT=3005 \
+  -e HAPPIER_SERVER_FLAVOR=light \
+  -e HAPPIER_DB_PROVIDER=pglite \
+  -e HAPPIER_SERVER_LIGHT_DATA_DIR=/data/server-light \
+  -v happier-server-light:/data/server-light \
+  happier-server
+```
+
+### Light flavor (SQLite, default)
+
+SQLite is the light flavor's default and the recommended light-mode database for Docker because it is single-process and easy to back up. With `RUN_MIGRATIONS=1` (default), the entrypoint enables the server's existing startup migration path; migrations run once inside normal server startup before the database client is initialized.
+
+```bash
+docker run --rm -p 3005:3005 \
+  -e PORT=3005 \
+  -e HAPPIER_SERVER_FLAVOR=light \
+  -e HAPPIER_DB_PROVIDER=sqlite \
+  -e HAPPIER_SERVER_LIGHT_DATA_DIR=/data/server-light \
+  -v happier-server-light:/data/server-light \
+  happier-server
+```
+
+## Recommended: Docker Compose
+
+For most self-hosters, Docker Compose is the most reliable and reproducible way to run the server: it keeps env vars and volumes in one place and makes upgrades easier.
+
+You can either:
+
+- copy values from `/apps/server/.env.example` into `environment:`, or
+- use `env_file:` with a managed copy of that file.
+
+### Full flavor (single process)
+
+This example uses Postgres + Minio. Redis is optional and only needed for multi-replica API deployments.
+
+```yaml
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: happier
+      POSTGRES_USER: happier
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  server:
+    build:
+      context: .
+      target: server
+    ports:
+      - "3005:3005"
+    environment:
+      PORT: "3005"
+      DATABASE_URL: postgresql://happier:change-me@db:5432/happier
+      HANDY_MASTER_SECRET: change-me-to-a-long-random-string
+      HAPPIER_FILES_BACKEND: s3
+      S3_HOST: minio
+      S3_PORT: "9000"
+      S3_USE_SSL: "false"
+      S3_BUCKET: happier-public
+      # For Minio behind a reverse proxy, set this to your public files URL.
+      S3_PUBLIC_URL: https://files.example.com/happier-public
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      # Single-container mode: leave SERVER_ROLE unset (defaults to "all")
+    depends_on:
+      - db
+      - minio
+
+volumes:
+  pgdata:
+  minio:
+```
+
+### Full flavor (single process, MySQL 8.0.16+)
+
+This example uses MySQL 8.0.16+ + Minio.
+
+```yaml
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: happier
+      MYSQL_ROOT_PASSWORD: change-me
+    volumes:
+      - mysqldata:/var/lib/mysql
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  server:
+    build:
+      context: .
+      target: server
+    ports:
+      - "3005:3005"
+    environment:
+      PORT: "3005"
+      HAPPIER_DB_PROVIDER: mysql
+      DATABASE_URL: mysql://root:change-me@db:3306/happier
+      HANDY_MASTER_SECRET: change-me-to-a-long-random-string
+      HAPPIER_FILES_BACKEND: s3
+      S3_HOST: minio
+      S3_PORT: "9000"
+      S3_USE_SSL: "false"
+      S3_BUCKET: happier-public
+      S3_PUBLIC_URL: https://files.example.com/happier-public
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+    depends_on:
+      - db
+      - minio
+
+volumes:
+  mysqldata:
+  minio:
+```
+
+### Light flavor (Compose, PGlite or SQLite)
+
+The light flavor runs a single process and stores everything on disk.
+
+```yaml
+services:
+  server:
+    build:
+      context: .
+      target: server
+    ports:
+      - "3005:3005"
+    environment:
+      PORT: "3005"
+      HAPPIER_SERVER_LIGHT_DATA_DIR: /data/server-light
+      # default: SQLite
+      # HAPPIER_DB_PROVIDER: sqlite
+      # alternative: embedded Postgres via PGlite
+      # HAPPIER_DB_PROVIDER: pglite
+    volumes:
+      - happier-server-light:/data/server-light
+    command: >
+      sh -lc '
+        if [ "${HAPPIER_DB_PROVIDER:-sqlite}" = "pglite" ]; then
+          yarn --cwd apps/server migrate:light:deploy &&
+          HAPPIER_DB_PROVIDER=pglite yarn --cwd apps/server start:light;
+        else
+          yarn --cwd apps/server migrate:sqlite:deploy &&
+          HAPPIER_DB_PROVIDER=sqlite yarn --cwd apps/server start:light;
+        fi
+      '
+
+volumes:
+  happier-server-light:
+```
+
+### Full flavor (API + worker)
+
+If you split roles, run:
+
+- API container(s) with `SERVER_ROLE=api`
+- Worker container with `SERVER_ROLE=worker`
+
+With more than one API replica, enable Redis fanout (`REDIS_URL` + `HAPPIER_SOCKET_ADAPTER=redis-streams`) and configure sticky sessions at your load balancer.
+
+Minimal example (add this on top of the full-flavor compose above):
+
+```yaml
+services:
+  redis:
+    image: redis:7
+
+  api:
+    build:
+      context: .
+      target: server
+    environment:
+      SERVER_ROLE: api
+      REDIS_URL: redis://redis:6379
+      HAPPIER_SOCKET_ADAPTER: redis-streams
+    depends_on:
+      - db
+      - minio
+      - redis
+
+  worker:
+    build:
+      context: .
+      target: server-worker
+    environment:
+      REDIS_URL: redis://redis:6379
+      HAPPIER_SOCKET_ADAPTER: redis-streams
+    depends_on:
+      - db
+      - minio
+      - redis
+```
+
+## Migrations
+
+The source-built `server` target and prebuilt `relay-server` image run DB migrations by default. Migration selection follows `HAPPIER_DB_PROVIDER`, independently of the preset: Postgres, MySQL, and PGlite use their packaged/provider migration owner; SQLite uses the server's canonical in-process startup migration path.
+
+The default is convenient for a single container. For Postgres, MySQL, or PGlite deployments managed by an orchestrator, run migrations once before replacing application containers:
+
+```bash
+docker compose run --rm relay /opt/happier/server/happier-server-migrate
+docker compose up -d --force-recreate relay
+```
+
+Set `RUN_MIGRATIONS=0` on the long-running API and worker services. The prebuilt image's dedicated migration binary exits after migration completion and never starts the server. For a source-built `server` image, use `run-server --migrate-only` instead. Your deployment system must treat a non-zero exit as a failed deployment and leave the existing application containers running.
+
+If your platform cannot run and await a blocking pre-deploy command (for example, separate Dokploy Applications triggered by independent webhooks), designate exactly one API service as the migration owner instead: set `RUN_MIGRATIONS=1` only there, set `RUN_MIGRATIONS=0` on every worker and other replica, use a start-first rollout with automatic rollback, and give the migration-owning container enough health-check startup grace for the largest expected migration. This fallback relies on backward-compatible migrations so workers may continue serving while the API owner upgrades the schema.
+
+Notes:
+
+- Disable automatic migrations with `RUN_MIGRATIONS=0`. For SQLite, the entrypoint maps this to the server startup migration setting; it does not launch a second migration process.
+- Keep SQLite on its normal single-process startup path; the packaged SQLite runtime does not support `--migrate-only`.
+- PostgreSQL advisory locks serialize competing migration attempts, but they do not protect a migration if an orchestrator terminates its container for failing startup health checks. Use one dedicated migration owner when migrations can outlive the platform's startup grace period.
+- If migration deployment is interrupted, inspect the database and migration ledger before recovery. Never mark an unknown failed migration as applied merely to make the server start.
+
+## Kubernetes
+
+Run the published `relay-server` image with the plain manifests in [the server deployment examples](https://github.com/happier-dev/happier/tree/dev/apps/server/deploy). This recipe is for external Postgres and S3-compatible storage. It does not install a database, object store, ingress controller, Helm chart, or External Secrets operator.
+
+### Prepare the image, storage, and environment
+
+You need a namespace, `kubectl`, a reachable Postgres database, a provisioned S3 bucket, and a TLS ingress or Gateway that supports WebSocket upgrades. Managed Postgres, CloudNativePG, or your existing database deployment can supply the database. Keep its backups and lifecycle independent of the API pods.
+
+Choose a published image for your release channel and pin **the same digest** in `server.yaml` and `migrate.yaml`. `:preview` in the examples is a discovery default, not an immutable deployment. Check the [published tags](https://hub.docker.com/r/happierdev/relay-server/tags) rather than assuming a floating channel tracks another one. Use manifests from the matching source revision; newer migration commands must not be assumed to exist in historical source/Yarn images.
+
+The image declares a named non-root user. Set numeric `runAsUser: 1000` and `runAsGroup: 1000`, as the examples do, so `runAsNonRoot` can be checked by Kubernetes. Verify the UID for your chosen image before deploying it:
+
+```bash
+docker run --rm --entrypoint id YOUR_PINNED_IMAGE
+```
+
+Copy the examples locally and edit `config.yaml` for your public server and web-app URLs. Configure your namespace in your current `kubectl` context, then create `happier-server-env` from a private env file containing:
+
+```dotenv
+DATABASE_URL=postgresql://happier:YOUR_PASSWORD@postgres.example.com:5432/happier?sslmode=require
+HANDY_MASTER_SECRET=YOUR_LONG_RANDOM_SECRET
+S3_HOST=s3.example.com
+S3_PORT=443
+S3_USE_SSL=true
+S3_BUCKET=happier-public
+S3_PUBLIC_URL=https://files.example.com/happier-public
+S3_ACCESS_KEY=YOUR_ACCESS_KEY
+S3_SECRET_KEY=YOUR_SECRET_KEY
+```
+
+Keep the master secret stable and backed up. Add your authentication policy from [Server Auth](/self-hosting/auth), including OIDC settings if you use an IdP. Keep this env file out of Git. Use your platform's secret manager to populate the same Kubernetes Secret if preferred. Do not put conflicting topology keys in the Secret: `envFrom` loads it after the ConfigMap, so it takes precedence.
+
+```bash
+kubectl create secret generic happier-server-env --from-env-file=server.env
+kubectl apply -f config.yaml
+```
+
+The ConfigMap explicitly selects full flavor, Postgres, S3, `SERVER_ROLE=all`, and the in-memory socket adapter. `HAPPIER_SERVER_FLAVOR` overrides the legacy `HAPPY_SERVER_FLAVOR` image default; overriding flavor alone does not change the image's SQLite default, so set `HAPPIER_DB_PROVIDER=postgres` too.
+
+#### S3 with an IAM role
+
+This mode is under development; see [web identity availability and settings](/self-hosting/env#s3-credentials-from-aws-web-identity) before choosing a server image.
+
+On Amazon EKS you can drop the static S3 keys and give the server an IAM role through [IAM roles for service accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html). Leave `S3_ACCESS_KEY` and `S3_SECRET_KEY` out of the Secret entirely: if either is set, the server uses static keys. Keep the other `S3_*` values:
+
+```dotenv
+S3_HOST=s3.us-west-2.amazonaws.com
+S3_BUCKET=happier-public
+S3_REGION=us-west-2
+S3_PUBLIC_URL=https://files.example.com/happier-public
+```
+
+Annotate the pod's service account with `eks.amazonaws.com/role-arn` and set `serviceAccountName` in `server.yaml`. The EKS webhook then injects `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` and mounts the token. Set `AWS_REGION` yourself if your pods do not receive it. The server sends STS requests to `sts.<AWS_REGION>.amazonaws.com`, and to the global `sts.amazonaws.com` endpoint when `AWS_REGION` is unset. GovCloud has no global endpoint, so `AWS_REGION` is required there. The China partitions are not supported, because their STS hosts end in `amazonaws.com.cn`.
+
+The role needs `s3:ListBucket` on the bucket, which the startup bucket check uses, and `s3:PutObject` on its objects. The server does not create the bucket. Other credential sources, such as EKS Pod Identity or EC2 instance profiles, are not used.
+
+### Migrate before starting or upgrading the API
+
+Back up the database before an upgrade. Run one migration Job using the candidate image and the same environment as the API. The Job directly invokes the packaged migrator; it has no application probes or application startup deadline. `RUN_MIGRATIONS=0` prevents the API pods from becoming additional migration owners.
+
+```bash
+# Example operator wait budget; set it from your expected migration duration.
+MIGRATION_WAIT_TIMEOUT=30m
+migration_job=$(kubectl create -f migrate.yaml -o jsonpath='{.metadata.name}')
+kubectl logs --pod-running-timeout="$MIGRATION_WAIT_TIMEOUT" -f "job/$migration_job"
+kubectl wait --for=condition=complete "job/$migration_job" --timeout="$MIGRATION_WAIT_TIMEOUT"
+```
+
+Only continue once the Job is `Complete`. A log-streaming or wait timeout is not proof that migration failed: inspect Job status and logs. If it fails, leave the existing API running and inspect the database and migration ledger before retrying. Do not blindly delete the Job, mark migrations applied, or roll an older binary onto a partly migrated database.
+
+```bash
+kubectl apply -f server.yaml
+kubectl rollout status deployment/happier-server
+kubectl port-forward service/happier-server 3005:3005
+# In another terminal:
+curl --fail http://127.0.0.1:3005/health
+curl --fail http://127.0.0.1:3005/ready
+```
+
+Use a fresh Job for each upgrade. Keep completed/failed Job logs according to your deployment retention policy. Do not apply the whole example directory at once: applying a Job and Deployment together does not order them.
+
+Automatic application rollback does not undo migrations. Return to the previous image only if it supports the resulting schema; otherwise recover forward or restore the database backup in a coordinated maintenance window. See [Migrations](#migrations) for the single-owner fallback when your platform cannot await a pre-deploy operation.
+
+### Probes, ingress, and persistent data
+
+The Deployment uses `Recreate` at one replica. With an in-memory adapter, overlapping old and new pods cannot fan out socket events to each other's clients. Recreate avoids that overlap and introduces planned downtime and client reconnection.
+
+The startup probe uses `/health` on port `3005`; it holds off liveness and readiness probes until the process is listening. Its sample allowance is 30 failures at 10-second intervals: tune it from observed startup on your cluster. Migrations run in the separate Job and must not be cut short by this allowance. Liveness also uses `/health`; readiness uses `/ready`, which checks database connectivity and returns `503` on failure or shutdown. A readiness failure removes the pod from Service traffic; a liveness/startup failure can restart it. See [Kubernetes probe guidance](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/).
+
+For `SERVER_ROLE=worker`, there is no API listener. Keep `METRICS_ENABLED=true` and probe `/health` and `/ready` on `METRICS_PORT` (`9090`). The example Service exposes only the API port; keep metrics private and scrape pod port `9090`.
+
+Point your TLS ingress or Gateway at `happier-server:3005`. Preserve `/v1/updates`, WebSocket upgrades, HTTP polling, and long-lived connection timeouts. Set `HAPPIER_SERVER_TRUST_PROXY` for your actual trusted proxy path; do not trust forwarded headers from arbitrary clients.
+
+In this Postgres/S3 recipe, authoritative database and uploaded-file data live outside the pods; `/data` is temporary runtime storage. If you switch to SQLite or `HAPPIER_FILES_BACKEND=local`, replace the `emptyDir` with persistent storage owned by UID/GID 1000, retain it across upgrades, and stay on the supported single-node topology. An ephemeral volume loses local data when the pod is replaced.
+
+### Multiple API replicas
+
+Before increasing the replica count, use the same `REDIS_URL` and `HAPPIER_SOCKET_ADAPTER=redis-streams` on every API and worker. Redis is optional for the single `all` replica; sticky sessions alone do not provide cross-pod fanout.
+
+Split the Deployment into API replicas with `SERVER_ROLE=api` and one worker with `SERVER_ROLE=worker`. Use the same database, master secret, file backend, Redis, and image revision; keep migrations disabled on both. Probe the worker on port `9090`, exclude it from the API Service, and expose only API pods through ingress. Configure sticky sessions at the ingress/load balancer for Socket.IO HTTP polling, as described by [Socket.IO's multiple-node guide](https://socket.io/docs/v4/using-multiple-nodes/). WebSocket-only connections do not need polling affinity, but Redis fanout is still required across API pods.
+
+`happy-redis.yaml` is an optional Redis StatefulSet example, not a prerequisite for this recipe. It assumes a default StorageClass and a private network; it provides no authentication, TLS, or NetworkPolicy. Use your secured Redis service or add those controls before exposing it to other workloads. The examples supply no ingress-specific affinity configuration: configure and verify it for your own controller.
+
+Validate your edited manifests against your cluster's API schema before rollout. A schema check cannot prove image pullability, credentials, DNS, storage permissions, migrations, or realtime fanout. After deployment, sign in from the web app, connect a daemon, start a session, and verify live updates and reconnection through your actual ingress. With multiple replicas, verify updates across different API pods and polling affinity too.
+
+## Reverse proxy checklist
+
+- Terminate TLS at the proxy (recommended).
+- Forward WebSocket upgrade headers.
+- Increase timeouts for long-lived connections.
+- Keep secrets in your deployment platform (env vars), not in git.
+
+## Development notes (contributors)
+
+If you are developing Happier Server itself (not just deploying it), keep in mind:
+
+- There are two runtime presets: **full** (`yarn --cwd apps/server start`) and **light** (`yarn --cwd apps/server start:light`).
+- The DB provider is independently selected via `HAPPIER_DB_PROVIDER=postgres|mysql|sqlite|pglite`; full defaults to Postgres and light defaults to SQLite.
+- Prisma model source of truth: `apps/server/prisma/schema.prisma`.
+- Provider schemas are generated from it:
+  - `yarn --cwd apps/server schema:sync` (and tests enforce `schema:sync:check`)
+- Migrations are provider-specific:
+  - Postgres/PGlite: `apps/server/prisma/migrations/*`
+  - SQLite: `apps/server/prisma/sqlite/migrations/*`
+  - MySQL: `apps/server/prisma/mysql/migrations/*`
+
+When you change the data model, make sure you:
+
+1. Update `apps/server/prisma/schema.prisma`
+2. Run `yarn --cwd apps/server schema:sync`
+3. Create migrations for each supported provider (at least Postgres + MySQL; and SQLite if you want light/sqlite supported for that change)

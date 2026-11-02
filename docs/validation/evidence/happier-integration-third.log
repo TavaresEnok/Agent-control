@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+not ok 1 - C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+  ---
+  duration_ms: 11981.205217
+  type: 'test'
+  location: '/workspace/tests/happier.test.ts:1:603'
+  failureType: 'testCodeFailure'
+  error: 'HAPPIER_NOT_READY'
+  code: 'HAPPIER_NOT_READY'
+  stack: |-
+    HappierEndpoint.start (/workspace/src/happier.ts:89:46)
+    async TestContext.<anonymous> (/workspace/tests/happier.test.ts:56:7)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...

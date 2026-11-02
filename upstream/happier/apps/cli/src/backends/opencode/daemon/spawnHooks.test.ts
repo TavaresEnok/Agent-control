@@ -1,0 +1,134 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { dirname, join } from 'node:path';
+
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createExecutableShim, writeExecutableShim } from '@/testkit/fs/executableShim';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+
+const envKeys = ['PATH', 'HAPPIER_OPENCODE_PATH', 'HAPPIER_OPENCODE_CLI_GENERATION', 'HAPPIER_HOME_DIR'] as const;
+const tempDirs = new Set<string>();
+let envScope = createEnvKeyScope(envKeys);
+
+async function createFakeBin(name: string): Promise<{ dir: string; binPath: string }> {
+  const isWindows = process.platform === 'win32';
+  const binPath = await createExecutableShim({
+    dirPrefix: 'happier-opencode-spawnhooks-',
+    fileName: isWindows ? `${name}.cmd` : name,
+    contents: isWindows ? ['@echo off', 'echo ok', ''].join('\r\n') : '#!/bin/sh\necho ok\n',
+  });
+  const dir = dirname(binPath);
+  tempDirs.add(dir);
+  return { dir, binPath };
+}
+
+afterEach(async () => {
+  envScope.restore();
+  envScope = createEnvKeyScope(envKeys);
+  vi.resetModules();
+  for (const dir of tempDirs) {
+    await removeTempDir(dir);
+  }
+  tempDirs.clear();
+});
+
+beforeEach(() => {
+  vi.resetModules();
+});
+
+describe('opencodeDaemonSpawnHooks.validateSpawn', () => {
+  it('presents only the native client while retaining headless OpenCode server controller custody', async () => {
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    for (const host of ['tmux', 'zellij', 'herdr'] as const) {
+      const selection = { host, accountSettings: null, runtimeSelection: {} };
+      expect(opencodeDaemonSpawnHooks.resolveTerminalPresentation?.({
+        ...selection, processEnv: {},
+      })).toEqual({ kind: 'provider_attach', startingMode: 'local' });
+      expect(opencodeDaemonSpawnHooks.resolveTerminalPresentation?.({
+        ...selection, processEnv: { HAPPIER_OPENCODE_BACKEND_MODE: 'acp' },
+      })).toEqual({ kind: 'none' });
+    }
+  });
+
+  it('rejects spawn when HAPPIER_OPENCODE_PATH points to an invalid executable', async () => {
+    const homeDir = await createTempDir('happier-opencode-spawnhooks-home-');
+    tempDirs.add(homeDir);
+    envScope.patch({
+      PATH: '',
+      HAPPIER_OPENCODE_PATH: join(homeDir, 'missing-opencode'),
+      HAPPIER_HOME_DIR: homeDir,
+    });
+
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    const res = await opencodeDaemonSpawnHooks.validateSpawn!({});
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('expected validation to fail');
+    expect(res.errorMessage.toLowerCase()).toContain('opencode');
+    expect(res.errorMessage).toContain('HAPPIER_OPENCODE_PATH');
+  });
+
+  it('allows spawn when opencode is on PATH', async () => {
+    const { dir } = await createFakeBin('opencode');
+    envScope.patch({
+      HAPPIER_OPENCODE_PATH: undefined,
+      PATH: dir,
+    });
+
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    const res = await opencodeDaemonSpawnHooks.validateSpawn!({});
+    expect(res.ok).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('finds a user-local installation when the daemon PATH omits it', async () => {
+    const homeDir = await createTempDir('happier-opencode-spawnhooks-home-');
+    tempDirs.add(homeDir);
+    const binPath = await writeExecutableShim({
+      dir: join(homeDir, '.local', 'bin'),
+      fileName: 'opencode',
+      contents: '#!/bin/sh\necho ok\n',
+    });
+    const environmentVariables = {
+      HOME: homeDir,
+      PATH: '',
+      HAPPIER_HOME_DIR: homeDir,
+    };
+
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    const res = await opencodeDaemonSpawnHooks.validateSpawn!({ environmentVariables });
+    expect(res.ok).toBe(true);
+
+    const { resolveOpenCodeCliLaunchSpec } = await import('../utils/resolveOpenCodeCliCommand');
+    expect(resolveOpenCodeCliLaunchSpec(environmentVariables).command).toBe(binPath);
+  });
+
+  it('allows the released opencode command when V2 is selected', async () => {
+    const { dir } = await createFakeBin('opencode');
+    envScope.patch({
+      HAPPIER_OPENCODE_PATH: undefined,
+      HAPPIER_OPENCODE_CLI_GENERATION: 'v2',
+      PATH: dir,
+    });
+
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    const res = await opencodeDaemonSpawnHooks.validateSpawn!({});
+    expect(res.ok).toBe(true);
+  });
+
+  it('allows spawn when HAPPIER_OPENCODE_PATH points to an executable', async () => {
+    const { binPath } = await createFakeBin('opencode-custom');
+    envScope.patch({
+      PATH: '',
+      HAPPIER_OPENCODE_PATH: binPath,
+    });
+
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    const res = await opencodeDaemonSpawnHooks.validateSpawn!({});
+    expect(res.ok).toBe(true);
+  });
+});
+
+describe('opencodeDaemonSpawnHooks', () => {
+  it('does not expose legacy generic token auth plumbing', async () => {
+    const { opencodeDaemonSpawnHooks } = await import('./spawnHooks');
+    expect('buildAuthEnv' in opencodeDaemonSpawnHooks).toBe(false);
+  });
+});
