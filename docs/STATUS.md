@@ -134,3 +134,15 @@ A implementação administrativa continua distinta da ativação operacional. Os
 Serviço read-only em snapshot PG repeatable-read e endpoint autenticado de owner foram ligados ao botão de download em Settings. Exporta versões e digests de planos/políticas, identidades Git e estados de evidências/integração, sem transcrições, paths, detalhes de audit ou credenciais. Limites: 100 registros por categoria e 256 KiB; o JSON identifica truncamento, `restorable:false` e `conversationIncluded:false`. Não é backup nem exportação completa de conversas. Teste focado foi preparado, não executado; a validação funcional fica pendente. A primeira checagem de tipos detectou uma conversão de arrays vazios, corrigida sem alterar contrato.
 
 Build integrado de administração e recuperação: `administrative-recovery-integration-build-20261102.log` passou backend, tipos web e bundle managed. Bundle ainda gera aviso de tamanho; essa compilação não comprova comportamento de RPC/recuperação novos.
+
+## Continuação com agente único
+
+A partir da última instrução do proprietário em 02/11/2026, somente o agente principal desenvolve e revisa; os seis trabalhadores anteriores não devem ser reativados. Preservam-se os limites do produto, que são independentes da equipe de desenvolvimento.
+
+Comandos locais explícitos `import-stage`, `import-deliver` e `import-archive` foram ligados ao gateway e ao core existente. Descriptors, bundle, token e chaves ficam em arquivos privados fora dos repositórios. Stage/deliver verificam a identidade da conta e as chaves/ciphertexts das sessões; novos contextos ficam pausados. O modo serve não dispara importações. Não foi executada migração real. Ver `IMPORT-CLI-20261102.md`.
+
+O transporte agora recusa redirects, limita cada chamada de rede e rejeita ACK para localId divergente. Um teste focado com fetch simulado e a checagem de tipos estão registrados em `single-agent-import-diagnostics-20261102.log`; não equivalem a prova ponta a ponta do CLI ou migração operacional.
+
+Diagnósticos foram ampliados com ausência de gerente quando existem intenções pendentes, admissão global fechada, orientação do especialista reprovada/incerta e operações administrativas incertas. Mantêm escopo/ACL, snapshot read-only, limites e indicação de responsável e próxima condição; nenhum diagnóstico inicia recuperação. Consultas novas ainda não possuem prova PG específica.
+
+Pendências principais permanecem: integração operacional e homologação dos provedores reais, gerente semântico, fronteiras restantes de recuperação e validação integrada final. Não há conclusão integral ou percentual validado declarado nesta rodada.

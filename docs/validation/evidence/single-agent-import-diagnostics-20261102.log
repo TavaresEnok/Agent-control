@@ -1,0 +1,19 @@
+Started 2026-11-02T21:54:54.320315+00:00
+COMMAND ['npm', 'run', 'typecheck']
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+EXIT 0
+COMMAND ['node', '--import', 'tsx', '--test', 'tests/happier-import-boundary.test.ts']
+✔ import transport refuses unsafe origins and mismatched acknowledgements; confirms exact ciphertext (31.346538ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 336.906855
+EXIT 0
+Finished 2026-11-02T21:54:57.288461+00:00

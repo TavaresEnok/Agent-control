@@ -21,6 +21,22 @@ export class ContextDiagnostics{
    const findings:DiagnosticFinding[]=[];
    if(context.paused)findings.push({code:'context_paused',meaning:'A pausa humana está ativa.',owner:'Operador do contexto',nextCondition:'Retomada explícita e autorizada.',evidence:[{kind:'context',id:contextId}]});
    if(context.draining)findings.push({code:'context_draining',meaning:'A drenagem impede admitir novos planos; planos aceitos podem continuar.',owner:'Operador do contexto',nextCondition:'Encerramento autorizado da drenagem para admitir novos planos.',evidence:[{kind:'context',id:contextId}]});
+   const active=(await c.query(`SELECT EXISTS(SELECT 1 FROM ac_intents WHERE context_id=$1
+    AND state NOT IN ('completed','done','review','failed','canceled','cancelled')) active`,[contextId])).rows[0].active;
+   if(active){
+    const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1')).rows[0];
+    if(admission?.enabled===false)findings.push({code:'admission_closed',meaning:'A admissão global está fechada para novos efeitos.',owner:'Administrador da instalação',nextCondition:'Reabertura explícita da admissão após resolver a causa registrada.',evidence:[{kind:'context',id:contextId}]});
+    const manager=(await c.query('SELECT 1 FROM ac_managers WHERE context_id=$1 AND lease_until>clock_timestamp()',[contextId])).rowCount;
+    if(!manager)findings.push({code:'manager_unavailable',meaning:'Há intenções pendentes sem concessão vigente de gerente.',owner:'Administrador do projeto',nextCondition:'Iniciar um gerente autorizado; depois reconciliar operações antigas antes de novos efeitos.',evidence:[{kind:'context',id:contextId}]});
+   }
+   const advice=await c.query(`SELECT id,state,receipt->>'status' verdict FROM ac_specialist_advice WHERE context_id=$1
+    AND (state IN ('running','uncertain') OR (state='completed' AND receipt->>'status'='rejected')) ORDER BY id LIMIT 101`,[contextId]);
+   for(const row of advice.rows.slice(0,100))findings.push(row.state==='completed'
+    ?{code:'specialist_rejected',meaning:'O especialista independente reprovou a orientação para esta implementação.',owner:'Gerente e responsável pelo plano',nextCondition:'Reavaliar a proposta preservando o parecer; a reprovação não autoriza lançar o escritor.',evidence:[{kind:'specialist',id:row.id}]}
+    :{code:'specialist_uncertain',meaning:'A orientação do especialista ainda não tem conclusão confirmada.',owner:'Controlador de recuperação',nextCondition:'Conciliar o executor e o recibo originais antes de autorizar o escritor.',evidence:[{kind:'specialist',id:row.id}]});
+   const administrative=await c.query(`SELECT id FROM ac_administrative_operations WHERE context_id=$1
+    AND state IN ('running','uncertain') ORDER BY id LIMIT 101`,[contextId]);
+   for(const row of administrative.rows.slice(0,100))findings.push({code:'administrative_effect_uncertain',meaning:'Uma operação administrativa mantém resultado não confirmado e ocupa a capacidade exclusiva.',owner:'Gerente e helper administrativo registrado',nextCondition:'Consultar a operação original e validar seu recibo assinado; não repetir o efeito.',evidence:[{kind:'administrative_operation',id:row.id}]});
    const cancellations=await c.query('SELECT intent_id,state FROM ac_plan_cancellations WHERE context_id=$1 ORDER BY requested_at,intent_id LIMIT 101',[contextId]);
    for(const row of cancellations.rows.slice(0,100))findings.push(row.state==='confirmed'
     ?{code:'cancellation_confirmed',meaning:'O cancelamento do plano foi confirmado no registro.',owner:'Controlador de execução',nextCondition:'Nenhuma condição adicional de cancelamento registrada.',evidence:[{kind:'cancellation',id:row.intent_id}]}
@@ -58,7 +74,7 @@ export class ContextDiagnostics{
     if(!policy.success||digest(policy.data)!==row.digest){findings.push({code:'policy_unknown',meaning:'Não foi possível verificar a política congelada.',owner:'Administrador do projeto',nextCondition:'Conciliar a política e sua integridade.',evidence:[{kind:'artifact',id:row.id}]});continue;}
     if(policy.data.requireHumanIntegration)findings.push({code:'approval_missing',meaning:'A aprovação exigida para este artefato e destino ainda não consta.',owner:'Aprovador autorizado',nextCondition:'Decisão autorizada sobre o artefato e destino congelados.',evidence:[{kind:'artifact',id:row.id},{kind:'stage',id:row.stage_id}]});
    }
-   const truncated=[cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
+   const truncated=[advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
    await c.query('COMMIT');
    return {contextId,findings,truncated,assessment:findings.length?'observed':'unknown',
     ...(findings.length?{}:{explanation:'Nenhuma causa foi comprovada nos registros consultados; o estado de parada é desconhecido.'})};

@@ -557,7 +557,7 @@ index a8a0b7098fae8349a9fe31f6e875cc49a2c2c018..0d368fdf6220bbf6b97196a3a2711c70
    });
 diff --git a/packages/contract/src/agent-control-operations.ts b/packages/contract/src/agent-control-operations.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f48601283877f64aac135697af0e8e66a0145e02
+index 0000000000000000000000000000000000000000..883f022e4e542b75c39ab13143d67e586a850ddf
 --- /dev/null
 +++ b/packages/contract/src/agent-control-operations.ts
 @@ -0,0 +1,27 @@
@@ -576,9 +576,9 @@ index 0000000000000000000000000000000000000000..f48601283877f64aac135697af0e8e66
 +export const agentControlOperationalSnapshotSchema=z.object({schemaVersion:z.literal(1),scope:z.literal('installation_aggregate'),
 + observedAt:z.iso.datetime(),databaseReadOnly:z.literal(true),diskObservation:z.enum(['not_configured','observed','partially_unavailable']),
 + metrics:z.array(z.object({name:z.string().regex(/^agent_control_[a-z_]+$/),help:z.string(),type:z.literal('gauge'),samples:z.array(metricSampleSchema)}).strict())}).strict();
-+export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact']),id:z.uuid()}).strict();
++export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact','specialist','administrative_operation']),id:z.uuid()}).strict();
 +export const agentControlDiagnosticFindingSchema=z.object({code:z.enum(['context_paused','context_draining','cancellation_requested','cancellation_confirmed',
-+ 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing']),
++ 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing','admission_closed','manager_unavailable','specialist_uncertain','specialist_rejected','administrative_effect_uncertain']),
 + meaning:z.string(),owner:z.string(),nextCondition:z.string(),evidence:z.array(agentControlDiagnosticEvidenceSchema)}).strict();
 +export const agentControlDiagnosticsSchema=z.object({contextId:z.uuid(),findings:z.array(agentControlDiagnosticFindingSchema),truncated:z.boolean(),
 + assessment:z.enum(['observed','unknown']),explanation:z.string().optional()}).strict();

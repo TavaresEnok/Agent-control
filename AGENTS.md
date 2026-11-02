@@ -6,9 +6,7 @@ Este é um repositório novo de desenvolvimento. Não alterar instalações oper
 
 ## Equipe de desenvolvimento autorizada em 02/11/2026
 
-Configuração vigente, após a última instrução do proprietário: um único gerente/revisor principal Sol 6.1 Médio e seis trabalhadores Terra 6.1 Médio. Os dois gerentes Sol adicionais foram retirados da execução, assim como dois trabalhadores da configuração anterior. Não reativá-los, criar gerentes/revisores adicionais, exceder seis trabalhadores, trocar os modelos ou elevar o esforço sem nova instrução do proprietário. Essa estrutura é da equipe que desenvolve o Agent Control; não altera automaticamente as políticas de contas ou capacidade do produto.
-
-Os seis trabalhadores recebem tarefas diretamente do agente principal, que concentra gerência, revisão e aprovação da integração. Não criar subagentes ou delegar a outros modelos. Cada trabalhador deve ter ownership de arquivos e contratos definido pelo principal. Todos compartilham o repositório: preservar alterações alheias e coordenar antes de editar arquivos compartilhados. O principal integra as entregas e mantém STATUS, FINDINGS, rastreabilidade e proveniência. Não abrir outras contas de provedores ou usar as assinaturas do produto para acelerar a equipe.
+Configuração vigente após a última instrução do proprietário: somente o agente principal desenvolve, gerencia e revisa. Os trabalhadores anteriores estão inativos. Não criar ou reativar subagentes, gerentes ou revisores adicionais. Esta configuração da equipe não altera os limites de agentes do produto. Preservar as entregas e alterações existentes. Priorizar implementação, usar checagens focadas e reservar validação ampla para a integração final.
 
 Famílias Hono montadas sob o prefixo compartilhado `/api/v1/ac` devem limitar seus middlewares aos próprios endpoints. Um `app.use('*')` nessa família pode interceptar pareamento e sessão públicos e quebrar o login; a regressão histórica está preservada nas evidências de planejamento. Todos os ingressos continuam sob a autenticação, origem e autorização centrais aplicáveis.
 

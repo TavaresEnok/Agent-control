@@ -418,15 +418,15 @@
   {
     "id": "RF-33",
     "normative_row": "RF-33\tP0\tImportar histórico, planos e evidências dos Paseos sem duplicar trabalho concluído\tI8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
     "evidence": "docs/implementation/IMPORT-PREVIEW-20261102.md",
-    "files": "src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts",
+    "files": "src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts;src/import-cli.ts;src/server-main.ts;src/happier-import.ts;tests/happier-import-boundary.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore."
+    "limitation": "Explicit local stage/deliver/archive CLI implemented with private descriptors, identity/key/ciphertext checks and imported contexts paused. No operational migration or CLI end-to-end proof. Focused transport proof uses mocked fetch only; original import core has earlier synthetic integration evidence."
   },
   {
     "id": "RF-34",
@@ -795,15 +795,15 @@
   {
     "id": "RNF-05",
     "normative_row": "RNF-05\tObservabilidade\tToda tarefa parada informa motivo, evidência, responsável pela recuperação e próxima condição de avanço\tI6/I7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
+    "status": "partially_examined",
+    "code_state": "partial",
     "test_result": "not_run",
     "evidence": "docs/validation/evidence/diagnostics-focused-first-20261102.log;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/diagnostics-manager-transport-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
-    "files": "src/diagnostics.ts;src/diagnostics-api.ts;tests/diagnostics.test.ts;src/installation-readiness.ts;src/server-main.ts;tests/installation-readiness.test.ts;tests/managers.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
+    "files": "src/diagnostics.ts;src/diagnostics-api.ts;tests/diagnostics.test.ts;src/installation-readiness.ts;src/server-main.ts;tests/installation-readiness.test.ts;tests/managers.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx;src/diagnostics.ts;src/diagnostics-api.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Read-only context diagnostics reports evidenced findings or unknown; focused test does not cover approval or receipt inconsistency findings and does not prove coverage for every stopped task. Integrated build passed; this is not behavioral acceptance. Local read-only readiness passed 2/2 including PG, TCP and CLI; manager transport distinction passed 1/1. Duplicate diagnostic UI regression is preserved; fixed focused test was reported 1/1 without an individual log, and the subsequent final Chromium check passed with one diagnostic heading. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
+    "limitation": "Read-only context-scoped diagnostics extended to manager lease, global admission, specialist rejection/uncertainty and administrative uncertainty; facts include recovery owner and next condition. No new PG behavioral proof for added queries; idle unknown is preserved."
   },
   {
     "id": "RNF-06",

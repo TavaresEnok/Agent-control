@@ -164,7 +164,7 @@
     {
       "path": "packages/contract/src/agent-control-operations.ts",
       "change": "added",
-      "sha256": "06dd46579cdc19a786ee8435ed03934e3cb2fced1d8fc6507d2626fe08eb51ea"
+      "sha256": "498ff81414259ac61de40a222e828c31559e011613992617ecfa9b3dd230d4af"
     },
     {
       "path": "packages/contract/src/agent-control-plans.ts",

@@ -13,8 +13,8 @@ import {ProjectAdmin} from './project-admin.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
- const descriptorCommand=['context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect'].includes(command);
- if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
+ const descriptorCommand=['context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive'].includes(command);
+ if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
@@ -30,6 +30,9 @@ async function main(){
   }
   if(command==='initialize'){console.log(JSON.stringify(await initializeInstallation(config,ledger)));return;}
   if(command==='operator-bootstrap'){console.log(JSON.stringify(await prepareInstallationOperator(config,ledger)));return;}
+  if(command==='import-stage'||command==='import-deliver'||command==='import-archive'){
+   const {executeImport}=await import('./import-cli.ts');console.log(JSON.stringify(await executeImport(command,config,ledger,extra[0])));return;
+  }
   if(command==='provider-home-initialize'||command==='provider-home-inspect'){
    const {executeAccountHome}=await import('./account-homes-cli.ts');console.log(JSON.stringify(await executeAccountHome(command,config,ledger,extra[0])));return;
   }
