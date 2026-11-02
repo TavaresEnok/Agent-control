@@ -330,7 +330,7 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log",
     "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
@@ -343,12 +343,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Lost acknowledgement and completed receipt after host restart tested; interrupted in-flight effect remains open."
+    "limitation": "Plan binding and parent-confirmed cancellation implemented. Two-host lost-ack proof is historical; new cancellation through SSH, supervisor death and interrupted-host recovery remain open."
   },
   {
     "id": "RF-28",
@@ -1110,7 +1110,7 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log",
     "files": "src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",

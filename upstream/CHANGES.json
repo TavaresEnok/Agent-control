@@ -109,7 +109,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "24442239e1ae66df0b60ad8b8a348871a3d33754b9438f692e473d8a5de4096e"
+      "sha256": "7261ff1386e1cca2a843c97908a24f316d96e817f075a7d70733803d1b625a84"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-operator.ts",

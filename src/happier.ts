@@ -193,9 +193,9 @@ export class HappierEndpoint {
     if (!this.socket.connected) return;
     await this.validateKey();
     await this.ledger.heartbeat(this.options.authority);
-    await this.runtime.reconcileCancellations(this.options.authority);
     let recoveryFailure:unknown;
-    try{await this.runtime.recoverManaged(this.options.authority);}catch(error){recoveryFailure=error;}
+    try{await this.runtime.reconcileCancellations(this.options.authority,this.options.principal);}catch(error){recoveryFailure=error;}
+    try{await this.runtime.recoverManaged(this.options.authority);}catch(error){recoveryFailure??=error;}
     this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
     if (Date.now() - this.lastPendingAt >= 1000) {
       this.lastPendingAt = Date.now();

@@ -55,7 +55,7 @@ export class Cancellations{
     await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$2
      WHERE g.intent_id=$1 AND g.state='reserved'
      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)
-     AND NOT EXISTS(SELECT 1 FROM ac_remote_operations r WHERE r.context_id=g.context_id AND r.state NOT IN ('completed','failed','canceled_confirmed'))
+     AND NOT EXISTS(SELECT 1 FROM ac_remote_operations r WHERE (r.intent_id=$1 OR (r.intent_id IS NULL AND r.context_id=g.context_id)) AND r.state NOT IN ('completed','failed','canceled_confirmed'))
      AND ((g.role='programmer' AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.intent_id=$1 AND o.state='registered' AND o.handle IS NULL))
       OR (g.role IN ('qa','reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.handle IS NULL)))`,
      [request.intent_id,{state:'not_started',source:'cancellation-reconciliation'}]);
@@ -64,7 +64,7 @@ export class Cancellations{
      EXISTS(SELECT 1 FROM ac_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_stage_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_sandbox_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE g.intent_id=$1 AND j.state NOT IN ('completed','failed')) OR
-     EXISTS(SELECT 1 FROM ac_remote_operations r WHERE r.context_id=$2 AND r.state NOT IN ('completed','failed','canceled_confirmed'))
+     EXISTS(SELECT 1 FROM ac_remote_operations r WHERE (r.intent_id=$1 OR (r.intent_id IS NULL AND r.context_id=$2)) AND r.state NOT IN ('completed','failed','canceled_confirmed'))
      pending`,[request.intent_id,authority.contextId])).rows[0].pending;
     if(pending)continue;
     await c.query("UPDATE ac_plan_cancellations SET state='confirmed',confirmed_at=clock_timestamp() WHERE intent_id=$1",[request.intent_id]);

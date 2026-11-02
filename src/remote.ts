@@ -10,7 +10,7 @@ export const RemoteHostInput=z.object({id:Id,label:z.string().min(1).max(100),ho
  credentialRef:Id,remoteRoot:z.string().min(1).max(500).regex(/^\/[^\0\r\n]*$/),
  allowedTasks:z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)).min(1).max(50),maxConcurrent:z.number().int().min(1).max(32)}).strict();
 export type RemoteHost={id:string;hostname:string;port:number;username:string;public_key:string;fingerprint:string;credential_ref:string;remote_root:string};
-const Reply=z.object({schemaVersion:z.literal(1),operationId:Id,state:z.enum(['unknown','uncertain','running','completed','failed']),
+const Reply=z.object({schemaVersion:z.literal(1),operationId:Id,state:z.enum(['unknown','uncertain','running','completed','failed','canceled_confirmed']),
  projectId:Id.optional(),taskId:z.string().optional(),epoch:z.number().int().positive().optional(),
  exitCode:z.number().int().optional(),logSha256:z.string().regex(/^[a-f0-9]{64}$/).optional()}).passthrough();
 export interface RemoteTransport {exchange(host:RemoteHost,request:object):Promise<unknown>}
@@ -67,13 +67,13 @@ export class RemoteOperations{
    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES(NULL,'remote.host.registered',$1)",[{projectId,hostId:host.id}]);
   });
  }
- async start(principal:string,request:{operationId:string;contextId:string;hostId:string;taskId:string},authority:Authority){
-  const input=z.object({operationId:Id,contextId:Id,hostId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)}).strict().parse(request);
+ async start(principal:string,request:{operationId:string;intentId:string;contextId:string;hostId:string;taskId:string},authority:Authority){
+  const input=z.object({operationId:Id,intentId:Id,contextId:Id,hostId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)}).strict().parse(request);
   const admitted=await this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,input.contextId);
    if(input.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
    await this.ledger.fence(c,authority);
-   if((await c.query("SELECT 1 FROM ac_plan_cancellations WHERE context_id=$1 AND state='requested'",[authority.contextId])).rowCount)throw new Refusal('PLAN_CANCELLATION_REQUESTED');
+   await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR UPDATE',[input.hostId,context.project_id])).rows[0];
    if(!host||!host.allowed_tasks.includes(input.taskId))throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
    const hash=digest(input);
@@ -81,16 +81,16 @@ export class RemoteOperations{
    if(prior){if(prior.request_digest!==hash)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');return {host,projectId:context.project_id,existing:prior};}
    const active=Number((await c.query("SELECT count(*) n FROM ac_remote_operations WHERE host_id=$1 AND state NOT IN ('completed','failed','canceled_confirmed')",[input.hostId])).rows[0].n);
    if(active>=host.max_concurrent)throw new Refusal('REMOTE_HOST_BUSY');
-   await c.query("INSERT INTO ac_remote_operations(id,context_id,host_id,task_id,request_digest,manager_epoch,state) VALUES($1,$2,$3,$4,$5,$6,'uncertain')",
-    [input.operationId,input.contextId,input.hostId,input.taskId,hash,authority.epoch]);
+   await c.query("INSERT INTO ac_remote_operations(id,context_id,host_id,task_id,request_digest,manager_epoch,state,intent_id) VALUES($1,$2,$3,$4,$5,$6,'uncertain',$7)",
+    [input.operationId,input.contextId,input.hostId,input.taskId,hash,authority.epoch,input.intentId]);
    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'remote.operation.registered',$2)",
-    [input.contextId,{operationId:input.operationId,hostId:input.hostId,taskId:input.taskId}]);
+    [input.contextId,{operationId:input.operationId,intentId:input.intentId,hostId:input.hostId,taskId:input.taskId}]);
    return {host,projectId:context.project_id,existing:null};
   });
   if(admitted.existing)return this.reconcile(principal,input.operationId,authority);
   return this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);
-   if((await c.query("SELECT 1 FROM ac_plan_cancellations WHERE context_id=$1 AND state='requested'",[authority.contextId])).rowCount)throw new Refusal('PLAN_CANCELLATION_REQUESTED');
+   await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
    const response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,
@@ -98,7 +98,7 @@ export class RemoteOperations{
    if(response.operationId!==input.operationId)throw new Refusal('REMOTE_RECEIPT_ID_MISMATCH');
    if(response.state==='unknown')throw new Refusal('REMOTE_START_UNCERTAIN');
    if(response.projectId!==admitted.projectId||response.taskId!==input.taskId||response.epoch!==authority.epoch)throw new Refusal('REMOTE_RECEIPT_SCOPE_MISMATCH');
-   if(['completed','failed'].includes(response.state)&&(response.exitCode===undefined||response.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');
+   if(['completed','failed','canceled_confirmed'].includes(response.state)&&(response.exitCode===undefined||response.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');
    if((response.state==='completed'&&response.exitCode!==0)||(response.state==='failed'&&response.exitCode===0))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INVALID');
    await c.query('UPDATE ac_remote_operations SET state=$2,remote_receipt=$3 WHERE id=$1',[input.operationId,response.state,response]);
    return response;
@@ -114,10 +114,39 @@ export class RemoteOperations{
    const result=Reply.parse(await this.transport.exchange(host,{schemaVersion:1,action:'inspect',operationId}));
    if(result.operationId!==operationId)throw new Refusal('REMOTE_RECEIPT_ID_MISMATCH');
    if(result.state!=='unknown'&&(result.projectId!==host.project_id||result.taskId!==op.task_id||result.epoch!==Number(op.manager_epoch)))throw new Refusal('REMOTE_RECEIPT_SCOPE_MISMATCH');
-   if(['completed','failed'].includes(result.state)&&(result.exitCode===undefined||result.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');
+   if(['completed','failed','canceled_confirmed'].includes(result.state)&&(result.exitCode===undefined||result.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');
    if((result.state==='completed'&&result.exitCode!==0)||(result.state==='failed'&&result.exitCode===0))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INVALID');
    await c.query('UPDATE ac_remote_operations SET state=$2,remote_receipt=$3 WHERE id=$1',[operationId,result.state==='unknown'?'uncertain':result.state,result]);
    return result;
   });
+ }
+ async cancel(principal:string,operationId:string,authority:Authority){
+  return this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
+   const op=(await c.query('SELECT * FROM ac_remote_operations WHERE id=$1 AND context_id=$2 FOR UPDATE',[Id.parse(operationId),authority.contextId])).rows[0];
+   if(!op)throw new Refusal('REMOTE_OPERATION_FORBIDDEN',403);
+   if(!op.intent_id)throw new Refusal('REMOTE_LEGACY_CANCELLATION_UNBOUND');
+   if(!(await c.query('SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND context_id=$2',[op.intent_id,authority.contextId])).rowCount)
+    throw new Refusal('SIGNED_PLAN_CANCELLATION_REQUIRED',403);
+   if(['completed','failed','canceled_confirmed'].includes(op.state))return op.remote_receipt;
+   const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1',[op.host_id])).rows[0];
+   const result=Reply.parse(await this.transport.exchange(host,{schemaVersion:1,action:'cancel',operationId,
+    projectId:host.project_id,taskId:op.task_id,epoch:Number(op.manager_epoch)}));
+   if(result.operationId!==operationId)throw new Refusal('REMOTE_RECEIPT_ID_MISMATCH');
+   if(result.state!=='unknown'&&(result.projectId!==host.project_id||result.taskId!==op.task_id||result.epoch!==Number(op.manager_epoch)))throw new Refusal('REMOTE_RECEIPT_SCOPE_MISMATCH');
+   if(['completed','failed','canceled_confirmed'].includes(result.state)&&(result.exitCode===undefined||result.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');
+   if((result.state==='completed'&&result.exitCode!==0)||(result.state==='failed'&&result.exitCode===0))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INVALID');
+   await c.query('UPDATE ac_remote_operations SET state=$2,remote_receipt=$3 WHERE id=$1',[operationId,result.state==='unknown'?'uncertain':result.state,result]);
+   return result;
+  });
+ }
+ async reconcileCancellationRequests(principal:string,authority:Authority){
+  const operations=await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   return (await c.query(`SELECT r.id FROM ac_remote_operations r JOIN ac_plan_cancellations k ON k.intent_id=r.intent_id
+    WHERE r.context_id=$1 AND k.state='requested' AND r.state NOT IN ('completed','failed','canceled_confirmed') ORDER BY r.created_at`,[authority.contextId])).rows;
+  });
+  for(const operation of operations)await this.cancel(principal,operation.id,authority);
  }
 }

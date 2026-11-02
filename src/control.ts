@@ -141,6 +141,8 @@ export class Control {
     FROM ac_artifacts a JOIN ac_execution_contracts x ON x.intent_id=a.intent_id
     JOIN ac_quality_policies p ON p.project_id=a.project_id AND p.revision=a.policy_revision
     WHERE a.context_id=$1 AND p.snapshot->>'requireHumanIntegration'='true' ORDER BY a.id LIMIT 100`,[contextId])).rows;
+   const remoteOperations=(await c.query(`SELECT r.id,r.intent_id,r.task_id,r.state,h.label host_label
+    FROM ac_remote_operations r JOIN ac_remote_hosts h ON h.id=r.host_id WHERE r.context_id=$1 ORDER BY r.created_at DESC LIMIT 100`,[contextId])).rows;
    const qualityPolicies=(await c.query('SELECT revision,snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const templates=(await c.query('SELECT revision,snapshot,digest FROM ac_context_templates WHERE context_id=$1 ORDER BY revision',[contextId])).rows;
    const canConfigureCapacity=context.role!=='viewer'&&!!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
@@ -152,7 +154,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,profiles,catalog,policies,grants,plans,approvals,canApproveIntegration:context.role==='owner'};
+    accounts,profiles,catalog,policies,grants,plans,approvals,remoteOperations,canApproveIntegration:context.role==='owner'};
   });
  }
 }

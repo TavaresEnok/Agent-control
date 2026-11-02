@@ -31,7 +31,9 @@ test('two pinned SSH hosts reconcile detached work, lost ack and paused takeover
    await remote.registerHost(principal,project,{id:hosts[i],label:'Synthetic host '+name,hostname:'ssh-host-'+name,port:2222,username:'node',
     publicKey,fingerprint,credentialRef,remoteRoot:'/projects/repo',allowedTasks:['fixture','slow','count'],maxConcurrent:2});
   }
-  const op=randomUUID(),request={operationId:op,contextId:context,hostId:hosts[0],taskId:'fixture'};
+  const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,
+   action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:ssh-fixture'}},authority,'api');
+  const op=randomUUID(),request={operationId:op,intentId:intent.id,contextId:context,hostId:hosts[0],taskId:'fixture'};
   await assert.rejects(remote.start(principal,request,authority),/REMOTE_TRANSPORT_UNCERTAIN/);
   assert.equal((await db.pool.query('SELECT state FROM ac_remote_operations WHERE id=$1',[op])).rows[0].state,'uncertain');
   let done:any;

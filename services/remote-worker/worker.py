@@ -54,6 +54,12 @@ def execute(config_path, operation):
         item = json.loads(record.read_text())
         if item['state'] != 'uncertain':
             return
+        cancel_path = root / (operation + '.cancel.json')
+        if cancel_path.exists():
+            item.update(state='canceled_confirmed', exitCode=0, canceledWithoutStart=True,
+                        logSha256=hashlib.sha256(b'').hexdigest(), finishedAt=time.time())
+            atomic(record, item)
+            return
         project = item['projectId']
         directory = pathlib.Path(config['projects'][project]).resolve(strict=True)
         if str(directory) != item['root'] or not directory.is_dir():
@@ -88,19 +94,28 @@ def execute(config_path, operation):
             item.update(state='running', pid=child.pid, startTime=observed_start,
                         bootId=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
             atomic(record, item)
-            timed_out = False
-            try:
-                code = child.wait(timeout=max_seconds)
-            except subprocess.TimeoutExpired:
-                timed_out = True
+            timed_out, canceled = False, False
+            deadline = time.monotonic() + max_seconds
+            while True:
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                code = child.wait()
+                    code = child.wait(timeout=min(.25, max(.01, deadline - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    canceled = cancel_path.exists()
+                    timed_out = time.monotonic() >= deadline
+                    if not canceled and not timed_out:
+                        continue
+                    # Only the owning parent signals its unreaped child's group.
+                    # RPC never signals a PID copied from historical state.
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    code = child.wait()
+                    break
             log.flush()
             os.fsync(log.fileno())
-        item.update(state='completed' if code == 0 else 'failed', exitCode=code, timedOut=timed_out,
+        item.update(state='canceled_confirmed' if canceled else 'completed' if code == 0 else 'failed', exitCode=code, timedOut=timed_out,
                     logSha256=hashlib.sha256(log_path.read_bytes()).hexdigest(), finishedAt=time.time())
         atomic(record, item)
 
@@ -116,6 +131,21 @@ def rpc(config_path):
     operation = str(uuid.UUID(request['operationId']))
     record = operation_path(root, operation)
     action = request.get('action')
+    if action == 'cancel':
+        if set(request) != {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'epoch'}:
+            raise ValueError('INVALID_REQUEST')
+        with open(root / (operation + '.admission.lock'), 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not record.exists():
+                return {'schemaVersion': 1, 'operationId': operation, 'state': 'unknown'}
+            item = json.loads(record.read_text())
+            if (item['projectId'] != request['projectId'] or item['taskId'] != request['taskId']
+                    or type(request['epoch']) is not int or item['epoch'] != request['epoch']):
+                raise ValueError('CANCELLATION_SCOPE_MISMATCH')
+            if item['state'] in ('completed', 'failed', 'canceled_confirmed'):
+                return item
+            atomic(root / (operation + '.cancel.json'), {'operationId': operation, 'requestedAt': time.time()})
+            return {**item, 'cancellationRequested': True}
     if action == 'inspect':
         if set(request) != {'schemaVersion', 'operationId', 'action'}:
             raise ValueError('INVALID_REQUEST')

@@ -20,6 +20,7 @@ import { Template } from './templates.ts';
 import {IsolatedImplementation} from './isolated-implementation.ts';
 import {IsolatedVerification} from './isolated-verification.ts';
 import {Cancellations} from './cancellation.ts';
+import type {RemoteOperations} from './remote.ts';
 export { baselineWorkflow } from './workflows.ts';
 
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
@@ -48,8 +49,9 @@ export class CezarRuntime {
   private running = true;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
-    private readonly isolated?:IsolatedImplementation) {
+    private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations) {
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
+    if(remote&&remote.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     this.capacity = new Capacity(ledger);
     this.semaphore=new WorkspaceSemaphore({initial:{maxParallel:1,memoryLimitMb:null,autoResumeOnUsageLimit:false},load:async()=>{
       const config=(await ledger.pool.query('SELECT programming_limit,evaluation_limit FROM ac_capacity_config WHERE id=1')).rows[0];
@@ -203,12 +205,17 @@ export class CezarRuntime {
     this.budgetRefresh=this.semaphore.refresh();
     try{await this.budgetRefresh;this.budgetRefreshAt=Date.now();}finally{this.budgetRefresh=undefined;}
   }
-  async reconcileCancellations(authority:Authority){
+  async reconcileCancellations(authority:Authority,principal?:string){
     if(!this.running||!this.lock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
     const service=new Cancellations(this.ledger);
     await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     if(this.isolated){
       await service.reconcileSandbox(authority,this.isolated.client);
+      await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    }
+    if(this.remote){
+      if(!principal)throw new Refusal('REMOTE_PRINCIPAL_REQUIRED');
+      await this.remote.reconcileCancellationRequests(principal,authority);
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     }
   }

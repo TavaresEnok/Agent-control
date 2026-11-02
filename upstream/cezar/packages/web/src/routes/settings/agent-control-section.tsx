@@ -17,6 +17,7 @@ const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlapping
  observed_at:z.string().nullable()}))})
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
+ remoteOperations:z.array(z.object({id:z.string().uuid(),intent_id:z.string().uuid().nullable(),task_id:z.string(),state:z.string(),host_label:z.string()})),
  capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
@@ -107,6 +108,12 @@ export function AgentControlSection(){
   {data&&data.approvals.length>0&&<SettingsField title="Integrações com aprovação humana" hint="A aprovação vale somente para o commit, árvore, base e política exibidos. QA e revisão continuam obrigatórios.">
    {data.approvals.map(artifact=><AgentControlIntegrationApproval key={artifact.id} contextId={contextId} artifact={artifact}
     canApprove={data.canApproveIntegration} busy={busy} onApprove={payload=>mutate.mutate({action:'integration.approve',payload})}/>)}
+  </SettingsField>}
+  {data&&data.remoteOperations.length>0&&<SettingsField title="Operações remotas" hint="Resultado incerto não confirma conclusão nem parada. Cancelamento atua pelo plano correspondente.">
+   {data.remoteOperations.map(operation=><div key={operation.id} className="rounded-md border p-2 text-sm">
+    <p>{operation.host_label} · {operation.task_id} · {operation.state}</p>
+    {!operation.intent_id&&<p role="status">Operação antiga sem vínculo com plano; exige reconciliação conservadora.</p>}
+   </div>)}
   </SettingsField>}
   {identity.error&&<p role="alert">{identity.error.message}</p>}
   {identity.data&&<SettingsField title="Dispositivo de administração" hint="A chave privada permanece neste navegador. O administrador precisa autorizar a chave pública antes da primeira alteração.">
