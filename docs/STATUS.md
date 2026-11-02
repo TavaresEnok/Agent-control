@@ -115,3 +115,5 @@ Uma recusa por reserva desnecessária limpa a seleção de perfil da espera; ela
 O relay da conversa trata esse novo motivo como espera de capacidade, preservando a projeção dos runs e a entrega de mensagens já persistidas em vez de encerrar o ciclo de supervisão.
 
 O pedido de parada do broker passou a consultar o contêiner após a parada; se houver recibo físico terminal, usa a mesma reconciliação que confirma o resultado e libera a concessão. Na ausência de contêiner ou confirmação, permanece incerto. O typecheck e o probe de isolamento passaram após a alteração (`sandbox-stop-reconcile-20261102.log`); não houve teste de interrupção de um worker lento nesta rodada.
+
+Os contêineres da bancada `deploy/compose.lab.yml` foram parados após as verificações, preservando seus volumes e recibos para continuidade. Nenhum serviço operacional foi reiniciado ou alterado. A continuação mais importante ainda aberta é retomar o grafo nativo do Cezar após reconciliar uma etapa física; a reconciliação do artefato já existe, mas não promove automaticamente os nós seguintes.
