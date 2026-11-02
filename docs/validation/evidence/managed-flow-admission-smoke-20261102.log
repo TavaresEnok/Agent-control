@@ -1,0 +1,34 @@
+TAP version 13
+# Subtest: three admitted native workflows progress beyond standalone cap while PG still limits workers
+ok 1 - three admitted native workflows progress beyond standalone cap while PG still limits workers
+  ---
+  duration_ms: 1099.94823
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then resume preserves implementation identity
+ok 2 - human pause holds the next native node, then resume preserves implementation identity
+  ---
+  duration_ms: 3348.524859
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then cancel preserves implementation identity
+ok 3 - human pause holds the next native node, then cancel preserves implementation identity
+  ---
+  duration_ms: 1239.884454
+  type: 'test'
+  ...
+# Subtest: human pause holds the next native node, then approve preserves implementation identity
+ok 4 - human pause holds the next native node, then approve preserves implementation identity
+  ---
+  duration_ms: 4106.800386
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 13139.273144

@@ -197,15 +197,15 @@
   {
     "id": "RF-16",
     "normative_row": "RF-16\tP0\tExecutar tarefas independentes em paralelo e serializar dependências e integrações incompatíveis\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-flow-admission-smoke-20261102.log",
+    "files": "src/cezar.ts;src/engineering.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-parallel.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Three admitted native workflows cross the former two-flow cap; waits reuse native slots and PG remains physical authority. No real-provider throughput or full dependency/fork/join acceptance yet."
   },
   {
     "id": "RF-17",

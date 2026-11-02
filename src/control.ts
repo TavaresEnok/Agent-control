@@ -90,6 +90,9 @@ export class Control {
         [command.payload.intentId,command.contextId,principal,command.payload.planRevision]);
        await c.query("UPDATE ac_intents SET state='cancellation_requested' WHERE id=$1",[command.payload.intentId]);
       }
+      // A canceled attempt must not remain the FIFO head for other work.
+      // Remove only admission waits, never its running/uncertain grants.
+      await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[command.payload.intentId]);
       result={intentId:command.payload.intentId,cancellationState:prior?.state??'requested'};break;
      }
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;

@@ -49,6 +49,7 @@ export class Cancellations{
     WHERE x.context_id=$1 AND x.state='requested' FOR UPDATE OF x`,[authority.contextId])).rows;
    for(const request of requests){
     cancelNative(request.run_id);
+    await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[request.intent_id]);
     // Reserved capacity can be returned only when its owner never persisted
     // launch preparation and no broker/remote job exists. Unknown effects hold it.
     await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$2

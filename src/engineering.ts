@@ -11,7 +11,8 @@ import { Quality,QualityPolicy, type VerificationReceipt } from './quality.ts';
 import { Integrator } from './integration.ts';
 import {IsolatedVerification} from './isolated-verification.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
-export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification};
+export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;
+ onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void};
 const nodeSchema=z.enum(['qa','review','judge','integrate']);
 function artifactId(intentId:string,commit:string){const h=digest({domain:'artifact-v1',intentId,commit});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function reviewSession(parent:string,index:number){const h=digest({domain:'review-session-v1',parent,index});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
@@ -31,6 +32,7 @@ export class EngineeringStages{
   const node=nodeSchema.parse(nodeId),sessionId=z.uuid().parse(spec.sessionId);
   let child:ChildProcess|undefined,open=true,canceled=false;
   const nested=new Set<AgentSession>();
+  const admissionWait=(reason:string|null)=>{const runId=spec.env?.CEZ_TASK_ID;if(runId)this.options.onAdmissionWait?.(runId,`stage:${node}:${sessionId}`,reason);};
   const result=(async()=>{
    if(!this.running)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
    const contract=await this.ledger.tx(async c=>{
@@ -92,8 +94,14 @@ export class EngineeringStages{
    });
    if(Number(stage.manager_epoch)!==authority.epoch)throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
    if(stage.state==='completed'){
-    if(stage.receipt?.verification)await this.options.quality.record(principal,stage.receipt.verification,stage.receipt.signature,authority);
-    if(stage.receipt?.integration?.status==='rejected')throw new Refusal('INTEGRATION_REJECTED');
+    if(node==='integrate'){
+     if(stage.receipt?.integration?.status!=='integrated')throw new Refusal('INTEGRATION_REJECTED');
+    }else{
+     const expected=node==='review'?'review':node;
+     if(stage.receipt?.verification?.kind!==expected)throw new Refusal('VERIFICATION_RECEIPT_MISSING');
+     await this.options.quality.record(principal,stage.receipt.verification,stage.receipt.signature,authority);
+     if(stage.receipt.verification.status!=='passed'||stage.receipt.verification.exitCode!==0)throw new Refusal('VERIFICATION_FAILED');
+    }
     return {text:`Recorded ${node} result ${stage.id}`,toolCalls:[],tokensUsed:0};
    }
    if(stage.state!=='registered')throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
@@ -110,9 +118,10 @@ export class EngineeringStages{
     let integration:Awaited<ReturnType<typeof prepare>>,announced=false;
     for(;;){
      if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
-     try{integration=await prepare();break;}
+     try{integration=await prepare();admissionWait(null);break;}
      catch(error){
       if(!(error instanceof Refusal)||!['INTEGRATION_APPROVAL_REQUIRED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+      admissionWait(error.code);
       if(!announced){onEvent?.({type:'text',text:'Integration is waiting for an authorized approval or admission. No Git effect started.'});announced=true;}
       await new Promise(resolve=>setTimeout(resolve,1000));
      }
@@ -131,9 +140,10 @@ export class EngineeringStages{
     let grant:Awaited<ReturnType<typeof reserve>>;let waitReason:string|undefined;
     for(;;){
      if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
-     try{grant=await reserve();break;}
+     try{grant=await reserve();admissionWait(null);break;}
      catch(error){
       if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+      admissionWait(error.code);
       if(waitReason!==error.code){onEvent?.({type:'text',text:`Stage ${node} waiting: ${error.code}. No verifier launched.`});waitReason=error.code;}
       await new Promise(resolve=>setTimeout(resolve,1000));
      }
@@ -231,7 +241,7 @@ export class EngineeringStages{
    }
    const text=`Synthetic ${node} completed for artifact ${artifact.id}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
    return {text,toolCalls:[],tokensUsed:0};
-  })().finally(()=>{open=false;});
+  })().finally(()=>{open=false;admissionWait(null);});
   return {result,get open(){return open;},get pid(){return child?.pid;},sendMessage(){return false;},end(){},interrupt(){canceled=true;stop(child);for(const reviewer of nested)reviewer.interrupt();},hardStop(){canceled=true;stop(child);for(const reviewer of nested)reviewer.hardStop?.();}};
  }
  close(){this.running=false;for(const child of this.children)stop(child);this.options.isolatedVerification?.close();}

@@ -25,6 +25,9 @@ test('signed cancellation blocks effects and confirms only never-started or phys
    const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',
     payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:cancellation-fixture'}},authority,'api');
    const grant=await fixture.service.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId,role:'programmer'},authority);
+   await fixture.service.observeQuota(principal,grant.account_id,{status:'exhausted',source:'synthetic://cancel-wait-fixture',ttlSeconds:3600});
+   await assert.rejects(fixture.service.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId,role:'programmer'},authority),/NO_ELIGIBLE_CAPACITY/);
+   await fixture.service.observeQuota(principal,grant.account_id,{status:'available',source:'synthetic://cancel-wait-fixture',ttlSeconds:3600});
    await db.pool.query('UPDATE ac_operations SET grant_id=$2 WHERE id=$1',[intent.operation_id,grant.id]);
    if(uncertain){
     await db.pool.query("UPDATE ac_operations SET state='uncertain' WHERE id=$1",[intent.operation_id]);
@@ -35,6 +38,7 @@ test('signed cancellation blocks effects and confirms only never-started or phys
    const wrong={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,planRevision:intent.plan_revision+1}};
    await assert.rejects(control.execute(principal,wrong,proof(wrong)),/PLAN_REVISION_MISMATCH/);
    const result=await control.execute(principal,command,proof(command));
+   assert.equal((await db.pool.query('SELECT count(*) n FROM ac_capacity_waits WHERE intent_id=$1',[intent.id])).rows[0].n,'0','canceled waits cannot strand the FIFO while physical work remains uncertain');
    assert.deepEqual(await control.execute(principal,{...command,deliveryAttemptId:randomUUID()},proof(command)),result);
    await assert.rejects(fixture.service.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId,role:'programmer'},authority),/PLAN_CANCELLATION_REQUESTED/);
    await service.reconcile(authority,()=>{cancelCalls++;});

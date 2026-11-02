@@ -15,6 +15,7 @@ updates = {
     'RF-09': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-control-20261102.log', 'src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx', 'Global/context revisions and wait states displayed; complete per-profile choice explanations and mobile acceptance pending.'),
     'RF-42': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx;src/capacity.ts', 'Loaded revision retained and stale UI submission blocked until reload; full concurrent browser-to-PG and rollback acceptance pending.'),
     'RF-11': ('docs/validation/evidence/original-reserve-global-20261102.log', 'src/capacity.ts;tests/capacity.test.ts', 'Global original-account reserve admission tested with synthetic quotas; live providers and safe transition of running tasks remain open.'),
+    'RF-16': ('docs/validation/evidence/managed-flow-admission-smoke-20261102.log', 'src/cezar.ts;src/engineering.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-parallel.test.ts', 'Three admitted native workflows cross the former two-flow cap; waits reuse native slots and PG remains physical authority. No real-provider throughput or full dependency/fork/join acceptance yet.'),
     'RF-18': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/engineering.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Independent synthetic verifier sessions in separate containers; real model reviews and provider accounts remain unverified.'),
     'RF-22': ('docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts', 'Native graph resumes after interrupted synthetic implementation; recovery of other nodes and real providers remains open.'),
     'RF-23': ('docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts', 'Controller SIGKILL after physical implementation result, successor reconciliation and native DAG continuation tested; other crash positions remain open.'),
@@ -42,7 +43,7 @@ for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 27
+assert len(rows) == 111 and len(updates) == 28
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()

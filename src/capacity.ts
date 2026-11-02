@@ -206,7 +206,8 @@ export class Capacity {
         JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
         JOIN ac_intents i ON i.id=w.intent_id
         JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
-        WHERE p.account_id=$1 AND p.enabled AND i.state NOT IN ('done','review','failed','canceled') AND NOT x.paused
+        WHERE p.account_id=$1 AND p.enabled AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused
+        AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id)
         AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
         ORDER BY w.priority DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
       if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}

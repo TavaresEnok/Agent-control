@@ -6,6 +6,7 @@ import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import { RunManager } from '../upstream/cezar/packages/cezar/dist/workflows/run.js';
+import {WorkspaceSemaphore} from '../upstream/cezar/packages/cezar/dist/workspace/semaphore.js';
 import { RunStore } from '../upstream/cezar/packages/cezar/dist/runs/store.js';
 import { createApp } from '../upstream/cezar/packages/cezar/dist/server/server.js';
 import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/dist/core/runner-factory.js';
@@ -41,17 +42,28 @@ export class CezarRuntime {
   private readonly children = new Set<ChildProcess>();
   private readonly recovering = new Set<string>();
   private readonly recoveryAt = new Map<string,number>();
+  private readonly semaphore:WorkspaceSemaphore;
+  private budgetRefresh:Promise<void>|undefined;
+  private budgetRefreshAt=0;
   private running = true;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
     private readonly isolated?:IsolatedImplementation) {
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     this.capacity = new Capacity(ledger);
+    this.semaphore=new WorkspaceSemaphore({initial:{maxParallel:1,memoryLimitMb:null,autoResumeOnUsageLimit:false},load:async()=>{
+      const config=(await ledger.pool.query('SELECT programming_limit,evaluation_limit FROM ac_capacity_config WHERE id=1')).rows[0];
+      if(!config)throw new Refusal('CAPACITY_NOT_CONFIGURED');
+      // Native flow slots must not silently impose the standalone default of
+      // two. Physical workers still require transactional per-role PG grants.
+      return {maxParallel:config.programming_limit+config.evaluation_limit,memoryLimitMb:null,autoResumeOnUsageLimit:false};
+    }});
     this.engineering=engineeringOptions?new EngineeringStages(ledger,projectId,{...engineeringOptions,
+      onAdmissionWait:(runId,key,reason)=>{this.manager.setManagedAdmissionWait(runId,key,reason);},
       ...(isolated?{isolatedVerification:new IsolatedVerification(ledger,isolated.client)}:{})}):undefined;
     this.store = RunStore.open(join(repo, '.ai/cezar'), { keepLive: true });
     requireManagedRunnerBoundary();
-    this.manager = new RunManager(this.store, repo, { managed: {
+    this.manager = new RunManager(this.store, repo, { semaphore:this.semaphore,managed: {
       authorizeStart: (workflow, input) => {
         if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
         const current = this.invocation.getStore();
@@ -83,9 +95,10 @@ export class CezarRuntime {
       },
     } });
     this.native = createApp({ repoRoot: repo, store: this.store, manager: this.manager,
-      bootProjectId: projectId, version: 'agent-control-0.1.0' });
+      bootProjectId: projectId, semaphore:this.semaphore,version: 'agent-control-0.1.0' });
   }
   async start() {
+    await this.refreshSchedulerBudget();
     const c = await this.ledger.pool.connect();
     const r = await c.query('SELECT pg_try_advisory_lock(hashtextextended($1,1)) AS ok', [this.repo]);
     if (!r.rows[0].ok) { c.release(); throw new Refusal('RUNTIME_ALREADY_ACTIVE'); }
@@ -101,6 +114,7 @@ export class CezarRuntime {
   }
   async dispatch(intent: Intent, authority: Authority) {
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    await this.refreshSchedulerBudget();
     const workflow=workflowFor(intent.command.payload.workflow);
     if(workflow.name==='engineering-synthetic-v1'&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
     const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
@@ -171,18 +185,23 @@ export class CezarRuntime {
           if(!intent)throw new Refusal('INTENT_MISSING');
           await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
         });
-        if(waiting){this.store.updateRun(runId,{status:'running',error:undefined});this.store.flush({throwOnError:true});}
+        if(waiting)this.manager.setManagedAdmissionWait(runId,'context-admission',null);
         return;
       }catch(error){
         if(error instanceof Refusal&&error.code==='PLAN_CANCELLATION_REQUESTED'){this.manager.cancel(runId);return;}
         if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
         if(!waiting){
-          this.store.updateRun(runId,{status:'waiting',error:`Managed admission waiting before ${nodeId}`});
-          this.store.flush({throwOnError:true});waiting=true;
+          this.manager.setManagedAdmissionWait(runId,'context-admission',`${error.code} before ${nodeId}`);waiting=true;
         }
         await new Promise(resolve=>setTimeout(resolve,250));
       }
     }
+  }
+  private async refreshSchedulerBudget(){
+    if(this.budgetRefresh)return this.budgetRefresh;
+    if(Date.now()-this.budgetRefreshAt<1000)return;
+    this.budgetRefresh=this.semaphore.refresh();
+    try{await this.budgetRefresh;this.budgetRefreshAt=Date.now();}finally{this.budgetRefresh=undefined;}
   }
   async reconcileCancellations(authority:Authority){
     if(!this.running||!this.lock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');

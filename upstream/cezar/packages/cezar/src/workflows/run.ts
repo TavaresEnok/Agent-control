@@ -1354,6 +1354,7 @@ export class RunManager {
   // timeout already bounds how long a session can sit open. Invariant:
   // `waiting ⊆ active` — always cleared together via dropActive().
   private readonly waiting = new Set<string>();
+  private readonly managedAdmissionWaits = new Map<string,Map<string,string>>();
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
   /**
@@ -1612,6 +1613,7 @@ export class RunManager {
     this.holdDeadlines.clear();
     this.active.clear();
     this.waiting.clear();
+    this.managedAdmissionWaits.clear();
     // The monitoring subsets are cleared with `waiting`, whose subset they are: a disposed
     // manager holds no slots and must not keep claiming exemptions for runs it no longer owns.
     this.monitoring.clear();
@@ -2622,6 +2624,33 @@ export class RunManager {
     return true;
   }
 
+  /** Managed admission waits reuse the native waiting-slot exemption. The
+   * graph/session stays owned here; external capacity remains authoritative.
+   * Keys keep parallel council members from clearing each other's waits. */
+  setManagedAdmissionWait(runId:string,key:string,reason:string|null):boolean {
+    const state=this.active.get(runId),run=this.store.getRun(runId);
+    if(!this.managed||!state||state.cancelled||!run||run.askParked||run.attentionRequest)return false;
+    const reasons=this.managedAdmissionWaits.get(runId)??new Map<string,string>();
+    if(reason===null)reasons.delete(key);else reasons.set(key,reason);
+    if(reasons.size){
+      this.managedAdmissionWaits.set(runId,reasons);
+      this.waiting.add(runId);this.clearIdleTimer(state);
+      const message=`Managed admission waiting: ${[...new Set(reasons.values())].join(', ')}`;
+      if(run.status!=='waiting'||run.error!==message){
+        this.store.updateRun(runId,{status:'waiting',error:message});
+        this.store.appendEvent(runId,{type:'note',message});
+        this.store.flush({throwOnError:true});
+      }
+      this.releaseSlot();
+    }else if(this.managedAdmissionWaits.delete(runId)){
+      this.waiting.delete(runId);
+      this.store.updateRun(runId,{status:'running',error:undefined});
+      this.store.appendEvent(runId,{type:'note',message:'Managed admission available — continuing the same session'});
+      this.store.flush({throwOnError:true});
+    }
+    return true;
+  }
+
   /**
    * Swap a dequeued run's snapshot for the catalog's current definition when it changed while the
    * run was queued (#1078; see `newerCatalogWorkflow` for which runs qualify). The record follows
@@ -2704,6 +2733,7 @@ export class RunManager {
     if (state?.cancellationTimer) clearTimeout(state.cancellationTimer);
     if (state) state.cancellationTimer = undefined;
     this.waiting.delete(runId);
+    this.managedAdmissionWaits.delete(runId);
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
