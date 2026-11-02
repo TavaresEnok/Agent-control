@@ -2596,6 +2596,32 @@ export class RunManager {
     void this.pump();
   }
 
+  /** Resume only a managed agent node whose external effect the controller has
+   * authoritatively reconciled. The injected runner must replay its receipt, never
+   * launch that effect again. No standalone or active run can enter this path. */
+  async resumeConfirmedNode(runId: string): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    if (!this.managed || !run || this.active.has(runId) || this.starting.has(runId)
+        || this.queue.includes(runId) || run.status !== 'waiting'
+        || run.error !== 'Managed execution awaiting authoritative reconciliation'
+        || run.askParked || run.attentionRequest) return false;
+    const cursor = run.graphState?.cursor;
+    const graph = run.workflowDef ? (run.workflowDef.graph ?? compileV1(run.workflowDef.steps)) : undefined;
+    if (!cursor || !graph?.nodes.some(node => node.id === cursor && node.type === 'agent')) return false;
+    if (!await this.managed.authorizeRecovery?.(run)) return false;
+    for (const step of run.steps) {
+      if (step.status === 'running' || step.status === 'waiting')
+        this.store.updateStep(runId, step.id, {status: 'pending'});
+    }
+    this.store.updateRun(runId, {status: 'queued', error: undefined, currentStepId: undefined,
+      startedAt: undefined, finishedAt: undefined, activity: undefined});
+    this.store.flush({throwOnError: true});
+    const requeued = this.store.getRun(runId);
+    if (requeued) await this.reviveQueuedRun(requeued, `managed result reconciled — resuming at "${cursor}"`);
+    void this.pump();
+    return true;
+  }
+
   /**
    * Swap a dequeued run's snapshot for the catalog's current definition when it changed while the
    * run was queued (#1078; see `newerCatalogWorkflow` for which runs qualify). The record follows

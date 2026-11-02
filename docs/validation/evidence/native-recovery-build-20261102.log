@@ -1,0 +1,7 @@
+Scope: compilation of the pinned Cezar backend fork and Agent Control application.
+Command 1: docker compose -f deploy/compose.lab.yml exec -T runtime node upstream/cezar/node_modules/typescript/bin/tsc -p upstream/cezar/packages/cezar/tsconfig.json
+Exit code 1: 0.
+Command 2: docker compose -f deploy/compose.lab.yml exec -T runtime npm run build
+Exit code 2: 0; tsc -p tsconfig.json and prepare-build completed.
+The native recovery tests import the resulting Cezar dist; no manual dist patch was used.
+The red run temporarily disabled only the Agent Control call to the new native recovery method. The source was restored before the final two-test green run.

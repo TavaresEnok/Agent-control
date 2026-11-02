@@ -33,6 +33,26 @@ export class IsolatedImplementation{
   const result=(async()=>{
    const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[intent.id,authority.contextId])).rows[0]?.principal_id;
    if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+   const saved=await this.ledger.tx(async c=>{
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+    const row=(await c.query(`SELECT o.state,o.receipt,o.manager_epoch,g.state grant_state,j.state job_state,j.receipt job_receipt
+      FROM ac_operations o JOIN ac_intents i ON i.id=o.intent_id
+      LEFT JOIN ac_capacity_grants g ON g.id=o.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=o.id
+      WHERE o.id=$1 AND i.id=$2 AND i.context_id=$3 AND i.run_id=$4 FOR UPDATE OF o`,
+      [intent.operation_id,intent.id,authority.contextId,intent.run_id])).rows[0];
+    if(row?.state!=='completed')return null;
+    const artifact=Implementation.parse(row.receipt);
+    if(Number(row.manager_epoch)>authority.epoch||artifact.operationId!==intent.operation_id||row.grant_state!=='released'||
+      row.job_state!=='completed'||!row.job_receipt?.implementation||digest(row.job_receipt.implementation)!==digest(artifact))throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
+    if(!this.active||canceled)throw new Refusal('STAGE_CANCELED');
+    if(await git(spec.cwd,['rev-parse','HEAD'])!==artifact.commit||await git(spec.cwd,['rev-parse','HEAD^{tree}'])!==artifact.tree)
+     throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
+    return artifact;
+   });
+   if(saved){
+    const text=`Reconciled isolated result replayed: ${saved.commit}`;
+    onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
+   }
    const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'operation-'));
    try{
     const base=await git(spec.cwd,['rev-parse','HEAD']);const bundlePath=join(temporary,'source.bundle');

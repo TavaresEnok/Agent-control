@@ -278,12 +278,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
-    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log",
+    "files": "src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
+    "limitation": "Native graph resumes after interrupted synthetic implementation; recovery of other nodes and real providers remains open."
   },
   {
     "id": "RF-23",
@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/isolated-successor-recovery-20261102.log",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/engineering.test.ts;tests/broker-recovery.test.ts;tests/isolated-recovery.test.ts",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Lost start acknowledgement, simulated broker restart fencing and successor artifact reconciliation tested; automatic native DAG continuation after crash remains open."
+    "limitation": "Controller SIGKILL after physical implementation result, successor reconciliation and native DAG continuation tested; other crash positions remain open."
   },
   {
     "id": "RF-24",
@@ -1006,12 +1006,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
-    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log",
+    "files": "src/cezar.ts;src/isolated-implementation.ts;tests/native-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
+    "limitation": "Human pause preserved through successor reconciliation of synthetic implementation; full operator/mobile and concurrent pause cases remain open."
   },
   {
     "id": "T07",
@@ -1032,12 +1032,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-graph-recovery-red-20261102.log",
+    "files": "src/cezar.ts;src/isolated-implementation.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Actual controller SIGKILL at one receipt boundary; fallback, cancellation and other node recovery positions remain open."
   },
   {
     "id": "T09",

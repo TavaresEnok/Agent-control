@@ -116,4 +116,12 @@ O relay da conversa trata esse novo motivo como espera de capacidade, preservand
 
 O pedido de parada do broker passou a consultar o contêiner após a parada; se houver recibo físico terminal, usa a mesma reconciliação que confirma o resultado e libera a concessão. Na ausência de contêiner ou confirmação, permanece incerto. O typecheck e o probe de isolamento passaram após a alteração (`sandbox-stop-reconcile-20261102.log`); não houve teste de interrupção de um worker lento nesta rodada.
 
-Os contêineres da bancada `deploy/compose.lab.yml` foram parados após as verificações, preservando seus volumes e recibos para continuidade. Nenhum serviço operacional foi reiniciado ou alterado. A continuação mais importante ainda aberta é retomar o grafo nativo do Cezar após reconciliar uma etapa física; a reconciliação do artefato já existe, mas não promove automaticamente os nós seguintes.
+Os contêineres da bancada `deploy/compose.lab.yml` foram parados após aquela rodada, preservando seus volumes e recibos. A rodada de recuperação nativa abaixo reabriu apenas essa bancada. Nenhum serviço operacional foi reiniciado ou alterado.
+
+## Continuação — retomada do grafo após SIGKILL
+
+Implementada a retomada do mesmo run nativo depois de reconciliar a implementação isolada. `RunManager.resumeConfirmedNode` aceita somente uma execução gerenciada estacionada para reconciliação, sem processo ativo, pergunta ou gate pendente. A autorização transacional confere o gerente, a admissão, a pausa, a definição congelada e os recibos físicos. O heartbeat da conversa solicita essa retomada; o Cezar mantém a fila e o grafo.
+
+Na prova `native-graph-recovery-final-20261102.log`, um controlador filho recebeu SIGKILL depois de concluir o worker físico, antes de devolver seu resultado. O sucessor reconciliou o commit, preservou a pausa sem abrir QA e, após retomada, concluiu QA, duas revisões, juiz e integração do mesmo run. Nenhum novo start de programação foi feito. O caso normal de engenharia também passou nessa execução. A contraprova sem a chamada de continuação falhou com o run em waiting (`native-graph-recovery-red-20261102.log`); depois de restaurar a correção, os dois testes passaram. Backend Cezar e aplicação compilaram.
+
+Decisão e fronteiras: `docs/architecture/ADR-002-RECUPERACAO-NATIVA.md`. A cobertura permanece sintética e restrita à interrupção da implementação antes do QA. Recuperação dos demais nós, pausa concorrente entre nós, isolamento dos verificadores, autenticação/CLIs reais e homologação mobile continuam abertos. As fases completas não foram aprovadas.

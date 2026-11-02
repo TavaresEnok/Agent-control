@@ -1,6 +1,6 @@
 {
   "result": "passed",
-  "tracked_files_scanned": 25717,
+  "tracked_files_scanned": 25725,
   "synthetic_secret_encodings_checked": 2,
   "secret_hits": [],
   "forbidden_paths": [],

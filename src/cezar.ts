@@ -37,6 +37,8 @@ export class CezarRuntime {
   private readonly invocation = new AsyncLocalStorage<{ intent: Intent; authority: Authority }>();
   private readonly authorities = new Map<string, Authority>();
   private readonly children = new Set<ChildProcess>();
+  private readonly recovering = new Set<string>();
+  private readonly recoveryAt = new Map<string,number>();
   private running = true;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
@@ -56,7 +58,25 @@ export class CezarRuntime {
       },
       runnerFactory: () => this.runner(),
       // Active-agent recovery must reconcile physical handles first (I5); never blindly respawn.
-      authorizeRecovery: async () => false,
+      authorizeRecovery: async run => {
+        const current=this.invocation.getStore();
+        if(!current||!this.isolated||!run.workflowDef||run.id!==current.intent.run_id||run.graphState?.cursor!=='implement')return false;
+        return this.ledger.tx(async c=>{
+          await this.ledger.fence(c,current.authority);
+          const bound=(await c.query(`SELECT i.principal_id,i.command,i.plan_revision,o.state,g.state grant_state,j.state job_state,f.digest
+            FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id
+            JOIN ac_capacity_grants g ON g.id=o.grant_id JOIN ac_sandbox_jobs j ON j.id=o.id
+            JOIN ac_frozen_plans f ON f.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id
+            WHERE i.id=$1 AND i.run_id=$2 AND i.context_id=$3 AND x.project_id=$4 AND o.id=$5`,
+            [current.intent.id,run.id,current.authority.contextId,this.projectId,current.intent.operation_id])).rows[0];
+          if(!bound)return false;
+          await this.ledger.authorize(c,bound.principal_id,current.authority.contextId);
+          return bound.state==='completed'&&bound.grant_state==='released'&&bound.job_state==='completed'&&
+            bound.plan_revision===current.intent.plan_revision&&digest(bound.command)===digest(current.intent.command)&&
+            bound.digest===digest(workflowFor(current.intent.command.payload.workflow))&&
+            digest(run.workflowDef)===bound.digest;
+        });
+      },
     } });
     this.native = createApp({ repoRoot: repo, store: this.store, manager: this.manager,
       bootProjectId: projectId, version: 'agent-control-0.1.0' });
@@ -153,6 +173,30 @@ export class CezarRuntime {
     const worktree=await realpath(run.worktreePath);
     if(!worktree.startsWith(root+sep))throw new Refusal('RECOVERY_WORKTREE_FORBIDDEN',403);
     return this.isolated.reconcileExisting(intent,authority,worktree);
+  }
+  /** Rejoin the native graph only after reconciling the interrupted implementation.
+   * Called by the existing conversation heartbeat, never by a second scheduler. */
+  async recoverManaged(authority:Authority){
+    if(!this.isolated||!this.running||!this.lock||this.recovering.has(authority.contextId)||
+       Date.now()-(this.recoveryAt.get(authority.contextId)??0)<1000)return;
+    this.recovering.add(authority.contextId);this.recoveryAt.set(authority.contextId,Date.now());
+    try{
+      const intents=(await this.ledger.pool.query<Intent>(`SELECT i.* FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
+        WHERE i.context_id=$1 AND x.project_id=$2 ORDER BY i.created_at`,[authority.contextId,this.projectId])).rows;
+      for(const intent of intents){
+        const run=this.store.getRun(intent.run_id);
+        if(run?.status!=='waiting'||run.error!=='Managed execution awaiting authoritative reconciliation'||
+           run.graphState?.cursor!=='implement'||run.askParked||run.attentionRequest)continue;
+        try{
+          if(await this.reconcileIsolated(intent,authority)!=='completed')continue;
+          this.authorities.set(intent.run_id,authority);
+          await this.invocation.run({intent,authority},()=>this.manager.resumeConfirmedNode(intent.run_id));
+        }catch(error){
+          if(error instanceof Refusal&&['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))continue;
+          throw error;
+        }
+      }
+    }finally{this.recovering.delete(authority.contextId);}
   }
   async recordReceipt(intent: Intent, authority: Authority, receipt: unknown) {
     await this.ledger.tx(async c => {

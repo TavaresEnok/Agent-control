@@ -1,0 +1,16 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "controllerSignal": "SIGKILL",
+  "pausePreserved": true,
+  "physicalLaunches": 1,
+  "recoveryLaunches": 0,
+  "stages": [
+    "integrate",
+    "judge",
+    "qa",
+    "review",
+    "review"
+  ],
+  "limitation": "Recovery covers interrupted synthetic implementation before QA; other node types and real providers remain unverified."
+}

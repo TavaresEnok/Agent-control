@@ -193,6 +193,8 @@ export class HappierEndpoint {
     if (!this.socket.connected) return;
     await this.validateKey();
     await this.ledger.heartbeat(this.options.authority);
+    let recoveryFailure:unknown;
+    try{await this.runtime.recoverManaged(this.options.authority);}catch(error){recoveryFailure=error;}
     this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
     if (Date.now() - this.lastPendingAt >= 1000) {
       this.lastPendingAt = Date.now();
@@ -230,6 +232,7 @@ export class HappierEndpoint {
         await c.query('UPDATE ac_chat_messages SET sent=true WHERE id=$1 AND session_id=$2', [item.id, this.options.sessionId]); });
     }
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
+    if (recoveryFailure !== undefined) throw recoveryFailure;
     if (capacityWait) throw capacityWait;
   }
   private async receivePending() {

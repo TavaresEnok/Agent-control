@@ -1,0 +1,30 @@
+Command: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/native-recovery.test.ts
+Exit code: 1
+TAP version 13
+# Subtest: native Cezar graph resumes after SIGKILL and physical reconciliation, preserving pause
+not ok 1 - native Cezar graph resumes after SIGKILL and physical reconciliation, preserving pause
+  ---
+  duration_ms: 23733.6767
+  type: 'test'
+  location: '/workspace/tests/native-recovery.test.ts:1:898'
+  failureType: 'testCodeFailure'
+  error: 'native graph did not finish {"id":"57bce77c-c16a-4040-9955-62be4f246f51","title":"Intent 14ecca9e-009b-4876-a3f0-5b2e7663cb8f","workflow":"engineering-synthetic-v1","task":"Intent 14ecca9e-009b-4876-a3f0-5b2e7663cb8f","runner":"claude","generateFollowups":false,"autonomous":false,"status":"waiting","createdAt":"2026-11-02T15:04:22.304Z","startedAt":"2026-11-02T15:04:22.356Z","tokensUsed":0,"prRefs":[],"worktreePath":"/workspace/.state/projects/ac-native-recovery-LCoFoL/.ai/cezar/worktrees/57bce77c-c16a-4040-9955-62be4f246f51","branch":"cez/57bce77c-c16a-4040-9955-62be4f246f51","baseBranch":"main","archived":false,"lastSeq":4,"currentStepId":"implement","steps":[{"id":"implement","name":"Synthetic implementation","kind":"agent","status":"running","iterations":1,"tokensUsed":0,"usageInvocationsStarted":1,"usageInvocationEpoch":1,"startedAt":"2026-11-02T15:04:22.429Z","sessionId":"c8280ecd-44b3-482e-9f27-67521f6cefda","backend":"claude","profileId":"default"},{"id":"qa","name":"Synthetic QA process","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"review","name":"Synthetic independent review process","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"judge","name":"Optional synthetic judge","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"integrate","name":"Conditional integration","kind":"agent","status":"pending","iterations":0,"tokensUsed":0}],"workflowDef":{"name":"engineering-synthetic-v1","steps":[{"id":"implement","name":"Synthetic implementation","prompt":"Execute the fixed isolated engineering fixture."},{"id":"qa","name":"Synthetic QA process","prompt":"Verify the immutable artifact using the fixed QA executor."},{"id":"review","name":"Synthetic independent review process","prompt":"Review the same artifact in a new verifier session."},{"id":"judge","name":"Optional synthetic judge","prompt":"Consolidate only complete QA and review evidence."},{"id":"integrate","name":"Conditional integration","prompt":"Apply the exact verified artifact using the controller CAS gate."}],"graph":{"nodes":[{"id":"start","type":"start"},{"id":"implement","name":"Synthetic implementation","type":"agent","prompt":"Execute the fixed isolated engineering fixture."},{"id":"qa","name":"Synthetic QA process","type":"agent","prompt":"Verify the immutable artifact using the fixed QA executor."},{"id":"review","name":"Synthetic independent review process","type":"agent","prompt":"Review the same artifact in a new verifier session."},{"id":"judge","name":"Optional synthetic judge","type":"agent","prompt":"Consolidate only complete QA and review evidence."},{"id":"integrate","name":"Conditional integration","type":"agent","prompt":"Apply the exact verified artifact using the controller CAS gate."},{"id":"done","type":"end","status":"success"}],"edges":[{"from":"start","to":"implement"},{"from":"implement","to":"qa"},{"from":"qa","to":"review"},{"from":"review","to":"judge"},{"from":"judge","to":"integrate"},{"from":"integrate","to":"done"}]},"source":"built-in"},"graphState":{"loops":{},"taken":["start.next->implement"],"cursor":"implement"},"error":"Managed execution awaiting authoritative reconciliation"}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/workspace/tests/native-recovery.test.ts:73:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 25103.281094
