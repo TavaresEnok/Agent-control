@@ -1828,6 +1828,36 @@ index 0000000000000000000000000000000000000000..29e3fc48ff843acbff68f400512461ce
 +  </div>}
 + </SettingsField>
 +}
+diff --git a/packages/web/src/routes/settings/agent-control-manager-status.tsx b/packages/web/src/routes/settings/agent-control-manager-status.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..d7aa8daf3e800ad8d1000a85558d837faf305359
+--- /dev/null
++++ b/packages/web/src/routes/settings/agent-control-manager-status.tsx
+@@ -0,0 +1,24 @@
++import {useQuery} from '@tanstack/react-query'
++import {z} from 'zod'
++import {useProjectScope} from '@/api/project-scope-context'
++import {SettingsField} from './settings-field'
++import {agentControlFetch} from './agent-control-fetch'
++const schema=z.object({contextId:z.string().uuid(),state:z.enum(['unavailable','stopped','starting','running','stopping','disconnected','revoked']),
++ executionEnabled:z.boolean().optional(),semanticManagerEnabled:z.boolean().optional()})
++const labels={unavailable:'Conexão não configurada',stopped:'Parado',starting:'Conectando',running:'Conectado',stopping:'Encerrando',disconnected:'Desconectado',revoked:'Autorização revogada'}
++export function AgentControlManagerStatus({contextId}:{contextId:string}){
++ const {projectId}=useProjectScope()
++ const query=useQuery({queryKey:['ac-manager-status',projectId,contextId],enabled:!!contextId,refetchInterval:15000,retry:false,queryFn:async({signal})=>{
++  const response=await agentControlFetch(`/api/v1/ac/contexts/${encodeURIComponent(contextId)}/manager`,{signal})
++  if(!response.ok)throw Error('MANAGER_STATUS_UNAVAILABLE')
++  const value=schema.parse(await response.json());if(value.contextId!==contextId)throw Error('MANAGER_CONTEXT_MISMATCH');return value
++ }})
++ return <SettingsField title="Conexão do gerente" hint="Estado da conexão desta conversa.">
++  {query.isPending&&<p role="status">Consultando conexão…</p>}
++  {query.isError&&<p role="status">Não foi possível confirmar a conexão.</p>}
++  {query.data&&<><p role="status">{labels[query.data.state]}</p>
++   {query.data.executionEnabled===false&&<p>Execução de tarefas desabilitada nesta instalação.</p>}
++   {query.data.semanticManagerEnabled===false&&<p>O gerente de IA ainda não está habilitado.</p>}
++  </>}
++ </SettingsField>
++}
 diff --git a/packages/web/src/routes/settings/agent-control-observability.tsx b/packages/web/src/routes/settings/agent-control-observability.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..a3e1182919af56804885f6a1caa1d5544c2c579d
@@ -2674,10 +2704,10 @@ index 0000000000000000000000000000000000000000..d773b0e902010f07148a16bba9b55252
 +})
 diff --git a/packages/web/src/routes/settings/agent-control-section.tsx b/packages/web/src/routes/settings/agent-control-section.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..5eb5db23195f903717b659c5d222d1a5479de880
+index 0000000000000000000000000000000000000000..80796162ab7de4d4061c04e2dd8ff3aa02ec157e
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-section.tsx
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,317 @@
 +import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 +import { useState } from 'react'
 +import { z } from 'zod'
@@ -2700,6 +2730,7 @@ index 0000000000000000000000000000000000000000..5eb5db23195f903717b659c5d222d1a5
 +import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './agent-control-provider-eligibility'
 +import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent-control-administrative-policy'
 +import {AgentControlPortableExport} from './agent-control-portable-export'
++import {AgentControlManagerStatus} from './agent-control-manager-status'
 +import {agentControlFetch} from './agent-control-fetch'
 +import {useProjectScope} from '@/api/project-scope-context'
 +
@@ -2838,6 +2869,7 @@ index 0000000000000000000000000000000000000000..5eb5db23195f903717b659c5d222d1a5
 +  {mutate.error&&<p role="alert">{mutate.error.message}</p>}
 +  {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
 +  {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
++  {data&&<AgentControlManagerStatus key={`manager-status-${contextId}`} contextId={contextId}/>}
 +  {data&&<AgentControlPortableExport key={`portable-export-${contextId}`} contextId={contextId} canExport={data.canApproveIntegration}/>}
 +  {data&&<SettingsField title="Planos desta conversa" hint="Cancelar bloqueia novas etapas. A confirmação de parada depende da reconciliação física e preserva os artefatos existentes.">
 +   {data.plans.length===0&&<p>Nenhum plano aceito nesta conversa.</p>}

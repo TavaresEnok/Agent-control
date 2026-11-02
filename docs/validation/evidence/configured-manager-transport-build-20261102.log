@@ -1,0 +1,209 @@
+Started 2026-11-02T22:18:51.077844+00:00
+COMMAND ['npm', 'run', 'build'] cwd=.
+
+> agent-control@0.1.0 prebuild
+> node scripts/prepare-build.mjs --before
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+EXIT 0
+COMMAND ['npm', 'run', 'typecheck:web'] cwd=upstream/cezar
+
+> typecheck:web
+> npm run typecheck -w @open-mercato/cezar-web
+
+
+> @open-mercato/cezar-web@0.19.0 typecheck
+> tsc --noEmit
+
+EXIT 0
+COMMAND ['npm', 'run', 'build:web'] cwd=upstream/cezar
+
+> build:web
+> npm run build -w @open-mercato/cezar-web
+
+
+> @open-mercato/cezar-web@0.19.0 build
+> vite build
+
+vite v8.1.4 building client environment for production...
+[2Ktransforming...✓ 3713 modules transformed.
+rendering chunks...
+computing gzip size...
+../cezar/web/dist/index.html                                                      6.33 kB │ gzip:   1.89 kB
+../cezar/web/dist/assets/chakra-petch-latin-600-normal-DVQm9bgb.woff2             9.96 kB
+../cezar/web/dist/assets/jetbrains-mono-latin-ext-wght-normal-DBQx-q_a.woff2     15.19 kB
+../cezar/web/dist/assets/tester-army-tUUSV6JM.png                                24.61 kB
+../cezar/web/dist/assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2         40.40 kB
+../cezar/web/dist/assets/inter-latin-wght-normal-Dx4kXJAl.woff2                  48.25 kB
+../cezar/web/dist/assets/inter-latin-ext-wght-normal-DO1Apj_S.woff2              85.06 kB
+../cezar/web/dist/assets/terminal-pane-BrP-ENHg.css                               3.93 kB │ gzip:   1.01 kB
+../cezar/web/dist/assets/index-D_BYeWmN.css                                     170.34 kB │ gzip:  28.00 kB
+../cezar/web/dist/assets/PLTZDMI2-DltbYIQQ.js                                     0.06 kB │ gzip:   0.08 kB
+../cezar/web/dist/assets/mermaid-GHXKKRXX-CuzKnfno.js                             0.07 kB │ gzip:   0.08 kB
+../cezar/web/dist/assets/check-NI8Sgh2G.js                                        0.11 kB │ gzip:   0.13 kB
+../cezar/web/dist/assets/chevron-left-BsjQEHF8.js                                 0.12 kB │ gzip:   0.13 kB
+../cezar/web/dist/assets/chevron-right-BvSaDru0.js                                0.12 kB │ gzip:   0.13 kB
+../cezar/web/dist/assets/loader-circle-mH6nNpbg.js                                0.13 kB │ gzip:   0.14 kB
+../cezar/web/dist/assets/plus-CeO1nL1m.js                                         0.14 kB │ gzip:   0.14 kB
+../cezar/web/dist/assets/x-DDLqsd4e.js                                            0.14 kB │ gzip:   0.14 kB
+../cezar/web/dist/assets/arrow-left-MIVjXeE5.js                                   0.15 kB │ gzip:   0.15 kB
+../cezar/web/dist/assets/RVARI57O-CgA1WoRv.js                                     0.15 kB │ gzip:   0.14 kB
+../cezar/web/dist/assets/circle-check-BARE2Psa.js                                 0.16 kB │ gzip:   0.16 kB
+../cezar/web/dist/assets/download-D_g2V1pb.js                                     0.22 kB │ gzip:   0.18 kB
+../cezar/web/dist/assets/message-square-CbGxztYE.js                               0.22 kB │ gzip:   0.19 kB
+../cezar/web/dist/assets/settings-2-BgtIYlQJ.js                                   0.24 kB │ gzip:   0.18 kB
+../cezar/web/dist/assets/search-x-DYVRCvyQ.js                                     0.24 kB │ gzip:   0.19 kB
+../cezar/web/dist/assets/types-BTlmexWF.js                                        0.24 kB │ gzip:   0.17 kB
+../cezar/web/dist/assets/square-2h9AdLm-.js                                       0.27 kB │ gzip:   0.22 kB
+../cezar/web/dist/assets/git-pull-request-draft-DWtZZRm9.js                       0.30 kB │ gzip:   0.22 kB
+../cezar/web/dist/assets/save-IOsbCX9F.js                                         0.31 kB │ gzip:   0.22 kB
+../cezar/web/dist/assets/terminal-DHJpQGsh.js                                     0.35 kB │ gzip:   0.24 kB
+../cezar/web/dist/assets/D4V2MWCI-Bm34L6wL.js                                     0.37 kB │ gzip:   0.28 kB
+../cezar/web/dist/assets/upload-Z31i8B8-.js                                       0.42 kB │ gzip:   0.28 kB
+../cezar/web/dist/assets/file-BpL-QcpP.js                                         0.47 kB │ gzip:   0.29 kB
+../cezar/web/dist/assets/5THPTBWS-Ce_hS451.js                                     0.47 kB │ gzip:   0.29 kB
+../cezar/web/dist/assets/use-submit-shortcut-1Jly7R0M.js                          0.48 kB │ gzip:   0.36 kB
+../cezar/web/dist/assets/use-desktop-DaXGdDX4.js                                  0.49 kB │ gzip:   0.29 kB
+../cezar/web/dist/assets/E65FQMJL-eiWd8F8c.js                                     0.49 kB │ gzip:   0.35 kB
+../cezar/web/dist/assets/GUJTEFZK-DPEFMf5Q.js                                     0.51 kB │ gzip:   0.22 kB
+../cezar/web/dist/assets/G3MDBVQH-BZmnMkFw.js                                     0.55 kB │ gzip:   0.33 kB
+../cezar/web/dist/assets/highlighted-body-OFNGDK62-CeWD08DQ.js                    0.57 kB │ gzip:   0.37 kB
+../cezar/web/dist/assets/STAXBNH4-C4N6ZLTR.js                                     0.60 kB │ gzip:   0.43 kB
+../cezar/web/dist/assets/drawer-state-DasOAIpO.js                                 0.62 kB │ gzip:   0.36 kB
+../cezar/web/dist/assets/triangle-alert-BQgvUhrk.js                               0.65 kB │ gzip:   0.34 kB
+../cezar/web/dist/assets/clipboard-DvCUPLwM.js                                    0.70 kB │ gzip:   0.41 kB
+../cezar/web/dist/assets/markdown-Bn_UBweS.js                                     0.75 kB │ gzip:   0.50 kB
+../cezar/web/dist/assets/DKTLEL5E-DciMwFJ1.js                                     0.82 kB │ gzip:   0.39 kB
+../cezar/web/dist/assets/input-QkWuOgTM.js                                        0.83 kB │ gzip:   0.47 kB
+../cezar/web/dist/assets/XLHPVVFU-MQkW7HpM.js                                     0.95 kB │ gzip:   0.52 kB
+../cezar/web/dist/assets/DHKBVIA3-Db-JqVOb.js                                     0.97 kB │ gzip:   0.58 kB
+../cezar/web/dist/assets/rolldown-runtime-aKtaBQYM.js                             1.08 kB │ gzip:   0.62 kB
+../cezar/web/dist/assets/token-metrics-Co1NsLoc.js                                1.19 kB │ gzip:   0.66 kB
+../cezar/web/dist/assets/preload-helper-Czpn1I53.js                               1.19 kB │ gzip:   0.67 kB
+../cezar/web/dist/assets/addon-fit-DIOBYJe3.js                                    1.20 kB │ gzip:   0.49 kB
+../cezar/web/dist/assets/JTJEEBDN-DZeTEWqk.js                                     1.40 kB │ gzip:   0.77 kB
+../cezar/web/dist/assets/textarea-TpmluY46.js                                     1.74 kB │ gzip:   0.82 kB
+../cezar/web/dist/assets/task-notes-BwXF8LV6.js                                   1.82 kB │ gzip:   0.93 kB
+../cezar/web/dist/assets/SPBWZ4VS-8FnOEPzw.js                                     1.84 kB │ gzip:   1.03 kB
+../cezar/web/dist/assets/7WLXJQOR-D6QVYUu9.js                                     1.94 kB │ gzip:   0.94 kB
+../cezar/web/dist/assets/commit-list-D5v6BbV2.js                                  2.11 kB │ gzip:   1.06 kB
+../cezar/web/dist/assets/DUZNPW7S-4AKJemkg.js                                     2.14 kB │ gzip:   1.06 kB
+../cezar/web/dist/assets/FTXIJQGB-CggtIYAM.js                                     2.54 kB │ gzip:   1.10 kB
+../cezar/web/dist/assets/diff-woXpYk--.js                                         2.56 kB │ gzip:   0.68 kB
+../cezar/web/dist/assets/centered-state-CEbUz7RY.js                               2.66 kB │ gzip:   1.05 kB
+../cezar/web/dist/assets/json-qhed-kSA.js                                         2.81 kB │ gzip:   0.77 kB
+../cezar/web/dist/assets/scroll-within-WbblpQQU.js                                2.92 kB │ gzip:   1.29 kB
+../cezar/web/dist/assets/automation-format-BnwcreKF.js                            2.98 kB │ gzip:   1.46 kB
+../cezar/web/dist/assets/jsonc-CYpm1nAK.js                                        3.10 kB │ gzip:   0.78 kB
+../cezar/web/dist/assets/C5HTQT3I-B50g1XeK.js                                     3.43 kB │ gzip:   1.61 kB
+../cezar/web/dist/assets/collapsible-BGPJ5xw-.js                                  3.46 kB │ gzip:   1.51 kB
+../cezar/web/dist/assets/terminal-pane-B1qjueHX.js                                3.55 kB │ gzip:   1.78 kB
+../cezar/web/dist/assets/alert-dialog-BqIYmolS.js                                 3.83 kB │ gzip:   1.27 kB
+../cezar/web/dist/assets/diff-BYETqUtJ.js                                         4.00 kB │ gzip:   1.73 kB
+../cezar/web/dist/assets/UO52YEYL-EHYBNpY5.js                                     4.16 kB │ gzip:   1.95 kB
+../cezar/web/dist/assets/task-graph-D-9pPy22.js                                   4.73 kB │ gzip:   2.20 kB
+../cezar/web/dist/assets/tabs-SftLfkds.js                                         4.87 kB │ gzip:   1.84 kB
+../cezar/web/dist/assets/host-usage-BRCNSjBo.js                                   4.99 kB │ gzip:   2.04 kB
+../cezar/web/dist/assets/task-commits-CH3_e445.js                                 5.04 kB │ gzip:   2.06 kB
+../cezar/web/dist/assets/BNU2RHQB-M1l5nkNs.js                                     5.13 kB │ gzip:   2.45 kB
+../cezar/web/dist/assets/VVVO4ZVP-CdFWI9EE.js                                     5.30 kB │ gzip:   2.64 kB
+../cezar/web/dist/assets/2IZ5MNOH-CgfSuFFL.js                                     5.74 kB │ gzip:   2.82 kB
+../cezar/web/dist/assets/run-diff-D-SrYhge.js                                     5.85 kB │ gzip:   2.21 kB
+../cezar/web/dist/assets/agent-task-pickers-BT_T7A7z.js                           6.00 kB │ gzip:   2.13 kB
+../cezar/web/dist/assets/IHVFDU4A-pP0Mb5Iu.js                                     6.41 kB │ gzip:   3.36 kB
+../cezar/web/dist/assets/toml-CcmNWLt0.js                                         6.41 kB │ gzip:   1.28 kB
+../cezar/web/dist/assets/XXYPNCD5-Ib-xj97c.js                                     6.46 kB │ gzip:   3.04 kB
+../cezar/web/dist/assets/compare-variants--mU94sSQ.js                             6.92 kB │ gzip:   2.68 kB
+../cezar/web/dist/assets/OB6ZFVKF-D6V5f56z.js                                     7.10 kB │ gzip:   3.22 kB
+../cezar/web/dist/assets/X5SG7MGC-DtC_vaXe.js                                     7.34 kB │ gzip:   3.34 kB
+../cezar/web/dist/assets/23I4SOAX-B4MCXPfc.js                                     7.37 kB │ gzip:   3.29 kB
+../cezar/web/dist/assets/AM43MQ64-C_UmP8Ka.js                                     7.56 kB │ gzip:   3.50 kB
+../cezar/web/dist/assets/7OAKGN26-t-mlpHkx.js                                     7.73 kB │ gzip:   3.09 kB
+../cezar/web/dist/assets/markdown-DhtWawDD.js                                     7.81 kB │ gzip:   3.44 kB
+../cezar/web/dist/assets/git-toolbar-CCZh2Uz7.js                                  8.34 kB │ gzip:   3.25 kB
+../cezar/web/dist/assets/2P3CZEXH-kInGrvHu.js                                     8.42 kB │ gzip:   3.75 kB
+../cezar/web/dist/assets/lib-D2UBYUbM.js                                          8.54 kB │ gzip:   4.41 kB
+../cezar/web/dist/assets/LHH2HHRB-DZSZGD4x.js                                     9.28 kB │ gzip:   4.17 kB
+../cezar/web/dist/assets/yaml-rwi0_p6S.js                                        10.49 kB │ gzip:   2.26 kB
+../cezar/web/dist/assets/Z6WRYFJC-C6TE3q4J.js                                    11.02 kB │ gzip:   4.77 kB
+../cezar/web/dist/assets/UFPIB6EZ-BVjLTP07.js                                    11.28 kB │ gzip:   5.03 kB
+../cezar/web/dist/assets/layout-cards-BkpT6YfE.js                                11.73 kB │ gzip:   4.41 kB
+../cezar/web/dist/assets/VIK3ONSK-Cton0Rgg.js                                    11.77 kB │ gzip:   5.33 kB
+../cezar/web/dist/assets/SXFARSFO-DHdVQB4G.js                                    12.06 kB │ gzip:   5.07 kB
+../cezar/web/dist/assets/A255FCTW-Bx0Z-P1v.js                                    12.06 kB │ gzip:   3.20 kB
+../cezar/web/dist/assets/terminal-drawer-CUfMrETt.js                             12.89 kB │ gzip:   4.53 kB
+../cezar/web/dist/assets/file-preview-DboKfaHi.js                                13.08 kB │ gzip:   4.89 kB
+../cezar/web/dist/assets/lazy-DaFjwB-q.js                                        13.14 kB │ gzip:   5.14 kB
+../cezar/web/dist/assets/3JIRLDUO-B9tVJ8E_.js                                    13.20 kB │ gzip:   5.57 kB
+../cezar/web/dist/assets/E3FWOBN4-AT8jzYgb.js                                    13.41 kB │ gzip:   6.24 kB
+../cezar/web/dist/assets/5MJ3UKSG-nDfsJSF7.js                                    13.45 kB │ gzip:   5.50 kB
+../cezar/web/dist/assets/26H2HVXD-DnN7AaEY.js                                    14.44 kB │ gzip:   5.93 kB
+../cezar/web/dist/assets/AOZTNTMC-Di2iVwCo.js                                    14.53 kB │ gzip:   6.30 kB
+../cezar/web/dist/assets/skills-CRtsstLp.js                                      14.95 kB │ gzip:   5.32 kB
+../cezar/web/dist/assets/rust-Cfkwpbl8.js                                        15.06 kB │ gzip:   2.71 kB
+../cezar/web/dist/assets/U7N72BGE-8vTdAst9.js                                    15.16 kB │ gzip:   5.84 kB
+../cezar/web/dist/assets/MSPQPZZY-DOCBMJ70.js                                    16.60 kB │ gzip:   6.98 kB
+../cezar/web/dist/assets/reference-chip-DLyUtXMv.js                              18.43 kB │ gzip:   6.72 kB
+../cezar/web/dist/assets/TZUXETIT-C6qyTEYa.js                                    19.06 kB │ gzip:   7.38 kB
+../cezar/web/dist/assets/lib-iubvZLyK.js                                         19.06 kB │ gzip:   6.56 kB
+../cezar/web/dist/assets/R7EPXMMD-Dk_RDmvY.js                                    20.38 kB │ gzip:   7.63 kB
+../cezar/web/dist/assets/K7FUICZ3-C9JebvoP.js                                    20.78 kB │ gzip:   8.62 kB
+../cezar/web/dist/assets/use-now-CxWhPsNt.js                                     21.74 kB │ gzip:   7.74 kB
+../cezar/web/dist/assets/WRGXZO53-DYQ4OW92.js                                    23.28 kB │ gzip:   9.34 kB
+../cezar/web/dist/assets/sql-BsFa4tDR.js                                         23.42 kB │ gzip:   7.45 kB
+../cezar/web/dist/assets/TC77ISAL-BgUbI3Of.js                                    24.22 kB │ gzip:  10.04 kB
+../cezar/web/dist/assets/repo-git-5iC2gWEC.js                                    25.37 kB │ gzip:   7.81 kB
+../cezar/web/dist/assets/icon-tooltip-BjGc9Qi9.js                                25.71 kB │ gzip:   7.69 kB
+../cezar/web/dist/assets/tracker-ux3z8wjb.js                                     26.65 kB │ gzip:   8.86 kB
+../cezar/web/dist/assets/SR7OOV3Q-3uZPNU1G.js                                    27.20 kB │ gzip:  11.13 kB
+../cezar/web/dist/assets/bundle-mjs-rHxsej31.js                                  28.20 kB │ gzip:   8.95 kB
+../cezar/web/dist/assets/IV52FOAS-jWHN2JLM.js                                    28.30 kB │ gzip:  10.96 kB
+../cezar/web/dist/assets/3E5HRNYT-DLbBxF6y.js                                    30.17 kB │ gzip:  11.46 kB
+../cezar/web/dist/assets/AQNLM6KG-CcWg0kGq.js                                    31.62 kB │ gzip:  12.20 kB
+../cezar/web/dist/assets/CUVCMPQX-75g4RQep.js                                    32.59 kB │ gzip:  13.22 kB
+../cezar/web/dist/assets/diff-view-D7dO6dyH.js                                   32.76 kB │ gzip:  11.27 kB
+../cezar/web/dist/assets/ZI2QNEGF-DwOKsV8B.js                                    34.12 kB │ gzip:  12.64 kB
+../cezar/web/dist/assets/tooltip-B0C3zf2E.js                                     35.69 kB │ gzip:  13.24 kB
+../cezar/web/dist/assets/button-hlCu3CBA.js                                      36.54 kB │ gzip:  12.82 kB
+../cezar/web/dist/assets/worktree-lifecycle-operation-BMKZJg4v.js                37.67 kB │ gzip:  13.97 kB
+../cezar/web/dist/assets/CPKRWH5G-DHdVktma.js                                    39.55 kB │ gzip:  14.74 kB
+../cezar/web/dist/assets/workflow-graph-C56YOanR.js                              40.13 kB │ gzip:  11.57 kB
+../cezar/web/dist/assets/shellscript-CLZ0U2zV.js                                 41.47 kB │ gzip:   6.07 kB
+../cezar/web/dist/assets/TYIQQHVC-S2gy0AUp.js                                    41.57 kB │ gzip:  15.60 kB
+../cezar/web/dist/assets/G3OATVW2-D5zJu3ib.js                                    44.17 kB │ gzip:  16.23 kB
+../cezar/web/dist/assets/toaster-vkejjU2b.js                                     45.01 kB │ gzip:  16.17 kB
+../cezar/web/dist/assets/go-rLFTqkRN.js                                          46.81 kB │ gzip:   5.14 kB
+../cezar/web/dist/assets/css-BsVw1vtW.js                                         49.03 kB │ gzip:  11.90 kB
+../cezar/web/dist/assets/github-CYaXmxrF.js                                      51.15 kB │ gzip:  14.43 kB
+../cezar/web/dist/assets/html-BY76lXLH.js                                        57.24 kB │ gzip:  11.74 kB
+../cezar/web/dist/assets/engine-javascript-FQvzRocB.js                           57.63 kB │ gzip:  20.18 kB
+../cezar/web/dist/assets/markdown-BYOwaDjH.js                                    59.32 kB │ gzip:   5.66 kB
+../cezar/web/dist/assets/facet-filter-BdpFd0oN.js                                67.98 kB │ gzip:  22.57 kB
+../cezar/web/dist/assets/python-gzcpVVnB.js                                      69.94 kB │ gzip:   9.09 kB
+../cezar/web/dist/assets/core-D_0TOSpM.js                                        93.03 kB │ gzip:  29.18 kB
+../cezar/web/dist/assets/automations-route-cAlIKkCh.js                           99.41 kB │ gzip:  27.17 kB
+../cezar/web/dist/assets/dashboard-DMkRmmGj.js                                  107.73 kB │ gzip:  30.18 kB
+../cezar/web/dist/assets/git-tab-loading-CFWusXRM.js                            113.19 kB │ gzip:  38.13 kB
+../cezar/web/dist/assets/queries-E6VnZ-94.js                                    128.90 kB │ gzip:  33.66 kB
+../cezar/web/dist/assets/javascript-BgS3c2Ky.js                                 174.82 kB │ gzip:  16.62 kB
+../cezar/web/dist/assets/tsx-udAQXfEw.js                                        175.52 kB │ gzip:  16.62 kB
+../cezar/web/dist/assets/jsx-Bz0zcwM4.js                                        177.78 kB │ gzip:  16.71 kB
+../cezar/web/dist/assets/utils-DVl7aEPo.js                                      178.29 kB │ gzip:  50.79 kB
+../cezar/web/dist/assets/typescript-bsJCZSQ-.js                                 181.07 kB │ gzip:  16.23 kB
+../cezar/web/dist/assets/react-runtime-DtbkTs89.js                              189.64 kB │ gzip:  59.65 kB
+../cezar/web/dist/assets/task-workspace-Bgl_jzrV.js                             198.63 kB │ gzip:  61.03 kB
+../cezar/web/dist/assets/xterm-U4TA8lIC.js                                      338.63 kB │ gzip:  85.75 kB
+../cezar/web/dist/assets/chunk-BO2N2NFS-PkvTxQyV.js                             429.89 kB │ gzip: 130.17 kB
+../cezar/web/dist/assets/index-BD-YaMvF.js                                    1,953.99 kB │ gzip: 521.52 kB
+
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.97s
+EXIT 0
+Finished 2026-11-02T22:19:01.448897+00:00

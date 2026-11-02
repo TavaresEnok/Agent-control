@@ -20,6 +20,7 @@ import {AgentControlRemoteSources} from './agent-control-remote-sources'
 import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './agent-control-provider-eligibility'
 import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent-control-administrative-policy'
 import {AgentControlPortableExport} from './agent-control-portable-export'
+import {AgentControlManagerStatus} from './agent-control-manager-status'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -158,6 +159,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
   {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
+  {data&&<AgentControlManagerStatus key={`manager-status-${contextId}`} contextId={contextId}/>}
   {data&&<AgentControlPortableExport key={`portable-export-${contextId}`} contextId={contextId} canExport={data.canApproveIntegration}/>}
   {data&&<SettingsField title="Planos desta conversa" hint="Cancelar bloqueia novas etapas. A confirmação de parada depende da reconciliação física e preserva os artefatos existentes.">
    {data.plans.length===0&&<p>Nenhum plano aceito nesta conversa.</p>}

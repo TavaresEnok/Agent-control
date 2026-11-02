@@ -22,10 +22,13 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
+ managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
+  contexts:z.array(z.object({projectId:z.uuid(),contextId:z.uuid(),sessionId:z.string().min(1).max(200),profileId:z.string().min(1).max(100),
+   keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey'])}).strict()).min(1).max(100)}).strict().optional(),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
  happier:z.object({upstreamOrigin:origin(),webOrigin:origin(),publicServerOrigin:origin()}).strict(),
  sessionMaxAgeSeconds:z.number().int().min(60).max(2592000).default(86400),
-}).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root')
+}).strict().refine(value=>!value.managerTransport||!!value.contextVault&&new Set(value.managerTransport.contexts.map(x=>x.contextId)).size===value.managerTransport.contexts.length,'Manager transport requires a vault and unique contexts').refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root')
  .refine(value=>!value.contextVault||[value.dataDirectory,value.contextVault.directory,value.contextVault.masterFile].every(path=>resolve(path)===path)&&
   value.contextVault.directory.startsWith(value.dataDirectory+sep)&&value.contextVault.masterFile.startsWith(value.dataDirectory+sep)&&value.contextVault.directory!==value.contextVault.masterFile,'Vault paths must be canonical and inside private data directory')
  .refine(value=>!value.accountHomesDirectory||resolve(value.accountHomesDirectory)===value.accountHomesDirectory&&value.accountHomesDirectory.startsWith(value.dataDirectory+sep)&&

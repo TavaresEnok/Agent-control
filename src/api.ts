@@ -46,7 +46,7 @@ export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations) {
+  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined) {
   const app = new Hono<{ Variables: { principal: string } }>();
   const control = new Control(ledger,providerAdapters,runtime.projectId,administrative);
   app.use('*', async (c, next) => {
@@ -75,6 +75,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   app.route('/api/v1/ac',createDiagnosticsApi(ledger,runtime.projectId));
   app.route('/api/v1/ac',createPortableExportApi(ledger,runtime.projectId));
   const family = app
+    .get('/api/v1/ac/contexts/:id/manager',async c=>{
+      const id=Id.parse(c.req.param('id'));await ledger.tx(async db=>{const scope=await ledger.authorize(db,c.get('principal'),id,false);
+       if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);});
+      c.header('Cache-Control','no-store');return c.json(await managerStatus?.(id)??{contextId:id,state:'unavailable'});
+    })
     .get('/api/v1/ac/auth/status',c=>c.json({authenticated:true,principalId:c.get('principal')}))
     .get('/api/v1/ac/operator/identity',async c=>{
       const principal=c.get('principal');

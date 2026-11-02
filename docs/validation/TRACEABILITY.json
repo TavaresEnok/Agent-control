@@ -31,12 +31,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
-    "files": "src/auth-relay.ts;src/sessions.ts;src/ledger.ts;src/api.ts;src/context-vault.ts;src/context-vault-cli.ts;src/managers.ts;tests/context-vault.test.ts",
+    "evidence": "docs/validation/evidence/browser-login-final-20261102.log;docs/validation/evidence/browser-login-proof.json;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md;docs/validation/evidence/configured-manager-transport-build-20261102.log;docs/validation/evidence/manager-transport-access-boundary-20261102.log",
+    "files": "src/auth-relay.ts;src/sessions.ts;src/ledger.ts;src/api.ts;src/context-vault.ts;src/context-vault-cli.ts;src/managers.ts;tests/context-vault.test.ts;src/manager-transport.ts;src/managers.ts;src/happier.ts;src/server-main.ts;tests/happier-access-boundary.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
+    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven. Optional explicitly configured vault-backed manager transport added. Runtime stays administration-only; no semantic manager or real inference enabled. Access boundary tested with simulated ledger only; native connection and operational takeover remain unverified."
   },
   {
     "id": "RF-04",
@@ -44,12 +44,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/manager-registry-sanitized-final-20261102.log;docs/implementation/MANAGER-REGISTRY-20261102.md;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md",
-    "files": "src/managers.ts;src/lab-main.ts;tests/managers.test.ts;src/context-vault.ts;src/context-vault-cli.ts;tests/context-vault.test.ts",
+    "evidence": "docs/validation/evidence/manager-registry-sanitized-final-20261102.log;docs/implementation/MANAGER-REGISTRY-20261102.md;docs/validation/evidence/context-vault-focused-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md;docs/validation/evidence/configured-manager-transport-build-20261102.log;docs/validation/evidence/manager-transport-access-boundary-20261102.log",
+    "files": "src/managers.ts;src/lab-main.ts;tests/managers.test.ts;src/context-vault.ts;src/context-vault-cli.ts;tests/context-vault.test.ts;src/manager-transport.ts;src/managers.ts;src/happier.ts;src/server-main.ts;tests/happier-access-boundary.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
+    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven. Optional explicitly configured vault-backed manager transport added. Runtime stays administration-only; no semantic manager or real inference enabled. Access boundary tested with simulated ledger only; native connection and operational takeover remain unverified."
   },
   {
     "id": "RF-05",

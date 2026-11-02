@@ -207,7 +207,7 @@ export function administrativeEndpointDispatcher(registry:ManagerRegistry,servic
  return async(contextId:string,raw:unknown)=>service.execute(await registry.administrativeCapability(contextId,service),raw);
 }
 export function happierEndpointFactory(ledger:Ledger,runtime:CezarRuntime,boundary:HappierBoundary,
- options:{baseUrl:string;token:string;machineId:string;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
+ options:{baseUrl:string;token:string;machineId:string;transportOnly?:boolean;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
  return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,principal:input.principal,sessionId:input.sessionId,
   authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant});
 }

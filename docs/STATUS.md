@@ -151,3 +151,11 @@ Pendências principais permanecem: integração operacional e homologação dos 
 ### Exportação cifrada canônica pelo CLI
 
 `export-context CONFIG DESCRIPTOR` acrescentado ao gateway local. Combina metadados limitados com ciphertexts do histórico Happier, sem decriptação/token/chave no pacote, e cria arquivo privado novo. ACL/owner revalidados por página; limites de tamanho/quantidade e cursor inválido abortam. Não há snapshot atômico entre PG e Happier ou restore automático. Código passou na checagem de tipos; exportação real e teste ponta a ponta não executados. Detalhes em `IMPORT-CLI-20261102.md`.
+
+## Bootstrap configurável do transporte do gerente
+
+`managerTransport` opcional liga registries por projeto ao vault e à sessão Happier explicitamente configurada. Verifica identidade do token, owner/contexto, chave e época; falha parcial e shutdown encerram transportes antes do runtime. A autoridade vigente passa às APIs de planejamento. Endpoint autenticado read-only e indicador em Settings mostram a conexão e distinguem execução/gerente semântico desabilitados.
+
+O modo permanece administrativo e `transportOnly:true`: não consome pendências, não aceita novos pedidos de execução, não recupera/despacha planos e não ativa conta/modelo. Não foi criada ou alterada configuração operacional. Isto resolve uma ligação de bootstrap, não a implementação do gerente semântico e dos adaptadores reais, que continuam pendentes.
+
+RPC, histórico e heartbeat passaram a revalidar ACL/projeto/vínculo/época; perda de autorização encerra transporte e limpa referências ao histórico recuperado. Build integrado passou e um teste local com ledger simulado cobriu recusa de acesso, projeto, época e sessão. Não houve conta real, conexão ponta a ponta ou repetição das suítes gerais. Ver `CONFIGURED-MANAGER-TRANSPORT-20261102.md`.

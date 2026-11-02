@@ -126,7 +126,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
@@ -136,7 +136,7 @@ export class HappierEndpoint {
     this.rpc = new boundary.RpcHandlerManager({ scopePrefix: options.sessionId, encryptionKey: options.key, encryptionVariant: options.encryptionVariant ?? 'legacy', logger: () => {},
       authorizeRequest: async q => {
         if(!q.method.startsWith(options.sessionId+':'))return {ok:false,error:'scope_forbidden'};
-        try{await this.validateKey();return {ok:true};}catch{return {ok:false,error:'context_key_unauthorized'};}
+        try{await this.validateLink();return {ok:true};}catch{return {ok:false,error:'context_key_unauthorized'};}
       } });
     boundary.registerSessionUserMessageSendHandler(this.rpc, { workingDirectory: runtime.repo,
       revalidateExplicitUserRequest: async () => ({ status: 'ready' }),
@@ -161,8 +161,13 @@ export class HappierEndpoint {
   }
   async validateLink() {
     await this.validateKey();
-    const row = await this.ledger.pool.query('SELECT * FROM ac_session_links WHERE context_id=$1', [this.options.authority.contextId]);
-    if (row.rows[0]?.session_id !== this.options.sessionId || row.rows[0]?.principal_id !== this.options.principal) throw new Refusal('SESSION_CONTEXT_MISMATCH', 403);
+    await this.ledger.tx(async c=>{
+      const context=await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId);
+      if(context.project_id!==this.runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+      await this.ledger.fence(c,this.options.authority,true);
+      const row=await c.query('SELECT session_id,principal_id FROM ac_session_links WHERE context_id=$1',[this.options.authority.contextId]);
+      if(row.rows[0]?.session_id!==this.options.sessionId||row.rows[0]?.principal_id!==this.options.principal)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
+    });
   }
   async start() {
     try{
@@ -177,7 +182,7 @@ export class HappierEndpoint {
     if (z.object({ id: z.string() }).passthrough().parse(profile).id !== this.options.principal)
       throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH', 403);
     this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
-    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateKey(),{signal:this.lifecycle.signal,timeoutMs:timeout});
+    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateLink(),{signal:this.lifecycle.signal,timeoutMs:timeout});
     // Fetching authorized pages may take time; re-read current structured state before activating RPC.
     this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
     if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
@@ -202,7 +207,7 @@ export class HappierEndpoint {
           "INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.blocked',$2)",
           [this.options.authority.contextId, { code }]).catch(() => {});
         this.lastError = code;
-        if (this.lastError === 'STALE_MANAGER') this.close();
+        if (['STALE_MANAGER','CONTEXT_FORBIDDEN','PROJECT_RUNTIME_MISMATCH','CONTEXT_KEY_UNAUTHORIZED','SESSION_CONTEXT_MISMATCH'].includes(this.lastError)) this.close();
         else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(code)){
           // Critical controller blockers do not wait for the completion window.
           // Failure to publish preserves the same encrypted outbox for retry.
@@ -216,6 +221,7 @@ export class HappierEndpoint {
     }catch(error){this.close();throw error;}
   }
   async accept(raw: unknown) {
+    if(this.options.transportOnly)throw new Refusal('EXECUTION_DISABLED');
     const q = UserRequest.parse(raw); await this.validateLink();
     const intentId = stableId(`${this.options.authority.contextId}\0${q.localId}`);
     const prior=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2 AND principal_id=$3',
@@ -256,8 +262,9 @@ export class HappierEndpoint {
   }
   async tick() {
     if (!this.socket.connected) return;
-    await this.validateKey();
+    await this.validateLink();
     await this.ledger.heartbeat(this.options.authority);
+    if(this.options.transportOnly){this.socket.emit('session-alive',{sid:this.options.sessionId,time:Date.now(),thinking:false,mode:'remote'});return;}
     let recoveryFailure:unknown;
     try{await this.runtime.reconcileCancellations(this.options.authority,this.options.principal);}catch(error){recoveryFailure=error;}
     try{await this.runtime.recoverManaged(this.options.authority);}catch(error){recoveryFailure??=error;}
@@ -333,5 +340,5 @@ export class HappierEndpoint {
     }
   }
   connectionState(): 'connected'|'disconnected' {return this.socket.connected?'connected':'disconnected';}
-  close() { this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.socket.disconnect(); }
+  close() { this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.socket.disconnect(); }
 }

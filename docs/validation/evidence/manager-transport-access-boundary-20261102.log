@@ -1,0 +1,23 @@
+Started 2026-11-02T22:21:20.421185+00:00
+COMMAND ['npm', 'run', 'build']
+
+> agent-control@0.1.0 prebuild
+> node scripts/prepare-build.mjs --before
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+EXIT 0
+COMMAND ['node', '--import', 'tsx', '--test', 'tests/happier-access-boundary.test.ts']
+✔ session transport requires current project permission and manager epoch, even with an authorized content key (3.24029ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 521.241534
+EXIT 0
+Finished 2026-11-02T22:21:24.649669+00:00

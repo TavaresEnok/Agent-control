@@ -38,3 +38,8 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 - [Diretriz recebida](docs/normative/DIRETRIZ_MESTRE_V1.md)
 
 Uma mensagem comum do Happier é admitida pelo template sintético fixado. Isso não implementa ainda um gerente de IA que compreende e planeja solicitações arbitrárias. Os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos.
+
+
+### Transporte administrativo do gerente
+
+O gateway aceita configuração privada opcional `managerTransport` para conectar sessões existentes usando o vault, sem ativar inferência/execução. Planejamento recebe a autoridade do registry, e Settings mostra o estado real da conexão. O gerente semântico e os adaptadores de CLIs reais continuam pendentes; não confundir conexão do transporte com desenvolvimento autônomo habilitado. Consulte `docs/implementation/CONFIGURED-MANAGER-TRANSPORT-20261102.md`.

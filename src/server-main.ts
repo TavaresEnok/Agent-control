@@ -1,5 +1,5 @@
-// Configured administration gateway. No fixture, manager acquisition, dispatch
-// loop or model adapter is started by this entrypoint.
+// Configured administration gateway. Optional explicit manager transport uses
+// private vault keys; no model adapter or execution loop is enabled here.
 import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
@@ -11,6 +11,8 @@ import {BrowserSessions} from './sessions.ts';
 import {HappierAuthRelay} from './auth-relay.ts';
 import {ProjectAdmin} from './project-admin.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
+import {startConfiguredManagerTransport} from './manager-transport.ts';
+import type {ManagerRegistry} from './managers.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
  const descriptorCommand=['context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command);
@@ -19,6 +21,8 @@ async function main(){
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
  const ledger=new Ledger(config.databaseUrl);
+ const managerTransports=new Map<string,ManagerRegistry>();
+ const closeManagers=async()=>{const results=await Promise.allSettled([...managerTransports.values()].map(registry=>registry.close()));managerTransports.clear();if(results.some(result=>result.status==='rejected'))throw Error('MANAGER_TRANSPORT_SHUTDOWN_FAILED');};
  let runtimes:ProjectRuntimes|undefined,serving=false;
  try{
   if(command==='inspect'){
@@ -64,12 +68,12 @@ async function main(){
   const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
   runtimes=new ProjectRuntimes(async project=>{
    const runtime=new CezarRuntime(ledger,project.repo,project.id);
-   try{await runtime.start('administration-only');return runtime;}catch(error){await runtime.close();throw error;}
+   try{await runtime.start('administration-only');const registry=await startConfiguredManagerTransport(config,ledger,runtime);if(registry)managerTransports.set(project.id,registry);return runtime;}catch(error){await runtime.close();throw error;}
   });
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,()=>undefined,config.happier.webOrigin,access,sessions,relay);
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),config.happier.webOrigin,access,sessions,relay,[],undefined,async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
@@ -84,8 +88,8 @@ async function main(){
   const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:false})));
   serving=true;
   let closing=false;
-  const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await activeRuntimes.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
+  const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
   process.once('SIGTERM',close);process.once('SIGINT',close);
- }finally{if(!serving){try{await runtimes?.close();}finally{await ledger.close();}}}
+ }finally{if(!serving){try{await closeManagers();}finally{try{await runtimes?.close();}finally{await ledger.close();}}}}
 }
 main().catch(()=>{console.error('INSTALLATION_COMMAND_FAILED: inspect private configuration, initialization and service availability; secrets are not logged.');process.exitCode=1;});
