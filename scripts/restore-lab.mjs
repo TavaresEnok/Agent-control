@@ -21,7 +21,26 @@ try{
  await pipeline(createReadStream(archive,{start:newline+1}),decipher,createWriteStream(tarPath,{mode:0o600,flags:'wx'}));
  // Validate every entry before extraction. Reject links/devices and any path outside the new directory.
  execFileSync('python3',['-c',
-  "import tarfile,sys,pathlib\nwith tarfile.open(sys.argv[1]) as t:\n for m in t.getmembers():\n  p=pathlib.PurePosixPath(m.name)\n  if p.is_absolute() or '..' in p.parts or not (m.isfile() or m.isdir()): raise SystemExit('UNSAFE_BACKUP_ENTRY')\n  if not (m.name in ('database.dump','MANIFEST.json') or m.name.startswith('.state/')): raise SystemExit('UNEXPECTED_BACKUP_ENTRY')\n",tarPath],{stdio:['ignore','pipe','pipe']});
+  `import tarfile,sys,pathlib,json
+with tarfile.open(sys.argv[1]) as t:
+ members=t.getmembers(); seen=set(); actual={}
+ for m in members:
+  p=pathlib.PurePosixPath(m.name)
+  if p.is_absolute() or '..' in p.parts or str(p)!=m.name.rstrip('/') or not (m.isfile() or m.isdir()): raise SystemExit('UNSAFE_BACKUP_ENTRY')
+  if str(p) in seen: raise SystemExit('DUPLICATE_BACKUP_ENTRY')
+  seen.add(str(p))
+  if not (m.name in ('database.dump','MANIFEST.json') or m.name.startswith('.state/')): raise SystemExit('UNEXPECTED_BACKUP_ENTRY')
+  if m.isfile(): actual[m.name]=m.size
+ manifest=json.load(t.extractfile('MANIFEST.json'))
+ if manifest.get('schemaVersion')!=1 or manifest.get('scope')!='isolated-synthetic-lab' or not isinstance(manifest.get('files'),list): raise SystemExit('INVALID_BACKUP_MANIFEST')
+ expected={'database.dump','MANIFEST.json'}
+ for item in manifest['files']:
+  name=item.get('path')
+  if not isinstance(name,str) or not name.startswith('.state/') or name in expected or type(item.get('size')) is not int or item['size']<0: raise SystemExit('INVALID_BACKUP_MANIFEST')
+  expected.add(name)
+  if actual.get(name)!=item['size']: raise SystemExit('BACKUP_SIZE_MISMATCH')
+ if set(actual)!=expected: raise SystemExit('BACKUP_INVENTORY_MISMATCH')
+`,tarPath],{stdio:['ignore','pipe','pipe']});
  execFileSync('tar',['-xf',tarPath,'-C',destination,'--no-same-owner','--no-same-permissions'],{stdio:['ignore','pipe','pipe']});
  const manifest=JSON.parse(await readFile(join(destination,'MANIFEST.json'),'utf8'));
  if(manifest.schemaVersion!==1||manifest.scope!=='isolated-synthetic-lab'||!Array.isArray(manifest.files))throw Error('INVALID_BACKUP_MANIFEST');

@@ -18,17 +18,22 @@ updates = {
     'RF-27': ('docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log', 'src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts', 'Lost acknowledgement and completed receipt after host restart tested; interrupted in-flight effect remains open.'),
     'RF-28': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified.'),
     'RF-49': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts', 'Known controller paths unavailable to synthetic verifiers; real account credential isolation and broader hostile process proof pending.'),
+    'RF-34': ('docs/validation/evidence/backup-restore-first-20261102.log', 'scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs', 'Encrypted synthetic backup extracted and imported into a new closed database; operational startup, relocation and off-host custody pending.'),
+    'RF-52': ('docs/validation/evidence/backup-restore-first-20261102.log', 'scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs', 'Restored database admission closed and copied leases/quotas/sessions invalidated; runtime version rollout and restored app startup pending.'),
     'RNF-03': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Synthetic workers have no host socket, keys or network; verifier snapshots read-only. Hostile real agents and account boundaries not homologated.'),
     'T14': ('docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log', 'src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts', 'Real SSH and completed result after restart; interrupted in-flight operation still uncertain.'),
     'T15': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts', 'Fixed synthetic verifiers attempted snapshot writes and controller path access; cross-account hostile process proof pending.'),
     'T06': ('docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/cezar.ts;src/isolated-implementation.ts;tests/native-recovery.test.ts', 'Human pause preserved through successor reconciliation of synthetic implementation; full operator/mobile and concurrent pause cases remain open.'),
     'T08': ('docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/native-graph-recovery-red-20261102.log', 'src/cezar.ts;src/isolated-implementation.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts', 'Actual controller SIGKILL at one receipt boundary; fallback, cancellation and other node recovery positions remain open.'),
+    'RNF-10': ('docs/validation/evidence/backup-restore-first-20261102.log', 'scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs', 'Synthetic database restore in a copy verified; no operational recovery or RPO/RTO measurement.'),
+    'T18': ('docs/validation/evidence/backup-restore-first-20261102.log', 'scripts/prove-backup-restore.mjs;tests/fixtures/backup-sentinel.ts', 'Archive and database hashes verified with corruption refusals; app/history UI startup and Git relocation remain unverified.'),
+    'T30': ('docs/validation/evidence/backup-restore-first-20261102.log', 'scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs', 'Paused context and uncertain grants preserved without starting an executor; external live effect reconciliation still pending.'),
 }
 for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 13
+assert len(rows) == 111 and len(updates) == 18
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()

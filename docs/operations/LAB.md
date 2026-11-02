@@ -66,3 +66,19 @@ Na execução sintética, a concessão é persistida antes de Cezar iniciar o pr
 `scripts/restore-lab.mjs <arquivo.acbackup> <arquivo.key>` autentica antes de extrair, recusa links/caminhos especiais e confere hashes em um NOVO diretório `.state/restores`. Não importa banco, não reabre admissão, não substitui diretórios existentes. Repositórios com ponteiros Git absolutos ainda exigem tratamento de relocação; extração íntegra não comprova que a aplicação restaurada já possa executar.
 
 Os scripts não devem ser apontados a dados reais. Nunca usar prune global ou remover o volume PG para simular reversão.
+
+### Prova de restauração em cópia
+
+Os scripts de backup e importação agora exigem somente o serviço `db` rodando; outros executores da bancada devem estar parados. O backup registra a ausência de `.state/keys` quando essa fixture opcional não existe. A restauração autentica o arquivo antes de extrair, recusa entradas duplicadas e exige correspondência exata entre o inventário de arquivos e o manifesto. A importação confere novamente o hash do dump antes de criar o banco novo.
+
+O banco importado recebe admissão fechada, leases expiradas, cotas desconhecidas, concessões não liberadas em estado incerto e sessões de browser revogadas. Tokens de bootstrap já restaurados são inutilizados. Pausas e operações concluídas permanecem preservadas. Nada disso inicia runtime, reloca worktrees ou reconcilia efeitos físicos.
+
+Para reproduzir a prova exclusivamente nesta bancada:
+
+```sh
+docker compose -f deploy/compose.lab.yml up -d runtime
+docker compose -f deploy/compose.lab.yml exec -T runtime node --import tsx tests/fixtures/backup-sentinel.ts
+node scripts/prove-backup-restore.mjs
+```
+
+O último script para os executores da bancada, mantém somente seu PostgreSQL, cria backup cifrado e um banco novo de nome aleatório, verifica corrupção de arquivo/dump e compara a origem antes/depois. Preserva o arquivo, sua chave privada separada e a cópia restaurada em `.state/`, sem publicá-los. O resultado público contém apenas estados e contagens. A execução registrada em `backup-restore-first-20261102.log` passou com 2.601 arquivos, sem iniciar aplicação da cópia. Restauração operacional, relocação Git, custódia fora do host e ensaio em outra VM continuam pendentes.

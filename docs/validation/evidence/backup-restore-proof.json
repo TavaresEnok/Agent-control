@@ -1,0 +1,21 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "authenticatedArchive": true,
+  "archiveCorruptionRejected": true,
+  "dumpModificationRejected": true,
+  "pausePreserved": true,
+  "sourceDatabaseUnchanged": true,
+  "admissionClosed": true,
+  "activeGrantsRemainUncertain": true,
+  "safety": {
+    "liveManagers": 0,
+    "availableQuotas": 0,
+    "activeSessions": 0,
+    "unreconciledGrantsWronglyFreed": 0
+  },
+  "sourceFiles": 2601,
+  "archiveBytes": 12421237,
+  "nodeVersion": "v24.22.1",
+  "limitation": "No runtime was started from the copy. Worktree relocation, physical effect reconciliation, off-host key custody and production restore remain unverified."
+}

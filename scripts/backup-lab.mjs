@@ -9,7 +9,7 @@ const root=resolve(new URL('..',import.meta.url).pathname);
 if(process.cwd()!==root)throw Error('RUN_FROM_ISOLATED_REPOSITORY');
 const compose=['compose','-f','deploy/compose.lab.yml'];
 const running=execFileSync('docker',[...compose,'ps','--status','running','--services'],{encoding:'utf8'}).trim().split('\n');
-if(running.includes('runtime'))throw Error('LAB_RUNTIME_MUST_BE_STOPPED');
+if(running.some(service=>service&&service!=='db'))throw Error('LAB_EXECUTORS_MUST_BE_STOPPED');
 if(!running.includes('db'))throw Error('ISOLATED_DATABASE_MUST_BE_RUNNING');
 const backupId=new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomBytes(4).toString('hex');
 const base=join(root,'.state/backups'),work=join(base,'staging-'+backupId),archive=join(base,backupId+'.acbackup'),keyFile=join(base,'keys',backupId+'.key');
@@ -23,14 +23,16 @@ async function scan(relative){
  files.push({path:relative,size:info.size,sha256:hash.digest('hex')});
 }
 try{
- const sources=['.state/happier','.state/projects','.state/keys','.state/browser-fixture.json'];
+ const sources=['.state/happier','.state/projects','.state/browser-fixture.json'],missingOptional=[];
+ try{await lstat(join(root,'.state/keys'));sources.push('.state/keys');}
+ catch(error){if(error.code!=='ENOENT')throw error;missingOptional.push('.state/keys');}
  for(const source of sources)await scan(source);
  const dump=spawn('docker',[...compose,'exec','-T','db','pg_dump','-U','ac_lab','-d','ac_implementation_test','-Fc'],{stdio:['ignore','pipe','inherit']});
  const dumpDone=new Promise((ok,fail)=>{dump.once('error',fail);dump.once('exit',code=>code===0?ok():fail(Error('PG_DUMP_FAILED')));});
  await Promise.all([pipeline(dump.stdout,createWriteStream(join(work,'database.dump'),{mode:0o600})),dumpDone]);
  const databaseHash=createHash('sha256');for await(const chunk of createReadStream(join(work,'database.dump')))databaseHash.update(chunk);
  const manifest={schemaVersion:1,scope:'isolated-synthetic-lab',backupId,root,createdAt:new Date().toISOString(),
-  commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),sources,files,databaseSha256:databaseHash.digest('hex'),
+  commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),sources,missingOptional,files,databaseSha256:databaseHash.digest('hex'),
   limitation:'Requires the same isolated root for absolute Git worktree links. No production restore/admission is authorized.'};
  await writeFile(join(work,'MANIFEST.json'),JSON.stringify(manifest,null,2),{mode:0o600});
  const key=randomBytes(32),iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
@@ -46,5 +48,5 @@ try{
  const result={scope:manifest.scope,archive,tagFile:archive+'.tag',keyFile,sha256:hash.digest('hex'),sourceFiles:files.length,
   size:(await stat(archive)).size,warning:'Key material is local and separate from the archive. Off-host custody is not provided.'};
  await writeFile(archive+'.json',JSON.stringify(result,null,2),{mode:0o600});console.log(JSON.stringify(result));
-}catch(error){await rm(archive,{force:true});await rm(keyFile,{force:true});throw error;}
+}catch(error){for(const path of [archive,archive+'.tag',archive+'.json',keyFile])await rm(path,{force:true});throw error;}
 finally{await rm(work,{recursive:true,force:true});}

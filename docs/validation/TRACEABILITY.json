@@ -431,15 +431,15 @@
   {
     "id": "RF-34",
     "normative_row": "RF-34\tP0\tExportar configuração e relatórios sem credenciais; oferecer backup e restauração\tI7/I8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "syntax_only_not_operational_restore",
-    "evidence": "",
-    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
+    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Lab-only encrypted archive and new-directory extraction implemented. No database import, relocation, off-host custody or operational restore proof."
+    "limitation": "Encrypted synthetic backup extracted and imported into a new closed database; operational startup, relocation and off-host custody pending."
   },
   {
     "id": "RF-35",
@@ -665,15 +665,15 @@
   {
     "id": "RF-52",
     "normative_row": "RF-52\tP0\tAtualizar workers/workflows com estratégia de versões e restaurar a central em modo de reconciliação sem despacho automático\tI5/I7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
+    "files": "scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Restored database admission closed and copied leases/quotas/sessions invalidated; runtime version rollout and restored app startup pending."
   },
   {
     "id": "RF-53",
@@ -860,15 +860,15 @@
   {
     "id": "RNF-10",
     "normative_row": "RNF-10\tRecuperação operacional\tBackup com restauração demonstrada; meta inicial de desastre RPO até 24 h e RTO até 2 h, a confirmar no piloto\tI7/I8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
+    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic database restore in a copy verified; no operational recovery or RPO/RTO measurement."
   },
   {
     "id": "RNF-11",
@@ -1159,15 +1159,15 @@
   {
     "id": "T18",
     "normative_row": "T18\tBackup, restauração e reimportação\tHistórico e política íntegros; tarefas integradas não duplicadas\tRF-33/34, RNF-10\tI7/I8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
+    "files": "scripts/prove-backup-restore.mjs;tests/fixtures/backup-sentinel.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Archive and database hashes verified with corruption refusals; app/history UI startup and Git relocation remain unverified."
   },
   {
     "id": "T19",
@@ -1315,15 +1315,15 @@
   {
     "id": "T30",
     "normative_row": "T30\tRestauração de backup com efeitos externos posteriores e processos ainda vivos\tInicializa em recuperação, reconcilia/neutraliza antigos, preserva pausas e só depois libera novas admissões\tRF-23/34/44/52\tI7/I8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
+    "files": "scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Paused context and uncertain grants preserved without starting an executor; external live effect reconciliation still pending."
   },
   {
     "id": "T31",

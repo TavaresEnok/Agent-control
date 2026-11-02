@@ -133,3 +133,11 @@ O runtime isolado agora executa QA, cada revisor e juiz em contêineres individu
 `isolated-verification-final-20261102.log` contém três testes aprovados: engenharia com três revisores e juiz, retomada após SIGKILL e probe anterior. QA, os três revisores e juiz confirmaram UID 10001, escrita negada no snapshot e caminhos administrativos ausentes. O teto de duas avaliações simultâneas continuou válido. O backend compilou. A implementação do verificador original foi reaproveitada sem alteração.
 
 ADR e limites: `docs/architecture/ADR-003-VERIFICADORES-ISOLADOS.md`. O launcher antigo continua uma fixture local e não foi promovido a bootstrap de produção. Não há modelos reais, isolamento homologado de contas reais, recuperação de crash durante QA/revisão ou revisão independente desta fronteira. As fases completas permanecem abertas.
+
+## Continuação — backup e restauração em cópia
+
+Os scripts agora exigem a parada dos executores da bancada, validam o inventário completo do arquivo e conferem novamente o hash do dump antes de importar. O banco novo recebe admissão fechada, leases expiradas, cotas desconhecidas, concessões abertas incertas e sessões revogadas. Pausas e recibos concluídos não são removidos. A ausência da pasta opcional de chaves é registrada, sem inventar custódia existente.
+
+`backup-restore-first-20261102.log` prova a criação de backup cifrado de 2.601 arquivos, rejeição de arquivo corrompido e dump alterado, extração íntegra e importação em banco novo. A origem foi comparada antes/depois e permaneceu igual. A pausa foi preservada, nenhuma concessão incerta foi liberada e não sobraram leases/cotas/sessões ativas na cópia. Nenhum runtime foi iniciado a partir dela. Os executores da bancada ficaram parados; somente seu banco permaneceu ligado.
+
+Reprodução: `docs/operations/LAB.md`. A cópia ainda contém caminhos Git absolutos da bancada e não foi iniciada como uma central restaurada. Relocação das worktrees, reconciliação física, recuperação off-host e ensaio de RPO/RTO continuam pendentes. Isso não aprova I7/I8 integralmente nem autoriza dados reais.
