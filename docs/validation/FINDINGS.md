@@ -46,3 +46,13 @@ A execução completa nativa Cezar antes das correções de asserção registrou
 | AC-IMP-0026 | Administração/autenticação / alta | aberto | Settings e comandos administrativos idempotentes existem. Rota de escrita exige prova humana distinta, recusada por padrão: o bearer do gerente não ganha permissão administrativa. Pareamento e UX de autorização precisam ser implementados antes de habilitar. |
 | AC-IMP-0027 | Qualidade/integração / alta | implementado sem homologação | Novos Quality/Integrator e wrapper Ruby têm gates por artefato, independência e CAS, mas faltam prova adversarial própria, executor de verificação confiável e ligação ao DAG completo. Repositório autorizado e Ruby são configuração de controlador; não expor ao worker. Não considerar types como prova de merge seguro. |
 | AC-IMP-0028 | Backup/restauração / alta | implementado sem execução operacional | Scripts AES-GCM verificam arquivo antes de extrair em diretório novo. Não importam banco, não reconciliam efeitos, não relocam worktrees nem abrem admissão; custódia off-host não existe. Não declarar restore aprovado. |
+
+## Continuação — escopo sintético (02/11/2026)
+
+| ID | Tipo / severidade | Estado | Evidência / pendência |
+|---|---|---|---|
+| AC-IMP-0029 | Isolamento / crítica | prova limitada; aberto | Probe em contêiner sem rede, com raiz somente leitura, usuário separado e sem socket/segredos observáveis passou em `sandbox-probe-final-20261102.log`. O broker usa socket Docker e o processo de engenharia existente não foi ligado a ele. O probe fixo não valida agentes hostis, nem autoriza produção. |
+| AC-IMP-0030 | Sessão web / alta | implementação parcial; aberto | Cookie opaco e bearer cifrado verificados em `browser-session-20261102.log`. Não há login completo de celular; exigir hostname dedicado e HTTPS, pois cookies não isolam portas. |
+| AC-IMP-0031 | SSH / alta | não homologado | Contratos, host key fixada e reconciliação foram implementados, mas sem demonstração de SSH em host isolado após queda. Não habilitar execução remota real. |
+| AC-IMP-0032 | Recuperação e backup / alta | não homologado | Exportação cifrada e importação para banco novo foram escritas, porém sem recuperação física completa e sem reconciliação provada de efeitos externos ou worktrees. |
+| AC-IMP-0033 | QA e integração / alta | somente sintético | `implementation-continuation-20261102.log` exercita DAG, três revisores, juiz e CAS Git com processos sintéticos. Não demonstra agentes reais, executor confiável isolado ou revisão humana independente. |

@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client';
 import { Authority, Checkpoint, Command, digest, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import { ContextKeys, type EncryptionVariant } from './context-keys.ts';
+import { Template } from './templates.ts';
 import type { CezarRuntime } from './cezar.ts';
 
 type Rpc = {
@@ -160,9 +161,17 @@ export class HappierEndpoint {
   async accept(raw: unknown) {
     const q = UserRequest.parse(raw); await this.validateLink();
     const intentId = stableId(`${this.options.authority.contextId}\0${q.localId}`);
+    const prior=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2 AND principal_id=$3',
+      [intentId,this.options.authority.contextId,this.options.principal])).rows[0];
+    const current=(await this.ledger.pool.query(`SELECT t.snapshot,t.digest FROM ac_contexts c LEFT JOIN ac_context_templates t
+      ON t.context_id=c.id AND t.revision=c.active_template_revision WHERE c.id=$1 AND NOT c.archived`,[this.options.authority.contextId])).rows[0];
+    if(!current)throw new Refusal('CONTEXT_FORBIDDEN',403);
+    const template=current.snapshot?Template.parse(current.snapshot):null;
+    if(template&&digest(template)!==current.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
+    const selected=prior?.command?.payload?.workflow??template?.workflow??'baseline-synthetic-v1';
     const command: Command = { schemaVersion: 1, contextId: this.options.authority.contextId, intentId,
       deliveryAttemptId: randomUUID(), policyRevision: 1, action: 'plan.start',
-      payload: { workflow: 'baseline-synthetic-v1', messageRef: `${q.localId}:${digest(q.text)}` } };
+      payload: { workflow: selected, messageRef: `${q.localId}:${digest(q.text)}` } };
     const intent = await this.ledger.accept(this.options.principal, command, this.options.authority, 'happier');
     // Canonical history is only in Happier. Ledger outbox stores ciphertext for retry, never the text.
     await this.enqueue(q.localId, { role: 'user', content: { type: 'text', text: q.text }, localKey: q.localId, meta: q.meta ?? {} });

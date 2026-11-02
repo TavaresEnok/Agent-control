@@ -46,15 +46,20 @@ export class Capacity {
     if (!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1', [principal])).rowCount)
       throw new Refusal('CONTROL_ADMIN_REQUIRED', 403);
   }
-  async configure(principal: string, value: { programmingLimit: number; evaluationLimit: number; expectedRevision?: number }) {
+  async configure(principal: string, value: { programmingLimit: number; evaluationLimit: number; expectedRevision?: number; originalFallback?: {accountId:string;programmingLimit:number;evaluationLimit:number}|null }) {
     const input = z.object({ programmingLimit: z.number().int().min(1).max(128), evaluationLimit: z.number().int().min(1).max(128),
-      expectedRevision:z.number().int().nonnegative().optional() }).strict().parse(value);
+      expectedRevision:z.number().int().nonnegative().optional(),
+      originalFallback:z.object({accountId:Id,programmingLimit:z.number().int().min(1).max(128),evaluationLimit:z.number().int().min(1).max(128)}).strict().nullable().optional() }).strict().parse(value);
     await this.tx(async c => {
       await this.admin(c, principal);
       await c.query('SELECT pg_advisory_xact_lock(189234,4)');
-      const current=(await c.query('SELECT revision FROM ac_capacity_config WHERE id=1 FOR UPDATE')).rows[0]?.revision??0;
-      if(input.expectedRevision!==undefined&&input.expectedRevision!==current)throw new Refusal('CAPACITY_CONFIG_CONFLICT');
-      await c.query('INSERT INTO ac_capacity_config VALUES(1,1,$1,$2) ON CONFLICT(id) DO UPDATE SET revision=ac_capacity_config.revision+1,programming_limit=$1,evaluation_limit=$2', [input.programmingLimit, input.evaluationLimit]);
+      const current=(await c.query('SELECT * FROM ac_capacity_config WHERE id=1 FOR UPDATE')).rows[0];
+      if(input.expectedRevision!==undefined&&input.expectedRevision!==(current?.revision??0))throw new Refusal('CAPACITY_CONFIG_CONFLICT');
+      const original=input.originalFallback===undefined?(current?.original_account_id?{accountId:current.original_account_id,programmingLimit:current.original_programming_limit,evaluationLimit:current.original_evaluation_limit}:null):input.originalFallback;
+      await c.query(`INSERT INTO ac_capacity_config(id,revision,programming_limit,evaluation_limit,original_account_id,original_programming_limit,original_evaluation_limit)
+        VALUES(1,1,$1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET revision=ac_capacity_config.revision+1,
+        programming_limit=$1,evaluation_limit=$2,original_account_id=$3,original_programming_limit=$4,original_evaluation_limit=$5`,
+        [input.programmingLimit,input.evaluationLimit,original?.accountId??null,original?.programmingLimit??null,original?.evaluationLimit??null]);
     });
   }
   async registerModel(principal: string, raw: {provider: string; model: string; efforts: string[]; roles: Role[]; source: string}) {
@@ -136,7 +141,7 @@ export class Capacity {
   }
   async reserve(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority): Promise<Grant> {
     const request = GrantRequest.parse(raw);
-    return this.tx(async c => {
+    const result = await this.tx<Grant|{blockedCode:string}>(async c => {
       const context = await this.ledger.authorize(c, principal, request.contextId);
       if (request.contextId !== authority.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
       await this.ledger.fence(c, authority);
@@ -157,6 +162,12 @@ export class Capacity {
       if (digest(policy)!==stored.digest) throw new Refusal('POLICY_DIGEST_MISMATCH');
       const chain = policy.roles[request.role];
       if (!chain) throw new Refusal('ROLE_NOT_CONFIGURED');
+      const priority=request.role==='manager'?100:evaluations.includes(request.role)?50:0;
+      const wait=await c.query(`INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,priority)
+        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(attempt_id) DO UPDATE SET manager_epoch=excluded.manager_epoch
+        WHERE ac_capacity_waits.request_digest=excluded.request_digest RETURNING attempt_id`,
+        [request.attemptId,request.contextId,request.intentId,request.role,hash,authority.epoch,priority]);
+      if(!wait.rowCount)throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
       const preferred = (await c.query('SELECT profile_id FROM ac_regular_selections WHERE context_id=$1 AND role=$2 AND policy_revision=$3',
         [request.contextId,request.role,context.capacity_policy_revision])).rows[0]?.profile_id;
       const regular = preferred && chain.regular.includes(preferred) ? [preferred,...chain.regular.filter(p=>p!==preferred)] : chain.regular;
@@ -168,19 +179,46 @@ export class Capacity {
       const available = (id: string) => candidates.rows.find(p=>p.id===id && p.enabled && p.eligibility==='documented_supported' && p.quota==='available');
       // Saturation does not imply exhausted quota: wait rather than spilling into another subscription.
       const selectedId = ids.find(id=>available(id));
-      if (!selectedId) throw new Refusal('NO_ELIGIBLE_CAPACITY');
+      if (!selectedId) {
+        await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY' WHERE attempt_id=$1",[request.attemptId]);
+        return {blockedCode:'NO_ELIGIBLE_CAPACITY'};
+      }
       const selected = available(selectedId)!;
+      await c.query('UPDATE ac_capacity_waits SET desired_profile=$2 WHERE attempt_id=$1',[request.attemptId,selected.id]);
+      const first=(await c.query(`SELECT w.attempt_id FROM ac_capacity_waits w JOIN ac_profiles p ON p.id=w.desired_profile
+        JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
+        JOIN ac_intents i ON i.id=w.intent_id
+        JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
+        WHERE p.account_id=$1 AND p.enabled AND i.state NOT IN ('done','review','failed','canceled') AND NOT x.paused
+        AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
+        ORDER BY w.priority DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
+      if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const isEvaluation = evaluations.includes(request.role);
       const group = isEvaluation ? evaluations : request.role==='programmer' ? ['programmer'] : ['manager'];
       const counts = (await c.query(`SELECT
         count(*) FILTER(WHERE account_id=$1) account,
+        count(*) FILTER(WHERE account_id=$1 AND role=ANY($3::text[])) account_role,
         count(*) FILTER(WHERE context_id=$2 AND role=ANY($3::text[])) context,
         count(*) FILTER(WHERE role=ANY($3::text[])) global
         FROM ac_capacity_grants WHERE state<>'released'`, [selected.account_id,request.contextId,group])).rows[0];
       const localLimit = isEvaluation ? policy.maxEvaluatorsPerContext : request.role==='programmer' ? policy.maxProgrammersPerContext : 1;
       const globalLimit = isEvaluation ? config.evaluation_limit : request.role==='programmer' ? config.programming_limit : Infinity;
-      if (Number(counts.account)>=selected.max_concurrent || Number(counts.context)>=localLimit || Number(counts.global)>=globalLimit)
-        throw new Refusal('CAPACITY_BUSY');
+      let originalLimit=Infinity;
+      if(config.original_account_id===selected.account_id&&(request.role==='programmer'||isEvaluation)){
+        const other=(await c.query(`SELECT 1 FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id
+          JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
+          CROSS JOIN LATERAL jsonb_each(r.snapshot->'roles') chain
+          CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(chain.value->'regular','[]'::jsonb)||COALESCE(chain.value->'emergency','[]'::jsonb)) member
+          JOIN ac_profiles p ON p.id=member.value::uuid JOIN ac_accounts a ON a.id=p.account_id
+          JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=x.project_id
+          JOIN ac_quota_observations q ON q.account_id=a.id
+          WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled
+          AND p.role IN ('programmer','reviewer','qa','specialist','judge') AND a.eligibility='documented_supported'
+          AND q.status='available' AND q.expires_at>clock_timestamp() LIMIT 1`,[selected.account_id])).rowCount;
+        if(!other)originalLimit=isEvaluation?config.original_evaluation_limit:config.original_programming_limit;
+      }
+      if (Number(counts.account)>=selected.max_concurrent || Number(counts.context)>=localLimit || Number(counts.global)>=globalLimit || Number(counts.account_role)>=originalLimit)
+        {await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_BUSY' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_BUSY'};}
       const emergency = chain.emergency.includes(selected.id);
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
@@ -191,8 +229,15 @@ export class Capacity {
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,
         [request.contextId,request.role,selected.id,context.capacity_policy_revision]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.reserved',$2)", [request.contextId,{grantId:grant.id,attemptId:request.attemptId,profileId:selected.id,emergency}]);
+      await c.query('DELETE FROM ac_capacity_waits WHERE attempt_id=$1',[request.attemptId]);
       return grant;
     });
+    if('blockedCode' in result)throw new Refusal(result.blockedCode);
+    return result;
+  }
+  async cancelWait(principal:string,attemptId:string,authority:Authority){
+    await this.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+      await c.query('DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2',[Id.parse(attemptId),authority.contextId]);});
   }
   async transition(principal: string, grantId: string, authority: Authority, next: 'running'|'uncertain'|'released', receipt?: { processId: string; state: 'exited'|'not_started' }) {
     const parsedReceipt = receipt === undefined ? undefined : z.object({ processId: z.string().min(1).max(200), state: z.enum(['exited','not_started']) }).strict().parse(receipt);

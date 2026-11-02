@@ -8,22 +8,16 @@ import { z } from 'zod';
 import { RunManager } from '../upstream/cezar/packages/cezar/dist/workflows/run.js';
 import { RunStore } from '../upstream/cezar/packages/cezar/dist/runs/store.js';
 import { createApp } from '../upstream/cezar/packages/cezar/dist/server/server.js';
-import { workflowDefSchema } from '../upstream/cezar/packages/cezar/dist/workflows/types.js';
 import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/dist/core/runner-factory.js';
 import type { AgentRunner, AgentSession, AgentEvent, AgentRunResult } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import { Authority, digest, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
+import { baselineWorkflow,workflowFor } from './workflows.ts';
+import { EngineeringStages,type EngineeringOptions } from './engineering.ts';
+import { Template } from './templates.ts';
+export { baselineWorkflow } from './workflows.ts';
 
-export const baselineWorkflow = workflowDefSchema.parse({
-  name: 'baseline-synthetic-v1', source: 'built-in',
-  steps: [{ id: 'implement', name: 'Synthetic implementation', prompt: 'Execute the fixed isolated baseline fixture.' }],
-  graph: { version: 2, nodes: [
-    { id: 'start', type: 'start' },
-    { id: 'implement', type: 'agent', name: 'Synthetic implementation', prompt: 'Execute the fixed isolated baseline fixture.' },
-    { id: 'done', type: 'end', status: 'success' },
-  ], edges: [{ from: 'start', to: 'implement' }, { from: 'implement', to: 'done' }] },
-});
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/), tree: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   exitCode: z.literal(0), synthetic: z.literal(true) }).strict();
@@ -35,6 +29,7 @@ function terminate(child:ChildProcess,signal:NodeJS.Signals){
 /** Sole DAG owner is Cezar. This adapter admits a frozen definition and projects its state. */
 export class CezarRuntime {
   readonly capacity: Capacity;
+  readonly engineering:EngineeringStages|undefined;
   readonly store: RunStore;
   readonly manager: RunManager;
   readonly native;
@@ -43,15 +38,16 @@ export class CezarRuntime {
   private readonly children = new Set<ChildProcess>();
   private running = true;
   private lock: import('pg').PoolClient | undefined;
-  constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string) {
+  constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions) {
     this.capacity = new Capacity(ledger);
+    this.engineering=engineeringOptions?new EngineeringStages(ledger,projectId,engineeringOptions):undefined;
     this.store = RunStore.open(join(repo, '.ai/cezar'), { keepLive: true });
     requireManagedRunnerBoundary();
     this.manager = new RunManager(this.store, repo, { managed: {
       authorizeStart: (workflow, input) => {
         if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
         const current = this.invocation.getStore();
-        if (!current || digest(workflow) !== digest(baselineWorkflow) || input.task !== `Intent ${current.intent.id}` || input.dispatch)
+        if (!current || digest(workflow) !== digest(workflowFor(current.intent.command.payload.workflow)) || input.task !== `Intent ${current.intent.id}` || input.dispatch)
           throw new Refusal('UNAPPROVED_PLAN');
         return current.intent.run_id;
       },
@@ -69,6 +65,7 @@ export class CezarRuntime {
     this.lock = c;
     const lost = () => {
       this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
+      this.engineering?.close();
       if (this.lock === c) { this.lock = undefined; c.release(true); }
     };
     c.on('error', lost); c.on('end', lost);
@@ -76,9 +73,11 @@ export class CezarRuntime {
   }
   async dispatch(intent: Intent, authority: Authority) {
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    const workflow=workflowFor(intent.command.payload.workflow);
+    if(workflow.name==='engineering-synthetic-v1'&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
     const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
       FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1`,[intent.id])).rows[0];
-    if (!identity || identity.operation_id!==intent.operation_id || identity.context_id!==intent.context_id || identity.run_id!==intent.run_id || identity.plan_revision!==intent.plan_revision)
+    if (!identity || identity.operation_id!==intent.operation_id || identity.context_id!==intent.context_id || identity.run_id!==intent.run_id || identity.plan_revision!==intent.plan_revision || digest(identity.command)!==digest(intent.command))
       throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
     if (identity.project_id!==this.projectId) throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
     const grant = identity.operation_state === 'registered' ? await this.capacity.reserve(identity.principal_id,
@@ -88,7 +87,7 @@ export class CezarRuntime {
       if (intent.context_id !== authority.contextId) throw new Refusal('EFFECT_SCOPE_MISMATCH');
       const recorded = (await c.query<Intent>('SELECT * FROM ac_intents WHERE id=$1 FOR UPDATE', [intent.id])).rows[0];
       if (!recorded || recorded.context_id !== intent.context_id || recorded.operation_id !== intent.operation_id ||
-        recorded.run_id !== intent.run_id || recorded.plan_revision !== intent.plan_revision)
+        recorded.run_id !== intent.run_id || recorded.plan_revision !== intent.plan_revision || digest(recorded.command)!==digest(intent.command))
         throw new Refusal('INTENT_IDENTITY_MISMATCH', 403);
       const context = await c.query('SELECT project_id FROM ac_contexts WHERE id=$1', [intent.context_id]);
       if (context.rows[0]?.project_id !== this.projectId) throw new Refusal('PROJECT_RUNTIME_MISMATCH', 403);
@@ -99,15 +98,28 @@ export class CezarRuntime {
         await c.query('UPDATE ac_operations SET grant_id=$2 WHERE id=$1 AND (grant_id IS NULL OR grant_id=$2)',[intent.operation_id,grant.id]);
       }
       await c.query(`INSERT INTO ac_frozen_plans VALUES($1,$2,$3,$4,$5) ON CONFLICT(context_id,revision) DO NOTHING`,
-        [intent.context_id, intent.plan_revision, intent.id, digest(baselineWorkflow), baselineWorkflow]);
+        [intent.context_id, intent.plan_revision, intent.id, digest(workflow), workflow]);
       const snapshot = await c.query('SELECT digest FROM ac_frozen_plans WHERE intent_id=$1', [intent.id]);
-      if (snapshot.rows[0]?.digest !== digest(baselineWorkflow)) throw new Refusal('FROZEN_PLAN_MISMATCH');
+      if (snapshot.rows[0]?.digest !== digest(workflow)) throw new Refusal('FROZEN_PLAN_MISMATCH');
+      if(workflow.name==='engineering-synthetic-v1'){
+        const chosen=(await c.query('SELECT snapshot,digest FROM ac_intent_templates WHERE intent_id=$1',[intent.id])).rows[0];
+        if(!chosen)throw new Refusal('TEMPLATE_REQUIRED');
+        const template=Template.parse(chosen.snapshot);
+        if(digest(template)!==chosen.digest||template.workflow!=='engineering-synthetic-v1')throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
+        const contract={qualityRevision:template.qualityRevision,targetRef:template.targetRef};
+        const allowed=this.engineeringOptions!.allowedTargets??(this.engineeringOptions!.targetRef?[this.engineeringOptions!.targetRef]:[]);
+        if(!allowed.includes(contract.targetRef))throw new Refusal('INTEGRATION_TARGET_FORBIDDEN',403);
+        await c.query('INSERT INTO ac_execution_contracts VALUES($1,$2,$3,$4,$5) ON CONFLICT(intent_id) DO NOTHING',
+          [intent.id,this.projectId,contract.qualityRevision,contract.targetRef,digest(contract)]);
+        const stored=(await c.query('SELECT digest FROM ac_execution_contracts WHERE intent_id=$1',[intent.id])).rows[0];
+        if(stored.digest!==digest(contract))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
+      }
       const existing = this.store.getRun(intent.run_id);
       if (existing) return;
       if (current.rows[0].state !== 'registered') throw new Refusal('OPERATION_UNCERTAIN');
       this.authorities.set(intent.run_id, authority);
       // startRun persists a stable run ID before enqueue; the runner checks epoch again at spawn.
-      this.invocation.run({ intent, authority }, () => this.manager.startRun(baselineWorkflow,
+      this.invocation.run({ intent, authority }, () => this.manager.startRun(workflow,
         { task: `Intent ${intent.id}`, runner: 'claude', worktree: true, generateFollowups: false }));
       this.store.flush({ throwOnError: true });
     });
@@ -150,6 +162,22 @@ export class CezarRuntime {
       backend: 'claude',
       async run() { throw new Refusal('ONE_SHOT_DISABLED'); }, async interrupt() {},
       startSession(spec, onEvent): AgentSession {
+        const runId=spec.env?.CEZ_TASK_ID;
+        const run=runId?runtime.store.getRun(runId):undefined;
+        const nodeId=spec.env?.AC_MANAGED_NODE_ID;
+        if(run?.workflow==='engineering-synthetic-v1'&&nodeId!=='implement'){
+          if(!runtime.engineering||!runId||!nodeId)throw new Refusal('ENGINEERING_NODE_NOT_ADMITTED');
+          const authority=runtime.authorities.get(runId);if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+          const result=(async()=>{
+            const intent=(await runtime.ledger.pool.query<Intent>('SELECT * FROM ac_intents WHERE run_id=$1',[runId])).rows[0];
+            if(!intent)throw new Refusal('INTENT_MISSING');
+            return runtime.engineering!.start(intent,authority,nodeId,spec,onEvent);
+          })();
+          let active:AgentSession|undefined,opened=true,cancelled=false;
+          return {result:result.then(session=>{active=session;if(cancelled)session.hardStop?.();return session.result;}).finally(()=>{opened=false;}),
+            get open(){return opened;},get pid(){return active?.pid;},sendMessage(){return false;},end(){active?.end();},
+            interrupt(){cancelled=true;return active?.interrupt();},hardStop(){cancelled=true;active?.hardStop?.();}};
+        }
         let child: ChildProcess | undefined, open = true, canceled = false;
         let monitor:ReturnType<typeof setInterval>|undefined;
         let completion:Promise<number|null>|undefined;
@@ -200,8 +228,8 @@ export class CezarRuntime {
             const startTime=proc.slice(proc.lastIndexOf(')')+2).split(' ')[19];
             if(!/^\d+$/.test(startTime??''))throw new Refusal('PROCESS_IDENTITY_UNAVAILABLE');
             const bootId=(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim();
-            await c.query("UPDATE ac_operations SET state='running',handle=$2 WHERE id=$1", [intent.operation_id,
-              { pid: child.pid, startTime, bootId, operationId: intent.operation_id, epoch: authority.epoch, synthetic: true }]);
+            await c.query("UPDATE ac_operations SET state='running',handle=$2,native_session_id=$3 WHERE id=$1", [intent.operation_id,
+              { pid: child.pid, startTime, bootId, operationId: intent.operation_id, epoch: authority.epoch, synthetic: true },z.uuid().parse(spec.sessionId)]);
           });
           if (!child) throw new Refusal('PROCESS_MISSING');
           const processChild = child;
@@ -239,6 +267,7 @@ export class CezarRuntime {
   }
   async close() {
     this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
+    this.engineering?.close();
     this.manager.dispose(); this.store.flush();
     if (this.lock) { await this.lock.query('SELECT pg_advisory_unlock(hashtextextended($1,1))', [this.repo]); this.lock.release(); this.lock = undefined; }
   }

@@ -36,7 +36,7 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
   const repo = await mkdtemp(resolve('.state/projects/ac-happier-'));
   const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
   git('init', '-q', '-b', 'main'); git('config', 'user.name', 'Synthetic fixture'); git('config', 'user.email', 'fixture@example.invalid');
-  await writeFile(join(repo, 'README.md'), 'Isolated integration fixture\n'); git('add', '.'); git('commit', '-qm', 'base');
+  await writeFile(join(repo, 'README.md'), 'Isolated integration fixture\n'); git('add', '.'); git('commit', '-qm', 'base'); git('branch','protected');
   await mkdir(join(repo, '.ai/cezar'), { recursive: true });
   await writeFile(join(repo, '.ai/cezar/config.json'), JSON.stringify({ baseBranch: 'main', skillsRepos: [], maxParallel: 2, worktreeRetention: 0 }));
   const project = randomUUID(); await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Two chats / one project']);

@@ -1,0 +1,153 @@
+
+> build:server
+> npm run build -w @open-mercato/cezar
+
+
+> @open-mercato/cezar@0.19.0 prebuild
+> node scripts/sync-readme.mjs
+
+
+> @open-mercato/cezar@0.19.0 build
+> tsc
+
+
+> @open-mercato/cezar@0.19.0 postbuild
+> node scripts/inline-contract.mjs
+
+inline-contract ok — contract bundled with declarations, 137 file(s) repointed
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+
+> agent-control@0.1.0 test
+> node --import tsx --test --test-concurrency=1 tests/*.test.ts
+
+TAP version 13
+# Subtest: global closed admission refuses new effects while allowing reconciliation and preserves context pause
+ok 1 - global closed admission refuses new effects while allowing reconciliation and preserves context pause
+  ---
+  duration_ms: 222.672518
+  type: 'test'
+  ...
+# Subtest: same subscription cannot be registered under another account alias; read-only members cannot change it
+ok 2 - same subscription cannot be registered under another account alias; read-only members cannot change it
+  ---
+  duration_ms: 210.270463
+  type: 'test'
+  ...
+# Subtest: concurrent reservations across two PG clients share one account slot; same attempt deduplicates
+ok 3 - concurrent reservations across two PG clients share one account slot; same attempt deduplicates
+  ---
+  duration_ms: 63.860738
+  type: 'test'
+  ...
+# Subtest: unknown quota is not availability; fallback stays regular after the earlier account recovers
+ok 4 - unknown quota is not availability; fallback stays regular after the earlier account recovers
+  ---
+  duration_ms: 52.813892
+  type: 'test'
+  ...
+# Subtest: emergency yields future attempts when a regular account recovers, without disturbing an existing grant
+ok 5 - emergency yields future attempts when a regular account recovers, without disturbing an existing grant
+  ---
+  duration_ms: 37.291901
+  type: 'test'
+  ...
+# Subtest: uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt
+ok 6 - uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt
+  ---
+  duration_ms: 45.494632
+  type: 'test'
+  ...
+# Subtest: published revisions remain immutable and an in-flight grant keeps its original policy
+ok 7 - published revisions remain immutable and an in-flight grant keeps its original policy
+  ---
+  duration_ms: 62.479462
+  type: 'test'
+  ...
+# Subtest: old manager cannot reserve; successor cannot release an unreconciled old grant
+ok 8 - old manager cannot reserve; successor cannot release an unreconciled old grant
+  ---
+  duration_ms: 51.981094
+  type: 'test'
+  ...
+# Subtest: key rotation revokes the endpoint and its effect authority without removing the human pause
+ok 9 - key rotation revokes the endpoint and its effect authority without removing the human pause
+  ---
+  duration_ms: 159.096946
+  type: 'test'
+  ...
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 10 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 340.541329
+  type: 'test'
+  ...
+# Subtest: engineering DAG records independent verification before conditional integration
+ok 11 - engineering DAG records independent verification before conditional integration
+  ---
+  duration_ms: 1822.720432
+  type: 'test'
+  ...
+# Subtest: C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+ok 12 - C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+  ---
+  duration_ms: 9099.002982
+  type: 'test'
+  ...
+# Subtest: history refuses a non-progressing cursor rather than silently truncating
+ok 13 - history refuses a non-progressing cursor rather than silently truncating
+  ---
+  duration_ms: 48.770023
+  type: 'test'
+  ...
+# Subtest: history rejects duplicate or reversed sequence numbers
+ok 14 - history rejects duplicate or reversed sequence numbers
+  ---
+  duration_ms: 3.284732
+  type: 'test'
+  ...
+# Subtest: RF-03/04: same project has independent context and session identities
+ok 15 - RF-03/04: same project has independent context and session identities
+  ---
+  duration_ms: 79.986358
+  type: 'test'
+  ...
+# Subtest: RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+ok 16 - RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+  ---
+  duration_ms: 37.240865
+  type: 'test'
+  ...
+# Subtest: RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+ok 17 - RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+  ---
+  duration_ms: 135.361416
+  type: 'test'
+  ...
+# Subtest: checkpoint tracks new plans atomically and rejects an older snapshot
+ok 18 - checkpoint tracks new plans atomically and rejects an older snapshot
+  ---
+  duration_ms: 47.56256
+  type: 'test'
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 19 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 2294.567098
+  type: 'test'
+  ...
+1..19
+# tests 19
+# suites 0
+# pass 19
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 22163.685205

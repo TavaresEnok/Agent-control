@@ -1,0 +1,25 @@
+TAP version 13
+# Subtest: isolated Docker worker has no administrative socket, peer credentials or network
+not ok 1 - isolated Docker worker has no administrative socket, peer credentials or network
+  ---
+  duration_ms: 703.270976
+  type: 'test'
+  location: '/workspace/tests/sandbox.test.ts:1:303'
+  failureType: 'testCodeFailure'
+  error: 'INVALID_REQUEST'
+  code: 'INVALID_REQUEST'
+  stack: |-
+    IncomingMessage.<anonymous> (/workspace/src/sandbox-client.ts:20:138)
+    IncomingMessage.emit (node:events:531:35)
+    endReadableNT (node:internal/streams/readable:1698:12)
+    process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1361.424307

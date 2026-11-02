@@ -1,0 +1,32 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "actualComponents": [
+    "PostgreSQL",
+    "Cezar RunManager",
+    "Git",
+    "Ruby helper",
+    "OS processes"
+  ],
+  "independentVerifierSessions": 5,
+  "reviewers": 3,
+  "judge": 1,
+  "maxSimultaneousReviews": 2,
+  "stages": [
+    "integrate",
+    "judge",
+    "qa",
+    "review",
+    "review",
+    "review"
+  ],
+  "verifiedTree": "f523633cd76c3b7a8361abe91ecf3eecdb26d691",
+  "denied": [
+    "changed artifact",
+    "implementation session reused",
+    "invalid signature",
+    "moved base"
+  ],
+  "replayDoesNotRewriteRef": true,
+  "limitation": "Synthetic fixed processes; no LLM reviewer, hostile sandbox, mobile client, or production deployment."
+}

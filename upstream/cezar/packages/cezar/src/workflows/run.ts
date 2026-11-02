@@ -7936,7 +7936,7 @@ export class RunManager {
             state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
-          env: stepProfile.env,
+          env: this.managed ? { ...stepProfile.env, AC_MANAGED_NODE_ID: step.id } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepMcp,
           model: backendModel,

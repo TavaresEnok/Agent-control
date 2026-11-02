@@ -4,15 +4,15 @@ import type pg from 'pg';
 import { Authority, Id, digest, canonical, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import type { GitArtifacts } from './git.ts';
+import { QualityPolicy,QualityPolicies } from './quality-policy.ts';
+export { QualityPolicy } from './quality-policy.ts';
 const GitId=z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
-export const QualityPolicy=z.object({schemaVersion:z.literal(1),requiredReviews:z.number().int().min(1).max(3),
-  allowLowRiskQaWaiver:z.boolean(),requireHumanIntegration:z.boolean().default(true)}).strict();
 export const ArtifactInput=z.object({id:Id,contextId:Id,intentId:Id,implementationGrantId:Id,implementationSessionId:Id,
   policyRevision:z.number().int().positive(),commit:GitId,tree:GitId,base:GitId,risk:z.enum(['low','medium','high'])}).strict();
-export const VerificationReceipt=z.object({schemaVersion:z.literal(1),id:Id,artifactId:Id,kind:z.enum(['qa','review']),
+export const VerificationReceipt=z.object({schemaVersion:z.literal(1),id:Id,artifactId:Id,kind:z.enum(['qa','review','judge']),
   sessionId:Id,grantId:Id,policyRevision:z.number().int().positive(),commit:GitId,tree:GitId,base:GitId,
   status:z.enum(['passed','failed','canceled','missing_result','stale']),exitCode:z.number().int(),
-  logSha256:z.string().regex(/^[a-f0-9]{64}$/),commandDigest:z.string().regex(/^[a-f0-9]{64}$/),
+  verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),logSha256:z.string().regex(/^[a-f0-9]{64}$/),commandDigest:z.string().regex(/^[a-f0-9]{64}$/),
   verifierVersion:z.string().min(1).max(100)}).strict();
 export type VerificationReceipt=z.infer<typeof VerificationReceipt>;
 export type ArtifactRow={id:string;context_id:string;intent_id:string;implementation_grant_id:string;implementation_session_id:string;
@@ -28,15 +28,7 @@ export class Quality {
       throw new Refusal('PROJECT_OWNER_REQUIRED',403);
   }
   async publish(principal:string,projectId:string,expectedRevision:number,raw:z.input<typeof QualityPolicy>){
-    const policy=QualityPolicy.parse(raw);
-    return this.ledger.tx(async c=>{
-      await this.owner(c,principal,projectId);
-      await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE',[projectId]);
-      const current=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_quality_policies WHERE project_id=$1',[projectId])).rows[0].revision);
-      if(current!==expectedRevision)throw new Refusal('QUALITY_POLICY_CONFLICT');
-      await c.query('INSERT INTO ac_quality_policies VALUES($1,$2,$3,$4)',[projectId,current+1,policy,digest(policy)]);
-      return current+1;
-    });
+    return new QualityPolicies(this.ledger).publish(principal,projectId,expectedRevision,raw);
   }
   async register(principal:string,raw:z.input<typeof ArtifactInput>,authority:Authority){
     const value=ArtifactInput.parse(raw);
@@ -79,9 +71,15 @@ export class Quality {
       if(!artifact)throw new Refusal('ARTIFACT_FORBIDDEN',403);
       if(receipt.commit!==artifact.commit_id||receipt.tree!==artifact.tree_id||receipt.base!==artifact.base_id||receipt.policyRevision!==artifact.policy_revision)
         throw new Refusal('VERIFICATION_ARTIFACT_MISMATCH');
+      const recordedPolicy=(await c.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
+        [artifact.project_id,artifact.policy_revision])).rows[0];
+      const policy=QualityPolicy.parse(recordedPolicy?.snapshot);
+      if(digest(policy)!==recordedPolicy.digest||!policy.verifierDigest||policy.verifierDigest!==receipt.verifierDigest)
+        throw new Refusal('VERIFIER_VERSION_MISMATCH');
       if(receipt.sessionId===artifact.implementation_session_id||receipt.grantId===artifact.implementation_grant_id)
         throw new Refusal('VERIFICATION_NOT_INDEPENDENT');
-      const role=receipt.kind==='qa'?'qa':'reviewer';
+      const role=receipt.kind==='qa'?'qa':receipt.kind==='judge'?'judge':'reviewer';
+      if(receipt.kind==='judge')await this.assertReady(c,artifact.id,authority,{ignoreJudge:true});
       const grant=await c.query(`SELECT 1 FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 AND intent_id=$3
         AND role=$4 AND state='released' AND physical_receipt IS NOT NULL`,[receipt.grantId,artifact.context_id,artifact.intent_id,role]);
       if(!grant.rowCount)throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
@@ -107,7 +105,7 @@ export class Quality {
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[row.context_id,{artifactId,reasonRef:reason}]);
     });
   }
-  async assertReady(c:pg.PoolClient,artifactId:string,authority:Authority):Promise<ArtifactRow>{
+  async assertReady(c:pg.PoolClient,artifactId:string,authority:Authority,options:{ignoreJudge?:boolean}={}):Promise<ArtifactRow>{
     await this.ledger.fence(c,authority,true);
     const artifact=(await c.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[artifactId,authority.contextId])).rows[0];
     if(!artifact)throw new Refusal('ARTIFACT_FORBIDDEN',403);
@@ -122,6 +120,7 @@ export class Quality {
     const waived=(await c.query('SELECT 1 FROM ac_qa_waivers WHERE artifact_id=$1',[artifactId])).rowCount;
     if(!qa.length&&!(waived&&artifact.risk==='low'&&policy.allowLowRiskQaWaiver))throw new Refusal('QA_MISSING');
     if(evidence.filter(e=>e.kind==='review').length<policy.requiredReviews)throw new Refusal('REVIEWS_MISSING');
+    if(policy.requireJudge&&!options.ignoreJudge&&evidence.filter(e=>e.kind==='judge').length!==1)throw new Refusal('JUDGMENT_MISSING');
     return artifact;
   }
   async approveIntegration(principal:string,artifactId:string,targetRef:string){

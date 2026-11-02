@@ -4,16 +4,45 @@ import { Command, Authority, Id, Refusal, Projection } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import type { CezarRuntime } from './cezar.ts';
 import { Control, ControlCommand } from './control.ts';
+import { OperatorProof,Operators } from './operator.ts';
+import type { BrowserSessions } from './sessions.ts';
+import {readFile,realpath} from 'node:fs/promises';
+import {resolve,sep} from 'node:path';
+
+// Only immutable public UI files are served without a session. Never delegate an
+// unauthenticated request to the embedded server, which owns privileged routes.
+async function publicUi(path:string):Promise<Response|null>{
+  let file:string, type:string;
+  if(path==='/icon.svg'){file='icon.svg';type='image/svg+xml';}
+  else if(/^\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|woff2|png|svg)$/.test(path)){
+    file=path.slice(1);const ext=file.split('.').pop();
+    type=({js:'text/javascript',css:'text/css',woff2:'font/woff2',png:'image/png',svg:'image/svg+xml'} as Record<string,string>)[ext!];
+  }else if(path==='/'||/^\/(?:tasks|p|settings)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)){
+    file='index.html';type='text/html; charset=utf-8';
+  }else return null;
+  try{
+    const root=await realpath(resolve('upstream/cezar/packages/cezar/web/dist'));
+    const actual=await realpath(resolve(root,file));
+    if(!actual.startsWith(root+sep))return null;
+    return new Response(await readFile(actual),{headers:{'content-type':type,'cache-control':'no-cache','x-content-type-options':'nosniff'}});
+  }catch{return null;}
+}
 
 export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string) => Promise<boolean> = async () => false,
-  authorizeControl: (request: Request, principal: string) => Promise<boolean> = async () => false) {
+  sessions?: BrowserSessions) {
   const app = new Hono<{ Variables: { principal: string } }>();
   const control = new Control(ledger);
   app.use('*', async (c, next) => {
-    const principal = await authenticate(c.req.raw);
+    if(sessions&&c.req.method==='GET'){
+      const ui=await publicUi(c.req.path);if(ui)return ui;
+    }
+    if(c.req.path==='/api/v1/ac/auth/session'&&c.req.method==='POST'&&sessions)return next();
+    const bearer=c.req.raw.headers.get('authorization');
+    const principal = bearer?await authenticate(c.req.raw):await sessions?.authenticate(c.req.raw)??await authenticate(c.req.raw);
+    if(principal&&!bearer&&sessions)sessions.checkOrigin(c.req.raw);
     if (!principal) return c.json({ error: 'AUTH_REQUIRED' }, 401);
     c.set('principal', principal); await next();
   });
@@ -24,19 +53,28 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
   });
   const family = app
+    .post('/api/v1/ac/auth/session',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.issue(c.req.raw);})
+    .post('/api/v1/ac/auth/logout',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.revoke(c.req.raw);})
     .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: 'isolated-synthetic' }))
+    .post('/api/v1/ac/operator/bootstrap',async c=>{
+      const value=z.object({deviceId:Id,publicKey:z.string().min(40).max(200),token:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(await c.req.json());
+      await new Operators(ledger).bootstrap(c.get('principal'),value);
+      return c.json({state:'active'});
+    })
     .get('/api/v1/ac/contexts', async c => {
       const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.plan_revision,x.capacity_policy_revision,s.session_id
         FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
-        JOIN ac_session_links s ON s.context_id=x.id WHERE x.project_id=$1 AND m.principal_id=$2 ORDER BY x.created_at`,
+        JOIN ac_session_links s ON s.context_id=x.id WHERE x.project_id=$1 AND m.principal_id=$2 AND NOT x.archived ORDER BY x.created_at`,
         [runtime.projectId,c.get('principal')]);
       return c.json({contexts:rows.rows});
     })
     .get('/api/v1/ac/contexts/:id/resources', async c => c.json(await control.view(c.get('principal'),Id.parse(c.req.param('id')))))
     .post('/api/v1/ac/control', async c => {
-      if(!await authorizeControl(c.req.raw,c.get('principal')))throw new Refusal('HUMAN_CONTROL_AUTH_REQUIRED',403);
-      const command=ControlCommand.parse(await c.req.json());
-      return c.json(await control.execute(c.get('principal'),command));
+      const encoded=c.req.header('x-ac-operator-proof');
+      if(!encoded||encoded.length>2000)throw new Refusal('HUMAN_CONTROL_AUTH_REQUIRED',403);
+      const proof=OperatorProof.parse(JSON.parse(Buffer.from(encoded,'base64url').toString('utf8')));
+      const command=await c.req.json();
+      return c.json(await control.execute(c.get('principal'),command,proof));
     })
     .post('/api/v1/ac/contexts', async c => {
       const body = z.object({ projectId: Id, happierSessionId: z.string().min(1) }).strict().parse(await c.req.json());

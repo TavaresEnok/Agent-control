@@ -14,7 +14,7 @@ for name in ['cezar','happier']:
   value=os.readlink(p).encode() if p.is_symlink() else p.read_bytes()
   blob=hashlib.sha1(b'blob '+str(len(value)).encode()+b'\0'+value).hexdigest()
   if blob!=old:result[name].append({'path':rel,'upstream_blob':old,'current_blob':blob,'sha256':hashlib.sha256(value).hexdigest()})
-for rel in ['packages/web/src/components/composer/canonical-chat.test.tsx','packages/cezar/src/git-worktree-identity.test.ts','packages/web/src/routes/settings/agent-control-section.tsx']:
+for rel in ['packages/web/src/components/composer/canonical-chat.test.tsx','packages/cezar/src/git-worktree-identity.test.ts','packages/web/src/routes/settings/agent-control-section.tsx','packages/web/src/routes/settings/agent-control-operator.ts']:
  p=root/'upstream/cezar'/rel
  result['cezar'].append({'path':rel,'change':'added','sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
 (root/'upstream/CHANGES.json').write_text(json.dumps(result,indent=2)+'\n')

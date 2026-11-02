@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import { Refusal } from './contracts.ts';
 const GitId=z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
@@ -28,6 +29,13 @@ export class GitArtifacts{
   GitId.parse(candidate);GitId.parse(base);
   const value=Identity.parse(await this.invoke({action:'identity',candidate,base}));
   if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  return value;
+ }
+ async snapshot(candidate:string,base:string,destination:string){
+  GitId.parse(candidate);GitId.parse(base);
+  const requested=resolve(destination);
+  const value=Identity.extend({snapshot:z.string()}).strict().parse(await this.invoke({action:'snapshot',candidate,base,destination:requested}));
+  if(value.commit!==candidate||value.base!==base||value.snapshot!==requested)throw new Refusal('GIT_SNAPSHOT_MISMATCH');
   return value;
  }
  async cas(candidate:string,base:string,targetRef:string,operationId:string){

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
 import { Authority, Checkpoint, Command, digest, Refusal, Projection } from './contracts.ts';
+import { workflowFor } from './workflows.ts';
+import { Template } from './templates.ts';
 
 export type Intent = { id: string; context_id: string; operation_id: string; run_id: string;
   manager_epoch: string; plan_revision: number; state: string; command: Command };
@@ -30,7 +32,7 @@ export class Ledger {
   }
   async authorize(c: pg.PoolClient, principal: string, contextId: string, write = true) {
     const r = await c.query(`SELECT x.*,m.role FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
-      WHERE x.id=$1 AND m.principal_id=$2 FOR UPDATE OF x`, [contextId, principal]);
+      WHERE x.id=$1 AND m.principal_id=$2 AND NOT x.archived FOR UPDATE OF x`, [contextId, principal]);
     if (!r.rowCount || (write && r.rows[0].role === 'viewer')) throw new Refusal('CONTEXT_FORBIDDEN', 403);
     return r.rows[0];
   }
@@ -65,6 +67,8 @@ export class Ledger {
     [a.contextId, a.instanceId, a.epoch]);
     if (!r.rowCount) throw new Refusal('STALE_MANAGER');
     if (r.rows[0].paused && !allowPaused) throw new Refusal('HUMAN_PAUSED');
+    const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
+    if (!admission?.enabled && !allowPaused) throw new Refusal('ADMISSION_CLOSED');
   }
   async heartbeat(a: Authority) {
     await this.tx(async c => {
@@ -128,6 +132,18 @@ export class Ledger {
           (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [command.intentId, command.contextId, principal, hash, command, randomUUID(), randomUUID(), a.epoch, revision])).rows[0];
+        if(context.active_template_revision){
+          const selected=(await c.query('SELECT snapshot,digest FROM ac_context_templates WHERE context_id=$1 AND revision=$2',
+            [command.contextId,context.active_template_revision])).rows[0];
+          if(!selected)throw new Refusal('TEMPLATE_NOT_FOUND');
+          const template=Template.parse(selected.snapshot);
+          if(digest(template)!==selected.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
+          if(template.workflow!==command.payload.workflow)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
+          await c.query('INSERT INTO ac_intent_templates VALUES($1,$2,$3,$4,$5)',
+            [intent.id,command.contextId,context.active_template_revision,template,selected.digest]);
+        }else if(command.payload.workflow==='engineering-synthetic-v1')throw new Refusal('TEMPLATE_REQUIRED');
+        const workflow=workflowFor(command.payload.workflow);
+        await c.query('INSERT INTO ac_frozen_plans VALUES($1,$2,$3,$4,$5)',[command.contextId,revision,intent.id,digest(workflow),workflow]);
         await c.query('INSERT INTO ac_operations(id,intent_id,state,manager_epoch) VALUES($1,$2,\'registered\',$3)', [intent.operation_id, intent.id, a.epoch]);
         await c.query('INSERT INTO ac_outbox(id,intent_id) VALUES($1,$2)', [randomUUID(), intent.id]);
         if (checkpoint) await c.query('UPDATE ac_checkpoints SET epoch=$2,snapshot=$3,updated_at=now() WHERE context_id=$1',

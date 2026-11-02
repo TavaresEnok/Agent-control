@@ -39,7 +39,67 @@ services:
     volumes: ['..:/workspace']
     depends_on:
       db: {condition: service_healthy}
+  sandbox-db:
+    profiles: [sandbox-test]
+    image: postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2
+    environment:
+      POSTGRES_USER: ac_lab
+      POSTGRES_PASSWORD: synthetic-sandbox-only
+      POSTGRES_DB: ac_sandbox_test
+    networks: [lab]
+    volumes: [sandbox-pg:/var/lib/postgresql/data]
+    mem_limit: 384m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U ac_lab -d ac_sandbox_test']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  sandbox-broker:
+    profiles: [sandbox-test]
+    image: agent-control-lab:0.1.0
+    user: '0:0'
+    init: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    networks: [lab]
+    working_dir: /home/app/projects/agent-control-implementation
+    command: [node, services/sandbox-broker/main.mjs]
+    environment:
+      AC_SANDBOX_DATABASE_URL: postgresql://ac_lab:synthetic-sandbox-only@sandbox-db:5432/ac_sandbox_test
+      AC_SANDBOX_HOST_ROOT: /home/app/projects/agent-control-implementation/.state/sandbox
+      AC_SANDBOX_PROBE: /home/app/projects/agent-control-implementation/scripts/sandbox-probe.mjs
+      AC_SANDBOX_PROBE_SHA256: ffbcfcb6bbaec702ff886ed0d72d4458265ad0e8410dd1d5d9b4c70eec2fba66
+      AC_SANDBOX_IMAGE: sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3
+    volumes:
+      - ..:/home/app/projects/agent-control-implementation:ro
+      - ../.state/sandbox:/home/app/projects/agent-control-implementation/.state/sandbox:rw
+      - broker-socket:/run/ac-broker
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      sandbox-db: {condition: service_healthy}
+  sandbox-client:
+    profiles: [sandbox-test]
+    image: agent-control-lab:0.1.0
+    init: true
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    networks: [lab]
+    working_dir: /workspace
+    command: [sleep, infinity]
+    environment:
+      AC_SANDBOX_DATABASE_URL: postgresql://ac_lab:synthetic-sandbox-only@sandbox-db:5432/ac_sandbox_test
+      HOME: /workspace/.state/home
+    volumes: ['..:/workspace','broker-socket:/run/ac-broker']
+    depends_on:
+      sandbox-db: {condition: service_healthy}
+      sandbox-broker: {condition: service_started}
 networks:
   lab: {internal: true}
 volumes:
   pg-data:
+  sandbox-pg:
+  broker-socket:

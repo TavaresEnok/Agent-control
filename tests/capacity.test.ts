@@ -53,6 +53,7 @@ test('concurrent reservations across two PG clients share one account slot; same
  assert.equal((await second.reserve(principal,requests[index],authority)).id,success.value.id);
  await assert.rejects(service.reserve(principal,{...requests[index],role:'reviewer'},authority),/ATTEMPT_PAYLOAD_CONFLICT/);
  await release(success.value.id);
+ await service.cancelWait(principal,requests[1-index].attemptId,authority);
 });
 test('unknown quota is not availability; fallback stays regular after the earlier account recovers',async()=>{
  await service.observeQuota(principal,accounts[0],{status:'exhausted',source:'synthetic-fixture',ttlSeconds:3600});
@@ -74,7 +75,9 @@ test('uncertain processes hold their capacity, cannot be released on timeout, an
  const grant=await service.reserve(principal,request(),authority);
  await service.transition(principal,grant.id,authority,'running');
  await service.transition(principal,grant.id,authority,'uncertain');
- await assert.rejects(service.reserve(principal,request(),authority),/CAPACITY_BUSY/);
+ const waiting=request();
+ await assert.rejects(service.reserve(principal,waiting,authority),/CAPACITY_BUSY/);
+ await service.cancelWait(principal,waiting.attemptId,authority);
  await assert.rejects(service.transition(principal,grant.id,authority,'released'),/PHYSICAL_RECEIPT_REQUIRED/);
  await assert.rejects(service.transition(principal,grant.id,authority,'released',{processId:'fixture',state:'not_started'}),/PROCESS_MUST_EXIT/);
  await service.transition(principal,grant.id,authority,'released',{processId:'fixture-exited',state:'exited'});

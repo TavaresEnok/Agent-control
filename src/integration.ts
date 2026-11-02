@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Authority, Id, Refusal } from './contracts.ts';
+import { Authority, Id, Refusal, digest } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import { Quality, type ArtifactRow } from './quality.ts';
 import { GitArtifacts } from './git.ts';
@@ -30,7 +30,9 @@ export class Integrator{
   if(admitted.terminal)return admitted.result;
   return this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);
-   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,3))',[this.projectId+'\0'+this.targetRef]);
+   // The row lock spans two bounded Git helper calls; keep the lease valid for their full duration.
+   await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,3))',[digest({projectId:this.projectId,targetRef:this.targetRef})]);
    const operation=(await c.query('SELECT * FROM ac_integration_intents WHERE id=$1 FOR UPDATE',[id])).rows[0];
    if(operation.state!=='uncertain'||Number(operation.manager_epoch)!==authority.epoch)throw new Refusal('INTEGRATION_RECONCILIATION_REQUIRED');
    const artifact=await this.quality.assertReady(c,admitted.artifact.id,authority);

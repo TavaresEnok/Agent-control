@@ -23,7 +23,7 @@ async function scan(relative){
  files.push({path:relative,size:info.size,sha256:hash.digest('hex')});
 }
 try{
- const sources=['.state/happier','.state/projects','.state/browser-fixture.json'];
+ const sources=['.state/happier','.state/projects','.state/keys','.state/browser-fixture.json'];
  for(const source of sources)await scan(source);
  const dump=spawn('docker',[...compose,'exec','-T','db','pg_dump','-U','ac_lab','-d','ac_implementation_test','-Fc'],{stdio:['ignore','pipe','inherit']});
  const dumpDone=new Promise((ok,fail)=>{dump.once('error',fail);dump.once('exit',code=>code===0?ok():fail(Error('PG_DUMP_FAILED')));});

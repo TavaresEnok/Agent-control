@@ -14,9 +14,14 @@ end
 begin
   input = JSON.parse(STDIN.read(65_537))
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
-  expected = input['action'] == 'identity' ? %w[action base candidate repo] : %w[action base candidate operationId repo targetRef]
+  expected = case input['action']
+    when 'identity' then %w[action base candidate repo]
+    when 'snapshot' then %w[action base candidate destination repo]
+    when 'cas' then %w[action base candidate operationId repo targetRef]
+    else raise 'INVALID_ACTION'
+  end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[identity cas].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[identity snapshot cas].include?(input['action'])
   %w[base candidate].each do |key|
     raise 'INVALID_GIT_ID' unless input[key].is_a?(String) && input[key].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
   end
@@ -30,6 +35,16 @@ begin
     source: 'AcSafeGit+AcArtifactIdentity'}
   if input['action'] == 'identity'
     puts JSON.generate(identity)
+  elsif input['action'] == 'snapshot'
+    destination = input.fetch('destination')
+    raise 'INVALID_REQUEST' unless destination.is_a?(String) && destination.start_with?('/') && !File.exist?(destination) && !File.symlink?(destination)
+    AcSafeGit.with_repository(repo) do |metadata|
+      _out, _error, cloned = AcSafeGit.capture('clone', '--no-local', '--no-checkout', '--', metadata, destination)
+      raise 'GIT_OPERATION_FAILED' unless cloned.success?
+    end
+    git(destination, 'checkout', '--detach', candidate)
+    raise 'GIT_OPERATION_FAILED' unless AcArtifactIdentity.digest(repo: destination, commit: candidate, base: base) == identity[:legacyDigest]
+    puts JSON.generate(identity.merge({snapshot: File.realpath(destination)}))
   else
     ref = input.fetch('targetRef'); operation = input.fetch('operationId')
     raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/) &&

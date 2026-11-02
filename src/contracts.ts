@@ -8,7 +8,7 @@ export const Command = z.object({
   schemaVersion: z.literal(1), intentId: Id, deliveryAttemptId: Id,
   contextId: Id, policyRevision: z.number().int().positive(),
   action: z.literal('plan.start'),
-  payload: z.object({ workflow: z.literal('baseline-synthetic-v1'), messageRef: z.string().min(1).max(200) }).strict(),
+  payload: z.object({ workflow: z.enum(['baseline-synthetic-v1','engineering-synthetic-v1']), messageRef: z.string().min(1).max(200) }).strict(),
 }).strict();
 export type Command = z.infer<typeof Command>;
 export const Checkpoint = z.object({
