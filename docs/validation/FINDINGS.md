@@ -61,3 +61,5 @@ A execução completa nativa Cezar antes das correções de asserção registrou
 
 | AC-IMP-0035 | Controle de pausa / alta | mitigado em bancada | Comando assinado com revisão impede reenvio obsoleto e a rota anterior recusa escritas sem prova. `guarded-pause-20261102.log` cobre deduplicação e conflito; falta percurso móvel, disponibilidade e recuperação ponta a ponta. |
 | AC-IMP-0036 | Diário remoto / alta | prova parcial | `remote-journal-private-20261102.log` exercita registro, duplicação, inspeção e permissão privada em contêiner sem rede. Não comprova SSH nem recuperação após desconexão efetiva. |
+
+| AC-IMP-0037 | Continuidade do chat / alta | mitigado em bancada | Projeção e outbox progridem durante pausa ou espera de capacidade sem disparar execução nova. `happier-capacity-relay-20261102.log` usa componentes reais com agentes sintéticos; cenários reais de cota, recuperação e celular permanecem abertos. |

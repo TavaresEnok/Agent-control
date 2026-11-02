@@ -13,6 +13,7 @@ import { loadHappier, HappierEndpoint } from '../src/happier.ts';
 import { CezarRuntime } from '../src/cezar.ts';
 import { provisionCapacity } from './fixtures/provision-capacity.ts';
 import { ContextKeys, keyFingerprint } from '../src/context-keys.ts';
+import { Refusal } from '../src/contracts.ts';
 
 test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history', { timeout: 120000 }, async () => {
   const database = process.env.AC_TEST_DATABASE_URL;
@@ -100,6 +101,36 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert(finished, 'integration pending: ' + JSON.stringify(endpoints.map(e => e.lastError)));
+    // A paused context must still deliver already-persisted messages; it must
+    // never start a new worker simply to update an existing run's status.
+    await db.pause(principal,contexts[0],true);
+    const pendingId=sessions[0]+'|paused-outbox-'+randomUUID();
+    await db.pool.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext) VALUES($1,$2,$3)',
+      [pendingId,sessions[0],seal({role:'agent',content:{type:'text',text:'fixture-paused-delivery'}})]);
+    let deliveredWhilePaused=false;
+    for(let i=0;i<100;i++){
+      if((await db.pool.query('SELECT sent FROM ac_chat_messages WHERE id=$1',[pendingId])).rows[0]?.sent){deliveredWhilePaused=true;break;}
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert(deliveredWhilePaused,'paused conversation must continue sending previously persisted messages');
+    assert.equal(runtime.store.listRuns().length,2);
+    await db.pause(principal,contexts[0],false);
+    const dispatch=runtime.dispatch.bind(runtime);
+    runtime.dispatch=async(intent,authority)=>{
+      if(intent.context_id===contexts[0])throw new Refusal('CAPACITY_BUSY');
+      return dispatch(intent,authority);
+    };
+    try{
+      const waitId=sessions[0]+'|capacity-outbox-'+randomUUID();
+      await db.pool.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext) VALUES($1,$2,$3)',
+        [waitId,sessions[0],seal({role:'agent',content:{type:'text',text:'fixture-capacity-delivery'}})]);
+      let sent=false;
+      for(let i=0;i<100;i++){
+        if((await db.pool.query('SELECT sent FROM ac_chat_messages WHERE id=$1',[waitId])).rows[0]?.sent){sent=true;break;}
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      assert(sent,'capacity wait must not block already persisted chat messages');
+    }finally{runtime.dispatch=dispatch;}
     await new Promise(resolve => setTimeout(resolve, 1600));
     const histories: unknown[][] = [];
     for (let index = 0; index < 2; index++) {

@@ -200,8 +200,17 @@ export class HappierEndpoint {
       catch (error) { this.pendingFailure = error; }
     }
     const intents = await this.ledger.pool.query<import('./ledger.ts').Intent>('SELECT * FROM ac_intents WHERE context_id=$1 ORDER BY created_at', [this.options.authority.contextId]);
+    let capacityWait:Refusal|undefined;
     for (const intent of intents.rows) {
-      const run = await this.runtime.dispatch(intent, this.options.authority);
+      let run;
+      try{run=await this.runtime.dispatch(intent,this.options.authority);}
+      catch(error){
+        if(!(error instanceof Refusal)||!['HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY'].includes(error.code))throw error;
+        if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY'].includes(error.code))capacityWait??=error;
+        // Admission or capacity may block this intent; status projection and
+        // queued chat delivery must still continue for existing work.
+        run=await this.runtime.observe(intent,this.options.authority);
+      }
       if (!run) continue;
       const seq = Number(run.lastSeq ?? 0);
       await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
@@ -221,6 +230,7 @@ export class HappierEndpoint {
         await c.query('UPDATE ac_chat_messages SET sent=true WHERE id=$1 AND session_id=$2', [item.id, this.options.sessionId]); });
     }
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
+    if (capacityWait) throw capacityWait;
   }
   private async receivePending() {
     if (!this.runtimeReady) {

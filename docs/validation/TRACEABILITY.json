@@ -145,15 +145,15 @@
   {
     "id": "RF-12",
     "normative_row": "RF-12\tP0\tRetomar automaticamente espera por capacidade quando houver evidência válida, preservando pausa humana\tI3/I5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
+    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
   },
   {
     "id": "RF-13",
@@ -278,12 +278,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
+    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
   },
   {
     "id": "RF-23",
@@ -990,15 +990,15 @@
   {
     "id": "T05",
     "normative_row": "T05\tTodos esgotados; depois uma conta volta\tEspera durável e retomada confirmada; sem depender do chat “continue”\tRF-12/22\tI3/I5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
+    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
   },
   {
     "id": "T06",
@@ -1006,12 +1006,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/happier-capacity-relay-20261102.log",
+    "files": "src/happier.ts;src/cezar.ts;tests/happier.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic paused/capacity relay only; real quota recovery, process reconciliation and mobile remain unverified."
   },
   {
     "id": "T07",

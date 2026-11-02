@@ -1,0 +1,42 @@
+{
+  "result": "passed",
+  "project": "6ef9b5aa-88da-4166-95ba-b78f448b7a28",
+  "contexts": [
+    "cf520dd5-4fb9-49cf-b65e-338a67837ab5",
+    "59cb909f-fcb1-4991-b81b-158b98d08e50"
+  ],
+  "sessions": [
+    "cmvzc283z00rykc50u9jwmdya",
+    "cmvzc286z00s2kc501558kg38"
+  ],
+  "runs": [
+    {
+      "id": "967c9975-98a7-4938-8f55-3623221999d7",
+      "status": "done",
+      "workflow": "baseline-synthetic-v1"
+    },
+    {
+      "id": "8d59f61f-388d-4954-9340-309f4c0dbefb",
+      "status": "done",
+      "workflow": "baseline-synthetic-v1"
+    }
+  ],
+  "encryptedMessageCounts": [
+    6,
+    3
+  ],
+  "duplicateIntentId": "ff912be7-4651-50be-aa4b-d7407d5c1cc9",
+  "synthetic": true,
+  "progressedDuringPollFailure": true,
+  "sameProfileTakeover": {
+    "oldEpoch": 1,
+    "newEpoch": 2,
+    "checkpointRecovered": true,
+    "historyRecoveredMessages": 161,
+    "staleEffectRejected": true
+  },
+  "limitations": [
+    "Synthetic manager/executor; no real providers or physical devices.",
+    "Key revocation and native pairing not yet implemented."
+  ]
+}

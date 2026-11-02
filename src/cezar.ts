@@ -127,6 +127,18 @@ export class CezarRuntime {
       await c.query("UPDATE ac_outbox SET state='dispatched',attempts=attempts+1 WHERE intent_id=$1", [intent.id]); });
     return this.store.getRun(intent.run_id);
   }
+  /** Read an already persisted run while admission is paused. This cannot start a run. */
+  async observe(intent:Intent,authority:Authority){
+    return this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority,true);
+      const row=(await c.query(`SELECT i.context_id,i.run_id,i.operation_id,i.plan_revision,i.command,x.project_id
+        FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1`,[intent.id])).rows[0];
+      if(!row||row.context_id!==authority.contextId||row.context_id!==intent.context_id||row.run_id!==intent.run_id||
+         row.operation_id!==intent.operation_id||row.plan_revision!==intent.plan_revision||row.project_id!==this.projectId||
+         digest(row.command)!==digest(intent.command))throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
+      return this.store.getRun(intent.run_id);
+    });
+  }
   async recordReceipt(intent: Intent, authority: Authority, receipt: unknown) {
     await this.ledger.tx(async c => {
       if (intent.context_id !== authority.contextId) throw new Refusal('EFFECT_SCOPE_MISMATCH');

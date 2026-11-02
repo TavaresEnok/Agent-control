@@ -87,3 +87,9 @@ A pausa e a retomada do cockpit passaram a usar comando assinado de operador, id
 Em contêiner descartável sem rede, o diário do executor remoto preservou uma única execução ao receber a mesma intenção duas vezes e permitiu consultar o resultado depois da perda simulada de confirmação; diretório de estado com permissões amplas é recusado. É uma prova do processo Python local, não uma prova de SSH, reconexão de rede ou isolamento hostil. Evidências: `guarded-pause-20261102.log`, `remote-journal-private-20261102.log` e os typechecks da rodada. A primeira prova Python falhou porque a imagem antiga da bancada não tem Python; a saída foi preservada. Nenhum servidor ou conta real foi usado.
 
 Ainda faltam a ligação do executor de engenharia à fronteira isolada, SSH real entre fixtures, recuperação física, pareamento mobile e integrações com contas homologadas. As fases permanecem abertas.
+
+## Continuação — entrega de mensagens com execução pausada ou aguardando capacidade
+
+O relay Happier agora consulta execuções já existentes sem despachar novos efeitos quando a conversa está pausada, a admissão fechada ou a tentativa aguarda capacidade. Com isso, continua projetando seu estado e entregando mensagens previamente persistidas; bloqueios de capacidade permanecem registrados e são novamente avaliados nas próximas iterações. A mudança não inicia um segundo coordenador e não libera recursos incertos.
+
+A prova `happier-capacity-relay-20261102.log` usou servidor Happier, PostgreSQL, grafo Cezar e Git da bancada: confirmou entrega durante pausa e durante falha de capacidade injetada, sem abrir novo run. O teste é sintético; não demonstra retentativa com contas reais, UI móvel ou recuperação física completa. O typecheck da aplicação também passou. Nenhum gate adicional foi homologado.
