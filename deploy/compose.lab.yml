@@ -16,11 +16,12 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 128m
     networks: [lab]
-    tmpfs: ['/run:rw,nosuid,nodev,size=8m','/tmp:rw,noexec,nosuid,nodev,size=8m','/projects:rw,nosuid,nodev,size=32m,uid=1000,gid=1000']
+    tmpfs: ['/run:rw,nosuid,nodev,size=8m','/tmp:rw,noexec,nosuid,nodev,size=8m']
     volumes:
       - ssh-fixture-keys:/fixtures:ro
+      - ssh-host-a-state:/projects
       - ../services/remote-worker/worker.py:/usr/local/lib/agent-control/worker.py:ro
-    command: [sh, -ec, 'mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-a/sshd_config -h /fixtures/host-a/host_key']
+    command: [sh, -ec, 'chown 1000:1000 /projects; mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-a/sshd_config -h /fixtures/host-a/host_key']
     depends_on:
       ssh-fixture-init: {condition: service_completed_successfully}
   ssh-host-b:
@@ -31,11 +32,12 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 128m
     networks: [lab]
-    tmpfs: ['/run:rw,nosuid,nodev,size=8m','/tmp:rw,noexec,nosuid,nodev,size=8m','/projects:rw,nosuid,nodev,size=32m,uid=1000,gid=1000']
+    tmpfs: ['/run:rw,nosuid,nodev,size=8m','/tmp:rw,noexec,nosuid,nodev,size=8m']
     volumes:
       - ssh-fixture-keys:/fixtures:ro
+      - ssh-host-b-state:/projects
       - ../services/remote-worker/worker.py:/usr/local/lib/agent-control/worker.py:ro
-    command: [sh, -ec, 'mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-b/sshd_config -h /fixtures/host-b/host_key']
+    command: [sh, -ec, 'chown 1000:1000 /projects; mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-b/sshd_config -h /fixtures/host-b/host_key']
     depends_on:
       ssh-fixture-init: {condition: service_completed_successfully}
   ssh-controller:
@@ -178,3 +180,5 @@ volumes:
   broker-socket:
 
   ssh-fixture-keys:
+  ssh-host-a-state:
+  ssh-host-b-state:

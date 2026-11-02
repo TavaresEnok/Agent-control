@@ -1,0 +1,15 @@
+Scope: two disposable SSH hosts on the internal Docker lab network; isolated named state volumes.
+Command 1: docker compose -f deploy/compose.lab.yml --profile ssh-test up -d ssh-controller
+Exit code 1: 0; created ssh-host-a-state and ssh-host-b-state volumes.
+Command 2: docker compose -f deploy/compose.lab.yml exec -T ssh-controller node --import tsx --test tests/ssh.test.ts
+Exit code 2: 0; 1 test, 1 pass, 0 fail, duration 5189 ms.
+Command 3: docker compose -f deploy/compose.lab.yml restart ssh-host-a
+Exit code 3: 0; disposable host container restarted.
+Command 4: docker compose -f deploy/compose.lab.yml exec -T ssh-controller node --import tsx --test tests/ssh.test.ts
+Exit code 4: 0; 1 test, 1 pass, 0 fail, duration 4706 ms.
+Command 5: docker compose -f deploy/compose.lab.yml restart ssh-host-a
+Exit code 5: 0; disposable host container restarted again after the second test.
+Command 6: docker compose -f deploy/compose.lab.yml exec -T -e AC_SSH_RESTART_VERIFY=1 ssh-controller node --import tsx --test tests/ssh-restart.test.ts
+Exit code 6: 0; 1 test, 1 pass, 0 fail, duration 1001 ms.
+Assertion: direct SSH inspection returned the identical completed receipt after restart; repeating the same start identity returned that receipt.
+Limit: the task had completed before restart. This is not an in-flight crash or real external network outage proof.

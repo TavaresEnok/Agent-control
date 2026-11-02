@@ -16,17 +16,20 @@ const Launch=z.object({profile:z.literal('synthetic-implementation-v1'),source:z
 const Implementation=z.object({operationId:Id,base:z.string().regex(/^[a-f0-9]{40}$/),commit:z.string().regex(/^[a-f0-9]{40}$/),
  tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(true)}).strict();
 const Receipt=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),implementation:Implementation.nullable(),bundle:z.string().max(1400000).optional()}).passthrough();
+const Running=z.object({state:z.literal('running'),containerId:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough();
 
 /** Executes the existing fixed synthetic worker in a broker-created container.
  * No host worktree/Git metadata, administrative socket, key or token enters it.
  * A real provider adapter remains a distinct, unauthorized activation. */
 export class IsolatedImplementation{
  private active=true;
+ private readonly stops=new Set<()=>void>();
  constructor(readonly ledger:Ledger,readonly client=new SandboxClient()){}
- close(){this.active=false;}
+ close(){this.active=false;for(const stop of this.stops)stop();}
  start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void):AgentSession{
   let open=true,canceled=false,grantId:string|undefined,execution:z.infer<typeof Launch>|undefined;
-  const stop=()=>{canceled=true;if(grantId&&execution)void this.client.perform('stop',intent.operation_id,grantId,authority,execution).catch(()=>{});};
+  const stop=()=>{if(canceled)return;canceled=true;if(grantId&&execution)void this.client.perform('stop',intent.operation_id,grantId,authority,execution).catch(()=>{});};
+  this.stops.add(stop);
   const result=(async()=>{
    const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[intent.id,authority.contextId])).rows[0]?.principal_id;
    if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
@@ -48,15 +51,26 @@ export class IsolatedImplementation{
      return operation.grant_id as string;
     });
     if(canceled||!this.active)throw new Refusal('STAGE_CANCELED');
-    const started=z.object({state:z.literal('running'),containerId:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(
-     await this.client.perform('start',intent.operation_id,grantId,authority,execution));
-    await this.ledger.tx(async c=>{
-     await this.ledger.fence(c,authority,true);
-     await c.query("UPDATE ac_operations SET state='running',handle=$2 WHERE id=$1 AND state='uncertain' AND manager_epoch=$3",
-      [intent.operation_id,{containerId:started.containerId,operationId:intent.operation_id,epoch:authority.epoch,synthetic:true},authority.epoch]);
-    });
     let receipt:z.infer<typeof Receipt>|undefined;
+    let first:unknown;
+    try{first=await this.client.perform('start',intent.operation_id,grantId,authority,execution);}
+    catch{
+     // The start acknowledgement may be lost after Docker accepted the request.
+     // Query the same immutable job; never submit a second start here.
+     first=await this.client.perform('reconcile',intent.operation_id,grantId,authority,execution);
+    }
+    const started=Running.safeParse(first),terminal=Receipt.safeParse(first);
+    if(started.success){
+     await this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority,true);
+      await c.query("UPDATE ac_operations SET state='running',handle=$2 WHERE id=$1 AND state='uncertain' AND manager_epoch=$3",
+       [intent.operation_id,{containerId:started.data.containerId,operationId:intent.operation_id,epoch:authority.epoch,synthetic:true},authority.epoch]);
+     });
+    }else if(terminal.success)receipt=terminal.data;
+    else if(!z.object({state:z.enum(['uncertain','running'])}).passthrough().safeParse(first).success)
+     throw new Refusal('SANDBOX_START_UNCERTAIN');
     for(let i=0;i<240;i++){
+     if(receipt)break;
      if(canceled||!this.active){stop();throw new Refusal('STAGE_CANCELED');}
      const response=await this.client.perform('reconcile',intent.operation_id,grantId,authority,execution);
      const terminal=Receipt.safeParse(response);if(terminal.success){receipt=terminal.data;break;}
@@ -68,7 +82,7 @@ export class IsolatedImplementation{
     const text=`Isolated synthetic implementation completed: ${committed.commit}`;
     onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
    }finally{await rm(temporary,{recursive:true,force:true});}
-  })().finally(()=>{open=false;});
+  })().finally(()=>{open=false;this.stops.delete(stop);});
   return {result,get open(){return open;},sendMessage(){return false;},end(){},interrupt:stop,hardStop:stop};
  }
  private async apply(principal:string,intent:Intent,authority:Authority,cwd:string,receipt:z.infer<typeof Receipt>,launch:z.infer<typeof Launch>){

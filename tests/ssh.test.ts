@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash,randomUUID} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile} from 'node:fs/promises';
 import {Ledger} from '../src/ledger.ts';
 import {RemoteOperations,OpenSshTransport,type RemoteTransport,type RemoteHost} from '../src/remote.ts';
 import {Refusal} from '../src/contracts.ts';
@@ -37,11 +37,14 @@ test('two pinned SSH hosts reconcile detached work, lost ack and paused takeover
   let done:any;
   for(let i=0;i<40;i++){done=await remote.reconcile(principal,op,authority);if(done.state==='completed')break;await new Promise(r=>setTimeout(r,100));}
   assert.equal(done.state,'completed');assert.equal(done.exitCode,0);
+  const count=async()=>{
+   const countOp=randomUUID();await remote.start(principal,{...request,operationId:countOp,taskId:'count'},authority);
+   for(let i=0;i<40;i++){const result=await remote.reconcile(principal,countOp,authority);if(result.state==='completed')return result.logSha256;await new Promise(r=>setTimeout(r,100));}
+   throw Error('COUNT_NOT_COMPLETED');
+  };
+  const beforeReplay=await count();
   assert.deepEqual(await remote.start(principal,request,authority),done);
-  const countOp=randomUUID();await remote.start(principal,{...request,operationId:countOp,taskId:'count'},authority);
-  let count:any;
-  for(let i=0;i<40;i++){count=await remote.reconcile(principal,countOp,authority);if(count.state==='completed')break;await new Promise(r=>setTimeout(r,100));}
-  assert.equal(count.logSha256,createHash('sha256').update('1\n').digest('hex'),'lost acknowledgement must not duplicate the effect');
+  assert.equal(await count(),beforeReplay,'replayed start must not repeat the physical effect');
   const slow=randomUUID();await remote.start(principal,{...request,operationId:slow,hostId:hosts[1],taskId:'slow'},authority);
   await db.pause(principal,context,true);
   await assert.rejects(remote.start(principal,{...request,operationId:randomUUID()},authority),/HUMAN_PAUSED/);
@@ -52,5 +55,7 @@ test('two pinned SSH hosts reconcile detached work, lost ack and paused takeover
   for(let i=0;i<60;i++){recovered=await remote.reconcile(principal,slow,authority);if(recovered.state==='completed')break;await new Promise(r=>setTimeout(r,100));}
   assert.equal(recovered.state,'completed');assert.equal(recovered.epoch,old.epoch);
   assert.equal((await db.pool.query('SELECT paused FROM ac_contexts WHERE id=$1',[context])).rows[0].paused,true);
+  await writeFile('.state/ssh-restart-marker.json',JSON.stringify({scope:'isolated-ssh-fixture',project,hostId:hosts[0],
+   credentialRef,operationId:op,epoch:old.epoch,receipt:done}));
  }finally{await db.close();}
 });

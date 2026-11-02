@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log",
+    "files": "src/isolated-implementation.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Start acknowledgement loss reconciled; crash between Git, physical result and PG commit remains open."
   },
   {
     "id": "RF-24",
@@ -330,8 +330,8 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
@@ -343,12 +343,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Lost acknowledgement and manager takeover tested; host reboot and physical network loss remain open."
+    "limitation": "Lost acknowledgement and completed receipt after host restart tested; interrupted in-flight effect remains open."
   },
   {
     "id": "RF-28",
@@ -1110,12 +1110,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log",
-    "files": "src/remote.ts;tests/ssh.test.ts",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log",
+    "files": "src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Real SSH transport and lost acknowledgement; no network cut or remote host reboot."
+    "limitation": "Real SSH and completed result after restart; interrupted in-flight operation still uncertain."
   },
   {
     "id": "T15",

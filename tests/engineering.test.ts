@@ -11,6 +11,16 @@ import {canonical,type Command} from '../src/contracts.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {Templates} from '../src/templates.ts';
 import {IsolatedImplementation} from '../src/isolated-implementation.ts';
+import {SandboxClient} from '../src/sandbox-client.ts';
+
+class LostStartAckClient extends SandboxClient {
+ starts=0;
+ override async perform(...args:Parameters<SandboxClient['perform']>){
+  const result=await super.perform(...args);
+  if(args[0]==='start' && this.starts++===0)throw Error('ACK_LOST_AFTER_START');
+  return result;
+ }
+}
 
 // Synthetic payloads, actual PostgreSQL, Cezar, Ruby Git helper, processes and Git refs.
 test('engineering DAG records independent verification before conditional integration', {timeout:90000}, async()=>{
@@ -32,7 +42,8 @@ test('engineering DAG records independent verification before conditional integr
  if(options.qualityRevision===undefined||options.targetRef===undefined)throw Error('MISSING_ENGINEERING_FIXTURE_CONFIG');
  await new Templates(db).publish(principal,context,0,{workflow:'engineering-synthetic-v1',qualityRevision:options.qualityRevision,targetRef:options.targetRef});
  const authority=await db.acquire(principal,context,randomUUID(),'synthetic-manager',60);
- const runtime=new CezarRuntime(db,repo,project,options,isolated?new IsolatedImplementation(db):undefined);await runtime.start();
+ const lostAck=isolated?new LostStartAckClient():undefined;
+ const runtime=new CezarRuntime(db,repo,project,options,isolated?new IsolatedImplementation(db,lostAck):undefined);await runtime.start();
  try{
   const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,
    action:'plan.start',payload:{workflow:'engineering-synthetic-v1',messageRef:'encrypted:synthetic'}};
@@ -47,6 +58,7 @@ test('engineering DAG records independent verification before conditional integr
   assert(done,'synthetic DAG did not finish');
   const operation=(await db.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intent.id])).rows[0];
   if(isolated){
+   assert.equal(lostAck?.starts,1,'one physical launch despite lost acknowledgement');
    const job=(await db.pool.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1',[operation.id])).rows[0];
    assert.equal(job.state,'completed');assert.equal(job.profile,'synthetic-implementation-v1');
    assert.equal(job.receipt.implementation.commit,operation.receipt.commit);
