@@ -9,8 +9,8 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "8dbb0177d9f0ea91307c5300241820c09e443c06",
-  "worktree_changes_present": true,
+  "git_head_before_delivery": "594578f007ad625b2448d5465e55370c98797ba1",
+  "worktree_changes_present": false,
   "new_sources": {
     "adapters/happier-browser-auth.ts": "e18ad5c1ec2ffd992f556ef15f2a63dd105bc6670d4f855115980418d496d5d1",
     "adapters/happier-entry.ts": "be11ef4aefe09bcb386dabb3b525705a13e9a17bee025642f2ce5221dde0a735",
@@ -117,6 +117,7 @@
     "src/cancellation.ts": "ec014d119eb34232e17055e0f017c7b6db5aa0e3ade0bd24e18567408a4cf69e",
     "src/capacity.ts": "b578c36cb282f3f1120c592188eca122e45f16fddc368d853f6fa814c0b00625",
     "src/cezar.ts": "0ac0e4f97ca0b130857d99fa5f42dd6091ad4d350bcf79f8646b996dd951e7d8",
+    "src/context-export-cli.ts": "1fcc6fdeb9f020aee0fa4ee1a0c3c9e677d1267571fae8f317b150149c795a80",
     "src/context-keys.ts": "fc68a3b2036bcbe5737b38d3ed755118a48010421e27b7d3f0c0ad1f8ec2ad84",
     "src/context-vault-backup.ts": "5ed6e50e587dea0d8024f2e7e38bdbde38d0a15d3c5498b2b0b41de246627ae2",
     "src/context-vault-cli.ts": "b67836ff12bf2ec7baf5203f9f588b62fb5445e2db52a3512888aa5f19dce0f6",
@@ -167,7 +168,7 @@
     "src/remote.ts": "d594cb35218c06f97340f259e8f2efdfe6f21c9fb07a990a57bf285e47f2ba39",
     "src/sandbox-broker.ts": "67e54c10c451cbee0b1407e93d89c21de25816095644146efbac0be37c71a339",
     "src/sandbox-client.ts": "786a6106b78dfb10636f49b1c3ca407b762175964a305a665aea38d7f6c39d45",
-    "src/server-main.ts": "054ef4679b31d8fdedf454ae5d8e6baef6377ac8fe9402e112897eb00f36dee0",
+    "src/server-main.ts": "a5f5f7c114567084a762a98934c843c3acd024fd257cb7c388ba3e24dbabbe0e",
     "src/sessions.ts": "4a10aa1753080a3f4f876c50016a0f3e5e4dee4b7a2f1c89c881cc8881396bcd",
     "src/storage.ts": "be8be5be8ab2c9410801d3619df1c59c77649bc6644546145566a7637805a9b6",
     "src/templates.ts": "603e529b048fadb3eefa3297d1d0c8780a3e891f2ce338f8add423a52b131557",
