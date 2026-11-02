@@ -3,12 +3,15 @@ import { z } from 'zod';
 import { Command, Authority, Id, Refusal, Projection } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import type { CezarRuntime } from './cezar.ts';
+import { Control, ControlCommand } from './control.ts';
 
 export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
-  verifySessionAccess: (principal: string, sessionId: string) => Promise<boolean> = async () => false) {
+  verifySessionAccess: (principal: string, sessionId: string) => Promise<boolean> = async () => false,
+  authorizeControl: (request: Request, principal: string) => Promise<boolean> = async () => false) {
   const app = new Hono<{ Variables: { principal: string } }>();
+  const control = new Control(ledger);
   app.use('*', async (c, next) => {
     const principal = await authenticate(c.req.raw);
     if (!principal) return c.json({ error: 'AUTH_REQUIRED' }, 401);
@@ -22,6 +25,19 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   const family = app
     .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: 'isolated-synthetic' }))
+    .get('/api/v1/ac/contexts', async c => {
+      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.plan_revision,x.capacity_policy_revision,s.session_id
+        FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
+        JOIN ac_session_links s ON s.context_id=x.id WHERE x.project_id=$1 AND m.principal_id=$2 ORDER BY x.created_at`,
+        [runtime.projectId,c.get('principal')]);
+      return c.json({contexts:rows.rows});
+    })
+    .get('/api/v1/ac/contexts/:id/resources', async c => c.json(await control.view(c.get('principal'),Id.parse(c.req.param('id')))))
+    .post('/api/v1/ac/control', async c => {
+      if(!await authorizeControl(c.req.raw,c.get('principal')))throw new Refusal('HUMAN_CONTROL_AUTH_REQUIRED',403);
+      const command=ControlCommand.parse(await c.req.json());
+      return c.json(await control.execute(c.get('principal'),command));
+    })
     .post('/api/v1/ac/contexts', async c => {
       const body = z.object({ projectId: Id, happierSessionId: z.string().min(1) }).strict().parse(await c.req.json());
       if (!await verifySessionAccess(c.get('principal'), body.happierSessionId)) throw new Refusal('SESSION_OWNERSHIP_UNVERIFIED', 403);

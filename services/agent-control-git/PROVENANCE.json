@@ -1,0 +1,18 @@
+{
+  "source_repository": "https://github.com/TavaresEnok/Agent-control",
+  "reference_commit": "3b808a37a45d5e8a2d0bed5720ddd2a70a13e69a",
+  "evidence_source": "agent-control-proof-v3/sources/current/app/services",
+  "files": [
+    {
+      "path": "ac_safe_git.rb",
+      "sha256": "f0ac804ab0e31524473f0096c3910125ac342fa96a473d8c9135766251a1f26f",
+      "modifications": false
+    },
+    {
+      "path": "ac_artifact_identity.rb",
+      "sha256": "c59ba438e7909825d2dfa97c1906817767897fb7e04c5013ad45523839edb5c1",
+      "modifications": false
+    }
+  ],
+  "limitation": "License confirmation and independent security review remain pending before distribution. Helper is not yet the final CAS integrator."
+}

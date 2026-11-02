@@ -13,6 +13,7 @@ import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/d
 import type { AgentRunner, AgentSession, AgentEvent, AgentRunResult } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import { Authority, digest, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
+import { Capacity } from './capacity.ts';
 
 export const baselineWorkflow = workflowDefSchema.parse({
   name: 'baseline-synthetic-v1', source: 'built-in',
@@ -26,9 +27,14 @@ export const baselineWorkflow = workflowDefSchema.parse({
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/), tree: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   exitCode: z.literal(0), synthetic: z.literal(true) }).strict();
+function terminate(child:ChildProcess,signal:NodeJS.Signals){
+  if(child.exitCode!==null||child.signalCode!==null)return;
+  try{if(child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch{child.kill(signal);}
+}
 
 /** Sole DAG owner is Cezar. This adapter admits a frozen definition and projects its state. */
 export class CezarRuntime {
+  readonly capacity: Capacity;
   readonly store: RunStore;
   readonly manager: RunManager;
   readonly native;
@@ -38,6 +44,7 @@ export class CezarRuntime {
   private running = true;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string) {
+    this.capacity = new Capacity(ledger);
     this.store = RunStore.open(join(repo, '.ai/cezar'), { keepLive: true });
     requireManagedRunnerBoundary();
     this.manager = new RunManager(this.store, repo, { managed: {
@@ -61,7 +68,7 @@ export class CezarRuntime {
     if (!r.rows[0].ok) { c.release(); throw new Refusal('RUNTIME_ALREADY_ACTIVE'); }
     this.lock = c;
     const lost = () => {
-      this.running = false; for (const child of this.children) child.kill('SIGKILL');
+      this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
       if (this.lock === c) { this.lock = undefined; c.release(true); }
     };
     c.on('error', lost); c.on('end', lost);
@@ -69,6 +76,13 @@ export class CezarRuntime {
   }
   async dispatch(intent: Intent, authority: Authority) {
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
+      FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1`,[intent.id])).rows[0];
+    if (!identity || identity.operation_id!==intent.operation_id || identity.context_id!==intent.context_id || identity.run_id!==intent.run_id || identity.plan_revision!==intent.plan_revision)
+      throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
+    if (identity.project_id!==this.projectId) throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+    const grant = identity.operation_state === 'registered' ? await this.capacity.reserve(identity.principal_id,
+      {attemptId:identity.execution_attempt_id,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority) : null;
     await this.ledger.tx(async c => {
       await this.ledger.fence(c, authority);
       if (intent.context_id !== authority.contextId) throw new Refusal('EFFECT_SCOPE_MISMATCH');
@@ -80,6 +94,10 @@ export class CezarRuntime {
       if (context.rows[0]?.project_id !== this.projectId) throw new Refusal('PROJECT_RUNTIME_MISMATCH', 403);
       const current = await c.query('SELECT state FROM ac_operations WHERE id=$1 FOR UPDATE', [intent.operation_id]);
       if (!current.rowCount) throw new Refusal('OPERATION_MISSING');
+      if (grant) {
+        if (Number(grant.manager_epoch)!==authority.epoch || grant.state!=='reserved') throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
+        await c.query('UPDATE ac_operations SET grant_id=$2 WHERE id=$1 AND (grant_id IS NULL OR grant_id=$2)',[intent.operation_id,grant.id]);
+      }
       await c.query(`INSERT INTO ac_frozen_plans VALUES($1,$2,$3,$4,$5) ON CONFLICT(context_id,revision) DO NOTHING`,
         [intent.context_id, intent.plan_revision, intent.id, digest(baselineWorkflow), baselineWorkflow]);
       const snapshot = await c.query('SELECT digest FROM ac_frozen_plans WHERE intent_id=$1', [intent.id]);
@@ -108,6 +126,22 @@ export class CezarRuntime {
         AND o.state='running' AND o.manager_epoch=$3`,
         [intent.operation_id, parsed.data, authority.epoch, intent.id, authority.contextId]);
       if (!updated.rowCount) throw new Refusal('OPERATION_RECEIPT_STALE');
+      const released=await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$3
+        FROM ac_operations o WHERE o.id=$1 AND o.grant_id=g.id AND g.manager_epoch=$2 AND g.state='running'`,
+        [intent.operation_id,authority.epoch,{operationId:intent.operation_id,state:'exited',source:'fixed-synthetic-worker'}]);
+      if (!released.rowCount) throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
+    });
+  }
+  private async recordFailedExit(intent:Intent,authority:Authority,pid:number|undefined,code:number|null,signal:string|null){
+    await this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority,true);
+      const receipt={operationId:intent.operation_id,pid:pid??null,exitCode:code,signal,physicalExited:true,synthetic:true,success:false};
+      const operation=await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='running' AND manager_epoch=$3 RETURNING grant_id",
+        [intent.operation_id,receipt,authority.epoch]);
+      if(!operation.rowCount)throw new Refusal('OPERATION_RECEIPT_STALE');
+      const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state='running' AND manager_epoch=$3",
+        [operation.rows[0].grant_id,{operationId:intent.operation_id,processId:String(pid),state:'exited',exitCode:code,signal,source:'fixed-synthetic-worker'},authority.epoch]);
+      if(!released.rowCount)throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
     });
   }
   private runner(): AgentRunner {
@@ -117,6 +151,8 @@ export class CezarRuntime {
       async run() { throw new Refusal('ONE_SHOT_DISABLED'); }, async interrupt() {},
       startSession(spec, onEvent): AgentSession {
         let child: ChildProcess | undefined, open = true, canceled = false;
+        let monitor:ReturnType<typeof setInterval>|undefined;
+        let completion:Promise<number|null>|undefined;
         const result = (async (): Promise<AgentRunResult> => {
           const runId = spec.env?.CEZ_TASK_ID;
           const authority = runId && runtime.authorities.get(runId);
@@ -136,41 +172,73 @@ export class CezarRuntime {
           await runtime.ledger.tx(async c => {
             await runtime.ledger.fence(c, authority);
             if (!runtime.running || canceled) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+            const eligible=await c.query(`SELECT g.id FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id
+              JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
+              JOIN ac_quota_observations q ON q.account_id=a.id
+              WHERE o.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
+              AND a.enabled AND p.enabled AND a.eligibility='documented_supported'
+              AND q.status='available' AND q.expires_at>clock_timestamp() FOR UPDATE OF g`,
+              [intent.operation_id,authority.contextId,authority.epoch]);
+            if (!eligible.rowCount) throw new Refusal('GRANT_NOT_ELIGIBLE');
+            await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[eligible.rows[0].id]);
             child = spawn(process.execPath, [new URL('../scripts/synthetic-worker.mjs', import.meta.url).pathname, intent.operation_id], {
               cwd: spec.cwd, env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: spec.cwd,
                 GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
                 GIT_AUTHOR_NAME: 'Synthetic fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
                 GIT_COMMITTER_NAME: 'Synthetic fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' },
-              stdio: ['ignore', 'pipe', 'pipe'],
+              stdio: ['ignore', 'pipe', 'pipe'], detached: true,
             });
+            completion=new Promise<number|null>((resolve,reject)=>{
+              child!.once('exit',resolve);child!.once('error',reject);
+            });
+            void completion.catch(()=>{});
             runtime.children.add(child);
+            child.once('exit',()=>runtime.children.delete(child!));
             // Observe spawn before recording a running handle; spawn errors remain uncertain.
             await new Promise<void>((resolve, reject) => { child!.once('spawn', resolve); child!.once('error', reject); });
+            const proc=await readFile(`/proc/${child.pid}/stat`,'utf8');
+            const startTime=proc.slice(proc.lastIndexOf(')')+2).split(' ')[19];
+            if(!/^\d+$/.test(startTime??''))throw new Refusal('PROCESS_IDENTITY_UNAVAILABLE');
+            const bootId=(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim();
             await c.query("UPDATE ac_operations SET state='running',handle=$2 WHERE id=$1", [intent.operation_id,
-              { pid: child.pid, operationId: intent.operation_id, epoch: authority.epoch, synthetic: true }]);
+              { pid: child.pid, startTime, bootId, operationId: intent.operation_id, epoch: authority.epoch, synthetic: true }]);
           });
           if (!child) throw new Refusal('PROCESS_MISSING');
           const processChild = child;
+          let checking=false;
+          monitor=setInterval(()=>{
+            if(checking||!open)return;checking=true;
+            void runtime.ledger.tx(c=>runtime.ledger.fence(c,authority,true)).catch(()=>{
+              canceled=true;terminate(processChild,'SIGKILL');
+            }).finally(()=>{checking=false;});
+          },500);
           let output = '';
           processChild.stdout?.on('data', b => { output = (output + String(b)).slice(-4000); });
           processChild.stderr?.resume();
-          const code = await new Promise<number | null>((resolve, reject) => { processChild.once('exit', resolve); processChild.once('error', reject); });
+          if(!completion)throw new Refusal('PROCESS_COMPLETION_MISSING');
+          const code = await completion;
           runtime.children.delete(processChild); open = false;
-          if (code !== 0) throw new Refusal('SYNTHETIC_PROCESS_FAILED');
+          if (code !== 0) {
+            await runtime.recordFailedExit(intent,authority,processChild.pid,code,processChild.signalCode);
+            throw new Refusal('SYNTHETIC_PROCESS_FAILED');
+          }
           const receipt: unknown = JSON.parse(await readFile(receiptPath, 'utf8'));
           await runtime.recordReceipt(intent, authority, receipt);
           const events: AgentEvent[] = [{ type: 'text', text: output }, { type: 'done' }];
           events.forEach(e => onEvent?.(e));
           return { text: output, toolCalls: [], tokensUsed: 0 };
-        })().finally(() => { open = false; });
+        })().catch(error=>{
+          if(child)terminate(child,'SIGKILL');
+          throw error;
+        }).finally(() => { open = false; if(monitor)clearInterval(monitor); });
         return { result, get open() { return open; }, get pid() { return child?.pid; },
-          sendMessage() { return false; }, end() {}, interrupt() { canceled = true; child?.kill('SIGTERM'); },
-          hardStop() { canceled = true; child?.kill('SIGKILL'); } };
+          sendMessage() { return false; }, end() {}, interrupt() { canceled = true; if(child)terminate(child,'SIGTERM'); },
+          hardStop() { canceled = true; if(child)terminate(child,'SIGKILL'); } };
       },
     };
   }
   async close() {
-    this.running = false; for (const child of this.children) child.kill('SIGKILL');
+    this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
     this.manager.dispose(); this.store.flush();
     if (this.lock) { await this.lock.query('SELECT pg_advisory_unlock(hashtextextended($1,1))', [this.repo]); this.lock.release(); this.lock = undefined; }
   }

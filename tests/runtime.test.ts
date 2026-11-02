@@ -9,6 +9,7 @@ import { Ledger, type Intent } from '../src/ledger.ts';
 import { Command, Refusal, Projection } from '../src/contracts.ts';
 import { CezarRuntime } from '../src/cezar.ts';
 import { createApi } from '../src/api.ts';
+import { provisionCapacity } from './fixtures/provision-capacity.ts';
 
 test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial', { timeout: 60000 }, async () => {
   const url = process.env.AC_TEST_DATABASE_URL;
@@ -18,6 +19,8 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Runtime fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,'owner','owner')", [project]);
   const context = await db.createContext('owner', project, 'happier-' + randomUUID());
+  const capacity = await provisionCapacity(db, 'owner', project);
+  await capacity.service.assignPolicy('owner', context, capacity.revision);
   await mkdir('.state/projects', { recursive: true });
   const repo = await mkdtemp(resolve('.state/projects/ac-impl-test-'));
   const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();

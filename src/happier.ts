@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Socket } from 'socket.io-client';
 import { Authority, Checkpoint, Command, digest, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
+import { ContextKeys, type EncryptionVariant } from './context-keys.ts';
 import type { CezarRuntime } from './cezar.ts';
 
 type Rpc = {
@@ -13,12 +14,12 @@ type Rpc = {
 };
 // Private imports are encapsulated here. The pinned bundle's contract is exercised with the actual server.
 export type HappierBoundary = {
-  encrypt(key: Uint8Array, variant: 'legacy', value: unknown): Uint8Array;
-  decrypt(key: Uint8Array, variant: 'legacy', value: Uint8Array): unknown;
+  encrypt(key: Uint8Array, variant: EncryptionVariant, value: unknown): Uint8Array;
+  decrypt(key: Uint8Array, variant: EncryptionVariant, value: Uint8Array): unknown;
   encodeBase64(value: Uint8Array): string; decodeBase64(value: string): Uint8Array;
   createSessionSocketTransport(options: { token: string; sessionId: string; machineId: string; serverUrl: string; transports: string[] }):
     { socket: Socket; transport: { connect(): Promise<void> } };
-  RpcHandlerManager: new (options: { scopePrefix: string; encryptionKey: Uint8Array; encryptionVariant: 'legacy';
+  RpcHandlerManager: new (options: { scopePrefix: string; encryptionKey: Uint8Array; encryptionVariant: EncryptionVariant;
     logger: () => void; authorizeRequest: (q: { method: string }) => Promise<{ ok: true } | { ok: false; error: string }> }) => Rpc;
   registerSessionUserMessageSendHandler(rpc: Rpc, options: {
     workingDirectory: string; revalidateExplicitUserRequest: () => Promise<{ status: 'ready' }>;
@@ -53,13 +54,15 @@ const UserRecord = z.object({ role: z.literal('user'), content: z.object({ type:
 // Read only the linked session using Happier's native backward cursor. Never silently
 // present a truncated or non-progressing traversal as a complete history.
 export async function recoverHistory(baseUrl: string, sessionId: string, token: string,
-  key: Uint8Array, boundary: HappierBoundary, fetchPage: typeof fetch = fetch): Promise<unknown[]> {
+  key: Uint8Array, boundary: HappierBoundary, fetchPage: typeof fetch = fetch, variant: EncryptionVariant = 'legacy',
+  authorize: () => Promise<void> = async () => {}): Promise<unknown[]> {
   const messages: { seq: number; content: unknown }[] = [];
   let before: number | undefined;
   for (let page = 0; page < 100; page++) {
     const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
     url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
     if (before !== undefined) url.searchParams.set('beforeSeq', String(before));
+    await authorize();
     const response = await fetchPage(url, { headers: { authorization: 'Bearer ' + token } });
     if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
     const result = z.object({ messages: z.array(z.object({ seq: z.number().int().nonnegative(), content: z.unknown() }).passthrough()),
@@ -71,9 +74,10 @@ export async function recoverHistory(baseUrl: string, sessionId: string, token: 
     }
     if (!result.hasMore) {
       if (result.nextBeforeSeq !== null) throw new Refusal('HISTORY_CURSOR_INVALID');
+      await authorize();
       return messages.reverse().map(message => {
         const envelope = z.object({ t: z.literal('encrypted'), c: z.string() }).parse(typeof message.content === 'string' ? JSON.parse(message.content) : message.content);
-        const decrypted = boundary.decrypt(key, 'legacy', boundary.decodeBase64(envelope.c));
+        const decrypted = boundary.decrypt(key, variant, boundary.decodeBase64(envelope.c));
         if (decrypted === null) throw new Refusal('INVALID_HISTORY_CIPHERTEXT');
         return decrypted;
       });
@@ -101,14 +105,17 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority }) {
-    this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, 'legacy', value));
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant }) {
+    this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
       machineId: options.machineId, serverUrl: options.baseUrl, transports: ['websocket'] });
     this.socket = socket; this.transport = transport;
     socket.onAny((name: string) => { this.transportEvents.add(name); });
-    this.rpc = new boundary.RpcHandlerManager({ scopePrefix: options.sessionId, encryptionKey: options.key, encryptionVariant: 'legacy', logger: () => {},
-      authorizeRequest: async q => q.method.startsWith(options.sessionId + ':') ? { ok: true } : { ok: false, error: 'scope_forbidden' } });
+    this.rpc = new boundary.RpcHandlerManager({ scopePrefix: options.sessionId, encryptionKey: options.key, encryptionVariant: options.encryptionVariant ?? 'legacy', logger: () => {},
+      authorizeRequest: async q => {
+        if(!q.method.startsWith(options.sessionId+':'))return {ok:false,error:'scope_forbidden'};
+        try{await this.validateKey();return {ok:true};}catch{return {ok:false,error:'context_key_unauthorized'};}
+      } });
     boundary.registerSessionUserMessageSendHandler(this.rpc, { workingDirectory: runtime.repo,
       revalidateExplicitUserRequest: async () => ({ status: 'ready' }),
       sessionRuntimeControls: { handleUserMessage: raw => this.accept(raw) } });
@@ -116,7 +123,11 @@ export class HappierEndpoint {
     socket.on('connect', () => { this.runtimeReady = false; this.rpc.onSocketConnect(socket); });
     socket.on('disconnect', () => this.rpc.onSocketDisconnect());
   }
+  async validateKey() {
+    await new ContextKeys(this.ledger).validate(this.options.authority.contextId,this.options.keyVersion??1,this.options.encryptionVariant??'legacy',this.options.key);
+  }
   async validateLink() {
+    await this.validateKey();
     const row = await this.ledger.pool.query('SELECT * FROM ac_session_links WHERE context_id=$1', [this.options.authority.contextId]);
     if (row.rows[0]?.session_id !== this.options.sessionId || row.rows[0]?.principal_id !== this.options.principal) throw new Refusal('SESSION_CONTEXT_MISMATCH', 403);
   }
@@ -125,11 +136,10 @@ export class HappierEndpoint {
     const profileResponse = await fetch(this.options.baseUrl + '/v1/account/profile', { headers: { authorization: 'Bearer ' + this.options.token } });
     if (!profileResponse.ok || z.object({ id: z.string() }).passthrough().parse(await profileResponse.json()).id !== this.options.principal)
       throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH', 403);
-    const checkpoint = await this.ledger.pool.query('SELECT k.snapshot,x.plan_revision FROM ac_checkpoints k JOIN ac_contexts x ON x.id=k.context_id WHERE k.context_id=$1', [this.options.authority.contextId]);
-    this.recoveredCheckpoint = checkpoint.rowCount ? Checkpoint.parse(checkpoint.rows[0].snapshot) : null;
-    if (this.recoveredCheckpoint && this.recoveredCheckpoint.planRevision !== checkpoint.rows[0].plan_revision)
-      throw new Refusal('CHECKPOINT_STALE');
-    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary);
+    this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
+    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateKey());
+    // Fetching authorized pages may take time; re-read current structured state before activating RPC.
+    this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
     await this.transport.connect();
     const registered = await this.rpc.waitForRegisteredHandlers(['session.userMessage.send'], { timeoutMs: 10000 });
     if (registered.status !== 'ready') {
@@ -172,6 +182,7 @@ export class HappierEndpoint {
   }
   async tick() {
     if (!this.socket.connected) return;
+    await this.validateKey();
     await this.ledger.heartbeat(this.options.authority);
     this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
     if (Date.now() - this.lastPendingAt >= 1000) {
@@ -185,7 +196,8 @@ export class HappierEndpoint {
       if (!run) continue;
       const seq = Number(run.lastSeq ?? 0);
       await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
-        await c.query('UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3', [intent.id, run.status, this.options.authority.contextId]); });
+        await c.query('UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3', [intent.id, run.status, this.options.authority.contextId]);
+        await this.ledger.refreshPending(c,this.options.authority.contextId); });
       await this.ledger.event(this.options.principal, { schemaVersion: 1, eventId: randomUUID(), contextId: intent.context_id,
         runId: run.id, planRevision: intent.plan_revision, seq, status: run.status }, this.options.authority);
       await this.enqueue(`status-${run.id}-${seq}`, { role: 'agent', content: { type: 'output', data: { type: 'assistant', uuid: `status-${run.id}-${seq}`,
@@ -214,7 +226,7 @@ export class HappierEndpoint {
       foregroundState: 'ready', expectedRuntimeActivityRevision: this.revision }));
     if (pending.deferredReason === 'runtime_activity_unknown') this.runtimeReady = false;
     if (pending.didMaterialize && pending.message?.localId) {
-      const record = UserRecord.parse(this.boundary.decrypt(this.options.key, 'legacy', this.boundary.decodeBase64(pending.message.content.c)));
+      const record = UserRecord.parse(this.boundary.decrypt(this.options.key, this.options.encryptionVariant??'legacy', this.boundary.decodeBase64(pending.message.content.c)));
       const accepted = z.object({ ok: z.literal(true) }).passthrough().parse(await this.rpc.invokeLocal('session.userMessage.send',
         { text: record.content.text, localId: pending.message.localId, meta: record.meta ?? {} }));
       await this.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: this.socket, sessionId: this.options.sessionId, localId: pending.message.localId });

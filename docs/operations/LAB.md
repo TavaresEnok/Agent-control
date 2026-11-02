@@ -50,3 +50,19 @@ Os testes Node nativos exigem `curl`; a receita Dockerfile inclui a dependência
 A CI em `.github/workflows/isolated-ci.yml` cobre contratos/PG/runtime e tipos/build Cezar. É uma configuração preparada e validada localmente nos comandos equivalentes, não uma execução remota já observada. UID/GID do runner são propagados para evitar depender do usuário 1000 de desenvolvimento. O checkout não persiste credenciais.
 
 A imagem própria `agent-control-lab:0.1.0` foi preparada com a dependência curl para as próximas aberturas. A rodada executada usou a imagem histórica e o reparo equivalente no container. `deploy/Dockerfile.lab` fornece a receita para instalação nova; a reprodução em outra VM permanece GI7.
+
+## Incremento de contas e controle
+
+O cadastro habilitado por código aceita exclusivamente modo synthetic. Perfis exigem modelo/esforço/função presentes no catálogo do administrador; credenciais não fazem parte do payload. Configure orçamento global explicitamente. As fixtures usam valores próprios de laboratório, que não devem ser importados como política de produção.
+
+A consulta de contextos e recursos passa por RBAC. Escritas em `/api/v1/ac/control` exigem callback de autenticação humana configurado pelo gateway, negado por padrão. O bearer do gerente não deve ser tratado como prova de presença do proprietário. O formulário Settings → Agent Control já usa comandos tipados e preserva a intenção em reenvios, mas o login humano/pareamento ainda precisa ser entregue para habilitar escrita fora das fixtures.
+
+Na execução sintética, a concessão é persistida antes de Cezar iniciar o processo; a cota/época é conferida no spawn. Perda de autoridade não libera automaticamente a vaga. O operador não deve editar a concessão para fingir que um processo terminou.
+
+## Backup cifrado da bancada (não é procedimento de produção)
+
+`scripts/backup-lab.mjs` recusa execução enquanto o runtime deste compose estiver rodando. Com runtime parado e somente o PG da bancada ativo, gera pg_dump, manifesto, cópia do estado Happier/projetos e credenciais exclusivamente sintéticas da fixture em arquivo AES-256-GCM. A chave fica separada em `.state/backups/keys`, protegida por permissão 0600. Sua custódia fora do host não está implementada.
+
+`scripts/restore-lab.mjs <arquivo.acbackup> <arquivo.key>` autentica antes de extrair, recusa links/caminhos especiais e confere hashes em um NOVO diretório `.state/restores`. Não importa banco, não reabre admissão, não substitui diretórios existentes. Repositórios com ponteiros Git absolutos ainda exigem tratamento de relocação; extração íntegra não comprova que a aplicação restaurada já possa executar.
+
+Os scripts não devem ser apontados a dados reais. Nunca usar prune global ou remover o volume PG para simular reversão.

@@ -15,7 +15,12 @@ A contraprova de falha do pending-poll foi executada RED → GREEN e o relay de 
 | I0 | Baseline, proveniência, matrizes e CI de base disponíveis | Types/build Cezar; servidor/runtime e UI Happier; instalação nova; testes nativos e de pacote | Pendente: CI remota/VM independente, revisão e limitações registradas |
 | I1 | Fatia de autoridade/intenção implementada | PG real, concorrência, gerações, pausas, entrada inválida, escopo, outbox e operação incerta | Parcial: AC-IMP-0001 |
 | I2 | Conversa canônica e integração executável | Duas sessões/contextos, histórico cifrado, checkpoint, takeover, navegador desktop/390, reconexão e Cezar | Parcial: AC-IMP-0002/0005/0006/0020 |
-| I3–I10 | Requisitos preservados e rastreados | Não homologados por estas provas | Fases futuras; nenhum recurso removido do escopo |
+| I3 | Contas sintéticas, catálogo, políticas imutáveis e concessões globais integradas ao runner | Suíte de capacidade e integração consolidada; resultados do incremento em evidence | Parcial: não há contas reais, condição histórica especial ou justiça durável |
+| I4 | Contratos de artefato, verificação, QA e preparação/execução CAS no controlador | Types; ensaio próprio de qualidade/CAS ainda pendente | Não homologado; não conectado ao template QA/conselho completo |
+| I5 | Recibo ligado a grant, grupo de processos, observação de autoridade e identidade PID/start-time/boot | Escopo de processo sintético; contraprovas hostis/SSH ausentes | Parcial; não usar como sandbox de produção |
+| I6 | Seção Settings Cezar com contas/perfis/políticas/concessões e comandos deduplicados | Types/build do cockpit; browser desta seção pendente | Escrita humana recusada até autenticação específica; restante de administração ausente |
+| I7 | Scripts de backup cifrado e extração para nova área | Sintaxe; backup/restore operacional ainda não executado | Não homologado |
+| I8–I10 | Requisitos preservados e rastreados | Não homologados por estas provas | Fases futuras; nenhum recurso removido do escopo |
 
 Os resultados e comandos estão em `docs/validation/evidence/`, com códigos em CHECKS.jsonl e JSONs das provas. O registro canônico de pendências é FINDINGS.md. TRACEABILITY.json/CSV preserva 57 RF, 15 RNF e 39 T, distinguindo código, teste e aceite. Nenhum requisito integral foi aprovado por analogia.
 
@@ -47,3 +52,9 @@ O adaptador recupera páginas nativas Happier em ordem, valida cursores e recusa
 A projeção de eventos e escritas locais da outbox agora verificam a época da autoridade na mesma transação. A fronteira de chamada remota em trânsito ainda exige reconciliação (AC-IMP-0023). Oito testes e typecheck/build passaram em `docs/validation/evidence/i2-history-fencing-final2-20261102.log`.
 
 O recebimento de resultado sintético também exige autoridade, identidade e estado running coerentes; evidência `docs/validation/evidence/receipt-identity-20261102.log`. Validação do artefato real e reconciliação de escritores continuam pendentes (AC-IMP-0024).
+
+## Incremento atual de implementação
+
+Código adicional e seus limites: `docs/implementation/I1-I4-IMPLEMENTACAO.md`. Migrações 004–008 adicionam capacidade, controle, qualidade, catálogo e fingerprints por contexto. A integração condicional está implementada em serviço interno, ainda sem prova Git/Ruby própria ou conexão ao fluxo completo; não expõe uma rota de merge não homologada. A suíte consolidada anterior ao ajuste final de processos registrou 17 aprovações; o resultado final está em `implementation-increment-final.log`.
+
+A solicitação mais recente prioriza implementação e validação concentrada ao final. Não reexecutar toda a suíte upstream de mais de 13 mil casos a cada alteração. Manter verificações pertinentes à mudança e falhas preservadas.

@@ -79,6 +79,12 @@
       "sha256": "442b84181bcdce699746eea35a0b3575f2ec6887216977b39e0f2208c2f4ea5a"
     },
     {
+      "path": "packages/web/src/routes/settings/registry.tsx",
+      "upstream_blob": "611c67f2c3c52cc29f11bdca8fbc5931e5679860",
+      "current_blob": "7040f32d2ad013226997c9e3824c77e7d50fa6e4",
+      "sha256": "8447d3ea9c8afbab7bead55d2afcb92b2f8e3a684c14f89b764a80084354cb4d"
+    },
+    {
       "path": "packages/web/src/routes/workflow-graph/workflow-graph.tsx",
       "upstream_blob": "58d80c622ba7f1bb81f2c8eed8a038a9d863c096",
       "current_blob": "0799dbabfccb096657475b64b007d0b765003b8b",
@@ -93,6 +99,11 @@
       "path": "packages/cezar/src/git-worktree-identity.test.ts",
       "change": "added",
       "sha256": "80073780f0548ad27aec9ae338d86df4a9d6a6fbef01b0dc041f20a594df4732"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-section.tsx",
+      "change": "added",
+      "sha256": "fb15abfbbabe681b688139faf3259e6b391a40773c2c20e40f0769edc4ed78a2"
     }
   ],
   "happier": [

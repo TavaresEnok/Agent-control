@@ -11,6 +11,8 @@ import { z } from 'zod';
 import { Ledger } from '../src/ledger.ts';
 import { loadHappier, HappierEndpoint } from '../src/happier.ts';
 import { CezarRuntime } from '../src/cezar.ts';
+import { provisionCapacity } from './fixtures/provision-capacity.ts';
+import { ContextKeys, keyFingerprint } from '../src/context-keys.ts';
 
 test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history', { timeout: 120000 }, async () => {
   const database = process.env.AC_TEST_DATABASE_URL;
@@ -39,6 +41,7 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
   await writeFile(join(repo, '.ai/cezar/config.json'), JSON.stringify({ baseBranch: 'main', skillsRepos: [], maxParallel: 2, worktreeRetention: 0 }));
   const project = randomUUID(); await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Two chats / one project']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+  const capacity = await provisionCapacity(db, principal, project);
   const runtime = new CezarRuntime(db, repo, project); await runtime.start();
   const endpoints: HappierEndpoint[] = [], sessions: string[] = [], contexts: string[] = [];
   let pendingFault = true;
@@ -53,6 +56,8 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
       }));
       const sessionId = raw.session.id; sessions.push(sessionId);
       const contextId = await db.createContext(principal, project, sessionId); contexts.push(contextId);
+      await capacity.service.assignPolicy(principal, contextId, capacity.revision);
+      await new ContextKeys(db).authorize(principal,contextId,1,'legacy',keyFingerprint(key));
       const authority = await db.acquire(principal, contextId, randomUUID(), 'synthetic-sol-profile');
       const transportBoundary = i === 0 ? { ...b, materializeNextPendingQueueV2Message: async (options: Record<string, unknown>) => {
         const result = await b.materializeNextPendingQueueV2Message(options);

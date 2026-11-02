@@ -11,11 +11,18 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 - `src/cezar.ts`: admissão do RunManager/RunStore existentes, snapshot congelado, exclusão mútua do runtime e executor de fixture Git.
 - `src/happier.ts` + `adapters/happier-entry.ts`: fronteira versionada com as implementações nativas de RPC, fila, transporte e E2EE.
 - `src/api.ts`: gateway autenticado; rotas não integradas recusadas. Escrita nativa Cezar, terminal, MCP e WS não são expostos.
+- `src/capacity.ts` + `src/control.ts`: contas sintéticas, catálogo, políticas versionadas, seleção regular, concessões PG e comandos administrativos idempotentes.
+- `src/context-keys.ts`: autorização, versionamento e revogação de fingerprints de chave por contexto, preservando a criptografia Happier.
+- `src/quality.ts` + `src/integration.ts`: contratos de evidência, independência, dispensa QA e integração condicional; ainda exigem prova própria e conexão ao fluxo completo.
+- `services/agent-control-git/` + `src/git.ts`: helpers AcSafeGit/AcArtifactIdentity preservados e wrapper controlado de identidade/CAS.
+- Settings → Agent Control: seção inicial de contas/perfis/políticas/concessões no cockpit existente; escrita humana exige autenticação específica ainda não habilitada.
+- `scripts/backup-lab.mjs` e `scripts/restore-lab.mjs`: arquivo cifrado e extração autenticada para nova área; não são restauração operacional.
 - `src/lab-main.ts`: launcher **de fixture sintética**, reaproveitando as sessões criadas pelo teste. Não é bootstrap de produção.
 
 ## Comece aqui
 
 - [Estado e próximo trabalho](docs/STATUS.md)
+- [Incremento de implementação e limites](docs/implementation/I1-I4-IMPLEMENTACAO.md)
 - [Reprodução](docs/operations/LAB.md)
 - [Achados canônicos](docs/validation/FINDINGS.md)
 - [Critérios desta entrega](docs/validation/ACCEPTANCE-I0-I2.md)

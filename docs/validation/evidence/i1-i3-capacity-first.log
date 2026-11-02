@@ -1,0 +1,60 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+TAP version 13
+# Subtest: same subscription cannot be registered under another account alias; read-only members cannot change it
+ok 1 - same subscription cannot be registered under another account alias; read-only members cannot change it
+  ---
+  duration_ms: 362.325337
+  type: 'test'
+  ...
+# Subtest: concurrent reservations across two PG clients share one account slot; same attempt deduplicates
+ok 2 - concurrent reservations across two PG clients share one account slot; same attempt deduplicates
+  ---
+  duration_ms: 54.976689
+  type: 'test'
+  ...
+# Subtest: unknown quota is not availability; fallback stays regular after the earlier account recovers
+ok 3 - unknown quota is not availability; fallback stays regular after the earlier account recovers
+  ---
+  duration_ms: 66.943803
+  type: 'test'
+  ...
+# Subtest: emergency yields future attempts when a regular account recovers, without disturbing an existing grant
+ok 4 - emergency yields future attempts when a regular account recovers, without disturbing an existing grant
+  ---
+  duration_ms: 47.872101
+  type: 'test'
+  ...
+# Subtest: uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt
+ok 5 - uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt
+  ---
+  duration_ms: 69.523929
+  type: 'test'
+  ...
+# Subtest: published revisions remain immutable and an in-flight grant keeps its original policy
+ok 6 - published revisions remain immutable and an in-flight grant keeps its original policy
+  ---
+  duration_ms: 71.514417
+  type: 'test'
+  ...
+# Subtest: old manager cannot reserve; successor cannot release an unreconciled old grant
+ok 7 - old manager cannot reserve; successor cannot release an unreconciled old grant
+  ---
+  duration_ms: 36.58459
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1343.071227

@@ -87,6 +87,21 @@ export class Ledger {
         DO UPDATE SET epoch=excluded.epoch,snapshot=excluded.snapshot,updated_at=now()`, [a.contextId, a.epoch, parsed]);
     });
   }
+  async refreshPending(c: pg.PoolClient, contextId: string) {
+    const pending=(await c.query("SELECT id FROM ac_intents WHERE context_id=$1 AND state NOT IN ('done','review','failed','canceled') ORDER BY created_at,id",[contextId])).rows.map(r=>r.id);
+    await c.query("UPDATE ac_checkpoints SET snapshot=jsonb_set(snapshot,'{pendingIntentIds}',$2::jsonb),updated_at=now() WHERE context_id=$1",[contextId,JSON.stringify(pending)]);
+  }
+  async recoverCheckpoint(authority: Authority): Promise<Checkpoint|null> {
+    return this.tx(async c=>{
+      await this.fence(c,authority,true);
+      const saved=(await c.query('SELECT k.snapshot,x.plan_revision FROM ac_contexts x LEFT JOIN ac_checkpoints k ON k.context_id=x.id WHERE x.id=$1',[authority.contextId])).rows[0];
+      if(!saved?.snapshot)return null;
+      const value=Checkpoint.parse(saved.snapshot);
+      if(value.planRevision!==saved.plan_revision)throw new Refusal('CHECKPOINT_STALE');
+      await this.refreshPending(c,authority.contextId);
+      return Checkpoint.parse((await c.query('SELECT snapshot FROM ac_checkpoints WHERE context_id=$1',[authority.contextId])).rows[0].snapshot);
+    });
+  }
   async accept(principal: string, raw: Command, a: Authority, channel: string): Promise<Intent> {
     const command = Command.parse(raw);
     return this.tx(async c => {
@@ -118,6 +133,13 @@ export class Ledger {
         if (checkpoint) await c.query('UPDATE ac_checkpoints SET epoch=$2,snapshot=$3,updated_at=now() WHERE context_id=$1',
           [command.contextId, a.epoch, { ...checkpoint, planRevision: revision,
             pendingIntentIds: [...new Set([...checkpoint.pendingIntentIds, intent.id])] }]);
+        else {
+          const first=(await c.query('SELECT id FROM ac_intents WHERE context_id=$1 ORDER BY plan_revision LIMIT 1',[command.contextId])).rows[0];
+          const initial=Checkpoint.parse({schemaVersion:1,planRevision:revision,objectiveRef:`intent:${first.id}`,
+            constraintRefs:[],decisionRefs:[],artifactRefs:[],pendingIntentIds:[intent.id],historyCursor:0});
+          await c.query('INSERT INTO ac_checkpoints VALUES($1,$2,$3,now())',[command.contextId,a.epoch,initial]);
+        }
+        await this.refreshPending(c,command.contextId);
         await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'intent.accepted',$2)", [a.contextId, { intentId: intent.id, epoch: a.epoch }]);
       }
       await c.query('INSERT INTO ac_deliveries(id,intent_id,channel) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [deliveryAttemptId, intent.id, channel]);

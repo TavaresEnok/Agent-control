@@ -12,3 +12,14 @@
 {"id":"adapter-final-build-and-tests","command":["sh","-c","npm run typecheck && npm run build && npm test"],"startedAt":"2026-11-02T04:30:21.553Z","finishedAt":"2026-11-02T04:30:42.642Z","exitCode":0,"signal":null}
 {"id":"browser-final-candidate","command":["node","scripts/browser-acceptance.mjs"],"startedAt":"2026-11-02T04:39:58.705Z","finishedAt":"2026-11-02T04:40:38.322Z","exitCode":0,"signal":null}
 {"id":"final-image-contracts","command":["sh","-c","npm run typecheck && npm run build && node --import tsx --test tests/ledger.test.ts tests/runtime.test.ts"],"startedAt":"2026-11-02T04:58:57.905Z","finishedAt":"2026-11-02T04:59:09.702Z","exitCode":0,"signal":null}
+{"id":"increment-core-types","command":["npm","run","typecheck"],"startedAt":"2026-11-02T05:32:19.644Z","finishedAt":"2026-11-02T05:32:23.743Z","exitCode":0,"signal":null}
+{"id":"increment-core-build","command":["npm","run","build"],"startedAt":"2026-11-02T05:32:23.783Z","finishedAt":"2026-11-02T05:32:27.161Z","exitCode":0,"signal":null}
+{"id":"increment-cezar-types","command":["npm","--prefix","upstream/cezar","run","typecheck"],"startedAt":"2026-11-02T05:32:27.198Z","finishedAt":"2026-11-02T05:32:57.410Z","exitCode":1,"signal":null}
+{"id":"increment-cezar-types-fixed","command":["npm","--prefix","upstream/cezar","run","typecheck"],"startedAt":"2026-11-02T05:34:33.722Z","finishedAt":"2026-11-02T05:35:07.579Z","exitCode":0,"signal":null}
+{"id":"increment-cezar-web","command":["npm","--prefix","upstream/cezar","run","build:web"],"startedAt":"2026-11-02T05:35:07.638Z","finishedAt":"2026-11-02T05:35:13.063Z","exitCode":0,"signal":null}
+{"id":"increment-integration","command":["npm","test"],"startedAt":"2026-11-02T05:35:13.120Z","finishedAt":"2026-11-02T05:35:33.707Z","exitCode":0,"signal":null}
+{"id":"increment-lifecycle-types","command":["npm","run","typecheck"],"startedAt":"2026-11-02T05:38:31.312Z","finishedAt":"2026-11-02T05:38:33.830Z","exitCode":0,"signal":null}
+{"id":"increment-lifecycle-runtime","command":["node","--import","tsx","--test","tests/runtime.test.ts"],"startedAt":"2026-11-02T05:38:33.867Z","finishedAt":"2026-11-02T05:38:37.982Z","exitCode":0,"signal":null}
+{"id":"increment-final-types","command":["npm","run","typecheck"],"startedAt":"2026-11-02T05:40:58.352Z","finishedAt":"2026-11-02T05:41:01.918Z","exitCode":0,"signal":null}
+{"id":"increment-final-build","command":["npm","run","build"],"startedAt":"2026-11-02T05:41:01.965Z","finishedAt":"2026-11-02T05:41:05.270Z","exitCode":0,"signal":null}
+{"id":"increment-final-tests","command":["npm","test"],"startedAt":"2026-11-02T05:41:05.329Z","finishedAt":"2026-11-02T05:41:25.733Z","exitCode":0,"signal":null}

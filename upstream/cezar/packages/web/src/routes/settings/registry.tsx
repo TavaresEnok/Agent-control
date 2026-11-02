@@ -22,6 +22,7 @@ import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
 import { AccountsSection } from './accounts-section'
+import { AgentControlSection } from './agent-control-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
@@ -59,6 +60,7 @@ import { IntegrationsSection } from './integrations-section'
 
 export type SettingsSectionId =
   | 'bookmarklets'
+  | 'agent-control'
   | 'appearance'
   | 'accounts'
   | 'agents'
@@ -96,6 +98,7 @@ export interface SettingsSection {
 }
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
+  {id: 'agent-control', title: 'Agent Control', description: 'Contas, políticas e capacidade por conversa.', icon: ShieldCheckIcon, component: AgentControlSection, scope: 'project', hidden: import.meta.env.VITE_AGENT_CONTROL_MANAGED !== '1'},
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
   {
     id: 'tracker',
