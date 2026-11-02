@@ -23,6 +23,7 @@ updates = {
     'RF-49': ('docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/managed-process-reaper-green-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/engineering.test.ts', 'Known controller paths unavailable to synthetic verifiers and native ID-based reaper disabled in managed mode; real account boundaries remain unverified.'),
     'RF-34': ('docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log', 'scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/relocate-restored-worktrees.mjs', 'Encrypted synthetic backup, new database, relocated Git/native metadata and managed runtime startup verified; full UI, external effects and off-host custody pending.'),
     'RF-52': ('docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log', 'scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs', 'Restored database fenced and managed runtime starts without dispatch; version rollout and full application startup pending.'),
+    'RF-56': ('docs/validation/evidence/account-state-final-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log', 'src/capacity.ts;src/control.ts;tests/account-state.test.ts;tests/capacity.test.ts', 'Disabled synthetic account/profile prevents new grants and stale state changes are refused; multi-context restart selection and real account acceptance remain open.'),
     'RNF-03': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Synthetic workers have no host socket, keys or network; verifier snapshots read-only. Hostile real agents and account boundaries not homologated.'),
     'T14': ('docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log', 'src/remote.ts;tests/ssh.test.ts;tests/ssh-restart.test.ts', 'Real SSH and completed result after restart; interrupted in-flight operation still uncertain.'),
     'T15': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts', 'Fixed synthetic verifiers attempted snapshot writes and controller path access; cross-account hostile process proof pending.'),
@@ -32,12 +33,13 @@ updates = {
     'T18': ('docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log', 'scripts/prove-backup-restore.mjs;scripts/prove-restored-worktrees.mjs;tests/fixtures/restored-runtime-smoke.ts', 'Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified.'),
     'T30': ('docs/validation/evidence/backup-restore-first-20261102.log', 'scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs', 'Paused context and uncertain grants preserved without starting an executor; external live effect reconciliation still pending.'),
     'T36': ('docs/validation/evidence/managed-process-reaper-red-20261102.log;docs/validation/evidence/managed-process-reaper-green-20261102.log', 'upstream/cezar/packages/cezar/src/workflows/run.ts;upstream/cezar/packages/cezar/src/workflows/leftover-processes.test.ts', 'Native process cleanup cannot bypass broker authority in managed mode; full ingress and account administration coverage remains partial.'),
+    'T37': ('docs/validation/evidence/account-state-final-20261102.log', 'src/capacity.ts;src/control.ts;tests/account-state.test.ts', 'Account/profile disable is respected without releasing uncertain work; multiple context selections after restart are not yet covered.'),
 }
 for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 22
+assert len(rows) == 111 and len(updates) == 24
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()

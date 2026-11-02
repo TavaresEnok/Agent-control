@@ -717,15 +717,15 @@
   {
     "id": "RF-56",
     "normative_row": "RF-56\tAntes de G1\tPersistir a seleção regular por contexto, independente dos perfis imutáveis de tentativas e dos limites globais.\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/account-state-final-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log",
+    "files": "src/capacity.ts;src/control.ts;tests/account-state.test.ts;tests/capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Disabled synthetic account/profile prevents new grants and stale state changes are refused; multi-context restart selection and real account acceptance remain open."
   },
   {
     "id": "RF-57",
@@ -1406,15 +1406,15 @@
   {
     "id": "T37",
     "normative_row": "T37\tDois chats mantêm seleções regulares distintas ao disputar a capacidade global e após reinício; mudança em um não altera indevidamente o outro, e conta desabilitada é respeitada.\tSeleção por contexto persistente e capacidade global íntegra\tRF-56/RF-13\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/account-state-final-20261102.log",
+    "files": "src/capacity.ts;src/control.ts;tests/account-state.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Account/profile disable is respected without releasing uncertain work; multiple context selections after restart are not yet covered."
   },
   {
     "id": "T38",

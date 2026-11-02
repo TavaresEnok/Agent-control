@@ -15,8 +15,8 @@ const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlapping
  observed_at:z.string().nullable()}))})
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
- accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string()})),
- profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string()})),
+ accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
+ profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
  qualityPolicies:z.array(z.object({revision:z.number()})),
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
@@ -57,7 +57,8 @@ export function AgentControlSection(){
    const result=z.object({intentId:z.string(),state:z.literal('applied')}).passthrough().parse(await request('/api/v1/ac/control',body,{'x-ac-operator-proof':proof}))
    sessionStorage.removeItem(storageKey)
    return result
-  },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]});void cache.invalidateQueries({queryKey:['ac-contexts']})}})
+  },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]});void cache.invalidateQueries({queryKey:['ac-contexts']})},
+  onError:error=>{if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','POLICY_CONFLICT'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})}})
  const bootstrap=useMutation({mutationFn:async()=>{
   if(!identity.data)throw Error('DEVICE_KEY_UNAVAILABLE')
   return z.object({state:z.literal('active')}).parse(await request('/api/v1/ac/operator/bootstrap',
@@ -102,9 +103,12 @@ export function AgentControlSection(){
    </form>
   </SettingsField>}
   {data&&<>
-   <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Nenhuma assinatura real é utilizada.">
+   <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Desabilitar impede novas concessões nos projetos que compartilham a conta; trabalhos já iniciados preservam seus recibos. Nenhuma assinatura real é utilizada.">
     <ul className="flex flex-col gap-2">{data.accounts.map(a=><li key={a.id} className="break-words rounded-md border p-3">
-     <strong>{a.label}</strong> · {a.provider}<br/>{a.quota_status} · {a.eligibility}
+     <strong>{a.label}</strong> · {a.provider}<br/>{a.enabled?'Habilitada':'Desabilitada'} · {a.quota_status} · {a.eligibility}<br/>
+     {a.can_manage?<Button type="button" disabled={busy} onClick={()=>mutate.mutate({action:'account.state',payload:{id:a.id,enabled:!a.enabled,expectedRevision:a.revision}})}>
+      {a.enabled?'Desabilitar conta':'Habilitar conta'}
+     </Button>:<span className="text-xs">Gerenciada pelo titular da conta.</span>}
     </li>)}</ul>
     <form className="flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();const id=crypto.randomUUID();mutate.mutate({action:'account.add',payload:{
      id,provider:'synthetic',label,resourceIdentity:`synthetic-${id}`,mode:'synthetic',eligibility:'not_assessed',
@@ -114,7 +118,11 @@ export function AgentControlSection(){
     </form>
    </SettingsField>
    <SettingsField title="Perfis" hint="Modelo, esforço e função pertencem a um perfil de uma conta específica.">
-    <ul>{data.profiles.map(p=><li key={p.id} className="break-words">{p.model} · {p.effort} · {p.role}</li>)}</ul>
+    <ul className="flex flex-col gap-2">{data.profiles.map(p=><li key={p.id} className="break-words rounded-md border p-3">{p.model} · {p.effort} · {p.role} · {p.enabled?'Habilitado':'Desabilitado'}<br/>
+     {p.can_manage?<Button type="button" disabled={busy} onClick={()=>mutate.mutate({action:'profile.state',payload:{id:p.id,enabled:!p.enabled,expectedRevision:p.revision}})}>
+      {p.enabled?'Desabilitar perfil':'Habilitar perfil'}
+     </Button>:<span className="text-xs">Gerenciado pelo titular da conta.</span>}
+    </li>)}</ul>
     <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();mutate.mutate({action:'profile.add',payload:{id:crypto.randomUUID(),accountId:account,model,effort,role}})}}>
      <select aria-label="Conta do perfil" className={selectStyle} required value={account} onChange={e=>setAccount(e.target.value)}>
       <option value="">Selecione a conta</option>{data.accounts.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}

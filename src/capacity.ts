@@ -89,6 +89,22 @@ export class Capacity {
       await c.query('INSERT INTO ac_account_access VALUES($1,$2) ON CONFLICT DO NOTHING', [accountId, projectId]);
     });
   }
+  async setEnabled(principal:string,projectId:string,kind:'account'|'profile',raw:{id:string;enabled:boolean;expectedRevision:number}){
+    const input=z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict().parse(raw);
+    await this.tx(async c=>{
+      await this.owner(c,principal,projectId);
+      await c.query('SELECT id FROM ac_capacity_config WHERE id=1 FOR UPDATE');
+      const row=(await c.query(kind==='account'
+        ?`SELECT a.revision FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
+          WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a`
+        :`SELECT p.revision FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id JOIN ac_account_access x ON x.account_id=a.id
+          WHERE p.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF p`,[input.id,principal,projectId])).rows[0];
+      if(!row)throw new Refusal('ACCOUNT_PROFILE_FORBIDDEN',403);
+      if(row.revision!==input.expectedRevision)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
+      await c.query(kind==='account'?'UPDATE ac_accounts SET enabled=$2,revision=revision+1 WHERE id=$1':
+        'UPDATE ac_profiles SET enabled=$2,revision=revision+1 WHERE id=$1',[input.id,input.enabled]);
+    });
+  }
   async addProfile(principal: string, projectId: string, raw: z.input<typeof ProfileInput>) {
     const p = ProfileInput.parse(raw);
     await this.tx(async c => {

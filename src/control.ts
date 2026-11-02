@@ -19,6 +19,8 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('context.pause'),payload:z.object({paused:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
  z.object({...base,action:z.literal('account.add'),payload:AccountInput}).strict(),
  z.object({...base,action:z.literal('account.share'),payload:z.object({accountId:Id}).strict()}).strict(),
+ z.object({...base,action:z.literal('account.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
+ z.object({...base,action:z.literal('profile.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
  z.object({...base,action:z.literal('profile.add'),payload:ProfileInput}).strict(),
  z.object({...base,action:z.literal('policy.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:CapacityPolicy}).strict()}).strict(),
  z.object({...base,action:z.literal('policy.assign'),payload:z.object({revision:z.number().int().positive()}).strict()}).strict(),
@@ -37,7 +39,10 @@ export class Control {
    const admission=(await c.query(command.action==='admission.set'
     ?'SELECT enabled FROM ac_admission_control WHERE id=1 FOR UPDATE'
     :'SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
-   if(!admission?.enabled&&command.action!=='admission.set'&&!(command.action==='context.pause'&&command.payload.paused))throw new Refusal('ADMISSION_CLOSED');
+   const allowedWhileClosed=command.action==='admission.set'||command.action==='device.revoke'||
+    (command.action==='context.pause'&&command.payload.paused)||
+    ((command.action==='account.state'||command.action==='profile.state')&&!command.payload.enabled);
+   if(!admission?.enabled&&!allowedWhileClosed)throw new Refusal('ADMISSION_CLOSED');
    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,2))',[command.intentId]);
    const {deliveryAttemptId,...semantic}=command;
    const hash=digest({principal,...semantic});
@@ -61,6 +66,8 @@ export class Control {
      }
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;
      case 'account.share':await service.shareAccount(principal,command.payload.accountId,context.project_id);result={accountId:command.payload.accountId};break;
+     case 'account.state':await service.setEnabled(principal,context.project_id,'account',command.payload);result={id:command.payload.id,enabled:command.payload.enabled,revision:command.payload.expectedRevision+1};break;
+     case 'profile.state':await service.setEnabled(principal,context.project_id,'profile',command.payload);result={id:command.payload.id,enabled:command.payload.enabled,revision:command.payload.expectedRevision+1};break;
      case 'profile.add':await service.addProfile(principal,context.project_id,command.payload);result={profileId:command.payload.id};break;
      case 'policy.publish':result={revision:await service.publish(principal,context.project_id,command.payload.expectedRevision,command.payload.policy)};break;
      case 'policy.assign':await service.assignPolicy(principal,command.contextId,command.payload.revision);result={revision:command.payload.revision};break;
@@ -80,12 +87,14 @@ export class Control {
  async view(principal:string,contextId:string){
   return this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,Id.parse(contextId),false);
-   const accounts=(await c.query(`SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.max_concurrent,
+   const accounts=(await c.query(`SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.revision,a.max_concurrent,
+    (a.owner_id=$2 AND $3::boolean) can_manage,
     CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE 'unknown' END quota_status,
     q.source quota_source,q.observed_at,q.expires_at
     FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id LEFT JOIN ac_quota_observations q ON q.account_id=a.id
-    WHERE x.project_id=$1 ORDER BY a.id`,[context.project_id])).rows;
-   const profiles=(await c.query('SELECT p.* FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id',[context.project_id])).rows;
+    WHERE x.project_id=$1 ORDER BY a.id`,[context.project_id,principal,context.role==='owner'])).rows;
+   const profiles=(await c.query(`SELECT p.*,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
+    JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows;
    const policies=(await c.query('SELECT revision,digest,snapshot,published_at FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const grants=(await c.query(`SELECT id,attempt_id,intent_id,profile_id,account_id,role,policy_revision,emergency,state,created_at
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
