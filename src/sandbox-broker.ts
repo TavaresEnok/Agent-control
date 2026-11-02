@@ -10,10 +10,13 @@ import { Authority,Id,canonical,digest,Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 
 const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup','stop']),jobId:Id,grantId:Id,
- authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1']),
+ authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1']),
  source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict().optional(),
+ verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict().optional(),
  expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 type SandboxRequest=z.infer<typeof SandboxRequest>;
+export type SandboxExecution={profile:'synthetic-implementation-v1';source:NonNullable<SandboxRequest['source']>}|
+ {profile:'synthetic-verification-v1';source:NonNullable<SandboxRequest['source']>;verification:NonNullable<SandboxRequest['verification']>};
 function signature(value:Omit<SandboxRequest,'signature'>,key:Uint8Array){return createHmac('sha256',key).update(canonical(value)).digest('hex');}
 export function signSandbox(value:Omit<SandboxRequest,'signature'>,key:Uint8Array):SandboxRequest{return {...value,signature:signature(value,key)};}
 const Inspect=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Image:z.string(),Config:z.object({User:z.string(),Labels:z.record(z.string(),z.string())}).passthrough(),
@@ -45,7 +48,9 @@ export class DockerDaemon{
  async stop(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/stop?t=3`);if(![204,304].includes(r.status))throw new Refusal('DOCKER_STOP_UNCERTAIN');}
  async remove(id:string){const r=await this.call('DELETE',`/v1.44/containers/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}
 }
-export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
+export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;
+ verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;
+ imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
 const exec=promisify(execFile);
 async function safeGit(cwd:string,args:string[]){
  const result=await exec('/usr/bin/git',['-c','safe.directory='+cwd,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,...args],
@@ -81,6 +86,13 @@ export class SandboxBroker{
   await chmod(expected,0o755);await chown(expected,10001,10001);return actual;
  }
  private executor(request:SandboxRequest){
+  if(request.profile==='synthetic-verification-v1'){
+   if(!request.source||!request.verification||!this.config.verificationPath||!this.config.verificationSha256||
+      !this.config.verifierPath||!this.config.verifierSha256)throw new Refusal('SANDBOX_VERIFICATION_NOT_CONFIGURED');
+   return {path:this.config.verificationPath,hash:this.config.verificationSha256,
+    verifier:{path:this.config.verifierPath,hash:this.config.verifierSha256}};
+  }
+  if(request.verification)throw new Refusal('SANDBOX_PROFILE_MISMATCH');
   if(request.profile==='synthetic-probe-v1'){
    if(request.source)throw new Refusal('SANDBOX_PROFILE_MISMATCH');
    return {path:this.config.probeHostPath,hash:this.config.probeSha256};
@@ -91,7 +103,8 @@ export class SandboxBroker{
  private specification(request:SandboxRequest,work:string,epoch=request.authority.epoch){
   const executor=this.executor(request);
   const base={profile:request.profile,image:this.config.imageId,work,probe:executor.path,probeSha256:executor.hash,grant:request.grantId,epoch};
-  return digest(request.source?{...base,sourceDigest:digest(request.source)}:base);
+  return digest(request.verification?{...base,sourceDigest:digest(request.source),verification:request.verification,verifier:executor.verifier}:
+   request.source?{...base,sourceDigest:digest(request.source)}:base);
  }
  private inspectExpected(value:Inspected,request:SandboxRequest,spec:string,work:string){
   const labels=value.Config.Labels??{};
@@ -100,7 +113,9 @@ export class SandboxBroker{
     value.Config.User!=='10001:10001'||value.HostConfig.NetworkMode!=='none'||!value.HostConfig.ReadonlyRootfs||value.HostConfig.Privileged||
     !value.HostConfig.CapDrop?.includes('ALL')||!value.HostConfig.SecurityOpt?.some(s=>s.startsWith('no-new-privileges'))||
     value.HostConfig.PidsLimit!==64||value.HostConfig.Memory!==268435456||value.HostConfig.NanoCpus!==1000000000||
-    value.Mounts.length!==2||!value.Mounts.some(m=>m.Destination==='/work'&&m.Source===work&&m.RW)||
+    value.Mounts.length!==(request.verification?4:2)||!value.Mounts.some(m=>m.Destination==='/work'&&m.Source===work&&m.RW===!request.verification)||
+    (request.verification&&(!value.Mounts.some(m=>m.Destination==='/output'&&m.Source===join(this.config.hostRoot,request.jobId,'output')&&m.RW)||
+      !value.Mounts.some(m=>m.Destination==='/runner/verifier.mjs'&&m.Source===this.executor(request).verifier?.path&&!m.RW)))||
     !value.Mounts.some(m=>m.Destination==='/runner/probe.mjs'&&m.Source===this.executor(request).path&&!m.RW))
     throw new Refusal('SANDBOX_IDENTITY_MISMATCH');
  }
@@ -108,6 +123,8 @@ export class SandboxBroker{
   const value=this.validate(raw),name='ac-synthetic-'+value.jobId,work=join(this.config.hostRoot,value.jobId,'work');
   const executor=this.executor(value);
   if(createHash('sha256').update(await readFile(executor.path)).digest('hex')!==executor.hash)
+    throw new Refusal('SANDBOX_EXECUTOR_CHANGED');
+  if(executor.verifier&&createHash('sha256').update(await readFile(executor.verifier.path)).digest('hex')!==executor.verifier.hash)
     throw new Refusal('SANDBOX_EXECUTOR_CHANGED');
   const spec=this.specification(value,work);
   const principal=(await this.ledger.pool.query('SELECT i.principal_id FROM ac_capacity_grants g JOIN ac_intents i ON i.id=g.intent_id WHERE g.id=$1',[value.grantId])).rows[0]?.principal_id;
@@ -127,9 +144,16 @@ export class SandboxBroker{
    if(value.action!=='start')throw new Refusal('SANDBOX_JOB_NOT_FOUND');
    if(Number(grant.manager_epoch)!==value.authority.epoch||grant.state!=='reserved'||!grant.account_enabled||!grant.profile_enabled||
       grant.eligibility!=='documented_supported'||grant.quota_status!=='available'||!grant.quota_fresh)throw new Refusal('GRANT_NOT_ELIGIBLE');
+   if(value.verification){
+    const role=value.verification.kind==='review'?'reviewer':value.verification.kind;
+    const artifact=await c.query(`SELECT 1 FROM ac_artifacts a JOIN ac_intents i ON i.id=a.intent_id
+      WHERE a.id=$1 AND a.context_id=$2 AND a.intent_id=$3 AND a.commit_id=$4 AND i.operation_id=$5`,
+      [value.verification.artifactId,value.authority.contextId,grant.intent_id,value.source!.base,value.verification.operationId]);
+    if(grant.role!==role||!artifact.rowCount)throw new Refusal('SANDBOX_VERIFICATION_SCOPE_MISMATCH',403);
+   }else if(grant.role!=='programmer')throw new Refusal('SANDBOX_PROFILE_ROLE_MISMATCH',403);
    const owner=grant.role==='programmer'
     ?await c.query('SELECT 1 FROM ac_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3',[value.jobId,grant.intent_id,value.grantId])
-    :await c.query("SELECT 1 FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3 AND (($4='qa' AND node_id='qa') OR ($4='reviewer' AND node_id='review'))",[value.jobId,grant.intent_id,value.grantId,grant.role]);
+    :await c.query("SELECT 1 FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3 AND (($4='qa' AND node_id='qa') OR ($4='reviewer' AND node_id='review') OR ($4='judge' AND node_id='judge'))",[value.jobId,grant.intent_id,value.grantId,grant.role]);
    if(!owner.rowCount)throw new Refusal('SANDBOX_OPERATION_MISMATCH',403);
    await c.query("INSERT INTO ac_sandbox_jobs(id,context_id,grant_id,manager_epoch,profile,spec_digest,state) VALUES($1,$2,$3,$4,$5,$6,'uncertain')",
     [value.jobId,value.authority.contextId,value.grantId,value.authority.epoch,value.profile,spec]);
@@ -167,18 +191,25 @@ export class SandboxBroker{
     await safeGit(work,['fetch','--no-tags',sourcePath,'HEAD']);
     if(await safeGit(work,['rev-parse','FETCH_HEAD'])!==value.source.base)throw new Refusal('SANDBOX_SOURCE_IDENTITY_MISMATCH');
     await safeGit(work,['checkout','--detach',value.source.base]);
+    if(value.verification){
+     const artifact=(await c.query('SELECT tree_id FROM ac_artifacts WHERE id=$1',[value.verification.artifactId])).rows[0];
+     if(!artifact||await safeGit(work,['rev-parse','HEAD^{tree}'])!==artifact.tree_id)throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
+    }
     await exec('/bin/chown',['-R','-h','10001:10001',work],{timeout:10000});
    }
+   const output=join(this.config.hostRoot,value.jobId,'output');
+   if(value.verification){await mkdir(output,{mode:0o777});await chmod(output,0o777);}
    if(await this.docker.inspect(name))throw new Refusal('SANDBOX_NAME_IN_USE');
    const labels={'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
    const id=await this.docker.create(name,{Image:this.config.imageId,User:'10001:10001',WorkingDir:'/work',
-    Entrypoint:['node','/runner/probe.mjs',...(value.source?[value.jobId]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
+    Entrypoint:['node','/runner/probe.mjs',...(value.verification?[value.verification.operationId,value.verification.kind]:value.source?[value.jobId]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
      'GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_AUTHOR_NAME=Synthetic worker','GIT_AUTHOR_EMAIL=fixture@example.invalid',
      'GIT_COMMITTER_NAME=Synthetic worker','GIT_COMMITTER_EMAIL=fixture@example.invalid'],Labels:labels,
     HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],
      PidsLimit:64,Memory:268435456,NanoCpus:1000000000,AutoRemove:false,Init:true,
      Tmpfs:{'/tmp':'rw,nosuid,nodev,noexec,size=64m'},LogConfig:{Type:'json-file',Config:{'max-size':'1m','max-file':'1'}},
-     Binds:[`${work}:/work:rw`,`${executor.path}:/runner/probe.mjs:ro`]}});
+     Binds:value.verification?[`${work}:/work:ro`,`${executor.path}:/runner/probe.mjs:ro`,`${executor.verifier!.path}:/runner/verifier.mjs:ro`,`${output}:/output:rw`]:
+      [`${work}:/work:rw`,`${executor.path}:/runner/probe.mjs:ro`]}});
    const created=await this.docker.inspect(id);if(!created)throw new Refusal('DOCKER_CREATE_UNCERTAIN');
    this.inspectExpected(created,value,spec,work);
    await this.ledger.fence(c,value.authority);
@@ -210,8 +241,26 @@ export class SandboxBroker{
    const probeSchema=z.object({visible:z.array(z.string()),network:z.boolean(),uid:z.number()}).strict();
    let probe:z.infer<typeof probeSchema>|null=null;
    try{const decoded=probeSchema.safeParse(JSON.parse(await readFile(join(work,'probe-result.json'),'utf8')));if(decoded.success)probe=decoded.data;}catch{}
-   let implementation:unknown=null,bundle:string|undefined;
-   if(value.source&&inspected.State.ExitCode===0){
+   let implementation:unknown=null,bundle:string|undefined,verification:unknown=null,verificationIsolation:unknown=null;
+   if(value.verification){
+    const resultPath=join(this.config.hostRoot,value.jobId,'output','verification-result.json');
+    const info=await lstat(resultPath).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;});
+    if(info){
+     if(info.isSymbolicLink()||!info.isFile()||info.size>70000||await realpath(resultPath)!==resultPath)throw new Refusal('SANDBOX_VERIFICATION_INVALID');
+     const result=z.object({exitCode:z.number().int(),output:z.string().max(65536),nodeVersion:z.string().regex(/^v\d+\.\d+\.\d+$/),synthetic:z.literal(true),
+      isolation:z.object({readOnlySnapshot:z.literal(true),uid:z.literal(10001),visible:z.array(z.string()).length(0)}).strict()}).strict()
+      .parse(JSON.parse(await readFile(resultPath,'utf8')));
+     const checked=z.object({role:z.enum(['qa','review','judge']),status:z.enum(['passed','failed']),checks:z.array(z.string()),synthetic:z.literal(true)}).strict().parse(JSON.parse(result.output));
+     const artifact=(await c.query('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[value.verification.artifactId,value.authority.contextId])).rows[0];
+     if(!artifact||result.exitCode!==inspected.State.ExitCode||checked.role!==value.verification.kind||
+       (checked.status==='passed')!==(result.exitCode===0)||artifact.commit_id!==value.source!.base||
+       await safeGit(work,['rev-parse','HEAD'])!==artifact.commit_id||await safeGit(work,['rev-parse','HEAD^{tree}'])!==artifact.tree_id)
+      throw new Refusal('SANDBOX_VERIFICATION_INVALID');
+     verification={...value.verification,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,
+      verifierDigest:this.executor(value).verifier!.hash,output:result.output,nodeVersion:result.nodeVersion};
+     verificationIsolation=result.isolation;
+    }else if(inspected.State.ExitCode===0)throw new Refusal('SANDBOX_VERIFICATION_INVALID');
+   }else if(value.source&&inspected.State.ExitCode===0){
     const raw=await readFile(join(work,`receipt-${value.jobId}.json`),'utf8');
     const parsed=z.object({operationId:Id,base:z.string().regex(/^[a-f0-9]{40}$/),commit:z.string().regex(/^[a-f0-9]{40}$/),
      tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(true)}).strict().parse(JSON.parse(raw));
@@ -225,7 +274,7 @@ export class SandboxBroker{
     implementation=parsed;bundle=content.toString('base64');
    }else if(!value.source&&inspected.State.ExitCode===0&&(!probe||probe.visible.length||probe.network||probe.uid!==10001))throw new Refusal('SANDBOX_PROBE_INVALID');
    const receipt={jobId:value.jobId,containerId:inspected.Id,exitCode:inspected.State.ExitCode,finishedAt:inspected.State.FinishedAt,synthetic:true,
-    probe,...(value.source?{implementation,bundle}: {})};
+    probe,...(value.verification?{verification,verificationIsolation}:value.source?{implementation,bundle}: {})};
    await c.query('UPDATE ac_sandbox_jobs SET state=$2,receipt=$3 WHERE id=$1',[value.jobId,inspected.State.ExitCode===0?'completed':'failed',receipt]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','running','uncertain')",[value.grantId,receipt]);
    this.active.delete(inspected.Id);const timer=this.monitors.get(inspected.Id);if(timer)clearInterval(timer);this.monitors.delete(inspected.Id);return receipt;
@@ -259,16 +308,19 @@ export class SandboxBroker{
  async neutralizePersistedJobs(){
   const jobs=(await this.ledger.pool.query("SELECT * FROM ac_sandbox_jobs WHERE state IN ('uncertain','running') ORDER BY created_at,id")).rows;
   for(const job of jobs){
-   const profile=z.enum(['synthetic-probe-v1','synthetic-implementation-v1']).parse(job.profile);
+   const profile=z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1']).parse(job.profile);
    let source:SandboxRequest['source'];
-   if(profile==='synthetic-implementation-v1'){
-    const launch=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=$1',[job.id])).rows[0];
+   let verification:SandboxRequest['verification'];
+   if(profile!=='synthetic-probe-v1'){
+    const launch=(await this.ledger.pool.query(profile==='synthetic-verification-v1'
+     ?'SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=$1':'SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=$1',[job.id])).rows[0];
     if(!launch||digest(launch.snapshot)!==launch.digest)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
     source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict().parse(launch.snapshot.source);
+    if(profile==='synthetic-verification-v1')verification=SandboxRequest.shape.verification.unwrap().parse(launch.snapshot.verification);
    }
    const value:SandboxRequest={schemaVersion:1,action:'reconcile',jobId:job.id,grantId:job.grant_id,
     authority:{contextId:job.context_id,instanceId:randomUUID(),epoch:Number(job.manager_epoch)},profile,
-    ...(source?{source}:{}),expiresAt:Date.now()+30000,signature:'0'.repeat(64)};
+    ...(source?{source}:{}),...(verification?{verification}:{}),expiresAt:Date.now()+30000,signature:'0'.repeat(64)};
    const work=join(this.config.hostRoot,job.id,'work');
    const inspected=await this.docker.inspect('ac-synthetic-'+job.id);
    if(!inspected)continue;

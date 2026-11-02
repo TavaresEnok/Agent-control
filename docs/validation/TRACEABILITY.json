@@ -223,15 +223,15 @@
   {
     "id": "RF-18",
     "normative_row": "RF-18\tP0\tExecutar QA e revisão independentes, quando exigidos pelo template da tarefa\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "types_only_not_behaviorally_verified",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/validation/evidence/git-helper-syntax.log",
-    "files": "src/quality.ts;src/integration.ts;src/git.ts;services/agent-control-git/;db/migrations/005_artifacts_and_quality.sql",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
+    "files": "src/engineering.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Artifact gates/CAS implemented in internal services; no dedicated adversarial proof or complete DAG/verifier integration yet."
+    "limitation": "Independent synthetic verifier sessions in separate containers; real model reviews and provider accounts remain unverified."
   },
   {
     "id": "RF-19",
@@ -356,12 +356,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-engineering-second-20261102.log",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
+    "files": "src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Only fixed synthetic implementation is container-isolated; QA and real CLIs are not."
+    "limitation": "Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified."
   },
   {
     "id": "RF-29",
@@ -626,15 +626,15 @@
   {
     "id": "RF-49",
     "normative_row": "RF-49\tP0\tImpedir acesso cruzado entre contas e acesso de agentes à administração da central por arquivos, processos e APIs\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": ";src/context-keys.ts;tests/context-keys.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
+    "files": "src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Context fingerprints/rotation revoke authority in synthetic tests. Legacy fixtures still share an account key; no production custody/pairing proof."
+    "limitation": "Known controller paths unavailable to synthetic verifiers; real account credential isolation and broader hostile process proof pending."
   },
   {
     "id": "RF-50",
@@ -772,12 +772,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-engineering-second-20261102.log",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
+    "files": "src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic worker has no host socket, keys or network; hostile agents and all roles not demonstrated."
+    "limitation": "Synthetic workers have no host socket, keys or network; verifier snapshots read-only. Hostile real agents and account boundaries not homologated."
   },
   {
     "id": "RNF-04",
@@ -1123,12 +1123,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-engineering-second-20261102.log",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
+    "files": "src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Fixed synthetic implementation only; cross-account hostile process proof pending."
+    "limitation": "Fixed synthetic verifiers attempted snapshot writes and controller path access; cross-account hostile process proof pending."
   },
   {
     "id": "T16",

@@ -9,20 +9,22 @@ import { Capacity } from './capacity.ts';
 import { GitArtifacts } from './git.ts';
 import { Quality,QualityPolicy, type VerificationReceipt } from './quality.ts';
 import { Integrator } from './integration.ts';
+import {IsolatedVerification} from './isolated-verification.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
-export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array};
+export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification};
 const nodeSchema=z.enum(['qa','review','judge','integrate']);
 function artifactId(intentId:string,commit:string){const h=digest({domain:'artifact-v1',intentId,commit});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function reviewSession(parent:string,index:number){const h=digest({domain:'review-session-v1',parent,index});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function stop(child:ChildProcess|undefined){if(!child||child.exitCode!==null||child.signalCode!==null)return;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}}
 
 /** Fixed engineering template adapter. Every invocation comes from an existing Cezar node.
- * The subprocesses are synthetic verifiers, not model reviewers or a hostile-code sandbox. */
+ * Verifiers are synthetic; the isolated runtime uses broker containers for each session. */
 export class EngineeringStages{
  private readonly key:Buffer;
  private running=true;
  private readonly children=new Set<ChildProcess>();
  constructor(readonly ledger:Ledger,readonly projectId:string,readonly options:EngineeringOptions){
+  if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
  }
  start(intent:Intent,authority:Authority,nodeId:string,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void),internalReview=false):AgentSession{
@@ -115,6 +117,35 @@ export class EngineeringStages{
     const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:stage.attempt_id,intentId:intent.id,contextId:intent.context_id,
      role:node==='qa'?'qa':node==='judge'?'judge':'reviewer'},authority);
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
+    if(this.options.isolatedVerification){
+     const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
+      [this.projectId,contract.quality_revision])).rows[0];
+     const policy=QualityPolicy.parse(qualityRow?.snapshot);
+     const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
+     if(digest(policy)!==qualityRow.digest||policy.verifierDigest!==verifierDigest)throw new Refusal('VERIFIER_VERSION_MISMATCH');
+     const verified=await this.options.isolatedVerification.run(principal,stage.id,grant.id,authority,spec.cwd,
+      {id:artifact.id,commit:source.commit,tree:source.tree,base:source.base},intent.operation_id,node,verifierDigest,()=>canceled||!this.running);
+     const logs=resolve('.state/verification-logs');await mkdir(logs,{recursive:true,mode:0o700});
+     await writeFile(join(logs,stage.id+'.log'),verified.output,{mode:0o600});
+     const receipt:VerificationReceipt={schemaVersion:1,id:randomUUID(),artifactId:artifact.id,kind:node==='review'?'review':node,sessionId,
+      grantId:grant.id,policyRevision:contract.quality_revision,commit:source.commit,tree:source.tree,base:source.base,
+      status:verified.exitCode===0?'passed':'failed',exitCode:verified.exitCode,verifierDigest,
+      logSha256:createHash('sha256').update(verified.output).digest('hex'),
+      commandDigest:digest({executor:'isolated-fixed-verifier-v1',verifierDigest,node,commit:source.commit,tree:source.tree,base:source.base}),
+      verifierVersion:'synthetic-isolated-verifier-v1/'+verified.nodeVersion};
+     const signature=createHmac('sha256',this.key).update(canonical(receipt)).digest('hex');
+     await this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority,true);
+      const physical=(await c.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grant.id])).rows[0];
+      if(physical?.state!=='released'||physical.physical_receipt?.jobId!==stage.id||physical.physical_receipt?.containerId!==verified.containerId)
+       throw new Refusal('VERIFIER_EXECUTION_UNCONFIRMED');
+      await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND manager_epoch=$3",
+       [stage.id,{verification:receipt,signature},authority.epoch]);
+     });
+     await this.options.quality.record(principal,receipt,signature,authority);
+     await this.options.isolatedVerification.cleanup(stage.id,grant.id,authority);
+     if(verified.exitCode!==0)throw new Refusal('VERIFICATION_FAILED');
+    }else{
     const parent=resolve('.state/verifier-workspaces');await mkdir(parent,{recursive:true,mode:0o700});
     const temporary=await mkdtemp(join(parent,'stage-'));let monitor:ReturnType<typeof setInterval>|undefined;
     try{
@@ -174,11 +205,12 @@ export class EngineeringStages{
      await this.options.quality.record(principal,receipt,signature,authority);
      if(code!==0)throw new Refusal('VERIFICATION_FAILED');
     }finally{if(monitor)clearInterval(monitor);stop(child);await rm(temporary,{recursive:true,force:true});}
+    }
    }
    const text=`Synthetic ${node} completed for artifact ${artifact.id}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
    return {text,toolCalls:[],tokensUsed:0};
   })().finally(()=>{open=false;});
   return {result,get open(){return open;},get pid(){return child?.pid;},sendMessage(){return false;},end(){},interrupt(){canceled=true;stop(child);for(const reviewer of nested)reviewer.interrupt();},hardStop(){canceled=true;stop(child);for(const reviewer of nested)reviewer.hardStop?.();}};
  }
- close(){this.running=false;for(const child of this.children)stop(child);}
+ close(){this.running=false;for(const child of this.children)stop(child);this.options.isolatedVerification?.close();}
 }

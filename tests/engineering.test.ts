@@ -17,7 +17,7 @@ class LostStartAckClient extends SandboxClient {
  starts=0;
  override async perform(...args:Parameters<SandboxClient['perform']>){
   const result=await super.perform(...args);
-  if(args[0]==='start' && this.starts++===0)throw Error('ACK_LOST_AFTER_START');
+  if(args[0]==='start'&&args[4]?.profile==='synthetic-implementation-v1'&&this.starts++===0)throw Error('ACK_LOST_AFTER_START');
   return result;
  }
 }
@@ -62,6 +62,9 @@ test('engineering DAG records independent verification before conditional integr
    const job=(await db.pool.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1',[operation.id])).rows[0];
    assert.equal(job.state,'completed');assert.equal(job.profile,'synthetic-implementation-v1');
    assert.equal(job.receipt.implementation.commit,operation.receipt.commit);
+   const verifiers=(await db.pool.query(`SELECT j.* FROM ac_sandbox_jobs j JOIN ac_stage_operations s ON s.id=j.id WHERE s.intent_id=$1`,[intent.id])).rows;
+   assert.equal(verifiers.length,5);assert(verifiers.every(j=>j.profile==='synthetic-verification-v1'&&j.state==='completed'));
+   for(const verifier of verifiers)assert.deepEqual(verifier.receipt.verificationIsolation,{readOnlySnapshot:true,uid:10001,visible:[]});
   }
   assert.equal(git('rev-parse','refs/heads/protected'),operation.receipt.commit);
   assert.equal(git('rev-parse','refs/heads/main'),base);
@@ -96,6 +99,7 @@ test('engineering DAG records independent verification before conditional integr
    independentVerifierSessions:5,reviewers:3,judge:1,maxSimultaneousReviews:Number(overlap),stages:stages.map(s=>s.node_id),verifiedTree:operation.receipt.tree,
    denied:['changed artifact','implementation session reused','invalid signature','moved base'],replayDoesNotRewriteRef:true,
    isolatedImplementation:isolated,
-   limitation:'Synthetic fixed implementation and reviewers; verification processes remain controller-local. No real provider, mobile client or production deployment.'},null,2));
+   limitation:isolated?'Fixed synthetic implementation and verifiers in separate containers. No real provider, mobile client or production deployment.':
+    'Synthetic fixed implementation and reviewers; verification processes remain controller-local. No real provider, mobile client or production deployment.'},null,2));
  }finally{await runtime.close();await db.close();}
 });

@@ -20,7 +20,7 @@
     "review",
     "review"
   ],
-  "verifiedTree": "715655fc88aa48862cd81dfa2b8e8804b1fa0c5c",
+  "verifiedTree": "e7250873588f47166c281a25c0c23098a572f548",
   "denied": [
     "changed artifact",
     "implementation session reused",
@@ -29,5 +29,5 @@
   ],
   "replayDoesNotRewriteRef": true,
   "isolatedImplementation": true,
-  "limitation": "Synthetic fixed implementation and reviewers; verification processes remain controller-local. No real provider, mobile client or production deployment."
+  "limitation": "Fixed synthetic implementation and verifiers in separate containers. No real provider, mobile client or production deployment."
 }

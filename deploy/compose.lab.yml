@@ -145,6 +145,10 @@ services:
       AC_SANDBOX_PROBE_SHA256: ffbcfcb6bbaec702ff886ed0d72d4458265ad0e8410dd1d5d9b4c70eec2fba66
       AC_SANDBOX_IMPLEMENTATION: /home/app/projects/agent-control-implementation/scripts/synthetic-worker.mjs
       AC_SANDBOX_IMPLEMENTATION_SHA256: 69fec5c252c65279d60f06ff93ac087438a0a00789dd840a7b5ac76cbb97db1f
+      AC_SANDBOX_VERIFICATION: /home/app/projects/agent-control-implementation/scripts/sandbox-verifier.mjs
+      AC_SANDBOX_VERIFICATION_SHA256: 4817e0aad40cc1e16830314c87e095d4e70b1bd01fee3342829eea3dc12b3f2d
+      AC_SANDBOX_VERIFIER: /home/app/projects/agent-control-implementation/scripts/synthetic-verifier.mjs
+      AC_SANDBOX_VERIFIER_SHA256: 66f05e612ac165f2532cf924efc20b346db2d5569e967a393de214096d53a96c
       AC_SANDBOX_IMAGE: sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3
     volumes:
       - ..:/home/app/projects/agent-control-implementation:ro

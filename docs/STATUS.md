@@ -125,3 +125,11 @@ Implementada a retomada do mesmo run nativo depois de reconciliar a implementaç
 Na prova `native-graph-recovery-final-20261102.log`, um controlador filho recebeu SIGKILL depois de concluir o worker físico, antes de devolver seu resultado. O sucessor reconciliou o commit, preservou a pausa sem abrir QA e, após retomada, concluiu QA, duas revisões, juiz e integração do mesmo run. Nenhum novo start de programação foi feito. O caso normal de engenharia também passou nessa execução. A contraprova sem a chamada de continuação falhou com o run em waiting (`native-graph-recovery-red-20261102.log`); depois de restaurar a correção, os dois testes passaram. Backend Cezar e aplicação compilaram.
 
 Decisão e fronteiras: `docs/architecture/ADR-002-RECUPERACAO-NATIVA.md`. A cobertura permanece sintética e restrita à interrupção da implementação antes do QA. Recuperação dos demais nós, pausa concorrente entre nós, isolamento dos verificadores, autenticação/CLIs reais e homologação mobile continuam abertos. As fases completas não foram aprovadas.
+
+## Continuação — QA, revisores e juiz isolados
+
+O runtime isolado agora executa QA, cada revisor e juiz em contêineres individuais. O snapshot Git é somente leitura; a saída usa um mount separado. Os workers recebem o verificador existente e um wrapper fixo, ambos por hash, sem socket Docker, chaves ou credenciais administrativas. O broker valida concessão, papel, intenção, artefato e identidade do contêiner; só o controlador assina o parecer após receber confirmação física. Os snapshots de lançamento das etapas são imutáveis na migração 027.
+
+`isolated-verification-final-20261102.log` contém três testes aprovados: engenharia com três revisores e juiz, retomada após SIGKILL e probe anterior. QA, os três revisores e juiz confirmaram UID 10001, escrita negada no snapshot e caminhos administrativos ausentes. O teto de duas avaliações simultâneas continuou válido. O backend compilou. A implementação do verificador original foi reaproveitada sem alteração.
+
+ADR e limites: `docs/architecture/ADR-003-VERIFICADORES-ISOLADOS.md`. O launcher antigo continua uma fixture local e não foi promovido a bootstrap de produção. Não há modelos reais, isolamento homologado de contas reais, recuperação de crash durante QA/revisão ou revisão independente desta fronteira. As fases completas permanecem abertas.

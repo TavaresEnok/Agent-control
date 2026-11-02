@@ -17,6 +17,7 @@ import { baselineWorkflow,workflowFor } from './workflows.ts';
 import { EngineeringStages,type EngineeringOptions } from './engineering.ts';
 import { Template } from './templates.ts';
 import {IsolatedImplementation} from './isolated-implementation.ts';
+import {IsolatedVerification} from './isolated-verification.ts';
 export { baselineWorkflow } from './workflows.ts';
 
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
@@ -45,7 +46,8 @@ export class CezarRuntime {
     private readonly isolated?:IsolatedImplementation) {
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     this.capacity = new Capacity(ledger);
-    this.engineering=engineeringOptions?new EngineeringStages(ledger,projectId,engineeringOptions):undefined;
+    this.engineering=engineeringOptions?new EngineeringStages(ledger,projectId,{...engineeringOptions,
+      ...(isolated?{isolatedVerification:new IsolatedVerification(ledger,isolated.client)}:{})}):undefined;
     this.store = RunStore.open(join(repo, '.ai/cezar'), { keepLive: true });
     requireManagedRunnerBoundary();
     this.manager = new RunManager(this.store, repo, { managed: {

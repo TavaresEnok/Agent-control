@@ -15,7 +15,7 @@ import type {Command} from '../src/contracts.ts';
 
 class CountStarts extends SandboxClient{
  starts=0;
- override async perform(...args:Parameters<SandboxClient['perform']>){if(args[0]==='start')this.starts++;return super.perform(...args);}
+ override async perform(...args:Parameters<SandboxClient['perform']>){if(args[0]==='start'&&args[4]?.profile==='synthetic-implementation-v1')this.starts++;return super.perform(...args);}
 }
 test('native Cezar graph resumes after SIGKILL and physical reconciliation, preserving pause',
  {timeout:60000,skip:!process.env.AC_SANDBOX_DATABASE_URL},async()=>{

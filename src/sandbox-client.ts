@@ -2,12 +2,12 @@ import { request as httpRequest } from 'node:http';
 import { lstat,readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { Authority,Id,Refusal } from './contracts.ts';
-import { signSandbox } from './sandbox-broker.ts';
+import { signSandbox,type SandboxExecution } from './sandbox-broker.ts';
 const Action=z.enum(['start','reconcile','cleanup','stop']);
 /** Only the trusted controller receives this socket and key; worker containers receive neither. */
 export class SandboxClient{
  constructor(private readonly socket='/run/ac-broker/control.sock',private readonly keyPath='/run/ac-broker/key'){}
- async perform(action:z.infer<typeof Action>,jobId:string,grantId:string,authority:Authority,execution?:{profile:'synthetic-implementation-v1';source:{base:string;bundle:string}}){
+ async perform(action:z.infer<typeof Action>,jobId:string,grantId:string,authority:Authority,execution?:SandboxExecution){
   Action.parse(action);Id.parse(jobId);Id.parse(grantId);Authority.parse(authority);
   const info=await lstat(this.keyPath);
   if(!info.isFile()||info.isSymbolicLink()||info.uid!==0||info.gid!==1000||(info.mode&0o037)!==0)throw new Refusal('UNSAFE_BROKER_KEY');
