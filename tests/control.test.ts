@@ -4,6 +4,7 @@ import { randomUUID,generateKeyPairSync,sign } from 'node:crypto';
 import { Operators,operatorMessage } from '../src/operator.ts';
 import { Ledger } from '../src/ledger.ts';
 import { Control, type ControlCommand } from '../src/control.ts';
+import {Capacity} from '../src/capacity.ts';
 import type { z } from 'zod';
 
 test('control intent, mutation and delivery are atomic across retries and conflicts',async()=>{
@@ -28,7 +29,12 @@ test('control intent, mutation and delivery are atomic across retries and confli
   await assert.rejects(control.execute(principal,altered,proof(altered)),/CONTROL_INTENT_CONFLICT/);
   const conflicting={...command,intentId:randomUUID(),payload:{...command.payload,id:randomUUID(),resourceIdentity:'another-'+randomUUID()}};
   await assert.rejects(control.execute(principal,conflicting,proof(conflicting)),/CONTROL_DELIVERY_CONFLICT/);
+  const catalog=new Capacity(ledger);
+  await catalog.registerModel(principal,{provider:'synthetic',model:'control-catalog-v1',efforts:['medium'],roles:['programmer'],source:'synthetic://control-catalog'});
+  await catalog.registerModel(principal,{provider:'not-shared-'+randomUUID(),model:'unshared-model',efforts:['high'],roles:['programmer'],source:'synthetic://private-catalog'});
   const view=await control.view(principal,context);assert.equal(view.accounts.length,1);
+  assert(view.catalog.some(entry=>entry.model==='control-catalog-v1'));
+  assert(view.catalog.every(entry=>entry.provider==='synthetic'),'unshared provider catalog must not appear in project resources');
   assert.equal(view.canConfigureCapacity,true);
   const viewer='viewer-'+randomUUID();await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'viewer')",[project,viewer]);
   const readonly=await control.view(viewer,context);assert.equal(readonly.canConfigureCapacity,false);

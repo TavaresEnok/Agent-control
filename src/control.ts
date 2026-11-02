@@ -95,6 +95,9 @@ export class Control {
     WHERE x.project_id=$1 ORDER BY a.id`,[context.project_id,principal,context.role==='owner'])).rows;
    const profiles=(await c.query(`SELECT p.*,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
     JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows;
+   const catalog=(await c.query(`SELECT m.provider,m.model,m.efforts,m.roles,m.source FROM ac_model_catalog m
+    WHERE EXISTS(SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.provider=m.provider AND x.project_id=$1)
+    ORDER BY m.provider,m.model`,[context.project_id])).rows;
    const policies=(await c.query('SELECT revision,digest,snapshot,published_at FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const grants=(await c.query(`SELECT id,attempt_id,intent_id,profile_id,account_id,role,policy_revision,emergency,state,created_at
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
@@ -110,7 +113,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,profiles,policies,grants};
+    accounts,profiles,catalog,policies,grants};
   });
  }
 }

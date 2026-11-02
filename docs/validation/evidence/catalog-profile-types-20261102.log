@@ -1,0 +1,13 @@
+Observed exit code: 0. Targeted catalog/profile validation inside transient runtime.
+ANSI styling removed; semantic output preserved.
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> typecheck:web
+> npm run typecheck -w @open-mercato/cezar-web
+
+
+> @open-mercato/cezar-web@0.19.0 typecheck
+> tsc --noEmit

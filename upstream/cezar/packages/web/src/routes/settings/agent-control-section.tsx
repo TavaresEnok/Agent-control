@@ -7,6 +7,7 @@ import { SettingsField } from './settings-field'
 import { operatorIdentity,signControl } from './agent-control-operator'
 import {AgentControlPolicyEditor,policyEditorSchema} from './agent-control-policy-editor'
 import {AgentControlCapacityEditor,capacityEditorSchema} from './agent-control-capacity-editor'
+import {AgentControlProfileEditor,catalogEntrySchema} from './agent-control-profile-editor'
 
 const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative()}))})
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
@@ -17,6 +18,7 @@ const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.s
  capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
+ catalog:z.array(catalogEntrySchema),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
  qualityPolicies:z.array(z.object({revision:z.number()})),
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
@@ -33,8 +35,7 @@ async function request(path:string,body?:unknown,extraHeaders:Record<string,stri
 /** Uses the existing Settings shell; all state comes from the PG authority. */
 export function AgentControlSection(){
  const cache=useQueryClient()
- const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[account,setAccount]=useState('')
- const [model,setModel]=useState(''),[role,setRole]=useState('programmer'),[effort,setEffort]=useState('medium')
+ const [selected,setSelected]=useState(''),[label,setLabel]=useState('')
  const [requiredReviews,setRequiredReviews]=useState(1),[requireHuman,setRequireHuman]=useState(false),[requireJudge,setRequireJudge]=useState(false)
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
@@ -123,19 +124,8 @@ export function AgentControlSection(){
       {p.enabled?'Desabilitar perfil':'Habilitar perfil'}
      </Button>:<span className="text-xs">Gerenciado pelo titular da conta.</span>}
     </li>)}</ul>
-    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();mutate.mutate({action:'profile.add',payload:{id:crypto.randomUUID(),accountId:account,model,effort,role}})}}>
-     <select aria-label="Conta do perfil" className={selectStyle} required value={account} onChange={e=>setAccount(e.target.value)}>
-      <option value="">Selecione a conta</option>{data.accounts.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}
-     </select>
-     <Input aria-label="Modelo" required value={model} onChange={e=>setModel(e.target.value)} maxLength={100}/>
-     <select aria-label="Função" className={selectStyle} value={role} onChange={e=>setRole(e.target.value)}>
-      {['manager','programmer','reviewer','qa','specialist','judge'].map(r=><option key={r}>{r}</option>)}
-     </select>
-     <select aria-label="Esforço" className={selectStyle} value={effort} onChange={e=>setEffort(e.target.value)}>
-      {['low','medium','high'].map(r=><option key={r}>{r}</option>)}
-     </select>
-     <Button disabled={busy||!account||!model} type="submit">Cadastrar perfil</Button>
-    </form>
+    <AgentControlProfileEditor key={contextId} accounts={data.accounts} catalog={data.catalog} busy={busy}
+     onAdd={payload=>mutate.mutate({action:'profile.add',payload})}/>
    </SettingsField>
    <SettingsField title="Capacidade global" hint="Alterações afetam todas as conversas e exigem administrador da central.">
     <AgentControlCapacityEditor key={data.principalId} config={data.capacity} canEdit={data.canConfigureCapacity} accounts={data.accounts} busy={busy}

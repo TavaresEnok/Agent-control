@@ -11,6 +11,7 @@ with path.open(newline='') as stream:
 
 updates = {
     'RF-07': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-types-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx', 'Six role chains, global limits and reserve account editable with synthetic profiles; full browser signed write, login, mobile and real accounts pending.'),
+    'RF-08': ('docs/validation/evidence/catalog-profile-ui-20261102.log;docs/validation/evidence/catalog-profile-control-20261102.log', 'src/capacity.ts;src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-profile-editor.tsx', 'Synthetic catalog validates model/effort/role and UI only offers scoped combinations; official provider discovery and live model eligibility pending.'),
     'RF-09': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-control-20261102.log', 'src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx', 'Global/context revisions and wait states displayed; complete per-profile choice explanations and mobile acceptance pending.'),
     'RF-42': ('docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/original-reserve-global-20261102.log', 'upstream/cezar/packages/web/src/routes/settings/agent-control-policy-editor.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-editor.tsx;src/capacity.ts', 'Loaded revision retained and stale UI submission blocked until reload; full concurrent browser-to-PG and rollback acceptance pending.'),
     'RF-11': ('docs/validation/evidence/original-reserve-global-20261102.log', 'src/capacity.ts;tests/capacity.test.ts', 'Global original-account reserve admission tested with synthetic quotas; live providers and safe transition of running tasks remain open.'),
@@ -39,7 +40,7 @@ for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 24
+assert len(rows) == 111 and len(updates) == 25
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()
