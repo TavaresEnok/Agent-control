@@ -50,6 +50,41 @@ const Pending = z.object({ didMaterialize: z.boolean(), deferredReason: z.string
   message: z.object({ localId: z.string().nullable().optional(), content: z.object({ t: z.literal('encrypted'), c: z.string() }) }).nullable().optional() }).passthrough();
 const UserRecord = z.object({ role: z.literal('user'), content: z.object({ type: z.literal('text'), text: z.string() }), meta: z.unknown().optional() });
 
+// Read only the linked session using Happier's native backward cursor. Never silently
+// present a truncated or non-progressing traversal as a complete history.
+export async function recoverHistory(baseUrl: string, sessionId: string, token: string,
+  key: Uint8Array, boundary: HappierBoundary, fetchPage: typeof fetch = fetch): Promise<unknown[]> {
+  const messages: { seq: number; content: unknown }[] = [];
+  let before: number | undefined;
+  for (let page = 0; page < 100; page++) {
+    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
+    url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
+    if (before !== undefined) url.searchParams.set('beforeSeq', String(before));
+    const response = await fetchPage(url, { headers: { authorization: 'Bearer ' + token } });
+    if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+    const result = z.object({ messages: z.array(z.object({ seq: z.number().int().nonnegative(), content: z.unknown() }).passthrough()),
+      hasMore: z.boolean(), nextBeforeSeq: z.number().int().positive().nullable() }).passthrough().parse(await response.json());
+    let previous = before ?? Infinity;
+    for (const message of result.messages) {
+      if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
+      previous = message.seq; messages.push(message);
+    }
+    if (!result.hasMore) {
+      if (result.nextBeforeSeq !== null) throw new Refusal('HISTORY_CURSOR_INVALID');
+      return messages.reverse().map(message => {
+        const envelope = z.object({ t: z.literal('encrypted'), c: z.string() }).parse(typeof message.content === 'string' ? JSON.parse(message.content) : message.content);
+        const decrypted = boundary.decrypt(key, 'legacy', boundary.decodeBase64(envelope.c));
+        if (decrypted === null) throw new Refusal('INVALID_HISTORY_CIPHERTEXT');
+        return decrypted;
+      });
+    }
+    if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
+      throw new Refusal('HISTORY_CURSOR_INVALID');
+    before = result.nextBeforeSeq;
+  }
+  throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
+}
+
 export class HappierEndpoint {
   readonly socket: Socket;
   readonly rpc: Rpc;
@@ -94,16 +129,7 @@ export class HappierEndpoint {
     this.recoveredCheckpoint = checkpoint.rowCount ? Checkpoint.parse(checkpoint.rows[0].snapshot) : null;
     if (this.recoveredCheckpoint && this.recoveredCheckpoint.planRevision !== checkpoint.rows[0].plan_revision)
       throw new Refusal('CHECKPOINT_STALE');
-    const historyResponse = await fetch(`${this.options.baseUrl}/v1/sessions/${encodeURIComponent(this.options.sessionId)}/messages?scope=main&limit=150`,
-      { headers: { authorization: 'Bearer ' + this.options.token } });
-    if (!historyResponse.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
-    const history = z.object({ messages: z.array(z.object({ content: z.unknown() }).passthrough()) }).passthrough().parse(await historyResponse.json());
-    this.recoveredMessages = history.messages.map(message => {
-      const envelope = z.object({ t: z.literal('encrypted'), c: z.string() }).parse(typeof message.content === 'string' ? JSON.parse(message.content) : message.content);
-      const decrypted = this.boundary.decrypt(this.options.key, 'legacy', this.boundary.decodeBase64(envelope.c));
-      if (decrypted === null) throw new Refusal('INVALID_HISTORY_CIPHERTEXT');
-      return decrypted;
-    });
+    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary);
     await this.transport.connect();
     const registered = await this.rpc.waitForRegisteredHandlers(['session.userMessage.send'], { timeoutMs: 10000 });
     if (registered.status !== 'ready') {
@@ -133,8 +159,12 @@ export class HappierEndpoint {
     return { handled: true, result: { ok: true, providerAcceptancePending: true, intentId: intent.id } };
   }
   private async enqueue(id: string, content: unknown) {
-    await this.ledger.pool.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
-      [this.options.sessionId + '|' + id, this.options.sessionId, this.seal(content)]);
+    const ciphertext = this.seal(content);
+    await this.ledger.tx(async c => {
+      await this.ledger.fence(c, this.options.authority, true);
+      await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+        [this.options.sessionId + '|' + id, this.options.sessionId, ciphertext]);
+    });
   }
   async ack(event: string, data: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => this.socket.timeout(8000).emit(event, data,
@@ -154,9 +184,10 @@ export class HappierEndpoint {
       const run = await this.runtime.dispatch(intent, this.options.authority);
       if (!run) continue;
       const seq = Number(run.lastSeq ?? 0);
-      await this.ledger.pool.query('UPDATE ac_intents SET state=$2 WHERE id=$1', [intent.id, run.status]);
+      await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
+        await c.query('UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3', [intent.id, run.status, this.options.authority.contextId]); });
       await this.ledger.event(this.options.principal, { schemaVersion: 1, eventId: randomUUID(), contextId: intent.context_id,
-        runId: run.id, planRevision: intent.plan_revision, seq, status: run.status });
+        runId: run.id, planRevision: intent.plan_revision, seq, status: run.status }, this.options.authority);
       await this.enqueue(`status-${run.id}-${seq}`, { role: 'agent', content: { type: 'output', data: { type: 'assistant', uuid: `status-${run.id}-${seq}`,
         message: { role: 'assistant', content: [{ type: 'text', text: `Cezar ${run.id}: ${run.status} (contexto ${intent.context_id}, evento ${seq}).` }] } } }, meta: { sentFrom: 'cli' } });
     }
@@ -165,7 +196,8 @@ export class HappierEndpoint {
       const result = await this.ack('message', { sid: this.options.sessionId, message: item.ciphertext,
         localId: item.id.slice(this.options.sessionId.length + 1), echoToSender: true });
       if (z.object({ ok: z.boolean().optional() }).passthrough().parse(result).ok === false) throw new Refusal('HAPPIER_PUBLICATION_FAILED');
-      await this.ledger.pool.query('UPDATE ac_chat_messages SET sent=true WHERE id=$1', [item.id]);
+      await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
+        await c.query('UPDATE ac_chat_messages SET sent=true WHERE id=$1 AND session_id=$2', [item.id, this.options.sessionId]); });
     }
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
   }

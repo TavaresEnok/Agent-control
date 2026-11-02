@@ -115,6 +115,10 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
     await db.checkpoint(previous.options.authority, { schemaVersion: 1, planRevision: 1,
       objectiveRef: `happier:${sessions[0]}:${localIds[0]}`, constraintRefs: ['encrypted:fixture-constraints'],
       decisionRefs: ['encrypted:fixture-decisions'], artifactRefs: ['git:synthetic-candidate'], pendingIntentIds: [], historyCursor: histories[0].length });
+    // Populate more than one native server page with encrypted fixture messages.
+    for (let index = 0; index < 155; index++) await api(`/v2/sessions/${sessions[0]}/messages`, {
+      ciphertext: seal({ role: 'agent', content: { type: 'text', text: `synthetic-history-${index}` } }), localId: randomUUID(),
+    });
     previous.close(); await new Promise(resolve => setTimeout(resolve, 500));
     await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1", [contexts[0]]);
     const replacement = await db.acquire(principal, contexts[0], randomUUID(), 'synthetic-sol-profile');
@@ -124,6 +128,9 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
     assert.deepEqual(resumed.recoveredCheckpoint?.constraintRefs, ['encrypted:fixture-constraints']);
     assert.deepEqual(resumed.recoveredCheckpoint?.decisionRefs, ['encrypted:fixture-decisions']);
     assert(JSON.stringify(resumed.recoveredMessages).includes(texts[0]));
+    assert(JSON.stringify(resumed.recoveredMessages).includes('synthetic-history-0'));
+    assert(JSON.stringify(resumed.recoveredMessages).includes('synthetic-history-154'));
+    assert(resumed.recoveredMessages.length > 150, 'all pages recovered, including the original request');
     assert(!JSON.stringify(resumed.recoveredMessages).includes(texts[1]));
     await assert.rejects(previous.accept({ text: 'New effect from old manager', localId: randomUUID() }), /STALE_MANAGER/);
     assert.equal((await send(0, texts[0], localIds[0])).intentId, accepted[0].intentId);

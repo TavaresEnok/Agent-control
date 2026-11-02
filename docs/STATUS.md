@@ -24,7 +24,7 @@ Os resultados e comandos estão em `docs/validation/evidence/`, com códigos em 
 1. Ler esta página, FINDINGS e a Diretriz Mestre. Conferir `git status`; não sobrescrever mudanças concorrentes.
 2. Reabrir somente a bancada descrita em `docs/operations/LAB.md`. Não ligar Paseos, filas ou contas antigas.
 3. Fechar o restante de I1: contratos e persistência de política/revisão, concessões e aprovações; inventário de ingressos habilitados e testes de perda de PG/ack/processo com IDs persistentes. Reusar o modo gerenciado existente, sem segundo scheduler.
-4. Fechar I2: custódia/rotação/revogação de chave por contexto, frescor e atualização completa de checkpoint, histórico paginado, vínculo dinâmico e autorização de conta/sessão. Não usar as credenciais sintéticas como mecanismo de produto.
+4. Fechar I2: custódia/rotação/revogação de chave por contexto, frescor e atualização completa de checkpoint, histórico segmentado acima do limite, vínculo dinâmico e autorização de conta/sessão. Não usar as credenciais sintéticas como mecanismo de produto.
 5. Encaminhar código crítico para revisão independente autorizada. Não criar subagentes ou utilizar outras contas automaticamente.
 6. Só então fechar I3/I4 pelos contratos aprovados: contas/perfis/elegibilidade, capacidade global e papéis, QA/revisão e integração do artefato exato. Helpers Git antigos permanecem fontes de reuso, não foram substituídos por um novo integrador.
 
@@ -39,3 +39,9 @@ Procedimento de rollback: manter a bancada parada; voltar apenas este novo repos
 ## Continuação — checkpoint
 
 Checkpoint existente passa a acompanhar atomicamente novas revisões e IDs de intenção; a recuperação recusa checkpoint antigo. Testes PG/Cezar e build em `docs/validation/evidence/checkpoint-continuation-green.log`. Persistem as limitações registradas em AC-IMP-0020; não se afirma continuidade completa. A estimativa anterior de cerca de 15% é qualitativa para o produto inteiro, não contagem de requisitos aprovados.
+
+## Continuação — paginação de histórico
+
+O adaptador recupera páginas nativas Happier em ordem, valida cursores e recusa limites inconsistentes ou mais de 15.000 mensagens. Servidor e criptografia Happier reais foram exercitados com mais de 150 mensagens sintéticas e troca de gerente (`docs/validation/evidence/i2-history-real-server-20261102.log`); sete testes PG/Cezar/cursores e build em `i2-history-unit-20261102.log`. Integração real de modelo, autenticação por dispositivo e limites acima da janela seguem pendentes.
+
+A projeção de eventos e escritas locais da outbox agora verificam a época da autoridade na mesma transação. A fronteira de chamada remota em trânsito ainda exige reconciliação (AC-IMP-0023). Oito testes e typecheck/build passaram em `docs/validation/evidence/i2-history-fencing-final2-20261102.log`.

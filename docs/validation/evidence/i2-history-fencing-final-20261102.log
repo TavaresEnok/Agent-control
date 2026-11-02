@@ -1,0 +1,66 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+TAP version 13
+# Subtest: C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+ok 1 - C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git -> canonical history
+  ---
+  duration_ms: 10154.147549
+  type: 'test'
+  ...
+# Subtest: history refuses a non-progressing cursor rather than silently truncating
+ok 2 - history refuses a non-progressing cursor rather than silently truncating
+  ---
+  duration_ms: 78.46939
+  type: 'test'
+  ...
+# Subtest: history rejects duplicate or reversed sequence numbers
+ok 3 - history rejects duplicate or reversed sequence numbers
+  ---
+  duration_ms: 2.790574
+  type: 'test'
+  ...
+# Subtest: RF-03/04: same project has independent context and session identities
+ok 4 - RF-03/04: same project has independent context and session identities
+  ---
+  duration_ms: 99.570158
+  type: 'test'
+  ...
+# Subtest: RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+ok 5 - RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+  ---
+  duration_ms: 55.401564
+  type: 'test'
+  ...
+# Subtest: RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+ok 6 - RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+  ---
+  duration_ms: 174.975524
+  type: 'test'
+  ...
+# Subtest: checkpoint tracks new plans atomically and rejects an older snapshot
+ok 7 - checkpoint tracks new plans atomically and rejects an older snapshot
+  ---
+  duration_ms: 57.877465
+  type: 'test'
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 8 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 2443.34546
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11820.43559

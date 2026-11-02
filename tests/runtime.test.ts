@@ -70,8 +70,10 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
     assert.equal((await api.request('/assets/' + terminalAsset, { headers })).status, 200, 'static terminal component is not a terminal execution endpoint');
     assert.equal((await api.request('/api/v1/ws', { headers: { ...headers, upgrade: 'websocket' } })).status, 403);
     assert.equal((await api.request(`/api/v1/runs/${intent.run_id}`, { headers })).status, 200);
-    await db.event('owner', { schemaVersion: 1, eventId: randomUUID(), contextId: context, runId: intent.run_id,
-      planRevision: intent.plan_revision, seq: 1, status: 'done' });
+    const event = { schemaVersion: 1 as const, eventId: randomUUID(), contextId: context, runId: intent.run_id,
+      planRevision: intent.plan_revision, seq: 1, status: 'done' };
+    await assert.rejects(db.event('owner', event, old), (e: unknown) => e instanceof Refusal && e.code === 'STALE_MANAGER');
+    await db.event('owner', event, authority);
     const projection = await api.request(`/api/v1/ac/contexts/${context}/events`, { headers });
     assert.equal(projection.status, 200);
     const projected = await projection.json();

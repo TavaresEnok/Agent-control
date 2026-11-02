@@ -1,0 +1,60 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+TAP version 13
+# Subtest: history refuses a non-progressing cursor rather than silently truncating
+ok 1 - history refuses a non-progressing cursor rather than silently truncating
+  ---
+  duration_ms: 44.660916
+  type: 'test'
+  ...
+# Subtest: history rejects duplicate or reversed sequence numbers
+ok 2 - history rejects duplicate or reversed sequence numbers
+  ---
+  duration_ms: 2.033117
+  type: 'test'
+  ...
+# Subtest: RF-03/04: same project has independent context and session identities
+ok 3 - RF-03/04: same project has independent context and session identities
+  ---
+  duration_ms: 105.30101
+  type: 'test'
+  ...
+# Subtest: RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+ok 4 - RF-04/T19: concurrent managers and same-profile takeover increment epoch; old effects fail
+  ---
+  duration_ms: 50.686858
+  type: 'test'
+  ...
+# Subtest: RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+ok 5 - RF-45/53/T27: concurrency, semantic retry, payload and cross-context conflicts
+  ---
+  duration_ms: 136.070425
+  type: 'test'
+  ...
+# Subtest: checkpoint tracks new plans atomically and rejects an older snapshot
+ok 6 - checkpoint tracks new plans atomically and rejects an older snapshot
+  ---
+  duration_ms: 55.417446
+  type: 'test'
+  ...
+# Subtest: C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+ok 7 - C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingress denial
+  ---
+  duration_ms: 2460.04804
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4316.014722

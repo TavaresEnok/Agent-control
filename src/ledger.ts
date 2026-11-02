@@ -126,9 +126,11 @@ export class Ledger {
       return intent;
     });
   }
-  async event(principal: string, value: Projection) {
+  async event(principal: string, value: Projection, authority: Authority) {
     const p = Projection.parse(value);
-    await this.tx(async c => { await this.authorize(c, principal, p.contextId, false);
+    await this.tx(async c => { await this.authorize(c, principal, p.contextId);
+      if (authority.contextId !== p.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH', 403);
+      await this.fence(c, authority, true);
       const bound = await c.query('SELECT 1 FROM ac_intents WHERE context_id=$1 AND run_id=$2 AND plan_revision=$3', [p.contextId, p.runId, p.planRevision]);
       if (!bound.rowCount) throw new Refusal('PROJECTION_SCOPE_MISMATCH');
       await c.query('INSERT INTO ac_events VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(run_id,seq) DO NOTHING',

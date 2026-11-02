@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "project": "93dcc562-3cd3-4c8f-b4f4-9272d242dcf6",
+  "context": "15837f71-ace7-46a9-b1ed-50e1d30f6b4d",
+  "intentId": "ce789ac3-9b5a-4a42-ae04-b71b4520dc2c",
+  "runId": "947861a3-e342-4eec-9d05-7963d589aaa2",
+  "operationId": "18de51c6-47fa-4ab5-9327-59c624cfa79c",
+  "epoch": 2,
+  "oldEpoch": 1,
+  "base": "fdecde5d595f0191676df166342f2f03ebb4d6b1",
+  "receipt": {
+    "base": "fdecde5d595f0191676df166342f2f03ebb4d6b1",
+    "tree": "7616fc0aebf60595052bda10c9a22d07d7e94965",
+    "commit": "bf7a969d83577dbd7058e5267d5099251350be5a",
+    "exitCode": 0,
+    "synthetic": true,
+    "operationId": "18de51c6-47fa-4ab5-9327-59c624cfa79c"
+  },
+  "synthetic": true
+}
