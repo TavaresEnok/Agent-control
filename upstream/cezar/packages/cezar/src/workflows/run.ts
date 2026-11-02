@@ -2876,6 +2876,9 @@ export class RunManager {
    * Fire-and-forget: never delays or throws into the lifecycle.
    */
   private reapLeftoverProcesses(runIds: string[], graceMs: number, reason: string): void {
+    // Managed workers are stopped only by the fenced broker using physical
+    // identities. A restored run ID must never signal a live source process.
+    if (this.managed) return;
     if (!taskProcessReapEnabled() || runIds.length === 0) return;
     const ids = new Set(runIds);
     const timer = setTimeout(() => {

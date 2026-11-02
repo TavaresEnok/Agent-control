@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "d6462c2decc3f9bd3fea7b1797d301464743af0f",
+  "git_head_before_delivery": "7b18177b639799242cb80752fa544907d3385521",
   "worktree_changes_present": true,
   "new_sources": {
     "src/admission.ts": "d615b1dd28fe0de1e4078e9eb9016728d35897da7804d1931db0af4f59c86f65",
@@ -78,6 +78,7 @@
     "tests/fixtures/manager-lease.ts": "a636a1d7dc741b9ae97aba440b6c8405feb6b30ca2069dab806fa93a1c5664e7",
     "tests/fixtures/provision-capacity.ts": "8ae7003561d36c55688a4b2c0cf4929354978474df981ae4ead2b6f5390ec156",
     "tests/fixtures/provision-engineering.ts": "0ded517ec433ec2123851d60bf68c763243ac85a5a7b86d2083a8a44bd236fb7",
+    "tests/fixtures/restored-runtime-smoke.ts": "3b90ceb42d65f1fe775bcc8eaff270a703752fcc743cb6b03d0c168db7199e86",
     "tests/happier.test.ts": "07a0937c56ae61dea66960d201c35e866e1714a070a9800a8177a431d5eb1715",
     "tests/history.test.ts": "e13ee390649bd925a6835947c39c3f592f19f390ee5847449d0b7a280320487a",
     "tests/import.test.ts": "7996a1a9fbd2835494ebaa9ea131543add20f75faf99ea9933c2583134816d65",
@@ -103,7 +104,9 @@
     "scripts/prepare-build.mjs": "33e37f00185561d09fed5875fec2d8b1c5f85ed2ce3690db2d41ae70a9b0d559",
     "scripts/prepare-ssh-fixtures.mjs": "efe8077bdc93a4eea3d63e920decb924b60cb5ec25272e8fc729d438755da3a9",
     "scripts/prove-backup-restore.mjs": "da681b94ab2367014cc4c77a1f88b4c1a5aff722602a8ed046d09cca6596c0c5",
+    "scripts/prove-restored-worktrees.mjs": "85c7d511f78ab53884a1e0846e53ef66c9ab09e3b41a8b280ba1d522541af5df",
     "scripts/record-check.mjs": "e3e8d59aaf5680b35bda80095b75cab916e12e498b2396bb348427d877b2df78",
+    "scripts/relocate-restored-worktrees.mjs": "c3fb041dcad98a36ba63655fd6a71749f3d6263bd718d226e2c329e5aabd83d5",
     "scripts/restore-lab.mjs": "cbc3df11afa8267cc9653988fd432e24bb0aa3f73974155f7f44e23369116f2d",
     "scripts/restore-linux-optionals.py": "df5717911d8adccfb8169467c6e7a1324cbf5e05706c235bc1255a559bae9fe5",
     "scripts/run-checks.sh": "09d90c57eb73a6a384247f061ae423b3f768996c6576c89f64c9bdf60529ee34",
@@ -115,7 +118,7 @@
     "scripts/synthetic-worker.mjs": "69fec5c252c65279d60f06ff93ac087438a0a00789dd840a7b5ac76cbb97db1f",
     "scripts/traceability.py": "18e0f3f6290593cad967d214914b23753e47c57c35e6f493bc9f3f532af4a000",
     "scripts/typecheck-happier-ui.mjs": "b417d59fab882126974e40df49b93309e89861af70910381510b7b3b3c106553",
-    "scripts/update-traceability-ssh-isolation.py": "14c1f5fef7d1754e9e33f6a755f5c97dc2e336b12bd5820e544f201e11976f83",
+    "scripts/update-traceability-ssh-isolation.py": "0c8b6344f4806c14fe316c9c04ca093ce2beded73cee4fe205c49c9a652d2ffb",
     "scripts/upstream-changes.py": "8d5a78f14055a754de42d3c54664f75c7d65e3c094ebb8a8ade417d11b17ae78",
     "scripts/validate-increment.sh": "b1cbbc0da41fcdaddd98626303176c34e6839157a1dcce8721627d95e13f0a91",
     "scripts/verify-canonical-history.mjs": "092c2c3b646c25aae53b89b662f5e8bcc6b521ff113a0974f9fb92b36070a3f4",

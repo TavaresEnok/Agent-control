@@ -1,0 +1,11 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "admissionClosed": true,
+  "runsPreserved": 2,
+  "operationsAndGrantsUnchanged": true,
+  "noHttpListener": true,
+  "noConversationEndpoint": true,
+  "noWorkerDispatched": true,
+  "limitation": "Managed runtime only; canonical Happier UI, live physical effects, provider accounts and full disaster recovery are not exercised."
+}

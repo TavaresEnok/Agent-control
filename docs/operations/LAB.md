@@ -82,3 +82,15 @@ node scripts/prove-backup-restore.mjs
 ```
 
 O último script para os executores da bancada, mantém somente seu PostgreSQL, cria backup cifrado e um banco novo de nome aleatório, verifica corrupção de arquivo/dump e compara a origem antes/depois. Preserva o arquivo, sua chave privada separada e a cópia restaurada em `.state/`, sem publicá-los. O resultado público contém apenas estados e contagens. A execução registrada em `backup-restore-first-20261102.log` passou com 2.601 arquivos, sem iniciar aplicação da cópia. Restauração operacional, relocação Git, custódia fora do host e ensaio em outra VM continuam pendentes.
+
+Para reparar os ponteiros Git e ler uma cópia já importada:
+
+```sh
+node scripts/prove-restored-worktrees.mjs .state/restores/<diretorio-restaurado>
+```
+
+O importador de worktrees valida todos os backlinks antes de escrever. Só aceita a cópia dentro de `.state/restores`, recusa referências Git externas e configurações desconhecidas e altera apenas ponteiros dessa cópia. Registra hashes antes/depois em `WORKTREE_RELOCATION.json`. O verificador confere todos os arquivos de origem e inicia um runtime gerenciado temporário, sem listener HTTP ou endpoint de conversa, apontado ao banco novo com admissão fechada. Não inicia conta, fila ou trabalhador.
+
+`restored-worktrees-first-20261102.log` verificou 45 repositórios, 60 worktrees e 2.601 arquivos originais intactos. Duas execuções nativas persistidas foram lidas, sem alteração nas operações/concessões. Isso não prova a UI Happier restaurada, contas reais, reconciliação de efeitos externos ou desastre em outro host.
+
+A versão final reloca também o campo `worktreePath` dos índices nativos `runs.json`, incluindo a cópia de segurança quando existir. Lifecycle com estado desconhecido é recusado; não é descartado para fingir reconciliação. `restored-worktrees-final-20261102.log` verifica 60 registros nativos e repete a conferência de origem depois de iniciar/fechar o runtime. O modo gerenciado do Cezar não usa a limpeza nativa de processos por run ID; workers são neutralizados pelo broker. Os testes de limpeza standalone continuam passando.

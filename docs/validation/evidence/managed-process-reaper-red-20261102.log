@@ -1,0 +1,41 @@
+Command: docker compose -f deploy/compose.lab.yml run --rm --no-deps -T runtime sh -c 'cd upstream/cezar && npm test -- packages/cezar/src/workflows/leftover-processes.test.ts -t "managed recovery leaves"'
+Exit code: 1
+ANSI styling removed where present; semantic output preserved.
+
+> test
+> vitest run packages/cezar/src/workflows/leftover-processes.test.ts -t managed recovery leaves
+
+
+ RUN  v4.1.10 /workspace/upstream/cezar
+
+ ❯  server  src/workflows/leftover-processes.test.ts (3 tests | 1 failed | 2 skipped) 1062ms
+     ↓ stops a settled run’s leftover and notes it, leaving live and foreign tasks alone
+     ↓ reaps nothing with CEZ_TASK_PROCESS_REAP=0
+     × managed recovery leaves matching processes to its authoritative broker 1059ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL   server  src/workflows/leftover-processes.test.ts > recover() reaps processes left by settled tasks > managed recovery leaves matching processes to its authoritative broker
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/workflows/leftover-processes.test.ts:111:38
+    109|       await managed.recover();
+    110|       await new Promise(resolve => setTimeout(resolve, 1_000));
+    111|       expect(await running(settled)).toBe(true);
+       |                                      ^
+    112|     } finally { managed.dispose(); }
+    113|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 skipped (3)
+   Start at  15:28:01
+   Duration  3.96s (transform 1.98s, setup 56ms, import 2.66s, tests 1.06s, environment 0ms)

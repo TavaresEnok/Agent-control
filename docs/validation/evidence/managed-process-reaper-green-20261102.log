@@ -1,0 +1,19 @@
+Command: docker compose -f deploy/compose.lab.yml run --rm --no-deps -T runtime sh -c 'cd upstream/cezar && npm test -- packages/cezar/src/workflows/leftover-processes.test.ts'
+Exit code: 0
+ANSI styling removed where present; semantic output preserved.
+
+> test
+> vitest run packages/cezar/src/workflows/leftover-processes.test.ts
+
+
+ RUN  v4.1.10 /workspace/upstream/cezar
+
+ ✓  server  src/workflows/leftover-processes.test.ts (3 tests) 5131ms
+     ✓ stops a settled run’s leftover and notes it, leaving live and foreign tasks alone  3100ms
+     ✓ reaps nothing with CEZ_TASK_PROCESS_REAP=0  1016ms
+     ✓ managed recovery leaves matching processes to its authoritative broker  1013ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  15:28:12
+   Duration  7.90s (transform 1.80s, setup 60ms, import 2.50s, tests 5.13s, environment 0ms)

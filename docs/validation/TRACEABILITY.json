@@ -434,12 +434,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
-    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
+    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/relocate-restored-worktrees.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Encrypted synthetic backup extracted and imported into a new closed database; operational startup, relocation and off-host custody pending."
+    "limitation": "Encrypted synthetic backup, new database, relocated Git/native metadata and managed runtime startup verified; full UI, external effects and off-host custody pending."
   },
   {
     "id": "RF-35",
@@ -629,12 +629,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
-    "files": "src/isolated-verification.ts;src/sandbox-broker.ts;scripts/sandbox-verifier.mjs;tests/engineering.test.ts",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/managed-process-reaper-green-20261102.log",
+    "files": "src/isolated-verification.ts;src/sandbox-broker.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Known controller paths unavailable to synthetic verifiers; real account credential isolation and broader hostile process proof pending."
+    "limitation": "Known controller paths unavailable to synthetic verifiers and native ID-based reaper disabled in managed mode; real account boundaries remain unverified."
   },
   {
     "id": "RF-50",
@@ -668,12 +668,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
-    "files": "scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
+    "files": "scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Restored database admission closed and copied leases/quotas/sessions invalidated; runtime version rollout and restored app startup pending."
+    "limitation": "Restored database fenced and managed runtime starts without dispatch; version rollout and full application startup pending."
   },
   {
     "id": "RF-53",
@@ -863,12 +863,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
-    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
+    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic database restore in a copy verified; no operational recovery or RPO/RTO measurement."
+    "limitation": "Synthetic copy restore and Git/runtime read verified; no operational disaster recovery or RPO/RTO measurement."
   },
   {
     "id": "RNF-11",
@@ -1162,12 +1162,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
-    "files": "scripts/prove-backup-restore.mjs;tests/fixtures/backup-sentinel.ts",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
+    "files": "scripts/prove-backup-restore.mjs;scripts/prove-restored-worktrees.mjs;tests/fixtures/restored-runtime-smoke.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Archive and database hashes verified with corruption refusals; app/history UI startup and Git relocation remain unverified."
+    "limitation": "Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified."
   },
   {
     "id": "T19",
@@ -1396,12 +1396,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/managed-process-reaper-red-20261102.log;docs/validation/evidence/managed-process-reaper-green-20261102.log",
+    "files": "upstream/cezar/packages/cezar/src/workflows/run.ts;upstream/cezar/packages/cezar/src/workflows/leftover-processes.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Native process cleanup cannot bypass broker authority in managed mode; full ingress and account administration coverage remains partial."
   },
   {
     "id": "T37",

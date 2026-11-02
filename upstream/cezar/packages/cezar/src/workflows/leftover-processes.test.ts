@@ -96,4 +96,19 @@ describe.runIf(process.platform === 'linux')('recover() reaps processes left by 
     expect(await running(settled)).toBe(true);
     expect(lifecycle(settled).some((m) => m.startsWith('stopped'))).toBe(false);
   });
+
+  it('managed recovery leaves matching processes to its authoritative broker', async () => {
+    const settled = makeRun('done');
+    await leave(settled);
+    const managed = new RunManager(store, dataRoot, { managed: {
+      runnerFactory: () => { throw new Error('No worker is authorized'); },
+      authorizeStart: () => { throw new Error('No run is authorized'); },
+      authorizeRecovery: async () => false,
+    } });
+    try {
+      await managed.recover();
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      expect(await running(settled)).toBe(true);
+    } finally { managed.dispose(); }
+  });
 });

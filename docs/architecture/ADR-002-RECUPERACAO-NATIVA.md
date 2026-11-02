@@ -15,3 +15,5 @@ A prova `native-recovery.test.ts` encerra o controlador filho com SIGKILL depois
 Arquivos upstream alterados: `packages/cezar/src/workflows/run.ts`. O inventário `upstream/CHANGES.json` registra o hash atualizado. A aplicação importa a compilação desse mesmo arquivo, sem patch manual de dist.
 
 Limites: a prova cobre a interrupção da implementação sintética antes do QA. Reinícios em QA/revisão/juiz/integração, pause concorrente entre nós, quedas do broker durante worker ativo, CLIs reais e revisores isolados ainda exigem implementação e homologação. Uma operação cujo resultado permanece incerto não é relançada automaticamente. Revisão independente continua pendente.
+
+Na continuação da restauração, foi identificada a limpeza nativa de processos por `CEZ_TASK_ID`: um run restaurado mantém seu ID, portanto esse mecanismo poderia sinalizar um processo da origem. O modo gerenciado agora recusa essa limpeza nativa; somente o broker pode neutralizar seus workers por identidade física e autoridade. O comportamento standalone foi preservado. `managed-process-reaper-red-20261102.log` mostra a falha sem a correção; a suíte focada com os três casos passou após o ajuste.
