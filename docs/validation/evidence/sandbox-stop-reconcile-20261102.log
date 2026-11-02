@@ -1,0 +1,7 @@
+Scope: isolated sandbox broker stop path; no operational workers or accounts.
+Command 1: docker compose -f deploy/compose.lab.yml exec -T sandbox-client npm run typecheck
+Exit code 1: 0; TypeScript typecheck passed.
+Command 2: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/sandbox.test.ts
+Exit code 2: 0; 1 test, 1 pass, 0 fail, duration 1882 ms.
+Code change: stop now inspects the identified container and invokes the broker's existing reconciliation path. Only a terminal Docker receipt can release capacity; absent/uncertain state remains reserved.
+Limit: the passing probe does not exercise stop during a slow worker. Cancellation semantics are still partially verified.

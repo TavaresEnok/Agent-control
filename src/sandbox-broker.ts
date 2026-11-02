@@ -138,14 +138,16 @@ export class SandboxBroker{
   if(admission.prior){
    if(value.action==='cleanup')return this.cleanup(value,admission.prior,admission.priorSpec,work);
    if(value.action==='stop'){
-    return this.ledger.tx(async c=>{
+    if(['completed','failed'].includes(String(admission.prior.state)))return admission.prior.receipt;
+    const stopped=await this.ledger.tx(async c=>{
      await this.ledger.fence(c,value.authority,true);
      const inspected=await this.docker.inspect(name);
-     if(!inspected)return {jobId:value.jobId,state:'uncertain'};
+     if(!inspected)return false;
      this.inspectExpected(inspected,{...value,authority:{...value.authority,epoch:Number(admission.prior.manager_epoch)}},admission.priorSpec,work);
      if(inspected.State.Running)await this.docker.stop(inspected.Id);
-     return {jobId:value.jobId,state:'uncertain'};
+     return true;
     });
+    return stopped?this.reconcile(value,admission.prior,admission.priorSpec,work):{jobId:value.jobId,state:'uncertain'};
    }
    return this.reconcile(value,admission.prior,admission.priorSpec,work);
   }
