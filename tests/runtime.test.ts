@@ -41,6 +41,11 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
     const body: Command = { schemaVersion: 1, intentId: randomUUID(), deliveryAttemptId: randomUUID(), contextId: context,
       policyRevision: 1, action: 'plan.start', payload: { workflow: 'baseline-synthetic-v1', messageRef: 'encrypted:fixture' } };
     const intent = await db.accept('owner', body, authority, 'happier');
+    const receipt = { operationId: intent.operation_id, base: 'a'.repeat(40), commit: 'b'.repeat(40), tree: 'c'.repeat(40), exitCode: 0, synthetic: true };
+    await assert.rejects(runtime.recordReceipt(intent, old, receipt), /STALE_MANAGER/);
+    await assert.rejects(runtime.recordReceipt(intent, authority, { ...receipt, operationId: randomUUID() }), /INVALID_SYNTHETIC_RECEIPT/);
+    await assert.rejects(runtime.recordReceipt(intent, authority, receipt), /OPERATION_RECEIPT_STALE/);
+    assert.equal((await db.pool.query('SELECT state FROM ac_operations WHERE id=$1', [intent.operation_id])).rows[0].state, 'registered');
     await assert.rejects(runtime.dispatch({ ...intent, run_id: randomUUID() }, authority), /INTENT_IDENTITY_MISMATCH/);
     await assert.rejects(runtime.dispatch(intent, old), (e: unknown) => e instanceof Refusal && e.code === 'STALE_MANAGER');
     await runtime.dispatch(intent, authority); await runtime.dispatch(intent, authority);

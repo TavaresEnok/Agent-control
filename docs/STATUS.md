@@ -45,3 +45,5 @@ Checkpoint existente passa a acompanhar atomicamente novas revisões e IDs de in
 O adaptador recupera páginas nativas Happier em ordem, valida cursores e recusa limites inconsistentes ou mais de 15.000 mensagens. Servidor e criptografia Happier reais foram exercitados com mais de 150 mensagens sintéticas e troca de gerente (`docs/validation/evidence/i2-history-real-server-20261102.log`); sete testes PG/Cezar/cursores e build em `i2-history-unit-20261102.log`. Integração real de modelo, autenticação por dispositivo e limites acima da janela seguem pendentes.
 
 A projeção de eventos e escritas locais da outbox agora verificam a época da autoridade na mesma transação. A fronteira de chamada remota em trânsito ainda exige reconciliação (AC-IMP-0023). Oito testes e typecheck/build passaram em `docs/validation/evidence/i2-history-fencing-final2-20261102.log`.
+
+O recebimento de resultado sintético também exige autoridade, identidade e estado running coerentes; evidência `docs/validation/evidence/receipt-identity-20261102.log`. Validação do artefato real e reconciliação de escritores continuam pendentes (AC-IMP-0024).

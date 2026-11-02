@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { z } from 'zod';
 import { RunManager } from '../upstream/cezar/packages/cezar/dist/workflows/run.js';
 import { RunStore } from '../upstream/cezar/packages/cezar/dist/runs/store.js';
 import { createApp } from '../upstream/cezar/packages/cezar/dist/server/server.js';
@@ -22,6 +23,9 @@ export const baselineWorkflow = workflowDefSchema.parse({
     { id: 'done', type: 'end', status: 'success' },
   ], edges: [{ from: 'start', to: 'implement' }, { from: 'implement', to: 'done' }] },
 });
+const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+  commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/), tree: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+  exitCode: z.literal(0), synthetic: z.literal(true) }).strict();
 
 /** Sole DAG owner is Cezar. This adapter admits a frozen definition and projects its state. */
 export class CezarRuntime {
@@ -89,8 +93,22 @@ export class CezarRuntime {
         { task: `Intent ${intent.id}`, runner: 'claude', worktree: true, generateFollowups: false }));
       this.store.flush({ throwOnError: true });
     });
-    await this.ledger.pool.query("UPDATE ac_outbox SET state='dispatched',attempts=attempts+1 WHERE intent_id=$1", [intent.id]);
+    await this.ledger.tx(async c => { await this.ledger.fence(c, authority);
+      await c.query("UPDATE ac_outbox SET state='dispatched',attempts=attempts+1 WHERE intent_id=$1", [intent.id]); });
     return this.store.getRun(intent.run_id);
+  }
+  async recordReceipt(intent: Intent, authority: Authority, receipt: unknown) {
+    await this.ledger.tx(async c => {
+      if (intent.context_id !== authority.contextId) throw new Refusal('EFFECT_SCOPE_MISMATCH');
+      await this.ledger.fence(c, authority, true);
+      const parsed = SyntheticReceipt.safeParse(receipt);
+      if (!parsed.success || parsed.data.operationId !== intent.operation_id) throw new Refusal('INVALID_SYNTHETIC_RECEIPT');
+      const updated = await c.query(`UPDATE ac_operations o SET state='completed',receipt=$2
+        FROM ac_intents i WHERE o.id=$1 AND o.intent_id=i.id AND i.id=$4 AND i.context_id=$5
+        AND o.state='running' AND o.manager_epoch=$3`,
+        [intent.operation_id, parsed.data, authority.epoch, intent.id, authority.contextId]);
+      if (!updated.rowCount) throw new Refusal('OPERATION_RECEIPT_STALE');
+    });
   }
   private runner(): AgentRunner {
     const runtime = this;
@@ -140,7 +158,7 @@ export class CezarRuntime {
           runtime.children.delete(processChild); open = false;
           if (code !== 0) throw new Refusal('SYNTHETIC_PROCESS_FAILED');
           const receipt: unknown = JSON.parse(await readFile(receiptPath, 'utf8'));
-          await runtime.ledger.pool.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1", [intent.operation_id, receipt]);
+          await runtime.recordReceipt(intent, authority, receipt);
           const events: AgentEvent[] = [{ type: 'text', text: output }, { type: 'done' }];
           events.forEach(e => onEvent?.(e));
           return { text: output, toolCalls: [], tokensUsed: 0 };
