@@ -17,6 +17,7 @@ export function AgentControlRemoteSources({canAuthorize,hosts,plans,authorizatio
  const lastPage=Math.max(0,Math.ceil(authorizations.length/pageSize)-1),currentPage=Math.min(page,lastPage)
  return <SettingsField title="Fontes Git remotas" hint="A autorização permite apenas ler o commit e a árvore identificados no host e plano selecionados.">
   <p className="text-sm">Autorizar leitura não inicia execução nem aprova integração.</p>
+  <p className="text-xs text-muted-foreground">São exibidos até 100 hosts elegíveis e as 100 autorizações mais recentes; as listas podem não ser exaustivas.</p>
   {canAuthorize&&<>
    {eligible.length===0&&<p role="status">Nenhum plano elegível nesta conversa.</p>}
    {hosts.length===0&&<p role="status">Nenhum host autorizado para exportar Git neste projeto.</p>}

@@ -11,8 +11,12 @@ import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
 import {ProviderCollectors,ProviderBinding,projectProviderSnapshot,type ProviderAdapter} from './providers.ts';
 import {IntegrationApproval,approveIntegration} from './approvals.ts';
 import {authorizeRemoteSource,RemoteSourcePayload} from './remote-source-authorizations.ts';
+import {ProviderEligibility,ProviderEligibilityInput} from './provider-eligibility.ts';
+import {AdministrativeOperations,AdministrativePolicy} from './administrative-operations.ts';
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
+ z.object({...base,action:z.literal('administrative.policy.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:AdministrativePolicy}).strict()}).strict(),
+ z.object({...base,action:z.literal('provider.eligibility.publish'),payload:ProviderEligibilityInput}).strict(),
  z.object({...base,action:z.literal('remote.source.authorize'),payload:RemoteSourcePayload}).strict(),
  z.object({...base,action:z.literal('integration.approve'),payload:IntegrationApproval}).strict(),
  z.object({...base,action:z.literal('quality.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:QualityPolicy}).strict()}).strict(),
@@ -38,7 +42,9 @@ export const ControlCommand=z.discriminatedUnion('action',[
 /** Human administration has a separate intent identity but uses the same PG/RBAC authority.
  * A nested Capacity view shares this transaction: effect and dedupe commit together. */
 export class Control {
- constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[],private readonly projectScope?:string){}
+ constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[],private readonly projectScope?:string,readonly administrative=new AdministrativeOperations(ledger,[])){
+  if(administrative.ledger!==ledger)throw new Refusal('ADMIN_SERVICE_LEDGER_MISMATCH',403);
+ }
  async execute(principal:string,raw:z.input<typeof ControlCommand>,proof:OperatorProof){
   const command=ControlCommand.parse(raw);
   return this.ledger.tx(async c=>{
@@ -63,6 +69,8 @@ export class Control {
    else{
     const service=new Capacity(this.ledger,c);
     switch(command.action){
+     case 'administrative.policy.publish':result=await this.administrative.publish(c,principal,command.contextId,command.payload.expectedRevision,command.payload.policy);break;
+     case 'provider.eligibility.publish':result=await new ProviderEligibility(this.ledger,c).publish(principal,context.project_id,command.payload);break;
      case 'remote.source.authorize':result=await authorizeRemoteSource(c,principal,context.project_id,command,proof);break;
      case 'integration.approve':result=await approveIntegration(this.ledger,c,principal,command.contextId,command.payload);break;
      case 'quality.publish':result={revision:await new QualityPolicies(this.ledger,c).publish(principal,context.project_id,command.payload.expectedRevision,command.payload.policy)};break;
@@ -129,6 +137,7 @@ export class Control {
    const context=await this.ledger.authorize(c,principal,Id.parse(contextId),false);
    if(this.projectScope&&context.project_id!==this.projectScope)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
    const accounts=(await c.query(`SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.revision,a.max_concurrent,
+    (a.mode='synthetic') can_activate,
     (a.owner_id=$2 AND $3::boolean) can_manage,
     CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE 'unknown' END quota_status,
     q.source quota_source,q.observed_at,q.expires_at
@@ -143,11 +152,17 @@ export class Control {
      ORDER BY completed_at DESC LIMIT 1) o ON true WHERE x.project_id=$1 ORDER BY b.account_id`,[context.project_id])).rows.map(row=>{const {digest:storedDigest,...binding}=row;return {...binding,
      snapshot:row.snapshot?projectProviderSnapshot(row.snapshot,storedDigest,row.fresh===true):null};});
    const providerAdapters=this.providerAdapters.map(adapter=>({id:adapter.manifest.id,version:adapter.manifest.version,provider:adapter.manifest.provider,mode:adapter.manifest.mode,source:adapter.manifest.source}));
-   const profiles=(await c.query(`SELECT p.*,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
+   const profiles=(await c.query(`SELECT p.*,(a.mode='synthetic') can_activate,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
     JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows;
    const catalog=(await c.query(`SELECT m.provider,m.model,m.efforts,m.roles,m.source FROM ac_model_catalog m
     WHERE EXISTS(SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.provider=m.provider AND x.project_id=$1)
     ORDER BY m.provider,m.model`,[context.project_id])).rows;
+   const administrative={recentOperations:(await c.query(
+    `SELECT id,operation_name AS name,operation_version AS version,state,manager_epoch AS epoch,created_at
+     FROM ac_administrative_operations WHERE context_id=$1 ORDER BY created_at DESC,id LIMIT 50`,[contextId])).rows,managerProfileIds:(await c.query(
+    'SELECT DISTINCT profile_id FROM ac_managers WHERE context_id=$1',[contextId])).rows.map(row=>row.profile_id),operations:this.administrative.catalog(),policies:(await c.query(
+    'SELECT revision,digest,snapshot,created_at AS published_at FROM ac_administrative_policies WHERE context_id=$1 ORDER BY revision DESC LIMIT 100',[contextId])).rows};
+   const providerEligibility=await new ProviderEligibility(this.ledger,c).viewProject(principal,context.project_id);
    const policies=(await c.query('SELECT revision,digest,snapshot,published_at FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const grants=(await c.query(`SELECT id,attempt_id,intent_id,resource_kind,profile_id,account_id,role,policy_revision,emergency,state,created_at
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
@@ -178,8 +193,9 @@ export class Control {
    const operatorDeviceIds=(await c.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
-   return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,providerBindings,providerAdapters,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
+   const specialistVerifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-specialist.mjs',import.meta.url))).digest('hex');
+   return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,specialistVerifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
+    accounts,providerBindings,providerAdapters,providerEligibility,administrative,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
     remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner'};
   });
  }

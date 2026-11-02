@@ -21,12 +21,16 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
+ accountHomesDirectory:absolute.optional(),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
  happier:z.object({upstreamOrigin:origin(),webOrigin:origin(),publicServerOrigin:origin()}).strict(),
  sessionMaxAgeSeconds:z.number().int().min(60).max(2592000).default(86400),
 }).strict().refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root')
  .refine(value=>!value.contextVault||[value.dataDirectory,value.contextVault.directory,value.contextVault.masterFile].every(path=>resolve(path)===path)&&
-  value.contextVault.directory.startsWith(value.dataDirectory+sep)&&value.contextVault.masterFile.startsWith(value.dataDirectory+sep)&&value.contextVault.directory!==value.contextVault.masterFile,'Vault paths must be canonical and inside private data directory');
+  value.contextVault.directory.startsWith(value.dataDirectory+sep)&&value.contextVault.masterFile.startsWith(value.dataDirectory+sep)&&value.contextVault.directory!==value.contextVault.masterFile,'Vault paths must be canonical and inside private data directory')
+ .refine(value=>!value.accountHomesDirectory||resolve(value.accountHomesDirectory)===value.accountHomesDirectory&&value.accountHomesDirectory.startsWith(value.dataDirectory+sep)&&
+  (!value.contextVault||![value.contextVault.directory,value.contextVault.masterFile].some(path=>path===value.accountHomesDirectory||path.startsWith(value.accountHomesDirectory+sep)||value.accountHomesDirectory!.startsWith(path+sep))),
+ 'Account homes must be isolated inside private data directory and outside the context vault');
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536){

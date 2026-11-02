@@ -1,5 +1,6 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,readFile,writeFile,rm,realpath} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {z} from 'zod';
@@ -9,12 +10,24 @@ import {SandboxClient} from './sandbox-client.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import type {AgentRunSpec,AgentSession,AgentEvent} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import {readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
+import {CorrectionSource} from './sandbox-broker.ts';
+import type pg from 'pg';
+import {QualityPolicy} from './quality-policy.ts';
 const exec=promisify(execFile);
 async function git(cwd:string,args:string[]){
  const r=await exec('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,...args],{
   env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000,maxBuffer:2000000});return r.stdout.trim();
 }
-const Launch=z.object({profile:z.literal('synthetic-implementation-v1'),source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().max(1400000),outputPath:z.string().min(1).optional()}).strict()}).strict();
+const Launch=z.object({profile:z.literal('synthetic-implementation-v1'),source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().max(1400000),outputPath:z.string().min(1).optional(),correction:CorrectionSource.optional()}).strict()}).strict();
+async function expectedOutput(cwd:string,launch:z.infer<typeof Launch>,operationId:string){
+ const correction=launch.source.correction;if(!correction)return `Synthetic isolated effect ${operationId}`;
+ if(!launch.source.outputPath||await git(cwd,['rev-parse','refs/agent-control/correction-source'])!==correction.priorCommit||
+   await git(cwd,['rev-parse',`${correction.priorCommit}^{tree}`])!==correction.priorTree||
+   await git(cwd,['rev-list','--parents','-n','1',correction.priorCommit])!==`${correction.priorCommit} ${launch.source.base}`)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+ const previous=await exec('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,'show',`${correction.priorCommit}:${launch.source.outputPath}`],
+  {encoding:'buffer',env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000,maxBuffer:1000000});
+ return `Synthetic corrected effect ${operationId}\nPrior content sha256 ${createHash('sha256').update(previous.stdout).digest('hex')}\nDecision ${correction.decisionDigest}`;
+}
 const Implementation=z.object({operationId:Id,base:z.string().regex(/^[a-f0-9]{40}$/),commit:z.string().regex(/^[a-f0-9]{40}$/),
  tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(true)}).strict();
 const Receipt=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),implementation:Implementation.nullable(),bundle:z.string().max(1400000).optional()}).passthrough();
@@ -27,8 +40,12 @@ export class IsolatedImplementation{
  private active=true;
  private managedRepository?:string;
  private readonly stops=new Set<()=>void>();
+ private specialistGuard?: (c:pg.PoolClient,intent:Intent,authority:Authority,writer:{sessionId:string;grantId:string})=>Promise<void>;
  constructor(readonly ledger:Ledger,readonly client=new SandboxClient(),private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){}
  bindManagedRepository(repo:string){const path=resolve(repo);if(this.managedRepository&&this.managedRepository!==path)throw new Refusal('MANAGED_REPOSITORY_MISMATCH');this.managedRepository=path;}
+ bindSpecialistGuard(guard:(c:pg.PoolClient,intent:Intent,authority:Authority,writer:{sessionId:string;grantId:string})=>Promise<void>){
+  if(this.specialistGuard&&this.specialistGuard!==guard)throw new Refusal('SPECIALIST_GUARD_ALREADY_BOUND');this.specialistGuard=guard;
+ }
  private async managedCwd(parent:string,unit:ManagedUnit){
   if(!this.managedRepository)throw new Refusal('MANAGED_REPOSITORY_MISSING');
   const repo=await realpath(this.managedRepository),cwd=join(repo,'.ai/cezar/managed',parent,unit.runId);
@@ -69,18 +86,27 @@ export class IsolatedImplementation{
    await this.diskGuard?.assertAdmission();
    const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'operation-'));
    try{
-    const base=await git(spec.cwd,['rev-parse','HEAD']);const bundlePath=join(temporary,'source.bundle');
-    await git(spec.cwd,['bundle','create',bundlePath,'HEAD']);const source=await readFile(bundlePath);
-    if(source.length>1000000)throw new Refusal('SANDBOX_SOURCE_TOO_LARGE');
     const managed=unit?await readManagedInput(this.ledger,intent.id):null;
+    const base=await git(spec.cwd,['rev-parse','HEAD']);const bundlePath=join(temporary,'source.bundle');
     if(managed&&(managed.unitId!==unit?.id||managed.kind!=='task'||managed.base!==base||!managed.writePaths[0]))throw new Refusal('MANAGED_INPUT_MISMATCH');
-    execution=Launch.parse({profile:'synthetic-implementation-v1',source:{base,bundle:source.toString('base64'),...(managed?{outputPath:managed.writePaths[0]}:{})}});
+    const correction=managed?.correction?CorrectionSource.parse({schemaVersion:1,parentIntentId:managed.parentIntentId,...managed.correction}):undefined;
+    if(correction&&(await git(spec.cwd,['rev-parse','refs/agent-control/correction-source'])!==correction.priorCommit||
+      await git(spec.cwd,['rev-parse',`${correction.priorCommit}^{tree}`])!==correction.priorTree||
+      await git(spec.cwd,['rev-list','--parents','-n','1',correction.priorCommit])!==`${correction.priorCommit} ${base}`))throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+    await git(spec.cwd,['bundle','create',bundlePath,'HEAD',...(correction?['refs/agent-control/correction-source']:[])]);const source=await readFile(bundlePath);
+    if(source.length>1000000)throw new Refusal('SANDBOX_SOURCE_TOO_LARGE');
+    execution=Launch.parse({profile:'synthetic-implementation-v1',source:{base,bundle:source.toString('base64'),...(managed?{outputPath:managed.writePaths[0]}:{}),...(correction?{correction}:{})}});
     const snapshot=execution;
     grantId=await this.ledger.tx(async c=>{
      await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
      if(!this.active||canceled)throw new Refusal('STAGE_CANCELED');
      const operation=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];
      if(operation?.state!=='registered'||Number(operation.manager_epoch)!==authority.epoch||!operation.grant_id)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
+     const contract=(await c.query(`SELECT p.snapshot,p.digest FROM ac_execution_contracts x JOIN ac_quality_policies p
+      ON p.project_id=x.project_id AND p.revision=x.quality_revision WHERE x.intent_id=$1`,[intent.id])).rows[0];
+     if(contract){const policy=QualityPolicy.parse(contract.snapshot);if(digest(policy)!==contract.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
+      if(policy.requireSpecialistBeforeImplementation){if(!this.specialistGuard)throw new Refusal('SPECIALIST_ADVICE_REQUIRED');
+       await this.specialistGuard(c,intent,authority,{sessionId:z.uuid().parse(spec.sessionId),grantId:operation.grant_id});}}
      await c.query('INSERT INTO ac_execution_launches(operation_id,context_id,manager_epoch,snapshot,digest) VALUES($1,$2,$3,$4,$5)',
       [intent.operation_id,authority.contextId,authority.epoch,snapshot,digest(snapshot)]);
      await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[intent.operation_id,z.uuid().parse(spec.sessionId)]);
@@ -137,6 +163,7 @@ export class IsolatedImplementation{
   if(!initial.snapshot||!initial.grant_id||!['running','uncertain','completed'].includes(initial.state))return 'uncertain';
   const launch=Launch.parse(initial.snapshot);
   if(digest(launch)!==initial.digest||initial.launch_context!==authority.contextId||launch.source.base!==input.base||launch.source.outputPath!==input.writePaths[0]||
+     digest(launch.source.correction??null)!==digest(input.correction?{schemaVersion:1,parentIntentId:input.parentIntentId,...input.correction}:null)||
      Number(initial.launch_epoch)>authority.epoch||Number(initial.manager_epoch)>authority.epoch)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
   const present=(await this.ledger.pool.query('SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount;
   if(!present)return 'uncertain';
@@ -170,12 +197,14 @@ export class IsolatedImplementation{
    const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'replay-'));
    try{const file=join(temporary,'result.bundle');await writeFile(file,content,{mode:0o600,flag:'wx'});
     await git(cwd,['bundle','verify',file]);
-    if(await git(cwd,['bundle','list-heads',file])!==`${receipt.implementation.commit} HEAD`)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+    const heads=(await git(cwd,['bundle','list-heads',file])).split('\n').sort();
+    const expected=[`${receipt.implementation.commit} HEAD`,...(launch.source.correction?[`${launch.source.correction.priorCommit} refs/agent-control/correction-source`]:[])].sort();
+    if(digest(heads)!==digest(expected))throw new Refusal('MANAGED_RECEIPT_MISMATCH');
    }finally{await rm(temporary,{recursive:true,force:true});}
    if(digest(terminal.operation_receipt)!==digest(receipt.implementation)||await git(cwd,['rev-parse','HEAD'])!==receipt.implementation.commit||
       await git(cwd,['rev-parse','HEAD^{tree}'])!==receipt.implementation.tree||await git(cwd,['rev-parse','HEAD^'])!==input.base||
       await git(cwd,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==input.writePaths[0]||
-      await git(cwd,['show',`HEAD:${input.writePaths[0]}`])!==`Synthetic isolated effect ${intent.operation_id}`)throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+      await git(cwd,['show',`HEAD:${input.writePaths[0]}`])!==await expectedOutput(cwd,launch,intent.operation_id))throw new Refusal('MANAGED_RECEIPT_MISMATCH');
    return 'completed';
   }
   await this.apply(initial.principal_id,intent,authority,cwd,receipt,launch,true);
@@ -227,11 +256,12 @@ export class IsolatedImplementation{
       throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
     if(managed){const job=(await c.query('SELECT state,receipt FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[intent.operation_id])).rows[0];
      if(job?.state!=='completed'||digest(job.receipt)!==digest(grant.physical_receipt)||digest(job.receipt)!==digest(receipt))throw new Refusal('MANAGED_RECEIPT_MISMATCH');}
+    if(launch.source.correction)await git(cwd,['fetch','--no-tags',path,'refs/agent-control/correction-source:refs/agent-control/correction-source']);
     await git(cwd,['fetch','--no-tags',path,'HEAD']);
    const outputPath=launch.source.outputPath??`synthetic-${intent.operation_id}.txt`;
    if(await git(cwd,['rev-parse','FETCH_HEAD'])!==artifact.commit||await git(cwd,['rev-parse',artifact.commit+'^{tree}'])!==artifact.tree||
      await git(cwd,['rev-parse',artifact.commit+'^'])!==artifact.base||await git(cwd,['diff-tree','--no-commit-id','--name-only','-r',artifact.commit])!==outputPath||
-     await git(cwd,['show',`${artifact.commit}:${outputPath}`])!==`Synthetic isolated effect ${intent.operation_id}`)
+     await git(cwd,['show',`${artifact.commit}:${outputPath}`])!==await expectedOutput(cwd,launch,intent.operation_id))
      throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
     const head=await git(cwd,['rev-parse','HEAD']);if(head!==artifact.base&&head!==artifact.commit)throw new Refusal('SANDBOX_BASE_CHANGED');
     await git(cwd,['merge','--ff-only',artifact.commit]);

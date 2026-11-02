@@ -1,0 +1,18 @@
+Started 2026-11-02T21:47:57.739533+00:00
+COMMAND ['npm', 'run', 'typecheck'] cwd=.
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+EXIT 0
+COMMAND ['npm', 'run', 'typecheck:web'] cwd=upstream/cezar
+
+> typecheck:web
+> npm run typecheck -w @open-mercato/cezar-web
+
+
+> @open-mercato/cezar-web@0.19.0 typecheck
+> tsc --noEmit
+
+EXIT 0
+Finished 2026-11-02T21:48:05.184343+00:00

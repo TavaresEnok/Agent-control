@@ -1,0 +1,9 @@
+Started 2026-11-02T21:47:48.309228+00:00
+COMMAND ['npm', 'run', 'typecheck'] cwd=.
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+src/portable-export.ts(69,19): error TS2352: Conversion of type '{ [k: string]: never[]; }' to type 'Record<"approvals" | "artifacts" | "audit" | "capacityPolicies" | "frozenPlans" | "integration" | "managerPlans" | "qualityPolicies" | "verification" | "waivers", unknown[]>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ [k: string]: never[]; }' is missing the following properties from type 'Record<"approvals" | "artifacts" | "audit" | "capacityPolicies" | "frozenPlans" | "integration" | "managerPlans" | "qualityPolicies" | "verification" | "waivers", unknown[]>': approvals, artifacts, audit, capacityPolicies, and 6 more.
+EXIT 1

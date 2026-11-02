@@ -2,10 +2,12 @@ import {z} from 'zod';
 import {digest,Refusal,type Authority} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import type {SandboxClient} from './sandbox-client.ts';
-const Source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().optional(),composition:z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string(),tree:z.string(),base:z.string(),writePaths:z.array(z.string())}).strict()).optional()}).strict();
+import {CorrectionSource,SpecialistRequest} from './sandbox-broker.ts';
+const Source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().optional(),composition:z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string(),tree:z.string(),base:z.string(),writePaths:z.array(z.string())}).strict()).optional(),correction:CorrectionSource.optional()}).strict();
 const Execution=z.discriminatedUnion('profile',[
  z.object({profile:z.literal('synthetic-implementation-v1'),source:Source}).strict(),
  z.object({profile:z.literal('synthetic-verification-v1'),source:Source,verification:z.object({artifactId:z.uuid(),operationId:z.uuid(),kind:z.enum(['qa','review','judge'])}).strict()}).strict(),
+ z.object({profile:z.literal('synthetic-specialist-v1'),source:Source,advice:SpecialistRequest}).strict(),
 ]);
 
 /** Reconciles signed cancellation requests in the existing controller tick.
@@ -20,7 +22,8 @@ export class Cancellations{
    return (await c.query(`SELECT j.*,g.intent_id,l.snapshot,l.digest FROM ac_sandbox_jobs j
     JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_plan_cancellations x ON x.intent_id=g.intent_id
     LEFT JOIN LATERAL (SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=j.id
-     UNION ALL SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=j.id) l ON true
+     UNION ALL SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=j.id
+     UNION ALL SELECT snapshot,digest FROM ac_specialist_execution_launches WHERE advice_id=j.id) l ON true
     WHERE x.context_id=$1 AND x.state='requested' ORDER BY j.created_at`,[authority.contextId])).rows;
   });
   for(const job of jobs){
@@ -37,8 +40,9 @@ export class Cancellations{
        terminal.data.jobId!==job.id||digest(physical.receipt)!==digest(result)||digest(physical.physical_receipt)!==digest(result))
       throw new Refusal('CANCELLATION_PHYSICAL_RECEIPT_UNCONFIRMED');
     const receipt={cancellation:true,physical:physical.receipt};
-    await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state IN ('running','uncertain')",[job.id,receipt]);
-    await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND state IN ('running','uncertain')",[job.id,receipt]);
+    if(job.profile==='synthetic-implementation-v1'||job.profile==='synthetic-probe-v1')await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND intent_id=$3 AND state IN ('running','uncertain')",[job.id,receipt,job.intent_id]);
+    if(job.profile==='synthetic-verification-v1')await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND intent_id=$3 AND state IN ('running','uncertain')",[job.id,receipt,job.intent_id]);
+    if(job.profile==='synthetic-specialist-v1')await c.query("UPDATE ac_specialist_advice SET state='completed',receipt=$2 WHERE id=$1 AND intent_id=$3 AND state IN ('running','uncertain')",[job.id,receipt,job.intent_id]);
    });
   }
  }
@@ -59,7 +63,9 @@ export class Cancellations{
      AND ((g.role='programmer' AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.intent_id=$1 AND o.grant_id=g.id AND o.state='registered' AND o.handle IS NULL
        AND NOT EXISTS(SELECT 1 FROM ac_execution_launches l WHERE l.operation_id=o.id)))
       OR (g.role IN ('qa','reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.handle IS NULL
-       AND NOT EXISTS(SELECT 1 FROM ac_stage_execution_launches l WHERE l.stage_id=s.id))))`,
+       AND NOT EXISTS(SELECT 1 FROM ac_stage_execution_launches l WHERE l.stage_id=s.id)))
+      OR (g.role='specialist' AND EXISTS(SELECT 1 FROM ac_specialist_advice a WHERE a.intent_id=$1 AND a.attempt_id=g.attempt_id
+       AND a.grant_id=g.id AND a.state='registered' AND NOT EXISTS(SELECT 1 FROM ac_specialist_execution_launches l WHERE l.advice_id=a.id))))`,
      [request.intent_id,{state:'not_started',source:'cancellation-reconciliation'}]);
     const pending=(await c.query(`SELECT
      EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released') OR
@@ -67,6 +73,7 @@ export class Cancellations{
        WHERE child.parent_intent_id=$1 AND (cc.intent_id IS NULL OR cc.state<>'confirmed')) OR
      EXISTS(SELECT 1 FROM ac_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_stage_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
+     EXISTS(SELECT 1 FROM ac_specialist_advice WHERE intent_id=$1 AND state IN ('uncertain','running')) OR
      EXISTS(SELECT 1 FROM ac_integration_intents t JOIN ac_artifacts a ON a.id=t.artifact_id WHERE a.intent_id=$1 AND t.state='uncertain') OR
      EXISTS(SELECT 1 FROM ac_sandbox_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE g.intent_id=$1 AND j.state NOT IN ('completed','failed')) OR
      EXISTS(SELECT 1 FROM ac_remote_operations r WHERE (r.intent_id=$1 OR (r.intent_id IS NULL AND r.context_id=$2)) AND r.state NOT IN ('completed','failed','canceled_confirmed'))

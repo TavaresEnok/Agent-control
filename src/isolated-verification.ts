@@ -7,10 +7,11 @@ import {Authority,Id,digest,Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {SandboxClient} from './sandbox-client.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
-import {readManagedInput} from './managed-plan.ts';
+import {readManagedInput,readManagedRecipe} from './managed-plan.ts';
+import {CorrectionSource} from './sandbox-broker.ts';
 const exec=promisify(execFile),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 const CompositionSource=z.object({unitId:z.string(),artifactId:Id,commit:GitId,tree:GitId,base:GitId,writePaths:z.array(z.string())}).strict();
-const Launch=z.object({profile:z.literal('synthetic-verification-v1'),source:z.object({base:GitId,bundle:z.string().max(1400000),outputPath:z.string().optional(),composition:z.array(CompositionSource).min(2).max(4).optional()}).strict(),
+const Launch=z.object({profile:z.literal('synthetic-verification-v1'),source:z.object({base:GitId,bundle:z.string().max(1400000),outputPath:z.string().optional(),composition:z.array(CompositionSource).min(2).max(4).optional(),correction:CorrectionSource.optional()}).strict(),
  verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict()}).strict();
 const Result=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),verification:z.object({
  artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge']),commit:GitId,tree:GitId,base:GitId,
@@ -55,11 +56,24 @@ export class IsolatedVerification{
     if(!row||digest(row.snapshot)!==row.digest)throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
     composition=z.array(CompositionSource).min(2).max(4).parse(row.snapshot);
     if(digest(composition.map(s=>s.unitId))!==digest(input.sources))throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
+    const recipe=await readManagedRecipe(this.ledger,input.parentIntentId);
+    if(recipe.schemaVersion!==1)for(const source of composition){
+     const unit=recipe.units.find(value=>value.id===source.unitId);
+     const selected=unit&&(await this.ledger.pool.query(`SELECT s.artifact_id,a.commit_id,a.tree_id,a.base_id FROM ac_managed_task_selections s
+      JOIN ac_artifacts a ON a.id=s.artifact_id WHERE s.parent_intent_id=$1 AND s.task_id=$2 AND s.selected_intent_id=$3`,
+      [input.parentIntentId,unit.taskId,unit.intentId])).rows[0];
+     if(!selected||selected.artifact_id!==source.artifactId||selected.commit_id!==source.commit||selected.tree_id!==source.tree||selected.base_id!==source.base)
+      throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
+    }
    }
-   const bundlePath=join(temporary,'source.bundle');await git(cwd,['bundle','create',bundlePath,'HEAD',...(composition?.map((_,i)=>`refs/agent-control/sources/${i}`)??[])]);
+   const correction=input?.correction?CorrectionSource.parse({schemaVersion:1,parentIntentId:input.parentIntentId,...input.correction}):undefined;
+   if(correction&&(input?.kind!=='task'||await git(cwd,['rev-parse','refs/agent-control/correction-source'])!==correction.priorCommit||
+    await git(cwd,['rev-parse',`${correction.priorCommit}^{tree}`])!==correction.priorTree))throw new Refusal('MANAGED_CORRECTION_SOURCE_MISMATCH');
+   const bundlePath=join(temporary,'source.bundle');await git(cwd,['bundle','create',bundlePath,'HEAD',...(composition?.map((_,i)=>`refs/agent-control/sources/${i}`)??[]),
+    ...(correction?['refs/agent-control/correction-source']:[])]);
    const bundle=await readFile(bundlePath);if(bundle.length>1000000)throw new Refusal('SANDBOX_SOURCE_TOO_LARGE');
    const outputPath=input?.kind==='task'?input.writePaths[0]:undefined;
-   launch=Launch.parse({profile:'synthetic-verification-v1',source:{base:artifact.commit,bundle:bundle.toString('base64'),...(outputPath?{outputPath}:{}),...(composition?{composition}:{})},verification:{artifactId:artifact.id,operationId,kind}});
+   launch=Launch.parse({profile:'synthetic-verification-v1',source:{base:artifact.commit,bundle:bundle.toString('base64'),...(outputPath?{outputPath}:{}),...(composition?{composition}:{}),...(correction?{correction}:{})},verification:{artifactId:artifact.id,operationId,kind}});
    const snapshot=launch;
    await this.ledger.tx(async c=>{
     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);

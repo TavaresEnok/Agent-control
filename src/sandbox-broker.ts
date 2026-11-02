@@ -9,12 +9,20 @@ import {promisify} from 'node:util';
 import { Authority,Id,canonical,digest,Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import {DiskAdmissionGuard,type DiskAdmissionPolicy} from './disk-admission.ts';
+import {QualityPolicy} from './quality-policy.ts';
+import type pg from 'pg';
 
 const CompositionSource=z.object({unitId:z.string(),artifactId:Id,commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict();
+export const CorrectionSource=z.object({schemaVersion:z.literal(1),parentIntentId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/),revision:z.number().int().min(1).max(5),
+ priorIntentId:Id,priorArtifactId:Id,failedEvidenceIds:z.array(Id).min(1).max(16),priorCommit:z.string().regex(/^[a-f0-9]{40}$/),
+ priorTree:z.string().regex(/^[a-f0-9]{40}$/),decisionDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const SpecialistRequest=z.object({adviceId:Id,intentId:Id,unitId:z.string().min(1).max(200),operationId:Id,policyRevision:z.number().int().positive(),
+ scopeDigest:z.string().regex(/^[a-f0-9]{64}$/),inputDigest:z.string().regex(/^[a-f0-9]{64}$/),policyDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup','stop']),jobId:Id,grantId:Id,
- authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1']),
- source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().regex(/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/).max(240).optional(),composition:z.array(CompositionSource).min(2).max(4).optional()}).strict().optional(),
+ authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1','synthetic-specialist-v1']),
+ source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().regex(/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/).max(240).optional(),composition:z.array(CompositionSource).min(2).max(4).optional(),correction:CorrectionSource.optional()}).strict().optional(),
  verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict().optional(),
+ advice:SpecialistRequest.optional(),
  expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 type SandboxRequest=z.infer<typeof SandboxRequest>;
 const TerminalReceipt=z.object({jobId:Id,containerId:z.string().regex(/^[a-f0-9]{64}$/),exitCode:z.number().int(),finishedAt:z.string().min(1),synthetic:z.literal(true)}).passthrough();
@@ -26,7 +34,8 @@ function confirmedTerminal(job:Record<string,any>,grant:Record<string,any>,reque
  return job.receipt;
 }
 export type SandboxExecution={profile:'synthetic-implementation-v1';source:NonNullable<SandboxRequest['source']>}|
- {profile:'synthetic-verification-v1';source:NonNullable<SandboxRequest['source']>;verification:NonNullable<SandboxRequest['verification']>};
+ {profile:'synthetic-verification-v1';source:NonNullable<SandboxRequest['source']>;verification:NonNullable<SandboxRequest['verification']>}|
+ {profile:'synthetic-specialist-v1';source:NonNullable<SandboxRequest['source']>;advice:NonNullable<SandboxRequest['advice']>};
 function signature(value:Omit<SandboxRequest,'signature'>,key:Uint8Array){return createHmac('sha256',key).update(canonical(value)).digest('hex');}
 export function signSandbox(value:Omit<SandboxRequest,'signature'>,key:Uint8Array):SandboxRequest{return {...value,signature:signature(value,key)};}
 const Inspect=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Image:z.string(),Config:z.object({User:z.string(),Labels:z.record(z.string(),z.string())}).passthrough(),
@@ -60,6 +69,7 @@ export class DockerDaemon{
 }
 export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;diskPolicy?:DiskAdmissionPolicy;
  verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;
+ specialistPath?:string;specialistSha256?:string;
  imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
 const exec=promisify(execFile);
 async function safeGit(cwd:string,args:string[]){
@@ -67,10 +77,52 @@ async function safeGit(cwd:string,args:string[]){
   {env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'},timeout:10000,maxBuffer:2000000});
  return result.stdout.trim();
 }
+async function correctionOutput(cwd:string,correction:z.infer<typeof CorrectionSource>,outputPath:string,operationId:string){
+ const result=await exec('/usr/bin/git',['-c','safe.directory='+cwd,'-c','core.hooksPath=/dev/null','-C',cwd,'show',`${correction.priorCommit}:${outputPath}`],
+  {encoding:'buffer',env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000,maxBuffer:1000000});
+ return `Synthetic corrected effect ${operationId}\nPrior content sha256 ${createHash('sha256').update(result.stdout).digest('hex')}\nDecision ${correction.decisionDigest}`;
+}
 export class SandboxBroker{
  readonly ledger:Ledger;readonly docker:DockerDaemon;private readonly active=new Set<string>();
  private readonly diskGuard:DiskAdmissionGuard|undefined;
  private readonly monitors=new Map<string,ReturnType<typeof setInterval>>();
+ private async requireSpecialist(c:pg.PoolClient,request:SandboxRequest,intentId:string){
+  const policy=(await c.query(`SELECT x.quality_revision,p.snapshot,p.digest FROM ac_execution_contracts x JOIN ac_quality_policies p
+   ON p.project_id=x.project_id AND p.revision=x.quality_revision WHERE x.intent_id=$1`,[intentId])).rows[0];
+  if(!policy)return;
+  const parsed=QualityPolicy.parse(policy.snapshot);if(digest(parsed)!==policy.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
+  if(!parsed.requireSpecialistBeforeImplementation)return;
+  const row=(await c.query(`SELECT a.*,a.operation_id advice_operation,g.state grant_state,g.resource_kind,g.role,g.intent_id grant_intent,g.context_id grant_context,
+   g.attempt_id grant_attempt,g.manager_epoch grant_epoch,g.physical_receipt,j.state job_state,j.profile job_profile,j.receipt job_receipt,
+   j.context_id job_context,j.grant_id job_grant,j.manager_epoch job_epoch,j.container_id,l.snapshot launch,l.digest launch_digest,
+   l.context_id launch_context,l.manager_epoch launch_epoch,i.operation_id,i.parent_unit_id,m.snapshot input,m.digest input_saved,m.base_id input_base,
+   o.native_session_id writer_session FROM ac_intents i JOIN ac_operations o ON o.id=i.operation_id
+   JOIN ac_managed_delivery_inputs m ON m.intent_id=i.id LEFT JOIN ac_specialist_advice a ON a.intent_id=i.id
+   LEFT JOIN ac_capacity_grants g ON g.id=a.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=a.id
+   LEFT JOIN ac_specialist_execution_launches l ON l.advice_id=a.id WHERE i.id=$1 AND i.context_id=$2`,[intentId,request.authority.contextId])).rows[0];
+  const receipt=row?.receipt,physical=row?.physical_receipt,advice=physical?.advice;
+  if(!row||row.state!=='completed'||typeof row.signature!=='string'||!/^[a-f0-9]{64}$/.test(row.signature)||
+    !receipt||receipt.schemaVersion!==1||receipt.kind!=='preimplementation_advice'||receipt.status!=='approved'||receipt.exitCode!==0||row.policy_revision!==policy.quality_revision||
+    receipt.adviceId!==row.id||receipt.contextId!==request.authority.contextId||receipt.intentId!==intentId||
+    receipt.operationId!==row.operation_id||row.advice_operation!==row.operation_id||receipt.unitId!==row.parent_unit_id||row.unit_id!==row.parent_unit_id||receipt.sessionId!==row.session_id||receipt.grantId!==row.grant_id||
+    !row.writer_session||row.writer_session===row.session_id||row.grant_id===request.grantId||row.role!=='specialist'||row.resource_kind!=='model'||
+    row.grant_intent!==intentId||row.grant_context!==request.authority.contextId||row.grant_attempt!==row.attempt_id||row.grant_state!=='released'||
+    Number(row.grant_epoch)!==Number(row.manager_epoch)||Number(row.manager_epoch)>request.authority.epoch||
+    row.job_state!=='completed'||row.job_profile!=='synthetic-specialist-v1'||row.job_context!==request.authority.contextId||
+    row.job_grant!==row.grant_id||Number(row.job_epoch)!==Number(row.manager_epoch)||!physical||!row.job_receipt||digest(physical)!==digest(row.job_receipt)||
+    physical.jobId!==row.id||typeof physical.containerId!=='string'||!/^[a-f0-9]{64}$/.test(physical.containerId)||physical.containerId!==row.container_id||physical.exitCode!==0||typeof physical.finishedAt!=='string'||
+    physical.finishedAt.startsWith('0001-')||!Number.isFinite(Date.parse(physical.finishedAt))||physical.synthetic!==true||
+    physical.adviceIsolation?.readOnlySnapshot!==true||physical.adviceIsolation?.uid!==10001||!Array.isArray(physical.adviceIsolation?.visible)||physical.adviceIsolation.visible.length!==0||
+    !row.launch||!row.launch.advice||row.launch.profile!=='synthetic-specialist-v1'||row.launch.source?.base!==row.base_id||row.launch_context!==request.authority.contextId||Number(row.launch_epoch)!==Number(row.manager_epoch)||digest(row.launch)!==row.launch_digest||
+    digest(row.input)!==row.input_saved||row.input_digest!==row.input_saved||row.input_base!==row.base_id||row.policy_digest!==policy.digest||
+    row.scope_digest!==digest({writePaths:row.input.writePaths,acceptanceRefs:row.input.acceptanceRefs})||
+    receipt.inputDigest!==row.input_digest||receipt.scopeDigest!==row.scope_digest||receipt.policyDigest!==row.policy_digest||receipt.sourceBase!==row.base_id||receipt.policyRevision!==row.policy_revision||
+    !advice||advice.adviceId!==row.id||advice.intentId!==intentId||advice.operationId!==row.operation_id||advice.unitId!==row.parent_unit_id||
+    advice.inputDigest!==row.input_digest||advice.scopeDigest!==row.scope_digest||advice.policyDigest!==row.policy_digest||advice.sourceBase!==row.base_id||
+    advice.policyRevision!==row.policy_revision||digest(row.launch.advice)!==digest({adviceId:row.id,intentId,unitId:row.parent_unit_id,operationId:row.operation_id,
+     policyRevision:row.policy_revision,scopeDigest:row.scope_digest,inputDigest:row.input_digest,policyDigest:row.policy_digest})||
+    advice.verdict!=='proceed'||advice.verifierDigest!==receipt.verifierDigest||advice.verifierDigest!==policy.snapshot.specialistVerifierDigest)throw new Refusal('PREIMPLEMENTATION_ADVICE_REQUIRED');
+ }
  constructor(private readonly config:SandboxBrokerConfig,private readonly key:Uint8Array,docker=new DockerDaemon()){
   if(key.byteLength!==32||!/^sha256:[a-f0-9]{64}$/.test(config.imageId)||!/^[a-f0-9]{64}$/.test(config.probeSha256))throw Error('INVALID_BROKER_CONFIG');
   this.diskGuard=config.diskPolicy?new DiskAdmissionGuard(config.diskPolicy):undefined;
@@ -99,6 +151,12 @@ export class SandboxBroker{
   await chmod(expected,0o755);await chown(expected,10001,10001);return actual;
  }
  private executor(request:SandboxRequest){
+  if(request.profile==='synthetic-specialist-v1'){
+   if(!request.source||!request.advice||request.verification||request.source.outputPath||request.source.correction||request.source.composition||
+      !this.config.specialistPath||!this.config.specialistSha256)throw new Refusal('SANDBOX_SPECIALIST_NOT_CONFIGURED');
+   return {path:this.config.specialistPath,hash:this.config.specialistSha256};
+  }
+  if(request.advice)throw new Refusal('SANDBOX_PROFILE_MISMATCH');
   if(request.profile==='synthetic-verification-v1'){
    if(!request.source||!request.verification||!this.config.verificationPath||!this.config.verificationSha256||
       !this.config.verifierPath||!this.config.verifierSha256)throw new Refusal('SANDBOX_VERIFICATION_NOT_CONFIGURED');
@@ -116,7 +174,8 @@ export class SandboxBroker{
  private specification(request:SandboxRequest,work:string,epoch=request.authority.epoch){
   const executor=this.executor(request);
   const base={profile:request.profile,image:this.config.imageId,work,probe:executor.path,probeSha256:executor.hash,grant:request.grantId,epoch};
-  return digest(request.verification?{...base,sourceDigest:digest(request.source),verification:request.verification,verifier:executor.verifier}:
+  return digest(request.advice?{...base,sourceDigest:digest(request.source),advice:request.advice}:
+   request.verification?{...base,sourceDigest:digest(request.source),verification:request.verification,verifier:executor.verifier}:
    request.source?{...base,sourceDigest:digest(request.source)}:base);
  }
  private inspectExpected(value:Inspected,request:SandboxRequest,spec:string,work:string){
@@ -126,9 +185,10 @@ export class SandboxBroker{
     value.Config.User!=='10001:10001'||value.HostConfig.NetworkMode!=='none'||!value.HostConfig.ReadonlyRootfs||value.HostConfig.Privileged||
     !value.HostConfig.CapDrop?.includes('ALL')||!value.HostConfig.SecurityOpt?.some(s=>s.startsWith('no-new-privileges'))||
     value.HostConfig.PidsLimit!==64||value.HostConfig.Memory!==268435456||value.HostConfig.NanoCpus!==1000000000||
-    value.Mounts.length!==(request.verification?4:2)||!value.Mounts.some(m=>m.Destination==='/work'&&m.Source===work&&m.RW===!request.verification)||
+    value.Mounts.length!==(request.verification?4:request.advice?3:2)||!value.Mounts.some(m=>m.Destination==='/work'&&m.Source===work&&m.RW===!(request.verification||request.advice))||
     (request.verification&&(!value.Mounts.some(m=>m.Destination==='/output'&&m.Source===join(this.config.hostRoot,request.jobId,'output')&&m.RW)||
       !value.Mounts.some(m=>m.Destination==='/runner/verifier.mjs'&&m.Source===this.executor(request).verifier?.path&&!m.RW)))||
+    (request.advice&&!value.Mounts.some(m=>m.Destination==='/output'&&m.Source===join(this.config.hostRoot,request.jobId,'output')&&m.RW))||
     !value.Mounts.some(m=>m.Destination==='/runner/probe.mjs'&&m.Source===this.executor(request).path&&!m.RW))
     throw new Refusal('SANDBOX_IDENTITY_MISMATCH');
  }
@@ -149,20 +209,84 @@ export class SandboxBroker{
     LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 FOR UPDATE OF g`,[value.grantId,value.authority.contextId])).rows[0];
    if(!grant)throw new Refusal('GRANT_FORBIDDEN',403);
    if(value.action==='start')await this.ledger.assertIntentActive(c,value.authority.contextId,grant.intent_id);
-   if(value.source){
+   if(value.action==='start'&&value.profile==='synthetic-implementation-v1')await this.requireSpecialist(c,value,grant.intent_id);
+   if(value.source&&!value.advice){
     const binding=(await c.query(`SELECT i.parent_intent_id,m.base_id,m.snapshot,m.digest FROM ac_intents i
      LEFT JOIN ac_managed_delivery_inputs m ON m.intent_id=i.id WHERE i.id=$1`,[grant.intent_id])).rows[0];
     if(binding?.parent_intent_id){
-     const input=z.object({kind:z.enum(['task','composition']),writePaths:z.array(z.string()).min(1),sources:z.array(z.string())}).passthrough().safeParse(binding.snapshot);
+     const input=z.object({kind:z.enum(['task','composition']),writePaths:z.array(z.string()).min(1),sources:z.array(z.string()),correction:z.unknown().optional()}).passthrough().safeParse(binding.snapshot);
      if(!input.success||digest(binding.snapshot)!==binding.digest||
        (input.data.kind==='task'&&(value.source.outputPath!==input.data.writePaths[0]||value.source.composition!==undefined))||
        (!value.verification&&value.source.base!==binding.base_id))throw new Refusal('MANAGED_INPUT_MISMATCH');
      if(input.data.kind==='composition'){
       const sources=(await c.query('SELECT snapshot,digest FROM ac_managed_composition_sources WHERE intent_id=$1',[grant.intent_id])).rows[0];
-      if(!value.verification||value.source.outputPath!==undefined||!value.source.composition||!sources||digest(sources.snapshot)!==sources.digest||
+      if(!value.verification||value.source.outputPath!==undefined||value.source.correction!==undefined||!value.source.composition||!sources||digest(sources.snapshot)!==sources.digest||
         digest(value.source.composition)!==sources.digest||digest(value.source.composition.map(s=>s.unitId))!==digest(input.data.sources))throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
      }
-    }else if(value.source.outputPath!==undefined||value.source.composition!==undefined)throw new Refusal('MANAGED_INPUT_MISMATCH');
+     if(input.data.kind==='task'){
+      const correction=value.source.correction;
+      if(Boolean(input.data.correction)!==Boolean(correction))throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+      if(correction){
+       const {schemaVersion,parentIntentId,...saved}=correction;
+       if(parentIntentId!==binding.parent_intent_id||digest(saved)!==digest(input.data.correction)||!value.source.outputPath||value.source.composition)
+        throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+       const d=(await c.query(`SELECT d.*,a.intent_id artifact_intent,a.context_id artifact_context,a.commit_id,a.tree_id,a.base_id artifact_base,
+        i.parent_intent_id prior_parent,n.parent_intent_id next_parent FROM ac_managed_correction_decisions d
+        JOIN ac_artifacts a ON a.id=d.prior_artifact_id JOIN ac_intents i ON i.id=d.prior_intent_id JOIN ac_intents n ON n.id=d.next_intent_id
+        WHERE d.next_intent_id=$1 AND d.context_id=$2`,[grant.intent_id,value.authority.contextId])).rows[0];
+       if(!d||d.parent_intent_id!==parentIntentId||d.next_parent!==parentIntentId||d.prior_parent!==parentIntentId||
+         d.prior_intent_id!==correction.priorIntentId||d.prior_artifact_id!==correction.priorArtifactId||d.artifact_intent!==d.prior_intent_id||
+         d.artifact_context!==value.authority.contextId||d.commit_id!==correction.priorCommit||d.tree_id!==correction.priorTree||
+         d.artifact_base!==binding.base_id||d.base_id!==binding.base_id||d.task_id!==correction.taskId||d.revision!==correction.revision||
+         Number(d.manager_epoch)>value.authority.epoch||digest(d.failed_evidence_ids)!==digest(correction.failedEvidenceIds)||
+         digest([...new Set(correction.failedEvidenceIds)].sort())!==digest(correction.failedEvidenceIds)||d.decision_digest!==correction.decisionDigest||
+         digest({parentIntentId,contextId:value.authority.contextId,taskId:d.task_id,revision:d.revision,priorIntentId:d.prior_intent_id,
+          priorArtifactId:d.prior_artifact_id,failedEvidenceIds:d.failed_evidence_ids,priorCommit:d.prior_commit,priorTree:d.prior_tree,
+          baseId:d.base_id,nextIntentId:d.next_intent_id,managerEpoch:Number(d.manager_epoch)})!==d.decision_digest||
+         d.prior_commit!==correction.priorCommit||d.prior_tree!==correction.priorTree)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+       const proof=(await c.query(`SELECT e.id,e.receipt,e.receipt_digest FROM ac_verification_evidence e JOIN ac_stage_operations s ON s.grant_id=e.grant_id AND s.session_id=e.session_id
+        JOIN ac_capacity_grants g ON g.id=e.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=s.id
+        WHERE e.id=ANY($1::uuid[]) AND e.artifact_id=$2 AND e.status='failed' AND s.intent_id=$3 AND s.state='completed' AND g.state='released'
+        AND e.receipt->>'status'='failed' AND e.receipt->>'artifactId'=$2::text AND e.receipt->>'commit'=$4 AND e.receipt->>'tree'=$5
+        AND e.receipt->>'sessionId'=s.session_id::text AND e.receipt->>'grantId'=g.id::text AND g.intent_id=$3 AND g.context_id=$6
+        AND g.resource_kind='model' AND g.manager_epoch=s.manager_epoch AND g.manager_epoch<=$7
+        AND e.receipt->>'kind'=e.kind AND s.node_id=e.kind
+        AND g.role=CASE WHEN e.kind='review' THEN 'reviewer' ELSE e.kind END
+        AND e.receipt->>'exitCode'=g.physical_receipt->>'exitCode'
+        AND (e.receipt->>'exitCode') ~ '^[1-9][0-9]*$' AND s.receipt->'verification'=e.receipt AND s.receipt->>'signature' ~ '^[a-f0-9]{64}$'
+        AND ((j.state='failed' AND j.receipt=g.physical_receipt AND j.receipt->>'jobId'=s.id::text
+            AND j.receipt->'verification'->>'artifactId'=$2::text AND j.receipt->'verification'->>'commit'=$4
+            AND j.receipt->'verification'->>'tree'=$5 AND j.receipt->'verification'->>'kind'=e.kind)
+          OR (g.physical_receipt->>'source'='synthetic-verifier-parent' AND g.physical_receipt->>'state'='exited'
+           AND g.physical_receipt->>'processId'=s.handle->>'pid'))`,[correction.failedEvidenceIds,d.prior_artifact_id,d.prior_intent_id,d.prior_commit,d.prior_tree,value.authority.contextId,value.authority.epoch])).rows;
+       if(proof.length!==correction.failedEvidenceIds.length||proof.some((row:Record<string,unknown>)=>digest(row.receipt)!==row.receipt_digest))throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+      }
+     }
+    }else if(value.source.outputPath!==undefined||value.source.composition!==undefined||value.source.correction!==undefined)throw new Refusal('MANAGED_INPUT_MISMATCH');
+   }
+   if(value.advice){
+    const advice=value.advice;
+    const saved=(await c.query(`SELECT s.*,i.operation_id intent_operation,i.parent_unit_id,m.snapshot,m.digest input_saved,m.base_id,
+     o.state writer_state,EXISTS(SELECT 1 FROM ac_sandbox_jobs writer WHERE writer.id=o.id) writer_job,
+     l.snapshot launch,l.digest launch_digest,l.context_id launch_context,l.manager_epoch launch_epoch,
+     x.quality_revision,x.target_ref,x.digest contract_digest,p.snapshot policy,p.digest policy_saved
+     FROM ac_specialist_advice s JOIN ac_intents i ON i.id=s.intent_id JOIN ac_managed_delivery_inputs m ON m.intent_id=i.id
+     JOIN ac_operations o ON o.id=i.operation_id JOIN ac_specialist_execution_launches l ON l.advice_id=s.id
+     JOIN ac_execution_contracts x ON x.intent_id=i.id JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision
+     WHERE s.id=$1 AND s.context_id=$2 AND s.intent_id=$3`,[value.jobId,value.authority.contextId,grant.intent_id])).rows[0];
+    if(!saved||advice.adviceId!==value.jobId||advice.intentId!==grant.intent_id||saved.grant_id!==grant.id||
+      saved.attempt_id!==grant.attempt_id||grant.role!=='specialist'||grant.resource_kind!=='model'||saved.operation_id!==advice.operationId||
+      saved.intent_operation!==advice.operationId||saved.unit_id!==advice.unitId||saved.parent_unit_id!==advice.unitId||
+      saved.policy_revision!==advice.policyRevision||saved.quality_revision!==advice.policyRevision||saved.base_id!==value.source!.base||
+      saved.contract_digest!==digest({qualityRevision:saved.quality_revision,targetRef:saved.target_ref})||
+      saved.input_digest!==advice.inputDigest||saved.input_saved!==advice.inputDigest||digest(saved.snapshot)!==advice.inputDigest||
+      saved.policy_digest!==advice.policyDigest||saved.policy_saved!==advice.policyDigest||digest(saved.policy)!==advice.policyDigest||
+      saved.policy.requireSpecialistBeforeImplementation!==true||saved.policy.specialistVerifierDigest!==this.executor(value).hash||
+      digest({writePaths:saved.snapshot.writePaths,acceptanceRefs:saved.snapshot.acceptanceRefs})!==advice.scopeDigest||saved.scope_digest!==advice.scopeDigest||
+      saved.launch_context!==value.authority.contextId||Number(saved.launch_epoch)!==Number(saved.manager_epoch)||
+      digest(saved.launch)!==saved.launch_digest||digest(saved.launch)!==digest({profile:value.profile,source:value.source,advice})||
+      (value.action==='start'&&(saved.state!=='uncertain'||saved.writer_state!=='registered'||saved.writer_job))||
+      Number(saved.manager_epoch)>value.authority.epoch||Number(saved.manager_epoch)!==Number(grant.manager_epoch))throw new Refusal('SANDBOX_SPECIALIST_SCOPE_MISMATCH');
    }
    const prior=(await c.query('SELECT * FROM ac_sandbox_jobs WHERE id=$1 FOR UPDATE',[value.jobId])).rows[0];
    if(prior){
@@ -176,14 +300,16 @@ export class SandboxBroker{
    if(value.action!=='start')throw new Refusal('SANDBOX_JOB_NOT_FOUND');
    if(Number(grant.manager_epoch)!==value.authority.epoch||grant.state!=='reserved'||!grant.account_enabled||!grant.profile_enabled||
       grant.eligibility!=='documented_supported'||grant.quota_status!=='available'||!grant.quota_fresh)throw new Refusal('GRANT_NOT_ELIGIBLE');
-   if(value.verification){
+   if(value.advice){
+    if(grant.role!=='specialist')throw new Refusal('SANDBOX_PROFILE_ROLE_MISMATCH',403);
+   }else if(value.verification){
     const role=value.verification.kind==='review'?'reviewer':value.verification.kind;
     const artifact=await c.query(`SELECT 1 FROM ac_artifacts a JOIN ac_intents i ON i.id=a.intent_id
       WHERE a.id=$1 AND a.context_id=$2 AND a.intent_id=$3 AND a.commit_id=$4 AND i.operation_id=$5`,
       [value.verification.artifactId,value.authority.contextId,grant.intent_id,value.source!.base,value.verification.operationId]);
     if(grant.role!==role||!artifact.rowCount)throw new Refusal('SANDBOX_VERIFICATION_SCOPE_MISMATCH',403);
    }else if(grant.role!=='programmer')throw new Refusal('SANDBOX_PROFILE_ROLE_MISMATCH',403);
-   const owner=grant.role==='programmer'
+   const owner=value.advice?await c.query('SELECT 1 FROM ac_specialist_advice WHERE id=$1 AND intent_id=$2 AND grant_id=$3 AND state=$4',[value.jobId,grant.intent_id,value.grantId,'uncertain']):grant.role==='programmer'
     ?await c.query('SELECT 1 FROM ac_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3',[value.jobId,grant.intent_id,value.grantId])
     :await c.query("SELECT 1 FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3 AND (($4='qa' AND node_id='qa') OR ($4='reviewer' AND node_id='review') OR ($4='judge' AND node_id='judge'))",[value.jobId,grant.intent_id,value.grantId,grant.role]);
    if(!owner.rowCount)throw new Refusal('SANDBOX_OPERATION_MISMATCH',403);
@@ -236,6 +362,15 @@ export class SandboxBroker{
      await safeGit(work,['fetch','--no-tags',sourcePath,`${ref}:${ref}`]);
      if(await safeGit(work,['rev-parse',ref])!==source.commit)throw new Refusal('MANAGED_COMPOSITION_SOURCES_MISMATCH');
     }
+    if(value.source.correction){
+     const source=value.source.correction,ref='refs/agent-control/correction-source';
+     await safeGit(work,['fetch','--no-tags',sourcePath,`${ref}:${ref}`]);
+     const base=(await c.query('SELECT base_id FROM ac_managed_delivery_inputs WHERE intent_id=$1',[admission.grant.intent_id])).rows[0]?.base_id;
+     if(!base||await safeGit(work,['rev-parse',ref])!==source.priorCommit||
+       await safeGit(work,['rev-parse',`${ref}^{tree}`])!==source.priorTree||
+       await safeGit(work,['rev-list','--parents','-n','1',source.priorCommit])!==`${source.priorCommit} ${base}`)
+      throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+    }
     await safeGit(work,['checkout','--detach',value.source.base]);
     if(value.verification){
      const artifact=(await c.query('SELECT tree_id FROM ac_artifacts WHERE id=$1',[value.verification.artifactId])).rows[0];
@@ -244,24 +379,26 @@ export class SandboxBroker{
     await exec('/bin/chown',['-R','-h','10001:10001',work],{timeout:10000});
    }
    const output=join(this.config.hostRoot,value.jobId,'output');
-   if(value.verification){await mkdir(output,{mode:0o777});await chmod(output,0o777);}
+   if(value.verification||value.advice){await mkdir(output,{mode:0o777});await chmod(output,0o777);}
    // Re-observe after checkout immediately before creating any container.
    // Failure here preserves the registered uncertain job/grant for recovery.
    await this.diskGuard?.assertAdmission();
    if(await this.docker.inspect(name))throw new Refusal('SANDBOX_NAME_IN_USE');
    const labels={'ac.scope':'isolated-synthetic','ac.job':value.jobId,'ac.grant':value.grantId,'ac.epoch':String(value.authority.epoch),'ac.spec':spec};
    const id=await this.docker.create(name,{Image:this.config.imageId,User:'10001:10001',WorkingDir:'/work',
-    Entrypoint:['node','/runner/probe.mjs',...(value.verification?[value.verification.operationId,value.verification.kind,...(value.source?.composition?['--composition',Buffer.from(JSON.stringify(value.source.composition)).toString('base64')]:value.source?.outputPath?[value.source.outputPath]:[])]:value.source?[value.jobId,...(value.source.outputPath?[value.source.outputPath]:[])]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
+    Entrypoint:['node','/runner/probe.mjs',...(value.advice?[Buffer.from(JSON.stringify({...value.advice,sourceBase:value.source!.base})).toString('base64')]:value.verification?[value.verification.operationId,value.verification.kind,...(value.source?.correction?['--correction',Buffer.from(JSON.stringify({outputPath:value.source.outputPath,...value.source.correction})).toString('base64')]:value.source?.composition?['--composition',Buffer.from(JSON.stringify(value.source.composition)).toString('base64')]:value.source?.outputPath?[value.source.outputPath]:[])]:value.source?[value.jobId,...(value.source.outputPath?[value.source.outputPath]:[]),...(value.source.correction?['--correction',Buffer.from(JSON.stringify({outputPath:value.source.outputPath,...value.source.correction})).toString('base64')]:[])]:[])],Env:['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp',
      'GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_AUTHOR_NAME=Synthetic worker','GIT_AUTHOR_EMAIL=fixture@example.invalid',
      'GIT_COMMITTER_NAME=Synthetic worker','GIT_COMMITTER_EMAIL=fixture@example.invalid'],Labels:labels,
     HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],
      PidsLimit:64,Memory:268435456,NanoCpus:1000000000,AutoRemove:false,Init:true,
      Tmpfs:{'/tmp':'rw,nosuid,nodev,noexec,size=64m'},LogConfig:{Type:'json-file',Config:{'max-size':'1m','max-file':'1'}},
-     Binds:value.verification?[`${work}:/work:ro`,`${executor.path}:/runner/probe.mjs:ro`,`${executor.verifier!.path}:/runner/verifier.mjs:ro`,`${output}:/output:rw`]:
+    Binds:value.verification?[`${work}:/work:ro`,`${executor.path}:/runner/probe.mjs:ro`,`${executor.verifier!.path}:/runner/verifier.mjs:ro`,`${output}:/output:rw`]:value.advice?
+     [`${work}:/work:ro`,`${executor.path}:/runner/probe.mjs:ro`,`${output}:/output:rw`]:
       [`${work}:/work:rw`,`${executor.path}:/runner/probe.mjs:ro`]}});
    const created=await this.docker.inspect(id);if(!created)throw new Refusal('DOCKER_CREATE_UNCERTAIN');
    this.inspectExpected(created,value,spec,work);
    await this.ledger.fence(c,value.authority);await this.ledger.assertIntentActive(c,value.authority.contextId,admission.grant.intent_id);
+   if(value.profile==='synthetic-implementation-v1')await this.requireSpecialist(c,value,admission.grant.intent_id);
    this.active.add(id);await this.docker.start(id);this.monitor(id,value.authority);
    await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[value.grantId]);
    await c.query("UPDATE ac_sandbox_jobs SET state='running',container_id=$2 WHERE id=$1",[value.jobId,id]);
@@ -293,8 +430,20 @@ export class SandboxBroker{
    const probeSchema=z.object({visible:z.array(z.string()),network:z.boolean(),uid:z.number()}).strict();
    let probe:z.infer<typeof probeSchema>|null=null;
    try{const decoded=probeSchema.safeParse(JSON.parse(await readFile(join(work,'probe-result.json'),'utf8')));if(decoded.success)probe=decoded.data;}catch{}
-   let implementation:unknown=null,bundle:string|undefined,verification:unknown=null,verificationIsolation:unknown=null;
-   if(value.verification){
+   let implementation:unknown=null,bundle:string|undefined,verification:unknown=null,verificationIsolation:unknown=null,advice:unknown=null,adviceIsolation:unknown=null;
+   if(value.advice){
+    const resultPath=join(this.config.hostRoot,value.jobId,'output','advice-result.json');
+    const info=await lstat(resultPath).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;});
+    if(info){
+     if(info.isSymbolicLink()||!info.isFile()||info.size>4096||await realpath(resultPath)!==resultPath)throw new Refusal('SANDBOX_SPECIALIST_INVALID');
+     const result=z.object({advice:SpecialistRequest.extend({sourceBase:z.string().regex(/^[a-f0-9]{40}$/),verdict:z.enum(['proceed','reject']),
+       summary:z.literal('Synthetic pre-implementation advice')}).strict(),
+      isolation:z.object({readOnlySnapshot:z.literal(true),uid:z.literal(10001),visible:z.array(z.string()).length(0)}).strict()}).strict().parse(JSON.parse(await readFile(resultPath,'utf8')));
+     if(inspected.State.ExitCode!==0||digest(result.advice)!==digest({...value.advice,sourceBase:value.source!.base,verdict:result.advice.verdict,summary:'Synthetic pre-implementation advice'})||
+       await safeGit(work,['rev-parse','HEAD'])!==value.source!.base)throw new Refusal('SANDBOX_SPECIALIST_INVALID');
+     advice={...result.advice,verifierDigest:this.executor(value).hash};adviceIsolation=result.isolation;
+    }else if(inspected.State.ExitCode===0)throw new Refusal('SANDBOX_SPECIALIST_INVALID');
+   }else if(value.verification){
     const resultPath=join(this.config.hostRoot,value.jobId,'output','verification-result.json');
     const info=await lstat(resultPath).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;});
     if(info){
@@ -320,13 +469,15 @@ export class SandboxBroker{
       await safeGit(work,['rev-parse','HEAD^{tree}'])!==parsed.tree||await safeGit(work,['rev-parse','HEAD^'])!==parsed.base||
       await safeGit(work,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==(value.source.outputPath??`synthetic-${value.jobId}.txt`))
       throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
+    if(value.source.correction&&await safeGit(work,['show',`HEAD:${value.source.outputPath}`])!==
+      await correctionOutput(work,value.source.correction,value.source.outputPath!,value.jobId))throw new Refusal('SANDBOX_ARTIFACT_IDENTITY_MISMATCH');
     const output=join(this.config.hostRoot,value.jobId,'artifact.bundle');
-    await safeGit(work,['bundle','create',output,'HEAD']);
+    await safeGit(work,['bundle','create',output,'HEAD',...(value.source.correction?['refs/agent-control/correction-source']:[])]);
     const content=await readFile(output);if(content.length>1000000)throw new Refusal('SANDBOX_ARTIFACT_TOO_LARGE');
     implementation=parsed;bundle=content.toString('base64');
    }else if(!value.source&&inspected.State.ExitCode===0&&(!probe||probe.visible.length||probe.network||probe.uid!==10001))throw new Refusal('SANDBOX_PROBE_INVALID');
    const receipt={jobId:value.jobId,containerId:inspected.Id,exitCode:inspected.State.ExitCode,finishedAt:inspected.State.FinishedAt,synthetic:true,
-    probe,...(value.verification?{verification,verificationIsolation}:value.source?{implementation,bundle}: {})};
+    probe,...(value.advice?{advice,adviceIsolation}:value.verification?{verification,verificationIsolation}:value.source?{implementation,bundle}: {})};
    await c.query('UPDATE ac_sandbox_jobs SET state=$2,receipt=$3 WHERE id=$1',[value.jobId,inspected.State.ExitCode===0?'completed':'failed',receipt]);
    const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','running','uncertain') RETURNING id",[value.grantId,receipt]);
    if(!released.rowCount)throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
@@ -361,20 +512,24 @@ export class SandboxBroker{
  async neutralizePersistedJobs(){
   const jobs=(await this.ledger.pool.query("SELECT * FROM ac_sandbox_jobs WHERE state IN ('uncertain','running') ORDER BY created_at,id")).rows;
   for(const job of jobs){
-   const profile=z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1']).parse(job.profile);
+   const profile=z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1','synthetic-specialist-v1']).parse(job.profile);
    let source:SandboxRequest['source'];
    let verification:SandboxRequest['verification'];
+   let advice:SandboxRequest['advice'];
    if(profile!=='synthetic-probe-v1'){
     const launch=(await this.ledger.pool.query(profile==='synthetic-verification-v1'
-     ?'SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=$1':'SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=$1',[job.id])).rows[0];
+     ?'SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=$1':profile==='synthetic-specialist-v1'
+     ?'SELECT snapshot,digest FROM ac_specialist_execution_launches WHERE advice_id=$1':'SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=$1',[job.id])).rows[0];
     if(!launch||digest(launch.snapshot)!==launch.digest)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
-    source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict().parse(launch.snapshot.source);
+    source=SandboxRequest.shape.source.unwrap().parse(launch.snapshot.source);
     if(profile==='synthetic-verification-v1')verification=SandboxRequest.shape.verification.unwrap().parse(launch.snapshot.verification);
+    if(profile==='synthetic-specialist-v1')advice=SpecialistRequest.parse(launch.snapshot.advice);
    }
    const value:SandboxRequest={schemaVersion:1,action:'reconcile',jobId:job.id,grantId:job.grant_id,
     authority:{contextId:job.context_id,instanceId:randomUUID(),epoch:Number(job.manager_epoch)},profile,
-    ...(source?{source}:{}),...(verification?{verification}:{}),expiresAt:Date.now()+30000,signature:'0'.repeat(64)};
+    ...(source?{source}:{}),...(verification?{verification}:{}),...(advice?{advice}:{}),expiresAt:Date.now()+30000,signature:'0'.repeat(64)};
    const work=join(this.config.hostRoot,job.id,'work');
+   if(profile==='synthetic-specialist-v1'&&this.specification(value,work)!==job.spec_digest)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
    const inspected=await this.docker.inspect('ac-synthetic-'+job.id);
    if(!inspected)continue;
    this.inspectExpected(inspected,value,job.spec_digest,work);

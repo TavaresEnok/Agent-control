@@ -8,7 +8,7 @@ import {ManagedRecipe} from './managed-plan.ts';
 export const Role = z.enum(['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge']);
 export type Role = z.infer<typeof Role>;
 export const AccountInput = z.object({ id: Id, provider: z.string().min(1).max(80), label: z.string().min(1).max(100),
-  resourceIdentity: z.string().min(1).max(200), mode: z.literal('synthetic'),
+  resourceIdentity: z.string().min(1).max(200), mode: z.enum(['synthetic','subscription_cli','api']),
   eligibility: z.enum(['documented_supported','requires_clarification','unsupported_for_mode','not_assessed']),
   eligibilitySource: z.string().min(1).max(500), maxConcurrent: z.number().int().min(1).max(128) }).strict();
 export const ProfileInput = z.object({ id: Id, accountId: Id, model: z.string().min(1).max(100),
@@ -80,8 +80,8 @@ export class Capacity {
     const a = AccountInput.parse(raw);
     await this.tx(async c => {
       await this.owner(c, principal, projectId);
-      await c.query('INSERT INTO ac_accounts(id,owner_id,provider,label,resource_identity,mode,eligibility,eligibility_source,max_concurrent) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-        [a.id, principal, a.provider, a.label, a.resourceIdentity, a.mode, a.eligibility, a.eligibilitySource, a.maxConcurrent]);
+      await c.query('INSERT INTO ac_accounts(id,owner_id,provider,label,resource_identity,mode,eligibility,eligibility_source,max_concurrent,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [a.id, principal, a.provider, a.label, a.resourceIdentity, a.mode, a.eligibility, a.eligibilitySource, a.maxConcurrent,a.mode==='synthetic']);
       await c.query('INSERT INTO ac_account_access VALUES($1,$2)', [a.id, projectId]);
     });
   }
@@ -99,12 +99,13 @@ export class Capacity {
       await this.owner(c,principal,projectId);
       await c.query('SELECT id FROM ac_capacity_config WHERE id=1 FOR UPDATE');
       const row=(await c.query(kind==='account'
-        ?`SELECT a.revision FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
+        ?`SELECT a.revision,a.mode FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
           WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a`
-        :`SELECT p.revision FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id JOIN ac_account_access x ON x.account_id=a.id
+        :`SELECT p.revision,a.mode FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id JOIN ac_account_access x ON x.account_id=a.id
           WHERE p.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF p`,[input.id,principal,projectId])).rows[0];
       if(!row)throw new Refusal('ACCOUNT_PROFILE_FORBIDDEN',403);
       if(row.revision!==input.expectedRevision)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
+      if(input.enabled&&row.mode!=='synthetic')throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
       await c.query(kind==='account'?'UPDATE ac_accounts SET enabled=$2,revision=revision+1 WHERE id=$1':
         'UPDATE ac_profiles SET enabled=$2,revision=revision+1 WHERE id=$1',[input.id,input.enabled]);
     });
@@ -113,12 +114,13 @@ export class Capacity {
     const p = ProfileInput.parse(raw);
     await this.tx(async c => {
       await this.owner(c, principal, projectId);
-      if (!(await c.query('SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3', [p.accountId, principal, projectId])).rowCount)
+      const account=(await c.query('SELECT a.mode FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a', [p.accountId, principal, projectId])).rows[0];
+      if (!account)
         throw new Refusal('ACCOUNT_FORBIDDEN', 403);
       if(!(await c.query(`SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider
         WHERE a.id=$1 AND m.model=$2 AND $3=ANY(m.efforts) AND $4=ANY(m.roles)`,[p.accountId,p.model,p.effort,p.role])).rowCount)
         throw new Refusal('MODEL_EFFORT_NOT_IN_CATALOG');
-      await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role) VALUES($1,$2,$3,$4,$5)', [p.id,p.accountId,p.model,p.effort,p.role]);
+      await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,$3,$4,$5,$6)', [p.id,p.accountId,p.model,p.effort,p.role,account.mode==='synthetic']);
     });
   }
   async observeQuota(principal: string, accountId: string, raw: z.input<typeof QuotaInput>) {
@@ -173,6 +175,8 @@ export class Capacity {
       const old = (await c.query<Grant>('SELECT * FROM ac_capacity_grants WHERE attempt_id=$1', [request.attemptId])).rows[0];
       if (old) {
         if (old.resource_kind!=='model'||old.request_digest !== hash) throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
+        if(!(await c.query("SELECT 1 FROM ac_accounts WHERE id=$1 AND mode='synthetic'",[old.account_id])).rowCount)
+          throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
         return old;
       }
       if (!(await c.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2', [request.intentId,request.contextId])).rowCount)
@@ -196,7 +200,7 @@ export class Capacity {
       const candidates = await c.query<Candidate>(`SELECT p.id,a.id account_id,a.eligibility,a.max_concurrent,
         (a.enabled AND p.enabled) enabled,CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE 'unknown' END quota
         FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id JOIN ac_account_access x ON x.account_id=a.id
-        LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[]) AND x.project_id=$2`, [ids,context.project_id]);
+        LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[]) AND x.project_id=$2 AND a.mode='synthetic'`, [ids,context.project_id]);
       const available = (id: string) => candidates.rows.find(p=>p.id===id && p.enabled && p.eligibility==='documented_supported' && p.quota==='available');
       // Saturation does not imply exhausted quota: wait rather than spilling into another subscription.
       const selectedId = ids.find(id=>available(id));
@@ -234,7 +238,7 @@ export class Capacity {
           JOIN ac_profiles p ON p.id=member.value::uuid JOIN ac_accounts a ON a.id=p.account_id
           JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=x.project_id
           JOIN ac_quota_observations q ON q.account_id=a.id
-          WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled
+          WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled AND a.mode='synthetic'
           AND (($2='programmer' AND p.role='programmer') OR ($2<>'programmer' AND p.role IN ('reviewer','qa','specialist','judge')))
           AND a.eligibility='documented_supported'
           AND q.status='available' AND q.expires_at>clock_timestamp() LIMIT 1`,[selected.account_id,request.role])).rowCount;

@@ -4,7 +4,7 @@ import {Button} from '@/components/ui/button'
 const roleSchema=z.enum(['manager','programmer','reviewer','qa','specialist','judge'])
 const effortSchema=z.enum(['low','medium','high'])
 export const catalogEntrySchema=z.object({provider:z.string(),model:z.string(),efforts:z.array(effortSchema),roles:z.array(roleSchema),source:z.string()})
-type Props={accounts:{id:string;label:string;provider:string;can_manage:boolean}[];catalog:z.infer<typeof catalogEntrySchema>[];busy:boolean;
+type Props={accounts:{id:string;label:string;provider:string;mode?:string;can_manage:boolean}[];catalog:z.infer<typeof catalogEntrySchema>[];busy:boolean;
  onAdd:(payload:{id:string;accountId:string;model:string;effort:z.infer<typeof effortSchema>;role:z.infer<typeof roleSchema>})=>void}
 const labels={manager:'Gerente',programmer:'Programação',reviewer:'Revisão',qa:'QA',specialist:'Especialista',judge:'Julgador'}
 export function AgentControlProfileEditor({accounts,catalog,busy,onAdd}:Props){
@@ -22,6 +22,7 @@ export function AgentControlProfileEditor({accounts,catalog,busy,onAdd}:Props){
    onChange={event=>{setAccount(event.target.value);setModel('')}} disabled={busy}>
    <option value="">Selecione a conta</option>{accounts.filter(a=>a.can_manage).map(a=><option key={a.id} value={a.id}>{a.label}</option>)}
   </select></label>
+  {chosen?.mode&&chosen.mode!=='synthetic'&&<p role="status" className="text-xs text-muted-foreground">O perfil será configurado com execução não ativada.</p>}
   <label className="flex flex-col gap-1">Função do perfil<select aria-label="Função do perfil" className={style} value={role}
    onChange={event=>{setRole(roleSchema.parse(event.target.value));setModel('')}} disabled={busy}>
    {roleSchema.options.map(value=><option key={value} value={value}>{labels[value]}</option>)}

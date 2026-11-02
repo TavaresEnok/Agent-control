@@ -10,6 +10,7 @@ import {Notifications,NotificationPolicy,notificationReason,notificationStatus} 
 
 type Rpc = {
   onSocketConnect(socket: Socket): void; onSocketDisconnect(): void;
+  registerHandler?(method:string,handler:(data:unknown)=>Promise<unknown>):void;
   handleRequest(data: unknown): Promise<unknown>;
   invokeLocal(method: string, data: unknown): Promise<unknown>;
   waitForRegisteredHandlers(methods: string[], options: { timeoutMs: number }): Promise<{ status: string }>;
@@ -125,7 +126,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
@@ -140,6 +141,17 @@ export class HappierEndpoint {
     boundary.registerSessionUserMessageSendHandler(this.rpc, { workingDirectory: runtime.repo,
       revalidateExplicitUserRequest: async () => ({ status: 'ready' }),
       sessionRuntimeControls: { handleUserMessage: raw => this.accept(raw) } });
+    if(options.administrativeHandler){
+      if(!this.rpc.registerHandler)throw new Refusal('ADMIN_RPC_UNAVAILABLE');
+      this.rpc.registerHandler('agent-control.admin',async raw=>{
+        try{
+          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
+          await this.validateLink();
+          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
+          return {ok:true,result:await options.administrativeHandler!(options.authority.contextId,raw)};
+        }catch{return {ok:false,error:'ADMIN_REQUEST_FAILED'};}
+      });
+    }
     socket.on('rpc-request', async (data: unknown, callback: (value: unknown) => void) => callback(await this.rpc.handleRequest(data)));
     socket.on('connect', () => { if(this.lifecycle.signal.aborted){socket.disconnect();return;}this.runtimeReady = false; this.rpc.onSocketConnect(socket); });
     socket.on('disconnect', () => this.rpc.onSocketDisconnect());
@@ -172,7 +184,8 @@ export class HappierEndpoint {
     const connecting=this.transport.connect();
     void connecting.then(()=>{if(this.lifecycle.signal.aborted)this.socket.disconnect();},()=>{});
     await boundedNetwork(()=>connecting,timeout,this.lifecycle.signal);
-    const registered = await boundedNetwork(()=>this.rpc.waitForRegisteredHandlers(['session.userMessage.send'], { timeoutMs: timeout }),timeout,this.lifecycle.signal);
+    const methods=['session.userMessage.send',...(this.options.administrativeHandler?['agent-control.admin']:[])];
+    const registered = await boundedNetwork(()=>this.rpc.waitForRegisteredHandlers(methods, { timeoutMs: timeout }),timeout,this.lifecycle.signal);
     if (registered.status !== 'ready') {
       this.socket.disconnect();
       throw new Refusal('HAPPIER_NOT_READY_' + registered.status + '_' + [...this.transportEvents].join(','));

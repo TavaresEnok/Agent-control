@@ -3,8 +3,24 @@ import { readFileSync,mkdtempSync,mkdirSync,rmSync } from 'node:fs';
 import { resolve,join } from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 const [snapshot,operationId,role,providedPath,encodedComposition]=process.argv.slice(2);
 if(!/^[a-f0-9-]{36}$/.test(operationId)||!['qa','review','judge'].includes(role))throw Error('INVALID_VERIFIER_ARGUMENT');
+if(providedPath==='--correction'){
+ const source=JSON.parse(Buffer.from(encodedComposition??'','base64').toString('utf8'));
+ const path=source.outputPath;
+ if(typeof path!=='string'||!/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(path)||path.length>240||
+  !/^[a-f0-9]{40}$/.test(source.priorCommit)||!/^[a-f0-9]{40}$/.test(source.priorTree)||!/^[a-f0-9]{64}$/.test(source.decisionDigest))throw Error('INVALID_CORRECTION');
+ const env={PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/tmp',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
+ const git=(...args)=>execFileSync('git',['-C',snapshot,...args],{env,timeout:15000,maxBuffer:1000000});
+ if(git('rev-parse','refs/agent-control/correction-source').toString().trim()!==source.priorCommit||
+    git('rev-parse',`${source.priorCommit}^{tree}`).toString().trim()!==source.priorTree)throw Error('INVALID_CORRECTION');
+ const prior=git('show',`${source.priorCommit}:${path}`),hash=createHash('sha256').update(prior).digest('hex');
+ const expected=`Synthetic corrected effect ${operationId}\nPrior content sha256 ${hash}\nDecision ${source.decisionDigest}\n`;
+ const passed=readFileSync(join(resolve(snapshot),path),'utf8')===expected;
+ console.log(JSON.stringify({role,status:passed?'passed':'failed',checks:['correction-source','prior-content','decision-binding'],synthetic:true}));
+ process.exit(passed?0:1);
+}
 if(providedPath==='--composition'){
  const sources=JSON.parse(Buffer.from(encodedComposition??'','base64').toString('utf8'));
  if(!Array.isArray(sources)||sources.length<2||sources.length>4)throw Error('INVALID_COMPOSITION');

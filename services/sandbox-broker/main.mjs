@@ -8,6 +8,11 @@ const config={hostRoot:process.env.AC_SANDBOX_HOST_ROOT,probeHostPath:process.en
  verifierPath:process.env.AC_SANDBOX_VERIFIER,verifierSha256:process.env.AC_SANDBOX_VERIFIER_SHA256,
  socketPath:'/run/ac-broker/control.sock',keyPath:'/run/ac-broker/key',databaseUrl:process.env.AC_SANDBOX_DATABASE_URL};
 if(Object.values(config).some(value=>!value)||!config.databaseUrl.endsWith('/ac_sandbox_test'))throw Error('ISOLATED_SANDBOX_CONFIG_REQUIRED');
+if(process.env.AC_SANDBOX_SPECIALIST||process.env.AC_SANDBOX_SPECIALIST_SHA256){
+ if(!process.env.AC_SANDBOX_SPECIALIST||!process.env.AC_SANDBOX_SPECIALIST_SHA256)throw Error('ISOLATED_SPECIALIST_CONFIG_REQUIRED');
+ config.specialistPath=process.env.AC_SANDBOX_SPECIALIST;
+ config.specialistSha256=process.env.AC_SANDBOX_SPECIALIST_SHA256;
+}
 const diskPolicy=diskPolicyFromEnvironment();if(diskPolicy)config.diskPolicy=diskPolicy;
 const instance=await brokerMain(config);
 const stop=()=>void instance.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));

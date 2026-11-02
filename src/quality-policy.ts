@@ -3,13 +3,15 @@ import type pg from 'pg';
 import { digest,Refusal } from './contracts.ts';
 import type { Ledger } from './ledger.ts';
 export const QualityPolicy=z.object({schemaVersion:z.literal(1),requiredReviews:z.number().int().min(1).max(3),
- allowLowRiskQaWaiver:z.boolean(),requireJudge:z.boolean().optional(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),requireHumanIntegration:z.boolean().default(true)}).strict();
+ allowLowRiskQaWaiver:z.boolean(),requireJudge:z.boolean().optional(),requireSpecialistBeforeImplementation:z.boolean().optional(),
+ specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),requireHumanIntegration:z.boolean().default(true)}).strict();
 export class QualityPolicies{
  constructor(readonly ledger:Ledger,private readonly client?:pg.PoolClient){}
  private tx<T>(fn:(c:pg.PoolClient)=>Promise<T>){return this.client?fn(this.client):this.ledger.tx(fn);}
  async publish(principal:string,projectId:string,expectedRevision:number,raw:z.input<typeof QualityPolicy>){
   const policy=QualityPolicy.parse(raw);z.number().int().nonnegative().parse(expectedRevision);
   if(!policy.verifierDigest)throw new Refusal('VERIFIER_VERSION_REQUIRED');
+  if(policy.requireSpecialistBeforeImplementation&&!policy.specialistVerifierDigest)throw new Refusal('SPECIALIST_VERIFIER_VERSION_REQUIRED');
   return this.tx(async c=>{
    if(!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[projectId,principal])).rowCount)
     throw new Refusal('PROJECT_OWNER_REQUIRED',403);

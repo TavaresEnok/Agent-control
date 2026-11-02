@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type pg from 'pg';
 import { Authority, Id, digest, canonical, Refusal } from './contracts.ts';
@@ -19,14 +19,31 @@ export type VerificationReceipt=z.infer<typeof VerificationReceipt>;
 export type ArtifactRow={id:string;context_id:string;intent_id:string;implementation_grant_id:string;implementation_session_id:string;
   project_id:string;policy_revision:number;commit_id:string;tree_id:string;base_id:string;identity_digest:string;risk:string};
 
+/** Invoke only within the authenticated control transaction. The waiver does
+ * not create a QA receipt, remove failed evidence or approve integration. */
+export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,contextId:string,artifactId:string,reasonRef:string){
+  const context=Id.parse(contextId),artifact=Id.parse(artifactId),reason=z.string().min(1).max(200).parse(reasonRef);
+  const row=(await c.query(`SELECT a.*,p.snapshot,p.digest policy_digest FROM ac_artifacts a JOIN ac_quality_policies p
+    ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1 AND a.context_id=$2`,[artifact,context])).rows[0];
+  if(!row)throw new Refusal('ARTIFACT_FORBIDDEN',403);
+  if(!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[row.project_id,principal])).rowCount)
+    throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+  const policy=QualityPolicy.parse(row.snapshot);
+  if(digest(policy)!==row.policy_digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
+  if(row.risk!=='low'||!policy.allowLowRiskQaWaiver)throw new Refusal('QA_WAIVER_FORBIDDEN',403);
+  const inserted=await c.query('INSERT INTO ac_qa_waivers(artifact_id,principal_id,reason_ref) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING artifact_id',
+    [artifact,principal,reason]);
+  if(!inserted.rowCount){
+    const prior=(await c.query('SELECT principal_id,reason_ref FROM ac_qa_waivers WHERE artifact_id=$1',[artifact])).rows[0];
+    if(!prior||prior.principal_id!==principal||prior.reason_ref!==reason)throw new Refusal('QA_WAIVER_CONFLICT');
+  }else await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[context,{artifactId:artifact,reasonRef:reason}]);
+  return {artifactId:artifact,waived:true as const};
+}
+
 /** Gates only: Cezar remains the sole owner of sequencing and correction loops. */
 export class Quality {
   constructor(readonly ledger:Ledger,private readonly verifierKey:Uint8Array,private readonly git:Pick<GitArtifacts,'identity'>){
     if(verifierKey.byteLength<32)throw Error('VERIFIER_KEY_TOO_SHORT');
-  }
-  private async owner(c:pg.PoolClient,principal:string,projectId:string){
-    if(!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[projectId,principal])).rowCount)
-      throw new Refusal('PROJECT_OWNER_REQUIRED',403);
   }
   async publish(principal:string,projectId:string,expectedRevision:number,raw:z.input<typeof QualityPolicy>){
     return new QualityPolicies(this.ledger).publish(principal,projectId,expectedRevision,raw);
@@ -63,6 +80,7 @@ export class Quality {
            grant.physical_receipt?.source!=='managed-git-compositor'||grant.physical_receipt?.processId!==String(grant.handle?.pid))
           throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
       }else if(grant.resource_kind!=='model'||!grant.account_id||!grant.profile_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
+      await this.assertFreshCorrectionSession(c,value.intentId,value.implementationSessionId,value.implementationGrantId,authority);
       if(!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,value.policyRevision])).rowCount)
         throw new Refusal('QUALITY_POLICY_REQUIRED');
       const identity=digest({commit:value.commit,tree:value.tree,base:value.base});
@@ -96,6 +114,7 @@ export class Quality {
         throw new Refusal('VERIFIER_VERSION_MISMATCH');
       if(receipt.sessionId===artifact.implementation_session_id||receipt.grantId===artifact.implementation_grant_id)
         throw new Refusal('VERIFICATION_NOT_INDEPENDENT');
+      await this.assertFreshCorrectionSession(c,artifact.intent_id,receipt.sessionId,receipt.grantId,authority);
       const role=receipt.kind==='qa'?'qa':receipt.kind==='judge'?'judge':'reviewer';
       if(receipt.kind==='judge')await this.assertReady(c,artifact.id,authority,{ignoreJudge:true});
       const grant=await c.query(`SELECT 1 FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 AND intent_id=$3
@@ -111,17 +130,79 @@ export class Quality {
       return receipt.id;
     });
   }
-  async waiveQa(principal:string,artifactId:string,reasonRef:string){
-    const reason=z.string().min(1).max(200).parse(reasonRef);
-    await this.ledger.tx(async c=>{
-      const row=(await c.query(`SELECT a.*,p.snapshot FROM ac_artifacts a JOIN ac_quality_policies p
-        ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1`,[Id.parse(artifactId)])).rows[0];
-      if(!row)throw new Refusal('ARTIFACT_FORBIDDEN',403);
-      await this.owner(c,principal,row.project_id);
-      if(row.risk!=='low'||!QualityPolicy.parse(row.snapshot).allowLowRiskQaWaiver)throw new Refusal('QA_WAIVER_FORBIDDEN',403);
-      await c.query('INSERT INTO ac_qa_waivers VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[artifactId,principal,reason]);
-      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[row.context_id,{artifactId,reasonRef:reason}]);
-    });
+  /** A correction may follow only authenticated verifier failure with a
+   * matching terminal physical receipt. Infrastructure loss and cancellation
+   * are not review verdicts. Called inside the decision transaction. */
+  async assertCorrectionFailures(c:pg.PoolClient,artifactId:string,evidenceIds:readonly string[],authority:Authority){
+    const ids=z.array(Id).min(1).max(32).parse(evidenceIds);
+    if(new Set(ids).size!==ids.length)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+    await this.ledger.fence(c,authority,true);
+    const artifact=(await c.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[Id.parse(artifactId),authority.contextId])).rows[0];
+    if(!artifact)throw new Refusal('ARTIFACT_FORBIDDEN',403);
+    await this.ledger.assertIntentActive(c,authority.contextId,artifact.intent_id);
+    const rows=(await c.query(`SELECT e.*,s.id stage_id,s.intent_id stage_intent,s.node_id,s.session_id stage_session,s.grant_id stage_grant,
+      s.manager_epoch stage_epoch,s.state stage_state,s.handle,s.receipt stage_receipt,g.state grant_state,g.role grant_role,
+      g.resource_kind,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.physical_receipt,
+      j.state job_state,j.receipt job_receipt,i.operation_id FROM ac_verification_evidence e
+      JOIN ac_stage_operations s ON s.grant_id=e.grant_id AND s.session_id=e.session_id
+      JOIN ac_capacity_grants g ON g.id=e.grant_id JOIN ac_intents i ON i.id=s.intent_id LEFT JOIN ac_sandbox_jobs j ON j.id=s.id
+      WHERE e.id=ANY($1::uuid[]) AND e.artifact_id=$2`,[ids,artifact.id])).rows;
+    if(rows.length!==ids.length)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+    for(const row of rows){
+      const parsed=VerificationReceipt.safeParse(row.receipt),signature=row.stage_receipt?.signature;
+      if(!parsed.success||typeof signature!=='string'||!/^[a-f0-9]{64}$/.test(signature))throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+      const r=parsed.data,mac=createHmac('sha256',this.verifierKey).update(canonical(r)).digest();
+      if(!timingSafeEqual(mac,Buffer.from(signature,'hex'))||digest(r)!==row.receipt_digest||!row.stage_receipt?.verification||digest(row.stage_receipt.verification)!==digest(r)||
+       r.id!==row.id||r.artifactId!==artifact.id||row.kind!==r.kind||r.status!=='failed'||row.status!=='failed'||r.exitCode<=0||
+       r.commit!==artifact.commit_id||r.tree!==artifact.tree_id||r.base!==artifact.base_id||r.policyRevision!==artifact.policy_revision||
+       r.sessionId===artifact.implementation_session_id||r.grantId===artifact.implementation_grant_id||
+       r.sessionId!==row.stage_session||r.grantId!==row.stage_grant||row.stage_intent!==artifact.intent_id||row.grant_intent!==artifact.intent_id||
+       row.grant_context!==artifact.context_id||row.stage_state!=='completed'||row.grant_state!=='released'||row.resource_kind!=='model'||
+       row.node_id!==(r.kind==='review'?'review':r.kind)||row.grant_role!==(r.kind==='review'?'reviewer':r.kind)||
+       Number(row.stage_epoch)!==Number(row.grant_epoch)||Number(row.stage_epoch)>authority.epoch)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+      const physical=row.physical_receipt;
+      const local=physical?.source==='synthetic-verifier-parent'&&physical?.state==='exited'&&physical?.exitCode===r.exitCode&&
+       Number.isInteger(row.handle?.pid)&&physical.processId===String(row.handle.pid);
+      const isolated=row.job_state==='failed'&&row.job_receipt&&physical&&digest(row.job_receipt)===digest(physical)&&physical?.jobId===row.stage_id&&
+       physical?.exitCode===r.exitCode&&physical?.verification?.artifactId===artifact.id&&physical?.verification?.operationId===row.operation_id&&physical?.verification?.commit===r.commit&&
+       physical?.verification?.tree===r.tree&&physical?.verification?.base===r.base&&physical?.verification?.kind===r.kind&&physical?.verification?.verifierDigest===r.verifierDigest&&
+       typeof physical?.verification?.output==='string'&&createHash('sha256').update(physical.verification.output).digest('hex')===r.logSha256;
+      if(!local&&!isolated)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+    }
+    return artifact;
+  }
+  /** Do not reuse implementation or verifier sessions across correction revisions. */
+  private async assertFreshCorrectionSession(c:pg.PoolClient,intentId:string,sessionId:string,grantId:string,authority:Authority){
+    const current=(await c.query(`SELECT i.parent_intent_id,i.parent_unit_id,m.recipe,m.recipe_digest FROM ac_intents i
+      LEFT JOIN ac_managed_executions m ON m.parent_intent_id=i.parent_intent_id WHERE i.id=$1 AND i.context_id=$2`,[intentId,authority.contextId])).rows[0];
+    if(!current?.parent_intent_id)return;
+    const recipe=ManagedRecipe.parse(current.recipe);
+    if(digest(recipe)!==current.recipe_digest||recipe.parentIntentId!==current.parent_intent_id)throw new Refusal('MANAGED_RECIPE_MISMATCH');
+    if(recipe.schemaVersion===1)return;
+    let unit=recipe.units.find(value=>value.id===current.parent_unit_id&&value.intentId===intentId);
+    if(!unit)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+    let revision=unit.correctionRevision??0;
+    if(revision===0)return;
+    const taskId=unit.taskId,visited=new Set<string>([intentId]);let nextIntentId=intentId;
+    for(let depth=0;revision>0;depth++,revision--){
+      if(depth>=5||!taskId)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+      const decision=(await c.query('SELECT * FROM ac_managed_correction_decisions WHERE next_intent_id=$1 AND parent_intent_id=$2 AND task_id=$3 AND revision=$4',
+        [nextIntentId,current.parent_intent_id,taskId,revision])).rows[0];
+      if(!decision||decision.context_id!==authority.contextId||Number(decision.manager_epoch)>authority.epoch||visited.has(decision.prior_intent_id)||decision.decision_digest!==digest({
+        parentIntentId:decision.parent_intent_id,contextId:decision.context_id,taskId:decision.task_id,revision:decision.revision,
+        priorIntentId:decision.prior_intent_id,priorArtifactId:decision.prior_artifact_id,failedEvidenceIds:decision.failed_evidence_ids,
+        priorCommit:decision.prior_commit,priorTree:decision.prior_tree,baseId:decision.base_id,nextIntentId:decision.next_intent_id,
+        managerEpoch:Number(decision.manager_epoch)}))throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+      unit=recipe.units.find(value=>value.intentId===decision.prior_intent_id&&value.taskId===taskId&&value.kind==='task'&&(value.correctionRevision??0)===revision-1);
+      if(!unit)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+      const prior=await this.assertCorrectionFailures(c,decision.prior_artifact_id,decision.failed_evidence_ids,authority);
+      if(prior.intent_id!==decision.prior_intent_id||prior.commit_id!==decision.prior_commit||prior.tree_id!==decision.prior_tree||prior.base_id!==decision.base_id)
+        throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+      if(prior.implementation_session_id===sessionId||prior.implementation_grant_id===grantId||
+       (await c.query('SELECT 1 FROM ac_verification_evidence WHERE artifact_id=$1 AND (session_id=$2 OR grant_id=$3)',[prior.id,sessionId,grantId])).rowCount)
+        throw new Refusal('VERIFICATION_NOT_INDEPENDENT');
+      visited.add(decision.prior_intent_id);nextIntentId=decision.prior_intent_id;
+    }
   }
   async assertReady(c:pg.PoolClient,artifactId:string,authority:Authority,options:{ignoreJudge?:boolean}={}):Promise<ArtifactRow>{
     await this.ledger.fence(c,authority,true);

@@ -1,0 +1,21 @@
+start 2026-11-02T21:01:42Z
+e45a1fe100b97c584c9374c45b7ed23403c5ec55ef3396b4cca95999fcfb9774  -
+TAP version 13
+# Subtest: physical QA rejection leads to one corrected artifact; infrastructure failure does not
+ok 1 - physical QA rejection leads to one corrected artifact; infrastructure failure does not
+  ---
+  duration_ms: 14012.342638
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 16321.254087
+e45a1fe100b97c584c9374c45b7ed23403c5ec55ef3396b4cca95999fcfb9774  -
+end 2026-11-02T21:01:59Z
+exit 0

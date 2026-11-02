@@ -17,6 +17,9 @@ import {AgentControlImportPreview} from './agent-control-import-preview'
 import {AgentControlProjectAdmin} from './agent-control-project-admin'
 import {AgentControlDiagnostics} from './agent-control-diagnostics'
 import {AgentControlRemoteSources} from './agent-control-remote-sources'
+import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './agent-control-provider-eligibility'
+import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent-control-administrative-policy'
+import {AgentControlPortableExport} from './agent-control-portable-export'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -37,7 +40,7 @@ const waitSchema=z.discriminatedUnion('resource_kind',[
  z.object({...waitBase,resource_kind:z.literal('model'),desired_profile:z.string().uuid().nullable()}),
  z.object({...waitBase,resource_kind:z.literal('local_compositor'),desired_profile:z.null()}),
 ])
-const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
+const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
  canAuthorizeRemoteSource:z.boolean(),remoteSourceHosts:z.array(z.object({id:z.string().uuid(),label:z.string()})).max(100),
  remoteSourceAuthorizations:z.array(z.object({authorizationId:z.string().uuid(),intentId:z.string().uuid(),hostId:z.string().uuid(),
@@ -45,12 +48,14 @@ const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.s
  remoteOperations:z.array(z.object({id:z.string().uuid(),intent_id:z.string().uuid().nullable(),task_id:z.string(),state:z.string(),host_label:z.string()})),
  operatorDeviceIds:z.array(z.string().uuid()),
  capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
+ providerEligibility:providerEligibilityViewSchema,
+ administrative:administrativeViewSchema,
  providerBindings:z.array(agentControlProviderBindingSchema),providerAdapters:z.array(agentControlProviderAdapterSchema),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),mode:z.string(),quota_status:z.string(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  catalog:z.array(catalogEntrySchema),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
- qualityPolicies:z.array(z.object({revision:z.number()})),
+ qualityPolicies:z.array(z.object({revision:z.number(),snapshot:z.object({requireSpecialistBeforeImplementation:z.boolean().optional()}).passthrough().optional()})),
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
  activeTemplateRevision:z.number().nullable(),
  plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
@@ -71,7 +76,11 @@ export function AgentControlSection(){
 function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const cache=useQueryClient()
  const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[sessionId,setSessionId]=useState('')
- const [requiredReviews,setRequiredReviews]=useState(1),[requireHuman,setRequireHuman]=useState(false),[requireJudge,setRequireJudge]=useState(false)
+ const [accountMode,setAccountMode]=useState<'synthetic'|'subscription_cli'|'api'>('synthetic')
+ const [accountProvider,setAccountProvider]=useState('synthetic'),[resourceIdentity,setResourceIdentity]=useState(''),[accountId,setAccountId]=useState<string|null>(null)
+ const [eligibility,setEligibility]=useState<'documented_supported'|'requires_clarification'|'unsupported_for_mode'|'not_assessed'>('not_assessed')
+ const [eligibilitySource,setEligibilitySource]=useState('synthetic://manual-registration'),[accountConcurrency,setAccountConcurrency]=useState(1)
+ const [requiredReviews,setRequiredReviews]=useState(1),[requireHuman,setRequireHuman]=useState(false),[requireJudge,setRequireJudge]=useState(false),[requireSpecialist,setRequireSpecialist]=useState(false)
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
  const contexts=useQuery({queryKey:['ac-contexts',projectId],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
@@ -102,7 +111,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    return result
   },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]});void cache.invalidateQueries({queryKey:['ac-contexts']})},
   onError:error=>{
-   if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','PROVIDER_BINDING_CONFLICT','PROVIDER_PROBE_IN_PROGRESS','PROVIDER_PROBE_UNCERTAIN','POLICY_CONFLICT','PLAN_ALREADY_TERMINAL','PLAN_REVISION_MISMATCH'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})
+   if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','PROVIDER_BINDING_CONFLICT','PROVIDER_PROBE_IN_PROGRESS','PROVIDER_PROBE_UNCERTAIN','PROVIDER_ELIGIBILITY_REVISION_CONFLICT','POLICY_CONFLICT','QUALITY_POLICY_CONFLICT','ADMIN_POLICY_REVISION_CONFLICT','PLAN_ALREADY_TERMINAL','PLAN_REVISION_MISMATCH'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})
    if(['PAUSE_REVISION_CONFLICT','DRAIN_REVISION_CONFLICT'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-contexts']})
   }})
  const bootstrap=useMutation({mutationFn:async()=>{
@@ -111,6 +120,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    {...identity.data,token:bootstrapToken}))
  },onSettled:()=>setBootstrapToken('')})
  const data=resources.data
+ const assignedPolicy=data?.policies.find(policy=>policy.revision===data.assignedPolicyRevision)
+ const specialistChainConfigured=!!assignedPolicy?.snapshot?.roles.specialist?.regular.length
  const selectedContext=contexts.data?.contexts.find(c=>c.id===contextId)
  const busy=mutate.isPending||bootstrap.isPending
  const selectStyle='h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm'
@@ -147,6 +158,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
   {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
+  {data&&<AgentControlPortableExport key={`portable-export-${contextId}`} contextId={contextId} canExport={data.canApproveIntegration}/>}
   {data&&<SettingsField title="Planos desta conversa" hint="Cancelar bloqueia novas etapas. A confirmação de parada depende da reconciliação física e preserva os artefatos existentes.">
    {data.plans.length===0&&<p>Nenhum plano aceito nesta conversa.</p>}
    {data.plans.map(plan=><div key={plan.id} className="flex flex-wrap items-center gap-2 rounded-md border p-2">
@@ -161,6 +173,10 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    plans={data.plans} authorizations={data.remoteSourceAuthorizations} busy={busy} onAuthorize={payload=>mutate.mutate({action:'remote.source.authorize',payload})}/>}
   {data&&<AgentControlProviderCollectors key={`providers-${contextId}`} accounts={data.accounts} bindings={data.providerBindings} adapters={data.providerAdapters}
    canConfigure={data.canConfigureCapacity} busy={busy} onBind={payload=>mutate.mutate({action:'provider.bind',payload})}/>}
+  {data&&<AgentControlProviderEligibility key={`eligibility-${contextId}`} contextId={contextId} principalId={data.principalId} installationId={data.installationId}
+   accounts={data.accounts} view={data.providerEligibility} busy={busy} onPublish={payload=>mutate.mutate({action:'provider.eligibility.publish',payload})}/>}
+  {data&&<AgentControlAdministrativePolicy key={`administrative-${contextId}`} view={data.administrative} canEdit={data.canApproveIntegration} busy={busy}
+   onPublish={payload=>mutate.mutate({action:'administrative.policy.publish',payload})}/>}
   {data&&<AgentControlObservability enabled={data.canConfigureCapacity}/>}
   {data&&data.approvals.length>0&&<SettingsField title="Integrações com aprovação humana" hint="A aprovação vale somente para o commit, árvore, base e política exibidos. QA e revisão continuam obrigatórios.">
    {data.approvals.map(artifact=><AgentControlIntegrationApproval key={artifact.id} contextId={contextId} artifact={artifact}
@@ -191,26 +207,40 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </form>
   </SettingsField>}
   {data&&<>
-   <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Desabilitar impede novas concessões nos projetos que compartilham a conta; trabalhos já iniciados preservam seus recibos. Nenhuma assinatura real é utilizada.">
+   <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Desabilitar impede novas concessões nos projetos que compartilham a conta; trabalhos já iniciados preservam seus recibos.">
     <ul className="flex flex-col gap-2">{data.accounts.map(a=><li key={a.id} className="break-words rounded-md border p-3">
      <strong>{a.label}</strong> · {a.provider}<br/>{a.enabled?'Habilitada':'Desabilitada'} · {a.quota_status} · {a.eligibility}<br/>
-     {a.can_manage?<Button type="button" disabled={busy} onClick={()=>mutate.mutate({action:'account.state',payload:{id:a.id,enabled:!a.enabled,expectedRevision:a.revision}})}>
+     {a.mode!=='synthetic'&&<p className="text-sm">Conta configurada; execução não ativada.</p>}
+     {a.can_manage?<Button type="button" disabled={busy||(!a.enabled&&a.mode!=='synthetic')} onClick={()=>mutate.mutate({action:'account.state',payload:{id:a.id,enabled:!a.enabled,expectedRevision:a.revision}})}>
       {a.enabled?'Desabilitar conta':'Habilitar conta'}
      </Button>:<span className="text-xs">Gerenciada pelo titular da conta.</span>}
     </li>)}</ul>
-    <form className="flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();const id=crypto.randomUUID();mutate.mutate({action:'account.add',payload:{
-     id,provider:'synthetic',label,resourceIdentity:`synthetic-${id}`,mode:'synthetic',eligibility:'not_assessed',
-     eligibilitySource:'synthetic://manual-registration',maxConcurrent:1}})}}>
-     <Input aria-label="Nome da conta simulada" value={label} onChange={e=>setLabel(e.target.value)} required maxLength={100}/>
-     <Button disabled={busy||!label} type="submit">Adicionar conta simulada</Button>
+    <form className="flex min-w-0 flex-col gap-2" onSubmit={e=>{e.preventDefault();const id=accountId??crypto.randomUUID();setAccountId(id)
+     mutate.mutate({action:'account.add',payload:{id,provider:accountProvider,label,resourceIdentity:accountMode==='synthetic'?`synthetic-${id}`:resourceIdentity,
+      mode:accountMode,eligibility,eligibilitySource,maxConcurrent:accountConcurrency}},{onSuccess:()=>{setAccountId(null);setLabel('');setResourceIdentity('')}})}}>
+     <label className="flex flex-col gap-1">Modo da conta<select aria-label="Modo da conta" className={selectStyle} value={accountMode} onChange={e=>{
+      const next=z.enum(['synthetic','subscription_cli','api']).parse(e.target.value);setAccountMode(next);setAccountProvider(next==='synthetic'?'synthetic':'');setEligibilitySource(next==='synthetic'?'synthetic://manual-registration':'');setResourceIdentity('')}}>
+      <option value="synthetic">Sintética</option><option value="subscription_cli">Assinatura CLI</option><option value="api">API</option>
+     </select></label>
+     <label className="flex flex-col gap-1">Nome da conta<Input value={label} onChange={e=>setLabel(e.target.value)} required maxLength={100}/></label>
+     <label className="flex flex-col gap-1">Provedor<Input value={accountProvider} onChange={e=>setAccountProvider(e.target.value)} required maxLength={80}/></label>
+     {accountMode!=='synthetic'&&<><label className="flex flex-col gap-1">Identificador não secreto da conta<Input value={resourceIdentity} onChange={e=>setResourceIdentity(e.target.value)} required maxLength={200}/></label>
+      <p className="text-xs text-muted-foreground">Informe somente metadados. Não informe senha, token ou credencial. A conta será configurada com execução não ativada.</p></>}
+     <label className="flex flex-col gap-1">Elegibilidade<select aria-label="Elegibilidade da conta" className={selectStyle} value={eligibility} onChange={e=>setEligibility(z.enum(['documented_supported','requires_clarification','unsupported_for_mode','not_assessed']).parse(e.target.value))}>
+      <option value="not_assessed">Não avaliada</option><option value="documented_supported">Suporte documentado</option><option value="requires_clarification">Requer esclarecimento</option><option value="unsupported_for_mode">Não suportada neste modo</option>
+     </select></label>
+     <label className="flex flex-col gap-1">Fonte da elegibilidade<Input value={eligibilitySource} onChange={e=>setEligibilitySource(e.target.value)} required maxLength={500}/></label>
+     <label className="flex flex-col gap-1">Limite simultâneo configurado<Input type="number" min={1} max={128} value={accountConcurrency} onChange={e=>setAccountConcurrency(Number(e.target.value))} required/></label>
+     <Button disabled={busy||!label.trim()||!accountProvider.trim()||!eligibilitySource.trim()||(accountMode!=='synthetic'&&!resourceIdentity.trim())||!Number.isInteger(accountConcurrency)||accountConcurrency<1||accountConcurrency>128} type="submit">Cadastrar conta</Button>
     </form>
    </SettingsField>
    <SettingsField title="Perfis" hint="Modelo, esforço e função pertencem a um perfil de uma conta específica.">
-    <ul className="flex flex-col gap-2">{data.profiles.map(p=><li key={p.id} className="break-words rounded-md border p-3">{p.model} · {p.effort} · {p.role} · {p.enabled?'Habilitado':'Desabilitado'}<br/>
-     {p.can_manage?<Button type="button" disabled={busy} onClick={()=>mutate.mutate({action:'profile.state',payload:{id:p.id,enabled:!p.enabled,expectedRevision:p.revision}})}>
+    <ul className="flex flex-col gap-2">{data.profiles.map(p=>{const account=data.accounts.find(a=>a.id===p.account_id);return <li key={p.id} className="break-words rounded-md border p-3">{p.model} · {p.effort} · {p.role} · {p.enabled?'Habilitado':'Desabilitado'}<br/>
+     {account&&account.mode!=='synthetic'&&<p className="text-sm">Perfil configurado; execução não ativada.</p>}
+     {p.can_manage?<Button type="button" disabled={busy||(!p.enabled&&account?.mode!=='synthetic')} onClick={()=>mutate.mutate({action:'profile.state',payload:{id:p.id,enabled:!p.enabled,expectedRevision:p.revision}})}>
       {p.enabled?'Desabilitar perfil':'Habilitar perfil'}
      </Button>:<span className="text-xs">Gerenciado pelo titular da conta.</span>}
-    </li>)}</ul>
+    </li>})}</ul>
     <AgentControlProfileEditor key={contextId} accounts={data.accounts} catalog={data.catalog} busy={busy}
      onAdd={payload=>mutate.mutate({action:'profile.add',payload})}/>
    </SettingsField>
@@ -225,8 +255,10 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      onClick={()=>mutate.mutate({action:'policy.assign',payload:{revision:p.revision}})}>Usar revisão {p.revision}</Button>)}</div>
    </SettingsField>
    <SettingsField title="Revisão e QA" hint="Uma revisão aprovada deve referir-se ao mesmo código e usar uma sessão independente.">
-    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();mutate.mutate({action:'quality.publish',payload:{
-     expectedRevision:data.qualityPolicies.at(-1)?.revision??0,policy:{schemaVersion:1,requiredReviews,allowLowRiskQaWaiver:false,requireHumanIntegration:requireHuman,requireJudge,verifierDigest:data.verifierDigest}}})}}>
+    <ul className="flex flex-col gap-2">{data.qualityPolicies.map(policy=><li key={policy.revision} className="break-words rounded-md border p-2 text-sm">Revisão {policy.revision} · {policy.snapshot===undefined?'Requisito de especialista não informado':policy.snapshot.requireSpecialistBeforeImplementation?'Consulta ao especialista exigida antes da implementação':'Consulta prévia ao especialista não exigida'}</li>)}</ul>
+    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();if(requireSpecialist&&!data.specialistVerifierDigest)return;mutate.mutate({action:'quality.publish',payload:{
+     expectedRevision:data.qualityPolicies.at(-1)?.revision??0,policy:{schemaVersion:1,requiredReviews,allowLowRiskQaWaiver:false,requireHumanIntegration:requireHuman,requireJudge,verifierDigest:data.verifierDigest,
+      ...(requireSpecialist?{requireSpecialistBeforeImplementation:true,specialistVerifierDigest:data.specialistVerifierDigest}:{})}}})}}>
      <label>Quantidade de revisores <select className={selectStyle} value={requiredReviews} onChange={e=>setRequiredReviews(Number(e.target.value))}>
       {[1,2,3].map(n=><option key={n} value={n}>{n}</option>)}
      </select></label>
@@ -234,7 +266,11 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
       Exigir aprovação humana para integrar</label>
      <label className="flex items-center gap-2"><input type="checkbox" checked={requireJudge} onChange={e=>setRequireJudge(e.target.checked)}/>
       Incluir julgador depois das revisões</label>
-     <Button disabled={busy} type="submit">Publicar política de revisão</Button>
+     <label className="flex items-center gap-2"><input type="checkbox" checked={requireSpecialist} onChange={e=>setRequireSpecialist(e.target.checked)}/>
+      Consultar especialista antes da implementação</label>
+     {requireSpecialist&&!data.specialistVerifierDigest&&<p role="alert">O verificador de especialista não está disponível; não é possível publicar este requisito.</p>}
+     {requireSpecialist&&!specialistChainConfigured&&<p role="alert">Configure e atribua uma política de capacidade com uma cadeia para a função especialista. Nenhum perfil será escolhido automaticamente.</p>}
+     <Button disabled={busy||(requireSpecialist&&!data.specialistVerifierDigest)} type="submit">Publicar política de revisão</Button>
     </form>
    </SettingsField>
    <SettingsField title="Fluxo da conversa" hint={`Revisão ativa: ${data.activeTemplateRevision??'padrão'}. Solicitações anteriores mantêm seu fluxo congelado.`}>

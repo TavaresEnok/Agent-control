@@ -67,15 +67,15 @@
   {
     "id": "RF-06",
     "normative_row": "RF-06\tP0\tAutenticar por mecanismos oficiais de assinatura, sem API paga silenciosa\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/account-homes-first-20261102.log",
+    "files": "src/account-homes.ts;src/account-homes-cli.ts;src/capacity.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Real-account configuration and private HOME provisioning only; all nonsynthetic accounts/profiles remain disabled. No official authentication or inference performed."
   },
   {
     "id": "RF-07",
@@ -210,15 +210,15 @@
   {
     "id": "RF-17",
     "normative_row": "RF-17\tP0\tConsultar especialista antes da implementação quando o risco justificar\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-specialist-first-20261102.log",
+    "files": "src/preimplementation-advice.ts;src/isolated-advice.ts;src/engineering.ts;src/cezar.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic isolated specialist before writer demonstrated; completed-advice recovery added later without a physical recovery proof. Default administrative bootstrap does not enable execution."
   },
   {
     "id": "RF-18",
@@ -249,28 +249,28 @@
   {
     "id": "RF-20",
     "normative_row": "RF-20\tP0\tRetornar uma entrega reprovada à implementação, preservando achados e exigindo nova avaliação\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log",
+    "files": "src/managed-plan.ts;src/engineering.ts;src/quality.ts;src/cezar.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Bounded synthetic correction uses fresh attempt/session/grant/worktree and new evaluation; exact approved selection composes and CAS-integrates. No real provider workflow homologated."
   },
   {
     "id": "RF-21",
     "normative_row": "RF-21\tP0\tLimitar ciclos de correção e recuperar falhas técnicas sem loops ilimitados de consumo\tI4/I5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/implementation/MANAGED-EXECUTION-LIMITS.md",
-    "files": "src/managed-plan.ts;tests/managed-core-negative.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/MANAGED-EXECUTION-LIMITS.md;docs/validation/evidence/managed-corrections-final-20261102.log",
+    "files": "src/managed-plan.ts;tests/managed-core-negative.test.ts;src/engineering.ts;src/quality.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Preflight explicitly refuses maxCorrections greater than zero before recipe or children; plans remain previewable and no correction executor exists."
+    "limitation": "Maximum five corrections; infrastructure failure does not authorize correction. Recovery at all boundaries remains unproven."
   },
   {
     "id": "RF-22",
@@ -366,15 +366,15 @@
   {
     "id": "RF-29",
     "normative_row": "RF-29\tP0\tOferecer capacidade administrativa autorizada ao gerente sem repassá-la ao trabalhador\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/administrative-operations-final-20261102.log",
+    "files": "src/administrative-operations.ts;src/managers.ts;src/happier.ts;src/control.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Private capability, registered operations, signed policy, Ed25519 receipt and conservative reconciliation. New Happier transport/policy UI only compile-verified; no privileged helper registered or executed. Session identity does not attest an individual model/device."
   },
   {
     "id": "RF-30",
@@ -704,15 +704,15 @@
   {
     "id": "RF-55",
     "normative_row": "RF-55\tG0 / antes de ativar\tVerificar para cada provedor, plano, titular, CLI/adaptador, autenticação e modo de uso a elegibilidade oficial; login ou resposta técnica não são prova suficiente.\tI3 (elegibilidade antes de qualquer conta real)",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log",
+    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof."
   },
   {
     "id": "RF-56",
@@ -925,15 +925,15 @@
   {
     "id": "RNF-15",
     "normative_row": "RNF-15\tPortabilidade\tPlanos, políticas, histórico e evidências exportáveis; credenciais tratadas em procedimento separado\tI7/I8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
+    "status": "partially_examined",
+    "code_state": "partial",
     "test_result": "not_run",
     "evidence": "",
-    "files": "",
+    "files": "src/portable-export.ts;src/portable-export-api.ts;tests/portable-export.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-portable-export.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Bounded owner-only redacted metadata export implemented across service, authenticated API and UI. Not restorable, no conversation or credentials; truncation explicit. Focused test prepared but not executed; SQL/runtime acceptance pending."
   },
   {
     "id": "T01",
@@ -1042,15 +1042,15 @@
   {
     "id": "T09",
     "normative_row": "T09\tRevisão reprova e programador corrige\tNova avaliação do novo artefato; parecer anterior não autoriza merge\tRF-18/19/20\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log",
+    "files": "tests/managed-corrections.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic physical regression correction proven in bounded scenario; real agents and all recovery windows remain unverified."
   },
   {
     "id": "T10",
@@ -1198,15 +1198,15 @@
   {
     "id": "T21",
     "normative_row": "T21\tQA encontra defeito após implementação e revisão inicial\tDefeito reproduzível retorna à correção, com novas evidências necessárias\tRF-18/19/20\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log",
+    "files": "tests/managed-corrections.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Synthetic QA rejection causes fresh correction/evaluation; infrastructure uncertainty does not create a new attempt."
   },
   {
     "id": "T22",

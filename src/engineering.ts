@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, lstat, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { z } from 'zod';
@@ -10,10 +10,12 @@ import { GitArtifacts } from './git.ts';
 import { Quality,QualityPolicy, type VerificationReceipt,type ArtifactRow } from './quality.ts';
 import { Integrator } from './integration.ts';
 import {IsolatedVerification,type IsolatedVerificationResult} from './isolated-verification.ts';
-import {readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
+import {IsolatedAdvice} from './isolated-advice.ts';
+import {assertPreimplementationAdvice,signPreimplementationAdvice,PreimplementationAdviceReceipt} from './preimplementation-advice.ts';
+import {managedId,readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
-export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;
- onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void};
+export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;isolatedAdvice?:IsolatedAdvice;
+ onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void;syntheticVerifierPath?:string};
 const nodeSchema=z.enum(['qa','review','judge','integrate']);
 function artifactId(intentId:string,commit:string){const h=digest({domain:'artifact-v1',intentId,commit});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function reviewSession(parent:string,index:number){const h=digest({domain:'review-session-v1',parent,index});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
@@ -27,7 +29,146 @@ export class EngineeringStages{
  private readonly children=new Set<ChildProcess>();
  constructor(readonly ledger:Ledger,readonly projectId:string,readonly options:EngineeringOptions){
   if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
+  if(options.isolatedAdvice&&options.isolatedAdvice.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
+ }
+ async assertSpecialistApproved(c:import('pg').PoolClient,intentId:string,authority:Authority,writer?:{sessionId:string;grantId:string}){
+  return assertPreimplementationAdvice(c,this.key,intentId,authority,writer);
+ }
+ startSpecialist(intent:Intent,authority:Authority,unit:ManagedUnit,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void)):AgentSession{
+  let open=true,canceled=false;const sessionId=z.uuid().parse(spec.sessionId);
+  const wait=(reason:string|null)=>{const runId=spec.env?.CEZ_TASK_ID;if(runId)this.options.onAdmissionWait?.(runId,`specialist:${intent.operation_id}`,reason);};
+  const result=(async()=>{
+   if(!this.running||!this.options.isolatedAdvice)throw new Refusal('SPECIALIST_EXECUTOR_UNAVAILABLE');
+   const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
+   if(!bound||bound.recipe.schemaVersion!==3||!unit.requiresSpecialist||digest(bound.unit)!==digest(unit)||unit.kind!=='task')throw new Refusal('SPECIALIST_INPUT_MISMATCH');
+   const adviceId=managedId(bound.parentIntentId,unit.id,'specialist-operation'),attemptId=managedId(bound.parentIntentId,unit.id,'specialist-attempt');
+   const inputDigest=digest(input),scopeDigest=digest({writePaths:input.writePaths,acceptanceRefs:input.acceptanceRefs});
+   const assertWriterNotStarted=async(c:import('pg').PoolClient)=>{
+    const op=(await c.query('SELECT state,grant_id,handle,receipt,native_session_id FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];
+    if(!op||op.state!=='registered'||op.grant_id||op.handle||op.receipt||op.native_session_id||
+      (await c.query('SELECT 1 FROM ac_execution_launches WHERE operation_id=$1 UNION ALL SELECT 1 FROM ac_artifacts WHERE intent_id=$2 LIMIT 1',[intent.operation_id,intent.id])).rowCount)
+      throw new Refusal('SPECIALIST_WRITER_ALREADY_STARTED');
+   };
+   const setup=await this.ledger.tx(async c=>{
+    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+    await assertWriterNotStarted(c);
+    const owner=(await c.query(`SELECT i.principal_id,p.snapshot,p.digest FROM ac_intents i JOIN ac_execution_contracts x ON x.intent_id=i.id
+      JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision
+      WHERE i.id=$1 AND i.context_id=$2 AND x.project_id=$3 AND x.quality_revision=$4`,[intent.id,authority.contextId,this.projectId,unit.qualityRevision])).rows[0];
+    if(!owner)throw new Refusal('SPECIALIST_INPUT_MISMATCH');await this.ledger.authorize(c,owner.principal_id,authority.contextId);
+    const policy=QualityPolicy.parse(owner.snapshot);if(digest(policy)!==owner.digest||!policy.requireSpecialistBeforeImplementation||!policy.specialistVerifierDigest)throw new Refusal('SPECIALIST_POLICY_MISMATCH');
+    await c.query(`INSERT INTO ac_specialist_advice(id,intent_id,context_id,unit_id,operation_id,policy_revision,base_id,scope_digest,input_digest,policy_digest,session_id,attempt_id,manager_epoch,state)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'registered') ON CONFLICT(intent_id) DO NOTHING`,
+      [adviceId,intent.id,authority.contextId,unit.id,intent.operation_id,unit.qualityRevision,input.base,scopeDigest,inputDigest,owner.digest,sessionId,attemptId,authority.epoch]);
+    const row=(await c.query('SELECT * FROM ac_specialist_advice WHERE intent_id=$1 FOR UPDATE',[intent.id])).rows[0];
+    if(!row||row.id!==adviceId||row.context_id!==authority.contextId||row.unit_id!==unit.id||row.operation_id!==intent.operation_id||
+      row.policy_revision!==unit.qualityRevision||row.base_id!==input.base||row.scope_digest!==scopeDigest||row.input_digest!==inputDigest||
+      row.policy_digest!==owner.digest||row.session_id!==sessionId||row.attempt_id!==attemptId||Number(row.manager_epoch)>authority.epoch||
+      (row.state!=='completed'&&Number(row.manager_epoch)!==authority.epoch))
+      throw new Refusal('SPECIALIST_RECONCILIATION_REQUIRED');
+    return {principal:owner.principal_id,policyDigest:owner.digest,verifierDigest:policy.specialistVerifierDigest,state:row.state};
+   });
+   if(setup.state==='completed'){
+    await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+     await this.assertSpecialistApproved(c,intent.id,authority);});
+    const text='Authenticated specialist advice replayed.';onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
+   }
+   if(setup.state!=='registered')throw new Refusal('SPECIALIST_RECONCILIATION_REQUIRED');
+   const capacity=new Capacity(this.ledger);let grant:Awaited<ReturnType<Capacity['reserve']>>;
+   try{for(;;){
+    if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
+    await this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);});
+    try{grant=await capacity.reserve(setup.principal,{attemptId,intentId:intent.id,contextId:authority.contextId,role:'specialist'},authority);break;}
+    catch(error){if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+     wait(error.code);await new Promise(resolve=>setTimeout(resolve,250));}
+   }}finally{wait(null);}
+   await this.ledger.tx(async c=>{
+    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+    const updated=await c.query("UPDATE ac_specialist_advice SET grant_id=$2 WHERE id=$1 AND state='registered' AND manager_epoch=$3 AND (grant_id IS NULL OR grant_id=$2)",[adviceId,grant.id,authority.epoch]);
+    if(!updated.rowCount)throw new Refusal('SPECIALIST_RECONCILIATION_REQUIRED');
+   });
+   const physical=await this.options.isolatedAdvice.run(setup.principal,adviceId,grant.id,authority,spec.cwd,
+    {intentId:intent.id,unitId:unit.id,policyRevision:unit.qualityRevision,scopeDigest,inputDigest,policyDigest:setup.policyDigest,base:input.base},()=>canceled||!this.running);
+   if(physical.advice.verifierDigest!==setup.verifierDigest)throw new Refusal('SPECIALIST_POLICY_MISMATCH');
+   const receipt=PreimplementationAdviceReceipt.parse({schemaVersion:1,kind:'preimplementation_advice',adviceId,contextId:authority.contextId,
+    intentId:intent.id,operationId:intent.operation_id,unitId:unit.id,policyRevision:unit.qualityRevision,policyDigest:setup.policyDigest,
+    sourceBase:input.base,scopeDigest,inputDigest,sessionId,grantId:grant.id,status:physical.advice.verdict==='proceed'?'approved':'rejected',
+    exitCode:physical.exitCode,verifierDigest:physical.advice.verifierDigest});
+   const signature=signPreimplementationAdvice(this.key,receipt);
+   await this.ledger.tx(async c=>{
+    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+    await assertWriterNotStarted(c);
+    const updated=await c.query("UPDATE ac_specialist_advice SET state='completed',receipt=$2,signature=$3 WHERE id=$1 AND state IN ('uncertain','running') AND manager_epoch=$4",
+     [adviceId,receipt,signature,authority.epoch]);
+    if(!updated.rowCount)throw new Refusal('SPECIALIST_RECONCILIATION_REQUIRED');
+    await assertPreimplementationAdvice(c,this.key,intent.id,authority,undefined,'record');
+   });
+   if(receipt.status!=='approved')throw new Refusal('SPECIALIST_REJECTED');
+   const text='Independent specialist advice approved.';onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
+  })().finally(()=>{open=false;wait(null);});
+  return {result,get open(){return open;},sendMessage(){return false;},end(){},interrupt(){canceled=true;},hardStop(){canceled=true;}};
+ }
+ private async verifierBytes(){
+  if(!this.options.syntheticVerifierPath)return readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url));
+  const path=resolve(this.options.syntheticVerifierPath),info=await lstat(path);
+  if(path!==this.options.syntheticVerifierPath||info.isSymbolicLink()||!info.isFile()||info.size>1024*1024||await realpath(path)!==path)
+   throw new Refusal('VERIFIER_PATH_FORBIDDEN');
+  return readFile(path);
+ }
+ /** Persist a correction only for an authenticated, physically completed rejection. */
+ async recordManagedCorrection(principal:string,intent:Intent,authority:Authority,next:ManagedUnit,artifactId:string,evidenceIds:readonly string[]){
+  const bound=await readManagedUnit(this.ledger,intent);
+  if(!bound||bound.recipe.schemaVersion<2||bound.unit.kind!=='task'||next.kind!=='task'||!bound.unit.taskId||
+    next.taskId!==bound.unit.taskId||next.correctionRevision!==(bound.unit.correctionRevision??0)+1||
+    next.qualityRevision!==bound.unit.qualityRevision||next.targetRef!==bound.unit.targetRef||
+    digest(next.writePaths)!==digest(bound.unit.writePaths)||digest(next.acceptanceRefs)!==digest(bound.unit.acceptanceRefs)||
+    !bound.recipe.units.some(unit=>digest(unit)===digest(next)))throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+  const input=await readManagedInput(this.ledger,intent.id);
+  const ids=[...evidenceIds].sort();if(new Set(ids).size!==ids.length||!ids.length||ids.length>16)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+  return this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+   await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   if((await c.query("SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released' LIMIT 1",[intent.id])).rowCount)
+    throw new Refusal('CORRECTION_EVIDENCE_UNCERTAIN');
+   const nextRow=(await c.query('SELECT * FROM ac_intents WHERE id=$1 AND parent_intent_id=$2 AND context_id=$3 FOR UPDATE',
+    [next.intentId,bound.parentIntentId,authority.contextId])).rows[0];
+   if(!nextRow||nextRow.parent_unit_id!==next.id||nextRow.run_id!==next.runId||nextRow.operation_id!==next.operationId)
+    throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+   const artifact=await this.options.quality.assertCorrectionFailures(c,artifactId,ids,authority);
+   if(artifact.intent_id!==intent.id||artifact.project_id!==this.projectId||artifact.policy_revision!==next.qualityRevision||artifact.base_id!==input.base)
+    throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+   const existing=(await c.query('SELECT * FROM ac_managed_correction_decisions WHERE parent_intent_id=$1 AND task_id=$2 AND revision=$3',
+    [bound.parentIntentId,bound.unit.taskId,next.correctionRevision])).rows[0];
+   const epoch=existing?Number(existing.manager_epoch):authority.epoch;
+   const snapshot={parentIntentId:bound.parentIntentId,contextId:authority.contextId,taskId:bound.unit.taskId,revision:next.correctionRevision!,
+    priorIntentId:intent.id,priorArtifactId:artifact.id,failedEvidenceIds:ids,priorCommit:artifact.commit_id,priorTree:artifact.tree_id,
+    baseId:artifact.base_id,nextIntentId:next.intentId,managerEpoch:epoch};
+   const hash=digest(snapshot);
+   if(existing){if(existing.decision_digest!==hash||epoch>authority.epoch)throw new Refusal('MANAGED_CORRECTION_MISMATCH');return {decisionDigest:hash,...snapshot};}
+   await c.query(`INSERT INTO ac_managed_correction_decisions(parent_intent_id,context_id,task_id,revision,prior_intent_id,prior_artifact_id,
+    failed_evidence_ids,prior_commit,prior_tree,base_id,next_intent_id,manager_epoch,decision_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [snapshot.parentIntentId,snapshot.contextId,snapshot.taskId,snapshot.revision,snapshot.priorIntentId,snapshot.priorArtifactId,
+     ids,snapshot.priorCommit,snapshot.priorTree,snapshot.baseId,snapshot.nextIntentId,epoch,hash]);
+   return {decisionDigest:hash,...snapshot};
+  });
+ }
+ async selectManagedTask(principal:string,intent:Intent,authority:Authority,artifactId:string){
+  const bound=await readManagedUnit(this.ledger,intent);
+  if(!bound||bound.recipe.schemaVersion<2||bound.unit.kind!=='task'||!bound.unit.taskId)throw new Refusal('MANAGED_SELECTION_MISMATCH');
+  return this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+   const artifact=await this.options.quality.assertReady(c,artifactId,authority);
+   if(artifact.intent_id!==intent.id||artifact.project_id!==this.projectId)throw new Refusal('MANAGED_SELECTION_MISMATCH');
+   const existing=(await c.query('SELECT * FROM ac_managed_task_selections WHERE parent_intent_id=$1 AND task_id=$2',
+    [bound.parentIntentId,bound.unit.taskId])).rows[0];
+   const epoch=existing?Number(existing.manager_epoch):authority.epoch;
+   const hash=digest({parentIntentId:bound.parentIntentId,contextId:authority.contextId,taskId:bound.unit.taskId,
+    selectedIntentId:intent.id,artifactId:artifact.id,managerEpoch:epoch});
+   if(existing){if(existing.selection_digest!==hash||epoch>authority.epoch)throw new Refusal('MANAGED_SELECTION_MISMATCH');return hash;}
+   await c.query(`INSERT INTO ac_managed_task_selections(parent_intent_id,context_id,task_id,selected_intent_id,artifact_id,selection_digest,manager_epoch)
+    VALUES($1,$2,$3,$4,$5,$6,$7)`,[bound.parentIntentId,authority.contextId,bound.unit.taskId,intent.id,artifact.id,hash,epoch]);return hash;
+  });
  }
  async replayManagedComposition(intent:Intent,authority:Authority,unit:ManagedUnit):Promise<boolean>{
   const bound=await readManagedUnit(this.ledger,intent),input=await readManagedInput(this.ledger,intent.id);
@@ -269,8 +410,10 @@ export class EngineeringStages{
   for(const stage of saved.completed)await this.options.quality.record(saved.principal,stage.receipt.verification,stage.receipt.signature,authority);
   return true;
  }
- start(intent:Intent,authority:Authority,nodeId:string,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void),internalReview=false):AgentSession{
+ start(intent:Intent,authority:Authority,nodeId:string,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void),internalReview=false,qualityVerdict=false):AgentSession{
   const node=nodeSchema.parse(nodeId),sessionId=z.uuid().parse(spec.sessionId);
+  const notify=onEvent;
+  if(qualityVerdict)onEvent=event=>{if(event.type!=='done')notify?.(event);};
   let child:ChildProcess|undefined,open=true,canceled=false;
   const nested=new Set<AgentSession>();
   const admissionWait=(reason:string|null)=>{const runId=spec.env?.CEZ_TASK_ID;if(runId)this.options.onAdmissionWait?.(runId,`stage:${node}:${sessionId}`,reason);};
@@ -405,7 +548,7 @@ export class EngineeringStages{
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
       [this.projectId,contract.quality_revision])).rows[0];
      const policy=QualityPolicy.parse(qualityRow?.snapshot);
-     const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
+     const verifierDigest=createHash('sha256').update(await this.verifierBytes()).digest('hex');
      if(digest(policy)!==qualityRow.digest||policy.verifierDigest!==verifierDigest)throw new Refusal('VERIFIER_VERSION_MISMATCH');
      const verified=await this.options.isolatedVerification.run(principal,stage.id,grant.id,authority,spec.cwd,
       {id:artifact.id,commit:source.commit,tree:source.tree,base:source.base},intent.operation_id,node,verifierDigest,()=>canceled||!this.running);
@@ -415,7 +558,7 @@ export class EngineeringStages{
     const parent=resolve('.state/verifier-workspaces');await mkdir(parent,{recursive:true,mode:0o700});
     const temporary=await mkdtemp(join(parent,'stage-'));let monitor:ReturnType<typeof setInterval>|undefined;
     try{
-     const script=await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url));
+     const script=await this.verifierBytes();
      const verifierDigest=createHash('sha256').update(script).digest('hex');
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
        [this.projectId,contract.quality_revision])).rows[0];
@@ -475,8 +618,29 @@ export class EngineeringStages{
    }
    const text=`Synthetic ${node} completed for artifact ${artifact.id}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
    return {text,toolCalls:[],tokensUsed:0};
-  })().finally(()=>{open=false;admissionWait(null);});
-  return {result,get open(){return open;},get pid(){return child?.pid;},sendMessage(){return false;},end(){},interrupt(){canceled=true;stop(child);for(const reviewer of nested)reviewer.interrupt();},hardStop(){canceled=true;stop(child);for(const reviewer of nested)reviewer.hardStop?.();}};
+  })();
+  const finalResult=qualityVerdict?result.then(value=>{
+   const text=`${value.text}\nCEZ:VERDICT pass`;notify?.({type:'text',text:'\nCEZ:VERDICT pass'});notify?.({type:'turn-end'});notify?.({type:'done'});return {...value,text};
+  },async error=>{
+   if(!(error instanceof Refusal)||error.code!=='VERIFICATION_FAILED'||(node!=='qa'&&node!=='review'))throw error;
+   const bound=await readManagedUnit(this.ledger,intent);
+   if(!bound||bound.recipe.schemaVersion<2||!bound.unit.taskId)throw error;
+   const failed=await this.ledger.tx(async c=>{
+    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+    const rows=(await c.query(`SELECT e.id,e.artifact_id FROM ac_verification_evidence e JOIN ac_artifacts a ON a.id=e.artifact_id
+      WHERE a.intent_id=$1 AND e.kind=$2 AND e.status='failed' ORDER BY e.id`,[intent.id,node])).rows;
+    if(!rows.length||new Set(rows.map(row=>row.artifact_id)).size!==1)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+    const ids=rows.map(row=>row.id);await this.options.quality.assertCorrectionFailures(c,rows[0].artifact_id,ids,authority);
+    return {artifactId:rows[0].artifact_id,ids};
+   });
+   const next=bound.recipe.units.find(unit=>unit.kind==='task'&&unit.taskId===bound.unit.taskId&&unit.correctionRevision===(bound.unit.correctionRevision??0)+1);
+   if(next){const principal=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;
+    if(!principal)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+    await this.recordManagedCorrection(principal,intent,authority,next,failed.artifactId,failed.ids);}
+   const text='CEZ:VERDICT reject';notify?.({type:'text',text});notify?.({type:'turn-end'});notify?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
+  }):result;
+  const settled=finalResult.finally(()=>{open=false;admissionWait(null);});
+  return {result:settled,get open(){return open;},get pid(){return child?.pid;},sendMessage(){return false;},end(){},interrupt(){canceled=true;stop(child);for(const reviewer of nested)reviewer.interrupt();},hardStop(){canceled=true;stop(child);for(const reviewer of nested)reviewer.hardStop?.();}};
  }
  private async saveIsolatedResult(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,
   artifact:ArtifactRow,node:'qa'|'review'|'judge',verified:IsolatedVerificationResult){

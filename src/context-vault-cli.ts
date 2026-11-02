@@ -12,6 +12,10 @@ import type {Ledger} from './ledger.ts';
 const Descriptor=z.object({principal:z.string().min(1).max(200),contextId:Id,sessionId:z.string().min(1).max(200),
  profileId:z.string().min(1).max(100),keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey']),
  keyFile:z.string().refine(path=>isAbsolute(path)&&resolve(path)===path)}).strict();
+const BackupDescriptor=z.object({sourceRoot:z.string().refine(path=>isAbsolute(path)&&resolve(path)===path),
+ backupKeyFile:z.string().refine(path=>isAbsolute(path)&&resolve(path)===path),
+ archiveFile:z.string().refine(path=>isAbsolute(path)&&resolve(path)===path),
+ destinationDirectory:z.string().refine(path=>isAbsolute(path)&&resolve(path)===path).optional()}).strict();
 const overlaps=(a:string,b:string)=>a===b||a.startsWith(b+sep)||b.startsWith(a+sep);
 async function requireOutsideRepositories(path:string,repositories:readonly string[]){
  if(!isAbsolute(path)||resolve(path)!==path||await realpath(path)!==path||repositories.some(repo=>overlaps(repo,path)))throw new Refusal('VAULT_PATH_UNSAFE',403);
@@ -67,4 +71,20 @@ export async function executeContextKey(command:'context-key-authorize'|'context
   else await new ContextVault(ledger,env.installationId,env.vault.directory,env.vault.masterFile,env.repositories).importKey(input,key);
   return {state:command==='context-key-authorize'?'authorized' as const:'imported' as const};
  }finally{descriptorBytes?.fill(0);key?.fill(0);}
+}
+export async function executeVaultBackup(command:'vault-backup'|'vault-restore',config:Installation,ledger:Ledger,descriptorPath:string){
+ const env=await environment(config,ledger);let bytes:Buffer|undefined;
+ try{
+  await requireOutsideRepositories(descriptorPath,env.repositories);
+  bytes=await exactPrivateFile(descriptorPath,16384);const descriptor=BackupDescriptor.parse(JSON.parse(bytes.toString('utf8')));
+  if(descriptor.sourceRoot!==env.vault.directory)throw new Refusal('VAULT_BACKUP_IDENTITY_MISMATCH',403);
+  const {backupContextVault,restoreContextVault}=await import('./context-vault-backup.ts');
+  const common={installationId:env.installationId,backupKeyFile:descriptor.backupKeyFile,archiveFile:descriptor.archiveFile,repositories:env.repositories};
+  if(command==='vault-backup'){
+   if(descriptor.destinationDirectory!==undefined)throw new Refusal('VAULT_BACKUP_DESCRIPTOR_INVALID',400);
+   return await backupContextVault({...common,root:env.vault.directory,masterFile:env.vault.masterFile});
+  }
+  if(!descriptor.destinationDirectory)throw new Refusal('VAULT_BACKUP_DESCRIPTOR_INVALID',400);
+  return await restoreContextVault({...common,sourceRoot:env.vault.directory,sourceMasterFile:env.vault.masterFile,destinationDirectory:descriptor.destinationDirectory});
+ }finally{bytes?.fill(0);}
 }

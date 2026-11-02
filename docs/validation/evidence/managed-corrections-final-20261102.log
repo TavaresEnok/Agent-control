@@ -1,0 +1,33 @@
+start 2026-11-02T21:11:05Z
+e45a1fe100b97c584c9374c45b7ed23403c5ec55ef3396b4cca95999fcfb9774  -
+f019c0cb891f6b1891e6f5589a007e41a95b4c83ae0d3468921417545d0fbc4b  scripts/synthetic-worker.mjs
+5f648bd2e30bd4188fc8c73cfd79bfdf0702759593e6046403234b6f49683015  scripts/sandbox-verifier.mjs
+106f888537a1c0ea4b6c70291987842993cb778808654893d17c7b013960efcb  tests/fixtures/synthetic-correction-verifier.mjs
+TAP version 13
+# Subtest: correction graph is bounded and the existing zero-correction recipe stays v1
+ok 1 - correction graph is bounded and the existing zero-correction recipe stays v1
+  ---
+  duration_ms: 45.994388
+  type: 'test'
+  ...
+# Subtest: physical QA rejection leads to one corrected artifact; infrastructure failure does not
+ok 2 - physical QA rejection leads to one corrected artifact; infrastructure failure does not
+  ---
+  duration_ms: 12657.879943
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 14437.597311
+e45a1fe100b97c584c9374c45b7ed23403c5ec55ef3396b4cca95999fcfb9774  -
+f019c0cb891f6b1891e6f5589a007e41a95b4c83ae0d3468921417545d0fbc4b  scripts/synthetic-worker.mjs
+5f648bd2e30bd4188fc8c73cfd79bfdf0702759593e6046403234b6f49683015  scripts/sandbox-verifier.mjs
+106f888537a1c0ea4b6c70291987842993cb778808654893d17c7b013960efcb  tests/fixtures/synthetic-correction-verifier.mjs
+end 2026-11-02T21:11:20Z
+exit 0

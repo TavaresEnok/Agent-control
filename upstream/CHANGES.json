@@ -197,6 +197,16 @@
       "sha256": "3a7573c6940dd4d7852eecd3bd7f938211c9f5d8fa36f3a355b486aa9c2ce9f9"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-administrative-policy.test.tsx",
+      "change": "added",
+      "sha256": "aff2636d1df8f7cd556ac816e5b72087ff008617cd3c019ecf606decf8158ad4"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-administrative-policy.tsx",
+      "change": "added",
+      "sha256": "85c37501a59e20ebeb94b54d98e5919c6fb6959de1298791fe0c4e331e3833e9"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-backup-preview.ts",
       "change": "added",
       "sha256": "6608c87ebec74ad1f4e50dad771d1776de0d594a0bee0f43005b62c601033c07"
@@ -277,6 +287,11 @@
       "sha256": "da8b0011f6ae6fb92b9238729f4a4dac30b3d9c185c341196b35fb9cab33ba23"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-portable-export.tsx",
+      "change": "added",
+      "sha256": "2dc5e1c48814cad6ff2c4b9b165cdfa4c308c4d6c510f6cd469805c9fdd26e0b"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-profile-editor.test.tsx",
       "change": "added",
       "sha256": "7d7c47907532af119a653e510a77118dc2e1ecaf617262cb312a15bcf045a5f9"
@@ -284,7 +299,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-profile-editor.tsx",
       "change": "added",
-      "sha256": "89e032cee504de4241b11b027290a39668ed0302afb0d4da3f2f98599070521d"
+      "sha256": "131c6871b6ee3838262f068b50705ea29059a0107ccd9826edd8c81d0e4fadbb"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-project-admin.test.tsx",
@@ -302,6 +317,11 @@
       "sha256": "d1ad719ba6164d94a344e6fa85f8299844b78419473ba3f51c35d72f1048bdbe"
     },
     {
+      "path": "packages/web/src/routes/settings/agent-control-provider-eligibility.tsx",
+      "change": "added",
+      "sha256": "618f8e3747f814cbe596005a6f18a14f0998b974ad9ad510354ee7c17bd57851"
+    },
+    {
       "path": "packages/web/src/routes/settings/agent-control-provider-operations.test.tsx",
       "change": "added",
       "sha256": "076c3af0b518cd69b4b0dcf2ca98a64283cdef061c01ac25adb6ad2554db4471"
@@ -309,17 +329,17 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-remote-sources.tsx",
       "change": "added",
-      "sha256": "58badbb1359bd39a48243f964f959e3e4a8410dc33d5a8f14866f5df7b92f005"
+      "sha256": "6d77b300309ec0c4f81ac5c0e696364c89257f6bfc7649ef7e6799ed09f23249"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
       "change": "added",
-      "sha256": "c941ff9188ccea3817dbaed91730cca1098ec495813e86b88de5e433b568f201"
+      "sha256": "26ba50dd4d9bec6e52f0ef135e4056f51eb1a132549a4869e671d82a0f2aa9f8"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "e1d850bfca43cd4793fa2e49ef9aa3c0bfb92ded778e1e8f3f2264c12f97d6c2"
+      "sha256": "ea1794947b2b81b32fcf3ca2232db582f8735c9e26c2ec7b59cf4bc8ce909383"
     }
   ],
   "happier": [

@@ -26,7 +26,7 @@ it('does not duplicate diagnostics when resources and plan controls arrive after
  render(<QueryClientProvider client={client}><AgentControlSection/></QueryClientProvider>)
  await screen.findByText('Fixture diagnostics');expect(screen.queryByText('Fixture plans')).toBeNull()
  resolveResources(new Response(JSON.stringify({installationId:installation,principalId:'fixture',verifierDigest:'a'.repeat(64),contextId:context,assignedPolicyRevision:null,
-  approvals:[],canApproveIntegration:false,canAuthorizeRemoteSource:false,remoteSourceHosts:[],remoteSourceAuthorizations:[],remoteOperations:[],operatorDeviceIds:[],capacity:null,canConfigureCapacity:false,providerBindings:[],providerAdapters:[],accounts:[],profiles:[],catalog:[],policies:[],qualityPolicies:[],templates:[],activeTemplateRevision:null,plans:[],waits:[],grants:[
+  approvals:[],canApproveIntegration:false,canAuthorizeRemoteSource:false,remoteSourceHosts:[],remoteSourceAuthorizations:[],remoteOperations:[],operatorDeviceIds:[],capacity:null,canConfigureCapacity:false,administrative:{policies:[],operations:[],managerProfileIds:[],recentOperations:[]},providerEligibility:{assessments:[],truncated:false},providerBindings:[],providerAdapters:[],accounts:[],profiles:[],catalog:[],policies:[],qualityPolicies:[],templates:[],activeTemplateRevision:null,plans:[],waits:[],grants:[
    {id:context,role:'programmer',state:'uncertain',resource_kind:'local_compositor',account_id:null,profile_id:null,emergency:false},
    {id:installation,role:'reviewer',state:'running',resource_kind:'model',account_id:context,profile_id:installation,emergency:false}]})))
  await screen.findByText('Fixture plans')

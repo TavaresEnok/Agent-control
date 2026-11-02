@@ -1,3 +1,4 @@
+import type {AdministrativeOperations} from './administrative-operations.ts';
 import { Hono } from 'hono';
 import {bodyLimit} from 'hono/body-limit';
 import { z } from 'zod';
@@ -18,6 +19,7 @@ import {diskPolicyFromEnvironment} from './disk-admission.ts';
 import {managedWorkspaceStream} from './workspace-stream.ts';
 import {createImportPreviewApi} from './import-preview-api.ts';
 import {createDiagnosticsApi} from './diagnostics-api.ts';
+import {createPortableExportApi} from './portable-export-api.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -44,9 +46,9 @@ export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[]) {
+  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations) {
   const app = new Hono<{ Variables: { principal: string } }>();
-  const control = new Control(ledger,providerAdapters,runtime.projectId);
+  const control = new Control(ledger,providerAdapters,runtime.projectId,administrative);
   app.use('*', async (c, next) => {
     if(sessions&&c.req.method==='GET'){
       const ui=await publicUi(c.req.path);if(ui)return ui;
@@ -71,6 +73,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   app.route('/api/v1/ac',createObservabilityApi(new OperationalObservability(ledger,{diskPolicy:diskPolicyFromEnvironment()})));
   app.route('/api/v1/ac',createImportPreviewApi(ledger,runtime.projectId));
   app.route('/api/v1/ac',createDiagnosticsApi(ledger,runtime.projectId));
+  app.route('/api/v1/ac',createPortableExportApi(ledger,runtime.projectId));
   const family = app
     .get('/api/v1/ac/auth/status',c=>c.json({authenticated:true,principalId:c.get('principal')}))
     .get('/api/v1/ac/operator/identity',async c=>{

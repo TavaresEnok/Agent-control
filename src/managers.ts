@@ -5,6 +5,12 @@ import {ContextKeys,keyFingerprint,type EncryptionVariant} from './context-keys.
 import {Ledger} from './ledger.ts';
 import {HappierEndpoint,type HappierBoundary} from './happier.ts';
 import type {CezarRuntime} from './cezar.ts';
+import type {AdministrativeOperations,AdministrativeCapability} from './administrative-operations.ts';
+
+type AdministrativeCapabilityData={service:AdministrativeOperations;principal:string;authority:Authority;profileId:string;live:()=>boolean};
+const administrativeCapabilities=new WeakMap<object,AdministrativeCapabilityData>();
+/** Inspection cannot mint a capability; worker processes never receive this module's controller state. */
+export function inspectAdministrativeCapability(token:object){return administrativeCapabilities.get(token);}
 
 const Start=z.object({principal:z.string().min(1).max(200),contextId:Id,sessionId:z.string().min(1).max(200),
  profileId:z.string().min(1).max(100),keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey']),
@@ -155,6 +161,19 @@ export class ManagerRegistry{
   if(!entry||entry.state!=='running'||entry.cancelled||this.closed||invalidAuthorityErrors.has(entry.endpoint?.lastError??''))return undefined;
   return entry.authority?{...entry.authority}:undefined;
  }
+ /** Trusted endpoint integration only; this capability must never cross into workers. */
+ async administrativeCapability(contextId:string,service:AdministrativeOperations):Promise<AdministrativeCapability>{
+  Id.parse(contextId);const entry=this.entries.get(contextId);
+  if(!entry||entry.state!=='running'||entry.cancelled||this.closed||!entry.authority||service.ledger!==this.ledger)throw new Refusal('MANAGER_UNAVAILABLE');
+  await this.validate(entry,entry.authority);
+  await this.ledger.tx(async c=>{const context=await this.ledger.authorize(c,entry.input.principal,contextId);
+   if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);await this.ledger.fence(c,entry.authority!,true);});
+  if(this.entries.get(contextId)!==entry||entry.cancelled||this.closed||entry.state!=='running')throw new Refusal('MANAGER_STOPPED');
+  const capability=Object.freeze(Object.create(null) as object);
+  administrativeCapabilities.set(capability,Object.freeze({service,principal:entry.input.principal,authority:Object.freeze({...entry.authority}),profileId:entry.input.profileId,
+   live:()=>this.entries.get(contextId)===entry&&!entry.cancelled&&!this.closed&&entry.state==='running'}));
+  return capability;
+ }
  async status(contextId:string){
   Id.parse(contextId);const entry=this.entries.get(contextId);
   if(!entry)return {contextId,state:'stopped' as const};
@@ -183,8 +202,12 @@ export class ManagerRegistry{
 
 /** Reuses the existing native Happier endpoint. Credentials stay in this trusted
  * factory closure; only a private per-endpoint content-key copy reaches it. */
+export function administrativeEndpointDispatcher(registry:ManagerRegistry,service:AdministrativeOperations){
+ if(registry.ledger!==service.ledger)throw new Refusal('ADMIN_SERVICE_LEDGER_MISMATCH',403);
+ return async(contextId:string,raw:unknown)=>service.execute(await registry.administrativeCapability(contextId,service),raw);
+}
 export function happierEndpointFactory(ledger:Ledger,runtime:CezarRuntime,boundary:HappierBoundary,
- options:{baseUrl:string;token:string;machineId:string}):ManagerEndpointFactory{
+ options:{baseUrl:string;token:string;machineId:string;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
  return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,principal:input.principal,sessionId:input.sessionId,
   authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant});
 }
