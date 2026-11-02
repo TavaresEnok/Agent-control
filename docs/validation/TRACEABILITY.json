@@ -929,11 +929,11 @@
     "code_state": "partial",
     "test_result": "not_run",
     "evidence": "",
-    "files": "src/portable-export.ts;src/portable-export-api.ts;tests/portable-export.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-portable-export.tsx",
+    "files": "src/portable-export.ts;src/portable-export-api.ts;tests/portable-export.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-portable-export.tsx;src/context-export-cli.ts;src/server-main.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Bounded owner-only redacted metadata export implemented across service, authenticated API and UI. Not restorable, no conversation or credentials; truncation explicit. Focused test prepared but not executed; SQL/runtime acceptance pending."
+    "limitation": "Owner-only redacted metadata API/UI plus explicit local encrypted canonical-Happier history export implemented. No keys/token in bundle; bounded fail-closed pagination, private exclusive output, independent PG snapshot. Export not directly restorable, no atomic snapshot across stores and no runtime proof of new CLI; types only."
   },
   {
     "id": "T01",

@@ -146,3 +146,8 @@ O transporte agora recusa redirects, limita cada chamada de rede e rejeita ACK p
 Diagnósticos foram ampliados com ausência de gerente quando existem intenções pendentes, admissão global fechada, orientação do especialista reprovada/incerta e operações administrativas incertas. Mantêm escopo/ACL, snapshot read-only, limites e indicação de responsável e próxima condição; nenhum diagnóstico inicia recuperação. Consultas novas ainda não possuem prova PG específica.
 
 Pendências principais permanecem: integração operacional e homologação dos provedores reais, gerente semântico, fronteiras restantes de recuperação e validação integrada final. Não há conclusão integral ou percentual validado declarado nesta rodada.
+
+
+### Exportação cifrada canônica pelo CLI
+
+`export-context CONFIG DESCRIPTOR` acrescentado ao gateway local. Combina metadados limitados com ciphertexts do histórico Happier, sem decriptação/token/chave no pacote, e cria arquivo privado novo. ACL/owner revalidados por página; limites de tamanho/quantidade e cursor inválido abortam. Não há snapshot atômico entre PG e Happier ou restore automático. Código passou na checagem de tipos; exportação real e teste ponta a ponta não executados. Detalhes em `IMPORT-CLI-20261102.md`.
