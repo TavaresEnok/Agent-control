@@ -1,0 +1,14 @@
+Scope: isolated broker restart decision, PostgreSQL fixture and fake Docker daemon; no operational workers.
+Command 1: docker compose -f deploy/compose.lab.yml exec -T sandbox-client npm run typecheck
+Exit code 1: 0; tsc --noEmit passed.
+Command 2: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/broker-recovery.test.ts
+Exit code 2: 1; test fixture's fake inspect returned the same container for unrelated persisted jobs, correctly causing SANDBOX_IDENTITY_MISMATCH. Preserved as a negative run.
+Correction: fake inspect now returns a container only for the exact synthetic job under test.
+Command 3: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/broker-recovery.test.ts
+Exit code 3: 0; 1 test, 1 pass, 0 fail, duration 1073 ms.
+Assertion: a matching persisted running job caused exactly one stop request before broker admission.
+Limit: Docker itself was simulated; no physical broker crash or real process neutralization was executed.
+Command 4: docker compose -f deploy/compose.lab.yml exec -T sandbox-client npm run build
+Exit code 4: 0; TypeScript build and prepare-build completed.
+Command 5: docker compose -f deploy/compose.lab.yml restart sandbox-broker
+Exit code 5: 0; isolated broker restarted and stayed Up. No live worker was present during this smoke check.

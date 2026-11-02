@@ -1,4 +1,4 @@
-import { createHash,createHmac,randomBytes,timingSafeEqual } from 'node:crypto';
+import { createHash,createHmac,randomBytes,randomUUID,timingSafeEqual } from 'node:crypto';
 import { createServer,request as httpRequest,type IncomingMessage,type ServerResponse } from 'node:http';
 import { createConnection } from 'node:net';
 import { chmod,chown,lstat,mkdir,readFile,realpath,rm,unlink,writeFile } from 'node:fs/promises';
@@ -252,6 +252,28 @@ export class SandboxBroker{
    await rm(job,{recursive:true,force:true});return {jobId:value.jobId,state:'cleaned'};
   });
  }
+ /** On broker restart, do not leave an old writer running without a fence monitor.
+  * Stop matching containers; the successor reconciles their terminal receipts. */
+ async neutralizePersistedJobs(){
+  const jobs=(await this.ledger.pool.query("SELECT * FROM ac_sandbox_jobs WHERE state IN ('uncertain','running') ORDER BY created_at,id")).rows;
+  for(const job of jobs){
+   const profile=z.enum(['synthetic-probe-v1','synthetic-implementation-v1']).parse(job.profile);
+   let source:SandboxRequest['source'];
+   if(profile==='synthetic-implementation-v1'){
+    const launch=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=$1',[job.id])).rows[0];
+    if(!launch||digest(launch.snapshot)!==launch.digest)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
+    source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000)}).strict().parse(launch.snapshot.source);
+   }
+   const value:SandboxRequest={schemaVersion:1,action:'reconcile',jobId:job.id,grantId:job.grant_id,
+    authority:{contextId:job.context_id,instanceId:randomUUID(),epoch:Number(job.manager_epoch)},profile,
+    ...(source?{source}:{}),expiresAt:Date.now()+30000,signature:'0'.repeat(64)};
+   const work=join(this.config.hostRoot,job.id,'work');
+   const inspected=await this.docker.inspect('ac-synthetic-'+job.id);
+   if(!inspected)continue;
+   this.inspectExpected(inspected,value,job.spec_digest,work);
+   if(inspected.State.Running)await this.docker.stop(inspected.Id);
+  }
+ }
  private monitor(id:string,authority:Authority){
   if(this.monitors.has(id))return;
   let checking=false;
@@ -278,6 +300,7 @@ export async function brokerMain(config:SandboxBrokerConfig){
  const broker=new SandboxBroker(config,key);await broker.ledger.migrate();
  const lock=await broker.ledger.pool.connect();
  if(!(await lock.query('SELECT pg_try_advisory_lock(189234,19) ok')).rows[0].ok){lock.release();await broker.close();throw Error('BROKER_ALREADY_RUNNING');}
+ await broker.neutralizePersistedJobs();
  try{
   const old=await lstat(config.socketPath);
   if(!old.isSocket()||old.uid!==0)throw Error('UNSAFE_BROKER_SOCKET');

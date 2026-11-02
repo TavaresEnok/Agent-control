@@ -1,0 +1,11 @@
+Scope: isolated PostgreSQL, real sandbox broker/worker, synthetic Git repository and two manager epochs.
+Command 1: docker compose -f deploy/compose.lab.yml exec -T sandbox-client npm run typecheck
+Exit code 1: 0; TypeScript compiler passed without emitting files.
+Command 2: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/isolated-recovery.test.ts
+Exit code 2: 0; 1 test, 1 pass, 0 fail, duration 2666 ms.
+Command 3: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/isolated-recovery.test.ts
+Exit code 3: 0; 1 test, 1 pass, 0 fail, duration 1442 ms, after intent identity validation was added.
+Command 4: docker compose -f deploy/compose.lab.yml exec -T sandbox-client node --import tsx --test tests/isolated-recovery.test.ts
+Exit code 4: 0; 1 test, 1 pass, 0 fail, duration 1309 ms, with wrong-run rejection asserted.
+Assertions: physical job completed while controller operation remained uncertain; successor epoch reconciled and applied exact Git commit once; wrong run ID refused; repeated recovery returned completed; one sandbox job retained.
+Limit: no actual controller SIGKILL was used. The native Cezar DAG does not yet resume downstream nodes after the recovered commit.

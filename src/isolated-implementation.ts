@@ -85,6 +85,35 @@ export class IsolatedImplementation{
   })().finally(()=>{open=false;this.stops.delete(stop);});
   return {result,get open(){return open;},sendMessage(){return false;},end(){},interrupt:stop,hardStop:stop};
  }
+ /** Reconcile an immutable launch after controller loss. Never starts a second worker.
+  * A running old writer is stopped by the broker and remains uncertain until a later inspection. */
+ async reconcileExisting(intent:Intent,authority:Authority,cwd:string):Promise<'uncertain'|'completed'|'failed'>{
+  const row=await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority,true);
+   const result=(await c.query(`SELECT i.principal_id,i.run_id,i.operation_id,i.plan_revision,i.command,o.state,o.manager_epoch,o.grant_id,o.receipt,l.snapshot,l.digest
+     FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id
+     LEFT JOIN ac_execution_launches l ON l.operation_id=o.id
+     WHERE i.id=$1 AND i.context_id=$2 AND o.id=$3 FOR UPDATE OF o`,
+     [intent.id,authority.contextId,intent.operation_id])).rows[0];
+   if(!result||result.run_id!==intent.run_id||result.operation_id!==intent.operation_id||
+      result.plan_revision!==intent.plan_revision||digest(result.command)!==digest(intent.command))
+    throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+   await this.ledger.authorize(c,result.principal_id,authority.contextId);
+   return result;
+  });
+  if(row.state==='completed')return 'completed';
+  if(!['uncertain','running'].includes(row.state)||!row.snapshot||!row.grant_id||Number(row.manager_epoch)>authority.epoch)
+   throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
+  const launch=Launch.parse(row.snapshot);
+  if(digest(launch)!==row.digest)throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
+  const response=await this.client.perform('reconcile',intent.operation_id,row.grant_id,authority,launch);
+  const terminal=Receipt.safeParse(response);
+  if(!terminal.success)return 'uncertain';
+  if(terminal.data.exitCode!==0||!terminal.data.implementation)return 'failed';
+  await this.apply(row.principal_id,intent,authority,cwd,terminal.data,launch);
+  await this.client.perform('cleanup',intent.operation_id,row.grant_id,authority,launch);
+  return 'completed';
+ }
  private async apply(principal:string,intent:Intent,authority:Authority,cwd:string,receipt:z.infer<typeof Receipt>,launch:z.infer<typeof Launch>){
   if(receipt.jobId!==intent.operation_id||receipt.exitCode!==0||!receipt.implementation||!receipt.bundle)throw new Refusal('SANDBOX_IMPLEMENTATION_FAILED');
   const artifact=receipt.implementation;
@@ -102,12 +131,12 @@ export class IsolatedImplementation{
     await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
     const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 FOR UPDATE',[intent.operation_id])).rows[0];
     const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[op?.grant_id])).rows[0];
-    if(!op||Number(op.manager_epoch)!==authority.epoch||!['running','uncertain'].includes(op.state)||grant?.state!=='released'||
+    if(!op||Number(op.manager_epoch)>authority.epoch||!['running','uncertain'].includes(op.state)||grant?.state!=='released'||
       grant.physical_receipt?.jobId!==intent.operation_id||grant.physical_receipt?.containerId!==receipt.containerId)
       throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
     const head=await git(cwd,['rev-parse','HEAD']);if(head!==artifact.base&&head!==artifact.commit)throw new Refusal('SANDBOX_BASE_CHANGED');
     await git(cwd,['merge','--ff-only',artifact.commit]);
-    await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1",[intent.operation_id,artifact]);
+    await c.query("UPDATE ac_operations SET state='completed',manager_epoch=$3,receipt=$2 WHERE id=$1",[intent.operation_id,artifact,authority.epoch]);
    });
   }finally{await rm(temporary,{recursive:true,force:true});}
   return artifact;

@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log",
-    "files": "src/isolated-implementation.ts;tests/engineering.test.ts",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/isolated-successor-recovery-20261102.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/engineering.test.ts;tests/broker-recovery.test.ts;tests/isolated-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Start acknowledgement loss reconciled; crash between Git, physical result and PG commit remains open."
+    "limitation": "Lost start acknowledgement, simulated broker restart fencing and successor artifact reconciliation tested; automatic native DAG continuation after crash remains open."
   },
   {
     "id": "RF-24",

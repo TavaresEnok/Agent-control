@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { mkdir, readFile } from 'node:fs/promises';
+import { join,sep } from 'node:path';
+import { mkdir, readFile,realpath } from 'node:fs/promises';
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
@@ -142,6 +142,17 @@ export class CezarRuntime {
          digest(row.command)!==digest(intent.command))throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
       return this.store.getRun(intent.run_id);
     });
+  }
+  /** Reconcile a previous isolated launch in the original Cezar worktree.
+   * No native run is restarted and no new worker is launched by this method. */
+  async reconcileIsolated(intent:Intent,authority:Authority){
+    if(!this.running||!this.lock||!this.isolated)throw new Refusal('ISOLATED_RECOVERY_NOT_CONFIGURED');
+    const run=this.store.getRun(intent.run_id);
+    if(!run?.worktreePath)throw new Refusal('RECOVERY_WORKTREE_MISSING');
+    const root=await realpath(join(this.repo,'.ai/cezar/worktrees'));
+    const worktree=await realpath(run.worktreePath);
+    if(!worktree.startsWith(root+sep))throw new Refusal('RECOVERY_WORKTREE_FORBIDDEN',403);
+    return this.isolated.reconcileExisting(intent,authority,worktree);
   }
   async recordReceipt(intent: Intent, authority: Authority, receipt: unknown) {
     await this.ledger.tx(async c => {
