@@ -16,6 +16,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('device.enroll'),payload:z.object({deviceId:Id,publicKey:z.string().min(40).max(200)}).strict()}).strict(),
  z.object({...base,action:z.literal('device.revoke'),payload:z.object({deviceId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('admission.set'),payload:z.object({enabled:z.boolean(),expectedRevision:z.number().int().positive(),reason:z.string().min(1).max(200)}).strict()}).strict(),
+ z.object({...base,action:z.literal('context.pause'),payload:z.object({paused:z.boolean(),expectedRevision:z.number().int().nonnegative()}).strict()}).strict(),
  z.object({...base,action:z.literal('account.add'),payload:AccountInput}).strict(),
  z.object({...base,action:z.literal('account.share'),payload:z.object({accountId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('profile.add'),payload:ProfileInput}).strict(),
@@ -36,7 +37,7 @@ export class Control {
    const admission=(await c.query(command.action==='admission.set'
     ?'SELECT enabled FROM ac_admission_control WHERE id=1 FOR UPDATE'
     :'SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
-   if(!admission?.enabled&&command.action!=='admission.set')throw new Refusal('ADMISSION_CLOSED');
+   if(!admission?.enabled&&command.action!=='admission.set'&&!(command.action==='context.pause'&&command.payload.paused))throw new Refusal('ADMISSION_CLOSED');
    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,2))',[command.intentId]);
    const {deliveryAttemptId,...semantic}=command;
    const hash=digest({principal,...semantic});
@@ -52,6 +53,12 @@ export class Control {
      case 'device.enroll':await new Operators(this.ledger).enrollFromDevice(c,principal,command.payload.deviceId,command.payload.publicKey);result={deviceId:command.payload.deviceId};break;
      case 'device.revoke':await new Operators(this.ledger).revokeFromDevice(c,principal,command.payload.deviceId);result={deviceId:command.payload.deviceId};break;
      case 'admission.set':result=await new Admission(this.ledger,c).set(principal,command.payload);break;
+     case 'context.pause':{
+      if(context.pause_revision!==command.payload.expectedRevision)throw new Refusal('PAUSE_REVISION_CONFLICT');
+      const updated=await c.query('UPDATE ac_contexts SET paused=$2,pause_revision=pause_revision+1 WHERE id=$1 RETURNING paused,pause_revision',
+       [command.contextId,command.payload.paused]);
+      result={paused:updated.rows[0].paused,revision:updated.rows[0].pause_revision};break;
+     }
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;
      case 'account.share':await service.shareAccount(principal,command.payload.accountId,context.project_id);result={accountId:command.payload.accountId};break;
      case 'profile.add':await service.addProfile(principal,context.project_id,command.payload);result={profileId:command.payload.id};break;

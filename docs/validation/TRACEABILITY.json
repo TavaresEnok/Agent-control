@@ -304,12 +304,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/guarded-pause-20261102.log",
+    "files": "src/control.ts;src/api.ts;src/ledger.ts;db/migrations/024_pause_revision.sql;tests/control.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Signed pause and revision conflicts tested with synthetic database; full mobile, recovery and all ingress scenarios not homologated."
   },
   {
     "id": "RF-25",
@@ -327,15 +327,15 @@
   {
     "id": "RF-26",
     "normative_row": "RF-26\tP0\tExecutar CLIs na central e operações autorizadas em dois servidores sem logins de IA nesses destinos\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/remote-journal-private-20261102.log",
+    "files": "services/remote-worker/worker.py;src/remote.ts;tests/remote_worker_test.py",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Isolated journal process only; no SSH transport, remote host disconnect, real sandbox or production use demonstrated."
   },
   {
     "id": "RF-27",
@@ -564,12 +564,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/context-keys.ts;tests/context-keys.test.ts",
+    "evidence": "docs/validation/evidence/guarded-pause-20261102.log",
+    "files": "src/control.ts;src/api.ts;src/ledger.ts;db/migrations/024_pause_revision.sql;tests/control.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Context fingerprints/rotation revoke authority in synthetic tests. Legacy fixtures still share an account key; no production custody/pairing proof."
+    "limitation": "Signed pause and revision conflicts tested with synthetic database; full mobile, recovery and all ingress scenarios not homologated."
   },
   {
     "id": "RF-45",
@@ -1107,15 +1107,15 @@
   {
     "id": "T14",
     "normative_row": "T14\tSSH cai durante comando persistente\tConsulta recupera resultado; efeito incerto não é repetido cegamente\tRF-26/27\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/remote-journal-private-20261102.log",
+    "files": "services/remote-worker/worker.py;src/remote.ts;tests/remote_worker_test.py",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Isolated journal process only; no SSH transport, remote host disconnect, real sandbox or production use demonstrated."
   },
   {
     "id": "T15",
@@ -1279,12 +1279,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts",
+    "evidence": "docs/validation/evidence/guarded-pause-20261102.log",
+    "files": "src/control.ts;src/api.ts;src/ledger.ts;db/migrations/024_pause_revision.sql;tests/control.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication."
+    "limitation": "Signed pause and revision conflicts tested with synthetic database; full mobile, recovery and all ingress scenarios not homologated."
   },
   {
     "id": "T28",

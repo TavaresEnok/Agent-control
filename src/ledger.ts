@@ -78,7 +78,7 @@ export class Ledger {
   }
   async pause(principal: string, contextId: string, paused: boolean) {
     await this.tx(async c => { await this.authorize(c, principal, contextId);
-      await c.query('UPDATE ac_contexts SET paused=$2 WHERE id=$1', [contextId, paused]);
+      await c.query('UPDATE ac_contexts SET paused=$2,pause_revision=pause_revision+1 WHERE id=$1', [contextId, paused]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'context.pause',$2)", [contextId, { paused }]);
     });
   }

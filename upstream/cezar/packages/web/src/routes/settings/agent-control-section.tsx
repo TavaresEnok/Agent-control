@@ -6,7 +6,11 @@ import { Input } from '@/components/ui/input'
 import { SettingsField } from './settings-field'
 import { operatorIdentity,signControl } from './agent-control-operator'
 
-const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean()}))})
+const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative()}))})
+const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
+ grant_id:z.string().uuid(),role:z.string(),account_id:z.string().uuid(),model:z.string(),effort:z.string(),state:z.string(),
+ counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
+ observed_at:z.string().nullable()}))})
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string()})),
@@ -37,6 +41,8 @@ export function AgentControlSection(){
  const contextId=selected||contexts.data?.contexts[0]?.id||''
  const resources=useQuery({queryKey:['ac-resources',contextId],enabled:!!contextId,
   queryFn:async()=>resourcesSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/resources`))})
+ const usage=useQuery({queryKey:['ac-usage',contextId],enabled:!!contextId,
+  queryFn:async()=>usageSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/usage`))})
  const mutate=useMutation({mutationFn:async(command:{action:string;payload:unknown})=>{
    const storageKey=`ac-control-pending:${contextId}`
    const semantic=JSON.stringify(command)
@@ -49,13 +55,14 @@ export function AgentControlSection(){
    const result=z.object({intentId:z.string(),state:z.literal('applied')}).passthrough().parse(await request('/api/v1/ac/control',body,{'x-ac-operator-proof':proof}))
    sessionStorage.removeItem(storageKey)
    return result
-  },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]})}})
+  },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]});void cache.invalidateQueries({queryKey:['ac-contexts']})}})
  const bootstrap=useMutation({mutationFn:async()=>{
   if(!identity.data)throw Error('DEVICE_KEY_UNAVAILABLE')
   return z.object({state:z.literal('active')}).parse(await request('/api/v1/ac/operator/bootstrap',
    {...identity.data,token:bootstrapToken}))
  },onSettled:()=>setBootstrapToken('')})
  const data=resources.data
+ const selectedContext=contexts.data?.contexts.find(c=>c.id===contextId)
  const busy=mutate.isPending||bootstrap.isPending
  const selectStyle='h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm'
  return <div className="flex min-w-0 flex-col gap-6">
@@ -65,8 +72,14 @@ export function AgentControlSection(){
      {contexts.data?.contexts.map(c=><option key={c.id} value={c.id}>{c.id}{c.paused?' — pausada':''}</option>)}
     </select>
    </label>
+   {selectedContext&&<div className="flex flex-wrap items-center gap-2">
+    <span>{selectedContext.paused?'Pausada':'Ativa'}</span>
+    <Button disabled={busy} onClick={()=>mutate.mutate({action:'context.pause',payload:{paused:!selectedContext.paused,expectedRevision:selectedContext.pause_revision}})}>
+     {selectedContext.paused?'Retomar conversa':'Pausar conversa'}
+    </Button>
+   </div>}
   </SettingsField>
-  {(contexts.error||resources.error)&&<p role="alert">{(contexts.error||resources.error)?.message}</p>}
+  {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
   {identity.error&&<p role="alert">{identity.error.message}</p>}
@@ -170,6 +183,15 @@ export function AgentControlSection(){
     </li>)}</ul>
     <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">
      {g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
+    </li>)}</ul>
+   </SettingsField>
+   <SettingsField title="Uso por tentativa" hint="Contadores informados pelo executor, não saldo da assinatura. Cache e raciocínio podem estar incluídos em entrada e saída.">
+    <p>Saldo da assinatura: desconhecido</p>
+    {usage.data?.attempts.length===0&&<p>Nenhuma tentativa registrada nesta conversa.</p>}
+    <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
+     <strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
+     {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
+      Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}
     </li>)}</ul>
    </SettingsField>
   </>}

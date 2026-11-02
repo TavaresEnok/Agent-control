@@ -1,0 +1,6 @@
+test_duplicate_and_lost_ack (__main__.RemoteJournal.test_duplicate_and_lost_ack) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 1.799s
+
+OK

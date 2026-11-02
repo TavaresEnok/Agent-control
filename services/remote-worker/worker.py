@@ -2,7 +2,7 @@
 """Operation journal for controller-approved SSH tasks. No AI credentials or scheduler.
 This process boundary is not a hostile-code sandbox; deploy it as a restricted executor.
 """
-import argparse, fcntl, hashlib, json, os, pathlib, resource, signal, subprocess, sys, time, uuid
+import argparse, fcntl, hashlib, json, os, pathlib, resource, signal, stat, subprocess, sys, time, uuid
 
 
 def atomic(path, value):
@@ -36,6 +36,9 @@ def load(config_path):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if root.is_symlink():
         raise ValueError('UNSAFE_STATE_DIRECTORY')
+    info = root.stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise ValueError('UNSAFE_STATE_PERMISSIONS')
     return config, root
 
 

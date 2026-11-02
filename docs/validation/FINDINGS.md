@@ -58,3 +58,6 @@ A execução completa nativa Cezar antes das correções de asserção registrou
 | AC-IMP-0033 | QA e integração / alta | somente sintético | `implementation-continuation-20261102.log` exercita DAG, três revisores, juiz e CAS Git com processos sintéticos. Não demonstra agentes reais, executor confiável isolado ou revisão humana independente. |
 
 | AC-IMP-0034 | Uso/cotas / média | parcial | Observações cumulativas sintéticas e acesso por contexto verificados em `usage-observations-20261102.log`; saldo é desconhecido e contadores sobrepostos não são somados. Ainda faltam adaptadores confiáveis, coleta real, apresentação móvel, exportação e comparações. |
+
+| AC-IMP-0035 | Controle de pausa / alta | mitigado em bancada | Comando assinado com revisão impede reenvio obsoleto e a rota anterior recusa escritas sem prova. `guarded-pause-20261102.log` cobre deduplicação e conflito; falta percurso móvel, disponibilidade e recuperação ponta a ponta. |
+| AC-IMP-0036 | Diário remoto / alta | prova parcial | `remote-journal-private-20261102.log` exercita registro, duplicação, inspeção e permissão privada em contêiner sem rede. Não comprova SSH nem recuperação após desconexão efetiva. |

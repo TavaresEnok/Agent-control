@@ -63,7 +63,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       return c.json({state:'active'});
     })
     .get('/api/v1/ac/contexts', async c => {
-      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.plan_revision,x.capacity_policy_revision,s.session_id
+      const rows=await ledger.pool.query(`SELECT x.id,x.paused,x.pause_revision,x.plan_revision,x.capacity_policy_revision,s.session_id
         FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
         JOIN ac_session_links s ON s.context_id=x.id WHERE x.project_id=$1 AND m.principal_id=$2 AND NOT x.archived ORDER BY x.created_at`,
         [runtime.projectId,c.get('principal')]);
@@ -91,12 +91,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const intent = await ledger.accept(c.get('principal'), command, authority, 'cockpit');
       return c.json({ intentId: intent.id, runId: intent.run_id, state: intent.state }, 202);
     })
-    .post('/api/v1/ac/contexts/:id/pause', async c => {
-      const contextId = Id.parse(c.req.param('id'));
-      const { paused } = z.object({ paused: z.boolean() }).strict().parse(await c.req.json());
-      await ledger.pause(c.get('principal'), contextId, paused);
-      return c.json({ contextId, paused });
-    })
+    .post('/api/v1/ac/contexts/:id/pause', c => c.json({error:'SIGNED_CONTROL_REQUIRED'},403))
     .get('/api/v1/ac/contexts/:id', async c => {
       const contextId = Id.parse(c.req.param('id'));
       const data = await ledger.tx(async db => {

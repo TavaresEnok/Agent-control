@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 1 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 162.555516
+  type: 'test'
+  ...
+# Subtest: signed pause is deduplicated and stale commands cannot undo a newer decision
+ok 2 - signed pause is deduplicated and stale commands cannot undo a newer decision
+  ---
+  duration_ms: 92.339274
+  type: 'test'
+  ...
+# Subtest: browser session stores encrypted bearer, limits origin and revokes access
+ok 3 - browser session stores encrypted bearer, limits origin and revokes access
+  ---
+  duration_ms: 129.663136
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1003.778771
