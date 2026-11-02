@@ -15,13 +15,13 @@ begin
   input = JSON.parse(STDIN.read(65_537))
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
   expected = case input['action']
-    when 'identity' then %w[action base candidate repo]
+    when 'identity', 'diff' then %w[action base candidate repo]
     when 'snapshot' then %w[action base candidate destination repo]
     when 'cas' then %w[action base candidate operationId repo targetRef]
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[identity snapshot cas].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[identity diff snapshot cas].include?(input['action'])
   %w[base candidate].each do |key|
     raise 'INVALID_GIT_ID' unless input[key].is_a?(String) && input[key].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
   end
@@ -35,6 +35,10 @@ begin
     source: 'AcSafeGit+AcArtifactIdentity'}
   if input['action'] == 'identity'
     puts JSON.generate(identity)
+  elsif input['action'] == 'diff'
+    diff = git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', base, candidate, '--')
+    puts JSON.generate(identity.merge({diff: diff.byteslice(0, 20_000).force_encoding('UTF-8').scrub,
+      truncated: diff.bytesize > 20_000, diffSha256: Digest::SHA256.hexdigest(diff)}))
   elsif input['action'] == 'snapshot'
     destination = input.fetch('destination')
     raise 'INVALID_REQUEST' unless destination.is_a?(String) && destination.start_with?('/') && !File.exist?(destination) && !File.symlink?(destination)

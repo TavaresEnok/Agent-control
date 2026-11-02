@@ -109,7 +109,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "37995c8e6b7e7d26e6e8dd501402075daf3037a82f94827f5f0a63e0a9af0930"
+      "sha256": "24442239e1ae66df0b60ad8b8a348871a3d33754b9438f692e473d8a5de4096e"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-operator.ts",
@@ -145,6 +145,16 @@
       "path": "packages/web/src/routes/settings/agent-control-profile-editor.test.tsx",
       "change": "added",
       "sha256": "7d7c47907532af119a653e510a77118dc2e1ecaf617262cb312a15bcf045a5f9"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-integration-approval.tsx",
+      "change": "added",
+      "sha256": "a40ec4ab029b1d7b1b5d40768d29f46d59e633a253f5289b539df84fadeda9eb"
+    },
+    {
+      "path": "packages/web/src/routes/settings/agent-control-integration-approval.test.tsx",
+      "change": "added",
+      "sha256": "5f04e2dd19eaa5b74c1ffa0dd67f1b50c7ea2a17292140f47d45e56a6f7471a9"
     }
   ],
   "happier": [

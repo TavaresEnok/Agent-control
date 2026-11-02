@@ -123,17 +123,6 @@ export class Quality {
     if(policy.requireJudge&&!options.ignoreJudge&&evidence.filter(e=>e.kind==='judge').length!==1)throw new Refusal('JUDGMENT_MISSING');
     return artifact;
   }
-  async approveIntegration(principal:string,artifactId:string,targetRef:string){
-    const ref=z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/).parse(targetRef);
-    await this.ledger.tx(async c=>{
-      const artifact=(await c.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1',[Id.parse(artifactId)])).rows[0];
-      if(!artifact)throw new Refusal('ARTIFACT_FORBIDDEN',403);
-      await this.owner(c,principal,artifact.project_id);
-      await c.query('INSERT INTO ac_integration_approvals(artifact_id,target_ref,principal_id,artifact_digest,policy_revision) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
-        [artifact.id,ref,principal,artifact.identity_digest,artifact.policy_revision]);
-      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'integration.approved',$2)",[artifact.context_id,{artifactId,ref,principal}]);
-    });
-  }
   async prepareIntegration(principal:string,artifactId:string,authority:Authority,targetRef:string){
     const ref=z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/).parse(targetRef);
     return this.ledger.tx(async c=>{

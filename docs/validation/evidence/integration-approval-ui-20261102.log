@@ -1,0 +1,21 @@
+
+> typecheck:web
+> npm run typecheck -w @open-mercato/cezar-web
+
+
+> @open-mercato/cezar-web@0.19.0 typecheck
+> tsc --noEmit
+
+
+> test
+> vitest run packages/web/src/routes/settings/agent-control-integration-approval.test.tsx
+
+
+ RUN  v4.1.10 /workspace/upstream/cezar
+
+ ✓  web  src/routes/settings/agent-control-integration-approval.test.tsx (2 tests) 162ms
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  16:21:04
+   Duration  2.61s (transform 106ms, setup 38ms, import 656ms, tests 162ms, environment 1.53s)

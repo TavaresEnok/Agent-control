@@ -7,6 +7,7 @@ import { Control, ControlCommand } from './control.ts';
 import { OperatorProof,Operators } from './operator.ts';
 import type { BrowserSessions } from './sessions.ts';
 import {Usage} from './usage.ts';
+import {GitArtifacts} from './git.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -71,6 +72,20 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     })
     .get('/api/v1/ac/contexts/:id/resources', async c => c.json(await control.view(c.get('principal'),Id.parse(c.req.param('id')))))
     .get('/api/v1/ac/contexts/:id/usage', async c => c.json(await new Usage(ledger).context(c.get('principal'),Id.parse(c.req.param('id')))))
+    .get('/api/v1/ac/contexts/:id/artifacts/:artifactId/diff',async c=>{
+      const contextId=Id.parse(c.req.param('id')),artifactId=Id.parse(c.req.param('artifactId'));
+      const artifact=await ledger.tx(async db=>{
+        const context=await ledger.authorize(db,c.get('principal'),contextId,false);
+        if(context.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+        const value=(await db.query('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[artifactId,contextId])).rows[0];
+        if(!value)throw new Refusal('ARTIFACT_FORBIDDEN',403);
+        return value;
+      });
+      const observed=await new GitArtifacts(runtime.repo).diff(artifact.commit_id,artifact.base_id);
+      if(observed.tree!==artifact.tree_id)throw new Refusal('ARTIFACT_TREE_MISMATCH');
+      c.header('Cache-Control','no-store');
+      return c.json({...observed,artifactId,artifactDigest:artifact.identity_digest});
+    })
     .post('/api/v1/ac/control', async c => {
       const encoded=c.req.header('x-ac-operator-proof');
       if(!encoded||encoded.length>2000)throw new Refusal('HUMAN_CONTROL_AUTH_REQUIRED',403);

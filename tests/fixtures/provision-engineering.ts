@@ -5,7 +5,7 @@ import { GitArtifacts } from '../../src/git.ts';
 import { Quality } from '../../src/quality.ts';
 import type { Ledger } from '../../src/ledger.ts';
 import type { EngineeringOptions } from '../../src/engineering.ts';
-export async function provisionEngineering(ledger:Ledger,principal:string,projectId:string,repo:string,requiredReviews=1,requireJudge=false):Promise<{revision:number;options:EngineeringOptions}>{
+export async function provisionEngineering(ledger:Ledger,principal:string,projectId:string,repo:string,requiredReviews=1,requireJudge=false,requireHumanIntegration=false):Promise<{revision:number;options:EngineeringOptions}>{
  const service=new Capacity(ledger),admin='synthetic-engineering-admin';
  await ledger.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',[admin]);
  await service.configure(admin,{programmingLimit:128,evaluationLimit:128});
@@ -22,6 +22,6 @@ export async function provisionEngineering(ledger:Ledger,principal:string,projec
   roles:{programmer:{regular:[profiles.programmer],emergency:[]},qa:{regular:[profiles.qa],emergency:[]},reviewer:{regular:[profiles.reviewer],emergency:[]},judge:{regular:[profiles.judge],emergency:[]}}});
  const verifierKey=randomBytes(32),git=new GitArtifacts(repo),quality=new Quality(ledger,verifierKey,git);
  const verifierDigest=createHash('sha256').update(await readFile(new URL('../../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
- const qualityRevision=await quality.publish(principal,projectId,0,{schemaVersion:1,requiredReviews,allowLowRiskQaWaiver:false,requireHumanIntegration:false,verifierDigest,requireJudge});
+ const qualityRevision=await quality.publish(principal,projectId,0,{schemaVersion:1,requiredReviews,allowLowRiskQaWaiver:false,requireHumanIntegration,verifierDigest,requireJudge});
  return {revision,options:{quality,git,qualityRevision,targetRef:'refs/heads/protected',verifierKey}};
 }

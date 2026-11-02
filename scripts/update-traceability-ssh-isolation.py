@@ -18,6 +18,7 @@ updates = {
     'RF-18': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/engineering.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Independent synthetic verifier sessions in separate containers; real model reviews and provider accounts remain unverified.'),
     'RF-22': ('docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts', 'Native graph resumes after interrupted synthetic implementation; recovery of other nodes and real providers remains open.'),
     'RF-23': ('docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log', 'src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts', 'Controller SIGKILL after physical implementation result, successor reconciliation and native DAG continuation tested; other crash positions remain open.'),
+    'RF-41': ('docs/validation/evidence/integration-approval-native-20261102.log;docs/validation/evidence/integration-approval-ui-20261102.log', 'src/approvals.ts;src/control.ts;src/api.ts;src/engineering.ts;tests/native-pause.test.ts', 'Signed artifact/target approval and native wait verified with synthetic QA and real Git; independent delivery/publication/deploy workflows and mobile login remain open.'),
     'RF-26': ('docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log', 'src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts', 'Two disposable SSH hosts with no model credentials; remote AI CLIs and production hosts not evaluated.'),
     'RF-27': ('docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log', 'src/remote.ts;services/remote-worker/worker.py;tests/ssh.test.ts;tests/ssh-restart.test.ts', 'Lost acknowledgement and completed receipt after host restart tested; interrupted in-flight effect remains open.'),
     'RF-28': ('docs/validation/evidence/isolated-verification-final-20261102.log', 'src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts', 'Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified.'),
@@ -41,7 +42,7 @@ for row in rows:
     update = updates.get(row['id'])
     if update:
         row.update(status='partially_examined', code_state='partial', test_result='partial_scope_only', evidence=update[0], files=update[1], limitation=update[2])
-assert len(rows) == 111 and len(updates) == 26
+assert len(rows) == 111 and len(updates) == 27
 with path.open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
     writer.writeheader()

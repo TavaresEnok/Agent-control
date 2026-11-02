@@ -8,8 +8,10 @@ import { Operators,type OperatorProof } from './operator.ts';
 import { Admission } from './admission.ts';
 import { Templates,Template } from './templates.ts';
 import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
+import {IntegrationApproval,approveIntegration} from './approvals.ts';
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
+ z.object({...base,action:z.literal('integration.approve'),payload:IntegrationApproval}).strict(),
  z.object({...base,action:z.literal('quality.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:QualityPolicy}).strict()}).strict(),
  z.object({...base,action:z.literal('template.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),template:Template}).strict()}).strict(),
  z.object({...base,action:z.literal('template.assign'),payload:z.object({revision:z.number().int().positive()}).strict()}).strict(),
@@ -55,6 +57,7 @@ export class Control {
    else{
     const service=new Capacity(this.ledger,c);
     switch(command.action){
+     case 'integration.approve':result=await approveIntegration(this.ledger,c,principal,command.contextId,command.payload);break;
      case 'quality.publish':result={revision:await new QualityPolicies(this.ledger,c).publish(principal,context.project_id,command.payload.expectedRevision,command.payload.policy)};break;
      case 'template.publish':result=await new Templates(this.ledger,c).publish(principal,command.contextId,command.payload.expectedRevision,command.payload.template);break;
      case 'template.assign':result=await new Templates(this.ledger,c).assign(principal,command.contextId,command.payload.revision);break;
@@ -129,6 +132,12 @@ export class Control {
    const waits=(await c.query('SELECT attempt_id,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
    const plans=(await c.query(`SELECT i.id,i.run_id,i.plan_revision,i.state,c.state cancellation_state
     FROM ac_intents i LEFT JOIN ac_plan_cancellations c ON c.intent_id=i.id WHERE i.context_id=$1 ORDER BY i.created_at DESC LIMIT 100`,[contextId])).rows;
+   const approvals=(await c.query(`SELECT a.id,a.commit_id,a.tree_id,a.base_id,a.identity_digest,a.policy_revision,x.target_ref,
+    EXISTS(SELECT 1 FROM ac_integration_approvals h WHERE h.artifact_id=a.id AND h.target_ref=x.target_ref) approved,
+    EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=a.intent_id) canceled
+    FROM ac_artifacts a JOIN ac_execution_contracts x ON x.intent_id=a.intent_id
+    JOIN ac_quality_policies p ON p.project_id=a.project_id AND p.revision=a.policy_revision
+    WHERE a.context_id=$1 AND p.snapshot->>'requireHumanIntegration'='true' ORDER BY a.id LIMIT 100`,[contextId])).rows;
    const qualityPolicies=(await c.query('SELECT revision,snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const templates=(await c.query('SELECT revision,snapshot,digest FROM ac_context_templates WHERE context_id=$1 ORDER BY revision',[contextId])).rows;
    const canConfigureCapacity=context.role!=='viewer'&&!!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
@@ -140,7 +149,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
-    accounts,profiles,catalog,policies,grants,plans};
+    accounts,profiles,catalog,policies,grants,plans,approvals,canApproveIntegration:context.role==='owner'};
   });
  }
 }

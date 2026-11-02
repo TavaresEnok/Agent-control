@@ -522,15 +522,15 @@
   {
     "id": "RF-41",
     "normative_row": "RF-41\tP0\tSeparar aprovação da entrega, integração, publicação e deploy em permissões diferentes\tI4",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "types_only_not_behaviorally_verified",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/validation/evidence/git-helper-syntax.log",
-    "files": "src/quality.ts;src/integration.ts;src/git.ts;services/agent-control-git/;db/migrations/005_artifacts_and_quality.sql",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/validation/evidence/integration-approval-native-20261102.log;docs/validation/evidence/integration-approval-ui-20261102.log",
+    "files": "src/approvals.ts;src/control.ts;src/api.ts;src/engineering.ts;tests/native-pause.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Artifact gates/CAS implemented in internal services; no dedicated adversarial proof or complete DAG/verifier integration yet."
+    "limitation": "Signed artifact/target approval and native wait verified with synthetic QA and real Git; independent delivery/publication/deploy workflows and mobile login remain open."
   },
   {
     "id": "RF-42",

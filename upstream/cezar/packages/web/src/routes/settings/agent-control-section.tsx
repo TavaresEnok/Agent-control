@@ -8,6 +8,7 @@ import { operatorIdentity,signControl } from './agent-control-operator'
 import {AgentControlPolicyEditor,policyEditorSchema} from './agent-control-policy-editor'
 import {AgentControlCapacityEditor,capacityEditorSchema} from './agent-control-capacity-editor'
 import {AgentControlProfileEditor,catalogEntrySchema} from './agent-control-profile-editor'
+import {AgentControlIntegrationApproval,approvalSchema} from './agent-control-integration-approval'
 
 const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.object({
@@ -15,6 +16,7 @@ const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlapping
  counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),
  observed_at:z.string().nullable()}))})
 const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
+ approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
  capacity:capacityEditorSchema.nullable(),canConfigureCapacity:z.boolean(),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),quota_status:z.string(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
@@ -101,6 +103,10 @@ export function AgentControlSection(){
     {!plan.cancellation_state&&!['done','review','failed','canceled','cancelled'].includes(plan.state)&&<Button disabled={busy}
      onClick={()=>mutate.mutate({action:'plan.cancel',payload:{intentId:plan.id,planRevision:plan.plan_revision}})}>Cancelar este plano e solicitar parada</Button>}
    </div>)}
+  </SettingsField>}
+  {data&&data.approvals.length>0&&<SettingsField title="Integrações com aprovação humana" hint="A aprovação vale somente para o commit, árvore, base e política exibidos. QA e revisão continuam obrigatórios.">
+   {data.approvals.map(artifact=><AgentControlIntegrationApproval key={artifact.id} contextId={contextId} artifact={artifact}
+    canApprove={data.canApproveIntegration} busy={busy} onApprove={payload=>mutate.mutate({action:'integration.approve',payload})}/>)}
   </SettingsField>}
   {identity.error&&<p role="alert">{identity.error.message}</p>}
   {identity.data&&<SettingsField title="Dispositivo de administração" hint="A chave privada permanece neste navegador. O administrador precisa autorizar a chave pública antes da primeira alteração.">

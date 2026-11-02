@@ -38,6 +38,13 @@ export class GitArtifacts{
   if(value.commit!==candidate||value.base!==base||value.snapshot!==requested)throw new Refusal('GIT_SNAPSHOT_MISMATCH');
   return value;
  }
+ async diff(candidate:string,base:string){
+  GitId.parse(candidate);GitId.parse(base);
+  const value=Identity.extend({diff:z.string().max(20000),truncated:z.boolean(),diffSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict()
+   .parse(await this.invoke({action:'diff',candidate,base}));
+  if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  return value;
+ }
  async cas(candidate:string,base:string,targetRef:string,operationId:string){
   GitId.parse(candidate);GitId.parse(base);z.string().uuid().parse(operationId);
   z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/).parse(targetRef);

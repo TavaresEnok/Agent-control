@@ -106,7 +106,17 @@ export class EngineeringStages{
    if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
    if(node==='judge')await this.ledger.tx(c=>this.options.quality.assertReady(c,artifact.id,authority,{ignoreJudge:true}));
    if(node==='integrate'){
-    const integration=await this.options.quality.prepareIntegration(principal,artifact.id,authority,contract.target_ref);
+    const prepare=()=>this.options.quality.prepareIntegration(principal,artifact.id,authority,contract.target_ref);
+    let integration:Awaited<ReturnType<typeof prepare>>,announced=false;
+    for(;;){
+     if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
+     try{integration=await prepare();break;}
+     catch(error){
+      if(!(error instanceof Refusal)||!['INTEGRATION_APPROVAL_REQUIRED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
+      if(!announced){onEvent?.({type:'text',text:'Integration is waiting for an authorized approval or admission. No Git effect started.'});announced=true;}
+      await new Promise(resolve=>setTimeout(resolve,1000));
+     }
+    }
     await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
      await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1 AND state='registered'",[stage.id]);});
     const receipt=await new Integrator(this.ledger,this.options.quality,this.options.git,this.projectId,contract.target_ref).integrate(principal,integration.id,authority);
