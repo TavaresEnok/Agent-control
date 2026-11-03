@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "31f8b8fad878859857de74d175ee75a628d3d3a9",
+  "git_head_before_delivery": "d874459f04d75ba7a068f4b0155db2fdd32a23df",
   "worktree_changes_present": true,
   "new_sources": {
     "adapters/happier-browser-auth.ts": "e18ad5c1ec2ffd992f556ef15f2a63dd105bc6670d4f855115980418d496d5d1",
@@ -157,6 +157,7 @@
     "src/managed-plan.ts": "3554ee5cecfd1dc31d9a2e127e3fee59f23b301568c5863dd79bee761671fb75",
     "src/manager-transport.ts": "78744d29035588b6116a4e85053b1b3d54b36ce9aa535ee7063382504d018f5c",
     "src/managers.ts": "5b77ad6dd6c1d216d94633c1c27e5825c83651c8ac829713e4d09a0ecf90be80",
+    "src/native-execution-isolation.ts": "9b77250cf2ad26c13a3b682d91e69fcc682adfdfb3fe1613cb8b501b9c6d9af6",
     "src/native-execution-worker.ts": "3d48f369762a93c95230ed0f154265541953047042345d95b36addb40a1d3936",
     "src/native-planning-supervisor.ts": "1555bbfbfc60886d45b547ee2b78f4c8b7ba52df58909fb87ea316053dba11f5",
     "src/native-planning-worker.ts": "0dc915c112e4c337e0eba0fc0f580747740b8de8371af3e4a5a3c45f5d309eb4",
@@ -254,6 +255,7 @@
     "tests/manager-lifecycle.test.ts": "1096fd4b792ae770248cdc444bdbbca87f52bc8481ac4a10fda01af4c9cc0f29",
     "tests/managers.test.ts": "773ea4212b1bf38f151c2b467748942f8cf496b94bbf5507d17ed3a3589d3cc5",
     "tests/native-disk-wait.test.ts": "aa7fb321fcab6970fc3bfcfb9798804cd27f0526e2acbf24f0694bb78a99e60d",
+    "tests/native-execution-isolation.test.ts": "c407f987185400ccefd5729695fca894af08bcd990fbbd67e0e0ed9507569969",
     "tests/native-parallel.test.ts": "596465898401ee9a1ad1a97f6e5422c6334473688adc9a4c3ae20fe54874f75c",
     "tests/native-pause.test.ts": "8e8174c34a4f5e0ac44b69f69c7022fcddea646b8c318d85622d030c4d8345d5",
     "tests/native-planning-cancellation.test.ts": "bd1a811cc2024be5ab57d2e57395a111a9b19296246c2f14a4c3e29e077d924f",
