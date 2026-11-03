@@ -4,6 +4,12 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Incremento: conversa e proposta semântica — 03/11/2026
+
+O endpoint Happier agora pode encaminhar mensagens a um gerador semântico explicitamente injetado, preservando a intenção e o conteúdo cifrado na mesma transação. No laboratório, confirmação perdida, pausa, colisão e cancelamento de proposta pronta não duplicaram execução nem marcaram a proposta como programação; cancelamento de resultado incerto permanece pendente. O template visual fica desabilitado quando o gerente semântico ou a execução não estão habilitados. Detalhes em `implementation/SEMANTIC-CONVERSATION-20261103.md`.
+
+A instalação configurável permanece administrativa: a opção não foi ativada, nenhum modelo real foi chamado e propostas ainda não iniciam programação automaticamente. Integração operacional, classificação e resposta a perguntas, revisão/programação reais, contexto completo e fallback continuam pendentes.
+
 ## Incremento vigente: planejamento e execução nativa delimitada
 
 Planejamento semântico com journal PG, seleção de adaptador/perfil por concessão, recibos assinados e publicação transacional foi implementado e provado com executor sintético e HTTP. Pausa e confirmação perdida preservam a mesma chamada. Paralelismo explícito de 1–10 conserva quatro para planos antigos; conta/limites reais continuam sob Capacity. O runner Cezar envia esforço e fixa ambiente remoto de ferramentas; uma prova offline com CLI oficial e HOME vazio confirmou conexão e recusa de chave inválida.

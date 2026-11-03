@@ -1,0 +1,151 @@
+
+ RUN  v4.1.10 /home/app/projects/agent-control-implementation/upstream/cezar/packages/web
+
+ ❯ |web| src/routes/settings/agent-control-section-diagnostics.test.tsx (1 test | 1 failed) 246ms
+   × does not duplicate diagnostics when resources and plan controls arrive after context 245ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |web| src/routes/settings/agent-control-section-diagnostics.test.tsx > does not duplicate diagnostics when resources and plan controls arrive after context
+TestingLibraryElementError: Unable to find an element with the text: Contadores de modelo não se aplicam.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex min-w-0 flex-col gap-6 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5"[39m
+    [36m>[39m
+      [36m<section[39m
+        [33mclass[39m=[32m"flex flex-col gap-2"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<h2[39m
+            [33mclass[39m=[32m"text-sm font-semibold text-foreground"[39m
+          [36m>[39m
+            [0mAgent Control[0m
+          [36m</h2>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-ui text-muted-foreground"[39m
+          [36m>[39m
+            [0mContas de laboratório, políticas publicadas e capacidade confirmada.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<form[39m
+          [33mclass[39m=[32m"flex flex-col gap-2"[39m
+        [36m>[39m
+          [36m<label[39m
+            [33mclass[39m=[32m"flex flex-col gap-1"[39m
+          [36m>[39m
+            [0mVincular conversa existente do Happier[0m
+            [36m<input[39m
+              [33maria-label[39m=[32m"Identificador da sessão Happier"[39m
+              [33mclass[39m=[32m"h-9 w-full min-w-0 rounded-md border border-input bg-card px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-soft-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20"[39m
+              [33mdata-slot[39m=[32m"input"[39m
+              [33mmaxlength[39m=[32m"200"[39m
+              [33mrequired[39m=[32m""[39m
+              [33mvalue[39m=[32m""[39m
+            [36m/>[39m
+          [36m</label>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 bg-primary text-primary-foreground hover:brightness-[0.96] h-9 px-3.5 text-ui"[39m
+            [33mdata-size[39m=[32m"default"[39m
+            [33mdata-slot[39m=[32m"button"[39m
+            [33mdata-variant[39m=[32m"primary"[39m
+            [33mdisabled[39m=[32m""[39m
+            [33mtype[39m=[32m"submit"[39m
+          [36m>[39m
+            [0mVincular conversa[0m
+          [36m</button>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+          [36m>[39m
+            [0mO acesso é verificado no Happier. Vincular não inicia gerente ou trabalhadores.[0m
+          [36m</p>[39m
+        [36m</form>[39m
+        [36m<label[39m
+          [33mclass[39m=[32m"flex flex-col gap-1"[39m
+        [36m>[39m
+          [0mConversa[0m
+          [36m<select[39m
+            [33maria-label[39m=[32m"Conversa"[39m
+            [33mclass[39m=[32m"h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm"[39m
+          [36m>[39m
+            [36m<option[39m
+              [33mvalue[39m=[32m"00000000-0000-4000-8000-000000000001"[39m
+            [36m>[39m
+              [0m00000000-0000-4000-8000-000000000001[0m
+            [36m</option>[39m
+          [36m</select>[39m
+        [36m</label>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-wrap items-center gap-2"[39m
+        [36m>[39m
+          [36m<span>[39m
+            [0mAtiva[0m
+          [36m</span>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 bg-primary text-primary-foreground hover:brightness-[0.96] h-9 px-3.5 text-ui"[39m
+            [33mdata-size[39m=[32m"default"[39m
+            [33mdata-slot[39m=[32m"button"[39m
+            [33mdata-variant[39m=[32m"primary"[39m
+          [36m>[39m
+            [0mPausar novas etapas[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 bg-primary text-primary-foreground hover:brightness-[0.96] h-9 px-3.5 text-ui"[39m
+            [33mdata-size[39m=[32m"default"[39m
+            [33mdata-slot[39m=[32m"button"[39m
+            [33mdata-variant[39m=[32m"primary"[39m
+          [36m>[39m
+            [0mConcluir planos aceitos e aguardar[0m
+          [36m</button>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"w-full text-xs text-muted-foreground"[39m
+          [36m>[39m
+            [0mNovos planos permitidos, sujeitos à pausa, às políticas e à capacidade.[0m
+            [0m A pausa impede novas etapas; não confirma cancelamento de processos.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+      [36m</section>[39m
+      [36m<button[39m
+        [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 border border-border bg-card hover:bg-muted h-9 px-3.5 text-ui"[39m
+        [33mdata-size[39m=[32m"default"[39m
+        [33mdata-slot[39m=[32m"button"[39m
+        [33mdata-variant[39m=[32m"outline"[39m
+      [36m>[39m
+        [0mSair deste navegador[0m
+      [36m</button>[39m
+      [36m<h2>[39m
+        [0mFixture diagnostics[0m
+      [36m</h2>[39m
+      [36m<section[39m
+        [33mclass[39m=[32m"flex flex-col gap-2"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [36m<h2[39m
+            [33mclass[39m=[32m"text-sm font-semibold text-foreground"[39m
+          [36m>[39m
+            [0mConexão do gerente[0m
+          [36m</h2>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-ui text-muted-foreground"[...
+ ❯ Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/routes/settings/agent-control-section-diagnostics.test.tsx:38:16
+     36|  await waitFor(()=>expect(screen.getAllByText('Fixture diagnostics')).…
+     37|  expect(screen.getAllByText(/Composição determinística local/)).toHave…
+     38|  expect(screen.getByText('Contadores de modelo não se aplicam.')).toBe…
+       |                ^
+     39|  expect(screen.getByText('fixture-model · medium')).toBeTruthy()
+     40|  client.clear()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  00:24:54
+   Duration  2.79s (transform 711ms, setup 35ms, import 1.26s, tests 246ms, environment 1.09s)
+

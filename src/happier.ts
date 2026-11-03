@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Socket } from 'socket.io-client';
+import type pg from 'pg';
 import { Authority, Checkpoint, Command, digest, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import { ContextKeys, type EncryptionVariant } from './context-keys.ts';
 import { Template } from './templates.ts';
 import type { CezarRuntime } from './cezar.ts';
+import type { SemanticPlanning } from './semantic-planning.ts';
+import { managerPlanPublishedSchema } from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 
 type Rpc = {
@@ -126,7 +129,8 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; semanticPlanning?:SemanticPlanning; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
@@ -232,21 +236,44 @@ export class HappierEndpoint {
     const template=current.snapshot?Template.parse(current.snapshot):null;
     if(template&&digest(template)!==current.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
     const selected=prior?.command?.payload?.workflow??template?.workflow??'baseline-synthetic-v1';
+    if(selected==='semantic-proposal-v1'&&(!this.options.semanticPlanning||this.runtime.executionMode!=='execution'))throw new Refusal('SEMANTIC_PLANNING_DISABLED');
+    let payload:Command['payload'];
+    if(selected==='semantic-proposal-v1'){
+      const existing=prior?Command.parse(prior.command):undefined;
+      if(existing?.payload.workflow==='semantic-proposal-v1'){
+        if(existing.payload.localId!==q.localId||existing.payload.messageDigest!==digest(q.text))throw new Refusal('INTENT_PAYLOAD_CONFLICT');
+        payload=existing.payload;
+      }else{
+        if(!template||template.workflow!=='semantic-proposal-v1')throw new Refusal('TEMPLATE_REQUIRED');
+        payload={workflow:selected,localId:q.localId,messageDigest:digest(q.text),messageRef:`message:${stableId(this.options.authority.contextId+'\0'+q.localId)}`,
+          qualityRevision:template.qualityRevision,targetRef:template.targetRef};
+      }
+    }else{
+      if(selected!=='baseline-synthetic-v1'&&selected!=='engineering-synthetic-v1')throw new Refusal('WORKFLOW_NOT_ADMITTED');
+      payload={workflow:selected,messageRef:`${q.localId}:${digest(q.text)}`};
+    }
     const command: Command = { schemaVersion: 1, contextId: this.options.authority.contextId, intentId,
-      deliveryAttemptId: randomUUID(), policyRevision: 1, action: 'plan.start',
-      payload: { workflow: selected, messageRef: `${q.localId}:${digest(q.text)}` } };
-    const intent = await this.ledger.accept(this.options.principal, command, this.options.authority, 'happier');
-    // Canonical history is only in Happier. Ledger outbox stores ciphertext for retry, never the text.
-    await this.enqueue(q.localId, { role: 'user', content: { type: 'text', text: q.text }, localKey: q.localId, meta: q.meta ?? {} },100);
+      deliveryAttemptId: randomUUID(), policyRevision: 1, action: payload.workflow==='semantic-proposal-v1'?'plan.propose':'plan.start', payload };
+    // Bind encrypted request and intention in the same transaction, so a lost
+    // response cannot leave a runnable planning intention without its source.
+    const ciphertext=this.seal({role:'user',content:{type:'text',text:q.text},localKey:q.localId,meta:q.meta??{}});
+    const intent = await this.ledger.accept(this.options.principal, command, this.options.authority, 'happier',async c=>{
+      const id=this.options.sessionId+'|'+q.localId;
+      await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,100) ON CONFLICT DO NOTHING',[id,this.options.sessionId,ciphertext]);
+      const stored=(await c.query('SELECT session_id,ciphertext FROM ac_chat_messages WHERE id=$1',[id])).rows[0];
+      if(!stored||stored.session_id!==this.options.sessionId)throw new Refusal('CHAT_MESSAGE_CONFLICT');
+      const message=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext)));
+      if(digest(message.content.text)!==digest(q.text))throw new Refusal('CHAT_MESSAGE_CONFLICT');
+    });
     return { handled: true, result: { ok: true, providerAcceptancePending: true, intentId: intent.id } };
   }
-  private async enqueue(id: string, content: unknown,priority:0|50|100=0) {
-    const ciphertext = this.seal(content);
-    await this.ledger.tx(async c => {
-      await this.ledger.fence(c, this.options.authority, true);
-      await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-        [this.options.sessionId + '|' + id, this.options.sessionId, ciphertext,priority]);
-    });
+  private async insertAgentMessage(c:pg.PoolClient,localId:string,value:unknown,priority:0|50){
+    const id=this.options.sessionId+'|'+localId,ciphertext=this.seal(value);
+    await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[id,this.options.sessionId,ciphertext,priority]);
+    const stored=(await c.query('SELECT session_id,ciphertext FROM ac_chat_messages WHERE id=$1',[id])).rows[0];
+    if(!stored||stored.session_id!==this.options.sessionId)throw new Refusal('CHAT_MESSAGE_CONFLICT');
+    const decoded=this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext));
+    if(decoded===null||digest(decoded)!==digest(value))throw new Refusal('CHAT_MESSAGE_CONFLICT');
   }
   async ack(event: string, data: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => this.socket.timeout(8000).emit(event, data,
@@ -259,6 +286,44 @@ export class HappierEndpoint {
   private async deliverQueuedMessages(){
     return this.notifications.deliver(this.options.principal,this.options.authority,this.options.sessionId,
       message=>this.ack('message',{sid:this.options.sessionId,message:message.ciphertext,localId:message.localId,echoToSender:true}),()=>this.validateLink());
+  }
+  private async processSemanticProposal(intent:import('./ledger.ts').Intent){
+    const planner=this.options.semanticPlanning,command=Command.parse(intent.command),payload=command.payload;
+    if(!planner||this.runtime.executionMode!=='execution'||command.action!=='plan.propose'||payload.workflow!=='semantic-proposal-v1')throw new Refusal('SEMANTIC_PLANNING_DISABLED');
+    if(intent.state==='done')return;
+    await this.validateLink();
+    const source=(await this.ledger.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE id=$1 AND session_id=$2',
+      [this.options.sessionId+'|'+payload.localId,this.options.sessionId])).rows[0];
+    if(!source)throw new Refusal('PLANNING_SOURCE_MISSING');
+    const record=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(source.ciphertext)));
+    if(digest(record.content.text)!==payload.messageDigest||payload.messageRef!==`message:${stableId(intent.context_id+'\0'+payload.localId)}`)throw new Refusal('PLANNING_SOURCE_MISMATCH');
+    const callId=stableId('semantic-proposal-v1\0'+intent.id);
+    const previous=(await this.ledger.pool.query('SELECT expected_revision FROM ac_semantic_planning_calls WHERE id=$1 AND context_id=$2',[callId,intent.context_id])).rows[0];
+    const revision=previous?.expected_revision??Number((await this.ledger.pool.query('SELECT COALESCE(max(revision),0) revision FROM ac_manager_plans WHERE context_id=$1',[intent.context_id])).rows[0].revision);
+    // A long model call must not starve the manager lease. This is lease renewal,
+    // not a second scheduler; the same callId remains authoritative after failure.
+    let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.socket.connected){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
+    let result:z.infer<typeof managerPlanPublishedSchema>;
+    try{result=managerPlanPublishedSchema.parse(await planner.plan(this.options.principal,{id:callId,intentId:intent.id,contextId:intent.context_id,
+      expectedRevision:revision,sourceMessageRef:payload.messageRef,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,text:record.content.text},this.options.authority));}
+    finally{clearInterval(timer);}
+    await this.validateLink();
+    const localId='proposal-'+callId;
+    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
+      message:{role:'assistant',content:[{type:'text',text:`Proposta de plano ${result.revision} preparada. A distribuição das tarefas depende da configuração de execução.`}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId}}};
+    await this.ledger.tx(async c=>{
+      await this.ledger.authorize(c,this.options.principal,intent.context_id);await this.ledger.fence(c,this.options.authority,true);
+      await this.ledger.assertIntentActive(c,intent.context_id,intent.id);
+      const saved=(await c.query('SELECT state,result FROM ac_semantic_planning_calls WHERE id=$1 AND intent_id=$2 FOR UPDATE',[callId,intent.id])).rows[0];
+      if(!saved||saved.state!=='published'||digest(saved.result)!==digest(result))throw new Refusal('PLANNING_RESULT_CONFLICT');
+      const row=(await c.query('SELECT command,state FROM ac_intents WHERE id=$1 AND context_id=$2 FOR UPDATE',[intent.id,intent.context_id])).rows[0];
+      if(!row||digest(row.command)!==digest(intent.command))throw new Refusal('INTENT_IDENTITY_MISMATCH');
+      await c.query("UPDATE ac_intents SET state='done' WHERE id=$1",[intent.id]);
+      await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
+      await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,revision:result.revision,digest:result.digest}]);
+      await this.insertAgentMessage(c,localId,message,0);
+      await this.ledger.refreshPending(c,intent.context_id);
+    });
   }
   async tick() {
     if (!this.socket.connected) return;
@@ -283,6 +348,33 @@ export class HappierEndpoint {
         await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
           {entityId:intent.run_id,source:'cancellation',planRevision:intent.plan_revision,seq:0,
             status:intent.cancellation_state==='confirmed'?'cancel_confirmed':'cancel_requested',reason:intent.cancellation_state==='confirmed'?'NONE':'PLAN_CANCELLATION_REQUESTED'});
+        continue;
+      }
+      if(intent.command.payload.workflow==='semantic-proposal-v1'){
+        if(!['done','failed','canceled','cancelled'].includes(intent.state))try{await this.processSemanticProposal(intent);}catch(error){
+          if(error instanceof Refusal&&['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code)){capacityWait??=error;continue;}
+          if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED'].includes(error.code)){
+            const localId='proposal-failed-'+intent.id;
+            const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text:'A geração da proposta falhou. Consulte o diagnóstico desta conversa antes de continuar.'}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal-failed'}}};
+            await this.ledger.tx(async c=>{
+              await this.ledger.authorize(c,this.options.principal,intent.context_id);await this.ledger.fence(c,this.options.authority,true);await this.ledger.assertIntentActive(c,intent.context_id,intent.id);
+              const callId=stableId('semantic-proposal-v1\0'+intent.id);
+              const saved=(await c.query("SELECT failure_code FROM ac_semantic_planning_calls WHERE id=$1 AND intent_id=$2 AND state='rejected' FOR UPDATE",[callId,intent.id])).rows[0];
+              if(!saved||saved.failure_code!==error.code)throw new Refusal('PLANNING_RESULT_UNCERTAIN');
+              await c.query("UPDATE ac_intents SET state='failed' WHERE id=$1 AND context_id=$2",[intent.id,intent.context_id]);
+              await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
+              await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,failureCode:error.code}]);
+              await this.insertAgentMessage(c,localId,message,50);
+              await this.ledger.refreshPending(c,intent.context_id);
+            });
+            continue;
+          }
+          if(error instanceof Refusal&&['PLANNING_RESULT_UNCERTAIN','PLANNING_CONTEXT_BUSY','PLANNING_RECEIPT_INVALID','PLANNING_SOURCE_MISSING','PLANNING_SOURCE_MISMATCH','QUALITY_POLICY_CONFLICT','MANAGER_PLAN_REVISION_CONFLICT'].includes(error.code)){
+            await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.id,source:'manager',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});
+            continue;
+          }
+          throw error;
+        }
         continue;
       }
       let run;

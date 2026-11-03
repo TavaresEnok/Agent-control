@@ -67,8 +67,23 @@ export class Cancellations{
       OR (g.role='specialist' AND EXISTS(SELECT 1 FROM ac_specialist_advice a WHERE a.intent_id=$1 AND a.attempt_id=g.attempt_id
        AND a.grant_id=g.id AND a.state='registered' AND NOT EXISTS(SELECT 1 FROM ac_specialist_execution_launches l WHERE l.advice_id=a.id))))`,
      [request.intent_id,{state:'not_started',source:'cancellation-reconciliation'}]);
+    // A registered semantic call never handed control to an executor. Its
+    // reserved grant can be returned only while no physical job was recorded.
+    // Uncertain calls remain occupied even if a grant happens to look released.
+    await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$2
+      WHERE g.intent_id=$1 AND g.role='manager' AND g.state='reserved'
+      AND EXISTS(SELECT 1 FROM ac_semantic_planning_calls s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.grant_id IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.grant_id=g.id)
+      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)`,[request.intent_id,{state:'not_started',source:'semantic-cancellation'}]);
+    await c.query(`UPDATE ac_semantic_planning_calls s SET state='rejected',failure_code='PLANNING_CANCELED'
+      WHERE s.intent_id=$1 AND ((s.state='registered' AND NOT EXISTS(SELECT 1 FROM ac_capacity_grants g WHERE g.attempt_id=s.attempt_id AND g.state<>'released')
+       AND NOT EXISTS(SELECT 1 FROM ac_capacity_grants g JOIN ac_native_planning_jobs j ON j.grant_id=g.id WHERE g.attempt_id=s.attempt_id)
+       AND NOT EXISTS(SELECT 1 FROM ac_capacity_grants g JOIN ac_sandbox_jobs j ON j.grant_id=g.id WHERE g.attempt_id=s.attempt_id))
+      OR (s.state='ready' AND s.receipt IS NOT NULL AND EXISTS(SELECT 1 FROM ac_capacity_grants g WHERE g.id=s.grant_id AND g.state='released' AND g.physical_receipt IS NOT NULL)
+       AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.grant_id=s.grant_id AND j.state NOT IN ('completed','failed'))))`,[request.intent_id]);
     const pending=(await c.query(`SELECT
      EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released') OR
+     EXISTS(SELECT 1 FROM ac_semantic_planning_calls WHERE intent_id=$1 AND state IN ('registered','uncertain','ready')) OR
      EXISTS(SELECT 1 FROM ac_intents child LEFT JOIN ac_plan_cancellations cc ON cc.intent_id=child.id
        WHERE child.parent_intent_id=$1 AND (cc.intent_id IS NULL OR cc.state<>'confirmed')) OR
      EXISTS(SELECT 1 FROM ac_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR

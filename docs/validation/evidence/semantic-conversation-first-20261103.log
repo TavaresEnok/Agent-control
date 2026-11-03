@@ -1,0 +1,30 @@
+TAP version 13
+# Subtest: encrypted chat requests produce one durable proposal across ACK loss and pause, without dispatching an implementation
+not ok 1 - encrypted chat requests produce one durable proposal across ACK loss and pause, without dispatching an implementation
+  ---
+  duration_ms: 2300.902068
+  type: 'test'
+  location: '/workspace/tests/semantic-conversation.test.ts:1:755'
+  failureType: 'testCodeFailure'
+  error: 'STALE_MANAGER'
+  code: 'STALE_MANAGER'
+  stack: |-
+    Ledger.fence (/workspace/src/ledger.ts:75:28)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async <anonymous> (/workspace/src/happier.ts:170:7)
+    async Ledger.tx (/workspace/src/ledger.ts:16:45)
+    async HappierEndpoint.validateLink (/workspace/src/happier.ts:167:5)
+    async HappierEndpoint.accept (/workspace/src/happier.ts:228:39)
+    async TestContext.<anonymous> (/workspace/tests/semantic-conversation.test.ts:44:15)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3079.248286

@@ -310,7 +310,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-manager-status.tsx",
       "change": "added",
-      "sha256": "11ef06f759864d5828ad66ab5c302d92d377fd50462ca740670394676fb6b8e4"
+      "sha256": "ab3d840b8e9e500bd1d3473ac9824d44ed563f7873d091dfc27d8c15228854fb"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-observability.tsx",
@@ -380,12 +380,12 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
       "change": "added",
-      "sha256": "26ba50dd4d9bec6e52f0ef135e4056f51eb1a132549a4869e671d82a0f2aa9f8"
+      "sha256": "8edd24c4169ff35e9e6856c0d38e7c4a62dec73101ff44c7a1db3537a349b2d5"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "c60461af99d6e3b99f19e17d712a5a9ecba4c4e529f15799389734c580605902"
+      "sha256": "1f48819d1b2061ec150b433e600a04f4b2fde02e2768a79cb747cbd4c89ddf73"
     }
   ],
   "happier": [

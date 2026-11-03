@@ -4,6 +4,7 @@ import {Authority,Id,Refusal,digest} from './contracts.ts';
 import {ContextKeys,keyFingerprint,type EncryptionVariant} from './context-keys.ts';
 import {Ledger} from './ledger.ts';
 import {HappierEndpoint,type HappierBoundary} from './happier.ts';
+import type {SemanticPlanning} from './semantic-planning.ts';
 import type {CezarRuntime} from './cezar.ts';
 import type {AdministrativeOperations,AdministrativeCapability} from './administrative-operations.ts';
 
@@ -207,7 +208,7 @@ export function administrativeEndpointDispatcher(registry:ManagerRegistry,servic
  return async(contextId:string,raw:unknown)=>service.execute(await registry.administrativeCapability(contextId,service),raw);
 }
 export function happierEndpointFactory(ledger:Ledger,runtime:CezarRuntime,boundary:HappierBoundary,
- options:{baseUrl:string;token:string;machineId:string;transportOnly?:boolean;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
+ options:{baseUrl:string;token:string;machineId:string;transportOnly?:boolean;semanticPlanning?:SemanticPlanning;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
  return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,principal:input.principal,sessionId:input.sessionId,
   authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant});
 }

@@ -121,7 +121,7 @@ export class Ledger {
       return Checkpoint.parse((await c.query('SELECT snapshot FROM ac_checkpoints WHERE context_id=$1',[authority.contextId])).rows[0].snapshot);
     });
   }
-  async accept(principal: string, raw: Command, a: Authority, channel: string): Promise<Intent> {
+  async accept(principal: string, raw: Command, a: Authority, channel: string, afterAccept?:(c:pg.PoolClient,intent:Intent)=>Promise<void>): Promise<Intent> {
     const command = Command.parse(raw);
     return this.tx(async c => {
       const context = await this.authorize(c, principal, command.contextId);
@@ -155,9 +155,11 @@ export class Ledger {
           const template=Template.parse(selected.snapshot);
           if(digest(template)!==selected.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
           if(template.workflow!==command.payload.workflow)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
+          if(template.workflow==='semantic-proposal-v1'&&command.payload.workflow==='semantic-proposal-v1'&&
+            (template.qualityRevision!==command.payload.qualityRevision||template.targetRef!==command.payload.targetRef))throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
           await c.query('INSERT INTO ac_intent_templates VALUES($1,$2,$3,$4,$5)',
             [intent.id,command.contextId,context.active_template_revision,template,selected.digest]);
-        }else if(command.payload.workflow==='engineering-synthetic-v1')throw new Refusal('TEMPLATE_REQUIRED');
+        }else if(command.payload.workflow==='engineering-synthetic-v1'||command.payload.workflow==='semantic-proposal-v1')throw new Refusal('TEMPLATE_REQUIRED');
         const workflow=command.payload.workflow==='managed-synthetic-v1'
           ?await freezeManagedExecution(this,c,intent,principal,a,command.payload.proposalRevision,command.payload.proposalDigest)
           :workflowFor(command.payload.workflow);
@@ -179,6 +181,7 @@ export class Ledger {
       await c.query('INSERT INTO ac_deliveries(id,intent_id,channel) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [deliveryAttemptId, intent.id, channel]);
       const delivery = await c.query('SELECT intent_id FROM ac_deliveries WHERE id=$1', [deliveryAttemptId]);
       if (delivery.rows[0].intent_id !== intent.id) throw new Refusal('DELIVERY_ID_CONFLICT');
+      if(afterAccept){await this.fence(c,a,true);await this.assertIntentActive(c,a.contextId,intent.id);await afterAccept(c,intent);}
       return intent;
     });
   }

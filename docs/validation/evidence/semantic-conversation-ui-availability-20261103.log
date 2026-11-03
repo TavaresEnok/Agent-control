@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /home/app/projects/agent-control-implementation/upstream/cezar/packages/web
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  00:25:23
+   Duration  3.06s (transform 988ms, setup 38ms, import 1.49s, tests 617ms, environment 774ms)
+

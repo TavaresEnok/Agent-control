@@ -4,7 +4,7 @@ import { Id,digest,Refusal } from './contracts.ts';
 import type { Ledger } from './ledger.ts';
 export const Template=z.discriminatedUnion('workflow',[
  z.object({workflow:z.literal('baseline-synthetic-v1')}).strict(),
- z.object({workflow:z.literal('engineering-synthetic-v1'),qualityRevision:z.number().int().positive(),
+ z.object({workflow:z.enum(['engineering-synthetic-v1','semantic-proposal-v1']),qualityRevision:z.number().int().positive(),
   targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/)}).strict(),
 ]);
 export class Templates{
@@ -17,7 +17,7 @@ export class Templates{
    if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
    const latest=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_context_templates WHERE context_id=$1',[contextId])).rows[0].revision);
    if(latest!==expectedRevision)throw new Refusal('TEMPLATE_REVISION_CONFLICT');
-   if(template.workflow==='engineering-synthetic-v1'&&!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,template.qualityRevision])).rowCount)
+   if((template.workflow==='engineering-synthetic-v1'||template.workflow==='semantic-proposal-v1')&&!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,template.qualityRevision])).rowCount)
     throw new Refusal('QUALITY_POLICY_REQUIRED');
    await c.query('INSERT INTO ac_context_templates(context_id,revision,snapshot,digest,published_by) VALUES($1,$2,$3,$4,$5)',
     [contextId,latest+1,template,digest(template),principal]);

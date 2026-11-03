@@ -11,10 +11,12 @@ vi.mock('./agent-control-import-preview',()=>({AgentControlImportPreview:()=>nul
 const context='00000000-0000-4000-8000-000000000001',installation='00000000-0000-4000-8000-000000000002'
 afterEach(()=>{cleanup();vi.unstubAllGlobals()})
 it('does not duplicate diagnostics when resources and plan controls arrive after context',async()=>{
+ let semanticEnabled=false
  let resolveResources!:(value:Response)=>void
  const pending=new Promise<Response>(resolve=>{resolveResources=resolve})
  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
   if(path.endsWith('/resources'))return pending
+  if(path.endsWith('/manager'))return new Response(JSON.stringify({contextId:context,state:'running',executionEnabled:semanticEnabled,semanticManagerEnabled:semanticEnabled}))
   if(path.endsWith('/contexts'))return new Response(JSON.stringify({contexts:[{id:context,paused:false,pause_revision:0,draining:false,drain_revision:0,policy_revision:1}]}))
   if(path.endsWith('/operator/identity'))return new Response(JSON.stringify({principalId:'fixture',projectId:installation,installationId:installation,operatorDeviceIds:[]}))
   if(path.endsWith('/usage'))return new Response(JSON.stringify({subscriptionBalance:'unknown',overlappingCounters:true,attempts:[
@@ -37,5 +39,9 @@ it('does not duplicate diagnostics when resources and plan controls arrive after
  expect(screen.getAllByText(/Composição determinística local/)).toHaveLength(2)
  expect(screen.getByText('Contadores de modelo não se aplicam.')).toBeTruthy()
  expect(screen.getByText('fixture-model · medium')).toBeTruthy()
+ const option=screen.getByRole('option',{name:/Gerente planeja a solicitação/}) as HTMLOptionElement
+ expect(option.disabled).toBe(true)
+ semanticEnabled=true;await client.invalidateQueries({queryKey:['ac-manager-status']})
+ await waitFor(()=>expect((screen.getByRole('option',{name:/Gerente planeja a solicitação/}) as HTMLOptionElement).disabled).toBe(false))
  client.clear()
 })

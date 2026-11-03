@@ -206,6 +206,7 @@ export class CezarRuntime {
   }
   async dispatch(intent: Intent, authority: Authority) {
     if(!this.executionEnabled)throw new Refusal('ADMINISTRATION_ONLY');
+    if(intent.command.payload.workflow==='semantic-proposal-v1')throw new Refusal('PLANNING_INTENT_NOT_EXECUTION');
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
     const delivery=(await this.ledger.pool.query('SELECT parent_intent_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0];
     if(!delivery)throw new Refusal('INTENT_MISSING');

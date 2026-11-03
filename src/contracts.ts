@@ -7,12 +7,15 @@ export type Authority = z.infer<typeof Authority>;
 export const Command = z.object({
   schemaVersion: z.literal(1), intentId: Id, deliveryAttemptId: Id,
   contextId: Id, policyRevision: z.number().int().positive(),
-  action: z.literal('plan.start'),
+  action: z.enum(['plan.start','plan.propose']),
   payload: z.discriminatedUnion('workflow',[
    z.object({workflow:z.enum(['baseline-synthetic-v1','engineering-synthetic-v1']),messageRef:z.string().min(1).max(200)}).strict(),
+   z.object({workflow:z.literal('semantic-proposal-v1'),messageRef:z.string().min(1).max(200),localId:z.string().min(1).max(200),messageDigest:z.string().regex(/^[a-f0-9]{64}$/),qualityRevision:z.number().int().positive(),targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/)}).strict(),
    z.object({workflow:z.literal('managed-synthetic-v1'),messageRef:z.string().min(1).max(200),proposalRevision:z.number().int().positive(),proposalDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
   ]),
-}).strict();
+}).strict().superRefine((value,ctx)=>{
+ if((value.action==='plan.propose')!==(value.payload.workflow==='semantic-proposal-v1'))ctx.addIssue({code:'custom',message:'ACTION_WORKFLOW_MISMATCH',path:['action']});
+});
 export type Command = z.infer<typeof Command>;
 export const Checkpoint = z.object({
   schemaVersion: z.literal(1), planRevision: z.number().int().nonnegative(),

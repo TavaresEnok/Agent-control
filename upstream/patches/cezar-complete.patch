@@ -2094,10 +2094,10 @@ index 0000000000000000000000000000000000000000..8cdf80031c89cb120bc270f707a966c7
 +}
 diff --git a/packages/web/src/routes/settings/agent-control-manager-status.tsx b/packages/web/src/routes/settings/agent-control-manager-status.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d7aa8daf3e800ad8d1000a85558d837faf305359
+index 0000000000000000000000000000000000000000..531fda8b7ca8ebbb54522074309973d7c20c0a77
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-manager-status.tsx
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,27 @@
 +import {useQuery} from '@tanstack/react-query'
 +import {z} from 'zod'
 +import {useProjectScope} from '@/api/project-scope-context'
@@ -2106,13 +2106,16 @@ index 0000000000000000000000000000000000000000..d7aa8daf3e800ad8d1000a85558d837f
 +const schema=z.object({contextId:z.string().uuid(),state:z.enum(['unavailable','stopped','starting','running','stopping','disconnected','revoked']),
 + executionEnabled:z.boolean().optional(),semanticManagerEnabled:z.boolean().optional()})
 +const labels={unavailable:'Conexão não configurada',stopped:'Parado',starting:'Conectando',running:'Conectado',stopping:'Encerrando',disconnected:'Desconectado',revoked:'Autorização revogada'}
-+export function AgentControlManagerStatus({contextId}:{contextId:string}){
-+ const {projectId}=useProjectScope()
-+ const query=useQuery({queryKey:['ac-manager-status',projectId,contextId],enabled:!!contextId,refetchInterval:15000,retry:false,queryFn:async({signal})=>{
++export function useAgentControlManagerStatus(contextId:string,projectId:string|null|undefined){
++ return useQuery({queryKey:['ac-manager-status',projectId,contextId],enabled:!!contextId,refetchInterval:15000,retry:false,queryFn:async({signal})=>{
 +  const response=await agentControlFetch(`/api/v1/ac/contexts/${encodeURIComponent(contextId)}/manager`,{signal})
 +  if(!response.ok)throw Error('MANAGER_STATUS_UNAVAILABLE')
 +  const value=schema.parse(await response.json());if(value.contextId!==contextId)throw Error('MANAGER_CONTEXT_MISMATCH');return value
 + }})
++}
++export function AgentControlManagerStatus({contextId}:{contextId:string}){
++ const {projectId}=useProjectScope()
++ const query=useAgentControlManagerStatus(contextId,projectId)
 + return <SettingsField title="Conexão do gerente" hint="Estado da conexão desta conversa.">
 +  {query.isPending&&<p role="status">Consultando conexão…</p>}
 +  {query.isError&&<p role="status">Não foi possível confirmar a conexão.</p>}
@@ -2921,10 +2924,10 @@ index 0000000000000000000000000000000000000000..ae80d84a8531196adbcc41a290a10d24
 +}
 diff --git a/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx b/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..d773b0e902010f07148a16bba9b5525233badb3d
+index 0000000000000000000000000000000000000000..ce7438f501802f8d54588590dfd530f957818059
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,47 @@
 +import {cleanup,render,screen,waitFor} from '@testing-library/react'
 +import {QueryClient,QueryClientProvider} from '@tanstack/react-query'
 +import {afterEach,expect,it,vi} from 'vitest'
@@ -2938,10 +2941,12 @@ index 0000000000000000000000000000000000000000..d773b0e902010f07148a16bba9b55252
 +const context='00000000-0000-4000-8000-000000000001',installation='00000000-0000-4000-8000-000000000002'
 +afterEach(()=>{cleanup();vi.unstubAllGlobals()})
 +it('does not duplicate diagnostics when resources and plan controls arrive after context',async()=>{
++ let semanticEnabled=false
 + let resolveResources!:(value:Response)=>void
 + const pending=new Promise<Response>(resolve=>{resolveResources=resolve})
 + vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
 +  if(path.endsWith('/resources'))return pending
++  if(path.endsWith('/manager'))return new Response(JSON.stringify({contextId:context,state:'running',executionEnabled:semanticEnabled,semanticManagerEnabled:semanticEnabled}))
 +  if(path.endsWith('/contexts'))return new Response(JSON.stringify({contexts:[{id:context,paused:false,pause_revision:0,draining:false,drain_revision:0,policy_revision:1}]}))
 +  if(path.endsWith('/operator/identity'))return new Response(JSON.stringify({principalId:'fixture',projectId:installation,installationId:installation,operatorDeviceIds:[]}))
 +  if(path.endsWith('/usage'))return new Response(JSON.stringify({subscriptionBalance:'unknown',overlappingCounters:true,attempts:[
@@ -2964,14 +2969,18 @@ index 0000000000000000000000000000000000000000..d773b0e902010f07148a16bba9b55252
 + expect(screen.getAllByText(/Composição determinística local/)).toHaveLength(2)
 + expect(screen.getByText('Contadores de modelo não se aplicam.')).toBeTruthy()
 + expect(screen.getByText('fixture-model · medium')).toBeTruthy()
++ const option=screen.getByRole('option',{name:/Gerente planeja a solicitação/}) as HTMLOptionElement
++ expect(option.disabled).toBe(true)
++ semanticEnabled=true;await client.invalidateQueries({queryKey:['ac-manager-status']})
++ await waitFor(()=>expect((screen.getByRole('option',{name:/Gerente planeja a solicitação/}) as HTMLOptionElement).disabled).toBe(false))
 + client.clear()
 +})
 diff --git a/packages/web/src/routes/settings/agent-control-section.tsx b/packages/web/src/routes/settings/agent-control-section.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..2301e3da61560821d2eb69e473961c563d818744
+index 0000000000000000000000000000000000000000..a523dae81d2423854717444c147348405a3648c1
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-section.tsx
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,320 @@
 +import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 +import { useState } from 'react'
 +import { z } from 'zod'
@@ -2994,7 +3003,7 @@ index 0000000000000000000000000000000000000000..2301e3da61560821d2eb69e473961c56
 +import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './agent-control-provider-eligibility'
 +import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent-control-administrative-policy'
 +import {AgentControlPortableExport} from './agent-control-portable-export'
-+import {AgentControlManagerStatus} from './agent-control-manager-status'
++import {AgentControlManagerStatus,useAgentControlManagerStatus} from './agent-control-manager-status'
 +import {agentControlFetch} from './agent-control-fetch'
 +import {useProjectScope} from '@/api/project-scope-context'
 +
@@ -3060,6 +3069,8 @@ index 0000000000000000000000000000000000000000..2301e3da61560821d2eb69e473961c56
 + const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
 + const contexts=useQuery({queryKey:['ac-contexts',projectId],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
 + const contextId=selected||contexts.data?.contexts[0]?.id||''
++ const managerAvailability=useAgentControlManagerStatus(contextId,projectId)
++ const semanticAvailable=managerAvailability.data?.state==='running'&&managerAvailability.data.executionEnabled===true&&managerAvailability.data.semanticManagerEnabled===true
 + const resources=useQuery({queryKey:['ac-resources',contextId,projectId],enabled:!!contextId,refetchInterval:5000,
 +  queryFn:async()=>resourcesSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/resources`))})
 + const operator=useQuery({queryKey:['ac-operator-identity',projectId],queryFn:async()=>z.object({principalId:z.string(),projectId:z.string().uuid(),
@@ -3250,22 +3261,23 @@ index 0000000000000000000000000000000000000000..2301e3da61560821d2eb69e473961c56
 +    </form>
 +   </SettingsField>
 +   <SettingsField title="Fluxo da conversa" hint={`Revisão ativa: ${data.activeTemplateRevision??'padrão'}. Solicitações anteriores mantêm seu fluxo congelado.`}>
-+    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();const template=templateWorkflow==='engineering-synthetic-v1'
++    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();const template=templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1'
 +     ?{workflow:templateWorkflow,qualityRevision:Number(qualityRevision),targetRef}:{workflow:templateWorkflow}
 +     mutate.mutate({action:'template.publish',payload:{expectedRevision:data.templates.at(-1)?.revision??0,template}})}}>
 +     <select aria-label="Fluxo" className={selectStyle} value={templateWorkflow} onChange={e=>setTemplateWorkflow(e.target.value)}>
 +      <option value="baseline-synthetic-v1">Fluxo básico de teste</option>
 +      <option value="engineering-synthetic-v1">Implementação, QA, revisão e integração — teste</option>
++      <option value="semantic-proposal-v1" disabled={!semanticAvailable}>Gerente planeja a solicitação{semanticAvailable?'':' — indisponível'}</option>
 +     </select>
-+     {templateWorkflow==='engineering-synthetic-v1'&&<>
++     {(templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&<>
 +      <select aria-label="Política de revisão" className={selectStyle} required value={qualityRevision} onChange={e=>setQualityRevision(e.target.value)}>
 +       <option value="">Selecione a revisão</option>{data.qualityPolicies.map(p=><option key={p.revision} value={p.revision}>Revisão {p.revision}</option>)}
 +      </select>
 +      <Input aria-label="Branch de destino" value={targetRef} onChange={e=>setTargetRef(e.target.value)} required/>
 +     </>}
-+     <Button disabled={busy||(templateWorkflow==='engineering-synthetic-v1'&&(!qualityRevision||!targetRef))} type="submit">Publicar e usar fluxo</Button>
++     <Button disabled={busy||((templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&(!qualityRevision||!targetRef))||(templateWorkflow==='semantic-proposal-v1'&&!semanticAvailable)} type="submit">Publicar e usar fluxo</Button>
 +    </form>
-+    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision}
++    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='semantic-proposal-v1'&&!semanticAvailable)}
 +     onClick={()=>mutate.mutate({action:'template.assign',payload:{revision:t.revision}})}>Usar fluxo {t.revision}</Button>)}</div>
 +   </SettingsField>
 +   <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
@@ -3280,7 +3292,7 @@ index 0000000000000000000000000000000000000000..2301e3da61560821d2eb69e473961c56
 +    {usage.data?.attempts.some(item=>item.resource_kind==='model')&&<p>Saldo da assinatura: desconhecido</p>}
 +    {usage.data?.attempts.length===0&&<p>Nenhuma tentativa registrada nesta conversa.</p>}
 +    <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
-+     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/>Contadores de modelo não se aplicam.</>:
++     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/><span>Contadores de modelo não se aplicam.</span></>:
 +      <><strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
 +       {item.reported_tokens!==null&&item.reported_tokens!==undefined&&<p>Total informado pelo CLI: {item.reported_tokens.toLocaleString()} tokens</p>}{item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
 +        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>{item.reported_tokens===null||item.reported_tokens===undefined?'Uso ainda não informado.':'Detalhamento de entrada, saída e cache indisponível.'}</>}</>}

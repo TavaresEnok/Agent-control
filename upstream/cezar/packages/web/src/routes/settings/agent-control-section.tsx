@@ -20,7 +20,7 @@ import {AgentControlRemoteSources} from './agent-control-remote-sources'
 import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './agent-control-provider-eligibility'
 import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent-control-administrative-policy'
 import {AgentControlPortableExport} from './agent-control-portable-export'
-import {AgentControlManagerStatus} from './agent-control-manager-status'
+import {AgentControlManagerStatus,useAgentControlManagerStatus} from './agent-control-manager-status'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -86,6 +86,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
  const contexts=useQuery({queryKey:['ac-contexts',projectId],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
  const contextId=selected||contexts.data?.contexts[0]?.id||''
+ const managerAvailability=useAgentControlManagerStatus(contextId,projectId)
+ const semanticAvailable=managerAvailability.data?.state==='running'&&managerAvailability.data.executionEnabled===true&&managerAvailability.data.semanticManagerEnabled===true
  const resources=useQuery({queryKey:['ac-resources',contextId,projectId],enabled:!!contextId,refetchInterval:5000,
   queryFn:async()=>resourcesSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/resources`))})
  const operator=useQuery({queryKey:['ac-operator-identity',projectId],queryFn:async()=>z.object({principalId:z.string(),projectId:z.string().uuid(),
@@ -276,22 +278,23 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
     </form>
    </SettingsField>
    <SettingsField title="Fluxo da conversa" hint={`Revisão ativa: ${data.activeTemplateRevision??'padrão'}. Solicitações anteriores mantêm seu fluxo congelado.`}>
-    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();const template=templateWorkflow==='engineering-synthetic-v1'
+    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();const template=templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1'
      ?{workflow:templateWorkflow,qualityRevision:Number(qualityRevision),targetRef}:{workflow:templateWorkflow}
      mutate.mutate({action:'template.publish',payload:{expectedRevision:data.templates.at(-1)?.revision??0,template}})}}>
      <select aria-label="Fluxo" className={selectStyle} value={templateWorkflow} onChange={e=>setTemplateWorkflow(e.target.value)}>
       <option value="baseline-synthetic-v1">Fluxo básico de teste</option>
       <option value="engineering-synthetic-v1">Implementação, QA, revisão e integração — teste</option>
+      <option value="semantic-proposal-v1" disabled={!semanticAvailable}>Gerente planeja a solicitação{semanticAvailable?'':' — indisponível'}</option>
      </select>
-     {templateWorkflow==='engineering-synthetic-v1'&&<>
+     {(templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&<>
       <select aria-label="Política de revisão" className={selectStyle} required value={qualityRevision} onChange={e=>setQualityRevision(e.target.value)}>
        <option value="">Selecione a revisão</option>{data.qualityPolicies.map(p=><option key={p.revision} value={p.revision}>Revisão {p.revision}</option>)}
       </select>
       <Input aria-label="Branch de destino" value={targetRef} onChange={e=>setTargetRef(e.target.value)} required/>
      </>}
-     <Button disabled={busy||(templateWorkflow==='engineering-synthetic-v1'&&(!qualityRevision||!targetRef))} type="submit">Publicar e usar fluxo</Button>
+     <Button disabled={busy||((templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&(!qualityRevision||!targetRef))||(templateWorkflow==='semantic-proposal-v1'&&!semanticAvailable)} type="submit">Publicar e usar fluxo</Button>
     </form>
-    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision}
+    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='semantic-proposal-v1'&&!semanticAvailable)}
      onClick={()=>mutate.mutate({action:'template.assign',payload:{revision:t.revision}})}>Usar fluxo {t.revision}</Button>)}</div>
    </SettingsField>
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
@@ -306,7 +309,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
     {usage.data?.attempts.some(item=>item.resource_kind==='model')&&<p>Saldo da assinatura: desconhecido</p>}
     {usage.data?.attempts.length===0&&<p>Nenhuma tentativa registrada nesta conversa.</p>}
     <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
-     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/>Contadores de modelo não se aplicam.</>:
+     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/><span>Contadores de modelo não se aplicam.</span></>:
       <><strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
        {item.reported_tokens!==null&&item.reported_tokens!==undefined&&<p>Total informado pelo CLI: {item.reported_tokens.toLocaleString()} tokens</p>}{item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
         Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>{item.reported_tokens===null||item.reported_tokens===undefined?'Uso ainda não informado.':'Detalhamento de entrada, saída e cache indisponível.'}</>}</>}
