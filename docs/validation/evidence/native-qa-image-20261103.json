@@ -1,0 +1,13 @@
+{
+  "image": {
+    "id": "sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3",
+    "environment": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "NODE_VERSION=22.23.3",
+      "YARN_VERSION=1.22.22"
+    ]
+  },
+  "accountsMounted": false,
+  "modelInference": false,
+  "fixtureOnly": true
+}

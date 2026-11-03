@@ -1,5 +1,7 @@
 # Código gerado → artefato Git → revisão independente
 
+Atualização posterior: o executor de QA por contrato foi implementado e exercitado com contêineres reais; consultar `NATIVE-QA-20261103.md`. As limitações abaixo registram o escopo da rodada original.
+
 ## Implementação
 
 A migração 052 acrescenta o journal imutável da finalização. `NativeArtifactFinalizer` usa o mesmo grant do trabalhador enquanto o processo local ainda estiver incerto. Registra PID, início e boot antes de liberar a entrada ao helper; observa o grupo de processos antes de concluir e lê um resultado privado publicado com fsync. Um lançamento anterior é observado, sem repetição cega. Cancelamento tenta parar o grupo somente após conferir sua identidade.

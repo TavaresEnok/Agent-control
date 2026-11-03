@@ -1,5 +1,27 @@
 name: ac-implementation
 services:
+  native-qa-controller-proof:
+    profiles: [qa-physical]
+    image: agent-control-lab:0.1.0
+    user: '0:0'
+    init: true
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    networks: [lab]
+    working_dir: /home/app/projects/agent-control-implementation
+    command: [node, --import, tsx, --test, tests/native-qa-physical.test.ts]
+    environment:
+      AC_TEST_DATABASE_URL: postgresql://ac_lab:synthetic-lab-only@db:5432/ac_implementation_test
+      AC_QA_PHYSICAL_ROOT: /home/app/projects/agent-control-implementation/.state/native-qa-physical
+      HOME: /tmp
+    volumes:
+      - ..:/home/app/projects/agent-control-implementation:ro
+      - ../.state/native-qa-physical:/home/app/projects/agent-control-implementation/.state/native-qa-physical:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db: {condition: service_healthy}
   native-tools-proof:
     profiles: [native-pair]
     image: agent-control-native-tools:0.1.0

@@ -4,6 +4,12 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Estado vigente: QA funcional real
+
+QA por comando autorizado foi implementado e ligado ao Cezar/Quality. Dois casos funcionais rodaram em contêineres reais sem rede, credenciais ou montagem gravável do código: um passou, outro falhou; uma mensagem de aprovação impressa pelo teste não alterou a saída observada. A branch protegida permaneceu intacta. Ver `implementation/NATIVE-QA-20261103.md`.
+
+O projeto segue incompleto: faltam despacho nativo, contexto autorizado, integração de bootstrap e homologação real/móvel, entre os demais aceites abertos. O QA é uma capacidade entregue, ainda não uma homologação geral dos testes de qualquer projeto. As seções seguintes preservam o histórico dos incrementos.
+
 ## Estado vigente: artefatos e revisão nativos
 
 Finalização de código nativo, registro de artefato e revisão independente tipada foram ligados ao supervisor/Quality e ao ciclo de observação do Cezar. A prova com PostgreSQL, Git e helper reais passou com turnos/contêineres simulados. Sem QA, a integração continuou bloqueada. Detalhes: `implementation/NATIVE-ARTIFACT-REVIEW-20261103.md`.

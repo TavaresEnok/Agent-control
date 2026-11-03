@@ -1,0 +1,18 @@
+ Container ac-implementation-db-1  Running
+TAP version 13
+# {"proof":"native-qa-real-docker","functionalCommands":2,"outcomes":["passed","failed"],"untrustedStdoutIgnored":true,"network":"none","credentialsMounted":false,"modelCalls":0,"protectedBranchUnchanged":true}
+# Subtest: real isolated QA uses Docker exit code, preserves the commit and rejects forged stdout approval
+ok 1 - real isolated QA uses Docker exit code, preserves the commit and rejects forged stdout approval
+  ---
+  duration_ms: 4459.604299
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5672.20716

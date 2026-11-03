@@ -515,6 +515,11 @@ export class CezarRuntime {
       await service.reconcileSandbox(authority,this.isolated.client);
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     }
+    if(this.engineering?.options.nativeQa){
+      if(!principal)throw new Refusal('NATIVE_QA_PRINCIPAL_REQUIRED');
+      await this.engineering.options.nativeQa.reconcileContext(principal,authority);
+      await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    }
     if(this.nativePlanning.length){
       if(!principal)throw new Refusal('PLANNING_PRINCIPAL_REQUIRED');
       const calls=(await this.ledger.pool.query(`SELECT s.id FROM ac_semantic_planning_calls s

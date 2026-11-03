@@ -41,7 +41,7 @@ const waitSchema=z.discriminatedUnion('resource_kind',[
  z.object({...waitBase,resource_kind:z.literal('model'),desired_profile:z.string().uuid().nullable()}),
  z.object({...waitBase,resource_kind:z.literal('local_compositor'),desired_profile:z.null()}),
 ])
-const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
+const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
  canAuthorizeRemoteSource:z.boolean(),remoteSourceHosts:z.array(z.object({id:z.string().uuid(),label:z.string()})).max(100),
  remoteSourceAuthorizations:z.array(z.object({authorizationId:z.string().uuid(),intentId:z.string().uuid(),hostId:z.string().uuid(),
@@ -262,7 +262,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    <SettingsField title="Revisão e QA" hint="Uma revisão aprovada deve referir-se ao mesmo código e usar uma sessão independente.">
     <ul className="flex flex-col gap-2">{data.qualityPolicies.map(policy=><li key={policy.revision} className="break-words rounded-md border p-2 text-sm">Revisão {policy.revision} · {policy.snapshot===undefined?'Requisito de especialista não informado':policy.snapshot.requireSpecialistBeforeImplementation?'Consulta ao especialista exigida antes da implementação':'Consulta prévia ao especialista não exigida'}</li>)}</ul>
     <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();if(requireSpecialist&&!data.specialistVerifierDigest)return;mutate.mutate({action:'quality.publish',payload:{
-     expectedRevision:data.qualityPolicies.at(-1)?.revision??0,policy:{schemaVersion:1,requiredReviews,allowLowRiskQaWaiver:false,requireHumanIntegration:requireHuman,requireJudge,verifierDigest:data.verifierDigest,
+     expectedRevision:data.qualityPolicies.at(-1)?.revision??0,policy:{schemaVersion:1,requiredReviews,allowLowRiskQaWaiver:false,requireHumanIntegration:requireHuman,requireJudge,verifierDigest:data.verifierDigest,...(data.qaVerifierDigest?{qaVerifierDigest:data.qaVerifierDigest}:{}),
       ...(requireSpecialist?{requireSpecialistBeforeImplementation:true,specialistVerifierDigest:data.specialistVerifierDigest}:{})}}})}}>
      <label>Quantidade de revisores <select className={selectStyle} value={requiredReviews} onChange={e=>setRequiredReviews(Number(e.target.value))}>
       {[1,2,3].map(n=><option key={n} value={n}>{n}</option>)}

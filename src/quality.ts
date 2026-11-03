@@ -110,7 +110,8 @@ export class Quality {
       const recordedPolicy=(await c.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
         [artifact.project_id,artifact.policy_revision])).rows[0];
       const policy=QualityPolicy.parse(recordedPolicy?.snapshot);
-      if(digest(policy)!==recordedPolicy.digest||!policy.verifierDigest||policy.verifierDigest!==receipt.verifierDigest)
+      const expectedVerifier=receipt.kind==='qa'?(policy.qaVerifierDigest??policy.verifierDigest):policy.verifierDigest;
+      if(digest(policy)!==recordedPolicy.digest||!expectedVerifier||expectedVerifier!==receipt.verifierDigest)
         throw new Refusal('VERIFIER_VERSION_MISMATCH');
       if(receipt.sessionId===artifact.implementation_session_id||receipt.grantId===artifact.implementation_grant_id)
         throw new Refusal('VERIFICATION_NOT_INDEPENDENT');
@@ -143,9 +144,9 @@ export class Quality {
     const rows=(await c.query(`SELECT e.*,s.id stage_id,s.intent_id stage_intent,s.node_id,s.session_id stage_session,s.grant_id stage_grant,
       s.manager_epoch stage_epoch,s.state stage_state,s.handle,s.receipt stage_receipt,g.state grant_state,g.role grant_role,
       g.resource_kind,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.physical_receipt,
-      j.state job_state,j.receipt job_receipt,i.operation_id FROM ac_verification_evidence e
+      j.state job_state,j.receipt job_receipt,nq.state native_qa_state,nq.receipt native_qa_receipt,nq.contract_digest native_qa_contract,i.operation_id FROM ac_verification_evidence e
       JOIN ac_stage_operations s ON s.grant_id=e.grant_id AND s.session_id=e.session_id
-      JOIN ac_capacity_grants g ON g.id=e.grant_id JOIN ac_intents i ON i.id=s.intent_id LEFT JOIN ac_sandbox_jobs j ON j.id=s.id
+      JOIN ac_capacity_grants g ON g.id=e.grant_id JOIN ac_intents i ON i.id=s.intent_id LEFT JOIN ac_sandbox_jobs j ON j.id=s.id LEFT JOIN ac_native_qa_jobs nq ON nq.id=s.id
       WHERE e.id=ANY($1::uuid[]) AND e.artifact_id=$2`,[ids,artifact.id])).rows;
     if(rows.length!==ids.length)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
     for(const row of rows){
@@ -167,7 +168,13 @@ export class Quality {
        physical?.exitCode===r.exitCode&&physical?.verification?.artifactId===artifact.id&&physical?.verification?.operationId===row.operation_id&&physical?.verification?.commit===r.commit&&
        physical?.verification?.tree===r.tree&&physical?.verification?.base===r.base&&physical?.verification?.kind===r.kind&&physical?.verification?.verifierDigest===r.verifierDigest&&
        typeof physical?.verification?.output==='string'&&createHash('sha256').update(physical.verification.output).digest('hex')===r.logSha256;
-      if(!local&&!isolated)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+      const nativeQa=r.kind==='qa'&&row.native_qa_state==='failed'&&row.native_qa_receipt&&physical&&row.stage_receipt?.nativeQa&&
+       digest(row.native_qa_receipt)===digest(physical)&&digest(row.stage_receipt.nativeQa)===digest(physical)&&
+       row.native_qa_contract===r.verifierDigest&&physical.contractDigest===r.verifierDigest&&physical.jobId===row.stage_id&&
+       physical.artifactId===artifact.id&&physical.grantId===r.grantId&&physical.sessionId===r.sessionId&&physical.status==='failed'&&physical.exitCode===r.exitCode&&
+       physical.logSha256===r.logSha256&&physical.logsAvailable===true&&physical.synthetic===false&&physical.modelInference===false&&
+       /^[a-f0-9]{64}$/.test(physical.containerId??'')&&Number.isFinite(Date.parse(physical.finishedAt))&&!String(physical.finishedAt).startsWith('0001-');
+      if(!local&&!isolated&&!nativeQa)throw new Refusal('CORRECTION_EVIDENCE_INVALID');
     }
     return artifact;
   }

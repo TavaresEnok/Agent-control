@@ -66,6 +66,10 @@ export class DockerDaemon{
  async start(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/start`);if(r.status!==204)throw new Refusal('DOCKER_START_UNCERTAIN');}
  async stop(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/stop?t=3`);if(![204,304].includes(r.status))throw new Refusal('DOCKER_STOP_UNCERTAIN');}
  async remove(id:string){const r=await this.call('DELETE',`/v1.44/containers/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}
+ async logs(id:string){if(!/^[a-f0-9]{64}$/.test(id))throw new Refusal('DOCKER_CONTAINER_INVALID');
+  const r=await this.call('GET',`/v1.44/containers/${id}/logs?stdout=1&stderr=1&timestamps=0`);
+  if(r.status!==200)throw new Refusal('DOCKER_LOGS_UNCERTAIN');return r.body;
+ }
  async createPrivateNetwork(name:string,labels:Record<string,string>){
   if(!/^ac-native-exec-[a-f0-9-]{36}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
   const r=await this.call('POST','/v1.44/networks/create',{Name:name,CheckDuplicate:true,Driver:'bridge',Internal:true,Attachable:false,Labels:labels});
