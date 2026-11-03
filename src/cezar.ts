@@ -25,6 +25,7 @@ import {IsolatedVerification} from './isolated-verification.ts';
 import {IsolatedAdvice} from './isolated-advice.ts';
 import {Cancellations} from './cancellation.ts';
 import type {RemoteOperations} from './remote.ts';
+import type {NativePlanningSupervisor} from './native-planning-supervisor.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {ManagedExecutionInput,readManagedInput,readManagedUnit,readManagedRecipe,syntheticManagedCorrectionsAuthorized,syntheticSpecialistAdviceAuthorized,type ManagedRecipe} from './managed-plan.ts';
 export { baselineWorkflow } from './workflows.ts';
@@ -61,10 +62,14 @@ export class CezarRuntime {
   private running = true;
   private executionEnabled = true;
   private readonly diskGuard:DiskGuard|undefined;
+  private readonly nativePlanning:readonly NativePlanningSupervisor[];
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
     private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations,
-    admissionOptions?:{diskGuard?:DiskGuard}) {
+    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[]}) {
+    const native=admissionOptions?.nativePlanning;this.nativePlanning=Object.freeze(native?(Array.isArray(native)?[...native]:[native as NativePlanningSupervisor]):[]);
+    if(this.nativePlanning.some(supervisor=>supervisor.ledger!==ledger))throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
+    if(this.nativePlanning.length>32||new Set(this.nativePlanning.map(supervisor=>supervisor.executor.id+'@'+supervisor.executor.digest)).size!==this.nativePlanning.length)throw new Refusal('PLANNING_EXECUTOR_REGISTRY_INVALID');
     this.diskGuard=admissionOptions?.diskGuard??diskGuardFromEnvironment();
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     isolated?.bindManagedRepository(repo);
@@ -504,6 +509,15 @@ export class CezarRuntime {
     }
     if(this.isolated){
       await service.reconcileSandbox(authority,this.isolated.client);
+      await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    }
+    if(this.nativePlanning.length){
+      if(!principal)throw new Refusal('PLANNING_PRINCIPAL_REQUIRED');
+      const calls=(await this.ledger.pool.query(`SELECT s.id FROM ac_semantic_planning_calls s
+        JOIN ac_plan_cancellations x ON x.intent_id=s.intent_id AND x.context_id=s.context_id
+        JOIN ac_native_planning_jobs j ON j.id=s.id WHERE s.context_id=$1 AND x.state='requested' AND s.state='uncertain'
+        ORDER BY s.created_at,s.id LIMIT 100`,[authority.contextId])).rows;
+      for(const call of calls)for(const supervisor of this.nativePlanning)await supervisor.reconcileCancellation(principal,authority,call.id);
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     }
     if(this.remote){

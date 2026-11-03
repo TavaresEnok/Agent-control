@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "d2241fbd3ae1818e8be568edee3170836fbd52a2",
+  "git_head_before_delivery": "1ca2b9562f59787ff174a1b5a9c4e1a427c66bce",
   "worktree_changes_present": true,
   "new_sources": {
     "adapters/happier-browser-auth.ts": "e18ad5c1ec2ffd992f556ef15f2a63dd105bc6670d4f855115980418d496d5d1",
@@ -123,7 +123,7 @@
     "src/auth-relay.ts": "6c3d7a34d94d0543e649b7c4ba2a9087f252de6874aa483c5bf8621f155625b8",
     "src/cancellation.ts": "b1deadb31a0992d120fa9d0c283a3fd3cd66c6fa384f4d8379660eaeb2e607af",
     "src/capacity.ts": "b578c36cb282f3f1120c592188eca122e45f16fddc368d853f6fa814c0b00625",
-    "src/cezar.ts": "fbafe3ed16c26142240f7ade15c342a74cd8a3b1fba5feb2a764ded583d85d36",
+    "src/cezar.ts": "278902c36bb63c60aa675eb1884b63c46ed28f9cda31f3a2a94028875158de5f",
     "src/codex-planning-adapter.ts": "d205ca712758d70f8e76105effd55548e54ad7b462734ffcbb5f6d29c85f38b6",
     "src/context-export-cli.ts": "1fcc6fdeb9f020aee0fa4ee1a0c3c9e677d1267571fae8f317b150149c795a80",
     "src/context-keys.ts": "fc68a3b2036bcbe5737b38d3ed755118a48010421e27b7d3f0c0ad1f8ec2ad84",
@@ -154,7 +154,7 @@
     "src/managed-plan.ts": "3554ee5cecfd1dc31d9a2e127e3fee59f23b301568c5863dd79bee761671fb75",
     "src/manager-transport.ts": "78744d29035588b6116a4e85053b1b3d54b36ce9aa535ee7063382504d018f5c",
     "src/managers.ts": "5b77ad6dd6c1d216d94633c1c27e5825c83651c8ac829713e4d09a0ecf90be80",
-    "src/native-planning-supervisor.ts": "0e144030088ffe77b3866c5c20f737097110dcfb6f7a4486b8cd656a493697b8",
+    "src/native-planning-supervisor.ts": "1555bbfbfc60886d45b547ee2b78f4c8b7ba52df58909fb87ea316053dba11f5",
     "src/native-planning-worker.ts": "6b24d375d682184812f23b0aa797cc0b43242c6020a7a21f1e4bbf8da0b4172a",
     "src/notifications.ts": "9e7de887cfd7b17c2d504f61b7d8d4484a7b1dbb021e2407afdee399b06cd3f1",
     "src/observability-api.ts": "d8577f7c748be9d07577ead0569ace9b019ce3ba0a64a0f92c8c966120724be9",
@@ -249,6 +249,7 @@
     "tests/native-disk-wait.test.ts": "aa7fb321fcab6970fc3bfcfb9798804cd27f0526e2acbf24f0694bb78a99e60d",
     "tests/native-parallel.test.ts": "596465898401ee9a1ad1a97f6e5422c6334473688adc9a4c3ae20fe54874f75c",
     "tests/native-pause.test.ts": "8e8174c34a4f5e0ac44b69f69c7022fcddea646b8c318d85622d030c4d8345d5",
+    "tests/native-planning-cancellation.test.ts": "bd1a811cc2024be5ab57d2e57395a111a9b19296246c2f14a4c3e29e077d924f",
     "tests/native-planning-guard.test.ts": "49382682c977ebb71dabe00f6e7c0934799d95c238ced6feee8d995e96e5cbb1",
     "tests/native-recovery.test.ts": "ce0e7b5becb0d45653aad4f5120d5cc7736cd89269cb9729ccdf1b828c017929",
     "tests/notifications.test.ts": "6f0e47c33c9f73a57964b586f11eb74c89c9017e3fe00b79fd63e7707853baf2",

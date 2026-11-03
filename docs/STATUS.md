@@ -4,6 +4,10 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Incremento: cancelamento do planejamento nativo — 03/11/2026
+
+O runtime pode receber supervisores nativos para parar e observar o job original cancelado, inclusive após troca de gerente. A chave e a identidade do contêiner são conferidas; sem prova terminal a concessão não é liberada. A prova atual usa PostgreSQL descartável e Docker simulado. A instalação administrativa não ativa o recurso nem executa modelos reais. Detalhes em `implementation/NATIVE-PLANNING-CANCELLATION-20261103.md`.
+
 ## Incremento: conversa e proposta semântica — 03/11/2026
 
 O endpoint Happier agora pode encaminhar mensagens a um gerador semântico explicitamente injetado, preservando a intenção e o conteúdo cifrado na mesma transação. No laboratório, confirmação perdida, pausa, colisão e cancelamento de proposta pronta não duplicaram execução nem marcaram a proposta como programação; cancelamento de resultado incerto permanece pendente. O template visual fica desabilitado quando o gerente semântico ou a execução não estão habilitados. Detalhes em `implementation/SEMANTIC-CONVERSATION-20261103.md`.

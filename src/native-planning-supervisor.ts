@@ -21,7 +21,7 @@ export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imag
  * Runtime eligibility remains an independent mandatory gate. */
 export class NativePlanningSupervisor{
  private readonly subjects=new Map<string,string>();
- private readonly key;private readonly publicKey;private readonly docker:DockerDaemon;
+ private readonly key;private readonly publicKey;private readonly keyFingerprint:string;private readonly docker:DockerDaemon;
  readonly executor:PlanningExecutor;
  constructor(readonly ledger:Ledger,private readonly config:NativePlanningSupervisorConfig){
   this.config=Object.freeze({...config,protectedRepositories:Object.freeze([...config.protectedRepositories]),accountSubjects:Object.freeze(config.accountSubjects.map(a=>Object.freeze({...a})))});
@@ -35,6 +35,7 @@ export class NativePlanningSupervisor{
   for(const item of config.accountSubjects){z.uuid().parse(item.accountId);Hash.parse(item.subjectDigest);if(this.subjects.has(item.accountId))throw new Refusal('NATIVE_PLANNING_ACCOUNT_DUPLICATE');this.subjects.set(item.accountId,item.subjectDigest);}
   this.key=createPrivateKey(config.signingKeyPem);if(this.key.asymmetricKeyType!=='ed25519')throw new Refusal('PLANNING_RECEIPT_KEY_INVALID');
   this.publicKey=createPublicKey(this.key).export({format:'pem',type:'spki'}).toString();
+  this.keyFingerprint=createHash('sha256').update(createPublicKey(this.key).export({format:'der',type:'spki'})).digest('hex');
   this.docker=new DockerDaemon(config.socketPath);
   this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:'codex',mode:'subscription_cli',
    execute:(input:PlanningInvocation)=>this.execute(input),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
@@ -97,6 +98,14 @@ export class NativePlanningSupervisor{
   const f=await open(join(paths.output,'planning-result.json'),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{const s=await f.stat();if(!s.isFile()||s.nlink!==1||s.size>2*1024*1024||(s.mode&0o077)!==0||s.uid!==process.getuid?.())throw new Refusal('PLANNING_OUTPUT_INVALID');const b=await f.readFile();if(b.length>2*1024*1024)throw new Refusal('PLANNING_OUTPUT_INVALID');return Result.parse(JSON.parse(b.toString('utf8')));}finally{await f.close();}
  }
+ private async terminalResult(input:PlanningInvocation,exitCode:number){
+  try{return await this.readResult(input);}catch(error){
+   // A process known to have exited unsuccessfully cannot later publish an
+   // output. Missing output is a failed attempt, never a successful plan.
+   if((error as NodeJS.ErrnoException).code!=='ENOENT'||exitCode===0)throw error;
+   return {schemaVersion:1 as const,callId:input.callId,output:'',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:'PLANNING_WORKER_EXITED_WITHOUT_RESULT',exitCode};
+  }
+ }
  private inspectExpected(physical:NonNullable<Awaited<ReturnType<DockerDaemon['inspect']>>>,job:Record<string,any>,accountId:string){
   if(JSON.stringify(physical.Config.Entrypoint)!==JSON.stringify(['node','/opt/agent-control/dist/src/native-planning-worker.mjs'])||(physical.Config.Cmd?.length??0)>0||physical.Config.WorkingDir!=='/planning'||!physical.Config.Env||physical.Config.Env.some(e=>! /^(PATH|NODE_VERSION|YARN_VERSION)=/.test(e)))throw new Refusal('PLANNING_CONTAINER_MISMATCH');
   if((job.container_id&&job.container_id!==physical.Id)||physical.Image!==this.config.imageId||physical.Config.Labels['agent-control.job']!==job.id||physical.Config.Labels['agent-control.launch']!==job.launch_digest||physical.Config.Labels['agent-control.contract']!=='native-planning-v1'||physical.Config.User!==String(process.getuid?.())+':'+String(process.getgid?.())||physical.HostConfig.Memory!==512*1024*1024||physical.HostConfig.PidsLimit!==96||physical.HostConfig.NanoCpus!==1e9||physical.HostConfig.Privileged||!physical.HostConfig.ReadonlyRootfs||physical.HostConfig.NetworkMode!==this.config.providerNetwork||!physical.HostConfig.CapDrop?.includes('ALL')||!physical.HostConfig.SecurityOpt?.some(s=>s==='no-new-privileges'||s==='no-new-privileges:true'))throw new Refusal('PLANNING_CONTAINER_MISMATCH');
@@ -109,6 +118,41 @@ export class NativePlanningSupervisor{
  async observe(principal:string,authority:Authority,input:PlanningInvocation){
   if(input.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
   return this.reconcile({...input,assertAuthorized:async()=>this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);})});
+ }
+ /** Reconcile only the original canceled job. Never launch a replacement and
+  * never publish its output. The current manager fences observation, while the
+  * signed receipt remains bound to the original epoch and session. */
+ async reconcileCancellation(principal:string,authority:Authority,callId:string){
+  z.uuid().parse(callId);
+  const row=await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   return (await c.query(`SELECT s.*,g.account_id,p.model,p.effort,a.provider,a.mode FROM ac_semantic_planning_calls s
+    JOIN ac_plan_cancellations x ON x.intent_id=s.intent_id AND x.context_id=s.context_id AND x.state='requested'
+    JOIN ac_native_planning_jobs j ON j.id=s.id AND j.grant_id=s.grant_id
+    JOIN ac_capacity_grants g ON g.id=s.grant_id JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id
+    WHERE s.id=$1 AND s.context_id=$2 AND s.state='uncertain' AND s.selected_executor_id=$3 AND s.selected_executor_digest=$4`,
+    [callId,authority.contextId,this.config.id,this.config.executorDigest])).rows[0];
+  });
+  if(!row)return {state:'not_applicable' as const};
+  if(row.selected_key_fingerprint!==this.keyFingerprint)throw new Refusal('PLANNING_EXECUTOR_KEY_MISMATCH');
+  await this.stop(principal,authority,callId);
+  const input:PlanningInvocation={callId,intentId:row.intent_id,contextId:row.context_id,grantId:row.grant_id,sessionId:row.session_id,
+   executionEpoch:Number(row.execution_epoch),inputDigest:row.input_digest,profile:{id:row.profile_id,accountId:row.account_id,provider:row.provider,mode:row.mode,model:row.model,effort:row.effort},
+   sourceMessageRef:'message:cancel-observation',text:'',constraints:{qualityRevision:1,targetRef:'refs/heads/cancel-observation',knownReferences:[]},outputSchema:{},assertAuthorized:async()=>{}};
+  const outcome=await this.observe(principal,authority,input);if(!outcome)return {state:'uncertain' as const};
+  const receipt=PlanningPhysicalReceipt.parse(outcome.receipt),p=receipt.payload;
+  if(p.callId!==callId||p.contextId!==row.context_id||p.intentId!==row.intent_id||p.grantId!==row.grant_id||p.profileId!==row.profile_id||p.sessionId!==row.session_id||p.epoch!==Number(row.execution_epoch)||p.executorDigest!==this.config.executorDigest||p.inputDigest!==row.input_digest||p.profileDigest!==digest(input.profile)||!verify(null,planningReceiptMessage(p),createPublicKey(this.key),Buffer.from(receipt.signature,'hex')))throw new Refusal('PLANNING_RECEIPT_INVALID');
+  await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const saved=(await c.query(`SELECT s.state,j.state job_state,j.receipt job_receipt,g.state grant_state,g.physical_receipt
+    FROM ac_semantic_planning_calls s JOIN ac_plan_cancellations x ON x.intent_id=s.intent_id AND x.state='requested'
+    JOIN ac_native_planning_jobs j ON j.id=s.id JOIN ac_capacity_grants g ON g.id=s.grant_id
+    WHERE s.id=$1 AND s.context_id=$2 FOR UPDATE OF s,j,g`,[callId,authority.contextId])).rows[0];
+   if(!saved||saved.state!=='uncertain'||!['completed','failed'].includes(saved.job_state)||saved.grant_state!=='released'||
+     !saved.physical_receipt||digest(saved.physical_receipt)!==p.physicalDigest||digest(saved.job_receipt)!==digest(receipt))throw new Refusal('PLANNING_PHYSICAL_RESULT_UNCONFIRMED');
+   await c.query("UPDATE ac_semantic_planning_calls SET state='rejected',failure_code='PLANNING_CANCELED',receipt=$2 WHERE id=$1",[callId,receipt]);
+  });
+  return {state:'reconciled' as const};
  }
  /** Physical stop is permitted during a persisted pause/cancellation and never
   * releases a slot. Terminal observation remains a separate signed operation. */
@@ -143,9 +187,9 @@ export class NativePlanningSupervisor{
   await input.assertAuthorized();if(input.profile.provider!=='codex'||input.profile.mode!=='subscription_cli')throw new Refusal('PLANNING_EXECUTOR_PROFILE_MISMATCH');const job=(await this.ledger.pool.query('SELECT * FROM ac_native_planning_jobs WHERE id=$1 AND grant_id=$2 AND context_id=$3',[input.callId,input.grantId,input.contextId])).rows[0];
   if(!job)return null;if(job.input_digest!==input.inputDigest)throw new Refusal('PLANNING_CALL_CONFLICT');
   const original=(await this.ledger.pool.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1',[input.callId])).rows[0];
-  if(!original||original.grant_id!==input.grantId||original.intent_id!==input.intentId||original.context_id!==input.contextId||original.session_id!==input.sessionId||original.profile_id!==input.profile.id||Number(original.execution_epoch)!==input.executionEpoch||original.selected_executor_id!==this.config.id||original.selected_executor_digest!==this.config.executorDigest)throw new Refusal('PLANNING_CALL_CONFLICT');
+  if(!original||original.grant_id!==input.grantId||original.intent_id!==input.intentId||original.context_id!==input.contextId||original.session_id!==input.sessionId||original.profile_id!==input.profile.id||Number(original.execution_epoch)!==input.executionEpoch||original.selected_executor_id!==this.config.id||original.selected_executor_digest!==this.config.executorDigest||original.selected_key_fingerprint!==this.keyFingerprint)throw new Refusal('PLANNING_CALL_CONFLICT');
   if(['completed','failed'].includes(job.state)){
-   const receipt=PlanningPhysicalReceipt.parse(job.receipt),result=await this.readResult(input);
+   const receipt=PlanningPhysicalReceipt.parse(job.receipt),result=await this.terminalResult(input,receipt.payload.exitCode);
    if(!verify(null,planningReceiptMessage(receipt.payload),createPublicKey(this.key),Buffer.from(receipt.signature,'hex'))||receipt.payload.outputDigest!==createHash('sha256').update(result.output).digest('hex')||receipt.payload.exitCode!==result.exitCode)throw new Refusal('PLANNING_RESULT_CONFLICT');
    return {output:result.output,receipt};
   }
@@ -153,7 +197,7 @@ export class NativePlanningSupervisor{
   this.inspectExpected(physical,job,input.profile.accountId);
   if(physical.State.Running||physical.State.Status==='created')return null;
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return null;
-  const result=await this.readResult(input);if(result.callId!==input.callId||result.exitCode!==physical.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('PLANNING_OUTPUT_INVALID');
+  const result=await this.terminalResult(input,physical.State.ExitCode);if(result.callId!==input.callId||result.exitCode!==physical.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('PLANNING_OUTPUT_INVALID');
   const physicalReceipt={normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,nativeSessionId:result.nativeSessionId,jobId:input.callId,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,synthetic:false,executorDigest:this.config.executorDigest};
   const payload={callId:input.callId,intentId:input.intentId,contextId:input.contextId,grantId:input.grantId,profileId:input.profile.id,sessionId:input.sessionId,epoch:input.executionEpoch,
    executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,profileDigest:digest(input.profile),outputDigest:createHash('sha256').update(result.output).digest('hex'),physicalDigest:digest(physicalReceipt),exitCode:result.exitCode};
