@@ -8,10 +8,13 @@ import {ContextVault} from './context-vault.ts';
 import {loadHappier} from './happier.ts';
 import type {Ledger} from './ledger.ts';
 import type {CezarRuntime} from './cezar.ts';
+import {assertManagerTransportAllowed} from './native-bootstrap.ts';
 
 /** Optional configured transport only. Cezar still owns dispatch; no model login,
- * inference, unpause, policy edit or account activation occurs here. */
+ * inference, unpause, policy edit or account activation occurs here. A bench
+ * bootstrap cannot open this transport: substitutes are injected by the caller. */
 export async function startConfiguredManagerTransport(config:Installation,ledger:Ledger,runtime:CezarRuntime):Promise<ManagerRegistry|undefined>{
+ assertManagerTransportAllowed(config);
  const options=config.managerTransport;if(!options)return;
  const contexts=options.contexts.filter(item=>item.projectId===runtime.projectId);if(!contexts.length)return;
  if(!config.contextVault)throw new Refusal('VAULT_NOT_CONFIGURED');

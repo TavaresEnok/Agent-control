@@ -8,6 +8,7 @@ import {Operators} from './operator.ts';
 import {Refusal,digest} from './contracts.ts';
 import {Projects} from './projects.ts';
 import {ProjectRoot} from './project-admin.ts';
+import {NativeBootstrapConfig,nativeBootstrapSchemaError} from './native-bootstrap.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -22,6 +23,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
+ nativeBootstrap:NativeBootstrapConfig.optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
   contexts:z.array(z.object({projectId:z.uuid(),contextId:z.uuid(),sessionId:z.string().min(1).max(200),profileId:z.string().min(1).max(100),
    keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey'])}).strict()).min(1).max(100)}).strict().optional(),
@@ -33,7 +35,8 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
   value.contextVault.directory.startsWith(value.dataDirectory+sep)&&value.contextVault.masterFile.startsWith(value.dataDirectory+sep)&&value.contextVault.directory!==value.contextVault.masterFile,'Vault paths must be canonical and inside private data directory')
  .refine(value=>!value.accountHomesDirectory||resolve(value.accountHomesDirectory)===value.accountHomesDirectory&&value.accountHomesDirectory.startsWith(value.dataDirectory+sep)&&
   (!value.contextVault||![value.contextVault.directory,value.contextVault.masterFile].some(path=>path===value.accountHomesDirectory||path.startsWith(value.accountHomesDirectory+sep)||value.accountHomesDirectory!.startsWith(path+sep))),
- 'Account homes must be isolated inside private data directory and outside the context vault');
+ 'Account homes must be isolated inside private data directory and outside the context vault')
+ .superRefine((value,ctx)=>{const code=nativeBootstrapSchemaError(value);if(code)ctx.addIssue({code:'custom',message:code});});
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536){
