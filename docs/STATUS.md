@@ -183,3 +183,7 @@ Pendências principais permanecem: integração operacional e homologação dos 
 O modo permanece administrativo e `transportOnly:true`: não consome pendências, não aceita novos pedidos de execução, não recupera/despacha planos e não ativa conta/modelo. Não foi criada ou alterada configuração operacional. Isto resolve uma ligação de bootstrap, não a implementação do gerente semântico e dos adaptadores reais, que continuam pendentes.
 
 RPC, histórico e heartbeat passaram a revalidar ACL/projeto/vínculo/época; perda de autorização encerra transporte e limpa referências ao histórico recuperado. Build integrado passou e um teste local com ledger simulado cobriu recusa de acesso, projeto, época e sessão. Não houve conta real, conexão ponta a ponta ou repetição das suítes gerais. Ver `CONFIGURED-MANAGER-TRANSPORT-20261102.md`.
+
+### Verificação de isolamento do worker nativo
+
+Foi acrescentada uma primitiva que confere a identidade esperada dos dois contêineres, rede interna exclusiva, separação de montagens e leitura apenas para avaliadores. Ela ainda não está ligada a um supervisor físico; o teste usa observações sintéticas e não autoriza iniciar execução real. Detalhes e limites em `implementation/NATIVE-EXECUTION-WORKER-20261103.md`.

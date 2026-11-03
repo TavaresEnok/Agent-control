@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "b21f1b5cbe8ec773508ff1eca7926a0789301068",
+  "git_head_before_delivery": "31f8b8fad878859857de74d175ee75a628d3d3a9",
   "worktree_changes_present": true,
   "new_sources": {
     "adapters/happier-browser-auth.ts": "e18ad5c1ec2ffd992f556ef15f2a63dd105bc6670d4f855115980418d496d5d1",
