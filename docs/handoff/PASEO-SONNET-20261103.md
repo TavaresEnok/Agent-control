@@ -65,3 +65,7 @@ Verifique perfis/contas reais disponíveis pelo Paseo antes de criar trabalhador
 
 ## Método e aceite
 Transforme as pendências normativas em lotes objetivos. Delegue ao Grok implementação com escopo/branch/critério de aceite e ao Codex novo revisão do diff exato; integre correções aprovadas. Não reexecute baterias já válidas sem mudança pertinente. Faça checagens focadas e uma validação integrada ao final. Mantenha STATUS/FINDINGS/TRACEABILITY, proveniência upstream e manifestos atualizados. Não declarar 100% sem evidências; não esconder impedimentos. Continue autonomamente dentro deste escopo, mantendo o histórico acessível pelo celular.
+
+
+## Autorização posterior do proprietário — revezamento de cota
+Esta seção substitui a restrição anterior contra fallback entre os dois papéis. Sonnet 5.5 Médio gerencia normalmente; Sol 6.1 Médio do provider codex-programmer revisa. Se Sonnet esgotar, o Codex novo assume gerência E revisão em sessões separadas. Se o Codex novo esgotar, Sonnet assume gerência E revisão em sessões separadas. Quando a cota principal recuperar com evidência válida, restaurar os papéis preferidos no limite seguro entre execuções, sem interromper trabalho saudável. Nunca provider codex antigo, nunca API paga ou esforço maior. Se ambas esgotarem, aguardar renovação e não iniciar novas implementações; preservar tudo. Grok 4.7 Médio permanece o programador. Não é necessário manter o chat anterior aberto. Informe no celular se houver impedimento concreto; não declarar conclusão sem aceite.
