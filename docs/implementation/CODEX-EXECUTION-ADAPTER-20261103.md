@@ -1,0 +1,11 @@
+# Adaptador de execução Codex — 03/11/2026
+
+`CodexExecutionAdapter` reutiliza o runner do Cezar e recebe perfil, esforço, função e ambiente de ferramentas de uma chamada já autorizada. Programação exige caminhos literais definidos; QA, revisor, julgador e especialista exigem commit de artefato/base e schema de resposta, sem caminhos de escrita declarados. A capacidade de conexão não é incluída no prompt. O adapter preserva os contadores efetivamente informados e recusa turno falho, interrompido ou de compactação como sucesso, mesmo que haja texto parcial.
+
+O runner envia o modelo e esforço selecionados, inicializa uma sessão própria e fixa o mesmo ambiente remoto nas solicitações. Requisições nativas de interação humana são recusadas nesse trabalhador; não geram um cartão de confirmação para o usuário. Standalone sem ambiente gerenciado mantém seu comportamento original.
+
+O adapter **não é um supervisor de programação**. Antes de usá-lo é necessário um broker que prepare a worktree e o exec-server remoto, verifique a conta e as permissões, imponha os caminhos e o isolamento, retenha concessões enquanto existir processo incerto e verifique o commit/árvore resultantes. As funções de avaliação exigem montagem fisicamente somente de leitura; a declaração de caminhos vazios ou uma instrução ao modelo não substituem esse isolamento. Resultado, texto de ferramenta e credenciais não devem ser registrados em claro pelo controlador. O adapter não faz merge, não aprova artefatos e não altera cotas.
+
+`codex-execution-adapter-final-20261103.log` registra duas provas com runner simulado: perfil, esforço e ambiente são vinculados; capability não entra no prompt; escopo inválido é recusado; revisão exige artefato e schema; falha/turno incompleto não vira sucesso. `codex-worker-runner-autonomy-20261103.log` registra quatro casos do runner, incluindo recusa de pedido interativo em sessão remota. Não houve inferência real, programação real, contêiner de ferramentas ou autorização de produção.
+
+O gateway continua administrativo. Ainda faltam supervisor/broker físico de programação e revisão, integração dos artefatos ao fluxo existente, cota/fallback efetivo e homologação antes de usar essa fronteira em projetos reais.

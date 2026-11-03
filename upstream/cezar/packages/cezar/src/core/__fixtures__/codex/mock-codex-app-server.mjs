@@ -103,7 +103,9 @@ rl.on('line', (line) => {
   } catch {
     return;
   }
-  if (msg.id === 'ask-1' && msg.result) {
+  if (msg.id === 'ask-1' && msg.error && process.env.MOCK_CODEX_EXPECT_REMOTE==='1') {
+    emit({method:'turn/failed',params:{turn:{id:'turn_mock_1',status:'failed'},error:{message:'interactive request refused'}}});
+  } else if (msg.id === 'ask-1' && msg.result) {
     const answer = msg.result.answers?.library?.answers;
     const freeText = msg.result.answers?.first?.answers;
     emit((Array.isArray(answer) && answer[0] === 'Vitest') || (Array.isArray(freeText) && freeText[0] === 'Use sensible defaults')

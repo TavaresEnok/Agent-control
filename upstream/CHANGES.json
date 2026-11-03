@@ -15,8 +15,8 @@
     {
       "path": "packages/cezar/src/core/__fixtures__/codex/mock-codex-app-server.mjs",
       "upstream_blob": "1b3f88dd95099dc2fd2f815824d2950704491007",
-      "current_blob": "4708a65878a1dcc664eaf66d2076a7d7a4b7d2ae",
-      "sha256": "49f86c38a8fd94b1c03eeb925cc51469d84fd465950e1f7e1eff6a54e59e6bf0"
+      "current_blob": "58babfcf981a17d5504cdeeee60cf024d9fc0a13",
+      "sha256": "5b8777341acc7b4d8c684708b18c46c796a7a1bea4b9507e44afd550f32eddbd"
     },
     {
       "path": "packages/cezar/src/core/agent-runner.ts",
@@ -27,8 +27,8 @@
     {
       "path": "packages/cezar/src/core/codex-app-server-runner.ts",
       "upstream_blob": "2ba42b5cc0a7e14960a533f6f2de43af8cc0acc0",
-      "current_blob": "6b3b96bf955221d5d899d2208ab7341ddf7af660",
-      "sha256": "aa696c68831b1457e8c172d801914a504a503d0be3c220fce58e3c24a1ecb1e0"
+      "current_blob": "e27e33be754c9ec61e326e053db64e5a007ca3b7",
+      "sha256": "2ba719170a44f40dacf1944203598589c52b2e49ecdca42969a5f6c36ee00ca2"
     },
     {
       "path": "packages/cezar/src/core/codex-app-server-transport.ts",
@@ -195,7 +195,7 @@
     {
       "path": "packages/cezar/src/core/agent-control-effort.test.ts",
       "change": "added",
-      "sha256": "f71eb3aa68a27346b9a9501a059feb160ab634727e98392d74272ed13a35b453"
+      "sha256": "b26ee797747644d3dd9b8dca151de1ee81d981a34d28dc7d12f2f7688a3fd88e"
     },
     {
       "path": "packages/cezar/src/git-worktree-identity.test.ts",

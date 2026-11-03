@@ -4,6 +4,10 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Incremento: adapter Codex de execução — 03/11/2026
+
+O adapter para programação e funções de avaliação fixa o modelo, esforço e ambiente remoto, exige escopo para programação e commit/schema para avaliação, e rejeita saídas de turnos falhos ou incompletos. O runner recusa pedidos interativos dos trabalhadores gerenciados. As provas usam processos simulados; o supervisor físico de programação/revisão, a integração de artefatos e a homologação continuam pendentes. A instalação segue administrativa. Detalhes em `implementation/CODEX-EXECUTION-ADAPTER-20261103.md`.
+
 ## Incremento: cancelamento do planejamento nativo — 03/11/2026
 
 O runtime pode receber supervisores nativos para parar e observar o job original cancelado, inclusive após troca de gerente. A chave e a identidade do contêiner são conferidas; sem prova terminal a concessão não é liberada. A prova atual usa PostgreSQL descartável e Docker simulado. A instalação administrativa não ativa o recurso nem executa modelos reais. Detalhes em `implementation/NATIVE-PLANNING-CANCELLATION-20261103.md`.

@@ -25,3 +25,12 @@ it('pins remote tools before the first turn and refuses disconnected or substitu
  expect(()=>runner.startSession({...spec,executionEnvironment:{...spec.executionEnvironment,url:'ws://provider:8765'}})).toThrow('EXECUTION_ENVIRONMENT_INVALID');
  expect(()=>runner.startSession({...spec,isolatedAppServer:false})).toThrow('EXECUTION_ENVIRONMENT_INVALID');
 },20000);
+
+it('refuses native interactive requests in an isolated worker without surfacing an approval prompt',async()=>{
+ const runner=new CodexAppServerRunner({bin:fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs',import.meta.url)),timeoutMs:5000});
+ const events:string[]=[],ui:string[]=[];
+ const session=runner.startSession({cwd:process.cwd(),userPrompt:'mock:native-codex-ask',isolatedAppServer:true,model:'fixture-sol',reasoningEffort:'medium',
+  executionEnvironment:{id:'job_tools',url:'ws://127.0.0.1:8765',cwd:'/work',authBearerToken:'a'.repeat(48)},env:{MOCK_CODEX_EXPECT_REMOTE:'1'}},
+  event=>events.push(event.type),{autoEndAfterFirstTurn:true,onUiEvent:event=>ui.push(event.type)});
+ await session.result;expect(events).toContain('error');expect(ui).not.toContain('ask.requested');
+},10000);

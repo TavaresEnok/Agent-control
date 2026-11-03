@@ -1,0 +1,10 @@
+✔ programmer pins profile and isolated environment without exposing its capability in the prompt (6.593712ms)
+✔ a failed or incomplete native turn cannot be presented as successful work (1.261047ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 539.649066

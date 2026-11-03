@@ -559,7 +559,7 @@ class CodexSession implements AgentSession {
   }
 
   private handleUserInputRequest(rpcId: number | string, params: Record<string, unknown>): void {
-    if(this.spec.readOnlyPlanning){this.rpc.respond({id:rpcId,error:{code:-32000,message:'Planning-only sessions cannot request interactive input'}});return;}
+    if(this.spec.readOnlyPlanning||this.spec.executionEnvironment){this.rpc.respond({id:rpcId,error:{code:-32000,message:'Managed worker sessions cannot request interactive input'}});return;}
     const questions = codexAskQuestions(params.questions);
     if (!questions) {
       this.rpc.respond({ id: rpcId, error: { code: -32602, message: 'unsupported or malformed requestUserInput payload' } });

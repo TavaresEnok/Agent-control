@@ -9,7 +9,7 @@
       "postgres@sha256:4327b9fd295502f326f44153a1045a7170ddbfffed1c3829798328556cfd09e2"
     ]
   },
-  "git_head_before_delivery": "1ca2b9562f59787ff174a1b5a9c4e1a427c66bce",
+  "git_head_before_delivery": "096f1d9a4fcf84286360769a12f065371b29c912",
   "worktree_changes_present": true,
   "new_sources": {
     "adapters/happier-browser-auth.ts": "e18ad5c1ec2ffd992f556ef15f2a63dd105bc6670d4f855115980418d496d5d1",
@@ -124,6 +124,7 @@
     "src/cancellation.ts": "b1deadb31a0992d120fa9d0c283a3fd3cd66c6fa384f4d8379660eaeb2e607af",
     "src/capacity.ts": "b578c36cb282f3f1120c592188eca122e45f16fddc368d853f6fa814c0b00625",
     "src/cezar.ts": "278902c36bb63c60aa675eb1884b63c46ed28f9cda31f3a2a94028875158de5f",
+    "src/codex-execution-adapter.ts": "ecb7e668678436e6a40e1ed3130b47174f7b40c18e22245b71481ec5ea1e693e",
     "src/codex-planning-adapter.ts": "d205ca712758d70f8e76105effd55548e54ad7b462734ffcbb5f6d29c85f38b6",
     "src/context-export-cli.ts": "1fcc6fdeb9f020aee0fa4ee1a0c3c9e677d1267571fae8f317b150149c795a80",
     "src/context-keys.ts": "fc68a3b2036bcbe5737b38d3ed755118a48010421e27b7d3f0c0ad1f8ec2ad84",
@@ -197,6 +198,7 @@
     "tests/broker-terminal-recovery.test.ts": "1a50a80d7c25a4775e37fecc18c7990ab71de3925c7d4949c9983a10d63981c4",
     "tests/cancellation.test.ts": "d37432b67609e72888948319ee4af0ed8a1ad353af78822550756b9adcadcb6b",
     "tests/capacity.test.ts": "4249f1aa8e3ebfa06bae90fdb1924ad7d627f34d21369e5882ced8c42f7a5cfe",
+    "tests/codex-execution-adapter.test.ts": "c0d7ebfb7df97903bbdc7c0db88bb1033207cee395a4e8bd2ad2459079d68ace",
     "tests/codex-planning-adapter.test.ts": "d34c13fbd4142a4a33d99a705c381ac703f15350b9cbf42ddd1cc7383363c95a",
     "tests/completed-node-recovery.test.ts": "cb0c5bd17aa17310eb8932f731d3d4e6f80ba8ac85360f76030bb43fd32bda97",
     "tests/composition-verifier.test.ts": "d9da8dc72bedc2cff37a061c23a16a2b7e861a06a6810ab2a79a9a127f09dd9b",
