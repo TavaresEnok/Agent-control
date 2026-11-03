@@ -499,9 +499,10 @@ export class EngineeringStages{
    const implementation=(await this.ledger.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intent.id])).rows[0];
    if(implementation?.state!=='completed'||!implementation.receipt?.commit||!implementation.native_session_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
    const source=implementation.receipt;
-   if(source.synthetic===false&&node==='qa'&&!this.options.nativeQa)throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
-   if(source.synthetic===false&&node!=='qa'&&node!=='integrate'&&!this.options.nativeVerification)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
    const managed=await readManagedUnit(this.ledger,intent);
+   const nativeStage=source.synthetic===false||managed?.recipe.mode==='native';
+   if(nativeStage&&node==='qa'&&!this.options.nativeQa)throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
+   if(nativeStage&&node!=='qa'&&node!=='integrate'&&!this.options.nativeVerification)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
    if(managed?.unit.kind==='task'&&source.synthetic!==false){
     await this.options.git.assertManagedPath(managed.parentIntentId,managed.unit.runId,spec.cwd,true);
     await this.ledger.tx(async c=>{
@@ -553,7 +554,7 @@ export class EngineeringStages{
      }
     }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
-    if(source.synthetic===false){
+    if(nativeStage){
      const verified=node==='qa'?await this.options.nativeQa!.run(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running):await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);
      if(verified.status!=='passed')throw new Refusal('VERIFICATION_FAILED');
     }else if(this.options.isolatedVerification){

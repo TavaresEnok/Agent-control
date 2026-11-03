@@ -1,9 +1,12 @@
 import {z} from 'zod';
-import {digest,Id,Refusal,type Authority,type Command} from './contracts.ts';
+import {canonical,Command,digest,Id,Refusal,type Authority} from './contracts.ts';
 import type {Ledger,Intent} from './ledger.ts';
 import type pg from 'pg';
-import {compileManagerPlan,ManagerPlan,type PlanningPolicy} from './planning.ts';
+import {compileManagerPlan,ManagerPlan,type ManagerTask,type PlanningPolicy} from './planning.ts';
 import {QualityPolicy} from './quality-policy.ts';
+import {GitArtifacts} from './git.ts';
+import {Template} from './templates.ts';
+import {engineeringNativePlanWorkflowPrefix} from './workflows.ts';
 import {workflowDefSchema,type WorkflowDef} from '../upstream/cezar/packages/cezar/dist/workflows/types.js';
 import {graphIssues,graphToSteps,type GraphNode,type GraphEdge} from '../upstream/cezar/packages/cezar/dist/workflows/graph.js';
 
@@ -24,7 +27,7 @@ export const ManagedUnit=z.object({id:z.string(),kind:z.enum(['task','compositio
  qualityRevision:z.number().int().positive(),targetRef:z.string(),writePaths:z.array(z.string()),acceptanceRefs:z.array(z.string()),sources:z.array(z.string()),
  taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/).optional(),correctionRevision:z.number().int().min(0).max(5).optional(),requiresSpecialist:z.boolean().optional()}).strict();
 export type ManagedUnit=z.infer<typeof ManagedUnit>;
-export const ManagedRecipe=z.object({schemaVersion:z.union([z.literal(1),z.literal(2),z.literal(3)]),mode:z.literal('synthetic-only'),parentIntentId:Id,
+export const ManagedRecipe=z.object({schemaVersion:z.union([z.literal(1),z.literal(2),z.literal(3)]),mode:z.enum(['synthetic-only','native']),parentIntentId:Id,
  proposalRevision:z.number().int().positive(),proposalDigest:z.string(),workflow:workflowDefSchema,
  units:z.array(ManagedUnit),bindings:z.record(z.string(),z.object({unitId:z.string(),phase:Phase,launchId:z.string().optional()}).strict()),
  launches:z.record(z.string(),z.array(z.string())),targetRef:z.string()}).strict();
@@ -124,21 +127,27 @@ export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPoli
  return ManagedRecipe.parse({schemaVersion:2,mode:'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
   workflow:{name:`managed-synthetic-${parentIntentId}`,source:'built-in',steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
 }
-export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
+const syntheticAcceptance=['acceptance:synthetic-effect-v1'];
+/** Schema v1 batches, forks and composition. Synthetic mode keeps the single-file
+ * acceptance executor. Native mode stores each task's own acceptance refs and
+ * write paths and does not consult that executor. */
+function managedBatchRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number,native:boolean):ManagedRecipe{
  const preview=compileManagerPlan(plan,policies),tasks=new Map(plan.tasks.map(task=>[task.id,task])),policy=new Map(policies.map(p=>[p.qualityRevision,QualityPolicy.parse(p.policy)]));
- if(plan.tasks.some(task=>task.maxCorrections>0))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
+ if(!native){
+  if(plan.tasks.some(task=>task.maxCorrections>0))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
+  if(plan.tasks.some(task=>task.acceptanceRefs.length!==1||task.acceptanceRefs[0]!==syntheticAcceptance[0]))
+   throw new Refusal('MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE');
+  if(plan.tasks.some(task=>task.writePaths.length!==1||task.writePaths[0]!.length>240||
+   !/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(task.writePaths[0]!)))
+   throw new Refusal('MANAGED_WRITE_SCOPE_UNAVAILABLE');
+ }
  if(new Set(plan.tasks.map(task=>task.targetRef)).size!==1)throw new Refusal('MANAGED_SINGLE_TARGET_REQUIRED');
- if(plan.tasks.some(task=>task.acceptanceRefs.length!==1||task.acceptanceRefs[0]!=='acceptance:synthetic-effect-v1'))
-  throw new Refusal('MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE');
- if(plan.tasks.some(task=>task.writePaths.length!==1||task.writePaths[0]!.length>240||
-  !/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(task.writePaths[0]!)))
-  throw new Refusal('MANAGED_WRITE_SCOPE_UNAVAILABLE');
  const targetRef=plan.tasks[0]!.targetRef,units:ManagedUnit[]=[],bindings:ManagedRecipe['bindings']={},launches:ManagedRecipe['launches']={};
  const nodes:GraphNode[]=[{id:'start',type:'start'},{id:'failed',type:'end',status:'failed'}],edges:GraphEdge[]=[];let cursor='start';
- const unit=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],sources:string[]=[])=>{
+ const unit=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],acceptanceRefs:string[],sources:string[]=[],taskId?:string)=>{
   const value:ManagedUnit={id,kind,intentId:managedId(parentIntentId,id,'intent'),runId:managedId(parentIntentId,id,'run'),
    operationId:managedId(parentIntentId,id,'operation'),attemptId:managedId(parentIntentId,id,'attempt'),qualityRevision,targetRef,writePaths,
-   acceptanceRefs:['acceptance:synthetic-effect-v1'],sources};units.push(value);return value;
+   acceptanceRefs,sources,...(taskId===undefined?{}:{taskId})};units.push(value);return value;
  };
  const edge=(id:string)=>{edges.push({from:cursor,to:id},{from:id+'.failed',to:'failed'});cursor=id;};
  const checks=(u:ManagedUnit,integrate:boolean)=>{
@@ -152,7 +161,8 @@ export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],paren
   const grouped=new Map<number,string[]>();for(const id of batch){const revision=tasks.get(id)!.qualityRevision;grouped.set(revision,[...(grouped.get(revision)??[]),id]);}return [...grouped.values()];
  });
  for(const [batchIndex,batch] of batches.entries()){
-  const members=batch.map(id=>{const task=tasks.get(id)!;return unit(`task-${id}`,'task',task.qualityRevision,task.writePaths);});
+  const members=batch.map(id=>{const task=tasks.get(id)!;return unit(`task-${id}`,'task',task.qualityRevision,task.writePaths,
+   native?[...task.acceptanceRefs]:syntheticAcceptance,[],native?task.id:undefined);});
   const launch=`launch-${batchIndex}`;
   if(members.length===1){const u=members[0]!;nodes.push({id:launch,type:'dispatch',name:u.id,prompt:`AC_MANAGED_UNIT:${u.id}`});launches[launch]=[u.id];edge(launch);checks(u,true);}
   else{
@@ -161,14 +171,60 @@ export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],paren
     bindings[id]={unitId:u.id,phase:'implement'};edges.push({from:`${launch}.${index+1}`,to:id},{from:id,to:join},{from:id+'.failed',to:join});}
    cursor=join;for(const u of members)checks(u,false);
    const composedId=`compose-${batchIndex}`;
-   const composed=unit(composedId,'composition',members[0]!.qualityRevision,[...new Set(members.flatMap(u=>u.writePaths))],members.map(u=>u.id));
+   const composedAcceptance=native?[...new Set(members.flatMap(u=>u.acceptanceRefs))]:syntheticAcceptance;
+   const composed=unit(composedId,'composition',members[0]!.qualityRevision,[...new Set(members.flatMap(u=>u.writePaths))],composedAcceptance,members.map(u=>u.id));
    const id=`${composedId}-launch`;nodes.push({id,type:'dispatch',name:composed.id,prompt:`AC_MANAGED_UNIT:${composed.id}`});launches[id]=[composed.id];edge(id);checks(composed,true);
   }
  }
  nodes.push({id:'done',type:'end',status:'success'});edges.push({from:cursor,to:'done'});const graph={nodes,edges};
  if(graphIssues(graph).length)throw new Refusal('MANAGED_NATIVE_GRAPH_INVALID');
- return ManagedRecipe.parse({schemaVersion:1,mode:'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
-  workflow:{name:`managed-synthetic-${parentIntentId}`,source:'built-in',steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
+ return ManagedRecipe.parse({schemaVersion:1,mode:native?'native':'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
+  workflow:{name:native?`${engineeringNativePlanWorkflowPrefix}${parentIntentId}`:`managed-synthetic-${parentIntentId}`,source:'built-in',steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
+}
+export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
+ return managedBatchRecipe(plan,policies,parentIntentId,proposalRevision,false);
+}
+/** Frozen task contract. The digest is of this canonical text, not Happier plaintext. */
+export function nativeManagedTaskText(task:ManagerTask){
+ return canonical({domain:'native-managed-task-v1',id:task.id,objectiveRef:task.objectiveRef,acceptanceRefs:task.acceptanceRefs,inputRefs:task.inputRefs,outputRefs:task.outputRefs,dependsOn:task.dependsOn,writePaths:task.writePaths});
+}
+function pathsOverlap(a:string,b:string){return a===b||a.startsWith(b+'/')||b.startsWith(a+'/');}
+/** Refuse an unusable native plan before compile hides an overlap by serializing it. */
+export function assertNativePlanShape(plan:ManagerPlan){
+ if(plan.tasks.some(task=>task.maxCorrections>0))throw new Refusal('NATIVE_PLAN_CORRECTION_UNAVAILABLE');
+ for(let i=0;i<plan.tasks.length;i++)for(let j=i+1;j<plan.tasks.length;j++){
+  const left=plan.tasks[i]!,right=plan.tasks[j]!;
+  if(left.writePaths.some(a=>right.writePaths.some(b=>pathsOverlap(a,b))))throw new Refusal('NATIVE_PLAN_SCOPE_OVERLAP');
+ }
+}
+/** Same batch graph as the synthetic recipe, without its acceptance executor or single-file scope. */
+export function nativeExecutionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
+ assertNativePlanShape(plan);
+ return managedBatchRecipe(plan,policies,parentIntentId,proposalRevision,true);
+}
+async function assertNativeTemplate(c:pg.PoolClient,contextId:string,plan:ManagerPlan){
+ const context=(await c.query('SELECT active_template_revision FROM ac_contexts WHERE id=$1',[contextId])).rows[0];
+ const selected=context?.active_template_revision?(await c.query('SELECT snapshot,digest FROM ac_context_templates WHERE context_id=$1 AND revision=$2',[contextId,context.active_template_revision])).rows[0]:undefined;
+ if(!selected)throw new Refusal('NATIVE_PLAN_TEMPLATE_REQUIRED');
+ const template=Template.parse(selected.snapshot);
+ if(digest(template)!==selected.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
+ if(template.workflow!=='engineering-native-v1'||template.execution!=='plan')throw new Refusal('NATIVE_PLAN_TEMPLATE_REQUIRED');
+ for(const task of plan.tasks){
+  if(task.qualityRevision!==template.qualityRevision||task.targetRef!==template.targetRef)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
+  for(const path of task.writePaths)if(!template.writePaths.some(scope=>path===scope||path.startsWith(scope+'/')))throw new Refusal('NATIVE_PLAN_SCOPE_UNDECLARED');
+ }
+}
+async function assertNativeBase(c:pg.PoolClient,contextId:string,targetRef:string){
+ const project=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[contextId])).rows[0];
+ const repo=project?(await c.query('SELECT repo FROM ac_project_repositories WHERE project_id=$1',[project.project_id])).rows[0]:undefined;
+ if(!repo?.repo)throw new Refusal('NATIVE_TASK_BASE_MISSING');
+ try{await new GitArtifacts(repo.repo).resolveTarget(targetRef);}
+ catch(error){
+  if(error instanceof Refusal&&['GIT_IDENTITY_REFUSED','GIT_TARGET_MISMATCH','GIT_HELPER_UNAVAILABLE','GIT_HELPER_TIMEOUT','GIT_HELPER_OUTPUT_LIMIT'].includes(error.code))throw new Refusal('NATIVE_TASK_BASE_MISSING');
+  const code=(error as NodeJS.ErrnoException).code;
+  if(code==='ENOENT'||code==='ENOTDIR')throw new Refusal('NATIVE_TASK_BASE_MISSING');
+  throw error;
+ }
 }
 export async function freezeManagedExecution(ledger:Ledger,c:pg.PoolClient,parent:Intent,principal:string,a:Authority,revision:number,expectedDigest:string){
  const saved=(await c.query('SELECT snapshot,digest FROM ac_manager_plans WHERE context_id=$1 AND revision=$2',[a.contextId,revision])).rows[0];
@@ -181,14 +237,26 @@ export async function freezeManagedExecution(ledger:Ledger,c:pg.PoolClient,paren
  }
  const corrections=plan.tasks.some(task=>task.maxCorrections>0);
  const specialist=policies.some(item=>QualityPolicy.parse(item.policy).requireSpecialistBeforeImplementation===true);
- if(corrections&&!syntheticManagedCorrectionsAuthorized(ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
- if(specialist&&!syntheticSpecialistAdviceAuthorized(ledger))throw new Refusal('MANAGED_SPECIALIST_EXECUTOR_UNAVAILABLE');
- const recipe=specialist?specialistExecutionRecipe(plan,policies,parent.id,revision):corrections
+ const native=parent.command.payload.workflow==='managed-synthetic-v1'&&parent.command.payload.native===true;
+ if(native){
+  if(corrections)throw new Refusal('NATIVE_PLAN_CORRECTION_UNAVAILABLE');
+  if(specialist)throw new Refusal('NATIVE_PLAN_SPECIALIST_UNAVAILABLE');
+ }else{
+  if(corrections&&!syntheticManagedCorrectionsAuthorized(ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
+  if(specialist&&!syntheticSpecialistAdviceAuthorized(ledger))throw new Refusal('MANAGED_SPECIALIST_EXECUTOR_UNAVAILABLE');
+ }
+ const recipe=native?nativeExecutionRecipe(plan,policies,parent.id,revision):specialist?specialistExecutionRecipe(plan,policies,parent.id,revision):corrections
   ?correctionExecutionRecipe(plan,policies,parent.id,revision):executionRecipe(plan,policies,parent.id,revision);
+ if(native){await assertNativeTemplate(c,a.contextId,plan);await assertNativeBase(c,a.contextId,recipe.targetRef);}
  await c.query('INSERT INTO ac_managed_executions VALUES($1,$2,$3,$4,$5,$6)',[parent.id,a.contextId,revision,expectedDigest,digest(recipe),recipe]);
  for(const u of recipe.units){
+  const task=recipe.mode==='native'&&u.kind==='task'?plan.tasks.find(item=>item.id===u.taskId):undefined;
+  if(recipe.mode==='native'&&u.kind==='task'&&!task)throw new Refusal('MANAGED_UNIT_MISMATCH');
+  const payload=task
+   ?{workflow:'engineering-native-v1' as const,messageRef:`managed:${parent.id}:${u.id}`,localId:u.id,messageDigest:digest(nativeManagedTaskText(task)),qualityRevision:u.qualityRevision,targetRef:u.targetRef,writePaths:u.writePaths}
+   :{workflow:'engineering-synthetic-v1' as const,messageRef:`managed:${parent.id}:${u.id}`};
   const command:Command={schemaVersion:1,intentId:u.intentId,deliveryAttemptId:managedId(parent.id,u.id,'delivery'),contextId:a.contextId,
-   policyRevision:parent.command.policyRevision,action:'plan.start',payload:{workflow:'engineering-synthetic-v1',messageRef:`managed:${parent.id}:${u.id}`}};
+   policyRevision:parent.command.policyRevision,action:'plan.start',payload};
   const {deliveryAttemptId,...semantic}=command;
   await c.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,parent_intent_id,parent_unit_id)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[u.intentId,a.contextId,principal,digest({principal,...semantic}),command,u.operationId,u.runId,a.epoch,parent.plan_revision,parent.id,u.id]);

@@ -1,4 +1,7 @@
 import {randomUUID} from 'node:crypto';
+import {execFile,spawn} from 'node:child_process';
+import {promisify} from 'node:util';
+import {join} from 'node:path';
 import {Capacity} from './capacity.ts';
 import {z} from 'zod';
 import {Ledger,type Intent} from './ledger.ts';
@@ -6,7 +9,10 @@ import {Authority,Command,digest,Refusal} from './contracts.ts';
 import {GitArtifacts} from './git.ts';
 import {Quality} from './quality.ts';
 import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
+import {nativeManagedTaskText,readManagedUnit} from './managed-plan.ts';
+import {ManagerPlan} from './planning.ts';
 import type {AgentRunSpec,AgentSession,AgentEvent} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
+const execFileAsync=promisify(execFile);
 type Source=(intent:Intent,authority:Authority)=>Promise<string>;
 type Binding={authority:Authority;resolve:Source};
 /** Runs the implementation stage of the existing native Cezar graph. Source
@@ -29,10 +35,44 @@ export class NativeImplementation{
   const repo=(await c.query('SELECT repo FROM ac_project_repositories WHERE project_id=$1',[ctx.project_id])).rows[0];
   if(i?.principal_id!==principal||repo?.repo!==this.repository)throw new Refusal('NATIVE_IMPLEMENTATION_SCOPE_MISMATCH');
  }
+ private async frozenTaskText(intent:Intent,messageDigest:string,writePaths:readonly string[]){
+  const managed=await readManagedUnit(this.ledger,intent);
+  if(!managed||managed.recipe.mode!=='native'||managed.unit.kind!=='task'||!managed.unit.taskId)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
+  const saved=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_manager_plans WHERE context_id=$1 AND revision=$2',[intent.context_id,managed.recipe.proposalRevision])).rows[0];
+  if(!saved||saved.digest!==managed.recipe.proposalDigest)throw new Refusal('MANAGED_PROPOSAL_MISMATCH');
+  const plan=ManagerPlan.parse(saved.snapshot);
+  if(digest(plan)!==saved.digest)throw new Refusal('MANAGED_PROPOSAL_MISMATCH');
+  const task=plan.tasks.find(item=>item.id===managed.unit.taskId);
+  if(!task||digest(task.writePaths)!==digest(writePaths))throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
+  const text=nativeManagedTaskText(task);
+  if(digest(text)!==messageDigest)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
+  return text;
+ }
+ private async materializeManagedCommit(intent:Intent,commit:string){
+  const managed=await readManagedUnit(this.ledger,intent);
+  if(!managed||managed.recipe.mode!=='native'||managed.unit.kind!=='task')return;
+  const cwd=join(this.repository,'.ai/cezar/managed',managed.parentIntentId,managed.unit.runId);
+  const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
+  // The finalized commit is reachable in the job worktree, then imported without a branch.
+  // Copy that object into the isolated clone; upload-pack would refuse an unadvertised hash.
+  await new Promise<void>((resolve,reject)=>{
+   const pack=spawn('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',this.repository,'pack-objects','--revs','--stdout'],{env,stdio:['pipe','pipe','pipe']});
+   const unpack=spawn('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'unpack-objects'],{env,stdio:['pipe','ignore','pipe']});
+   let failure:Error|undefined;const fail=(error:Error)=>{failure??=error;pack.kill('SIGKILL');unpack.kill('SIGKILL');};
+   const timer=setTimeout(()=>fail(new Refusal('NATIVE_TASK_WORKTREE_MISMATCH')),10000);
+   pack.stdout!.pipe(unpack.stdin!);pack.stdin!.end(commit+'\n');
+   pack.once('error',fail);unpack.once('error',fail);
+   let pending=2;const done=(code:number|null)=>{if(code)fail(new Refusal('NATIVE_TASK_WORKTREE_MISMATCH'));if(--pending)return;clearTimeout(timer);failure?reject(failure):resolve();};
+   pack.once('close',done);unpack.once('close',done);
+  });
+  await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'checkout','--detach',commit],{env,timeout:10000});
+  const head=(await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'rev-parse','HEAD'],{env,timeout:10000})).stdout.trim();
+  if(head!==commit)throw new Refusal('NATIVE_TASK_WORKTREE_MISMATCH');
+ }
  async prepareRecovery(intent:Intent,authority:Authority){
   const owner=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;if(!owner)throw new Refusal('INTENT_MISSING');
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rows[0];
-  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);return true;}
+  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);await this.materializeManagedCommit(intent,artifact.commit_id);return true;}
   return this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,false,c);if(!this.hasSource(authority))return false;
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];if(op?.state!=='registered'||op.handle||op.native_session_id)return false;
    if((await c.query('SELECT 1 FROM ac_execution_launches WHERE operation_id=$1 UNION ALL SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount)return false;
@@ -61,8 +101,11 @@ export class NativeImplementation{
    let supervisor=prior?this.supervisors.find(s=>s.supportsAccount(prior.account_id)&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint):undefined;
    if(prior&&!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
    if(!prior){
-    const source=this.sources.get(authority.contextId);if(!this.hasSource(authority)||!source)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');
-    const text=await source.resolve(intent,authority);if(digest(text)!==p.messageDigest)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
+    const managed=await readManagedUnit(this.ledger,intent);
+    let text:string;
+    if(managed?.recipe.mode==='native')text=await this.frozenTaskText(intent,p.messageDigest,p.writePaths);
+    else{const source=this.sources.get(authority.contextId);if(!this.hasSource(authority)||!source)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');text=await source.resolve(intent,authority);}
+    if(digest(text)!==p.messageDigest)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
     const operation=(await this.ledger.pool.query('SELECT execution_attempt_id FROM ac_operations WHERE id=$1 AND intent_id=$2',[intent.operation_id,intent.id])).rows[0];
     if(!operation)throw new Refusal('OPERATION_MISSING');
     let grant;
@@ -111,6 +154,7 @@ export class NativeImplementation{
     if(observed.state==='failed')throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');
     if(observed.state==='completed'){
      const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);
+     await this.materializeManagedCommit(intent,artifact.commit_id);
      const row=(await this.ledger.pool.query('SELECT g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1',[intent.operation_id])).rows[0];
      const tokens=row?.physical_receipt?.normalizedTokensUsed;
      const text=`Native artifact prepared for independent QA and review: ${artifact.commit_id}`;
