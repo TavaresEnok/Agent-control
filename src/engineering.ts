@@ -109,8 +109,11 @@ export class EngineeringStages{
   })().finally(()=>{open=false;wait(null);});
   return {result,get open(){return open;},sendMessage(){return false;},end(){},interrupt(){canceled=true;},hardStop(){canceled=true;}};
  }
- private async verifierBytes(){
-  if(!this.options.syntheticVerifierPath)return readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url));
+ private async verifierBytes(expected?:string){
+  if(!this.options.syntheticVerifierPath){
+   for(const name of ['synthetic-verifier.mjs','synthetic-verifier-wide.mjs']){const bytes=await readFile(new URL('../scripts/'+name,import.meta.url));if(!expected||createHash('sha256').update(bytes).digest('hex')===expected)return bytes;}
+   throw new Refusal('VERIFIER_VERSION_MISMATCH');
+  }
   const path=resolve(this.options.syntheticVerifierPath),info=await lstat(path);
   if(path!==this.options.syntheticVerifierPath||info.isSymbolicLink()||!info.isFile()||info.size>1024*1024||await realpath(path)!==path)
    throw new Refusal('VERIFIER_PATH_FORBIDDEN');
@@ -191,7 +194,7 @@ export class EngineeringStages{
       !Number.isInteger(row.handle?.pid)||row.handle.pid<=0||row.handle?.operationId!==intent.operation_id||Number(row.handle?.epoch)!==Number(row.manager_epoch)||
       row.physical_receipt?.processId!==String(row.handle?.pid)||!row.snapshot||digest(row.snapshot)!==row.digest)
     throw new Refusal('MANAGED_RECEIPT_MISMATCH');
-   const schema=z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict()).min(2).max(4);
+   const schema=z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string().regex(/^[a-f0-9]{40}$/),tree:z.string().regex(/^[a-f0-9]{40}$/),base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string())}).strict()).min(2).max(10);
    const sources=schema.parse(row.snapshot);
    if(digest(sources.map(s=>s.unitId))!==digest(input.sources))throw new Refusal('MANAGED_RECEIPT_MISMATCH');
    for(const source of sources){
@@ -548,7 +551,7 @@ export class EngineeringStages{
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
       [this.projectId,contract.quality_revision])).rows[0];
      const policy=QualityPolicy.parse(qualityRow?.snapshot);
-     const verifierDigest=createHash('sha256').update(await this.verifierBytes()).digest('hex');
+     const verifierDigest=createHash('sha256').update(await this.verifierBytes(policy.verifierDigest)).digest('hex');
      if(digest(policy)!==qualityRow.digest||policy.verifierDigest!==verifierDigest)throw new Refusal('VERIFIER_VERSION_MISMATCH');
      const verified=await this.options.isolatedVerification.run(principal,stage.id,grant.id,authority,spec.cwd,
       {id:artifact.id,commit:source.commit,tree:source.tree,base:source.base},intent.operation_id,node,verifierDigest,()=>canceled||!this.running);
@@ -558,11 +561,10 @@ export class EngineeringStages{
     const parent=resolve('.state/verifier-workspaces');await mkdir(parent,{recursive:true,mode:0o700});
     const temporary=await mkdtemp(join(parent,'stage-'));let monitor:ReturnType<typeof setInterval>|undefined;
     try{
-     const script=await this.verifierBytes();
-     const verifierDigest=createHash('sha256').update(script).digest('hex');
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
        [this.projectId,contract.quality_revision])).rows[0];
      const policy=QualityPolicy.parse(qualityRow?.snapshot);
+     const script=await this.verifierBytes(policy.verifierDigest);const verifierDigest=createHash('sha256').update(script).digest('hex');
      if(digest(policy)!==qualityRow.digest||policy.verifierDigest!==verifierDigest)throw new Refusal('VERIFIER_VERSION_MISMATCH');
      const verifierPath=join(temporary,'verifier.mjs');await writeFile(verifierPath,script,{mode:0o500});
      const snapshot=await this.options.git.snapshot(source.commit,source.base,join(temporary,'snapshot'));

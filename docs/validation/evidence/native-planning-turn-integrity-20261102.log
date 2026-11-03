@@ -1,0 +1,10 @@
+✔ clean native planning completion preserves unknown telemetry and refuses failed or incomplete valid-looking text (6.618113ms)
+✔ an unexpected tool event is refused and does not become a successful planning result (0.493249ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 479.799157

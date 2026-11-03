@@ -1,0 +1,8 @@
+SOURCE installed Codex feature metadata; deprecated compatibility path
+COMMAND codex --enable use_legacy_landlock sandbox -P ac-test -C <owned synthetic work> -- <controlled canary read>
+
+thread 'main' (3913231) panicked at linux-sandbox/src/linux_run_main.rs:385:9:
+filesystem-restricted execution requires bubblewrap to isolate app-server sockets
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+EXIT 101

@@ -111,8 +111,18 @@ rl.on('line', (line) => {
       : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
+  } else if (msg.method === 'environment/add') {
+    if(!process.argv.includes('--no-daemon')||msg.params?.environmentId!=='job_tools') {emit({id:msg.id,error:{code:-32602,message:'environment bootstrap mismatch'}});return;}
+    emit({id:msg.id,result:{}});
+  } else if (msg.method === 'environment/info') {
+    emit({id:msg.id,result:{cwd:'/work',shell:'/bin/sh'}});
+  } else if (msg.method === 'environment/status') {
+    emit({id:msg.id,result:{status:process.env.MOCK_CODEX_REMOTE_STATE??'ready'}});
   } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
-    const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
+    const planning=process.env.MOCK_CODEX_EXPECT_PLANNING==='1';
+    if(process.env.MOCK_CODEX_EXPECT_REMOTE==='1'&&JSON.stringify(msg.params?.environments)!==JSON.stringify([{environmentId:'job_tools',cwd:'/work',runtimeWorkspaceRoots:['/work']}])){emit({id:msg.id,error:{code:-32602,message:'missing remote pin'}});return;}
+    const expectedSandbox=planning?'read-only':process.env.CEZ_CODEX_NETWORK==='0'?'workspace-write':'danger-full-access';
+    if(planning&&(['shell_tool','unified_exec','view_image','plugins','multi_agent'].some(name=>msg.params?.config?.['features.'+name]!==false)||msg.params?.modelProvider!=='openai')){emit({id:msg.id,error:{code:-32602,message:'unsafe planning config'}});return;}
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
       return;
@@ -123,7 +133,7 @@ rl.on('line', (line) => {
     }
     if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
-      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+      emit({ id: msg.id, result: { thread: { id: 'th_mock_1',...(process.env.MOCK_CODEX_EXPECT_REMOTE==='1'?{environments:process.env.MOCK_CODEX_REMOTE_WRONG==='1'?[]:msg.params.environments}:{}) },...((planning||process.env.MOCK_CODEX_EXPECT_REMOTE==='1')?{model:msg.params.model,modelProvider:'openai',reasoningEffort:msg.params.config.model_reasoning_effort,sandbox:{type:planning?'readOnly':'dangerFullAccess',networkAccess:false}}:{}) } });
     } else if (msg.method === 'thread/fork') {
       emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
     } else if (resumeLocked()) {
@@ -147,6 +157,9 @@ rl.on('line', (line) => {
     }
     emit({ id: msg.id, result: {} });
   } else if (msg.method === 'turn/start') {
+    if(process.env.MOCK_CODEX_EXPECT_REMOTE==='1'&&JSON.stringify(msg.params?.environments)!==JSON.stringify([{environmentId:'job_tools',cwd:'/work',runtimeWorkspaceRoots:['/work']}])){emit({id:msg.id,error:{code:-32602,message:'turn missing remote pin'}});return;}
+    if(process.env.MOCK_CODEX_EXPECT_PLANNING==='1'&&!msg.params?.outputSchema){emit({id:msg.id,error:{code:-32602,message:'missing output schema'}});return;}
+    if(process.env.MOCK_CODEX_EXPECT_EFFORT&&msg.params?.effort!==process.env.MOCK_CODEX_EXPECT_EFFORT){emit({id:msg.id,error:{code:-32602,message:'effort mismatch'}});return;}
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
     turnSeq += 1;
     if (turnSeq === 1) {

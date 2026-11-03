@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /home/app/projects/agent-control-implementation
+
+
+ Test Files  2 passed (2)
+      Tests  6 passed (6)
+   Start at  23:59:53
+   Duration  2.07s (transform 1.34s, setup 0ms, import 1.83s, tests 1.93s, environment 0ms)
+

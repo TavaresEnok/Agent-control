@@ -1,0 +1,4 @@
+*
+!services/
+!services/provider-egress/
+!services/provider-egress/proxy.py

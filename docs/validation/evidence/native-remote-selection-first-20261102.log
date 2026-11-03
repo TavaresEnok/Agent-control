@@ -1,0 +1,28 @@
+
+ RUN  v4.1.10 /home/app/projects/agent-control-implementation/upstream/cezar/packages/cezar
+
+ ❯ |server| src/core/agent-control-effort.test.ts (3 tests | 1 failed) 962ms
+   × pins remote tools before the first turn and refuses disconnected or substituted environments without local fallback 353ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |server| src/core/agent-control-effort.test.ts > pins remote tools before the first turn and refuses disconnected or substituted environments without local fallback
+Error: EXECUTION_ENVIRONMENT_NOT_READY
+ ❯ CodexSession.bootstrap src/core/codex-app-server-runner.ts:440:40
+    438|       await this.rpc.request('environment/add',{environmentId:remote.i…
+    439|       const status=await this.rpc.request('environment/status',{enviro…
+    440|       if(status.status!=='ready')throw new Error('EXECUTION_ENVIRONMEN…
+       |                                        ^
+    441|     }
+    442|     const environments=remote?[{environmentId:remote.id,cwd:remote.cwd…
+ ❯ src/core/codex-app-server-runner.ts:247:9
+ ❯ src/core/agent-control-effort.test.ts:23:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+   Start at  23:37:16
+   Duration  2.07s (transform 713ms, setup 45ms, import 922ms, tests 962ms, environment 0ms)
+

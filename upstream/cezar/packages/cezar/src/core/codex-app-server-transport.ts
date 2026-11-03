@@ -30,10 +30,11 @@ export function spawnCodexAppServer(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  isolated = false,
 ): ChildProcessWithoutNullStreams {
   try {
     const env = buildCodexAppServerEnv(extraEnv);
-    const [file, argv] = disclaimedCommand(bin, ['app-server'], env);
+    const [file, argv] = disclaimedCommand(bin, isolated ? ['--no-daemon', 'app-server'] : ['app-server'], env);
     return nodeSpawn(file, argv, { cwd, env });
   } catch (error) {
     throw codexSpawnError(error, bin);

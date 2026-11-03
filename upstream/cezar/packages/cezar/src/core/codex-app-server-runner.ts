@@ -94,6 +94,18 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    if(spec.reasoningEffort!==undefined&&!['low','medium','high'].includes(spec.reasoningEffort))throw new Error('MODEL_EFFORT_NOT_ALLOWED');
+    if(spec.readOnlyPlanning&&((spec.mcpServers?.length??0)>0||(spec.additionalDirectories?.length??0)>0))throw new Error('PLANNING_CAPABILITY_NOT_ALLOWED');
+    if(spec.readOnlyPlanning&&(!spec.model||!spec.reasoningEffort||spec.resume))throw new Error('PLANNING_FRESH_PROFILE_REQUIRED');
+    if(spec.executionEnvironment){
+      const e=spec.executionEnvironment;let u:URL;try{u=new URL(e.url);}catch{throw new Error('EXECUTION_ENVIRONMENT_INVALID');}
+      const loopback=['localhost','127.0.0.1','[::1]'].includes(u.hostname);
+      if(!/^[a-z][a-z0-9_-]{0,63}$/.test(e.id)||!e.cwd.startsWith('/')||e.cwd.includes('..')||e.cwd.includes('\0')||
+        !['ws:','wss:'].includes(u.protocol)||(!loopback&&u.protocol!=='wss:')||u.username||u.password||u.search||u.hash||
+        (typeof e.authBearerToken!=='string'||!/^[A-Za-z0-9._~-]{32,512}$/.test(e.authBearerToken))||!spec.isolatedAppServer||!spec.model||!spec.reasoningEffort||spec.resume||spec.readOnlyPlanning||(spec.mcpServers?.length??0)>0||(spec.additionalDirectories?.length??0)>0)
+        throw new Error('EXECUTION_ENVIRONMENT_INVALID');
+      spec={...spec,executionEnvironment:Object.freeze({...e})};
+    }
     const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
@@ -169,7 +181,7 @@ class CodexSession implements AgentSession {
     private readonly opts: SessionOptions,
   ) {
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, spec.isolatedAppServer===true||spec.readOnlyPlanning===true);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
@@ -421,10 +433,22 @@ class CodexSession implements AgentSession {
 
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
-
+    const remote=this.spec.executionEnvironment;
+    if(remote){
+      try{
+      await this.rpc.request('environment/add',{environmentId:remote.id,execServerUrl:remote.url,authBearerToken:remote.authBearerToken,connectTimeoutMs:5000});
+      // add is lazy in the official protocol. info connects the selected peer;
+      // status alone would remain pending forever. Never choose a local fallback.
+      await this.rpc.request('environment/info',{environmentId:remote.id});
+      }catch{throw new Error('EXECUTION_ENVIRONMENT_CONNECT_FAILED');}
+      const status=await this.rpc.request('environment/status',{environmentId:remote.id});
+      if(status.status!=='ready')throw new Error('EXECUTION_ENVIRONMENT_NOT_READY');
+    }
+    const environments=remote?[{environmentId:remote.id,cwd:remote.cwd,runtimeWorkspaceRoots:[remote.cwd]}]:undefined;
     const overrides = {
       model: this.spec.model,
-      cwd: this.spec.cwd,
+      cwd: remote?.cwd??this.spec.cwd,
+      ...(environments?{environments}:{}),
       // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
       // keeps container installs working when bubblewrap cannot create a UID map (#563).
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
@@ -432,12 +456,27 @@ class CodexSession implements AgentSession {
       approvalPolicy: 'never',
       // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
       // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
-      config: this.privateMcpConfig(),
+      config: this.spec.readOnlyPlanning ? {
+        mcp_servers:{},web_search:'disabled',model_reasoning_effort:this.spec.reasoningEffort,
+        ...Object.fromEntries(['shell_tool','unified_exec','view_image','multi_agent','multi_agent_v2','apps','plugins','plugin_discovery_prefetch','remote_plugin','browser_use','computer_use','image_generation','code_mode_host','workspace_dependencies','skill_search','skill_mcp_dependency_install','unbounded_connection_retries'].map(name=>['features.'+name,false])),
+      } : remote?{mcp_servers:{},web_search:'disabled',model_reasoning_effort:this.spec.reasoningEffort,
+        ...Object.fromEntries(['view_image','multi_agent','multi_agent_v2','apps','plugins','plugin_discovery_prefetch','remote_plugin','browser_use','computer_use','image_generation','code_mode_host','workspace_dependencies','skill_search','skill_mcp_dependency_install'].map(name=>['features.'+name,false]))
+      }:this.spec.reasoningEffort?{...this.privateMcpConfig(),model_reasoning_effort:this.spec.reasoningEffort}:this.privateMcpConfig(),
+      ...(remote?{sandbox:'danger-full-access',modelProvider:'openai',ephemeral:true}:{}),
+      ...(this.spec.readOnlyPlanning?{sandbox:'read-only',modelProvider:'openai',ephemeral:true}:{}),
     };
     if (this.spec.resume && this.spec.sessionId) {
       this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {
       const res = await this.rpc.request('thread/start', clean(overrides));
+      if(remote){
+        const thread=res.thread as {environments?:unknown}|undefined;
+        if(res.model!==this.spec.model||res.modelProvider!=='openai'||res.reasoningEffort!==this.spec.reasoningEffort)throw new Error('EXECUTION_ENVIRONMENT_PROFILE_MISMATCH');
+        if(JSON.stringify(thread?.environments)!==JSON.stringify(environments))throw new Error('EXECUTION_ENVIRONMENT_PROFILE_MISMATCH');
+      }
+      if(this.spec.readOnlyPlanning){const sandbox=res.sandbox as {type?:string;networkAccess?:boolean}|undefined;
+        if(res.model!==this.spec.model||res.modelProvider!=='openai'||res.reasoningEffort!==this.spec.reasoningEffort||sandbox?.type!=='readOnly'||sandbox.networkAccess===true)throw new Error('PLANNING_RUNTIME_PROFILE_MISMATCH');
+      }
       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
     }
     if (this.threadId) {
@@ -503,6 +542,9 @@ class CodexSession implements AgentSession {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.executionEnvironment?{environments:[{environmentId:this.spec.executionEnvironment.id,cwd:this.spec.executionEnvironment.cwd,runtimeWorkspaceRoots:[this.spec.executionEnvironment.cwd]}]}:{}),
+      ...(this.spec.reasoningEffort?{effort:this.spec.reasoningEffort}:{}),
+      ...(this.spec.structuredOutputSchema?{outputSchema:this.spec.structuredOutputSchema}:{}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }
@@ -517,6 +559,7 @@ class CodexSession implements AgentSession {
   }
 
   private handleUserInputRequest(rpcId: number | string, params: Record<string, unknown>): void {
+    if(this.spec.readOnlyPlanning){this.rpc.respond({id:rpcId,error:{code:-32000,message:'Planning-only sessions cannot request interactive input'}});return;}
     const questions = codexAskQuestions(params.questions);
     if (!questions) {
       this.rpc.respond({ id: rpcId, error: { code: -32602, message: 'unsupported or malformed requestUserInput payload' } });

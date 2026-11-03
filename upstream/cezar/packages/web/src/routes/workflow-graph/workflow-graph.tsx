@@ -1575,7 +1575,7 @@ function Inspector({
               value={node.branches}
               onChange={(e) => onGraphEdit((g) => setForkBranches(g, node.id, Number(e.target.value)))}
             >
-              {[2, 3, 4].map((n) => (
+              {Array.from({length:9},(_,i)=>i+2).map((n) => (
                 <option key={n} value={n}>
                   {n} agents
                 </option>
@@ -1584,7 +1584,7 @@ function Inspector({
           </Field>
           <p className="text-meta text-muted-foreground">
             Each branch is the agent it is wired to: set its prompt, runner and budget there. They run as subtasks in
-            their own worktrees (at most 4 at once) and meet at the join.
+            their own worktrees, subject to admitted capacity, and meet at the join.
           </p>
         </>
       )}

@@ -6,7 +6,7 @@ import {CorrectionSource,SpecialistRequest} from './sandbox-broker.ts';
 const Source=z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().optional(),composition:z.array(z.object({unitId:z.string(),artifactId:z.uuid(),commit:z.string(),tree:z.string(),base:z.string(),writePaths:z.array(z.string())}).strict()).optional(),correction:CorrectionSource.optional()}).strict();
 const Execution=z.discriminatedUnion('profile',[
  z.object({profile:z.literal('synthetic-implementation-v1'),source:Source}).strict(),
- z.object({profile:z.literal('synthetic-verification-v1'),source:Source,verification:z.object({artifactId:z.uuid(),operationId:z.uuid(),kind:z.enum(['qa','review','judge'])}).strict()}).strict(),
+ z.object({profile:z.literal('synthetic-verification-v1'),source:Source,verification:z.object({artifactId:z.uuid(),operationId:z.uuid(),kind:z.enum(['qa','review','judge']),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict()}).strict(),
  z.object({profile:z.literal('synthetic-specialist-v1'),source:Source,advice:SpecialistRequest}).strict(),
 ]);
 

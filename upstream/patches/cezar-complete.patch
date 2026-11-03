@@ -22,6 +22,224 @@ index 149d6200c75401b75145f247ecd79a94720027bf..d89a5dd34bb835832358280025e2026c
 +### Agent Control fork build
 +
 +`VITE_AGENT_CONTROL_MANAGED=1` replaces the shared native composer with the canonical Happier conversation link. It is set in this fork's lab build. The gateway additionally rejects native writes, WS, terminal, MCP and undocumented aliases; the UI flag is not an authorization boundary. Upstream standalone builds retain the original default.
+diff --git a/packages/cezar/src/core/__fixtures__/codex/mock-codex-app-server.mjs b/packages/cezar/src/core/__fixtures__/codex/mock-codex-app-server.mjs
+index 1b3f88dd95099dc2fd2f815824d2950704491007..4708a65878a1dcc664eaf66d2076a7d7a4b7d2ae 100755
+--- a/packages/cezar/src/core/__fixtures__/codex/mock-codex-app-server.mjs
++++ b/packages/cezar/src/core/__fixtures__/codex/mock-codex-app-server.mjs
+@@ -111,8 +111,18 @@ rl.on('line', (line) => {
+       : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
+   } else if (msg.method === 'initialize') {
+     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
++  } else if (msg.method === 'environment/add') {
++    if(!process.argv.includes('--no-daemon')||msg.params?.environmentId!=='job_tools') {emit({id:msg.id,error:{code:-32602,message:'environment bootstrap mismatch'}});return;}
++    emit({id:msg.id,result:{}});
++  } else if (msg.method === 'environment/info') {
++    emit({id:msg.id,result:{cwd:'/work',shell:'/bin/sh'}});
++  } else if (msg.method === 'environment/status') {
++    emit({id:msg.id,result:{status:process.env.MOCK_CODEX_REMOTE_STATE??'ready'}});
+   } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
+-    const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
++    const planning=process.env.MOCK_CODEX_EXPECT_PLANNING==='1';
++    if(process.env.MOCK_CODEX_EXPECT_REMOTE==='1'&&JSON.stringify(msg.params?.environments)!==JSON.stringify([{environmentId:'job_tools',cwd:'/work',runtimeWorkspaceRoots:['/work']}])){emit({id:msg.id,error:{code:-32602,message:'missing remote pin'}});return;}
++    const expectedSandbox=planning?'read-only':process.env.CEZ_CODEX_NETWORK==='0'?'workspace-write':'danger-full-access';
++    if(planning&&(['shell_tool','unified_exec','view_image','plugins','multi_agent'].some(name=>msg.params?.config?.['features.'+name]!==false)||msg.params?.modelProvider!=='openai')){emit({id:msg.id,error:{code:-32602,message:'unsafe planning config'}});return;}
+     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
+       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
+       return;
+@@ -123,7 +133,7 @@ rl.on('line', (line) => {
+     }
+     if (msg.method === 'thread/start') {
+       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
+-      emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
++      emit({ id: msg.id, result: { thread: { id: 'th_mock_1',...(process.env.MOCK_CODEX_EXPECT_REMOTE==='1'?{environments:process.env.MOCK_CODEX_REMOTE_WRONG==='1'?[]:msg.params.environments}:{}) },...((planning||process.env.MOCK_CODEX_EXPECT_REMOTE==='1')?{model:msg.params.model,modelProvider:'openai',reasoningEffort:msg.params.config.model_reasoning_effort,sandbox:{type:planning?'readOnly':'dangerFullAccess',networkAccess:false}}:{}) } });
+     } else if (msg.method === 'thread/fork') {
+       emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
+     } else if (resumeLocked()) {
+@@ -147,6 +157,9 @@ rl.on('line', (line) => {
+     }
+     emit({ id: msg.id, result: {} });
+   } else if (msg.method === 'turn/start') {
++    if(process.env.MOCK_CODEX_EXPECT_REMOTE==='1'&&JSON.stringify(msg.params?.environments)!==JSON.stringify([{environmentId:'job_tools',cwd:'/work',runtimeWorkspaceRoots:['/work']}])){emit({id:msg.id,error:{code:-32602,message:'turn missing remote pin'}});return;}
++    if(process.env.MOCK_CODEX_EXPECT_PLANNING==='1'&&!msg.params?.outputSchema){emit({id:msg.id,error:{code:-32602,message:'missing output schema'}});return;}
++    if(process.env.MOCK_CODEX_EXPECT_EFFORT&&msg.params?.effort!==process.env.MOCK_CODEX_EXPECT_EFFORT){emit({id:msg.id,error:{code:-32602,message:'effort mismatch'}});return;}
+     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+     turnSeq += 1;
+     if (turnSeq === 1) {
+diff --git a/packages/cezar/src/core/agent-control-effort.test.ts b/packages/cezar/src/core/agent-control-effort.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f7dbbefd2cae4b7f1170252dfc043016f09354c8
+--- /dev/null
++++ b/packages/cezar/src/core/agent-control-effort.test.ts
+@@ -0,0 +1,27 @@
++import {it,expect} from 'vitest';
++import {fileURLToPath} from 'node:url';
++import {CodexAppServerRunner} from './codex-app-server-runner.js';
++it('sends explicit high effort through native turn/start and refuses an unsupported ceiling before spawning',async()=>{
++ const runner=new CodexAppServerRunner({bin:fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs',import.meta.url)),timeoutMs:5000});
++ expect(()=>runner.startSession({cwd:process.cwd(),userPrompt:'offline fixture',reasoningEffort:'ultra' as 'high'})).toThrow('MODEL_EFFORT_NOT_ALLOWED');
++ const result=await runner.run({cwd:process.cwd(),userPrompt:'offline fixture',reasoningEffort:'high',env:{MOCK_CODEX_EXPECT_EFFORT:'high'}});
++ expect(typeof result.text).toBe('string');expect(result.text.length).toBeGreaterThan(0);
++},10000);
++it('uses a fresh read-only tools-disabled planning thread with structured output and pins the returned profile',async()=>{
++ const runner=new CodexAppServerRunner({bin:fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs',import.meta.url)),timeoutMs:5000});
++ const result=await runner.run({cwd:process.cwd(),userPrompt:'offline planning fixture',model:'fixture-sol',reasoningEffort:'medium',readOnlyPlanning:true,
++  structuredOutputSchema:{type:'object',additionalProperties:false,properties:{ok:{type:'boolean'}},required:['ok']},env:{MOCK_CODEX_EXPECT_EFFORT:'medium',MOCK_CODEX_EXPECT_PLANNING:'1'}});
++ expect(result.text.length).toBeGreaterThan(0);
++ expect(()=>runner.startSession({cwd:process.cwd(),userPrompt:'x',readOnlyPlanning:true,model:'fixture-sol',reasoningEffort:'medium',resume:true})).toThrow('PLANNING_FRESH_PROFILE_REQUIRED');
++},10000);
++it('pins remote tools before the first turn and refuses disconnected or substituted environments without local fallback',async()=>{
++ const runner=new CodexAppServerRunner({bin:fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs',import.meta.url)),timeoutMs:5000});
++ const spec={cwd:process.cwd(),userPrompt:'offline tools fixture',isolatedAppServer:true,model:'fixture-sol',reasoningEffort:'medium' as const,
++  executionEnvironment:{id:'job_tools',url:'ws://127.0.0.1:8765',cwd:'/work',authBearerToken:'a'.repeat(48)},env:{MOCK_CODEX_EXPECT_REMOTE:'1'}};
++ expect((await runner.run(spec)).text.length).toBeGreaterThan(0);
++ for(const env of [{MOCK_CODEX_REMOTE_STATE:'disconnected'},{MOCK_CODEX_REMOTE_WRONG:'1'}]){
++  await expect(runner.run({...spec,env:{...spec.env,...env}})).rejects.toThrow(/EXECUTION_ENVIRONMENT_(NOT_READY|PROFILE_MISMATCH)/);
++ }
++ expect(()=>runner.startSession({...spec,executionEnvironment:{...spec.executionEnvironment,url:'ws://provider:8765'}})).toThrow('EXECUTION_ENVIRONMENT_INVALID');
++ expect(()=>runner.startSession({...spec,isolatedAppServer:false})).toThrow('EXECUTION_ENVIRONMENT_INVALID');
++},20000);
+diff --git a/packages/cezar/src/core/agent-runner.ts b/packages/cezar/src/core/agent-runner.ts
+index 8a2578ac6012c0160031d5f85a05bc33cbc2e917..6c71fb07c168f1df2166a2298dcb64085e510064 100644
+--- a/packages/cezar/src/core/agent-runner.ts
++++ b/packages/cezar/src/core/agent-runner.ts
+@@ -66,6 +66,16 @@ export interface AgentRunSpec {
+    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
+   mcpServers?: PrivateMcpServer[];
+   model?: string;
++  /** Explicit effort selected by the admitted profile; never inferred from display labels. */
++  reasoningEffort?: 'low' | 'medium' | 'high';
++  /** Controller-owned planning task: no native execution, MCP or additional roots. */
++  readOnlyPlanning?: boolean;
++  structuredOutputSchema?: Record<string, unknown>;
++  /** Supervisor-owned tool environment; never supplied by a workflow prompt.
++   * Authentication is scoped to one isolated exec-server, not an AI account. */
++  executionEnvironment?: { id: string; url: string; authBearerToken: string; cwd: string };
++  /** Avoid sharing a native daemon between admitted account/session containers. */
++  isolatedAppServer?: boolean;
+   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
+   timeoutMs?: number;
+   /**
+diff --git a/packages/cezar/src/core/codex-app-server-runner.ts b/packages/cezar/src/core/codex-app-server-runner.ts
+index 2ba42b5cc0a7e14960a533f6f2de43af8cc0acc0..6b3b96bf955221d5d899d2208ab7341ddf7af660 100644
+--- a/packages/cezar/src/core/codex-app-server-runner.ts
++++ b/packages/cezar/src/core/codex-app-server-runner.ts
+@@ -94,6 +94,18 @@ export class CodexAppServerRunner implements AgentRunner {
+     onEvent?: (event: AgentEvent) => void,
+     opts: SessionOptions = {},
+   ): AgentSession {
++    if(spec.reasoningEffort!==undefined&&!['low','medium','high'].includes(spec.reasoningEffort))throw new Error('MODEL_EFFORT_NOT_ALLOWED');
++    if(spec.readOnlyPlanning&&((spec.mcpServers?.length??0)>0||(spec.additionalDirectories?.length??0)>0))throw new Error('PLANNING_CAPABILITY_NOT_ALLOWED');
++    if(spec.readOnlyPlanning&&(!spec.model||!spec.reasoningEffort||spec.resume))throw new Error('PLANNING_FRESH_PROFILE_REQUIRED');
++    if(spec.executionEnvironment){
++      const e=spec.executionEnvironment;let u:URL;try{u=new URL(e.url);}catch{throw new Error('EXECUTION_ENVIRONMENT_INVALID');}
++      const loopback=['localhost','127.0.0.1','[::1]'].includes(u.hostname);
++      if(!/^[a-z][a-z0-9_-]{0,63}$/.test(e.id)||!e.cwd.startsWith('/')||e.cwd.includes('..')||e.cwd.includes('\0')||
++        !['ws:','wss:'].includes(u.protocol)||(!loopback&&u.protocol!=='wss:')||u.username||u.password||u.search||u.hash||
++        (typeof e.authBearerToken!=='string'||!/^[A-Za-z0-9._~-]{32,512}$/.test(e.authBearerToken))||!spec.isolatedAppServer||!spec.model||!spec.reasoningEffort||spec.resume||spec.readOnlyPlanning||(spec.mcpServers?.length??0)>0||(spec.additionalDirectories?.length??0)>0)
++        throw new Error('EXECUTION_ENVIRONMENT_INVALID');
++      spec={...spec,executionEnvironment:Object.freeze({...e})};
++    }
+     const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
+     this.lastSession = session;
+     return session;
+@@ -169,7 +181,7 @@ class CodexSession implements AgentSession {
+     private readonly opts: SessionOptions,
+   ) {
+     try {
+-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
++      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, spec.isolatedAppServer===true||spec.readOnlyPlanning===true);
+       this.rpc = new CodexAppServerRpc(this.child);
+     } catch (err) {
+       throw codexSpawnError(err, bin);
+@@ -421,10 +433,22 @@ class CodexSession implements AgentSession {
+ 
+   private async bootstrap(): Promise<void> {
+     await this.rpc.initialize();
+-
++    const remote=this.spec.executionEnvironment;
++    if(remote){
++      try{
++      await this.rpc.request('environment/add',{environmentId:remote.id,execServerUrl:remote.url,authBearerToken:remote.authBearerToken,connectTimeoutMs:5000});
++      // add is lazy in the official protocol. info connects the selected peer;
++      // status alone would remain pending forever. Never choose a local fallback.
++      await this.rpc.request('environment/info',{environmentId:remote.id});
++      }catch{throw new Error('EXECUTION_ENVIRONMENT_CONNECT_FAILED');}
++      const status=await this.rpc.request('environment/status',{environmentId:remote.id});
++      if(status.status!=='ready')throw new Error('EXECUTION_ENVIRONMENT_NOT_READY');
++    }
++    const environments=remote?[{environmentId:remote.id,cwd:remote.cwd,runtimeWorkspaceRoots:[remote.cwd]}]:undefined;
+     const overrides = {
+       model: this.spec.model,
+-      cwd: this.spec.cwd,
++      cwd: remote?.cwd??this.spec.cwd,
++      ...(environments?{environments}:{}),
+       // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
+       // keeps container installs working when bubblewrap cannot create a UID map (#563).
+       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
+@@ -432,12 +456,27 @@ class CodexSession implements AgentSession {
+       approvalPolicy: 'never',
+       // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+       // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+-      config: this.privateMcpConfig(),
++      config: this.spec.readOnlyPlanning ? {
++        mcp_servers:{},web_search:'disabled',model_reasoning_effort:this.spec.reasoningEffort,
++        ...Object.fromEntries(['shell_tool','unified_exec','view_image','multi_agent','multi_agent_v2','apps','plugins','plugin_discovery_prefetch','remote_plugin','browser_use','computer_use','image_generation','code_mode_host','workspace_dependencies','skill_search','skill_mcp_dependency_install','unbounded_connection_retries'].map(name=>['features.'+name,false])),
++      } : remote?{mcp_servers:{},web_search:'disabled',model_reasoning_effort:this.spec.reasoningEffort,
++        ...Object.fromEntries(['view_image','multi_agent','multi_agent_v2','apps','plugins','plugin_discovery_prefetch','remote_plugin','browser_use','computer_use','image_generation','code_mode_host','workspace_dependencies','skill_search','skill_mcp_dependency_install'].map(name=>['features.'+name,false]))
++      }:this.spec.reasoningEffort?{...this.privateMcpConfig(),model_reasoning_effort:this.spec.reasoningEffort}:this.privateMcpConfig(),
++      ...(remote?{sandbox:'danger-full-access',modelProvider:'openai',ephemeral:true}:{}),
++      ...(this.spec.readOnlyPlanning?{sandbox:'read-only',modelProvider:'openai',ephemeral:true}:{}),
+     };
+     if (this.spec.resume && this.spec.sessionId) {
+       this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
+     } else {
+       const res = await this.rpc.request('thread/start', clean(overrides));
++      if(remote){
++        const thread=res.thread as {environments?:unknown}|undefined;
++        if(res.model!==this.spec.model||res.modelProvider!=='openai'||res.reasoningEffort!==this.spec.reasoningEffort)throw new Error('EXECUTION_ENVIRONMENT_PROFILE_MISMATCH');
++        if(JSON.stringify(thread?.environments)!==JSON.stringify(environments))throw new Error('EXECUTION_ENVIRONMENT_PROFILE_MISMATCH');
++      }
++      if(this.spec.readOnlyPlanning){const sandbox=res.sandbox as {type?:string;networkAccess?:boolean}|undefined;
++        if(res.model!==this.spec.model||res.modelProvider!=='openai'||res.reasoningEffort!==this.spec.reasoningEffort||sandbox?.type!=='readOnly'||sandbox.networkAccess===true)throw new Error('PLANNING_RUNTIME_PROFILE_MISMATCH');
++      }
+       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
+     }
+     if (this.threadId) {
+@@ -503,6 +542,9 @@ class CodexSession implements AgentSession {
+       threadId: this.threadId,
+       input,
+       summary: reasoningSummary(),
++      ...(this.spec.executionEnvironment?{environments:[{environmentId:this.spec.executionEnvironment.id,cwd:this.spec.executionEnvironment.cwd,runtimeWorkspaceRoots:[this.spec.executionEnvironment.cwd]}]}:{}),
++      ...(this.spec.reasoningEffort?{effort:this.spec.reasoningEffort}:{}),
++      ...(this.spec.structuredOutputSchema?{outputSchema:this.spec.structuredOutputSchema}:{}),
+     });
+     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
+   }
+@@ -517,6 +559,7 @@ class CodexSession implements AgentSession {
+   }
+ 
+   private handleUserInputRequest(rpcId: number | string, params: Record<string, unknown>): void {
++    if(this.spec.readOnlyPlanning){this.rpc.respond({id:rpcId,error:{code:-32000,message:'Planning-only sessions cannot request interactive input'}});return;}
+     const questions = codexAskQuestions(params.questions);
+     if (!questions) {
+       this.rpc.respond({ id: rpcId, error: { code: -32602, message: 'unsupported or malformed requestUserInput payload' } });
+diff --git a/packages/cezar/src/core/codex-app-server-transport.ts b/packages/cezar/src/core/codex-app-server-transport.ts
+index 3bbec1f6e67f00492b0bbb085656bf487b1eb945..7ce3695bc08d1bfcc59cab35bd77416d1256ec62 100644
+--- a/packages/cezar/src/core/codex-app-server-transport.ts
++++ b/packages/cezar/src/core/codex-app-server-transport.ts
+@@ -30,10 +30,11 @@ export function spawnCodexAppServer(
+   bin: string,
+   cwd: string,
+   extraEnv?: Record<string, string>,
++  isolated = false,
+ ): ChildProcessWithoutNullStreams {
+   try {
+     const env = buildCodexAppServerEnv(extraEnv);
+-    const [file, argv] = disclaimedCommand(bin, ['app-server'], env);
++    const [file, argv] = disclaimedCommand(bin, isolated ? ['--no-daemon', 'app-server'] : ['app-server'], env);
+     return nodeSpawn(file, argv, { cwd, env });
+   } catch (error) {
+     throw codexSpawnError(error, bin);
 diff --git a/packages/cezar/src/core/runner-factory.ts b/packages/cezar/src/core/runner-factory.ts
 index 06eb21662859d17afa732d4d6d061e2ac951224f..176c7d5e02a4b3fb16595b6855a7d9dc5e439985 100644
 --- a/packages/cezar/src/core/runner-factory.ts
@@ -164,6 +382,19 @@ index 85747804cc0bb525a120c207d83aba9cfc96cf77..dcd967a4f5ca5f4cd9dfc78759ca6fe5
        expect(Date.now() - started).toBeLessThan(4_000);
      } finally {
        manager.dispose();
+diff --git a/packages/cezar/src/workflows/graph.ts b/packages/cezar/src/workflows/graph.ts
+index 4b9a51d361d8a611b6afb9b3e54992418286fd12..7908a753506c939eecc0f3de46499cb77dd8b129 100644
+--- a/packages/cezar/src/workflows/graph.ts
++++ b/packages/cezar/src/workflows/graph.ts
+@@ -115,7 +115,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
+   /** Fork: 2–4 output ports (`1`…`4`), each wired to an agent node that runs as its own child
+    *  task (fresh session, own worktree, carved budget) at the same time as the others. Every
+    *  branch agent leads into one `join`. */
+-  z.object({ ...nodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(4).default(3) }),
++  z.object({ ...nodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(10).default(3) }),
+   /** Join: where a fork's branches meet. `all` waits for every branch; `any` takes the first
+    *  that succeeds and cancels the rest. */
+   z.object({ ...nodeBase, type: z.literal('join'), wait: z.enum(['all', 'any']).default('all') }),
 diff --git a/packages/cezar/src/workflows/leftover-processes.test.ts b/packages/cezar/src/workflows/leftover-processes.test.ts
 index 99d6c3054209cec5c7736f2272203ff189e43870..c509d65f1bbe10b3832da5d6be5b7ed9a5eadddf 100644
 --- a/packages/cezar/src/workflows/leftover-processes.test.ts
@@ -557,7 +788,7 @@ index a8a0b7098fae8349a9fe31f6e875cc49a2c2c018..0d368fdf6220bbf6b97196a3a2711c70
    });
 diff --git a/packages/contract/src/agent-control-operations.ts b/packages/contract/src/agent-control-operations.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..883f022e4e542b75c39ab13143d67e586a850ddf
+index 0000000000000000000000000000000000000000..340d130507bcfc361f04b6c91bbe5c129d692eff
 --- /dev/null
 +++ b/packages/contract/src/agent-control-operations.ts
 @@ -0,0 +1,27 @@
@@ -576,9 +807,9 @@ index 0000000000000000000000000000000000000000..883f022e4e542b75c39ab13143d67e58
 +export const agentControlOperationalSnapshotSchema=z.object({schemaVersion:z.literal(1),scope:z.literal('installation_aggregate'),
 + observedAt:z.iso.datetime(),databaseReadOnly:z.literal(true),diskObservation:z.enum(['not_configured','observed','partially_unavailable']),
 + metrics:z.array(z.object({name:z.string().regex(/^agent_control_[a-z_]+$/),help:z.string(),type:z.literal('gauge'),samples:z.array(metricSampleSchema)}).strict())}).strict();
-+export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact','specialist','administrative_operation']),id:z.uuid()}).strict();
++export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact','specialist','administrative_operation','semantic_planning','native_planning_job']),id:z.uuid()}).strict();
 +export const agentControlDiagnosticFindingSchema=z.object({code:z.enum(['context_paused','context_draining','cancellation_requested','cancellation_confirmed',
-+ 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing','admission_closed','manager_unavailable','specialist_uncertain','specialist_rejected','administrative_effect_uncertain']),
++ 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing','admission_closed','manager_unavailable','specialist_uncertain','specialist_rejected','administrative_effect_uncertain','planning_pending','planning_result_uncertain','planning_publication_pending','planning_rejected','native_planning_uncertain']),
 + meaning:z.string(),owner:z.string(),nextCondition:z.string(),evidence:z.array(agentControlDiagnosticEvidenceSchema)}).strict();
 +export const agentControlDiagnosticsSchema=z.object({contextId:z.uuid(),findings:z.array(agentControlDiagnosticFindingSchema),truncated:z.boolean(),
 + assessment:z.enum(['observed','unknown']),explanation:z.string().optional()}).strict();
@@ -590,10 +821,10 @@ index 0000000000000000000000000000000000000000..883f022e4e542b75c39ab13143d67e58
 +export type AgentControlDiagnostics=z.infer<typeof agentControlDiagnosticsSchema>;
 diff --git a/packages/contract/src/agent-control-plans.ts b/packages/contract/src/agent-control-plans.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d89d30d5acd5f40e07e373c40fa632cdf971a62a
+index 0000000000000000000000000000000000000000..624875125b37878891ddeede085a986eb166e7d9
 --- /dev/null
 +++ b/packages/contract/src/agent-control-plans.ts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,43 @@
 +import {z} from 'zod';
 +import {workflowDefSchema} from './workflows.ts';
 +
@@ -608,7 +839,10 @@ index 0000000000000000000000000000000000000000..d89d30d5acd5f40e07e373c40fa632cd
 + writePaths:z.array(RepoPath).min(1).max(64),qualityRevision:z.number().int().positive(),targetRef:Target,
 + maxCorrections:z.number().int().min(0).max(5)}).strict();
 +export const ManagerPlan=z.object({schemaVersion:z.literal(1),contextId:z.uuid(),objectiveRef:ContentRef,
-+ sourceMessageRef:ContentRef,constraintRefs:z.array(ContentRef).max(64),tasks:z.array(ManagerTask).min(1).max(64)}).strict();
++ sourceMessageRef:ContentRef,parallelism:z.number().int().min(1).max(10).optional(),constraintRefs:z.array(ContentRef).max(64),tasks:z.array(ManagerTask).min(1).max(64)}).strict();
++
++/** Structural output contract; controller also applies refinements after generation. */
++export function managerPlanOutputJsonSchema(){const schema=z.toJSONSchema(ManagerPlan);schema.required=Object.keys(schema.properties??{});return schema;}
 +
 +export const managerPlanBindingSchema=z.object({nodeId:z.string(),taskId:TaskId,role:z.enum(['programmer','qa','reviewer','judge','integrator']),
 + artifactSource:z.string(),freshSession:z.literal(true),reviewIndex:z.number().int().min(0).max(2).optional(),
@@ -645,6 +879,19 @@ index 6b44d3f2249086f21a3c118c9f95ed790d83249c..00e6760e55c78aaa410dc84239d5af2e
 +
 +export * from './agent-control-plans.ts';
 +export * from './agent-control-operations.ts';
+diff --git a/packages/contract/src/workflows.ts b/packages/contract/src/workflows.ts
+index 49c66bac0d4df44978ca04600c8cdcb8215de417..c39fc7dcd3586550152875b419611c637da71622 100644
+--- a/packages/contract/src/workflows.ts
++++ b/packages/contract/src/workflows.ts
+@@ -142,7 +142,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
+   }),
+   z.object({ ...graphNodeBase, type: z.literal('github.pr-comment'), body: z.string().min(1) }),
+   /** `branches` / `wait` are defaulted server-side, so the served shapes always carry them. */
+-  z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(4).default(3) }),
++  z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(10).default(3) }),
+   z.object({ ...graphNodeBase, type: z.literal('join'), wait: z.enum(['all', 'any']).default('all') }),
+   z.object({
+     ...graphNodeBase,
 diff --git a/packages/web/src/api/agent-control-streams.test.tsx b/packages/web/src/api/agent-control-streams.test.tsx
 new file mode 100644
 index 0000000000000000000000000000000000000000..f5f39b1ec4b6e3314982d68e1c67b4e13d841a37
@@ -1699,10 +1946,10 @@ index 0000000000000000000000000000000000000000..48c725f62bc0c3d4c3b7dd575a11893e
 +})
 diff --git a/packages/web/src/routes/settings/agent-control-manager-plans.tsx b/packages/web/src/routes/settings/agent-control-manager-plans.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..29e3fc48ff843acbff68f400512461cedab20409
+index 0000000000000000000000000000000000000000..8cdf80031c89cb120bc270f707a966c77d3b5f3b
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-manager-plans.tsx
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,142 @@
 +import '@xyflow/react/dist/style.css'
 +import {useMutation,useQuery,useQueryClient} from '@tanstack/react-query'
 +import {useMemo,useState} from 'react'
@@ -1744,6 +1991,13 @@ index 0000000000000000000000000000000000000000..29e3fc48ff843acbff68f400512461ce
 +  </ReactFlow></ReactFlowProvider>
 + </div>
 +}
++function ProposalParallelism({value,busy,onSave}:{value:number;busy:boolean;onSave:(value:number)=>void}){
++ const [parallelism,setParallelism]=useState(value)
++ return <div className="flex flex-wrap items-center gap-2"><label>Paralelismo desejado <select value={parallelism} disabled={busy} onChange={e=>setParallelism(Number(e.target.value))}>
++  {Array.from({length:10},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}
++ </select></label><Button type="button" variant="outline" disabled={busy||parallelism===value} onClick={()=>onSave(parallelism)}>Salvar como nova proposta</Button>
++ <p className="text-xs text-muted-foreground">O limite de capacidade continua valendo. Dependências e arquivos compartilhados reduzem o paralelismo. Planos já aceitos permanecem preservados.</p></div>
++}
 +const acceptedCommandSchema=z.object({intentId:z.string().uuid(),runId:z.string().uuid(),state:z.string()})
 +export function AgentControlManagerPlans({contextId,policyRevision,principalId,projectId}:{contextId:string;policyRevision:number|null;principalId:string;projectId:string}){
 + const [selectedRevision,setSelectedRevision]=useState<number|null>(null)
@@ -1761,6 +2015,14 @@ index 0000000000000000000000000000000000000000..29e3fc48ff843acbff68f400512461ce
 +  const response=await agentControlFetch(`/api/v1/ac/contexts/${contextId}/manager-plans/${selectedRevision}/restore`,{method:'POST',
 +   headers:{'content-type':'application/json'},body:JSON.stringify({expectedRevision:latestRevision})})
 +  if(!response.ok)throw Error(`Não foi possível restaurar a proposta (HTTP ${response.status}). Recarregue as versões antes de tentar novamente.`)
++  return managerPlanPublishedSchema.parse(await response.json())
++ },onSuccess:value=>{setSelectedRevision(value.revision);void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})},
++ onError:()=>{void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})}})
++ const saveParallelism=useMutation({mutationFn:async(parallelism:number)=>{
++  if(!selected.data||latestRevision===undefined||selected.data.revision!==latestRevision)throw Error('Selecione a proposta mais recente antes de alterar o paralelismo.')
++  const response=await agentControlFetch(`/api/v1/ac/contexts/${contextId}/manager-plans`,{method:'POST',headers:{'content-type':'application/json'},
++   body:JSON.stringify({expectedRevision:latestRevision,plan:{...selected.data.plan,parallelism}})})
++  if(!response.ok)throw Error(`Não foi possível salvar o paralelismo (HTTP ${response.status}). Recarregue as versões.`)
 +  return managerPlanPublishedSchema.parse(await response.json())
 + },onSuccess:value=>{setSelectedRevision(value.revision);void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})},
 + onError:()=>{void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})}})
@@ -1796,6 +2058,8 @@ index 0000000000000000000000000000000000000000..29e3fc48ff843acbff68f400512461ce
 +  {restore.error&&<p role="alert">{restore.error.message}</p>}
 +  {restore.isSuccess&&<p role="status">Nova proposta registrada. Planos aceitos continuam preservados.</p>}
 +  {selected.data&&<div className="flex min-w-0 flex-col gap-3">
++   <ProposalParallelism key={`parallelism-${selected.data.revision}`} value={selected.data.plan.parallelism??4} busy={saveParallelism.isPending||latestRevision===undefined||selected.data.revision!==latestRevision} onSave={value=>saveParallelism.mutate(value)}/>
++   {saveParallelism.error&&<p role="alert">{saveParallelism.error.message}</p>}
 +   <Button type="button" disabled={!policyRevision||start.isPending||start.isSuccess||selected.isFetching} onClick={()=>start.mutate()}>Solicitar execução desta proposta</Button>
 +   {!policyRevision&&<p role="status">Política da conversa indisponível; não é possível solicitar execução.</p>}
 +   {start.error&&<p role="alert">{start.error.message}</p>}
@@ -2704,7 +2968,7 @@ index 0000000000000000000000000000000000000000..d773b0e902010f07148a16bba9b55252
 +})
 diff --git a/packages/web/src/routes/settings/agent-control-section.tsx b/packages/web/src/routes/settings/agent-control-section.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..80796162ab7de4d4061c04e2dd8ff3aa02ec157e
+index 0000000000000000000000000000000000000000..2301e3da61560821d2eb69e473961c563d818744
 --- /dev/null
 +++ b/packages/web/src/routes/settings/agent-control-section.tsx
 @@ -0,0 +1,317 @@
@@ -2738,7 +3002,7 @@ index 0000000000000000000000000000000000000000..80796162ab7de4d4061c04e2dd8ff3aa
 +const usageBase={grant_id:z.string().uuid(),role:z.string(),state:z.string()}
 +const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.discriminatedUnion('resource_kind',[
 + z.object({...usageBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),model:z.string(),effort:z.string(),
-+  seq:z.union([z.number(),z.string()]).nullable(),counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),observed_at:z.string().nullable()}),
++  reported_tokens:z.number().int().nonnegative().nullable().optional(),seq:z.union([z.number(),z.string()]).nullable(),counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),observed_at:z.string().nullable()}),
 + z.object({...usageBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),model:z.null(),effort:z.null(),seq:z.null(),counters:z.null(),observed_at:z.null()}),
 +]))})
 +const grantBase={id:z.string(),role:z.string(),state:z.string()}
@@ -3018,8 +3282,8 @@ index 0000000000000000000000000000000000000000..80796162ab7de4d4061c04e2dd8ff3aa
 +    <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
 +     {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/>Contadores de modelo não se aplicam.</>:
 +      <><strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
-+       {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
-+        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}</>}
++       {item.reported_tokens!==null&&item.reported_tokens!==undefined&&<p>Total informado pelo CLI: {item.reported_tokens.toLocaleString()} tokens</p>}{item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
++        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>{item.reported_tokens===null||item.reported_tokens===undefined?'Uso ainda não informado.':'Detalhamento de entrada, saída e cache indisponível.'}</>}</>}
 +    </li>)}</ul>
 +   </SettingsField>
 +  </>}
@@ -3054,7 +3318,7 @@ index 611c67f2c3c52cc29f11bdca8fbc5931e5679860..7040f32d2ad013226997c9e3824c77e7
    {
      id: 'tracker',
 diff --git a/packages/web/src/routes/workflow-graph/workflow-graph.tsx b/packages/web/src/routes/workflow-graph/workflow-graph.tsx
-index 58d80c622ba7f1bb81f2c8eed8a038a9d863c096..0799dbabfccb096657475b64b007d0b765003b8b 100644
+index 58d80c622ba7f1bb81f2c8eed8a038a9d863c096..5bade732929a223bbc8f5490ed11923252277528 100644
 --- a/packages/web/src/routes/workflow-graph/workflow-graph.tsx
 +++ b/packages/web/src/routes/workflow-graph/workflow-graph.tsx
 @@ -661,8 +661,8 @@ function WorkflowGraphEditor() {
@@ -3077,6 +3341,24 @@ index 58d80c622ba7f1bb81f2c8eed8a038a9d863c096..0799dbabfccb096657475b64b007d0b7
            <Button
              size="sm"
              variant={paletteOpen ? 'primary' : 'ghost'}
+@@ -1575,7 +1575,7 @@ function Inspector({
+               value={node.branches}
+               onChange={(e) => onGraphEdit((g) => setForkBranches(g, node.id, Number(e.target.value)))}
+             >
+-              {[2, 3, 4].map((n) => (
++              {Array.from({length:9},(_,i)=>i+2).map((n) => (
+                 <option key={n} value={n}>
+                   {n} agents
+                 </option>
+@@ -1584,7 +1584,7 @@ function Inspector({
+           </Field>
+           <p className="text-meta text-muted-foreground">
+             Each branch is the agent it is wired to: set its prompt, runner and budget there. They run as subtasks in
+-            their own worktrees (at most 4 at once) and meet at the join.
++            their own worktrees, subject to admitted capacity, and meet at the join.
+           </p>
+         </>
+       )}
 diff --git a/packages/web/tsconfig.json b/packages/web/tsconfig.json
 index c9d3ad98175ed471032de2e77b068d1f21c33e83..e836c9291d347583ffd5c2f6c09d1f1a8c51ed3e 100644
 --- a/packages/web/tsconfig.json

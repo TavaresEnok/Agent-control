@@ -1,0 +1,22 @@
+{
+  "imageId": "sha256:afeaf6d34f1e5898847c42e36272380d66bac659de93934b2c539628e8964e01",
+  "entrypoint": [
+    "node",
+    "/opt/agent-control/dist/src/native-planning-worker.mjs"
+  ],
+  "user": "node",
+  "sourceManifest": {
+    "schemaVersion": 1,
+    "publicCodexSha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+    "bundleSha256": "8b09c7f4f2ce5ebac621fe97129cd40a661eb342434c8ee601ce3fa5c4dc3f60",
+    "dockerfileSha256": "9c5839dbdee3573145269e42af792fdb63a9d86d178c8538bd205810fc52bf84",
+    "sourceCommit": "bdabbe19a51e9fdad0d0dd725302e6980a353231",
+    "worktreeChangesPresent": true,
+    "credentialFilesIncluded": false,
+    "inferencePerformed": false
+  },
+  "inferencePerformed": false,
+  "accountsMounted": false,
+  "activated": false,
+  "buildNetwork": "none"
+}

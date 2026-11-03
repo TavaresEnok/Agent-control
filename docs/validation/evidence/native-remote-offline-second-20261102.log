@@ -1,0 +1,1 @@
+{"proof":"official-native-environment-protocol","ready":"ready","authenticatedRegistration":true,"wrongCapabilityRejected":true,"informationReturned":true,"inferencePerformed":false,"credentialsMounted":false,"network":"none","limits":"Loopback protocol metadata only; no cross-container TLS, tool invocation, model inference or production isolation homologation."}

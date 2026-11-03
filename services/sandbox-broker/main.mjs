@@ -13,6 +13,10 @@ if(process.env.AC_SANDBOX_SPECIALIST||process.env.AC_SANDBOX_SPECIALIST_SHA256){
  config.specialistPath=process.env.AC_SANDBOX_SPECIALIST;
  config.specialistSha256=process.env.AC_SANDBOX_SPECIALIST_SHA256;
 }
+if(process.env.AC_SANDBOX_WIDE_VERIFIER||process.env.AC_SANDBOX_WIDE_VERIFIER_SHA256){
+ if(!process.env.AC_SANDBOX_WIDE_VERIFIER||!process.env.AC_SANDBOX_WIDE_VERIFIER_SHA256)throw Error('ISOLATED_WIDE_VERIFIER_CONFIG_REQUIRED');
+ config.verifierVersions=[{path:process.env.AC_SANDBOX_WIDE_VERIFIER,hash:process.env.AC_SANDBOX_WIDE_VERIFIER_SHA256}];
+}
 const diskPolicy=diskPolicyFromEnvironment();if(diskPolicy)config.diskPolicy=diskPolicy;
 const instance=await brokerMain(config);
 const stop=()=>void instance.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));

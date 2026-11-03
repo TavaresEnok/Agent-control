@@ -32,10 +32,15 @@ export class Usage {
   return this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,contextId,false);
    const rows=await c.query(`SELECT g.id grant_id,g.role,g.resource_kind,g.account_id,g.profile_id,g.state,p.model,p.effort,
-     u.seq,u.counters,u.observed_at FROM ac_capacity_grants g LEFT JOIN ac_profiles p ON p.id=g.profile_id AND g.resource_kind='model'
+     u.seq,u.counters,u.observed_at,CASE WHEN g.resource_kind='model' AND g.state='released'
+      AND j.state IN ('completed','failed') AND j.receipt->'payload'->>'physicalDigest' IS NOT NULL
+      THEN g.physical_receipt->'normalizedTokensUsed' ELSE NULL END reported_tokens,
+      j.receipt->'payload'->>'physicalDigest' reported_physical_digest,g.physical_receipt reported_physical
+     FROM ac_capacity_grants g LEFT JOIN ac_profiles p ON p.id=g.profile_id AND g.resource_kind='model'
+     LEFT JOIN ac_native_planning_jobs j ON j.grant_id=g.id
      LEFT JOIN LATERAL (SELECT seq,counters,observed_at FROM ac_usage_observations WHERE grant_id=g.id AND g.resource_kind='model' ORDER BY seq DESC LIMIT 1) u ON true
      WHERE g.context_id=$1 ORDER BY g.created_at,g.id`,[contextId]);
-   return {scope:'reported_attempt_usage',subscriptionBalance:'unknown',overlappingCounters:true,attempts:rows.rows};
+   return {scope:'reported_attempt_usage',subscriptionBalance:'unknown',overlappingCounters:true,attempts:rows.rows.map(row=>{const {reported_physical,reported_physical_digest,...safe}=row;const total=z.number().int().nonnegative().safe().safeParse(safe.reported_tokens);return {...safe,reported_tokens:total.success&&reported_physical&&digest(reported_physical)===reported_physical_digest?total.data:null};})};
   });
  }
 }

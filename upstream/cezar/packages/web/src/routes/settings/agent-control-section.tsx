@@ -28,7 +28,7 @@ const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),p
 const usageBase={grant_id:z.string().uuid(),role:z.string(),state:z.string()}
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.discriminatedUnion('resource_kind',[
  z.object({...usageBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),model:z.string(),effort:z.string(),
-  seq:z.union([z.number(),z.string()]).nullable(),counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),observed_at:z.string().nullable()}),
+  reported_tokens:z.number().int().nonnegative().nullable().optional(),seq:z.union([z.number(),z.string()]).nullable(),counters:z.object({input:z.number().nullable(),output:z.number().nullable(),cache:z.number().nullable(),reasoning:z.number().nullable()}).nullable(),observed_at:z.string().nullable()}),
  z.object({...usageBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),model:z.null(),effort:z.null(),seq:z.null(),counters:z.null(),observed_at:z.null()}),
 ]))})
 const grantBase={id:z.string(),role:z.string(),state:z.string()}
@@ -308,8 +308,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
     <ul className="flex flex-col gap-2">{usage.data?.attempts.map(item=><li key={item.grant_id} className="break-words rounded-md border p-3">
      {item.resource_kind==='local_compositor'?<><strong>Composição determinística local</strong><br/>{item.role} · {item.state}<br/>Contadores de modelo não se aplicam.</>:
       <><strong>{item.model} · {item.effort}</strong><br/>{item.role} · {item.state}<br/>
-       {item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
-        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>Uso ainda não informado.</>}</>}
+       {item.reported_tokens!==null&&item.reported_tokens!==undefined&&<p>Total informado pelo CLI: {item.reported_tokens.toLocaleString()} tokens</p>}{item.counters?<>Entrada: {item.counters.input?.toLocaleString()??'desconhecida'} · Saída: {item.counters.output?.toLocaleString()??'desconhecida'}<br/>
+        Cache: {item.counters.cache?.toLocaleString()??'desconhecido'} · Raciocínio: {item.counters.reasoning?.toLocaleString()??'desconhecido'}</>:<>{item.reported_tokens===null||item.reported_tokens===undefined?'Uso ainda não informado.':'Detalhamento de entrada, saída e cache indisponível.'}</>}</>}
     </li>)}</ul>
    </SettingsField>
   </>}

@@ -4,6 +4,12 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Incremento vigente: planejamento e execução nativa delimitada
+
+Planejamento semântico com journal PG, seleção de adaptador/perfil por concessão, recibos assinados e publicação transacional foi implementado e provado com executor sintético e HTTP. Pausa e confirmação perdida preservam a mesma chamada. Paralelismo explícito de 1–10 conserva quatro para planos antigos; conta/limites reais continuam sob Capacity. O runner Cezar envia esforço e fixa ambiente remoto de ferramentas; uma prova offline com CLI oficial e HOME vazio confirmou conexão e recusa de chave inválida.
+
+Worker e supervisor nativos de **planejamento**, receitas de imagem e proxy restrito foram implementados, mas não ativados. A prova negativa recusa conta dormente antes de Docker/credenciais. O sandbox nativo com bubblewrap falhou neste host; a topologia de ferramentas separadas ainda precisa de homologação. Não há programação/revisão real, gerente semântico contínuo integrado à instalação, ativação de conta ou inferência nesta entrega. Gateway permanece administrativo. Detalhes, comandos e limitações: `implementation/SEMANTIC-NATIVE-EXECUTION-20261102.md`.
+
 ## Implementado e observado
 
 | Área | Implementação e evidência delimitada |
@@ -58,7 +64,7 @@ A retomada cobre também cursor anterior ao registro de QA, QA registrado aguard
 
 ## Continuidade
 
-Ler AGENTS, Diretriz Mestre, este arquivo e FINDINGS; conferir `git status`. Trabalhar somente neste repositório e compose `deploy/compose.lab.yml`. Não ligar filas/Paseos, usar contas reais ou migrar projetos. O proprietário autorizou explicitamente trabalho paralelo por subagentes em 02/11/2026; essa autorização prevalece sobre a proibição de criação automática anterior. A estrutura vigente foi reduzida pelo proprietário para um único gerente/revisor principal e seis trabalhadores Terra Médio diretos. Os dois Sol adicionais estão inativos. A criação anterior dos modelos foi testada; ownership e limite atual estão em AGENTS.md e TEAM-EXECUTION. Priorizar implementação e verificações pertinentes, concentrando validação ampla em fronteiras de integração. Os testes que dependem de perfis Docker/SSH/Happier exigem seus serviços de bancada; não interpretar skip como aprovação.
+Ler AGENTS, Diretriz Mestre, este arquivo e FINDINGS; conferir `git status`. Trabalhar somente neste repositório e compose `deploy/compose.lab.yml`. Não ligar filas/Paseos, usar contas reais ou migrar projetos. A instrução vigente do proprietário é trabalhar somente com o agente principal; equipes anteriores permanecem inativas, conforme AGENTS.md. A configuração histórica em TEAM-EXECUTION não substitui essa instrução. Priorizar implementação e verificações pertinentes, concentrando validação ampla em fronteiras de integração. Os testes que dependem de perfis Docker/SSH/Happier exigem seus serviços de bancada; não interpretar skip como aprovação.
 
 O histórico cronológico foi preservado em `docs/implementation/CONTINUATION-20261102.md`. Afirmações antigas de pendências ou percentuais nesse histórico retratam a etapa em que foram registradas; este arquivo é o resumo vigente. Não há percentual de conclusão calculado e validado para o produto inteiro.
 

@@ -1,0 +1,8 @@
+file:///home/app/projects/agent-control-implementation/scripts/prepare-native-planning-image.mjs:14
+const rootInfo=await lstat(root);if(rootInfo.isSymbolicLink()||!rootInfo.isDirectory()||(rootInfo.mode&0o077)!==0||rootInfo.uid!==process.getuid?.()||await realpath(root)!==root)throw Error('UNSAFE_BUILD_CONTEXT_ROOT');
+                                                                                                                                                                                        ^
+
+Error: UNSAFE_BUILD_CONTEXT_ROOT
+    at file:///home/app/projects/agent-control-implementation/scripts/prepare-native-planning-image.mjs:14:185
+
+Node.js v24.22.1

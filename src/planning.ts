@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import type pg from 'pg';
 import {Id,digest,Refusal,type Authority} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {QualityPolicy} from './quality-policy.ts';
@@ -39,7 +40,7 @@ function checked(raw:unknown){
   // actual advancement; PG capacity may admit fewer workers than this width.
   const batch:ManagerTask[]=[];
   for(const id of ready){const task=byId.get(id)!;
-   if(batch.length<4&&!batch.some(other=>other.writePaths.some(a=>task.writePaths.some(b=>overlap(a,b)))))batch.push(task);
+   if(batch.length<(parsed.parallelism??4)&&!batch.some(other=>other.writePaths.some(a=>task.writePaths.some(b=>overlap(a,b)))))batch.push(task);
   }
   ordered.push(batch);for(const task of batch){pending.delete(task.id);done.add(task.id);}
  }
@@ -97,14 +98,15 @@ export function compileManagerPlan(raw:unknown,policies:readonly PlanningPolicy[
 /** Immutable manager-authored proposals. Publishing never starts a Cezar run,
  * acquires worker capacity, activates a template, or replaces an active plan. */
 export class ManagerPlans{
- constructor(readonly ledger:Ledger){}
+ constructor(readonly ledger:Ledger,private readonly client?:pg.PoolClient){}
+ private tx<T>(fn:(c:pg.PoolClient)=>Promise<T>){return this.client?fn(this.client):this.ledger.tx(fn);}
  async publish(principal:string,authority:Authority,expectedRevision:number,raw:unknown){
   return this.store(principal,authority,expectedRevision,raw);
  }
  private async store(principal:string,authority:Authority,expectedRevision:number,raw:unknown,restoredFromRevision?:number){
   z.number().int().nonnegative().parse(expectedRevision);const {plan}=checked(raw);
   if(plan.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
-  return this.ledger.tx(async c=>{
+  return this.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,plan.contextId);await this.ledger.fence(c,authority);
    const current=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_manager_plans WHERE context_id=$1',[plan.contextId])).rows[0].revision);
    const hash=digest(plan);
@@ -144,13 +146,13 @@ export class ManagerPlans{
    return edited.length?[{taskId:id,fields:edited}]:[];
   });
   return managerPlanComparisonSchema.parse({fromRevision,toRevision,fromDigest:from.digest,toDigest:to.digest,
-   objectiveChanged:from.plan.objectiveRef!==to.plan.objectiveRef,constraintsChanged:digest(from.plan.constraintRefs)!==digest(to.plan.constraintRefs),
+   objectiveChanged:from.plan.objectiveRef!==to.plan.objectiveRef,constraintsChanged:digest(from.plan.constraintRefs)!==digest(to.plan.constraintRefs)||(from.plan.parallelism??4)!==(to.plan.parallelism??4),
    sourceMessageChanged:from.plan.sourceMessageRef!==to.plan.sourceMessageRef,added:[...right.keys()].filter(id=>!left.has(id)).sort(),
    removed:[...left.keys()].filter(id=>!right.has(id)).sort(),changed,executionImpact:'proposal-only'});
  }
  async list(principal:string,contextId:string){
   Id.parse(contextId);
-  return this.ledger.tx(async c=>{
+  return this.tx(async c=>{
    await this.ledger.authorize(c,principal,contextId,false);
    const rows=(await c.query(`SELECT revision,manager_epoch,digest,jsonb_array_length(snapshot->'tasks') task_count,created_at
     FROM ac_manager_plans WHERE context_id=$1 ORDER BY revision DESC LIMIT 101`,[contextId])).rows;
@@ -160,7 +162,7 @@ export class ManagerPlans{
  }
  async read(principal:string,contextId:string,revision:number){
   Id.parse(contextId);z.number().int().positive().parse(revision);
-  return this.ledger.tx(async c=>{
+  return this.tx(async c=>{
    await this.ledger.authorize(c,principal,contextId,false);
    const saved=(await c.query('SELECT * FROM ac_manager_plans WHERE context_id=$1 AND revision=$2',[contextId,revision])).rows[0];
    if(!saved)throw new Refusal('MANAGER_PLAN_NOT_FOUND',404);

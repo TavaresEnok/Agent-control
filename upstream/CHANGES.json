@@ -13,6 +13,30 @@
       "sha256": "49470781cc2ef75da3c3488c942c5f2d1aea987dec3f6501704e67154a03a9bb"
     },
     {
+      "path": "packages/cezar/src/core/__fixtures__/codex/mock-codex-app-server.mjs",
+      "upstream_blob": "1b3f88dd95099dc2fd2f815824d2950704491007",
+      "current_blob": "4708a65878a1dcc664eaf66d2076a7d7a4b7d2ae",
+      "sha256": "49f86c38a8fd94b1c03eeb925cc51469d84fd465950e1f7e1eff6a54e59e6bf0"
+    },
+    {
+      "path": "packages/cezar/src/core/agent-runner.ts",
+      "upstream_blob": "8a2578ac6012c0160031d5f85a05bc33cbc2e917",
+      "current_blob": "6c71fb07c168f1df2166a2298dcb64085e510064",
+      "sha256": "03b97ca362ef51841b5db1fd1bfd464c897f5decd2da799ec96a57166e7d51c6"
+    },
+    {
+      "path": "packages/cezar/src/core/codex-app-server-runner.ts",
+      "upstream_blob": "2ba42b5cc0a7e14960a533f6f2de43af8cc0acc0",
+      "current_blob": "6b3b96bf955221d5d899d2208ab7341ddf7af660",
+      "sha256": "aa696c68831b1457e8c172d801914a504a503d0be3c220fce58e3c24a1ecb1e0"
+    },
+    {
+      "path": "packages/cezar/src/core/codex-app-server-transport.ts",
+      "upstream_blob": "3bbec1f6e67f00492b0bbb085656bf487b1eb945",
+      "current_blob": "7ce3695bc08d1bfcc59cab35bd77416d1256ec62",
+      "sha256": "c2fe2218c5a9bde61614ba2bf6473ab2d570a50b1784aba94ef2ec1251badee0"
+    },
+    {
       "path": "packages/cezar/src/core/runner-factory.ts",
       "upstream_blob": "06eb21662859d17afa732d4d6d061e2ac951224f",
       "current_blob": "176c7d5e02a4b3fb16595b6855a7d9dc5e439985",
@@ -35,6 +59,12 @@
       "upstream_blob": "85747804cc0bb525a120c207d83aba9cfc96cf77",
       "current_blob": "dcd967a4f5ca5f4cd9dfc78759ca6fe5aa0668bc",
       "sha256": "a773fc6a0c497d53cb7782d8df4e33974c83c4175fd7f343ccfc85fa744e952a"
+    },
+    {
+      "path": "packages/cezar/src/workflows/graph.ts",
+      "upstream_blob": "4b9a51d361d8a611b6afb9b3e54992418286fd12",
+      "current_blob": "7908a753506c939eecc0f3de46499cb77dd8b129",
+      "sha256": "5c0573338c2c4089d589464a6d5fbeae9894d896bfb44f37e6135efcabf05df0"
     },
     {
       "path": "packages/cezar/src/workflows/leftover-processes.test.ts",
@@ -65,6 +95,12 @@
       "upstream_blob": "6b44d3f2249086f21a3c118c9f95ed790d83249c",
       "current_blob": "00e6760e55c78aaa410dc84239d5af2eedc60afb",
       "sha256": "a63d89183b20e621cf0dd38d299230ad81fc0bbb9cbb421bc196d48c8ed266e9"
+    },
+    {
+      "path": "packages/contract/src/workflows.ts",
+      "upstream_blob": "49c66bac0d4df44978ca04600c8cdcb8215de417",
+      "current_blob": "c39fc7dcd3586550152875b419611c637da71622",
+      "sha256": "3e3eef20d7f646908f11b0d5d58d677230b74294bca240371d45e337a3c1aeda"
     },
     {
       "path": "packages/web/src/api/client.test.ts",
@@ -141,8 +177,8 @@
     {
       "path": "packages/web/src/routes/workflow-graph/workflow-graph.tsx",
       "upstream_blob": "58d80c622ba7f1bb81f2c8eed8a038a9d863c096",
-      "current_blob": "0799dbabfccb096657475b64b007d0b765003b8b",
-      "sha256": "eeea252040c5cb0e9c1ffbe6ebe53965490738c3bf53035c5f347a87a8c9a695"
+      "current_blob": "5bade732929a223bbc8f5490ed11923252277528",
+      "sha256": "bf563b7c9dc805a9ab5419164973c61b16366f509455de6d3c096fe250cddabb"
     },
     {
       "path": "packages/web/tsconfig.json",
@@ -157,6 +193,11 @@
       "sha256": "375b1d80c2d405959f7bb56af89113675851e26003dac31579e3ac6f4a94c84c"
     },
     {
+      "path": "packages/cezar/src/core/agent-control-effort.test.ts",
+      "change": "added",
+      "sha256": "f71eb3aa68a27346b9a9501a059feb160ab634727e98392d74272ed13a35b453"
+    },
+    {
       "path": "packages/cezar/src/git-worktree-identity.test.ts",
       "change": "added",
       "sha256": "80073780f0548ad27aec9ae338d86df4a9d6a6fbef01b0dc041f20a594df4732"
@@ -164,12 +205,12 @@
     {
       "path": "packages/contract/src/agent-control-operations.ts",
       "change": "added",
-      "sha256": "498ff81414259ac61de40a222e828c31559e011613992617ecfa9b3dd230d4af"
+      "sha256": "92adcd29a6f4127e657d3a86eaa264accac5efbe7ebb11cfdfa1c234ac3147ec"
     },
     {
       "path": "packages/contract/src/agent-control-plans.ts",
       "change": "added",
-      "sha256": "e1d30cfd1f4071d379e5df4005508069c8ae09d5c889aca405a724b310fc503a"
+      "sha256": "ec3a9ce21dc8870d2519108c0da6fa100ab80d402217cc5566b71f881786105a"
     },
     {
       "path": "packages/web/src/api/agent-control-streams.test.tsx",
@@ -264,7 +305,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-manager-plans.tsx",
       "change": "added",
-      "sha256": "13ad20bb2c042e2bf95262086da2ff35362b48c4f7094cec24557ba52bf49449"
+      "sha256": "a39a6df596f99bfc2846935815dc7eb3b3afd2c0b333d8ab3c94f05cd9787086"
     },
     {
       "path": "packages/web/src/routes/settings/agent-control-manager-status.tsx",
@@ -344,7 +385,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "61da65ef2287c4d6770e618772de2c32ca5d18ed8b5e53a5227b4a31a514b0f1"
+      "sha256": "c60461af99d6e3b99f19e17d712a5a9ecba4c4e529f15799389734c580605902"
     }
   ],
   "happier": [

@@ -34,6 +34,28 @@ test('private account homes are immutable owner-scoped physical identities',asyn
   const file=join(area,'file');await writeFile(file,'fixture');const hardlinked=await create();await link(file,join(root,hardlinked));
   await assert.rejects(service.initialize(principal,project,hardlinked),/ACCOUNT_HOME_UNREGISTERED/);
   await chmod(join(root,id),0o755);await assert.rejects(service.inspect(principal,project,id),/ACCOUNT_HOME_IDENTITY_MISMATCH/);await chmod(join(root,id),0o700);
+  // A shared account keeps one physical HOME while the authorized project and
+  // intent principal change. Sharing must not duplicate or reveal credentials.
+  const sharedProject=randomUUID(),sharedPrincipal='shared-owner-'+randomUUID(),syntheticAccount=randomUUID(),sharedProfile=randomUUID();
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[sharedProject,'Shared-home scope']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner'),($1,$3,'owner'),($1,$4,'viewer')",[sharedProject,principal,sharedPrincipal,'shared-viewer']);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);await capacity.configure(principal,{programmingLimit:8,evaluationLimit:2});
+  await capacity.registerModel(principal,{provider:'home-fixture',model:'home-model',efforts:['medium'],roles:['manager'],source:'synthetic://home-fixture'});
+  await capacity.addAccount(principal,project,{id:syntheticAccount,provider:'home-fixture',label:'Shared synthetic HOME',resourceIdentity:syntheticAccount,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://home-fixture',maxConcurrent:1});
+  await capacity.addProfile(principal,project,{id:sharedProfile,accountId:syntheticAccount,model:'home-model',effort:'medium',role:'manager'});
+  const original=await service.initialize(principal,project,syntheticAccount);await capacity.shareAccount(principal,syntheticAccount,sharedProject);
+  await capacity.observeQuota(principal,syntheticAccount,{status:'available',source:'synthetic://home-fixture',ttlSeconds:300});
+  const revision=await capacity.publish(sharedPrincipal,sharedProject,0,{schemaVersion:1,maxProgrammersPerContext:8,maxEvaluatorsPerContext:2,roles:{manager:{regular:[sharedProfile],emergency:[]}}});
+  const contextId=await db.createContext(sharedPrincipal,sharedProject,randomUUID()),authority=await db.acquire(sharedPrincipal,contextId,randomUUID(),'home-manager',60);
+  await capacity.assignPolicy(sharedPrincipal,contextId,revision);
+  const intent=await db.accept(sharedPrincipal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:home-test'}},authority,'api');
+  const grant=await capacity.reserve(sharedPrincipal,{attemptId:randomUUID(),intentId:intent.id,contextId,role:'manager'},authority);
+  const granted=await service.inspectGranted(sharedPrincipal,grant.id,authority);assert.equal(granted.projectId,sharedProject);assert.equal(granted.ownerId,principal);assert.equal(granted.inode,original.inode);
+  await assert.rejects(service.inspectGranted('shared-viewer',grant.id,authority),/CONTEXT_FORBIDDEN/);
+  await assert.rejects(service.inspectGranted(sharedPrincipal,grant.id,{...authority,epoch:authority.epoch+1}),/STALE_MANAGER/);
+  await capacity.setEnabled(principal,project,'account',{id:syntheticAccount,enabled:false,expectedRevision:1});
+  await assert.rejects(service.inspectGranted(sharedPrincipal,grant.id,authority),/ACCOUNT_HOME_GRANT_FORBIDDEN/);
+  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant.id])).rows[0].state,'reserved');
   await rename(join(root,id),join(root,'old-home'));await mkdir(join(root,id),{mode:0o700});
   await assert.rejects(service.loadMetadata(principal,project,id),/ACCOUNT_HOME_IDENTITY_MISMATCH/);
  }finally{await db.close();await database.close();await rm(area,{recursive:true,force:true});}

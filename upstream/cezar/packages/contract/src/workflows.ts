@@ -142,7 +142,7 @@ export const workflowGraphNodeSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...graphNodeBase, type: z.literal('github.pr-comment'), body: z.string().min(1) }),
   /** `branches` / `wait` are defaulted server-side, so the served shapes always carry them. */
-  z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(4).default(3) }),
+  z.object({ ...graphNodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(10).default(3) }),
   z.object({ ...graphNodeBase, type: z.literal('join'), wait: z.enum(['all', 'any']).default('all') }),
   z.object({
     ...graphNodeBase,

@@ -1,0 +1,23 @@
+# Optional isolated provider network. No model workers/accounts are started here.
+name: ac-native-planning
+services:
+  provider-egress:
+    build: {context: .., dockerfile: deploy/Dockerfile.provider-egress}
+    image: agent-control-provider-egress:0.1.0
+    user: '1000:1000'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 96m
+    cpus: 0.25
+    networks:
+      provider: {aliases: [provider-egress]}
+      outbound: {}
+    tmpfs: ['/tmp:rw,nosuid,nodev,noexec,size=8m']
+    restart: unless-stopped
+networks:
+  provider:
+    name: ac-native-provider
+    internal: true
+  outbound: {}

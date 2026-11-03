@@ -39,6 +39,13 @@ function ProposalGraph({graph}:{graph:WorkflowGraph}){
   </ReactFlow></ReactFlowProvider>
  </div>
 }
+function ProposalParallelism({value,busy,onSave}:{value:number;busy:boolean;onSave:(value:number)=>void}){
+ const [parallelism,setParallelism]=useState(value)
+ return <div className="flex flex-wrap items-center gap-2"><label>Paralelismo desejado <select value={parallelism} disabled={busy} onChange={e=>setParallelism(Number(e.target.value))}>
+  {Array.from({length:10},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}
+ </select></label><Button type="button" variant="outline" disabled={busy||parallelism===value} onClick={()=>onSave(parallelism)}>Salvar como nova proposta</Button>
+ <p className="text-xs text-muted-foreground">O limite de capacidade continua valendo. Dependências e arquivos compartilhados reduzem o paralelismo. Planos já aceitos permanecem preservados.</p></div>
+}
 const acceptedCommandSchema=z.object({intentId:z.string().uuid(),runId:z.string().uuid(),state:z.string()})
 export function AgentControlManagerPlans({contextId,policyRevision,principalId,projectId}:{contextId:string;policyRevision:number|null;principalId:string;projectId:string}){
  const [selectedRevision,setSelectedRevision]=useState<number|null>(null)
@@ -56,6 +63,14 @@ export function AgentControlManagerPlans({contextId,policyRevision,principalId,p
   const response=await agentControlFetch(`/api/v1/ac/contexts/${contextId}/manager-plans/${selectedRevision}/restore`,{method:'POST',
    headers:{'content-type':'application/json'},body:JSON.stringify({expectedRevision:latestRevision})})
   if(!response.ok)throw Error(`Não foi possível restaurar a proposta (HTTP ${response.status}). Recarregue as versões antes de tentar novamente.`)
+  return managerPlanPublishedSchema.parse(await response.json())
+ },onSuccess:value=>{setSelectedRevision(value.revision);void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})},
+ onError:()=>{void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})}})
+ const saveParallelism=useMutation({mutationFn:async(parallelism:number)=>{
+  if(!selected.data||latestRevision===undefined||selected.data.revision!==latestRevision)throw Error('Selecione a proposta mais recente antes de alterar o paralelismo.')
+  const response=await agentControlFetch(`/api/v1/ac/contexts/${contextId}/manager-plans`,{method:'POST',headers:{'content-type':'application/json'},
+   body:JSON.stringify({expectedRevision:latestRevision,plan:{...selected.data.plan,parallelism}})})
+  if(!response.ok)throw Error(`Não foi possível salvar o paralelismo (HTTP ${response.status}). Recarregue as versões.`)
   return managerPlanPublishedSchema.parse(await response.json())
  },onSuccess:value=>{setSelectedRevision(value.revision);void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})},
  onError:()=>{void cache.invalidateQueries({queryKey:['ac-manager-plans',contextId]})}})
@@ -91,6 +106,8 @@ export function AgentControlManagerPlans({contextId,policyRevision,principalId,p
   {restore.error&&<p role="alert">{restore.error.message}</p>}
   {restore.isSuccess&&<p role="status">Nova proposta registrada. Planos aceitos continuam preservados.</p>}
   {selected.data&&<div className="flex min-w-0 flex-col gap-3">
+   <ProposalParallelism key={`parallelism-${selected.data.revision}`} value={selected.data.plan.parallelism??4} busy={saveParallelism.isPending||latestRevision===undefined||selected.data.revision!==latestRevision} onSave={value=>saveParallelism.mutate(value)}/>
+   {saveParallelism.error&&<p role="alert">{saveParallelism.error.message}</p>}
    <Button type="button" disabled={!policyRevision||start.isPending||start.isSuccess||selected.isFetching} onClick={()=>start.mutate()}>Solicitar execução desta proposta</Button>
    {!policyRevision&&<p role="status">Política da conversa indisponível; não é possível solicitar execução.</p>}
    {start.error&&<p role="alert">{start.error.message}</p>}

@@ -96,12 +96,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/catalog-profile-ui-20261102.log;docs/validation/evidence/catalog-profile-control-20261102.log",
-    "files": "src/capacity.ts;src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-profile-editor.tsx",
+    "evidence": "docs/validation/evidence/catalog-profile-ui-20261102.log;docs/validation/evidence/catalog-profile-control-20261102.log;docs/validation/evidence/native-remote-selection-final-20261102.log",
+    "files": "src/capacity.ts;src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-profile-editor.tsx;upstream/cezar/packages/cezar/src/core/codex-app-server-runner.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic catalog validates model/effort/role and UI only offers scoped combinations; official provider discovery and live model eligibility pending."
+    "limitation": "Synthetic catalog validates model/effort/role and UI only offers scoped combinations; official provider discovery and live model eligibility pending. Explicit effort reaches native turn; unknown ceilings rejected. Real model eligibility/catalogue and signed-in invocation remain unverified."
   },
   {
     "id": "RF-09",
@@ -200,12 +200,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/managed-flow-admission-smoke-20261102.log",
-    "files": "src/cezar.ts;src/engineering.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-parallel.test.ts",
+    "evidence": "docs/validation/evidence/managed-flow-admission-smoke-20261102.log;docs/validation/evidence/semantic-planning-http-final-20261102.log",
+    "files": "src/cezar.ts;src/engineering.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-parallel.test.ts;src/planning.ts;upstream/cezar/packages/contract/src/agent-control-plans.ts;upstream/cezar/packages/cezar/src/workflows/graph.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Three admitted native workflows cross the former two-flow cap; waits reuse native slots and PG remains physical authority. No real-provider throughput or full dependency/fork/join acceptance yet."
+    "limitation": "Three admitted native workflows cross the former two-flow cap; waits reuse native slots and PG remains physical authority. No real-provider throughput or full dependency/fork/join acceptance yet. Explicit 1–10 desired parallelism, legacy four preserved, eight independent tasks compile and overlapping writes serialize. This is not a benchmark of native workers."
   },
   {
     "id": "RF-17",
@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/semantic-planning-http-final-20261102.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts;src/semantic-planning.ts;db/migrations/048_semantic_planning.sql;db/migrations/049_semantic_executor_bindings.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open."
+    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Semantic call ACK loss reuses original executor/session after takeover; paused ready proposal publishes once after resume. Native Docker supervisor positive recovery remains unverified."
   },
   {
     "id": "RF-24",
@@ -356,12 +356,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log",
-    "files": "src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log;docs/validation/evidence/native-remote-offline-second-20261102.log;docs/validation/evidence/codex-deny-read-first-20261102.log",
+    "files": "src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts;src/native-planning-supervisor.ts;src/native-planning-worker.ts;src/account-homes.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified."
+    "limitation": "Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified. Dormant native account is refused before Docker/credentials. Official no-network exec-server handshake verified without inference. Filesystem sandbox canary failed; cross-container credential/tool boundary remains unhomologated."
   },
   {
     "id": "RF-29",
@@ -707,12 +707,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts",
+    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log",
+    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts;src/native-planning-supervisor.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof."
+    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof. Native planning requires fresh adapter/mode eligibility and matching account identity in code, while SQL real-account guards remain closed. No provider/plan has been operationally approved by this increment."
   },
   {
     "id": "RF-56",
@@ -902,12 +902,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
-    "files": "src/providers.ts;tests/providers.test.ts",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log;docs/validation/evidence/native-remote-offline-second-20261102.log;docs/validation/evidence/codex-protocol-effort-20261102.json",
+    "files": "src/providers.ts;tests/providers.test.ts;scripts/prove-native-remote-protocol.mjs;upstream/cezar/packages/cezar/src/core/codex-app-server-runner.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Collector manifest/version binding refuses mismatch; real CLI upgrades and provider adapters remain unverified."
+    "limitation": "Collector manifest/version binding refuses mismatch; real CLI upgrades and provider adapters remain unverified. Official installed CLI offline schemas and remote metadata handshake proved lazy connection behavior; no model turn or full authenticated compatibility homologation."
   },
   {
     "id": "RNF-14",

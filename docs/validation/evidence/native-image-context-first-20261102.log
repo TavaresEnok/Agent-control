@@ -1,0 +1,14 @@
+node:internal/fs/promises:1571
+  return await PromisePrototypeThen(
+         ^
+
+Error: EEXIST: file already exists, mkdir '/home/app/projects/agent-control-implementation/.state'
+    at async mkdir (node:internal/fs/promises:1571:10)
+    at async file:///home/app/projects/agent-control-implementation/scripts/prepare-native-planning-image.mjs:13:32 {
+  errno: -17,
+  code: 'EEXIST',
+  syscall: 'mkdir',
+  path: '/home/app/projects/agent-control-implementation/.state'
+}
+
+Node.js v24.22.1

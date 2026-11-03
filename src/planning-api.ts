@@ -4,12 +4,13 @@ import {z} from 'zod';
 import type {Ledger} from './ledger.ts';
 import {Id,Refusal,type Authority} from './contracts.ts';
 import {ManagerPlans} from './planning.ts';
+import {SemanticPlanning,SemanticPlanningRequest} from './semantic-planning.ts';
 import {managerPlanProposalSchema,managerPlanPublishedSchema,managerPlanPreviewSchema,managerPlanRestoreSchema}
  from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
 
 /** Mounted after the parent's session/bearer middleware and before native fallback.
  * Native execution is deliberately not an endpoint of this proposal family. */
-export function createPlanningApi(ledger:Ledger,projectId:string,manager:(contextId:string)=>Authority|undefined){
+export function createPlanningApi(ledger:Ledger,projectId:string,manager:(contextId:string)=>Authority|undefined,semantic?:SemanticPlanning){
  const plans=new ManagerPlans(ledger),app=new Hono<{Variables:{principal:string}}>();
  const authorize:MiddlewareHandler<{Variables:{principal:string}}>=async(c,next)=>{
   if(!c.get('principal'))throw new Refusal('AUTH_REQUIRED',401);c.header('Cache-Control','no-store');await next();
@@ -23,6 +24,19 @@ export function createPlanningApi(ledger:Ledger,projectId:string,manager:(contex
   if(context.project_id!==projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
  });
  return app
+  .get('/contexts/:id/manager-plans/generation/status',async c=>{
+   const id=Id.parse(c.req.param('id')),principal=c.get('principal');await scope(principal,id);
+   const calls=(await ledger.pool.query(`SELECT id,intent_id,state,expected_revision,failure_code,created_at
+    FROM ac_semantic_planning_calls WHERE context_id=$1 AND principal_id=$2 ORDER BY created_at DESC,id LIMIT 20`,[id,principal])).rows;
+   return c.json({enabled:Boolean(semantic),calls});
+  })
+  .post('/contexts/:id/manager-plans/generation',limit,async c=>{
+   const id=Id.parse(c.req.param('id')),principal=c.get('principal');await scope(principal,id);
+   if(!semantic)throw new Refusal('SEMANTIC_PLANNING_DISABLED');
+   const input=SemanticPlanningRequest.parse(await c.req.json());if(input.contextId!==id)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
+   const authority=manager(id);if(!authority)throw new Refusal('MANAGER_UNAVAILABLE');
+   return c.json(managerPlanPublishedSchema.parse(await semantic.plan(principal,input,authority)),201);
+  })
   .get('/contexts/:id/manager-plans',async c=>{
    const id=Id.parse(c.req.param('id')),principal=c.get('principal');await scope(principal,id);
    return c.json(await plans.list(principal,id));

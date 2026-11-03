@@ -13,6 +13,7 @@ import {GitArtifacts} from './git.ts';
 import type {HappierAuthRelay} from './auth-relay.ts';
 import type {ProviderAdapter} from './providers.ts';
 import {createPlanningApi} from './planning-api.ts';
+import type {SemanticPlanning} from './semantic-planning.ts';
 import {createObservabilityApi} from './observability-api.ts';
 import {OperationalObservability} from './observability.ts';
 import {diskPolicyFromEnvironment} from './disk-admission.ts';
@@ -46,7 +47,7 @@ export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined) {
+  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning) {
   const app = new Hono<{ Variables: { principal: string } }>();
   const control = new Control(ledger,providerAdapters,runtime.projectId,administrative);
   app.use('*', async (c, next) => {
@@ -69,7 +70,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
   });
-  app.route('/api/v1/ac',createPlanningApi(ledger,runtime.projectId,manager));
+  app.route('/api/v1/ac',createPlanningApi(ledger,runtime.projectId,manager,semanticPlanning));
   app.route('/api/v1/ac',createObservabilityApi(new OperationalObservability(ledger,{diskPolicy:diskPolicyFromEnvironment()})));
   app.route('/api/v1/ac',createImportPreviewApi(ledger,runtime.projectId));
   app.route('/api/v1/ac',createDiagnosticsApi(ledger,runtime.projectId));

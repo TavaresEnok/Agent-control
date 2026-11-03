@@ -115,7 +115,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
   /** Fork: 2–4 output ports (`1`…`4`), each wired to an agent node that runs as its own child
    *  task (fresh session, own worktree, carved budget) at the same time as the others. Every
    *  branch agent leads into one `join`. */
-  z.object({ ...nodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(4).default(3) }),
+  z.object({ ...nodeBase, type: z.literal('fork'), branches: z.number().int().min(2).max(10).default(3) }),
   /** Join: where a fork's branches meet. `all` waits for every branch; `any` takes the first
    *  that succeeds and cancels the rest. */
   z.object({ ...nodeBase, type: z.literal('join'), wait: z.enum(['all', 'any']).default('all') }),

@@ -1,0 +1,56 @@
+Started 2026-11-02T22:51:39.376813+00:00
+COMMAND ['npm', 'run', 'build:server'] cwd=upstream/cezar
+
+> build:server
+> npm run build -w @open-mercato/cezar
+
+
+> @open-mercato/cezar@0.19.0 prebuild
+> node scripts/sync-readme.mjs
+
+
+> @open-mercato/cezar@0.19.0 build
+> tsc
+
+
+> @open-mercato/cezar@0.19.0 postbuild
+> node scripts/inline-contract.mjs
+
+inline-contract ok — contract bundled with declarations, 137 file(s) repointed
+EXIT 0
+COMMAND ['npm', 'run', 'build'] cwd=.
+
+> agent-control@0.1.0 prebuild
+> node scripts/prepare-build.mjs --before
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+EXIT 0
+COMMAND ['node', '--import', 'tsx', '--test', 'tests/planning-parallelism.test.ts'] cwd=.
+✖ explicit parallelism admits eight independent tasks while preserving legacy four and bounded native recipes (94.219701ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 748.000193
+
+✖ failing tests:
+
+test at tests/planning-parallelism.test.ts:1:365
+✖ explicit parallelism admits eight independent tasks while preserving legacy four and bounded native recipes (94.219701ms)
+  Error: MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE
+      at correctionExecutionRecipe (/home/app/projects/agent-control-implementation/src/managed-plan.ts:69:124)
+      at TestContext.<anonymous> (/home/app/projects/agent-control-implementation/tests/planning-parallelism.test.ts:13:15)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    code: 'MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE',
+    status: 409
+  }
+EXIT 1

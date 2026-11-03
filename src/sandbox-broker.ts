@@ -20,8 +20,8 @@ export const SpecialistRequest=z.object({adviceId:Id,intentId:Id,unitId:z.string
  scopeDigest:z.string().regex(/^[a-f0-9]{64}$/),inputDigest:z.string().regex(/^[a-f0-9]{64}$/),policyDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 const SandboxRequest=z.object({schemaVersion:z.literal(1),action:z.enum(['start','reconcile','cleanup','stop']),jobId:Id,grantId:Id,
  authority:Authority,profile:z.enum(['synthetic-probe-v1','synthetic-implementation-v1','synthetic-verification-v1','synthetic-specialist-v1']),
- source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().regex(/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/).max(240).optional(),composition:z.array(CompositionSource).min(2).max(4).optional(),correction:CorrectionSource.optional()}).strict().optional(),
- verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge'])}).strict().optional(),
+ source:z.object({base:z.string().regex(/^[a-f0-9]{40}$/),bundle:z.string().min(1).max(1400000),outputPath:z.string().regex(/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/).max(240).optional(),composition:z.array(CompositionSource).min(2).max(10).optional(),correction:CorrectionSource.optional()}).strict().optional(),
+ verification:z.object({artifactId:Id,operationId:Id,kind:z.enum(['qa','review','judge']),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict().optional(),
  advice:SpecialistRequest.optional(),
  expiresAt:z.number().int().positive(),signature:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 type SandboxRequest=z.infer<typeof SandboxRequest>;
@@ -38,7 +38,7 @@ export type SandboxExecution={profile:'synthetic-implementation-v1';source:NonNu
  {profile:'synthetic-specialist-v1';source:NonNullable<SandboxRequest['source']>;advice:NonNullable<SandboxRequest['advice']>};
 function signature(value:Omit<SandboxRequest,'signature'>,key:Uint8Array){return createHmac('sha256',key).update(canonical(value)).digest('hex');}
 export function signSandbox(value:Omit<SandboxRequest,'signature'>,key:Uint8Array):SandboxRequest{return {...value,signature:signature(value,key)};}
-const Inspect=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Image:z.string(),Config:z.object({User:z.string(),Labels:z.record(z.string(),z.string())}).passthrough(),
+const Inspect=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Image:z.string(),Config:z.object({User:z.string(),Labels:z.record(z.string(),z.string()),Entrypoint:z.array(z.string()).nullable().optional(),Cmd:z.array(z.string()).nullable().optional(),Env:z.array(z.string()).nullable().optional(),WorkingDir:z.string().optional()}).passthrough(),
  State:z.object({Status:z.string(),Running:z.boolean(),ExitCode:z.number().int(),FinishedAt:z.string()}).passthrough(),
  HostConfig:z.object({NetworkMode:z.string(),ReadonlyRootfs:z.boolean(),Privileged:z.boolean(),CapDrop:z.array(z.string()).nullable(),
  SecurityOpt:z.array(z.string()).nullable(),PidsLimit:z.number().nullable(),Memory:z.number(),NanoCpus:z.number()}).passthrough(),
@@ -69,7 +69,7 @@ export class DockerDaemon{
 }
 export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;diskPolicy?:DiskAdmissionPolicy;
  verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;
- specialistPath?:string;specialistSha256?:string;
+ specialistPath?:string;specialistSha256?:string;verifierVersions?:readonly {path:string;hash:string}[];
  imageId:string;socketPath:string;keyPath:string;databaseUrl:string};
 const exec=promisify(execFile);
 async function safeGit(cwd:string,args:string[]){
@@ -127,6 +127,7 @@ export class SandboxBroker{
   if(key.byteLength!==32||!/^sha256:[a-f0-9]{64}$/.test(config.imageId)||!/^[a-f0-9]{64}$/.test(config.probeSha256))throw Error('INVALID_BROKER_CONFIG');
   this.diskGuard=config.diskPolicy?new DiskAdmissionGuard(config.diskPolicy):undefined;
   if(this.diskGuard&&!this.diskGuard.policy.paths.includes(resolve(config.hostRoot)))throw Error('BROKER_DISK_POLICY_MUST_COVER_HOST_ROOT');
+  const versions=config.verifierVersions??[];if(versions.length>16||new Set(versions.map(v=>v.hash)).size!==versions.length||versions.some(v=>!v.path.startsWith('/')||resolve(v.path)!==v.path||!/^[a-f0-9]{64}$/.test(v.hash)))throw Error('INVALID_VERIFIER_VERSIONS');
   this.ledger=new Ledger(config.databaseUrl);this.docker=docker;
  }
  private validate(raw:unknown){
@@ -160,8 +161,10 @@ export class SandboxBroker{
   if(request.profile==='synthetic-verification-v1'){
    if(!request.source||!request.verification||!this.config.verificationPath||!this.config.verificationSha256||
       !this.config.verifierPath||!this.config.verifierSha256)throw new Refusal('SANDBOX_VERIFICATION_NOT_CONFIGURED');
-   return {path:this.config.verificationPath,hash:this.config.verificationSha256,
-    verifier:{path:this.config.verifierPath,hash:this.config.verifierSha256}};
+   const expected=request.verification.verifierDigest;
+   const verifier=!expected||expected===this.config.verifierSha256?{path:this.config.verifierPath,hash:this.config.verifierSha256}:this.config.verifierVersions?.find(v=>v.hash===expected);
+   if(!verifier)throw new Refusal('VERIFIER_VERSION_NOT_CONFIGURED');
+   return {path:this.config.verificationPath,hash:this.config.verificationSha256,verifier};
   }
   if(request.verification)throw new Refusal('SANDBOX_PROFILE_MISMATCH');
   if(request.profile==='synthetic-probe-v1'){
@@ -308,6 +311,8 @@ export class SandboxBroker{
       WHERE a.id=$1 AND a.context_id=$2 AND a.intent_id=$3 AND a.commit_id=$4 AND i.operation_id=$5`,
       [value.verification.artifactId,value.authority.contextId,grant.intent_id,value.source!.base,value.verification.operationId]);
     if(grant.role!==role||!artifact.rowCount)throw new Refusal('SANDBOX_VERIFICATION_SCOPE_MISMATCH',403);
+    const policy=(await c.query(`SELECT p.snapshot,p.digest FROM ac_artifacts a JOIN ac_quality_policies p ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1 AND a.context_id=$2`,[value.verification.artifactId,value.authority.contextId])).rows[0];
+    if(!policy||digest(QualityPolicy.parse(policy.snapshot))!==policy.digest||policy.snapshot.verifierDigest!==this.executor(value).verifier!.hash)throw new Refusal('VERIFIER_VERSION_MISMATCH');
    }else if(grant.role!=='programmer')throw new Refusal('SANDBOX_PROFILE_ROLE_MISMATCH',403);
    const owner=value.advice?await c.query('SELECT 1 FROM ac_specialist_advice WHERE id=$1 AND intent_id=$2 AND grant_id=$3 AND state=$4',[value.jobId,grant.intent_id,value.grantId,'uncertain']):grant.role==='programmer'
     ?await c.query('SELECT 1 FROM ac_operations WHERE id=$1 AND intent_id=$2 AND grant_id=$3',[value.jobId,grant.intent_id,value.grantId])

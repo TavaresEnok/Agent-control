@@ -1,5 +1,21 @@
 name: ac-implementation
 services:
+  native-protocol-proof:
+    profiles: [native-protocol]
+    image: agent-control-lab:0.1.0
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    pids_limit: 96
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    working_dir: /workspace
+    volumes:
+      - ../scripts/prove-native-remote-protocol.mjs:/workspace/prove.mjs:ro
+      - ${AC_NATIVE_CODEX_BINARY:-/nonexistent-agent-control-public-codex-binary}:/native/codex:ro
+    command: [node, /workspace/prove.mjs]
   ssh-fixture-init:
     profiles: [ssh-test]
     image: agent-control-ssh-lab:0.1.0
@@ -150,6 +166,8 @@ services:
       AC_SANDBOX_VERIFICATION: /home/app/projects/agent-control-implementation/scripts/sandbox-verifier.mjs
       AC_SANDBOX_VERIFICATION_SHA256: 5f648bd2e30bd4188fc8c73cfd79bfdf0702759593e6046403234b6f49683015
       AC_SANDBOX_VERIFIER: /home/app/projects/agent-control-implementation/scripts/synthetic-verifier.mjs
+      AC_SANDBOX_WIDE_VERIFIER: /home/app/projects/agent-control-implementation/scripts/synthetic-verifier-wide.mjs
+      AC_SANDBOX_WIDE_VERIFIER_SHA256: eb9eeb85bcdf686741dcdca6c406708d5708b38a42dc4143a5fd3faa25edacbd
       AC_SANDBOX_SPECIALIST: /home/app/projects/agent-control-implementation/scripts/synthetic-specialist.mjs
       AC_SANDBOX_SPECIALIST_SHA256: dd1316dcc69608c535d9056aca2acb2e1a6df377e4d22ea37f726d64a2da4dc6
       AC_SANDBOX_VERIFIER_SHA256: e43333eb2436790d76d3d37d9e5a27f140eba92b69804f5854f190a2663b3968

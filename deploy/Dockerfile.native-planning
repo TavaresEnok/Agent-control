@@ -1,0 +1,8 @@
+# Context produced by prepare-native-planning-image.mjs, never the checkout/home.
+FROM node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+COPY native-planning-worker.mjs /opt/agent-control/dist/src/native-planning-worker.mjs
+COPY --chmod=0555 codex /usr/local/bin/codex
+RUN mkdir -p /account /input /output /planning /runner && chmod 0555 /runner
+USER node
+WORKDIR /planning
+ENTRYPOINT ["node", "/opt/agent-control/dist/src/native-planning-worker.mjs"]

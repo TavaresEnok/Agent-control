@@ -12,7 +12,10 @@ export const ManagerTask=z.object({id:TaskId,objectiveRef:ContentRef,acceptanceR
  writePaths:z.array(RepoPath).min(1).max(64),qualityRevision:z.number().int().positive(),targetRef:Target,
  maxCorrections:z.number().int().min(0).max(5)}).strict();
 export const ManagerPlan=z.object({schemaVersion:z.literal(1),contextId:z.uuid(),objectiveRef:ContentRef,
- sourceMessageRef:ContentRef,constraintRefs:z.array(ContentRef).max(64),tasks:z.array(ManagerTask).min(1).max(64)}).strict();
+ sourceMessageRef:ContentRef,parallelism:z.number().int().min(1).max(10).optional(),constraintRefs:z.array(ContentRef).max(64),tasks:z.array(ManagerTask).min(1).max(64)}).strict();
+
+/** Structural output contract; controller also applies refinements after generation. */
+export function managerPlanOutputJsonSchema(){const schema=z.toJSONSchema(ManagerPlan);schema.required=Object.keys(schema.properties??{});return schema;}
 
 export const managerPlanBindingSchema=z.object({nodeId:z.string(),taskId:TaskId,role:z.enum(['programmer','qa','reviewer','judge','integrator']),
  artifactSource:z.string(),freshSession:z.literal(true),reviewIndex:z.number().int().min(0).max(2).optional(),

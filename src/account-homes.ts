@@ -2,7 +2,7 @@ import {constants} from 'node:fs';
 import {lstat,mkdir,open,realpath} from 'node:fs/promises';
 import type {FileHandle} from 'node:fs/promises';
 import {isAbsolute,join,resolve,sep} from 'node:path';
-import {Id,Refusal} from './contracts.ts';
+import {Id,Refusal,type Authority} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import type pg from 'pg';
 
@@ -102,6 +102,28 @@ export class AccountHomes{
    const root=await this.rootHandle();
    try{const home=await this.homeInfo(root.handle,root.info,accountId,root.uid);this.checkStored(saved,principal,projectId,root.info,home);
     return this.result(accountId,projectId,principal,home);
+   }finally{await root.handle.close();}
+  });
+ }
+ /** Broker-only metadata check for an existing admitted grant. An account home
+  * belongs to the account owner; its original project is provisioning history,
+  * not a reason to duplicate credentials for every authorized shared project. */
+ async inspectGranted(principal:string,grantId:string,authority:Authority):Promise<AccountHomeMetadata>{
+  Id.parse(grantId);return this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+   const row=(await c.query(`SELECT h.*,a.owner_id account_owner,g.account_id FROM ac_capacity_grants g
+    JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id AND p.account_id=a.id
+    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=g.project_id JOIN ac_account_homes h ON h.account_id=a.id
+    JOIN ac_intents i ON i.id=g.intent_id AND i.context_id=g.context_id
+    WHERE g.id=$1 AND g.context_id=$2 AND g.project_id=$3 AND g.manager_epoch=$4 AND g.state='reserved'
+     AND g.resource_kind='model' AND a.enabled AND p.enabled AND p.role=g.role AND i.principal_id=$5
+     AND a.mode IN ('synthetic','subscription_cli') FOR UPDATE OF g FOR SHARE OF a,p,x`,
+    [grantId,authority.contextId,context.project_id,authority.epoch,principal])).rows[0];
+   if(!row||row.owner_id!==row.account_owner)throw new Refusal('ACCOUNT_HOME_GRANT_FORBIDDEN',403);
+   const root=await this.rootHandle();
+   try{const home=await this.homeInfo(root.handle,root.info,row.account_id,root.uid);
+    this.checkStored(row,row.account_owner,row.project_id,root.info,home);
+    return this.result(row.account_id,context.project_id,row.account_owner,home);
    }finally{await root.handle.close();}
   });
  }

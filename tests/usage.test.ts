@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {Ledger} from '../src/ledger.ts';
 import {Usage} from '../src/usage.ts';
+import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {provisionCapacity} from './fixtures/provision-capacity.ts';
 import type {Command} from '../src/contracts.ts';
 
 test('usage observations deduplicate, reject regressions and preserve unknown balances',async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
- const db=new Ledger(url);await db.migrate();const project=randomUUID(),principal='usage-'+randomUUID();
+ const isolated=await isolatedDatabase(url,'usage'),db=new Ledger(isolated.url);await db.migrate();const project=randomUUID(),principal='usage-'+randomUUID();
  try{
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Usage fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
@@ -26,7 +27,8 @@ test('usage observations deduplicate, reject regressions and preserve unknown ba
   await assert.rejects(usage.record(principal,authority,{...event,eventId:randomUUID(),seq:2,counters:{...event.counters,input:9}}),/USAGE_COUNTER_REGRESSION/);
   await usage.record(principal,authority,{...event,eventId:randomUUID(),seq:2,counters:{input:20,output:4,cache:8,reasoning:1}});
   const report=await usage.context(principal,context);assert.equal(report.subscriptionBalance,'unknown');
+  assert.equal(report.attempts[0].reported_tokens,null);assert(!JSON.stringify(report).includes('reported_physical'));
   assert.deepEqual(report.attempts[0].counters,{input:20,output:4,cache:8,reasoning:1});
   await assert.rejects(usage.context('other',context),/CONTEXT_FORBIDDEN/);
- }finally{await db.close();}
+ }finally{await db.close();await isolated.close();}
 });

@@ -1,0 +1,23 @@
+{
+  "source": "Installed official Codex CLI offline app-server schema generation",
+  "cliVersion": "codex-cli 0.166.0",
+  "schemaSha256": "49e53282f327c25e7b39d97afacd038ef10ad5c4fb0431608b354d3a7bf6bcea",
+  "effortField": {
+    "anyOf": [
+      {
+        "$ref": "#/definitions/ReasoningEffort"
+      },
+      {
+        "type": "null"
+      }
+    ],
+    "description": "Override the reasoning effort for this turn and subsequent turns."
+  },
+  "reasoningEffortDefinition": {
+    "description": "A non-empty reasoning effort value advertised by the model.",
+    "minLength": 1,
+    "type": "string"
+  },
+  "inferencePerformed": false,
+  "accountAuthenticationPerformed": false
+}

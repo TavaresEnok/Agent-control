@@ -66,6 +66,16 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
+  /** Explicit effort selected by the admitted profile; never inferred from display labels. */
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Controller-owned planning task: no native execution, MCP or additional roots. */
+  readOnlyPlanning?: boolean;
+  structuredOutputSchema?: Record<string, unknown>;
+  /** Supervisor-owned tool environment; never supplied by a workflow prompt.
+   * Authentication is scoped to one isolated exec-server, not an AI account. */
+  executionEnvironment?: { id: string; url: string; authBearerToken: string; cwd: string };
+  /** Avoid sharing a native daemon between admitted account/session containers. */
+  isolatedAppServer?: boolean;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**

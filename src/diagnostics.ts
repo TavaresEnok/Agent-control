@@ -29,6 +29,17 @@ export class ContextDiagnostics{
     const manager=(await c.query('SELECT 1 FROM ac_managers WHERE context_id=$1 AND lease_until>clock_timestamp()',[contextId])).rowCount;
     if(!manager)findings.push({code:'manager_unavailable',meaning:'Há intenções pendentes sem concessão vigente de gerente.',owner:'Administrador do projeto',nextCondition:'Iniciar um gerente autorizado; depois reconciliar operações antigas antes de novos efeitos.',evidence:[{kind:'context',id:contextId}]});
    }
+   const planning=await c.query(`SELECT id,state FROM ac_semantic_planning_calls WHERE context_id=$1
+    AND state IN ('registered','uncertain','ready','rejected') ORDER BY created_at DESC,id LIMIT 101`,[contextId]);
+   for(const row of planning.rows.slice(0,100)){
+    const fact=row.state==='registered'?{code:'planning_pending' as const,meaning:'A geração da proposta aguarda admissão.',nextCondition:'Gerente autorizado e capacidade elegível para a mesma chamada.'}
+     :row.state==='ready'?{code:'planning_publication_pending' as const,meaning:'A proposta foi conferida e aguarda publicação autorizada.',nextCondition:'Resolver pausa, cancelamento ou conflito de revisão preservando a proposta já gerada.'}
+     :row.state==='rejected'?{code:'planning_rejected' as const,meaning:'A geração terminou sem uma proposta válida e confirmada.',nextCondition:'Reavaliar a causa e admitir nova solicitação explícita; não repetir o mesmo efeito incerto.'}
+     :{code:'planning_result_uncertain' as const,meaning:'A geração ainda não possui resultado final reconciliado.',nextCondition:'Consultar o executor e recibo originais; não lançar outro modelo para esta mesma chamada.'};
+    findings.push({...fact,owner:'Gerente e controlador de planejamento',evidence:[{kind:'semantic_planning',id:row.id}]});
+   }
+   const nativePlanning=await c.query(`SELECT id FROM ac_native_planning_jobs WHERE context_id=$1 AND state='uncertain' ORDER BY created_at,id LIMIT 101`,[contextId]);
+   for(const row of nativePlanning.rows.slice(0,100))findings.push({code:'native_planning_uncertain',meaning:'O lançamento ou resultado do contêiner de planejamento ainda não está confirmado.',owner:'Supervisor de planejamento',nextCondition:'Observar o mesmo contêiner e sua saída; preservar a concessão até existir prova terminal.',evidence:[{kind:'native_planning_job',id:row.id}]});
    const advice=await c.query(`SELECT id,state,receipt->>'status' verdict FROM ac_specialist_advice WHERE context_id=$1
     AND (state IN ('running','uncertain') OR (state='completed' AND receipt->>'status'='rejected')) ORDER BY id LIMIT 101`,[contextId]);
    for(const row of advice.rows.slice(0,100))findings.push(row.state==='completed'
@@ -74,7 +85,7 @@ export class ContextDiagnostics{
     if(!policy.success||digest(policy.data)!==row.digest){findings.push({code:'policy_unknown',meaning:'Não foi possível verificar a política congelada.',owner:'Administrador do projeto',nextCondition:'Conciliar a política e sua integridade.',evidence:[{kind:'artifact',id:row.id}]});continue;}
     if(policy.data.requireHumanIntegration)findings.push({code:'approval_missing',meaning:'A aprovação exigida para este artefato e destino ainda não consta.',owner:'Aprovador autorizado',nextCondition:'Decisão autorizada sobre o artefato e destino congelados.',evidence:[{kind:'artifact',id:row.id},{kind:'stage',id:row.stage_id}]});
    }
-   const truncated=[advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
+   const truncated=[planning,nativePlanning,advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
    await c.query('COMMIT');
    return {contextId,findings,truncated,assessment:findings.length?'observed':'unknown',
     ...(findings.length?{}:{explanation:'Nenhuma causa foi comprovada nos registros consultados; o estado de parada é desconhecido.'})};

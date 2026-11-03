@@ -1,0 +1,17 @@
+{
+  "context": "/home/app/projects/agent-control-implementation/.state/native-planning-image-1rhfB8",
+  "prepared": true,
+  "built": false,
+  "activated": false,
+  "bundleSyntaxExitCode": 0,
+  "manifest": {
+    "schemaVersion": 1,
+    "publicCodexSha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+    "bundleSha256": "aedad1530a00c9ae50bd32729ab6bbb7e8f667ee3eeea2a47c3f54b47733a57f",
+    "dockerfileSha256": "9c5839dbdee3573145269e42af792fdb63a9d86d178c8538bd205810fc52bf84",
+    "sourceCommit": "bdabbe19a51e9fdad0d0dd725302e6980a353231",
+    "worktreeChangesPresent": true,
+    "credentialFilesIncluded": false,
+    "inferencePerformed": false
+  }
+}

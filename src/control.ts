@@ -192,7 +192,7 @@ export class Control {
    const installation=(await c.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
    const operatorDeviceIds=(await c.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
-   const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier.mjs',import.meta.url))).digest('hex');
+   const verifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier-wide.mjs',import.meta.url))).digest('hex');
    const specialistVerifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-specialist.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,specialistVerifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
     accounts,providerBindings,providerAdapters,providerEligibility,administrative,profiles,catalog,policies,grants,plans,approvals,remoteOperations,

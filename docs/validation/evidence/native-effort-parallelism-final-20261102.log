@@ -1,0 +1,34 @@
+Started 2026-11-02T22:52:24.384169+00:00
+COMMAND ['node', '--import', 'tsx', '--test', 'tests/planning-parallelism.test.ts'] cwd=.
+✔ explicit parallelism admits eight independent tasks while preserving legacy four and bounded native recipes (269.564167ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 801.183719
+EXIT 0
+COMMAND ['npx', 'vitest', 'run', 'packages/cezar/src/core/agent-control-effort.test.ts'] cwd=upstream/cezar
+
+ RUN  v4.1.10 /home/app/projects/agent-control-implementation/upstream/cezar
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  22:52:26
+   Duration  1.34s (transform 645ms, setup 46ms, import 851ms, tests 298ms, environment 0ms)
+
+EXIT 0
+COMMAND ['npm', 'run', 'typecheck:web'] cwd=upstream/cezar
+
+> typecheck:web
+> npm run typecheck -w @open-mercato/cezar-web
+
+
+> @open-mercato/cezar-web@0.19.0 typecheck
+> tsc --noEmit
+
+EXIT 0
+Finished 2026-11-02T22:52:32.300941+00:00
