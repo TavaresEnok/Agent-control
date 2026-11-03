@@ -250,7 +250,7 @@ export class CezarRuntime {
     await this.refreshSchedulerBudget();
     const recipe=intent.command.payload.workflow==='managed-synthetic-v1'?await readManagedRecipe(this.ledger,intent.id):undefined;
     if(recipe?.schemaVersion===3&&!syntheticSpecialistAdviceAuthorized(this.ledger))throw new Refusal('MANAGED_SPECIALIST_EXECUTOR_UNAVAILABLE');
-    if(recipe&&recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
+    if(recipe&&recipe.mode!=='native'&&recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
     // A native plan uses the programmer, QA and review adapters. It does not require the synthetic sandbox.
     if(recipe?.mode==='native'){if(!this.nativeExecutionReady)throw new Refusal('NATIVE_EXECUTION_NOT_CONFIGURED');}
     else if(recipe&&!this.managedExecutionReady())throw new Refusal('MANAGED_RUNTIME_NOT_READY');
@@ -504,6 +504,18 @@ export class CezarRuntime {
           acceptanceRefs:unit.acceptanceRefs,sources:unit.kind==='composition'?sources:unit.sources,...(correction?{correction}:{})});
         await c.query('INSERT INTO ac_managed_delivery_inputs(intent_id,base_id,snapshot,digest) VALUES($1,$2,$3,$4)',[unit.intentId,base,input,digest(input)]);
       }
+      if(recipe.mode==='native'){
+        for(const unit of members){
+          if(unit.kind!=='task')continue;
+          const child=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
+          const command=Command.parse(child?.command),payload=command.payload;
+          if(payload.workflow!=='engineering-native-v1'||payload.targetRef!==unit.targetRef||payload.qualityRevision!==unit.qualityRevision||digest(payload.writePaths)!==digest(unit.writePaths))throw new Refusal('NATIVE_TASK_INPUT_MISMATCH');
+          const frozen={schemaVersion:1,intentId:unit.intentId,contextId:authority.contextId,base,writePaths:payload.writePaths,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,messageRef:payload.messageRef,messageDigest:payload.messageDigest};
+          await c.query('INSERT INTO ac_native_task_inputs VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[unit.intentId,base,frozen,digest(frozen)]);
+          const saved=(await c.query('SELECT base_id,snapshot,digest FROM ac_native_task_inputs WHERE intent_id=$1',[unit.intentId])).rows[0];
+          if(!saved||saved.base_id!==base||saved.digest!==digest(frozen)||digest(saved.snapshot)!==saved.digest)throw new Refusal('NATIVE_TASK_INPUT_MISMATCH');
+        }
+      }
     });
     for(const unit of members)await readManagedInput(this.ledger,unit.intentId);
     const repoRoot=await realpath(this.repo),managedRoot=join(repoRoot,'.ai/cezar/managed');await mkdir(managedRoot,{recursive:true,mode:0o700});
@@ -728,7 +740,7 @@ export class CezarRuntime {
     else if(!this.isolated||!this.engineering)return;
     const run=this.store.getRun(parent.run_id);if(!run?.workflowDef||!run.graphState?.cursor)return;
     if(recipe.schemaVersion===3&&!syntheticSpecialistAdviceAuthorized(this.ledger))return;
-    if(recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))return;
+    if(recipe.mode!=='native'&&recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))return;
     await this.ledger.tx(async c=>{
       await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,parent.id);
       const row=(await c.query(`SELECT i.principal_id,i.context_id,i.run_id,i.command,i.operation_id,f.digest,x.project_id

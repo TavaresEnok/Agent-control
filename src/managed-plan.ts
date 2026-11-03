@@ -63,21 +63,35 @@ export function specialistExecutionRecipe(plan:ManagerPlan,policies:PlanningPoli
  const nextGraph={...graph,nodes,edges};if(graphIssues(nextGraph).length)throw new Refusal('MANAGED_NATIVE_GRAPH_INVALID');
  return ManagedRecipe.parse({...recipe,schemaVersion:3,units,bindings,workflow:{...recipe.workflow,steps:graphToSteps(nextGraph),graph:nextGraph}});
 }
-/** Builds the bounded graph without enabling execution; admission remains gated
- * until every correction boundary is wired and verified. */
-export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
+function pathsOverlap(a:string,b:string){return a===b||a.startsWith(b+'/')||b.startsWith(a+'/');}
+function assertNativePlanScopes(plan:ManagerPlan){
+ for(let i=0;i<plan.tasks.length;i++)for(let j=i+1;j<plan.tasks.length;j++){
+  const left=plan.tasks[i]!,right=plan.tasks[j]!;
+  if(left.writePaths.some(a=>right.writePaths.some(b=>pathsOverlap(a,b))))throw new Refusal('NATIVE_PLAN_SCOPE_OVERLAP');
+ }
+}
+/** Builds the bounded graph without enabling execution. Synthetic v2 remains the
+ * contract reference. Native mode stores the plan's own acceptance refs and write
+ * paths and does not grant the synthetic correction capability. */
+function boundedCorrectionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number,native:boolean):ManagedRecipe{
  const preview=compileManagerPlan(plan,policies),tasks=new Map(plan.tasks.map(task=>[task.id,task]));
  const policy=new Map(policies.map(item=>[item.qualityRevision,QualityPolicy.parse(item.policy)]));
+ if(native){
+  if(!plan.tasks.some(task=>task.maxCorrections>0))throw new Refusal('NATIVE_PLAN_CORRECTION_UNAVAILABLE');
+  assertNativePlanScopes(plan);
+  if([...policy.values()].some(item=>item.requireSpecialistBeforeImplementation===true))throw new Refusal('NATIVE_PLAN_SPECIALIST_UNAVAILABLE');
+ }else{
+  if(plan.tasks.some(task=>task.acceptanceRefs.length!==1||task.acceptanceRefs[0]!=='acceptance:synthetic-effect-v1'))throw new Refusal('MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE');
+  if(plan.tasks.some(task=>task.writePaths.length!==1||task.writePaths[0]!.length>240||
+   !/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(task.writePaths[0]!)))throw new Refusal('MANAGED_WRITE_SCOPE_UNAVAILABLE');
+ }
  if(new Set(plan.tasks.map(task=>task.targetRef)).size!==1)throw new Refusal('MANAGED_SINGLE_TARGET_REQUIRED');
- if(plan.tasks.some(task=>task.acceptanceRefs.length!==1||task.acceptanceRefs[0]!=='acceptance:synthetic-effect-v1'))throw new Refusal('MANAGED_ACCEPTANCE_EXECUTOR_UNAVAILABLE');
- if(plan.tasks.some(task=>task.writePaths.length!==1||task.writePaths[0]!.length>240||
-  !/^(?!\.)(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(task.writePaths[0]!)))throw new Refusal('MANAGED_WRITE_SCOPE_UNAVAILABLE');
  const targetRef=plan.tasks[0]!.targetRef,units:ManagedUnit[]=[],bindings:ManagedRecipe['bindings']={},launches:ManagedRecipe['launches']={};
  const nodes:GraphNode[]=[{id:'start',type:'start'},{id:'failed',type:'end',status:'failed'}],edges:GraphEdge[]=[];let frontier=['start'];
  const connect=(from:string[],to:string)=>{for(const source of from)edges.push({from:source,to});};
- const make=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],sources:string[]=[],taskId?:string,correctionRevision?:number)=>{
+ const make=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],acceptanceRefs:string[],sources:string[]=[],taskId?:string,correctionRevision?:number)=>{
   const value:ManagedUnit={id,kind,intentId:managedId(parentIntentId,id,'intent'),runId:managedId(parentIntentId,id,'run'),operationId:managedId(parentIntentId,id,'operation'),
-   attemptId:managedId(parentIntentId,id,'attempt'),qualityRevision,targetRef,writePaths,acceptanceRefs:['acceptance:synthetic-effect-v1'],sources,
+   attemptId:managedId(parentIntentId,id,'attempt'),qualityRevision,targetRef,writePaths,acceptanceRefs,sources,
    ...(taskId===undefined?{}:{taskId,correctionRevision})};units.push(value);return value;
  };
  const stage=(unit:ManagedUnit,phase:ManagedRecipe['bindings'][string]['phase'],source:string[],verdict=false)=>{
@@ -89,7 +103,7 @@ export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPoli
   const grouped=new Map<number,string[]>();for(const id of batch){const revision=tasks.get(id)!.qualityRevision;grouped.set(revision,[...(grouped.get(revision)??[]),id]);}return [...grouped.values()];
  });
  for(const [index,batch] of batches.entries()){
-  const initial=batch.map(id=>{const task=tasks.get(id)!;return make(`task-${id}`,'task',task.qualityRevision,task.writePaths,[],id,0);});
+  const initial=batch.map(id=>{const task=tasks.get(id)!;const acceptance=native?[...task.acceptanceRefs]:['acceptance:synthetic-effect-v1'];return make(`task-${id}`,'task',task.qualityRevision,task.writePaths,acceptance,[],id,0);});
   const launch=`launch-${index}`;launches[launch]=initial.map(unit=>unit.id);
   if(initial.length===1){nodes.push({id:launch,type:'dispatch',name:initial[0]!.id,prompt:`AC_MANAGED_UNIT:${initial[0]!.id}`});connect(frontier,launch);edges.push({from:launch+'.failed',to:'failed'});frontier=[launch];}
   else{
@@ -104,7 +118,7 @@ export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPoli
     let unit=first;
     if(revision){
      const id=`correction-${managedId(parentIntentId,`${task.id}:${revision}`,'unit').replaceAll('-','')}`;
-     unit=make(id,'task',task.qualityRevision,task.writePaths,[],task.id,revision);
+     unit=make(id,'task',task.qualityRevision,task.writePaths,[...first.acceptanceRefs],[],task.id,revision);
      const launchId=`${id}-launch`;nodes.push({id:launchId,type:'dispatch',name:id,prompt:`AC_MANAGED_UNIT:${id}`});launches[launchId]=[id];
      connect(failed,launchId);edges.push({from:launchId+'.failed',to:'failed'});entry=[launchId];
     }
@@ -116,7 +130,8 @@ export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPoli
    connect(failed,'failed');frontier=successful;
   }
   if(initial.length>1){
-   const id=`compose-${index}`,composed=make(id,'composition',initial[0]!.qualityRevision,[...new Set(initial.flatMap(unit=>unit.writePaths))],initial.map(unit=>unit.id));
+   const id=`compose-${index}`,acceptance=native?[...new Set(initial.flatMap(unit=>unit.acceptanceRefs))]:['acceptance:synthetic-effect-v1'];
+   const composed=make(id,'composition',initial[0]!.qualityRevision,[...new Set(initial.flatMap(unit=>unit.writePaths))],acceptance,initial.map(unit=>unit.id));
    const launchId=`${id}-launch`;nodes.push({id:launchId,type:'dispatch',name:id,prompt:`AC_MANAGED_UNIT:${id}`});launches[launchId]=[id];connect(frontier,launchId);edges.push({from:launchId+'.failed',to:'failed'});
    const phases:ManagedRecipe['bindings'][string]['phase'][]=['qa','review',...(policy.get(composed.qualityRevision)!.requireJudge?['judge' as const]:[]),'integrate'];
    let ready=[launchId];for(const phase of phases)ready=[stage(composed,phase,ready)];frontier=ready;
@@ -124,8 +139,15 @@ export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPoli
  }
  nodes.push({id:'done',type:'end',status:'success'});connect(frontier,'done');const graph={nodes,edges};
  if(graphIssues(graph).length)throw new Refusal('MANAGED_NATIVE_GRAPH_INVALID');
- return ManagedRecipe.parse({schemaVersion:2,mode:'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
-  workflow:{name:`managed-synthetic-${parentIntentId}`,source:'built-in',steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
+ return ManagedRecipe.parse({schemaVersion:2,mode:native?'native':'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
+  workflow:{name:native?`${engineeringNativePlanWorkflowPrefix}${parentIntentId}`:`managed-synthetic-${parentIntentId}`,source:'built-in',steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
+}
+export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
+ return boundedCorrectionRecipe(plan,policies,parentIntentId,proposalRevision,false);
+}
+/** Native multitask correction graph. `nativeExecutionRecipe` still refuses corrections so the zero-correction plan contract stays unchanged. */
+export function nativeCorrectionExecutionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
+ return boundedCorrectionRecipe(plan,policies,parentIntentId,proposalRevision,true);
 }
 const syntheticAcceptance=['acceptance:synthetic-effect-v1'];
 /** Schema v1 batches, forks and composition. Synthetic mode keeps the single-file
@@ -188,14 +210,10 @@ export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],paren
 export function nativeManagedTaskText(task:ManagerTask){
  return canonical({domain:'native-managed-task-v1',id:task.id,objectiveRef:task.objectiveRef,acceptanceRefs:task.acceptanceRefs,inputRefs:task.inputRefs,outputRefs:task.outputRefs,dependsOn:task.dependsOn,writePaths:task.writePaths});
 }
-function pathsOverlap(a:string,b:string){return a===b||a.startsWith(b+'/')||b.startsWith(a+'/');}
-/** Refuse an unusable native plan before compile hides an overlap by serializing it. */
+/** Refuse an unusable native plan before compile hides an overlap by serializing it. Corrections use the separate native recipe. */
 export function assertNativePlanShape(plan:ManagerPlan){
  if(plan.tasks.some(task=>task.maxCorrections>0))throw new Refusal('NATIVE_PLAN_CORRECTION_UNAVAILABLE');
- for(let i=0;i<plan.tasks.length;i++)for(let j=i+1;j<plan.tasks.length;j++){
-  const left=plan.tasks[i]!,right=plan.tasks[j]!;
-  if(left.writePaths.some(a=>right.writePaths.some(b=>pathsOverlap(a,b))))throw new Refusal('NATIVE_PLAN_SCOPE_OVERLAP');
- }
+ assertNativePlanScopes(plan);
 }
 /** Same batch graph as the synthetic recipe, without its acceptance executor or single-file scope. */
 export function nativeExecutionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
@@ -239,13 +257,12 @@ export async function freezeManagedExecution(ledger:Ledger,c:pg.PoolClient,paren
  const specialist=policies.some(item=>QualityPolicy.parse(item.policy).requireSpecialistBeforeImplementation===true);
  const native=parent.command.payload.workflow==='managed-synthetic-v1'&&parent.command.payload.native===true;
  if(native){
-  if(corrections)throw new Refusal('NATIVE_PLAN_CORRECTION_UNAVAILABLE');
   if(specialist)throw new Refusal('NATIVE_PLAN_SPECIALIST_UNAVAILABLE');
  }else{
   if(corrections&&!syntheticManagedCorrectionsAuthorized(ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
   if(specialist&&!syntheticSpecialistAdviceAuthorized(ledger))throw new Refusal('MANAGED_SPECIALIST_EXECUTOR_UNAVAILABLE');
  }
- const recipe=native?nativeExecutionRecipe(plan,policies,parent.id,revision):specialist?specialistExecutionRecipe(plan,policies,parent.id,revision):corrections
+ const recipe=native?(corrections?nativeCorrectionExecutionRecipe(plan,policies,parent.id,revision):nativeExecutionRecipe(plan,policies,parent.id,revision)):specialist?specialistExecutionRecipe(plan,policies,parent.id,revision):corrections
   ?correctionExecutionRecipe(plan,policies,parent.id,revision):executionRecipe(plan,policies,parent.id,revision);
  if(native){await assertNativeTemplate(c,a.contextId,plan);await assertNativeBase(c,a.contextId,recipe.targetRef);}
  await c.query('INSERT INTO ac_managed_executions VALUES($1,$2,$3,$4,$5,$6)',[parent.id,a.contextId,revision,expectedDigest,digest(recipe),recipe]);
