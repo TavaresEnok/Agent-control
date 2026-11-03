@@ -1,5 +1,39 @@
 name: ac-implementation
 services:
+  native-tools-proof:
+    profiles: [native-pair]
+    image: agent-control-native-tools:0.1.0
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    pids_limit: 96
+    networks: [native-pair]
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    volumes:
+      - ${AC_NATIVE_PAIR_FIXTURE:-/nonexistent-ac-native-pair}/work:/work:ro
+      - ${AC_NATIVE_PAIR_FIXTURE:-/nonexistent-ac-native-pair}/tools-token:/runner/exec-token:ro
+  native-client-proof:
+    profiles: [native-pair]
+    image: agent-control-lab:0.1.0
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    pids_limit: 96
+    networks: [native-pair]
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    working_dir: /tmp
+    volumes:
+      - ../scripts/prove-native-pair-protocol.mjs:/proof.mjs:ro
+      - ${AC_NATIVE_PAIR_FIXTURE:-/nonexistent-ac-native-pair}/native-tool-forwarder.mjs:/forwarder.mjs:ro
+      - ${AC_NATIVE_PAIR_FIXTURE:-/nonexistent-ac-native-pair}/worker-token:/runner/exec-token:ro
+      - ${AC_NATIVE_CODEX_BINARY:-/nonexistent-agent-control-public-codex-binary}:/native/codex:ro
+    command: [node, /proof.mjs]
+    depends_on:
+      native-tools-proof: {condition: service_started}
   native-protocol-proof:
     profiles: [native-protocol]
     image: agent-control-lab:0.1.0
@@ -200,6 +234,7 @@ services:
       sandbox-broker: {condition: service_started}
 networks:
   lab: {internal: true}
+  native-pair: {internal: true}
 volumes:
   pg-data:
   sandbox-pg:

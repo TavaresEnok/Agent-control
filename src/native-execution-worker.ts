@@ -1,4 +1,5 @@
 import {constants} from 'node:fs';
+import {waitForNativeLaunch} from './native-worker-gate.ts';
 import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity} from './native-worker-security.ts';
@@ -18,6 +19,7 @@ const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,inte
 async function main(){
  if(process.argv.length!==2)throw Error('INVALID_WORKER_ARGUMENTS');
  initializeNativeWorkerEnvironment();
+ await waitForNativeLaunch();
  const input=await readSignedWorkerLaunch(Launch,'agent-control:native-execution-launch:v1','/input/launch.json','/runner/execution-public-key.pem');
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
  initializeNativeWorkerEnvironment(input.proxyUrl);await assertCodexSubscriptionIdentity(input.providerSubjectDigest);

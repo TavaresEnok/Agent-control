@@ -1,3 +1,4 @@
+import type {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { join,sep } from 'node:path';
@@ -63,10 +64,13 @@ export class CezarRuntime {
   private executionEnabled = true;
   private readonly diskGuard:DiskGuard|undefined;
   private readonly nativePlanning:readonly NativePlanningSupervisor[];
+  private readonly nativeExecutions:readonly NativeExecutionSupervisor[];
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
     private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations,
-    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[]}) {
+    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[];nativeExecutions?:readonly NativeExecutionSupervisor[]}) {
+    this.nativeExecutions=Object.freeze([...(admissionOptions?.nativeExecutions??[])]);
+    if(this.nativeExecutions.length>32||this.nativeExecutions.some(s=>s.ledger!==ledger)||new Set(this.nativeExecutions.map(s=>s.executorDigest+'@'+s.keyFingerprint)).size!==this.nativeExecutions.length)throw new Refusal('NATIVE_EXECUTION_REGISTRY_INVALID');
     const native=admissionOptions?.nativePlanning;this.nativePlanning=Object.freeze(native?(Array.isArray(native)?[...native]:[native as NativePlanningSupervisor]):[]);
     if(this.nativePlanning.some(supervisor=>supervisor.ledger!==ledger))throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     if(this.nativePlanning.length>32||new Set(this.nativePlanning.map(supervisor=>supervisor.executor.id+'@'+supervisor.executor.digest)).size!==this.nativePlanning.length)throw new Refusal('PLANNING_EXECUTOR_REGISTRY_INVALID');
@@ -518,6 +522,20 @@ export class CezarRuntime {
         JOIN ac_native_planning_jobs j ON j.id=s.id WHERE s.context_id=$1 AND x.state='requested' AND s.state='uncertain'
         ORDER BY s.created_at,s.id LIMIT 100`,[authority.contextId])).rows;
       for(const call of calls)for(const supervisor of this.nativePlanning)await supervisor.reconcileCancellation(principal,authority,call.id);
+      await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
+    }
+    if(this.nativeExecutions.length){
+      if(!principal)throw new Refusal('NATIVE_EXECUTION_PRINCIPAL_REQUIRED');
+      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
+        LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id AND x.context_id=j.context_id
+        WHERE j.context_id=$1 AND (j.state IN ('uncertain','running') OR x.state='requested') ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId])).rows;
+      for(const job of jobs){
+        const supervisor=this.nativeExecutions.find(s=>s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
+        if(!supervisor)throw new Refusal('NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE');
+        await this.ledger.heartbeat(authority);
+        if(job.cancellation_state==='requested')await supervisor.reconcileCancellation(principal,authority,job.id);
+        else await supervisor.reconcileRegistered(principal,authority,job.id);
+      }
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     }
     if(this.remote){

@@ -278,12 +278,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/semantic-conversation-cancellation-first-20261103.log;docs/validation/evidence/semantic-conversation-ui-availability-20261103.log;docs/validation/evidence/native-planning-cancellation-takeover-20261103.log",
-    "files": "src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts;src/happier.ts;src/semantic-planning.ts;tests/semantic-conversation.test.ts;src/native-planning-supervisor.ts;tests/native-planning-cancellation.test.ts",
+    "evidence": "docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/semantic-conversation-cancellation-first-20261103.log;docs/validation/evidence/semantic-conversation-ui-availability-20261103.log;docs/validation/evidence/native-planning-cancellation-takeover-20261103.log;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md",
+    "files": "src/cezar.ts;src/happier.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/native-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts;src/happier.ts;src/semantic-planning.ts;tests/semantic-conversation.test.ts;src/native-planning-supervisor.ts;tests/native-planning-cancellation.test.ts;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native graph resumes from completed QA/review/judge/integration and physical implementation/QA receipts; Prepared QA/integration adopted only with proof of no launch; missing output, other uncertain effects and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Integrated build passed; this is not behavioral acceptance. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. Registered/ready semantic cancellation releases the planning slot; uncertain calls prevent confirmation even with a released grant. Native physical cancellation remains unverified. The original native planning job can be canceled by an authorized successor after identity/key verification and terminal observation; proof uses a Docker stub, not a physical native process."
+    "limitation": "Native graph resumes from completed QA/review/judge/integration and physical implementation/QA receipts; Prepared QA/integration adopted only with proof of no launch; missing output, other uncertain effects and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Integrated build passed; this is not behavioral acceptance. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. Registered/ready semantic cancellation releases the planning slot; uncertain calls prevent confirmation even with a released grant. Native physical cancellation remains unverified. The original native planning job can be canceled by an authorized successor after identity/key verification and terminal observation; proof uses a Docker stub, not a physical native process. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending; no acceptance promotion."
   },
   {
     "id": "RF-23",
@@ -304,12 +304,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/CORE-C-managed-cancel-final-20261102.log;docs/validation/evidence/CORE-C-live-writer-first-20261102.log",
-    "files": "src/control.ts;src/cancellation.ts;src/ledger.ts;src/cezar.ts;tests/native-pause.test.ts;tests/cancellation.test.ts;tests/managed-cancellation.test.ts;tests/managed-running-recovery.test.ts",
+    "evidence": "docs/validation/evidence/context-drain-pause-final-20261102.log;docs/validation/evidence/execution-controls-regression-final-20261102.log;docs/validation/evidence/CORE-C-managed-cancel-final-20261102.log;docs/validation/evidence/CORE-C-live-writer-first-20261102.log;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md",
+    "files": "src/control.ts;src/cancellation.ts;src/ledger.ts;src/cezar.ts;tests/native-pause.test.ts;tests/cancellation.test.ts;tests/managed-cancellation.test.ts;tests/managed-running-recovery.test.ts;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Signed pause/drain/cancellation implemented; uncertain grants held and forged receipt rejected. Broker stop uses contract stub in this increment; complete physical cancellation, remote linkage and concurrent recovery remain open. Parent cancellation uses simulated physical receipts; a separate physical broker baseline stops a live worker. Inaccessible managed executor and remote cancellation remain open."
+    "limitation": "Signed pause/drain/cancellation implemented; uncertain grants held and forged receipt rejected. Broker stop uses contract stub in this increment; complete physical cancellation, remote linkage and concurrent recovery remain open. Parent cancellation uses simulated physical receipts; a separate physical broker baseline stops a live worker. Inaccessible managed executor and remote cancellation remain open. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending; no acceptance promotion."
   },
   {
     "id": "RF-25",
@@ -707,12 +707,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts;src/native-planning-supervisor.ts",
+    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md",
+    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts;src/native-planning-supervisor.ts;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof. Native planning requires fresh adapter/mode eligibility and matching account identity in code, while SQL real-account guards remain closed. No provider/plan has been operationally approved by this increment."
+    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof. Native planning requires fresh adapter/mode eligibility and matching account identity in code, while SQL real-account guards remain closed. No provider/plan has been operationally approved by this increment. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending; no acceptance promotion."
   },
   {
     "id": "RF-56",
@@ -746,12 +746,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md",
+    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending; no acceptance promotion."
   },
   {
     "id": "RNF-02",
@@ -759,12 +759,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md",
-    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/",
+    "evidence": "docs/validation/evidence/; ACCEPTANCE-I0-I2.md;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md",
+    "files": "src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending; no acceptance promotion."
   },
   {
     "id": "RNF-03",

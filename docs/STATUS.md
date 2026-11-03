@@ -189,3 +189,9 @@ RPC, histórico e heartbeat passaram a revalidar ACL/projeto/vínculo/época; pe
 Foi acrescentada uma primitiva que confere a identidade esperada dos dois contêineres, rede interna exclusiva, separação de montagens e leitura apenas para avaliadores. Ela ainda não está ligada a um supervisor físico; o teste usa observações sintéticas e não autoriza iniciar execução real. Detalhes e limites em `implementation/NATIVE-EXECUTION-WORKER-20261103.md`.
 
 A inspeção somente leitura do par de contêineres foi ligada à primitiva de isolamento. Ela compara respostas do Docker com a configuração confiável, mas ainda não está integrada a um supervisor que crie e inicie os jobs. A prova atual utiliza respostas simuladas; não houve uso de contas ou daemon operacional.
+
+## Supervisor nativo e ligação ao ciclo Cezar
+
+O supervisor físico nativo foi implementado com journal PG, snapshots privados, par de contêineres, liberação por lançamento assinado após inspeção, observação conservadora, recibos e cancelamento no ciclo existente do Cezar. Três provas focadas passaram com PG/Cezar e Docker simulado. Uma prova separada conectou CLI oficial e ferramentas em dois contêineres reais, usando o encaminhador, sem conta ou inferência.
+
+Ainda não foi ligado o despacho de uma receita nativa, a finalização do código gerado nem a avaliação real ao integrador; o caminho completo de `start` físico ainda precisa de prova. O bootstrap administrativo continua sem ativação. Ver `implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md`. O projeto permanece incompleto; esta entrega não autoriza dizer 100%.

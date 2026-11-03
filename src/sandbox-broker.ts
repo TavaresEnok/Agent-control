@@ -66,6 +66,17 @@ export class DockerDaemon{
  async start(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/start`);if(r.status!==204)throw new Refusal('DOCKER_START_UNCERTAIN');}
  async stop(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/stop?t=3`);if(![204,304].includes(r.status))throw new Refusal('DOCKER_STOP_UNCERTAIN');}
  async remove(id:string){const r=await this.call('DELETE',`/v1.44/containers/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}
+ async createPrivateNetwork(name:string,labels:Record<string,string>){
+  if(!/^ac-native-exec-[a-f0-9-]{36}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('POST','/v1.44/networks/create',{Name:name,CheckDuplicate:true,Driver:'bridge',Internal:true,Attachable:false,Labels:labels});
+  if(r.status!==201)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+  return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(r.body.toString('utf8'))).Id;
+ }
+ async inspectPrivateNetwork(id:string):Promise<Record<string,any>|null>{
+  if(!/^[a-f0-9]{64}$/.test(id))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('GET',`/v1.44/networks/${id}`);if(r.status===404)return null;
+  if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return JSON.parse(r.body.toString('utf8'));
+ }
 }
 export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;diskPolicy?:DiskAdmissionPolicy;
  verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;

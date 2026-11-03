@@ -14,6 +14,7 @@ const Container=z.object({Id,Image:z.string(),Config:z.object({User:z.string(),L
 const Network=z.object({Id,Internal:z.boolean(),Containers:z.record(z.string(),z.object({IPv4Address:z.string()})).nullable()});
 type Container=z.infer<typeof Container>;
 const Rules=z.object({workerEntrypoint:z.array(z.string()).min(1),toolsEntrypoint:z.array(z.string()).min(1),
+ state:z.enum(['created','running']).default('created'),
  workerCmd:z.array(z.string()),toolsCmd:z.array(z.string()),workerEnv:z.array(z.string()),toolsEnv:z.array(z.string()),workerWorkingDir:z.string().startsWith('/'),toolsWorkingDir:z.string().startsWith('/'),
  workerMemory:z.number().int().positive(),toolsMemory:z.number().int().positive(),workerPids:z.number().int().positive(),toolsPids:z.number().int().positive(),
  workerNanoCpus:z.number().int().positive(),toolsNanoCpus:z.number().int().positive()}).strict();
@@ -40,7 +41,7 @@ export async function inspectNativeExecutionPair(read:(path:string)=>Promise<unk
   [tools,rules.toolsEntrypoint,rules.toolsCmd,rules.toolsEnv,rules.toolsWorkingDir,rules.toolsMemory,rules.toolsPids,rules.toolsNanoCpus]
  ] as const){
   const h=c.HostConfig;
-  if(c.State.Status!=='created'||c.State.Running||!exact(c.Config.Entrypoint,entry)||!exact(c.Config.Cmd,cmd)||!exact(c.Config.Env,env)||c.Config.WorkingDir!==cwd||
+  if(c.State.Status!==rules.state||c.State.Running!==(rules.state==='running')||!exact(c.Config.Entrypoint,entry)||!exact(c.Config.Cmd,cmd)||!exact(c.Config.Env,env)||c.Config.WorkingDir!==cwd||
    h.Memory!==memory||h.PidsLimit!==pids||h.NanoCpus!==cpu||Object.keys(h.PortBindings??{}).length!==0||
    c.Mounts.some(m=>m.Type!=='bind')||(h.CapAdd?.length??0)>0||(h.Devices?.length??0)>0||
    !['','private'].includes(h.PidMode)||!['','private'].includes(h.IpcMode)||h.SecurityOpt?.some(s=>s.startsWith('seccomp=unconfined')||s.startsWith('apparmor=unconfined'))||

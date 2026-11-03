@@ -1,0 +1,18 @@
+ Network ac-implementation_native-pair  Creating
+ Network ac-implementation_native-pair  Created
+ Container ac-implementation-native-tools-proof-1  Creating
+ Container ac-implementation-native-tools-proof-1  Created
+ Container ac-implementation-native-tools-proof-1  Starting
+ Container ac-implementation-native-tools-proof-1  Started
+file:///proof.mjs:17
+ app.once('exit',()=>{for(const p of pending.values())p.reject(Error('APP_EXITED'));pending.clear();});
+                                                               ^
+
+Error: APP_EXITED
+    at ChildProcess.<anonymous> (file:///proof.mjs:17:64)
+    at Object.onceWrapper (node:events:634:26)
+    at ChildProcess.emit (node:events:519:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+
+Node.js v22.23.3
+

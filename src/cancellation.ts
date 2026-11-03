@@ -59,6 +59,7 @@ export class Cancellations{
     await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$2
      WHERE g.intent_id=$1 AND g.state='reserved'
      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)
+     AND NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.grant_id=g.id)
      AND NOT EXISTS(SELECT 1 FROM ac_remote_operations r WHERE (r.intent_id=$1 OR (r.intent_id IS NULL AND r.context_id=g.context_id)) AND r.state NOT IN ('completed','failed','canceled_confirmed'))
      AND ((g.role='programmer' AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.intent_id=$1 AND o.grant_id=g.id AND o.state='registered' AND o.handle IS NULL
        AND NOT EXISTS(SELECT 1 FROM ac_execution_launches l WHERE l.operation_id=o.id)))
@@ -74,7 +75,8 @@ export class Cancellations{
       WHERE g.intent_id=$1 AND g.role='manager' AND g.state='reserved'
       AND EXISTS(SELECT 1 FROM ac_semantic_planning_calls s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.grant_id IS NULL)
       AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.grant_id=g.id)
-      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)`,[request.intent_id,{state:'not_started',source:'semantic-cancellation'}]);
+      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)
+     AND NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.grant_id=g.id)`,[request.intent_id,{state:'not_started',source:'semantic-cancellation'}]);
     await c.query(`UPDATE ac_semantic_planning_calls s SET state='rejected',failure_code='PLANNING_CANCELED'
       WHERE s.intent_id=$1 AND ((s.state='registered' AND NOT EXISTS(SELECT 1 FROM ac_capacity_grants g WHERE g.attempt_id=s.attempt_id AND g.state<>'released')
        AND NOT EXISTS(SELECT 1 FROM ac_capacity_grants g JOIN ac_native_planning_jobs j ON j.grant_id=g.id WHERE g.attempt_id=s.attempt_id)
@@ -84,6 +86,7 @@ export class Cancellations{
     const pending=(await c.query(`SELECT
      EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released') OR
      EXISTS(SELECT 1 FROM ac_semantic_planning_calls WHERE intent_id=$1 AND state IN ('registered','uncertain','ready')) OR
+     EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE intent_id=$1 AND state NOT IN ('completed','failed')) OR
      EXISTS(SELECT 1 FROM ac_intents child LEFT JOIN ac_plan_cancellations cc ON cc.intent_id=child.id
        WHERE child.parent_intent_id=$1 AND (cc.intent_id IS NULL OR cc.state<>'confirmed')) OR
      EXISTS(SELECT 1 FROM ac_operations WHERE intent_id=$1 AND state IN ('uncertain','running')) OR

@@ -1,0 +1,19 @@
+{
+  "images": [
+    {
+      "name": "agent-control-native-tools:0.1.0",
+      "id": "sha256:95f20f8272746763cd58a18fa1e94cdd8e74a2f8cad0a36f0c94475866b5b8fb",
+      "built": true,
+      "authenticatedModelRun": false
+    },
+    {
+      "name": "agent-control-native-execution:0.2.0",
+      "id": "sha256:8ba02d46c6964bdca73ed9953ff2252a7dadc2052c25eb648ad087fd0028c113",
+      "built": true,
+      "authenticatedModelRun": false
+    }
+  ],
+  "toolsProtocolOnly": true,
+  "realAccountsUsed": false,
+  "workerStartHomologated": false
+}

@@ -4,7 +4,7 @@ import {mkdir,mkdtemp,lstat,realpath,copyFile,readFile,writeFile,chmod} from 'no
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const repo=fileURLToPath(new URL('../',import.meta.url));
-const kinds={planning:{entry:'native-planning-worker',dockerfile:'Dockerfile.native-planning'},execution:{entry:'native-execution-worker',dockerfile:'Dockerfile.native-execution'}};
+const kinds={planning:{entry:'native-planning-worker',dockerfile:'Dockerfile.native-planning'},execution:{entry:'native-execution-worker',dockerfile:'Dockerfile.native-execution'},tools:{entry:'native-tools-worker',dockerfile:'Dockerfile.native-tools'}};
 /** Creates an exclusive private Docker context, without building or executing it. */
 export async function prepareNativeImage(kind,binaryPath,expected){
  const selected=Object.hasOwn(kinds,kind)?kinds[kind]:undefined;if(!selected||!binaryPath||!/^[a-f0-9]{64}$/.test(expected??''))throw Error('PUBLIC_BINARY_DIGEST_REQUIRED');

@@ -16,7 +16,7 @@ const Facts=z.object({worker:Container,tools:Container,network:z.object({id:Id,i
 const Expected=z.object({jobId:z.uuid(),launchDigest:z.string().regex(/^[a-f0-9]{64}$/),workerImage:Image,toolsImage:Image,
  workerUser:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),toolsUser:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),
  providerNetwork:z.string().min(1),networkId:Id,toolsAddress:z.string().refine(isPrivateToolAddress),
- workerMounts:z.array(Mount).min(1).max(20),toolsMounts:z.array(Mount).min(1).max(20),role:z.enum(['programmer','qa','reviewer','judge','specialist'])}).strict();
+ workerMounts:z.array(Mount).min(1).max(20),toolsMounts:z.array(Mount).min(1).max(20),role:z.enum(['programmer','qa','reviewer','judge','specialist']),phase:z.enum(['created','gated-running']).default('created')}).strict();
 function sameStrings(a:string[],b:string[]){return a.length===b.length&&new Set(a).size===a.length&&a.every(x=>b.includes(x));}
 function mountsEqual(a:z.infer<typeof Mount>[],b:z.infer<typeof Mount>[]){
  const key=(m:z.infer<typeof Mount>)=>JSON.stringify([m.source,m.destination,m.writable]);
@@ -30,7 +30,8 @@ export function assertNativeExecutionIsolation(rawFacts:unknown,rawExpected:unkn
  const f=Facts.parse(rawFacts),e=Expected.parse(rawExpected),w=f.worker,t=f.tools;
  const refuse=()=>{throw new Refusal('NATIVE_EXECUTION_ISOLATION_MISMATCH');};
  if(w.id===t.id||w.image!==e.workerImage||t.image!==e.toolsImage||w.user!==e.workerUser||t.user!==e.toolsUser||
-  f.network.id!==e.networkId||!f.network.internal||e.providerNetwork===e.networkId||w.running||t.running)refuse();
+  f.network.id!==e.networkId||!f.network.internal||e.providerNetwork===e.networkId||
+  (e.phase==='created'?(w.running||t.running):(!w.running||!t.running)))refuse();
  for(const c of [w,t]){
   if(c.privileged||!c.readOnlyRoot||!c.capDropAll||!c.noNewPrivileges||c.hostNetwork||c.hostPid||c.hostIpc||
     c.labels['agent-control.job']!==e.jobId||c.labels['agent-control.launch']!==e.launchDigest)refuse();

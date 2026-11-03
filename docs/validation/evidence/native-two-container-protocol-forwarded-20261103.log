@@ -1,0 +1,2 @@
+ Container ac-implementation-native-tools-proof-1  Running
+{"proof":"native-two-container-protocol","separateContainers":true,"privateNetwork":true,"authenticatedToolsReady":true,"wrongCapabilityRejected":true,"accountsMounted":false,"inferencePerformed":false,"limits":"Protocol metadata only; no model turn, code mutation, supervisor start path, TLS or production homologation."}
