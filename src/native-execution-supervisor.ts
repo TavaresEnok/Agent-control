@@ -10,6 +10,8 @@ import {DockerDaemon} from './sandbox-broker.ts';
 import {AccountHomes} from './account-homes.ts';
 import {ProviderEligibility} from './provider-eligibility.ts';
 import {GitArtifacts} from './git.ts';
+import {NativeArtifactFinalizer,NativeArtifactIdentity} from './native-artifact-finalizer.ts';
+import type {Quality} from './quality.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {inspectNativeExecutionPair,dockerReadOnly} from './native-execution-docker-observation.ts';
@@ -207,8 +209,8 @@ export class NativeExecutionSupervisor{
     grant?.state!=='released'||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
     ((payload.exitCode===0)!==(job.state==='completed')))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
    const result=await this.readResult(input,payload.exitCode);
-   if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.exitCode||result.jobId!==input.jobId)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-   return {state:job.state as 'completed'|'failed',receipt,output:result.output};
+   if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+   return {state:job.state as 'completed'|'failed',receipt,output:result.output,artifact:payload.artifact??null};
   }
   // Never recreate missing resources or rerun an uncertain start.
   const worker=await this.docker.inspect('ac-native-worker-'+input.jobId),tools=await this.docker.inspect('ac-native-tools-'+input.jobId);
@@ -222,16 +224,56 @@ export class NativeExecutionSupervisor{
   if(tools.State.Status!=='exited'||[worker,tools].some(p=>!Number.isFinite(Date.parse(p.State.FinishedAt))||p.State.FinishedAt.startsWith('0001-')))return {state:'uncertain' as const};
   const result=await this.readResult(input,worker.State.ExitCode);
   if(result.jobId!==input.jobId||result.exitCode!==worker.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-  const physical={jobId:input.jobId,containerId:worker.Id,toolsContainerId:tools.Id,networkId:job.network_id,exitCode:worker.State.ExitCode,finishedAt:worker.State.FinishedAt,toolsFinishedAt:tools.State.FinishedAt,synthetic:false,executorDigest:this.executorDigest,nativeSessionId:result.nativeSessionId,normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows};
-  const payload={schemaVersion:1,accountId:job.account_id,profileId:job.profile_id,profileDigest:job.profile_digest,jobId:input.jobId,intentId:input.intentId,contextId:authority.contextId,grantId:input.grantId,sessionId:input.sessionId,epoch:Number(job.manager_epoch),inputDigest:job.input_digest,executorDigest:this.executorDigest,outputDigest:digest(result.output),physicalDigest:digest(physical),exitCode:result.exitCode};
+  const cancellation=(await this.ledger.pool.query("SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND state='requested'",[input.intentId])).rowCount;
+  let finalization:any=null,artifact:z.infer<typeof NativeArtifactIdentity>|null=null;
+  if(input.role==='programmer'){
+   const existing=(await this.ledger.pool.query('SELECT state FROM ac_native_artifact_finalizations WHERE job_id=$1',[input.jobId])).rows[0];
+   if((result.exitCode===0&&!cancellation)||existing){
+    const finalizer=new NativeArtifactFinalizer(this.ledger,this.config.hostRoot);
+    const binding={jobId:input.jobId,intentId:input.intentId,grantId:input.grantId,inputDigest:job.input_digest,base:input.base,writePaths:input.writePaths};
+    if(cancellation)await finalizer.stop(principal,authority,binding);
+    finalization=await finalizer.finalize(principal,authority,binding,async()=>{
+     const [w,t]=await Promise.all([this.docker.inspect(worker.Id),this.docker.inspect(tools.Id)]);
+     if(!w||!t||w.Id!==worker.Id||t.Id!==tools.Id||w.State.Running||t.State.Running||w.State.Status!=='exited'||t.State.Status!=='exited')throw new Refusal('NATIVE_FINALIZER_PHYSICAL_UNCONFIRMED');
+    });
+    if(finalization.status==='uncertain')return {state:'uncertain' as const};
+    if(!cancellation&&finalization.status==='ready')artifact=NativeArtifactIdentity.parse(finalization.identity);
+   }
+  }
+  const effectiveExitCode=finalization?.status==='failed'&&result.exitCode===0?1:result.exitCode;
+  const physical={jobId:input.jobId,containerId:worker.Id,toolsContainerId:tools.Id,networkId:job.network_id,exitCode:effectiveExitCode,workerExitCode:worker.State.ExitCode,finalization,finishedAt:worker.State.FinishedAt,toolsFinishedAt:tools.State.FinishedAt,synthetic:false,executorDigest:this.executorDigest,nativeSessionId:result.nativeSessionId,normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows};
+  const payload={schemaVersion:1,accountId:job.account_id,profileId:job.profile_id,profileDigest:job.profile_digest,jobId:input.jobId,intentId:input.intentId,contextId:authority.contextId,grantId:input.grantId,sessionId:input.sessionId,epoch:Number(job.manager_epoch),inputDigest:job.input_digest,executorDigest:this.executorDigest,outputDigest:digest(result.output),physicalDigest:digest(physical),workerExitCode:result.exitCode,artifact,exitCode:effectiveExitCode};
   const receipt={payload,signature:sign(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),this.key).toString('hex')};
   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);const saved=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];if(['completed','failed'].includes(saved.state)){if(digest(saved.receipt)!==digest(receipt))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');return;}
    const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[input.grantId])).rows[0];
    if(!grant||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||grant.resource_kind!=='model'||grant.intent_id!==input.intentId||grant.context_id!==authority.contextId||Number(grant.manager_epoch)!==Number(job.manager_epoch)||!['uncertain','running'].includes(grant.state))throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH');
-   await c.query("UPDATE ac_native_execution_jobs SET state=$2,worker_id=$3,tools_id=$4,receipt=$5 WHERE id=$1",[input.jobId,result.exitCode===0?'completed':'failed',worker.Id,tools.Id,receipt]);
+   await c.query("UPDATE ac_native_execution_jobs SET state=$2,worker_id=$3,tools_id=$4,receipt=$5 WHERE id=$1",[input.jobId,effectiveExitCode===0?'completed':'failed',worker.Id,tools.Id,receipt]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[input.grantId,physical]);
+   if(input.role==='programmer'&&!cancellation){
+    const operationReceipt=artifact?{operationId:input.jobId,commit:artifact.commit,tree:artifact.tree,base:artifact.base,exitCode:0,synthetic:false,nativeExecution:receipt,finalizationDigest:digest(finalization)}:
+      {operationId:input.jobId,exitCode:effectiveExitCode,synthetic:false,nativeExecution:receipt,failureCode:finalization?.failureCode??result.failureCode};
+    const updated=await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND intent_id=$3 AND grant_id=$4 AND native_session_id=$5 AND manager_epoch=$6 AND state IN ('uncertain','running')",[input.jobId,operationReceipt,input.intentId,input.grantId,input.sessionId,job.manager_epoch]);
+    if(!updated.rowCount)throw new Refusal('NATIVE_EXECUTION_OPERATION_MISMATCH');
+   }
+
   });
-  return {state:result.exitCode===0?'completed' as const:'failed' as const,receipt,output:result.output};
+  return {state:effectiveExitCode===0?'completed' as const:'failed' as const,receipt,output:result.output,artifact};
+ }
+ /** Register only the exact finalized artifact; Quality still requires
+  * independent QA/review and authorized integration. No branch is changed. */
+ async registerArtifact(principal:string,authority:Authority,jobId:string,quality:Quality){
+  if(quality.ledger!==this.ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
+  const input=await this.registeredInput(principal,authority,jobId),outcome=await this.reconcile(principal,authority,input);
+  if(outcome.state!=='completed'||!('artifact' in outcome)||!outcome.artifact||input.role!=='programmer')throw new Refusal('NATIVE_ARTIFACT_NOT_READY');
+  const artifact=NativeArtifactIdentity.parse(outcome.artifact);
+  const revision=await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,false);
+   const contract=(await c.query('SELECT quality_revision,target_ref,digest FROM ac_execution_contracts WHERE intent_id=$1',[input.intentId])).rows[0];
+   if(!contract||contract.digest!==digest({qualityRevision:contract.quality_revision,targetRef:contract.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
+   const identity=await new GitArtifacts(this.config.repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
+   if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');return contract.quality_revision;
+  });
+  const hash=digest({domain:'artifact-v1',intentId:input.intentId,commit:artifact.commit}),id=`${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
+  return quality.register(principal,{id,contextId:authority.contextId,intentId:input.intentId,implementationGrantId:input.grantId,implementationSessionId:input.sessionId,policyRevision:revision,commit:artifact.commit,tree:artifact.tree,base:artifact.base,risk:'high'},authority);
  }
  async stop(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);await this.validateReplay(principal,authority,input,job);

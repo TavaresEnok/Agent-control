@@ -4,6 +4,12 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Estado vigente: artefatos e revisão nativos
+
+Finalização de código nativo, registro de artefato e revisão independente tipada foram ligados ao supervisor/Quality e ao ciclo de observação do Cezar. A prova com PostgreSQL, Git e helper reais passou com turnos/contêineres simulados. Sem QA, a integração continuou bloqueada. Detalhes: `implementation/NATIVE-ARTIFACT-REVIEW-20261103.md`.
+
+Ainda faltam a receita de despacho nativo, o contexto autorizado das tarefas, QA confiável de código real e a homologação do fluxo inteiro com provedores e interface móvel. O bootstrap continua administrativo. As seções seguintes preservam o histórico; esta seção resume o incremento mais recente. O projeto não está completo.
+
 ## Incremento: worker e canal de ferramentas — 03/11/2026
 
 Existe uma entrada assinada para trabalhadores Codex e um encaminhador local para um peer privado de ferramentas. Assinatura, identidade sintética e tráfego de bytes foram verificados em bancada; o teste de rede não demonstra isolamento entre dois contêineres. A imagem não foi ativada. Ainda faltam o broker físico, rede exclusiva verificada, worktrees, conferência de artefato e integração ao fluxo. Detalhes em `implementation/NATIVE-EXECUTION-WORKER-20261103.md`.

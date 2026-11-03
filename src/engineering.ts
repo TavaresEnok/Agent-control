@@ -10,11 +10,12 @@ import { GitArtifacts } from './git.ts';
 import { Quality,QualityPolicy, type VerificationReceipt,type ArtifactRow } from './quality.ts';
 import { Integrator } from './integration.ts';
 import {IsolatedVerification,type IsolatedVerificationResult} from './isolated-verification.ts';
+import type {NativeVerification} from './native-verification.ts';
 import {IsolatedAdvice} from './isolated-advice.ts';
 import {assertPreimplementationAdvice,signPreimplementationAdvice,PreimplementationAdviceReceipt} from './preimplementation-advice.ts';
 import {managedId,readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
-export type EngineeringOptions={quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;isolatedAdvice?:IsolatedAdvice;
+export type EngineeringOptions={nativeVerification?:NativeVerification;quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;isolatedAdvice?:IsolatedAdvice;
  onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void;syntheticVerifierPath?:string};
 const nodeSchema=z.enum(['qa','review','judge','integrate']);
 function artifactId(intentId:string,commit:string){const h=digest({domain:'artifact-v1',intentId,commit});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
@@ -28,6 +29,7 @@ export class EngineeringStages{
  private running=true;
  private readonly children=new Set<ChildProcess>();
  constructor(readonly ledger:Ledger,readonly projectId:string,readonly options:EngineeringOptions){
+  if(options.nativeVerification&&(options.nativeVerification.ledger!==ledger||options.nativeVerification.quality!==options.quality))throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   if(options.isolatedAdvice&&options.isolatedAdvice.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
@@ -495,8 +497,10 @@ export class EngineeringStages{
    const implementation=(await this.ledger.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intent.id])).rows[0];
    if(implementation?.state!=='completed'||!implementation.receipt?.commit||!implementation.native_session_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
    const source=implementation.receipt;
+   if(source.synthetic===false&&node==='qa')throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
+   if(source.synthetic===false&&node!=='integrate'&&!this.options.nativeVerification)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
    const managed=await readManagedUnit(this.ledger,intent);
-   if(managed?.unit.kind==='task'){
+   if(managed?.unit.kind==='task'&&source.synthetic!==false){
     await this.options.git.assertManagedPath(managed.parentIntentId,managed.unit.runId,spec.cwd,true);
     await this.ledger.tx(async c=>{
      await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
@@ -547,7 +551,10 @@ export class EngineeringStages{
      }
     }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
-    if(this.options.isolatedVerification){
+    if(source.synthetic===false){
+     const verified=await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);
+     if(verified.status!=='passed')throw new Refusal('VERIFICATION_FAILED');
+    }else if(this.options.isolatedVerification){
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
       [this.projectId,contract.quality_revision])).rows[0];
      const policy=QualityPolicy.parse(qualityRow?.snapshot);

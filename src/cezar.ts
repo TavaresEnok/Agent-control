@@ -526,15 +526,28 @@ export class CezarRuntime {
     }
     if(this.nativeExecutions.length){
       if(!principal)throw new Refusal('NATIVE_EXECUTION_PRINCIPAL_REQUIRED');
-      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
+      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.role,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
         LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id AND x.context_id=j.context_id
-        WHERE j.context_id=$1 AND (j.state IN ('uncertain','running') OR x.state='requested') ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId])).rows;
+        WHERE j.context_id=$1 AND (j.state IN ('uncertain','running') OR x.state='requested' OR
+         (j.state='completed' AND j.role='programmer' AND j.receipt->'payload'->'artifact'->>'commit' IS NOT NULL AND
+          NOT EXISTS(SELECT 1 FROM ac_artifacts a WHERE a.intent_id=j.intent_id AND a.commit_id=j.receipt->'payload'->'artifact'->>'commit')) OR
+         (j.state='completed' AND j.role IN ('reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state<>'completed')))
+        ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId])).rows;
       for(const job of jobs){
         const supervisor=this.nativeExecutions.find(s=>s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
         if(!supervisor)throw new Refusal('NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE');
         await this.ledger.heartbeat(authority);
         if(job.cancellation_state==='requested')await supervisor.reconcileCancellation(principal,authority,job.id);
-        else await supervisor.reconcileRegistered(principal,authority,job.id);
+        else{
+          const outcome=await supervisor.reconcileRegistered(principal,authority,job.id);
+          if(outcome.state==='completed'&&job.role==='programmer'&&'artifact' in outcome&&outcome.artifact){
+            if(!this.engineering)throw new Refusal('NATIVE_ARTIFACT_REGISTRY_UNAVAILABLE');
+            await supervisor.registerArtifact(principal,authority,job.id,this.engineering.options.quality);
+          }else if(outcome.state==='completed'&&['reviewer','judge'].includes(job.role)){
+            const verifier=this.engineering?.options.nativeVerification;if(!verifier)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
+            await verifier.record(principal,authority,job.id);
+          }
+        }
       }
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     }

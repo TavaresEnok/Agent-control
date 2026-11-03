@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: stopped native fixture finalizes exact scoped Git code, registers high-risk artifact and does not approve it
+ok 1 - stopped native fixture finalizes exact scoped Git code, registers high-risk artifact and does not approve it
+  ---
+  duration_ms: 2547.138882
+  type: 'test'
+  ...
+# Subtest: native execution retains uncertain capacity, fences takeover and replays only physical receipts
+ok 2 - native execution retains uncertain capacity, fences takeover and replays only physical receipts
+  ---
+  duration_ms: 1559.264188
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3810.251332

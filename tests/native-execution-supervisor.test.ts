@@ -36,6 +36,7 @@ test('native execution retains uncertain capacity, fences takeover and replays o
   await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'programmer','running',$14,$15,$16)`,[input.jobId,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),supervisor.executorDigest,fingerprint,hash,input.base,workerId,toolsId,network]);
   await db.pool.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[grant]);
+  await db.pool.query("UPDATE ac_operations SET state='uncertain',grant_id=$2,native_session_id=$3 WHERE id=$1",[input.jobId,grant,input.sessionId]);
   const root=join(spool,input.jobId);await mkdir(root,{mode:0o700});await mkdir(join(root,'output'),{mode:0o700});await writeFile(join(root,'request.json'),JSON.stringify(input),{mode:0o600});
   const labels={'agent-control.job':input.jobId,'agent-control.launch':hash,'agent-control.contract':'native-execution-v1'};
   const physical=(id:string)=>({Id:id,Image:image,Config:{Labels:labels},State:{Status:'running',Running:true,ExitCode:0,FinishedAt:'0001-01-01T00:00:00Z'}});
