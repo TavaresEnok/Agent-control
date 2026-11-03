@@ -15,6 +15,7 @@ import type {Quality} from './quality.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {inspectNativeExecutionPair,dockerReadOnly} from './native-execution-docker-observation.ts';
+import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
 import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {usageWindowsObservationSchema} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
@@ -44,6 +45,7 @@ export class NativeExecutionSupervisor{
  supportsAccount(accountId:string){return this.subjects.has(accountId);}
  get keyFingerprint(){return this.fingerprint;}private readonly key;private readonly publicKey:string;private readonly fingerprint:string;
  private readonly subjects=new Map<string,string>();private readonly docker:DockerDaemon;private readonly user:string;
+ private readonly effectTails=new Map<string,Promise<void>>();
  constructor(readonly ledger:Ledger,private readonly config:NativeExecutionSupervisorConfig,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){
   z.string().regex(/^[a-z][a-z0-9._-]{0,99}$/).parse(config.id);
   for(const image of [config.workerImage,config.toolsImage])z.string().regex(/^sha256:[a-f0-9]{64}$/).parse(image);
@@ -95,6 +97,15 @@ export class NativeExecutionSupervisor{
   return g;
  }
  private profileDigest(row:Record<string,any>){return digest({accountId:row.account_id,profileId:row.profile_id,model:row.model,effort:row.effort,role:row.role});}
+ /** Queues create/start with recovery on this process. The job row lock does the same across processes. */
+ private serialEffect<T>(id:string,fn:()=>Promise<T>):Promise<T>{
+  const previous=this.effectTails.get(id)??Promise.resolve();
+  let open:()=>void=()=>{};
+  const gate=new Promise<void>(resolve=>{open=resolve;});
+  const tail=previous.then(()=>gate,()=>gate);
+  this.effectTails.set(id,tail);
+  return previous.then(fn,fn).finally(()=>{open();if(this.effectTails.get(id)===tail)this.effectTails.delete(id);});
+ }
  private async effect<T>(principal:string,authority:Authority,input:Input,fn:()=>Promise<T>){return this.ledger.tx(async c=>{
   await this.scope(c,principal,authority,input);
   const job=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];
@@ -133,17 +144,21 @@ export class NativeExecutionSupervisor{
   await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});const token=randomBytes(32).toString('hex');
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
-  const network=await this.effect(principal,authority,input,()=>this.docker.createPrivateNetwork('ac-native-exec-'+input.jobId,labels));
-  await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET network_id=$2 WHERE id=$1',[input.jobId,network]);
   const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false}];
   const toolsMounts=[{source:p.work,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
-  const host=(mounts:typeof toolsMounts)=>({NetworkMode:network,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,Tmpfs:{'/tmp':'rw,nosuid,nodev,size=64m'},Binds:mounts.map(m=>m.source+':'+m.destination+(m.writable?':rw':':ro'))});
-  const tools=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-tools-'+input.jobId,{Image:this.config.toolsImage,User:this.user,WorkingDir:'/work',Entrypoint:toolsEntrypoint,Cmd:[],Env:[...this.config.toolsEnv],Labels:labels,HostConfig:host(toolsMounts)}));
-  await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[input.jobId,tools]);
-  const worker=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-worker-'+input.jobId,{Image:this.config.workerImage,User:this.user,WorkingDir:'/planning',Entrypoint:workerEntrypoint,Cmd:[],Env:[...this.config.workerEnv],Labels:labels,HostConfig:host(workerMounts),NetworkingConfig:{EndpointsConfig:{[network]:{},[this.config.providerNetworkId]:{}}}}));
-  await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET worker_id=$2 WHERE id=$1',[input.jobId,worker]);
-  // The CLI wrapper waits for a signed launch. No account is opened yet.
-  await this.effect(principal,authority,input,()=>this.docker.start(tools));await this.effect(principal,authority,input,()=>this.docker.start(worker));
+  const host=(networkId:string,mounts:typeof toolsMounts)=>({NetworkMode:networkId,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,Tmpfs:{'/tmp':'rw,nosuid,nodev,size=64m'},Binds:mounts.map(m=>m.source+':'+m.destination+(m.writable?':rw':':ro'))});
+  const started=await this.serialEffect(input.jobId,async()=>{
+   const network=await this.effect(principal,authority,input,()=>this.docker.createPrivateNetwork('ac-native-exec-'+input.jobId,labels));
+   await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET network_id=$2 WHERE id=$1',[input.jobId,network]);
+   const tools=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-tools-'+input.jobId,{Image:this.config.toolsImage,User:this.user,WorkingDir:'/work',Entrypoint:toolsEntrypoint,Cmd:[],Env:[...this.config.toolsEnv],Labels:labels,HostConfig:host(network,toolsMounts)}));
+   await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[input.jobId,tools]);
+   const worker=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-worker-'+input.jobId,{Image:this.config.workerImage,User:this.user,WorkingDir:'/planning',Entrypoint:workerEntrypoint,Cmd:[],Env:[...this.config.workerEnv],Labels:labels,HostConfig:host(network,workerMounts),NetworkingConfig:{EndpointsConfig:{[network]:{},[this.config.providerNetworkId]:{}}}}));
+   await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET worker_id=$2 WHERE id=$1',[input.jobId,worker]);
+   // The CLI wrapper waits for a signed launch. No account is opened yet.
+   await this.effect(principal,authority,input,()=>this.docker.start(tools));await this.effect(principal,authority,input,()=>this.docker.start(worker));
+   return {network,tools,worker};
+  });
+  const {network,tools,worker}=started;
   const physical=await this.docker.inspectPrivateNetwork(network);const address=physical?.Containers?.[tools]?.IPv4Address?.split('/')[0];
   const expected={jobId:input.jobId,launchDigest:hash,workerImage:this.config.workerImage,toolsImage:this.config.toolsImage,workerUser:this.user,toolsUser:this.user,providerNetwork:this.config.providerNetworkId,networkId:network,toolsAddress:address,workerMounts,toolsMounts,role:input.role,phase:'gated-running'};
   const rules={state:'running',workerEntrypoint,toolsEntrypoint,workerCmd:[],toolsCmd:[],workerEnv:[...this.config.workerEnv],toolsEnv:[...this.config.toolsEnv],workerWorkingDir:'/planning',toolsWorkingDir:'/work',workerMemory:512*1024*1024,toolsMemory:512*1024*1024,workerPids:96,toolsPids:96,workerNanoCpus:1e9,toolsNanoCpus:1e9};
@@ -178,7 +193,8 @@ export class NativeExecutionSupervisor{
   const canceled=await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);
    return Boolean((await c.query("SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND context_id=$2 AND state='requested'",[input.intentId,authority.contextId])).rowCount);});
   if(!canceled)return {state:'not_applicable' as const};
-  await this.stop(principal,authority,input);const observed=await this.reconcile(principal,authority,input);
+  const stopped=await this.stop(principal,authority,input);if(stopped.state!=='stop_requested')return {state:'uncertain' as const};
+  const observed=await this.reconcile(principal,authority,input);
   if(observed.state!=='completed'&&observed.state!=='failed')return {state:'uncertain' as const};
   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);
    const saved=(await c.query(`SELECT j.receipt,g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
@@ -292,12 +308,131 @@ export class NativeExecutionSupervisor{
  async stop(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);await this.validateReplay(principal,authority,input,job);
   return this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);
-   for(const [name,id,image] of [['ac-native-worker-'+input.jobId,job.worker_id,this.config.workerImage],['ac-native-tools-'+input.jobId,job.tools_id,this.config.toolsImage]]){
-    const physical=await this.docker.inspect(String(name));if(!physical)continue;
+   const names=[['ac-native-worker-'+input.jobId,job.worker_id,this.config.workerImage],['ac-native-tools-'+input.jobId,job.tools_id,this.config.toolsImage]] as const;
+   let absent=false;
+   for(const [name,id,image] of names){
+    let physical;try{physical=await this.docker.inspect(name);}catch(error){if(dockerUncertain(error))return {state:'uncertain' as const};throw error;}
+    if(!physical){absent=true;continue;}
     if((id&&physical.Id!==id)||physical.Image!==image||physical.Config.Labels['agent-control.job']!==input.jobId||physical.Config.Labels['agent-control.launch']!==job.input_digest)throw new Refusal('NATIVE_EXECUTION_CONTAINER_MISMATCH');
-    if(physical.State.Running)await this.docker.stop(physical.Id);
+    if(physical.State.Running){try{await this.docker.stop(physical.Id);}catch(error){if(dockerUncertain(error))return {state:'uncertain' as const};throw error;}}
+   }
+   if(absent)return {state:'uncertain' as const};
+   for(const [name,id] of names){
+    let after;try{after=await this.docker.inspect(name);}catch(error){if(dockerUncertain(error))return {state:'uncertain' as const};throw error;}
+    if(!after||(id&&after.Id!==id)||after.State.Running)return {state:'uncertain' as const};
    }
    return {state:'stop_requested' as const};
   });
  }
+ /** Observe the original pair after a crash. Never creates a network or container.
+  * Capacity stays reserved unless both bodies are still created while this recovery
+  * holds the job lock, and the network is already gone. A name 404 is not that proof. */
+ async recover(principal:string,authority:Authority,jobId:string){
+  Id.parse(jobId);
+  const loaded=await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,i.principal_id FROM ac_native_execution_jobs j
+    JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
+   if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
+   if(row.principal_id!==principal)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+   return row;
+  });
+  const preserved=(interval:NativeExecutionRecovery['interval'],grant:NativeExecutionRecovery['grant']=loaded.grant_state==='released'?'released':'preserved'):NativeExecutionRecovery=>({state:'uncertain',interval,grant,removed:[],replayed:false});
+  if(loaded.key_fingerprint!==this.fingerprint||loaded.executor_digest!==this.executorDigest)return preserved('supervisor_identity');
+  if(['completed','failed'].includes(loaded.state)){
+   let input;try{input=await this.registeredInput(principal,authority,jobId);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return preserved('terminal_evidence_missing');throw error;}
+   const outcome=await this.reconcile(principal,authority,input);
+   if(outcome.state!=='completed'&&outcome.state!=='failed')return preserved('terminal_evidence_missing');
+   return {state:'acknowledged',interval:'ack_lost',grant:'released',removed:[],replayed:false,receipt:outcome.receipt};
+  }
+  const workerName='ac-native-worker-'+jobId,toolsName='ac-native-tools-'+jobId;
+  const decision=await this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const job=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
+   if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
+   const receiptUnstarted=job.grant_state==='released'&&job.physical_receipt?.executionStarted===false;
+   const read=async()=>{
+    const worker=await this.docker.inspect(workerName),tools=await this.docker.inspect(toolsName);
+    const network=job.network_id?await this.docker.inspectPrivateNetwork(job.network_id):null;
+    return {worker,tools,network};
+   };
+   const matches=(physical:NonNullable<Awaited<ReturnType<DockerDaemon['inspect']>>>,id:string|null,image:string)=>{
+    if((id&&physical.Id!==id)||physical.Image!==image||physical.Config.Labels['agent-control.job']!==jobId||physical.Config.Labels['agent-control.launch']!==job.input_digest||physical.Config.Labels['agent-control.contract']!=='native-execution-v1')throw new Refusal('NATIVE_EXECUTION_CONTAINER_MISMATCH');
+   };
+   let seen;try{seen=await read();}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+   if(seen.worker)matches(seen.worker,job.worker_id,this.config.workerImage);
+   if(seen.tools)matches(seen.tools,job.tools_id,this.config.toolsImage);
+   const absent=!seen.worker&&!seen.tools;
+   const bothNever=Boolean(seen.worker&&seen.tools&&nativeContainerNeverStarted(seen.worker.State)&&nativeContainerNeverStarted(seen.tools.State));
+   if(!bothNever){
+    if(absent){
+     await this.ledger.fence(c,authority,true);
+     let again;try{again=await read();}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+     if(again.worker||again.tools)return {kind:'recovery' as const,recovery:preserved(again.worker&&again.tools&&nativeContainerNeverStarted(again.worker.State)&&nativeContainerNeverStarted(again.tools.State)?'terminal_evidence_missing':'before_terminal_evidence')};
+     const published=await this.launchPublished(jobId);
+     if(!job.network_id)return {kind:'recovery' as const,recovery:preserved('network_unproven')};
+     if(receiptUnstarted&&!again.network&&!published)return {kind:'recovery' as const,recovery:{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed:[],replayed:false as const}};
+     return {kind:'recovery' as const,recovery:preserved(again.network?'network_or_container_remains':'terminal_evidence_missing')};
+    }
+    if((job.worker_id&&!seen.worker)||(job.tools_id&&!seen.tools))return {kind:'recovery' as const,recovery:preserved('terminal_evidence_missing')};
+    return {kind:'observe' as const,worker:seen.worker,tools:seen.tools};
+   }
+   if(job.state!=='uncertain'||(!receiptUnstarted&&!['reserved','uncertain'].includes(job.grant_state)))return {kind:'observe' as const,worker:seen.worker,tools:seen.tools};
+   await this.ledger.fence(c,authority,true);
+   const current=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
+   if(!current||current.state!=='uncertain')return {kind:'recovery' as const,recovery:preserved('before_terminal_evidence')};
+   let confirmed;try{confirmed=await read();}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+   const pair=[[confirmed.worker,workerName,seen.worker!.Id],[confirmed.tools,toolsName,seen.tools!.Id]] as const;
+   for(const [physical,name,id] of pair){
+    if(!physical||physical.Id!==id||!nativeContainerNeverStarted(physical.State))return {kind:'recovery' as const,recovery:preserved('before_terminal_evidence')};
+    matches(physical,name===workerName?current.worker_id:current.tools_id,name===workerName?this.config.workerImage:this.config.toolsImage);
+   }
+   const removed:string[]=[];
+   for(const [physical] of pair){
+    await this.ledger.fence(c,authority,true);
+    let live;try{live=await this.docker.inspect(physical!.Id===seen.worker!.Id?workerName:toolsName);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:{...preserved('docker_response_lost'),removed}};throw error;}
+    if(!live||live.Id!==physical!.Id||!nativeContainerNeverStarted(live.State))return {kind:'recovery' as const,recovery:{...preserved('before_terminal_evidence'),removed}};
+    try{await this.docker.remove(live.Id);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:{...preserved('docker_response_lost'),removed}};throw error;}
+    removed.push(live.Id);
+   }
+   let after;try{after=await read();}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:{...preserved('docker_response_lost'),removed}};throw error;}
+   const published=await this.launchPublished(jobId);
+   if(after.worker||after.tools||after.network)return {kind:'recovery' as const,recovery:{...preserved('network_or_container_remains'),removed}};
+   if(published||!current.network_id)return {kind:'recovery' as const,recovery:{...preserved(published?'terminal_evidence_missing':'network_unproven'),removed}};
+   if((current.worker_id&&!removed.includes(current.worker_id))||(current.tools_id&&!removed.includes(current.tools_id)))return {kind:'recovery' as const,recovery:{...preserved('terminal_evidence_missing'),removed}};
+   if(receiptUnstarted)return {kind:'recovery' as const,recovery:{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed,replayed:false as const}};
+   await this.ledger.fence(c,authority,true);
+   const fresh=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
+   if(!fresh||fresh.state!=='uncertain'||!fresh.network_id||!['reserved','uncertain'].includes(fresh.grant_state))return {kind:'recovery' as const,recovery:{...preserved('before_terminal_evidence'),removed}};
+   if((fresh.worker_id&&!removed.includes(fresh.worker_id))||(fresh.tools_id&&!removed.includes(fresh.tools_id)))return {kind:'recovery' as const,recovery:{...preserved('terminal_evidence_missing'),removed}};
+   let still;try{still=await read();}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:{...preserved('docker_response_lost'),removed}};throw error;}
+   if(still.worker||still.tools||still.network||await this.launchPublished(jobId))return {kind:'recovery' as const,recovery:{...preserved(still.network||still.worker||still.tools?'network_or_container_remains':'terminal_evidence_missing'),removed}};
+   const receipt={executionStarted:false,jobId,containerId:null,networkId:fresh.network_id,synthetic:false,modelInference:false,reason:'proven_not_started'};
+   const updated=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[fresh.grant_id,receipt]);
+   return {kind:'recovery' as const,recovery:updated.rowCount===1?{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed,replayed:false as const}:{...preserved('before_terminal_evidence'),removed}};
+  }));
+  if(decision.kind==='recovery')return decision.recovery;
+  const worker=decision.worker,tools=decision.tools,removed:string[]=[];
+  const workerExited=Boolean(worker&&worker.State.Running===false&&worker.State.Status==='exited');
+  const toolsRunning=Boolean(tools&&tools.State.Running);
+  const toolsExited=Boolean(tools&&tools.State.Running===false&&tools.State.Status==='exited');
+  // Worker already exited while tools are still running: only reconcile may ask
+  // them to stop. The grant stays until a later observation sees both exited.
+  if(!workerExited||(!toolsRunning&&!toolsExited))return {...preserved('before_terminal_evidence'),removed};
+  let input;try{input=await this.registeredInput(principal,authority,jobId);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {...preserved('terminal_evidence_missing'),removed};throw error;}
+  try{const outcome=await this.reconcile(principal,authority,input);
+   if(outcome.state==='completed'||outcome.state==='failed')return {state:'acknowledged',interval:'ack_lost',grant:'released',removed,replayed:false,receipt:outcome.receipt};
+   return {...preserved(outcome.state==='running'?'before_terminal_evidence':'terminal_evidence_missing'),removed};
+  }catch(error){const code=error instanceof Refusal?error.code:(error as NodeJS.ErrnoException).code;if(code==='ENOENT'||code==='NATIVE_EXECUTION_OUTPUT_INVALID'||code==='NATIVE_EXECUTION_GRANT_MISMATCH'||code==='NATIVE_FINALIZER_PHYSICAL_UNCONFIRMED')return {...preserved('terminal_evidence_missing'),removed};throw error;}
+ }
+ private async launchPublished(jobId:string){
+  try{const s=await lstat(join(this.paths(jobId).input,'launch.json'));if(!s.isFile()||s.isSymbolicLink())throw new Refusal('NATIVE_EXECUTION_LAUNCH_UNCERTAIN');return true;}
+  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}
+ }
 }
+function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
+export type NativeExecutionRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost'|'network_unproven';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};

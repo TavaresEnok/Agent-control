@@ -31,10 +31,11 @@ function convert(c:Container){
  * the trusted broker configuration and journal, never in an agent request. */
 export async function inspectNativeExecutionPair(read:(path:string)=>Promise<unknown>,ids:{worker:string;tools:string;network:string},expected:unknown,rulesInput:unknown){
  const wId=Id.parse(ids.worker),tId=Id.parse(ids.tools),nId=Id.parse(ids.network),rules=Rules.parse(rulesInput);
+ const load=async(path:string)=>{try{return await read(path);}catch(error){if(error instanceof Refusal)throw error;throw new Refusal('DOCKER_UNCERTAIN');}};
  const [worker,tools,network]=await Promise.all([
-  read(`/v1.44/containers/${wId}/json`).then(v=>Container.parse(v)),
-  read(`/v1.44/containers/${tId}/json`).then(v=>Container.parse(v)),
-  read(`/v1.44/networks/${nId}`).then(v=>Network.parse(v))]);
+  load(`/v1.44/containers/${wId}/json`).then(v=>Container.parse(v)),
+  load(`/v1.44/containers/${tId}/json`).then(v=>Container.parse(v)),
+  load(`/v1.44/networks/${nId}`).then(v=>Network.parse(v))]);
  if(worker.Id!==wId||tools.Id!==tId||network.Id!==nId)throw new Refusal('NATIVE_EXECUTION_INSPECTION_MISMATCH');
  for(const [c,entry,cmd,env,cwd,memory,pids,cpu] of [
   [worker,rules.workerEntrypoint,rules.workerCmd,rules.workerEnv,rules.workerWorkingDir,rules.workerMemory,rules.workerPids,rules.workerNanoCpus],

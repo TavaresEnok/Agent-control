@@ -17,6 +17,11 @@ const Expected=z.object({jobId:z.uuid(),launchDigest:z.string().regex(/^[a-f0-9]
  workerUser:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),toolsUser:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),
  providerNetwork:z.string().min(1),networkId:Id,toolsAddress:z.string().refine(isPrivateToolAddress),
  workerMounts:z.array(Mount).min(1).max(20),toolsMounts:z.array(Mount).min(1).max(20),role:z.enum(['programmer','qa','reviewer','judge','specialist']),phase:z.enum(['created','gated-running']).default('created')}).strict();
+/** Docker proves the process never started only with an explicit created state.
+ * A missing pid or start time is not proof and must not release a grant. */
+export function nativeContainerNeverStarted(state:{Status?:unknown;Running?:unknown;Pid?:unknown;StartedAt?:unknown}):boolean{
+ return state.Status==='created'&&state.Running===false&&state.Pid===0&&(state.StartedAt===''||(typeof state.StartedAt==='string'&&state.StartedAt.startsWith('0001-')));
+}
 function sameStrings(a:string[],b:string[]){return a.length===b.length&&new Set(a).size===a.length&&a.every(x=>b.includes(x));}
 function mountsEqual(a:z.infer<typeof Mount>[],b:z.infer<typeof Mount>[]){
  const key=(m:z.infer<typeof Mount>)=>JSON.stringify([m.source,m.destination,m.writable]);

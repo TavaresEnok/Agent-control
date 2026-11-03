@@ -11,10 +11,13 @@ import {DockerDaemon} from './sandbox-broker.ts';
 import {digest,canonical,Refusal,type Authority} from './contracts.ts';
 import {planningReceiptMessage,PlanningPhysicalReceipt,type PlanningExecutor,type PlanningInvocation} from './semantic-planning.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
+import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
 export {nativePlanningExecutorDigest};
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),
  usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
+export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
+function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
  protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[]};
 /** Fixed Docker supervisor, not a scheduler. No HTTP-controlled image, mount,
@@ -23,6 +26,7 @@ export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imag
 export class NativePlanningSupervisor{
  private readonly subjects=new Map<string,string>();
  private readonly key;private readonly publicKey;private readonly keyFingerprint:string;private readonly docker:DockerDaemon;
+ private readonly effectTails=new Map<string,Promise<void>>();
  readonly executor:PlanningExecutor;
  constructor(readonly ledger:Ledger,private readonly config:NativePlanningSupervisorConfig){
   this.config=Object.freeze({...config,protectedRepositories:Object.freeze([...config.protectedRepositories]),accountSubjects:Object.freeze(config.accountSubjects.map(a=>Object.freeze({...a})))});
@@ -76,7 +80,7 @@ export class NativePlanningSupervisor{
   await mkdir(paths.root,{mode:0o700});for(const path of [paths.input,paths.output,paths.planning])await mkdir(path,{mode:0o700});
   await writeFile(join(paths.input,'launch.json'),JSON.stringify(signed),{mode:0o600,flag:'wx'});await writeFile(paths.key,this.publicKey,{mode:0o600,flag:'wx'});
   await input.assertAuthorized();
-  const id=await this.ledger.tx(async c=>{
+  const id=await this.serialEffect(input.callId,()=>this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
    const active=(await c.query(`SELECT g.state,a.enabled account_enabled,p.enabled profile_enabled,q.status,q.expires_at>clock_timestamp() fresh
     FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
@@ -87,7 +91,7 @@ export class NativePlanningSupervisor{
    HostConfig:{NetworkMode:this.config.providerNetwork,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,
     Tmpfs:{'/tmp':'rw,nosuid,nodev,noexec,size=64m'},Binds:[join(this.config.accountRoot,input.profile.accountId)+':/account:rw',paths.input+':/input:ro',paths.output+':/output:rw',paths.planning+':/planning:ro',paths.key+':/runner/planning-public-key.pem:ro']}});
    await this.docker.start(id);return id;
-  });
+  }));
   await this.ledger.pool.query('UPDATE ac_native_planning_jobs SET container_id=$2 WHERE id=$1',[input.callId,id]);
   await this.ledger.tx(async c=>{await c.query("UPDATE ac_native_planning_jobs SET state='running' WHERE id=$1 AND state='uncertain'",[input.callId]);await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='reserved'",[input.grantId]);});
   // One bounded observation window. Retries use only reconcile(), never start().
@@ -136,7 +140,7 @@ export class NativePlanningSupervisor{
   });
   if(!row)return {state:'not_applicable' as const};
   if(row.selected_key_fingerprint!==this.keyFingerprint)throw new Refusal('PLANNING_EXECUTOR_KEY_MISMATCH');
-  await this.stop(principal,authority,callId);
+  const stopped=await this.stop(principal,authority,callId);if(stopped.state!=='stop_requested')return {state:'uncertain' as const};
   const input:PlanningInvocation={callId,intentId:row.intent_id,contextId:row.context_id,grantId:row.grant_id,sessionId:row.session_id,
    executionEpoch:Number(row.execution_epoch),inputDigest:row.input_digest,profile:{id:row.profile_id,accountId:row.account_id,provider:row.provider,mode:row.mode,model:row.model,effort:row.effort},
    sourceMessageRef:'message:cancel-observation',text:'',constraints:{qualityRevision:1,targetRef:'refs/heads/cancel-observation',knownReferences:[]},outputSchema:{},assertAuthorized:async()=>{}};
@@ -163,11 +167,100 @@ export class NativePlanningSupervisor{
    const job=(await c.query(`SELECT j.*,g.account_id FROM ac_native_planning_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[callId,authority.contextId])).rows[0];
    if(!job)throw new Refusal('PLANNING_JOB_NOT_FOUND',404);
-   const physical=await this.docker.inspect(job.container_name);if(!physical)return {state:'uncertain'};
+   let physical;try{physical=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {state:'uncertain' as const};throw error;}
+   if(!physical)return {state:'uncertain' as const};
    this.inspectExpected(physical,job,job.account_id);
-   if(physical.State.Running)await this.docker.stop(physical.Id);
-   return {state:'stop_requested'};
+   if(physical.State.Running){try{await this.docker.stop(physical.Id);}catch(error){if(dockerUncertain(error))return {state:'uncertain' as const};throw error;}}
+   let after;try{after=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {state:'uncertain' as const};throw error;}
+   if(!after||after.Id!==physical.Id||after.State.Running)return {state:'uncertain' as const};
+   this.inspectExpected(after,job,job.account_id);
+   return {state:'stop_requested' as const};
   });
+ }
+ /** Same-process queue as create/start. PostgreSQL still serializes them with the grant row lock. */
+ private serialEffect<T>(id:string,fn:()=>Promise<T>):Promise<T>{
+  const previous=this.effectTails.get(id)??Promise.resolve();
+  let open:()=>void=()=>{};
+  const gate=new Promise<void>(resolve=>{open=resolve;});
+  const tail=previous.then(()=>gate,()=>gate);
+  this.effectTails.set(id,tail);
+  return previous.then(fn,fn).finally(()=>{open();if(this.effectTails.get(id)===tail)this.effectTails.delete(id);});
+ }
+ /** Fenced observation after a crash. Never creates or starts a container.
+  * A grant is released only when this same supervisor, still holding the grant
+  * lock, sees the named container created and removes it before the original
+  * executor can start it. A 404 without that body is not proof. */
+ async recover(principal:string,authority:Authority,callId:string){
+  z.uuid().parse(callId);
+  const loaded=await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   return (await c.query(`SELECT s.*,j.state job_state,j.container_name,j.container_id,j.launch_digest,j.receipt job_receipt,j.input_digest job_input,
+    g.state grant_state,g.physical_receipt,g.account_id,p.model,p.effort,a.provider,a.mode
+    FROM ac_semantic_planning_calls s JOIN ac_native_planning_jobs j ON j.id=s.id AND j.grant_id=s.grant_id
+    JOIN ac_capacity_grants g ON g.id=s.grant_id JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id
+    WHERE s.id=$1 AND s.context_id=$2 FOR UPDATE OF s,j,g`,[callId,authority.contextId])).rows[0];
+  });
+  if(!loaded)throw new Refusal('PLANNING_JOB_NOT_FOUND',404);
+  const preserved=(interval:NativeRecovery['interval'],grant:NativeRecovery['grant']=loaded.grant_state==='released'?'released':'preserved'):NativeRecovery=>({state:'uncertain',interval,grant,removed:[],replayed:false});
+  if(loaded.selected_executor_id!==this.config.id||loaded.selected_executor_digest!==this.config.executorDigest||loaded.selected_key_fingerprint!==this.keyFingerprint)return preserved('supervisor_identity');
+  const invocation=this.recoveryInvocation(principal,authority,loaded);
+  if(['completed','failed'].includes(loaded.job_state)){
+   const outcome=await this.observe(principal,authority,invocation);if(!outcome)return preserved('terminal_evidence_missing');
+   return {state:'acknowledged',interval:'ack_lost',grant:loaded.grant_state==='released'?'released':'preserved',removed:[],replayed:false,receipt:outcome.receipt};
+  }
+  const alreadyUnstarted=loaded.grant_state==='released'&&loaded.physical_receipt?.executionStarted===false;
+  const decision=await this.serialEffect(callId,()=>this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const job=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_planning_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[callId,authority.contextId])).rows[0];
+   if(!job)throw new Refusal('PLANNING_JOB_NOT_FOUND',404);
+   const receiptUnstarted=job.grant_state==='released'&&job.physical_receipt?.executionStarted===false;
+   let physical;try{physical=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+   if(!physical){
+    await this.ledger.fence(c,authority,true);
+    let again;try{again=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+    if(again)return {kind:'observe' as const,physical:again};
+    if(receiptUnstarted)return {kind:'recovery' as const,recovery:{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed:[],replayed:false as const}};
+    // Two 404s do not prove create was never sent. The journal is written before create returns an id.
+    return {kind:'recovery' as const,recovery:preserved('terminal_evidence_missing')};
+   }
+   this.inspectExpected(physical,job,loaded.account_id);
+   if(!nativeContainerNeverStarted(physical.State)||job.state!=='uncertain')return {kind:'observe' as const,physical};
+   if(!receiptUnstarted&&!['reserved','uncertain'].includes(job.grant_state))return {kind:'observe' as const,physical};
+   await this.ledger.fence(c,authority,true);
+   const current=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_planning_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[callId,authority.contextId])).rows[0];
+   if(!current||current.state!=='uncertain'||(current.container_id&&current.container_id!==physical.Id))return {kind:'recovery' as const,recovery:preserved('before_terminal_evidence')};
+   if(!receiptUnstarted&&!['reserved','uncertain'].includes(current.grant_state))return {kind:'recovery' as const,recovery:preserved('before_terminal_evidence')};
+   let confirmed;try{confirmed=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+   if(!confirmed||confirmed.Id!==physical.Id||!nativeContainerNeverStarted(confirmed.State))return {kind:'recovery' as const,recovery:preserved('before_terminal_evidence')};
+   this.inspectExpected(confirmed,current,loaded.account_id);
+   try{await this.docker.remove(confirmed.Id);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
+   let gone;try{gone=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:{...preserved('docker_response_lost'),removed:[confirmed.Id]}};throw error;}
+   if(gone)return {kind:'recovery' as const,recovery:{...preserved('network_or_container_remains'),removed:[]}};
+   if(receiptUnstarted||current.physical_receipt?.executionStarted===false)return {kind:'recovery' as const,recovery:{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed:[confirmed.Id],replayed:false as const}};
+   await this.ledger.fence(c,authority,true);
+   const fresh=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt FROM ac_native_planning_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[callId,authority.contextId])).rows[0];
+   if(!fresh||fresh.state!=='uncertain'||!['reserved','uncertain'].includes(fresh.grant_state)||(fresh.container_id&&fresh.container_id!==confirmed.Id))return {kind:'recovery' as const,recovery:{...preserved('before_terminal_evidence'),removed:[confirmed.Id]}};
+   let still;try{still=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:{...preserved('docker_response_lost'),removed:[confirmed.Id]}};throw error;}
+   if(still)return {kind:'recovery' as const,recovery:{...preserved('network_or_container_remains'),removed:[confirmed.Id]}};
+   const receipt={executionStarted:false,jobId:callId,containerId:null,synthetic:false,modelInference:false,reason:'proven_not_started'};
+   const updated=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[fresh.grant_id,receipt]);
+   return {kind:'recovery' as const,recovery:updated.rowCount===1?{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed:[confirmed.Id],replayed:false as const}:{...preserved('before_terminal_evidence'),removed:[confirmed.Id]}};
+  }));
+  if(decision.kind==='recovery')return decision.recovery;
+  const physical=decision.physical;
+  if(alreadyUnstarted&&!nativeContainerNeverStarted(physical.State))return preserved('before_terminal_evidence','released');
+  if(physical.State.Running||physical.State.Status!=='exited')return preserved('before_terminal_evidence');
+  try{const outcome=await this.observe(principal,authority,invocation);if(!outcome)return preserved('terminal_evidence_missing');
+   return {state:'acknowledged',interval:'ack_lost',grant:'released',removed:[],replayed:false,receipt:outcome.receipt};
+  }catch(error){const code=error instanceof Refusal?error.code:(error as NodeJS.ErrnoException).code;if(code==='ENOENT'||code==='PLANNING_OUTPUT_INVALID'||code==='PLANNING_RESULT_UNCERTAIN'||code==='PLANNING_RESULT_CONFLICT')return preserved('terminal_evidence_missing');throw error;}
+ }
+ private recoveryInvocation(principal:string,authority:Authority,row:Record<string,any>):PlanningInvocation{
+  return {callId:row.id,intentId:row.intent_id,contextId:row.context_id,grantId:row.grant_id,sessionId:row.session_id,executionEpoch:Number(row.execution_epoch),inputDigest:row.input_digest,
+   profile:{id:row.profile_id,accountId:row.account_id,provider:row.provider,mode:row.mode,model:row.model,effort:row.effort},sourceMessageRef:'message:recovery-observation',text:'',
+   constraints:{qualityRevision:1,targetRef:'refs/heads/recovery-observation',knownReferences:[]},outputSchema:{},assertAuthorized:async()=>this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);})};
  }
  /** Explicit removal of an already-receipted container only. Keep the journal,
   * proposal and signed receipt; no account directory can be cleaned here. */
