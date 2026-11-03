@@ -1,0 +1,1 @@
+{"id":"rpc-1","schemaVersion":2,"result":{"rateLimits":{"primary":{"usedPercent":20,"resetsAt":1793714400,"windowDurationMins":300},"secondary":{"usedPercent":35,"resetsAt":1793714400,"windowDurationMins":10080}}}}
