@@ -1,0 +1,6 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+src/native-worker-security.ts(26,134): error TS2339: Property 'payload' does not exist on type '{ [K in keyof ({ -readonly [k in keyof { payload: S; signature: ZodString; } as { payload: S; signature: ZodString; }[k] extends OptionalOutSchema ? never : k]: { payload: S; signature: ZodString; }[k]["_zod"]["output"]; } & { -readonly [k in keyof { ...; } as ...]?: { ...; }[k]["_zod"]["output"] | undefined; })]: (...'.
+src/native-worker-security.ts(27,17): error TS2339: Property 'payload' does not exist on type '{ [K in keyof ({ -readonly [k in keyof { payload: S; signature: ZodString; } as { payload: S; signature: ZodString; }[k] extends OptionalOutSchema ? never : k]: { payload: S; signature: ZodString; }[k]["_zod"]["output"]; } & { -readonly [k in keyof { ...; } as ...]?: { ...; }[k]["_zod"]["output"] | undefined; })]: (...'.

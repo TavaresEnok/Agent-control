@@ -4,6 +4,10 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Incremento: worker e canal de ferramentas — 03/11/2026
+
+Existe uma entrada assinada para trabalhadores Codex e um encaminhador local para um peer privado de ferramentas. Assinatura, identidade sintética e tráfego de bytes foram verificados em bancada; o teste de rede não demonstra isolamento entre dois contêineres. A imagem não foi ativada. Ainda faltam o broker físico, rede exclusiva verificada, worktrees, conferência de artefato e integração ao fluxo. Detalhes em `implementation/NATIVE-EXECUTION-WORKER-20261103.md`.
+
 ## Incremento: adapter Codex de execução — 03/11/2026
 
 O adapter para programação e funções de avaliação fixa o modelo, esforço e ambiente remoto, exige escopo para programação e commit/schema para avaliação, e rejeita saídas de turnos falhos ou incompletos. O runner recusa pedidos interativos dos trabalhadores gerenciados. As provas usam processos simulados; o supervisor físico de programação/revisão, a integração de artefatos e a homologação continuam pendentes. A instalação segue administrativa. Detalhes em `implementation/CODEX-EXECUTION-ADAPTER-20261103.md`.

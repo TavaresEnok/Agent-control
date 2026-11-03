@@ -1,0 +1,23 @@
+{
+  "imageId": "sha256:7ec205dac15737a43a870ef12b666b8af0b819d62bf502dc3eb1b49fa51c9103",
+  "entrypoint": [
+    "node",
+    "/opt/agent-control/dist/src/native-execution-worker.mjs"
+  ],
+  "user": "node",
+  "buildNetwork": "none",
+  "sourceManifest": {
+    "schemaVersion": 1,
+    "kind": "execution",
+    "publicCodexSha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+    "bundleSha256": "e203ae1958b334d4e43541f7c3459460fa235642846eae85310c1b3ac53691c6",
+    "dockerfileSha256": "423d0490ef56f44932086b30b8640ef21d9b7378649e4a63ac4175a337675115",
+    "sourceCommit": "b21f1b5cbe8ec773508ff1eca7926a0789301068",
+    "worktreeChangesPresent": true,
+    "credentialFilesIncluded": false,
+    "inferencePerformed": false
+  },
+  "inferencePerformed": false,
+  "accountsMounted": false,
+  "activated": false
+}

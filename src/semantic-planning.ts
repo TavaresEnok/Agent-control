@@ -60,6 +60,7 @@ export class SemanticPlanning{
    }
    await this.ledger.fence(c,authority);
    const project=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[input.contextId])).rows[0];
+   await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[project.project_id]);
    const quality=(await c.query('SELECT max(revision) revision FROM ac_quality_policies WHERE project_id=$1',[project.project_id])).rows[0];
    if(quality?.revision!==input.qualityRevision)throw new Refusal('QUALITY_POLICY_CONFLICT');
    const current=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_manager_plans WHERE context_id=$1',[input.contextId])).rows[0].revision);

@@ -385,7 +385,7 @@
     {
       "path": "packages/web/src/routes/settings/agent-control-section.tsx",
       "change": "added",
-      "sha256": "1f48819d1b2061ec150b433e600a04f4b2fde02e2768a79cb747cbd4c89ddf73"
+      "sha256": "7a1a22c679d2740cf187fd39f5ca447c917415578f5cfd916a54410ae0a91678"
     }
   ],
   "happier": [

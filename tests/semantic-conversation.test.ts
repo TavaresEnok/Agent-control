@@ -84,5 +84,10 @@ test('encrypted chat requests produce one durable proposal across ACK loss and p
   await new Cancellations(db).reconcile(authority,()=>{});
   assert.equal((await db.pool.query('SELECT state FROM ac_plan_cancellations WHERE intent_id=$1',[thirdIntent.id])).rows[0].state,'requested');
   assert.equal((await db.pool.query('SELECT state FROM ac_semantic_planning_calls WHERE intent_id=$1',[thirdIntent.id])).rows[0].state,'uncertain');
+  await new QualityPolicies(db).publish(principal,project,1,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:true,verifierDigest:'a'.repeat(64)});
+  await assert.rejects(new Templates(db).assign(principal,context,1),/QUALITY_POLICY_CONFLICT/);
+  await assert.rejects(new Templates(db).publish(principal,context,1,{workflow:'semantic-proposal-v1',qualityRevision:quality,targetRef:'refs/heads/protected'}),/QUALITY_POLICY_CONFLICT/);
+  await assert.rejects(endpoint.accept({text:'stale policy fixture',localId:'stale-'+randomUUID()}),/QUALITY_POLICY_CONFLICT/);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_intents WHERE context_id=$1',[context])).rows[0].n,3);
  }finally{await db.close();await database.close();}
 });

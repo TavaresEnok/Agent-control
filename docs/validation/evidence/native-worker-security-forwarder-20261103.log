@@ -1,0 +1,10 @@
+✔ worker accepts only a signed scoped request and the matching private subscription identity (42.295834ms)
+✔ tool forwarding accepts only private IPv4 destinations and refuses local or public targets before binding (9.792932ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 432.789533

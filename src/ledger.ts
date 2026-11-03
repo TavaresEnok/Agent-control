@@ -157,6 +157,11 @@ export class Ledger {
           if(template.workflow!==command.payload.workflow)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
           if(template.workflow==='semantic-proposal-v1'&&command.payload.workflow==='semantic-proposal-v1'&&
             (template.qualityRevision!==command.payload.qualityRevision||template.targetRef!==command.payload.targetRef))throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
+          if(template.workflow==='semantic-proposal-v1'){
+            await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[context.project_id]);
+            const latest=(await c.query('SELECT max(revision) revision FROM ac_quality_policies WHERE project_id=$1',[context.project_id])).rows[0].revision;
+            if(latest!==template.qualityRevision)throw new Refusal('QUALITY_POLICY_CONFLICT');
+          }
           await c.query('INSERT INTO ac_intent_templates VALUES($1,$2,$3,$4,$5)',
             [intent.id,command.contextId,context.active_template_revision,template,selected.digest]);
         }else if(command.payload.workflow==='engineering-synthetic-v1'||command.payload.workflow==='semantic-proposal-v1')throw new Refusal('TEMPLATE_REQUIRED');

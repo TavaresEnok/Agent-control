@@ -90,6 +90,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const semanticAvailable=managerAvailability.data?.state==='running'&&managerAvailability.data.executionEnabled===true&&managerAvailability.data.semanticManagerEnabled===true
  const resources=useQuery({queryKey:['ac-resources',contextId,projectId],enabled:!!contextId,refetchInterval:5000,
   queryFn:async()=>resourcesSchema.parse(await request(`/api/v1/ac/contexts/${contextId}/resources`))})
+ const latestQualityRevision=Math.max(0,...(resources.data?.qualityPolicies??[]).map(policy=>policy.revision))
  const operator=useQuery({queryKey:['ac-operator-identity',projectId],queryFn:async()=>z.object({principalId:z.string(),projectId:z.string().uuid(),
   installationId:z.string().uuid(),operatorDeviceIds:z.array(z.string().uuid())}).parse(await request('/api/v1/ac/operator/identity'))})
  const identity=useQuery({queryKey:['ac-operator-device',operator.data?.principalId,projectId],enabled:!!operator.data,
@@ -288,13 +289,13 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      </select>
      {(templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&<>
       <select aria-label="Política de revisão" className={selectStyle} required value={qualityRevision} onChange={e=>setQualityRevision(e.target.value)}>
-       <option value="">Selecione a revisão</option>{data.qualityPolicies.map(p=><option key={p.revision} value={p.revision}>Revisão {p.revision}</option>)}
+       <option value="">Selecione a revisão</option>{data.qualityPolicies.map(p=><option key={p.revision} value={p.revision} disabled={templateWorkflow==='semantic-proposal-v1'&&p.revision!==latestQualityRevision}>Revisão {p.revision}</option>)}
       </select>
       <Input aria-label="Branch de destino" value={targetRef} onChange={e=>setTargetRef(e.target.value)} required/>
      </>}
-     <Button disabled={busy||((templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&(!qualityRevision||!targetRef))||(templateWorkflow==='semantic-proposal-v1'&&!semanticAvailable)} type="submit">Publicar e usar fluxo</Button>
+     <Button disabled={busy||((templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&(!qualityRevision||!targetRef))||(templateWorkflow==='semantic-proposal-v1'&&(!semanticAvailable||Number(qualityRevision)!==latestQualityRevision))} type="submit">Publicar e usar fluxo</Button>
     </form>
-    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='semantic-proposal-v1'&&!semanticAvailable)}
+    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='semantic-proposal-v1'&&(!semanticAvailable||t.snapshot.qualityRevision!==latestQualityRevision))}
      onClick={()=>mutate.mutate({action:'template.assign',payload:{revision:t.revision}})}>Usar fluxo {t.revision}</Button>)}</div>
    </SettingsField>
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">

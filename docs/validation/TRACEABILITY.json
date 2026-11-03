@@ -70,12 +70,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/account-homes-first-20261102.log;docs/validation/evidence/codex-execution-adapter-final-20261103.log;docs/validation/evidence/codex-worker-runner-autonomy-20261103.log",
-    "files": "src/account-homes.ts;src/account-homes-cli.ts;src/capacity.ts;src/codex-execution-adapter.ts;tests/codex-execution-adapter.test.ts",
+    "evidence": "docs/validation/evidence/account-homes-first-20261102.log;docs/validation/evidence/codex-execution-adapter-final-20261103.log;docs/validation/evidence/codex-worker-runner-autonomy-20261103.log;docs/validation/evidence/native-worker-security-forwarder-20261103.log;docs/validation/evidence/native-tool-forwarder-isolated-20261103.log",
+    "files": "src/account-homes.ts;src/account-homes-cli.ts;src/capacity.ts;src/codex-execution-adapter.ts;tests/codex-execution-adapter.test.ts;src/native-execution-worker.ts;src/native-tool-forwarder.ts;src/native-worker-security.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Real-account configuration and private HOME provisioning only; all nonsynthetic accounts/profiles remain disabled. No official authentication or inference performed. Native runner adapter pins model, effort, role and remote environment and rejects failed turns; role isolation and artifact identity still require a physical supervisor and authenticated integration proof."
+    "limitation": "Real-account configuration and private HOME provisioning only; all nonsynthetic accounts/profiles remain disabled. No official authentication or inference performed. Native runner adapter pins model, effort, role and remote environment and rejects failed turns; role isolation and artifact identity still require a physical supervisor and authenticated integration proof. Signed worker entry and fixed private tool forwarding are prepared; byte transport was tested within a disposable container. Physical broker, isolated peer identity, authenticated CLI, Git artifact and network boundary remain unverified."
   },
   {
     "id": "RF-07",
@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/semantic-planning-http-final-20261102.log;docs/validation/evidence/semantic-conversation-cancellation-first-20261103.log;docs/validation/evidence/native-planning-cancellation-takeover-20261103.log",
-    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts;src/semantic-planning.ts;db/migrations/048_semantic_planning.sql;db/migrations/049_semantic_executor_bindings.sql;src/happier.ts;src/semantic-planning.ts;tests/semantic-conversation.test.ts;src/native-planning-supervisor.ts;tests/native-planning-cancellation.test.ts",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/semantic-planning-http-final-20261102.log;docs/validation/evidence/semantic-conversation-cancellation-first-20261103.log;docs/validation/evidence/native-planning-cancellation-takeover-20261103.log;docs/validation/evidence/native-worker-security-forwarder-20261103.log;docs/validation/evidence/native-tool-forwarder-isolated-20261103.log",
+    "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts;src/semantic-planning.ts;db/migrations/048_semantic_planning.sql;db/migrations/049_semantic_executor_bindings.sql;src/happier.ts;src/semantic-planning.ts;tests/semantic-conversation.test.ts;src/native-planning-supervisor.ts;tests/native-planning-cancellation.test.ts;src/native-execution-worker.ts;src/native-tool-forwarder.ts;src/native-worker-security.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Semantic call ACK loss reuses original executor/session after takeover; paused ready proposal publishes once after resume. Native Docker supervisor positive recovery remains unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. The original native planning job can be canceled by an authorized successor after identity/key verification and terminal observation; proof uses a Docker stub, not a physical native process."
+    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Semantic call ACK loss reuses original executor/session after takeover; paused ready proposal publishes once after resume. Native Docker supervisor positive recovery remains unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. The original native planning job can be canceled by an authorized successor after identity/key verification and terminal observation; proof uses a Docker stub, not a physical native process. Signed worker entry and fixed private tool forwarding are prepared; byte transport was tested within a disposable container. Physical broker, isolated peer identity, authenticated CLI, Git artifact and network boundary remain unverified."
   },
   {
     "id": "RF-24",
@@ -356,12 +356,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log;docs/validation/evidence/native-remote-offline-second-20261102.log;docs/validation/evidence/codex-deny-read-first-20261102.log;docs/validation/evidence/codex-execution-adapter-final-20261103.log;docs/validation/evidence/codex-worker-runner-autonomy-20261103.log",
-    "files": "src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts;src/native-planning-supervisor.ts;src/native-planning-worker.ts;src/account-homes.ts;src/codex-execution-adapter.ts;tests/codex-execution-adapter.test.ts",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log;docs/validation/evidence/native-remote-offline-second-20261102.log;docs/validation/evidence/codex-deny-read-first-20261102.log;docs/validation/evidence/codex-execution-adapter-final-20261103.log;docs/validation/evidence/codex-worker-runner-autonomy-20261103.log;docs/validation/evidence/native-worker-security-forwarder-20261103.log;docs/validation/evidence/native-tool-forwarder-isolated-20261103.log",
+    "files": "src/isolated-implementation.ts;src/isolated-verification.ts;src/sandbox-broker.ts;tests/engineering.test.ts;src/native-planning-supervisor.ts;src/native-planning-worker.ts;src/account-homes.ts;src/codex-execution-adapter.ts;tests/codex-execution-adapter.test.ts;src/native-execution-worker.ts;src/native-tool-forwarder.ts;src/native-worker-security.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified. Dormant native account is refused before Docker/credentials. Official no-network exec-server handshake verified without inference. Filesystem sandbox canary failed; cross-container credential/tool boundary remains unhomologated. Native runner adapter pins model, effort, role and remote environment and rejects failed turns; role isolation and artifact identity still require a physical supervisor and authenticated integration proof."
+    "limitation": "Fixed synthetic implementation and verifiers container-isolated; production bootstrap, hostile agents and real CLIs remain unverified. Dormant native account is refused before Docker/credentials. Official no-network exec-server handshake verified without inference. Filesystem sandbox canary failed; cross-container credential/tool boundary remains unhomologated. Native runner adapter pins model, effort, role and remote environment and rejects failed turns; role isolation and artifact identity still require a physical supervisor and authenticated integration proof. Signed worker entry and fixed private tool forwarding are prepared; byte transport was tested within a disposable container. Physical broker, isolated peer identity, authenticated CLI, Git artifact and network boundary remain unverified."
   },
   {
     "id": "RF-29",
@@ -369,12 +369,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/administrative-operations-final-20261102.log",
-    "files": "src/administrative-operations.ts;src/managers.ts;src/happier.ts;src/control.ts",
+    "evidence": "docs/validation/evidence/administrative-operations-final-20261102.log;docs/validation/evidence/native-worker-security-forwarder-20261103.log;docs/validation/evidence/native-tool-forwarder-isolated-20261103.log",
+    "files": "src/administrative-operations.ts;src/managers.ts;src/happier.ts;src/control.ts;src/native-execution-worker.ts;src/native-tool-forwarder.ts;src/native-worker-security.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Private capability, registered operations, signed policy, Ed25519 receipt and conservative reconciliation. New Happier transport/policy UI only compile-verified; no privileged helper registered or executed. Session identity does not attest an individual model/device."
+    "limitation": "Private capability, registered operations, signed policy, Ed25519 receipt and conservative reconciliation. New Happier transport/policy UI only compile-verified; no privileged helper registered or executed. Session identity does not attest an individual model/device. Signed worker entry and fixed private tool forwarding are prepared; byte transport was tested within a disposable container. Physical broker, isolated peer identity, authenticated CLI, Git artifact and network boundary remain unverified."
   },
   {
     "id": "RF-30",

@@ -1,0 +1,39 @@
+import {constants} from 'node:fs';
+import {open,readFile,lstat} from 'node:fs/promises';
+import {join} from 'node:path';
+import {createPublicKey,verify} from 'node:crypto';
+import {z} from 'zod';
+import {canonical,digest} from './contracts.ts';
+
+/** Fixed-path workers use these helpers after admission by their supervisor. */
+export function initializeNativeWorkerEnvironment(proxyUrl?:'http://provider-egress:8080'){
+ for(const name of Object.keys(process.env))delete process.env[name];
+ Object.assign(process.env,{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/account',CODEX_HOME:'/account/.codex',TMPDIR:'/tmp',
+  CEZ_TELEMETRY:'0',CEZ_AUTONAME:'0',CEZ_AUTOMATIONS:'0',CEZ_SKILLS_AUTO_UPDATE:'0',CEZ_NO_BANNER:'1',DO_NOT_TRACK:'1'});
+ if(proxyUrl)Object.assign(process.env,{HTTPS_PROXY:proxyUrl,HTTP_PROXY:proxyUrl,NO_PROXY:'127.0.0.1,localhost'});
+}
+export async function readPrivateWorkerFile(path:string,maxBytes:number){
+ const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+ try{const info=await file.stat();if(!info.isFile()||info.nlink!==1||(info.mode&0o077)!==0||info.uid!==process.getuid?.()||info.size>maxBytes)throw Error('INVALID_WORKER_PRIVATE_FILE');
+  const bytes=await file.readFile();if(bytes.length>maxBytes){bytes.fill(0);throw Error('INVALID_WORKER_PRIVATE_FILE');}return bytes;
+ }finally{await file.close();}
+}
+export async function readSignedWorkerLaunch<S extends z.ZodType>(schema:S,domain:string,inputPath='/input/launch.json',publicKeyPath='/runner/planning-public-key.pem'):Promise<z.output<S>>{
+ const bytes=await readPrivateWorkerFile(inputPath,512*1024);
+ try{
+  const signed=z.object({payload:z.unknown(),signature:z.string().regex(/^[a-f0-9]{128}$/)}).strict().parse(JSON.parse(bytes.toString('utf8')));
+  const payload=schema.parse(signed.payload) as z.output<S>;
+  const publicBytes=await readFile(publicKeyPath);if(publicBytes.length>4096)throw Error('INVALID_WORKER_KEY');
+  const key=createPublicKey(publicBytes);if(key.asymmetricKeyType!=='ed25519'||!verify(null,Buffer.from(domain+'\n'+canonical(payload)),key,Buffer.from(signed.signature,'hex')))throw Error('INVALID_WORKER_SIGNATURE');
+  return payload;
+ }finally{bytes.fill(0);}
+}
+/** The subject is an account identifier digest, not an OAuth token or balance. */
+export async function assertCodexSubscriptionIdentity(expected:string,accountRoot='/account'){
+ try{await lstat(join(accountRoot,'.codex/config.toml'));throw Error('CUSTOM_CODEX_CONFIG_FORBIDDEN');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+ const bytes=await readPrivateWorkerFile(join(accountRoot,'.codex/auth.json'),65536);
+ try{
+  const auth=z.object({auth_mode:z.literal('chatgpt'),OPENAI_API_KEY:z.null().optional(),tokens:z.object({account_id:z.string().min(1),access_token:z.string().min(1),refresh_token:z.string().min(1)}).passthrough()}).passthrough().parse(JSON.parse(bytes.toString('utf8')));
+  if(digest({provider:'codex',subject:auth.tokens.account_id})!==expected)throw Error('WORKER_ACCOUNT_IDENTITY_MISMATCH');
+ }finally{bytes.fill(0);}
+}
