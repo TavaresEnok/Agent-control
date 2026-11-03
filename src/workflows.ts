@@ -18,6 +18,8 @@ export const engineeringWorkflow=workflowDefSchema.parse({name:'engineering-synt
  steps:nodes.map(({id,name,prompt})=>({id,name,prompt})),graph:{version:2,nodes:[{id:'start',type:'start'},...nodes,{id:'done',type:'end',status:'success'}],
  edges:[{from:'start',to:'implement'},{from:'implement',to:'qa'},{from:'qa',to:'review'},{from:'review',to:'judge'},{from:'judge',to:'integrate'},{from:'integrate',to:'done'}]}});
 const nativeNodes=nodes.map(node=>({...node,name:node.name.replace(/Synthetic/gi,'Native'),prompt:'Execute the frozen native engineering stage through its admitted controller adapter.'}));
+/** Dynamic native plans keep this prefix. Cezar still owns the frozen graph. */
+export const engineeringNativePlanWorkflowPrefix='engineering-native-plan-';
 export const engineeringNativeWorkflow=workflowDefSchema.parse({...engineeringWorkflow,name:'engineering-native-v1',
  steps:nativeNodes.map(({id,name,prompt})=>({id,name,prompt})),
  graph:{...engineeringWorkflow.graph,nodes:[{id:'start',type:'start'},...nativeNodes,{id:'done',type:'end',status:'success'}]}});

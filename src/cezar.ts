@@ -16,7 +16,7 @@ import { createApp } from '../upstream/cezar/packages/cezar/dist/server/server.j
 import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/dist/core/runner-factory.js';
 import {childTaskEnvelope} from '../upstream/cezar/packages/cezar/dist/dispatch/engine.js';
 import type { AgentRunner, AgentSession, AgentEvent, AgentRunResult } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
-import { Authority, digest, Refusal } from './contracts.ts';
+import { Authority, Command, digest, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
 import { baselineWorkflow,workflowFor } from './workflows.ts';
@@ -36,6 +36,8 @@ export { baselineWorkflow } from './workflows.ts';
 const SyntheticReceipt = z.object({ operationId: z.uuid(), base: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/), tree: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
   exitCode: z.literal(0), synthetic: z.literal(true) }).strict();
+const NativeTaskReceipt=z.object({operationId:z.uuid(),base:z.string().regex(/^[a-f0-9]{40}$/),commit:z.string().regex(/^[a-f0-9]{40}$/),
+ tree:z.string().regex(/^[a-f0-9]{40}$/),exitCode:z.literal(0),synthetic:z.literal(false)}).passthrough();
 const execFileAsync=promisify(execFile);
 const recoveryStateDigest=(run:{workflowDef?:unknown;graphState?:unknown;steps:unknown})=>digest(JSON.parse(JSON.stringify({workflow:run.workflowDef,graphState:run.graphState,steps:run.steps})));
 function terminate(child:ChildProcess,signal:NodeJS.Signals){
@@ -249,8 +251,9 @@ export class CezarRuntime {
     const recipe=intent.command.payload.workflow==='managed-synthetic-v1'?await readManagedRecipe(this.ledger,intent.id):undefined;
     if(recipe?.schemaVersion===3&&!syntheticSpecialistAdviceAuthorized(this.ledger))throw new Refusal('MANAGED_SPECIALIST_EXECUTOR_UNAVAILABLE');
     if(recipe&&recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
-    // Admission stays closed until every managed node has an effect-boundary adapter.
-    if(recipe&&!this.managedExecutionReady())throw new Refusal('MANAGED_RUNTIME_NOT_READY');
+    // A native plan uses the programmer, QA and review adapters. It does not require the synthetic sandbox.
+    if(recipe?.mode==='native'){if(!this.nativeExecutionReady)throw new Refusal('NATIVE_EXECUTION_NOT_CONFIGURED');}
+    else if(recipe&&!this.managedExecutionReady())throw new Refusal('MANAGED_RUNTIME_NOT_READY');
     const workflow=recipe?.workflow??workflowFor(intent.command.payload.workflow);
     if(['engineering-synthetic-v1','engineering-native-v1'].includes(workflow.name)&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
     const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
@@ -421,6 +424,19 @@ export class CezarRuntime {
           [unit.intentId,base,input,digest(input)]);
         const saved=(await c.query('SELECT digest FROM ac_managed_delivery_inputs WHERE intent_id=$1',[unit.intentId])).rows[0];
         if(saved?.digest!==digest(input))throw new Refusal('MANAGED_BASE_CHANGED');
+      }
+      if(recipe.mode==='native'){
+        for(const unit of members){
+          if(unit.kind!=='task')continue;
+          const child=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
+          const command=Command.parse(child?.command);
+          const payload=command.payload;
+          if(payload.workflow!=='engineering-native-v1'||payload.targetRef!==unit.targetRef||payload.qualityRevision!==unit.qualityRevision||digest(payload.writePaths)!==digest(unit.writePaths))throw new Refusal('NATIVE_TASK_INPUT_MISMATCH');
+          const frozen={schemaVersion:1,intentId:unit.intentId,contextId:authority.contextId,base,writePaths:payload.writePaths,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,messageRef:payload.messageRef,messageDigest:payload.messageDigest};
+          await c.query('INSERT INTO ac_native_task_inputs VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[unit.intentId,base,frozen,digest(frozen)]);
+          const row=(await c.query('SELECT base_id,snapshot,digest FROM ac_native_task_inputs WHERE intent_id=$1',[unit.intentId])).rows[0];
+          if(!row||row.base_id!==base||row.digest!==digest(frozen)||digest(row.snapshot)!==row.digest)throw new Refusal('NATIVE_TASK_INPUT_MISMATCH');
+        }
       }
     });
     const managedRoot=join(this.repo,'.ai/cezar/managed');await mkdir(managedRoot,{recursive:true,mode:0o700});
@@ -604,11 +620,10 @@ export class CezarRuntime {
           JOIN ac_operations o ON o.intent_id=i.id WHERE i.parent_intent_id=$1 AND i.context_id=$2 ORDER BY i.parent_unit_id`,
           [intent.id,authority.contextId])).rows;
         if(children.length!==recipe.units.length||children.some(child=>{
-          if(recipe.schemaVersion>=2&&child.state==='registered'&&!child.grant_id&&!child.handle&&!child.native_session_id&&!child.receipt)
-            return !recipe.units.some(unit=>unit.id===child.parent_unit_id&&unit.intentId===child.id&&unit.operationId===child.operation_id);
-          const receipt=SyntheticReceipt.safeParse(child.receipt);
-          return child.state!=='completed'||!receipt.success||receipt.data.operationId!==child.operation_id||
-            !recipe.units.some(unit=>unit.id===child.parent_unit_id&&unit.intentId===child.id&&unit.operationId===child.operation_id);
+          const unit=recipe.units.find(item=>item.id===child.parent_unit_id&&item.intentId===child.id&&item.operationId===child.operation_id);
+          if(recipe.schemaVersion>=2&&child.state==='registered'&&!child.grant_id&&!child.handle&&!child.native_session_id&&!child.receipt)return !unit;
+          const receipt=recipe.mode==='native'&&unit?.kind==='task'?NativeTaskReceipt.safeParse(child.receipt):SyntheticReceipt.safeParse(child.receipt);
+          return !unit||child.state!=='completed'||!receipt.success||receipt.data.operationId!==child.operation_id;
         }))throw new Refusal('MANAGED_AGGREGATE_INCOMPLETE');
         let selectedIds:Set<string>|undefined;
         if(recipe.schemaVersion>=2){
@@ -707,9 +722,11 @@ export class CezarRuntime {
     });
   }
   private async recoverManagedGraph(parent:Intent,authority:Authority){
-    if(!this.isolated||!this.engineering)return;
-    const run=this.store.getRun(parent.run_id);if(!run?.workflowDef||!run.graphState?.cursor)return;
     const recipe=await readManagedRecipe(this.ledger,parent.id);
+    const native=recipe.mode==='native';
+    if(native){if(!this.nativeImplementation||!this.engineering)return;}
+    else if(!this.isolated||!this.engineering)return;
+    const run=this.store.getRun(parent.run_id);if(!run?.workflowDef||!run.graphState?.cursor)return;
     if(recipe.schemaVersion===3&&!syntheticSpecialistAdviceAuthorized(this.ledger))return;
     if(recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))return;
     await this.ledger.tx(async c=>{
@@ -754,7 +771,9 @@ export class CezarRuntime {
         if(!session||!operation||operation.native_session_id!==session)throw new Refusal('MANAGED_RECOVERY_SESSION_MISMATCH');
         if(unit.kind==='composition'){
           if(!await this.engineering.replayManagedComposition(intent,authority,unit))return;
-        }else if(await this.isolated.reconcileManagedTask(intent,authority,unit)!=='completed')return;
+        }else if(native){
+          if(!await this.nativeImplementation!.prepareRecovery(intent,authority))return;
+        }else if(await this.isolated!.reconcileManagedTask(intent,authority,unit)!=='completed')return;
         if(child.status==='waiting'&&child.error==='Managed execution awaiting authoritative reconciliation'){
           if(child.graphState?.cursor!=='task')return;
           await this.resumeManagedRecord(intent,authority,false);return;
@@ -925,6 +944,10 @@ export class CezarRuntime {
               const receipt=await runtime.engineering.composeManaged(intent,authority,unit,z.uuid().parse(spec.sessionId),cwd,sources,spec.env?.CEZ_TASK_ID);
               const text=`Managed composition completed: ${receipt.commit}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
               return {text,toolCalls:[],tokensUsed:0};
+            }else if(managed.recipe.mode==='native'){
+              if(unit.kind!=='task'||!runtime.nativeImplementation)throw new Refusal('NATIVE_IMPLEMENTATION_NOT_CONFIGURED');
+              if(await realpath(cwd)!==cwd)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN');
+              active=runtime.nativeImplementation.start(intent,authority,spec,onEvent);
             }else{
               if(!runtime.isolated||await realpath(cwd)!==cwd)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN');
               const principal=(await runtime.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;

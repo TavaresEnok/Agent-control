@@ -6,7 +6,7 @@ export const Template=z.discriminatedUnion('workflow',[
  z.object({workflow:z.literal('baseline-synthetic-v1')}).strict(),
  z.object({workflow:z.enum(['engineering-synthetic-v1','semantic-proposal-v1']),qualityRevision:z.number().int().positive(),
   targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/)}).strict(),
- z.object({workflow:z.literal('engineering-native-v1'),qualityRevision:z.number().int().positive(),targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/),writePaths:z.array(z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f*?\[\]{}]/.test(p)&&!p.split('/').some(s=>!s||['.','..','.git','.ai'].includes(s)))).min(1).max(64)}).strict(),
+ z.object({workflow:z.literal('engineering-native-v1'),qualityRevision:z.number().int().positive(),targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/),writePaths:z.array(z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f*?\[\]{}]/.test(p)&&!p.split('/').some(s=>!s||['.','..','.git','.ai'].includes(s)))).min(1).max(64),execution:z.enum(['root','plan']).optional()}).strict(),
 ]);
 export class Templates{
  constructor(readonly ledger:Ledger,private readonly client?:pg.PoolClient){}
