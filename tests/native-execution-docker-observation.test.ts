@@ -25,3 +25,9 @@ test('inspection binds created containers and isolated network to trusted expect
  f.tools.HostConfig.PidMode='';f.network.Internal=false;await assert.rejects(()=>inspectNativeExecutionPair(f.read,ids,f.expected,f.rules));
  await assert.rejects(()=>dockerReadOnly('/tmp/no-socket')('/v1.44/containers/x/stop'));
 });
+test('a lost docker read stays uncertain and does not invent isolation facts',async()=>{
+ const f=setup(),ids={worker:w,tools:t,network:n};
+ await assert.rejects(()=>inspectNativeExecutionPair(async()=>{throw Error('socket hangup');},ids,f.expected,f.rules),/DOCKER_UNCERTAIN/);
+ f.worker.State={Status:'running',Running:true};await assert.rejects(()=>inspectNativeExecutionPair(f.read,ids,f.expected,f.rules),/NATIVE_EXECUTION_ISOLATION_MISMATCH|NATIVE_EXECUTION_INSPECTION_MISMATCH/);
+ await assert.rejects(()=>dockerReadOnly('/tmp/ac-no-docker.sock')(`/v1.44/containers/${'ab'.repeat(32)}/json`),/DOCKER_UNCERTAIN/);
+});
