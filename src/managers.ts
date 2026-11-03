@@ -199,6 +199,21 @@ export class ManagerRegistry{
   this.closed=true;for(const guard of this.keyLoads.values())guard.abort();for(const guard of this.restarts.values())guard.abort();const results=await Promise.allSettled([...this.entries.values()].map(entry=>this.dispose(entry)));
   if(results.some(result=>result.status==='rejected'))throw new Refusal('MANAGER_SHUTDOWN_CLEANUP_REQUIRED');
  }
+ /** Live read fence. A closed registry, a known authority error, or a stale ledger row is empty.
+  * Does not start an endpoint, load a key, dispose the entry or replay work. */
+ async boundAuthority(contextId:string):Promise<Authority|undefined>{
+  if(this.closed)return;
+  const entry=this.entries.get(Id.parse(contextId));
+  if(!entry||entry.state!=='running'||entry.cancelled||!entry.authority)return;
+  if(invalidAuthorityErrors.has(entry.endpoint?.lastError??''))return;
+  const authority={contextId:entry.authority.contextId,instanceId:entry.authority.instanceId,epoch:entry.authority.epoch};
+  try{await this.ledger.tx(async c=>{await this.ledger.fence(c,authority,true);});}
+  catch{return;}
+  if(this.closed||this.entries.get(contextId)!==entry||entry.state!=='running'||entry.cancelled||!entry.authority)return;
+  if(invalidAuthorityErrors.has(entry.endpoint?.lastError??''))return;
+  if(entry.authority.epoch!==authority.epoch||entry.authority.instanceId!==authority.instanceId||entry.authority.contextId!==authority.contextId)return;
+  return authority;
+ }
 }
 
 /** Reuses the existing native Happier endpoint. Credentials stay in this trusted

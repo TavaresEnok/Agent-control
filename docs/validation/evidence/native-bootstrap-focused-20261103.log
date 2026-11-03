@@ -1,0 +1,55 @@
+Native bootstrap focused checks — 2026-11-03
+Worktree: /home/app/srv_projetos/worktrees/09j29l84/task-6f860b8862d4-native-bootstrap-safe
+Node: v24.22.1 (/home/app/.local/share/node24/bin/node). package.json engines asks for >=22.23.3 <23. This host had no Node 22 binary.
+
+Preparation, server package only (no build:web, no chat/editor):
+- npm ci --prefix upstream/cezar --ignore-scripts --no-audit --no-fund
+  exit 0
+  added 531 packages in 21s
+- npm --prefix upstream/cezar run build:server
+  exit 0
+  @open-mercato/cezar prebuild: node scripts/sync-readme.mjs
+  @open-mercato/cezar build: tsc
+  @open-mercato/cezar postbuild: node scripts/inline-contract.mjs
+  inline-contract ok — contract bundled with declarations, 137 file(s) repointed
+
+npm run typecheck
+  tsc -p tsconfig.json --noEmit
+  exit 0
+
+node --import tsx --test --test-concurrency=1 tests/native-bootstrap.test.ts
+  exit 0
+  tests 8
+  pass 8
+  fail 0
+  duration_ms 2001.728593
+  default and explicit disabled bootstrap stay administrative and perform no queries
+  incomplete, incompatible and socket configuration is refused before effects
+  configured opt-in refuses bad keys, paths, sources and accounts before writes, and does not become ready
+  bench injection composes explicit substitutes, authorizes the source and never calls a model
+  partial shutdown closes only unstarted components and preserves uncertain grants
+  shutdown keeps going when close or the release query rejects and a later call is not an empty success
+  bench composition builds the real CezarRuntime and refuses a revoked fence without a model
+  manager transport and registry do not start for bench bootstrap or an unbound context
+
+Correction round (registry required; Ledger.fence and endpoint.lastError on read):
+PATH prefix /home/app/.local/share/node24/bin
+npm ci and build:server were not repeated; the earlier exit 0 records above still stand.
+npm run typecheck
+  tsc -p tsconfig.json --noEmit
+  exit 0
+node --import tsx --test --test-concurrency=1 tests/native-bootstrap.test.ts
+  exit 0
+  tests 9
+  pass 9
+  fail 0
+  duration_ms 2223.676604
+  added: a ledger takeover leaves the old registry open and refuses the read before the resolver
+  composition without a registry refuses before the resolver (resolverCalls 0)
+  takeover keeps ManagerRegistry open, uses Ledger.fence against the bench client, and does not call the resolver again
+  endpoint.lastError STALE_MANAGER refuses before the resolver
+  real CezarRuntime composition remains in the bench test and is not an activation permit
+
+No credentials, no model startSession, no Docker socket, no operational install.
+Configured opt-in remains activation-blocked. This log is not acceptance of the 111 requirements.
+Independent diff review is still required.

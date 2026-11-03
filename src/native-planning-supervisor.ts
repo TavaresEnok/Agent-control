@@ -10,8 +10,9 @@ import {usageWindowsObservationSchema} from '../upstream/cezar/packages/contract
 import {DockerDaemon} from './sandbox-broker.ts';
 import {digest,canonical,Refusal,type Authority} from './contracts.ts';
 import {planningReceiptMessage,PlanningPhysicalReceipt,type PlanningExecutor,type PlanningInvocation} from './semantic-planning.ts';
+import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
+export {nativePlanningExecutorDigest};
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
-export const nativePlanningExecutorDigest=(imageId:string)=>digest({contract:'native-planning-v1',imageId});
 const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),
  usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;

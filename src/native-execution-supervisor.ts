@@ -17,6 +17,7 @@ import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {inspectNativeExecutionPair,dockerReadOnly} from './native-execution-docker-observation.ts';
 import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {usageWindowsObservationSchema} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
+import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 const Path=z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f*?\[\]{}]/.test(p)&&!p.split('/').some(s=>!s||['.','..','.git','.ai'].includes(s)));
 export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,sessionId:Id,base:GitId,
@@ -31,12 +32,13 @@ export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsI
  workerEnv:readonly string[];toolsEnv:readonly string[]};
 export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null};
 const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
-export const nativeExecutionExecutorDigest=(workerImage:string,toolsImage:string)=>digest({contract:'native-execution-v1',workerImage,toolsImage});
+export {nativeExecutionExecutorDigest};
 const toolsEntrypoint=['node','/opt/agent-control/dist/src/native-tools-worker.mjs'];
 const workerEntrypoint=['node','/opt/agent-control/dist/src/native-execution-worker.mjs'];
 /** Effect supervisor only. A trusted Cezar stage must already own the grant,
  * frozen source and policy. No scheduler, inference on construction, fallback,
- * approval or Git integration occurs here. Not wired to production bootstrap. */
+ * approval or Git integration occurs here. Production bootstrap does not construct
+ * this supervisor; configured opt-in stays activation-blocked. */
 export class NativeExecutionSupervisor{
  readonly executorDigest:string;
  supportsAccount(accountId:string){return this.subjects.has(accountId);}

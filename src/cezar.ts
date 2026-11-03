@@ -29,6 +29,7 @@ import {Cancellations} from './cancellation.ts';
 import type {RemoteOperations} from './remote.ts';
 import type {NativePlanningSupervisor} from './native-planning-supervisor.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
+import {assertNativeBootstrapAttachment,type NativeBootstrapAttachment} from './native-bootstrap.ts';
 import {ManagedExecutionInput,readManagedInput,readManagedUnit,readManagedRecipe,syntheticManagedCorrectionsAuthorized,syntheticSpecialistAdviceAuthorized,type ManagedRecipe} from './managed-plan.ts';
 export { baselineWorkflow } from './workflows.ts';
 
@@ -67,10 +68,11 @@ export class CezarRuntime {
   private readonly nativePlanning:readonly NativePlanningSupervisor[];
   private readonly nativeExecutions:readonly NativeExecutionSupervisor[];
   readonly nativeImplementation:NativeImplementation|undefined;
+  private readonly nativeBootstrapAttachment:NativeBootstrapAttachment|undefined;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
     private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations,
-    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[];nativeExecutions?:readonly NativeExecutionSupervisor[];nativeImplementation?:NativeImplementation}) {
+    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[];nativeExecutions?:readonly NativeExecutionSupervisor[];nativeImplementation?:NativeImplementation;nativeBootstrap?:NativeBootstrapAttachment}) {
     this.nativeImplementation=admissionOptions?.nativeImplementation;
     if(this.nativeImplementation&&(this.nativeImplementation.ledger!==ledger||this.nativeImplementation.repository!==repo||this.nativeImplementation.quality!==engineeringOptions?.quality))throw new Refusal('NATIVE_IMPLEMENTATION_CONFIGURATION_INVALID');
     this.nativeExecutions=Object.freeze([...(admissionOptions?.nativeExecutions??[])]);
@@ -78,6 +80,11 @@ export class CezarRuntime {
     const native=admissionOptions?.nativePlanning;this.nativePlanning=Object.freeze(native?(Array.isArray(native)?[...native]:[native as NativePlanningSupervisor]):[]);
     if(this.nativePlanning.some(supervisor=>supervisor.ledger!==ledger))throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     if(this.nativePlanning.length>32||new Set(this.nativePlanning.map(supervisor=>supervisor.executor.id+'@'+supervisor.executor.digest)).size!==this.nativePlanning.length)throw new Refusal('PLANNING_EXECUTOR_REGISTRY_INVALID');
+    this.nativeBootstrapAttachment=admissionOptions?.nativeBootstrap;
+    if(this.nativeBootstrapAttachment){
+      assertNativeBootstrapAttachment(projectId,this.nativeBootstrapAttachment,{implementation:Boolean(this.nativeImplementation),executions:this.nativeExecutions.length,planning:this.nativePlanning.length});
+      this.executionEnabled=false;
+    }
     this.diskGuard=admissionOptions?.diskGuard??diskGuardFromEnvironment();
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     isolated?.bindManagedRepository(repo);
@@ -170,6 +177,7 @@ export class CezarRuntime {
       bootProjectId: projectId, semaphore:this.semaphore,version: 'agent-control-0.1.0' });
   }
   async start(mode:'execution'|'administration-only'='execution') {
+    if(this.nativeBootstrapAttachment&&mode==='execution')throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
     this.executionEnabled=mode==='execution';
     if(this.executionEnabled)await this.refreshSchedulerBudget();
     const c = await this.ledger.pool.connect();
@@ -184,7 +192,17 @@ export class CezarRuntime {
       if (this.lock === c) { this.lock = undefined; c.release(true); }
     };
     c.on('error', lost); c.on('end', lost);
-    if(this.executionEnabled)await this.manager.recover();
+    if(this.executionEnabled){
+      if(this.nativeBootstrapAttachment)throw new Refusal('NATIVE_BOOTSTRAP_REPLAY_FORBIDDEN');
+      await this.manager.recover();
+    }
+  }
+  get nativeBootstrapReport(){return this.nativeBootstrapAttachment?.report;}
+  /** Authorized bench source only. A missing or closed registry, takeover, or mismatched context, epoch or instance never reaches the resolver. */
+  async readAuthorizedBootstrapSource(authority:Authority){
+    Authority.parse(authority);
+    if(!this.nativeBootstrapAttachment?.readSource)throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
+    return this.nativeBootstrapAttachment.readSource(authority);
   }
   get nativeExecutionReady(){return this.executionEnabled&&Boolean(this.nativeImplementation&&this.engineering?.options.nativeQa&&this.engineering?.options.nativeVerification);}
   get executionMode():'administration-only'|'execution'{return this.executionEnabled?'execution':'administration-only';}
