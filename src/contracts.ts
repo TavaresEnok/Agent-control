@@ -11,6 +11,7 @@ export const Command = z.object({
   payload: z.discriminatedUnion('workflow',[
    z.object({workflow:z.enum(['baseline-synthetic-v1','engineering-synthetic-v1']),messageRef:z.string().min(1).max(200)}).strict(),
    z.object({workflow:z.literal('semantic-proposal-v1'),messageRef:z.string().min(1).max(200),localId:z.string().min(1).max(200),messageDigest:z.string().regex(/^[a-f0-9]{64}$/),qualityRevision:z.number().int().positive(),targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/)}).strict(),
+   z.object({workflow:z.literal('engineering-native-v1'),messageRef:z.string().min(1).max(200),localId:z.string().min(1).max(200),messageDigest:z.string().regex(/^[a-f0-9]{64}$/),qualityRevision:z.number().int().positive(),targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/),writePaths:z.array(z.string().min(1).max(240)).min(1).max(64)}).strict(),
    z.object({workflow:z.literal('managed-synthetic-v1'),messageRef:z.string().min(1).max(200),proposalRevision:z.number().int().positive(),proposalDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
   ]),
 }).strict().superRefine((value,ctx)=>{

@@ -1,0 +1,36 @@
+ Container ac-implementation-db-1  Running
+TAP version 13
+# {"state":"failed","runStatus":"failed","error":"step \\"qa\\" failed: GIT_IDENTITY_REFUSED","steps":[{"id":"implement","status":"done"},{"id":"qa","status":"failed","error":"GIT_IDENTITY_REFUSED"},{"id":"review","status":"pending"},{"id":"judge","status":"pending"},{"id":"integrate","status":"pending"}],"operation":{"state":"completed","receipt":{"base":"0dfb12cdd323f6dc7c0fd0926b250e0e34004692","tree":"3ac503e9b614e57f3ea0237aa7e18159cc30f8d3","commit":"5cf03f042a99ecee566e3e4354128ce8521a88f7","exitCode":0,"synthetic":false,"operationId":"f794f80b-158a-486b-ad90-c234af3f3495","nativeExecution":{"payload":{"epoch":1,"jobId":"f794f80b-158a-486b-ad90-c234af3f3495","grantId":"c469767d-84c0-4d4b-88b2-1fdc92b3a530","artifact":{"base":"0dfb12cdd323f6dc7c0fd0926b250e0e34004692","tree":"3ac503e9b614e57f3ea0237aa7e18159cc30f8d3","commit":"5cf03f042a99ecee566e3e4354128ce8521a88f7","source":"AcSafeGit+AcArtifactIdentity","legacyDigest":"598f2af131e354515dbd9dc6dee250f0ca852c90a1c4d340f4562f3e7f209cd9"},"exitCode":0,"intentId":"141dff60-78ff-58ca-afe6-f0096b635f74","accountId":"50a25ac1-9787-44f1-9765-d35933a5aeac","contextId":"a6a3b4df-e3c1-4088-b373-e9545e0ab2ba","profileId":"e0822f79-8085-4fa4-b656-61af9e4607e2","sessionId":"2e353f9b-67a2-4261-bf80-c0e4f3b022b3","inputDigest":"bc9f0ce2a7098e7446c7b412c6c754c6fbb98373129b857b928c88c7ebca38e0","outputDigest":"1f66f6123a6f8172120a0b5939b663066be0dbd0ced9bc26b74993c8204bb7ea","profileDigest":"2c219874bec713bb9ad6290c4e2fb9ae5a9ff83b8191dfe7dc6bb6b5ed7d2a29","schemaVersion":1,"executorDigest":"c8331398391975993a6316e37576e36429d4d8aba045390f1be808a2b43d857c","physicalDigest":"d47d4751b446473d3aaf5628bdad4b1ab9a09b72cf0e4e666e0195cf729b87b9","workerExitCode":0},"signature":"de995da5c56f0a4d089d0b503eee1c89900a34066e032fe44d161d762537ca3e42c98ecf7be2fbc403e72ffea5fe6f1904c7bfbf48b43dd4fe0d1aae6cad760c"},"finalizationDigest":"2d4d8521e6f95ccc22575801eabcdd1611edca4ab97c5b928957e6a9d50d74f5"}}}
+# Subtest: canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration
+not ok 1 - canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration
+  ---
+  duration_ms: 4018.51213
+  type: 'test'
+  location: '/home/app/projects/agent-control-implementation/tests/native-dispatch.test.ts:1:1254'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    'failed' !== 'done'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'done'
+  actual: 'failed'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/app/projects/agent-control-implementation/tests/native-dispatch.test.ts:67:663)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5398.096866
+

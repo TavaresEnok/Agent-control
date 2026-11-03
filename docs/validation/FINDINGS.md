@@ -178,3 +178,7 @@ A execução completa nativa Cezar antes das correções de asserção registrou
 
 | AC-IMP-0129 | QA nativo sem teste funcional real / alta | executor e ligação implementados; fixture física aprovada | NativeQa usa imagem/comando/ambiente fixados, rede nenhuma, fonte RO e saída Docker, com journal antes dos efeitos e logs privados. `native-qa-physical-durable-20261103.log` passou caso funcional positivo/negativo, recusa de aprovação por stdout e validação de falha para correção. Sem modelo/credenciais; não homologa todos os intervalos de recuperação nem um projeto operacional. |
 | AC-IMP-0130 | Contrato único para QA e revisão / média | separado com compatibilidade | qaVerifierDigest opcional permite QA funcional independente do contrato de parecer por modelo. Metadados/formulário usam os adaptadores configurados; build/tipos passaram, sem nova prova em navegador. Configuração nativa não foi ativada no bootstrap administrativo. |
+
+## Despacho nativo delimitado — 03/11/2026
+
+A prova integrada identificou e corrigiu a cópia Git de commit sem ref e a concorrência entre observadores de finalização. Logs negativos e resultado verde são preservados; detalhes em `../implementation/NATIVE-DISPATCH-20261103.md`. O percurso raiz usa substitutos de modelo e QA Docker real. Bootstrap nativo, execução de planos nativos completos, ativação de provedores e revisão independente continuam abertos; AC-IMP-0003/0007 não são encerrados.

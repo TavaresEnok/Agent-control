@@ -1,3 +1,4 @@
+import type {NativeImplementation} from './native-implementation.ts';
 import type {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
@@ -65,10 +66,13 @@ export class CezarRuntime {
   private readonly diskGuard:DiskGuard|undefined;
   private readonly nativePlanning:readonly NativePlanningSupervisor[];
   private readonly nativeExecutions:readonly NativeExecutionSupervisor[];
+  readonly nativeImplementation:NativeImplementation|undefined;
   private lock: import('pg').PoolClient | undefined;
   constructor(readonly ledger: Ledger, readonly repo: string, readonly projectId: string, private readonly engineeringOptions?:EngineeringOptions,
     private readonly isolated?:IsolatedImplementation,private readonly remote?:RemoteOperations,
-    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[];nativeExecutions?:readonly NativeExecutionSupervisor[]}) {
+    admissionOptions?:{diskGuard?:DiskGuard;nativePlanning?:NativePlanningSupervisor|readonly NativePlanningSupervisor[];nativeExecutions?:readonly NativeExecutionSupervisor[];nativeImplementation?:NativeImplementation}) {
+    this.nativeImplementation=admissionOptions?.nativeImplementation;
+    if(this.nativeImplementation&&(this.nativeImplementation.ledger!==ledger||this.nativeImplementation.repository!==repo||this.nativeImplementation.quality!==engineeringOptions?.quality))throw new Refusal('NATIVE_IMPLEMENTATION_CONFIGURATION_INVALID');
     this.nativeExecutions=Object.freeze([...(admissionOptions?.nativeExecutions??[])]);
     if(this.nativeExecutions.length>32||this.nativeExecutions.some(s=>s.ledger!==ledger)||new Set(this.nativeExecutions.map(s=>s.executorDigest+'@'+s.keyFingerprint)).size!==this.nativeExecutions.length)throw new Refusal('NATIVE_EXECUTION_REGISTRY_INVALID');
     const native=admissionOptions?.nativePlanning;this.nativePlanning=Object.freeze(native?(Array.isArray(native)?[...native]:[native as NativePlanningSupervisor]):[]);
@@ -137,7 +141,7 @@ export class CezarRuntime {
           });
         }
         const cursor=run.graphState?.cursor;
-        if(cursor==='implement'){if(!this.isolated)return false;}
+        if(cursor==='implement'){if(current.intent.command.payload.workflow==='engineering-native-v1'){if(!this.nativeImplementation||!await this.nativeImplementation.prepareRecovery(current.intent,current.authority))return false;return true;}if(!this.isolated)return false;}
         else{
           const session=run.steps.find(step=>step.id===cursor)?.sessionId;
           if(!this.engineering||!cursor||!session)return false;
@@ -176,11 +180,13 @@ export class CezarRuntime {
       this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
       this.engineering?.close();
       this.isolated?.close();
+    this.nativeImplementation?.close();
       if (this.lock === c) { this.lock = undefined; c.release(true); }
     };
     c.on('error', lost); c.on('end', lost);
     if(this.executionEnabled)await this.manager.recover();
   }
+  get nativeExecutionReady(){return this.executionEnabled&&Boolean(this.nativeImplementation&&this.engineering?.options.nativeQa&&this.engineering?.options.nativeVerification);}
   get executionMode():'administration-only'|'execution'{return this.executionEnabled?'execution':'administration-only';}
   private managedExecutionReady():boolean{return this.executionEnabled&&Boolean(this.isolated)&&Boolean(this.engineering);}
   async readManagedSourceArtifacts(intent:Intent,authority:Authority):Promise<readonly {unitId:string;artifactId:string;cwd:string}[]>{
@@ -215,6 +221,7 @@ export class CezarRuntime {
   }
   async dispatch(intent: Intent, authority: Authority) {
     if(!this.executionEnabled)throw new Refusal('ADMINISTRATION_ONLY');
+    if(intent.command.payload.workflow==='engineering-native-v1'&&(!this.nativeImplementation||!this.engineering?.options.nativeQa||!this.engineering?.options.nativeVerification||!this.nativeImplementation.hasSource(authority)))throw new Refusal('NATIVE_EXECUTION_NOT_CONFIGURED');
     if(intent.command.payload.workflow==='semantic-proposal-v1')throw new Refusal('PLANNING_INTENT_NOT_EXECUTION');
     if (!this.running || !this.lock) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
     const delivery=(await this.ledger.pool.query('SELECT parent_intent_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0];
@@ -227,7 +234,7 @@ export class CezarRuntime {
     // Admission stays closed until every managed node has an effect-boundary adapter.
     if(recipe&&!this.managedExecutionReady())throw new Refusal('MANAGED_RUNTIME_NOT_READY');
     const workflow=recipe?.workflow??workflowFor(intent.command.payload.workflow);
-    if(workflow.name==='engineering-synthetic-v1'&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
+    if(['engineering-synthetic-v1','engineering-native-v1'].includes(workflow.name)&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
     const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
       FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1`,[intent.id])).rows[0];
     if (!identity || identity.operation_id!==intent.operation_id || identity.context_id!==intent.context_id || identity.run_id!==intent.run_id || identity.plan_revision!==intent.plan_revision || digest(identity.command)!==digest(intent.command))
@@ -255,11 +262,11 @@ export class CezarRuntime {
         [intent.context_id, intent.plan_revision, intent.id, digest(workflow), workflow]);
       const snapshot = await c.query('SELECT digest FROM ac_frozen_plans WHERE intent_id=$1', [intent.id]);
       if (snapshot.rows[0]?.digest !== digest(workflow)) throw new Refusal('FROZEN_PLAN_MISMATCH');
-      if(workflow.name==='engineering-synthetic-v1'){
+      if(workflow.name==='engineering-synthetic-v1'||workflow.name==='engineering-native-v1'){
         const chosen=(await c.query('SELECT snapshot,digest FROM ac_intent_templates WHERE intent_id=$1',[intent.id])).rows[0];
         if(!chosen)throw new Refusal('TEMPLATE_REQUIRED');
         const template=Template.parse(chosen.snapshot);
-        if(digest(template)!==chosen.digest||template.workflow!=='engineering-synthetic-v1')throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
+        if(digest(template)!==chosen.digest||template.workflow!==workflow.name)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
         const contract={qualityRevision:template.qualityRevision,targetRef:template.targetRef};
         const allowed=this.engineeringOptions!.allowedTargets??(this.engineeringOptions!.targetRef?[this.engineeringOptions!.targetRef]:[]);
         if(!allowed.includes(contract.targetRef))throw new Refusal('INTEGRATION_TARGET_FORBIDDEN',403);
@@ -783,7 +790,8 @@ export class CezarRuntime {
           if(intent.parent_intent_id)continue;
           const cursor=run.graphState?.cursor;
           if(cursor==='implement'){
-            if(!this.isolated||await this.reconcileIsolated(intent,authority)!=='completed')continue;
+            if(intent.command.payload.workflow==='engineering-native-v1'){if(!this.nativeImplementation||!await this.nativeImplementation.prepareRecovery(intent,authority))continue;}
+            else if(!this.isolated||await this.reconcileIsolated(intent,authority)!=='completed')continue;
           }else{
             if(!run.worktreePath)throw new Refusal('RECOVERY_WORKTREE_MISSING');
             const root=await realpath(join(this.repo,'.ai/cezar/worktrees')),worktree=await realpath(run.worktreePath);
@@ -791,7 +799,7 @@ export class CezarRuntime {
             const session=run.steps.find(step=>step.id===cursor)?.sessionId;
             if(!cursor||!session||!this.engineering)continue;
             if(cursor==='integrate')await this.engineering.reconcileIntegrationResult(intent,authority);
-            await this.engineering.reconcileVerifierResults(intent,authority,cursor,session);
+            if(intent.command.payload.workflow!=='engineering-native-v1')await this.engineering.reconcileVerifierResults(intent,authority,cursor,session);
             if(!await this.engineering.canReplayCompleted(intent,authority,cursor,session)&&
                !await this.engineering.prepareUnstartedNode(intent,authority,cursor,session))continue;
           }
@@ -925,7 +933,7 @@ export class CezarRuntime {
           return {result,get open(){return opened;},get pid(){return active?.pid;},sendMessage(){return false;},end(){active?.end();},
             interrupt(){canceled=true;return active?.interrupt();},hardStop(){canceled=true;active?.hardStop?.();}};
         }
-        if(run?.workflow==='engineering-synthetic-v1'&&nodeId!=='implement'){
+        if((run?.workflow==='engineering-synthetic-v1'||run?.workflow==='engineering-native-v1')&&nodeId!=='implement'){
           if(!runtime.engineering||!runId||!nodeId)throw new Refusal('ENGINEERING_NODE_NOT_ADMITTED');
           const authority=runtime.authorities.get(runId);if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
           const result=(async()=>{
@@ -937,6 +945,14 @@ export class CezarRuntime {
           return {result:result.then(session=>{active=session;if(cancelled)session.hardStop?.();return session.result;}).finally(()=>{opened=false;}),
             get open(){return opened;},get pid(){return active?.pid;},sendMessage(){return false;},end(){active?.end();},
             interrupt(){cancelled=true;return active?.interrupt();},hardStop(){cancelled=true;active?.hardStop?.();}};
+        }
+        if(run?.workflow==='engineering-native-v1'){
+          if(!runtime.nativeImplementation||!runId||nodeId!=='implement')throw new Refusal('NATIVE_IMPLEMENTATION_NOT_CONFIGURED');
+          const authority=runtime.authorities.get(runId);if(!authority)throw new Refusal('EFFECT_AUTHORITY_MISSING');
+          let active:AgentSession|undefined,opened=true,canceled=false;
+          const result=(async()=>{const intent=(await runtime.ledger.pool.query<Intent>('SELECT * FROM ac_intents WHERE run_id=$1',[runId])).rows[0];if(!intent)throw new Refusal('INTENT_MISSING');
+            active=runtime.nativeImplementation!.start(intent,authority,spec,onEvent);if(canceled)active.hardStop?.();return active.result;})().finally(()=>{opened=false;});
+          return {result,get open(){return opened;},sendMessage(){return false;},end(){},interrupt(){canceled=true;active?.interrupt();},hardStop(){canceled=true;active?.hardStop?.();}};
         }
         if(runtime.isolated){
           if(!runId)throw new Refusal('EFFECT_AUTHORITY_MISSING');
@@ -1042,6 +1058,7 @@ export class CezarRuntime {
     this.running = false; for (const child of this.children) terminate(child,'SIGKILL');
     this.engineering?.close();
     this.isolated?.close();
+    this.nativeImplementation?.close();
     this.manager.dispose(); this.store.flush();
     if (this.lock) { await this.lock.query('SELECT pg_advisory_unlock(hashtextextended($1,1))', [this.repo]); this.lock.release(); this.lock = undefined; }
   }

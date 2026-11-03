@@ -123,6 +123,7 @@ export class Ledger {
   }
   async accept(principal: string, raw: Command, a: Authority, channel: string, afterAccept?:(c:pg.PoolClient,intent:Intent)=>Promise<void>): Promise<Intent> {
     const command = Command.parse(raw);
+    if(command.payload.workflow==='engineering-native-v1'&&(channel!=='happier'||!afterAccept))throw new Refusal('NATIVE_CANONICAL_MESSAGE_REQUIRED',403);
     return this.tx(async c => {
       const context = await this.authorize(c, principal, command.contextId);
       if (command.contextId !== a.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH', 403);
@@ -157,14 +158,18 @@ export class Ledger {
           if(template.workflow!==command.payload.workflow)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
           if(template.workflow==='semantic-proposal-v1'&&command.payload.workflow==='semantic-proposal-v1'&&
             (template.qualityRevision!==command.payload.qualityRevision||template.targetRef!==command.payload.targetRef))throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
-          if(template.workflow==='semantic-proposal-v1'){
+          if(template.workflow==='semantic-proposal-v1'||template.workflow==='engineering-native-v1'){
             await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[context.project_id]);
             const latest=(await c.query('SELECT max(revision) revision FROM ac_quality_policies WHERE project_id=$1',[context.project_id])).rows[0].revision;
             if(latest!==template.qualityRevision)throw new Refusal('QUALITY_POLICY_CONFLICT');
           }
+          if(template.workflow==='engineering-native-v1'){
+            const p=command.payload;if(p.workflow!=='engineering-native-v1'||p.qualityRevision!==template.qualityRevision||p.targetRef!==template.targetRef||digest(p.writePaths)!==digest(template.writePaths))throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
+            await c.query('INSERT INTO ac_execution_contracts VALUES($1,$2,$3,$4,$5)',[intent.id,context.project_id,template.qualityRevision,template.targetRef,digest({qualityRevision:template.qualityRevision,targetRef:template.targetRef})]);
+          }
           await c.query('INSERT INTO ac_intent_templates VALUES($1,$2,$3,$4,$5)',
             [intent.id,command.contextId,context.active_template_revision,template,selected.digest]);
-        }else if(command.payload.workflow==='engineering-synthetic-v1'||command.payload.workflow==='semantic-proposal-v1')throw new Refusal('TEMPLATE_REQUIRED');
+        }else if(command.payload.workflow==='engineering-synthetic-v1'||command.payload.workflow==='semantic-proposal-v1'||command.payload.workflow==='engineering-native-v1')throw new Refusal('TEMPLATE_REQUIRED');
         const workflow=command.payload.workflow==='managed-synthetic-v1'
           ?await freezeManagedExecution(this,c,intent,principal,a,command.payload.proposalRevision,command.payload.proposalDigest)
           :workflowFor(command.payload.workflow);

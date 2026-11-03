@@ -20,6 +20,7 @@ test('composition preserves source changes, is deterministic, and rejects scope 
   }
   const service=new GitArtifacts(repo),a=await service.compose(base,sources,join(root,'a')),b=await service.compose(base,sources,join(root,'b'));
   assert.equal(a.commit,b.commit);assert.equal(a.tree,b.tree);
+  assert.equal((await service.snapshot(a.commit,base,join(root,'unreferenced-snapshot'))).tree,a.tree);
   assert.equal((await service.verifyComposition(a.snapshot,a.commit,base,sources.map(s=>s.commit))).tree,a.tree);
   await assert.rejects(service.verifyComposition(a.snapshot,a.commit,base,[sources[1]!.commit,sources[0]!.commit]));
   let launched=false;

@@ -42,9 +42,9 @@ export const ControlCommand=z.discriminatedUnion('action',[
 /** Human administration has a separate intent identity but uses the same PG/RBAC authority.
  * A nested Capacity view shares this transaction: effect and dedupe commit together. */
 export class Control {
- constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[],private readonly projectScope?:string,readonly administrative=new AdministrativeOperations(ledger,[]),private readonly qualityExecutors:{reviewDigest?:string;qaDigest?:string}={}){
+ constructor(readonly ledger:Ledger,readonly providerAdapters:readonly ProviderAdapter[]=[],private readonly projectScope?:string,readonly administrative=new AdministrativeOperations(ledger,[]),private readonly qualityExecutors:{reviewDigest?:string;qaDigest?:string;nativeExecutionEnabled?:boolean}={}){
   this.qualityExecutors=Object.freeze({...qualityExecutors});
-  for(const value of Object.values(this.qualityExecutors))if(value!==undefined&&!/^[a-f0-9]{64}$/.test(value))throw new Refusal('QUALITY_EXECUTOR_CONFIGURATION_INVALID');
+  for(const value of [this.qualityExecutors.reviewDigest,this.qualityExecutors.qaDigest])if(value!==undefined&&!/^[a-f0-9]{64}$/.test(value))throw new Refusal('QUALITY_EXECUTOR_CONFIGURATION_INVALID');
   if(administrative.ledger!==ledger)throw new Refusal('ADMIN_SERVICE_LEDGER_MISMATCH',403);
  }
  async execute(principal:string,raw:z.input<typeof ControlCommand>,proof:OperatorProof){
@@ -196,7 +196,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=this.qualityExecutors.reviewDigest??createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier-wide.mjs',import.meta.url))).digest('hex');
    const specialistVerifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-specialist.mjs',import.meta.url))).digest('hex');
-   return {schemaVersion:1,installationId:installation.id,principalId:principal,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
+   return {schemaVersion:1,installationId:installation.id,principalId:principal,nativeExecutionEnabled:this.qualityExecutors.nativeExecutionEnabled===true,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
     accounts,providerBindings,providerAdapters,providerEligibility,administrative,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
     remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner'};
   });

@@ -6,6 +6,7 @@ export const Template=z.discriminatedUnion('workflow',[
  z.object({workflow:z.literal('baseline-synthetic-v1')}).strict(),
  z.object({workflow:z.enum(['engineering-synthetic-v1','semantic-proposal-v1']),qualityRevision:z.number().int().positive(),
   targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/)}).strict(),
+ z.object({workflow:z.literal('engineering-native-v1'),qualityRevision:z.number().int().positive(),targetRef:z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/),writePaths:z.array(z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f*?\[\]{}]/.test(p)&&!p.split('/').some(s=>!s||['.','..','.git','.ai'].includes(s)))).min(1).max(64)}).strict(),
 ]);
 export class Templates{
  constructor(readonly ledger:Ledger,private readonly client?:pg.PoolClient){}
@@ -17,9 +18,9 @@ export class Templates{
    if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
    const latest=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_context_templates WHERE context_id=$1',[contextId])).rows[0].revision);
    if(latest!==expectedRevision)throw new Refusal('TEMPLATE_REVISION_CONFLICT');
-   if((template.workflow==='engineering-synthetic-v1'||template.workflow==='semantic-proposal-v1')&&!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,template.qualityRevision])).rowCount)
+   if((template.workflow==='engineering-synthetic-v1'||(template.workflow==='semantic-proposal-v1'||template.workflow==='engineering-native-v1'))&&!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,template.qualityRevision])).rowCount)
     throw new Refusal('QUALITY_POLICY_REQUIRED');
-   if(template.workflow==='semantic-proposal-v1'){
+   if((template.workflow==='semantic-proposal-v1'||template.workflow==='engineering-native-v1')){
     await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[context.project_id]);
     const latest=(await c.query('SELECT max(revision) revision FROM ac_quality_policies WHERE project_id=$1',[context.project_id])).rows[0].revision;
     if(latest!==template.qualityRevision)throw new Refusal('QUALITY_POLICY_CONFLICT');
@@ -39,7 +40,7 @@ export class Templates{
    const saved=(await c.query('SELECT snapshot,digest FROM ac_context_templates WHERE context_id=$1 AND revision=$2',[contextId,revision])).rows[0];
    if(!saved)throw new Refusal('TEMPLATE_NOT_FOUND');const template=Template.parse(saved.snapshot);
    if(digest(template)!==saved.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
-   if(template.workflow==='semantic-proposal-v1'){
+   if((template.workflow==='semantic-proposal-v1'||template.workflow==='engineering-native-v1')){
     await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[context.project_id]);
     const latest=(await c.query('SELECT max(revision) revision FROM ac_quality_policies WHERE project_id=$1',[context.project_id])).rows[0].revision;
     if(latest!==template.qualityRevision)throw new Refusal('QUALITY_POLICY_CONFLICT');

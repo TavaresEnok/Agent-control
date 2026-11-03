@@ -4,6 +4,12 @@ Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Estado vigente: despacho nativo delimitado
+
+A receita `engineering-native-v1` liga a mensagem cifrada autorizada ao grafo Cezar, com escopo/base congelados, finalização de artefato, QA físico, revisão independente e integração do commit exato. A prova integrada passou, incluindo ACK perdido, duplicação recusada e recuperação após troca de gerente. Programação e revisão na prova usam substitutos sintéticos; nenhuma conta real foi ativada. Ver `implementation/NATIVE-DISPATCH-20261103.md`.
+
+Permanecem pendentes o bootstrap nativo configurável, execução nativa de planos com múltiplas tasks/correções, provedores/cotas reais, homologação móvel e revisão independente. As seções abaixo são registros históricos de incrementos; suas pendências devem ser lidas com este estado mais recente. O projeto continua incompleto.
+
 ## Estado vigente: QA funcional real
 
 QA por comando autorizado foi implementado e ligado ao Cezar/Quality. Dois casos funcionais rodaram em contêineres reais sem rede, credenciais ou montagem gravável do código: um passou, outro falhou; uma mensagem de aprovação impressa pelo teste não alterou a saída observada. A branch protegida permaneceu intacta. Ver `implementation/NATIVE-QA-20261103.md`.

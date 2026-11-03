@@ -1,5 +1,33 @@
 name: ac-implementation
 services:
+  native-dispatch-controller-proof:
+    profiles: [native-dispatch]
+    image: agent-control-lab:0.1.0
+    init: true
+    user: '${AC_LAB_UID:-1000}:${AC_LAB_GID:-1000}'
+    group_add: ['${AC_LAB_DOCKER_GID:-999}']
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    networks: [lab]
+    working_dir: /home/app/projects/agent-control-implementation
+    command: [node, --import, tsx, --test, tests/native-dispatch.test.ts]
+    environment:
+      AC_TEST_DATABASE_URL: postgresql://ac_lab:synthetic-lab-only@db:5432/ac_implementation_test
+      AC_NATIVE_DISPATCH_ROOT: /home/app/projects/agent-control-implementation/.state/native-dispatch-physical
+      CEZ_HOME: /home/app/projects/agent-control-implementation/.state/native-dispatch-physical/cezar-home
+      CEZ_AUTONAME: '0'
+      CEZ_AUTOMATIONS: '0'
+      CEZ_TELEMETRY: '0'
+      CEZ_SKILLS_AUTO_UPDATE: '0'
+      CEZ_NO_BANNER: '1'
+      HOME: /tmp
+    volumes:
+      - ..:/home/app/projects/agent-control-implementation:ro
+      - ../.state/native-dispatch-physical:/home/app/projects/agent-control-implementation/.state/native-dispatch-physical:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db: {condition: service_healthy}
   native-qa-controller-proof:
     profiles: [qa-physical]
     image: agent-control-lab:0.1.0

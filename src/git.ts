@@ -45,6 +45,11 @@ export class GitArtifacts{
   });
   return JSON.parse(result) as unknown;
  }
+ async resolveTarget(targetRef:string){
+  z.string().regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/).parse(targetRef);
+  const result=z.object({commit:z.string().regex(/^[a-f0-9]{40}$/),targetRef:z.string()}).strict().parse(await this.invoke({action:'head',targetRef}));
+  if(result.targetRef!==targetRef)throw new Refusal('GIT_TARGET_MISMATCH');return result.commit;
+ }
  async identity(candidate:string,base:string){
   GitId.parse(candidate);GitId.parse(base);
   const value=Identity.parse(await this.invoke({action:'identity',candidate,base}));

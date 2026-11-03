@@ -20,7 +20,9 @@ export class NativeArtifactFinalizer{
    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[input.jobId,authority.contextId])).rows[0];
   if(!row||row.intent_id!==input.intentId||row.grant_id!==input.grantId||row.input_digest!==input.inputDigest||row.base_id!==input.base||row.role!=='programmer'||
    row.grant_role!=='programmer'||row.principal_id!==principal||!['running','uncertain'].includes(row.state)||!['running','uncertain'].includes(row.grant_state))throw new Refusal('NATIVE_FINALIZER_BINDING_MISMATCH');
-  const source=(await c.query('SELECT snapshot,digest,base_id FROM ac_managed_delivery_inputs WHERE intent_id=$1',[input.intentId])).rows[0];
+  const intent=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0];
+  const table=intent?.command?.payload?.workflow==='engineering-native-v1'?'ac_native_task_inputs':'ac_managed_delivery_inputs';
+  const source=(await c.query(`SELECT snapshot,digest,base_id FROM ${table} WHERE intent_id=$1`,[input.intentId])).rows[0];
   if(!source||source.base_id!==input.base||digest(source.snapshot)!==source.digest||digest(source.snapshot.writePaths)!==digest(input.writePaths))throw new Refusal('NATIVE_FINALIZER_SCOPE_MISMATCH');
  }
  private async groupAbsent(raw:unknown){

@@ -173,6 +173,18 @@ export class HappierEndpoint {
       if(row.rows[0]?.session_id!==this.options.sessionId||row.rows[0]?.principal_id!==this.options.principal)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
     });
   }
+  private nativeSourceCleanup:(()=>void)|undefined;
+  private bindNativeSource(){
+    if(this.nativeSourceCleanup||!this.runtime.nativeImplementation||this.options.transportOnly)return;
+    this.nativeSourceCleanup=this.runtime.nativeImplementation.bindSource(this.options.authority,async(intent,authority)=>{
+      if(this.lifecycle.signal.aborted||authority.contextId!==this.options.authority.contextId||authority.epoch!==this.options.authority.epoch||authority.instanceId!==this.options.authority.instanceId)throw new Refusal('STALE_MANAGER');
+      await this.validateLink();const payload=Command.parse(intent.command).payload;if(payload.workflow!=='engineering-native-v1')throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
+      const row=(await this.ledger.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE id=$1 AND session_id=$2',[this.options.sessionId+'|'+payload.localId,this.options.sessionId])).rows[0];
+      if(!row)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');
+      const record=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(row.ciphertext)));
+      if(digest(record.content.text)!==payload.messageDigest||payload.messageRef!==`message:${stableId(intent.context_id+'\0'+payload.localId)}`)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');return record.content.text;
+    });
+  }
   async start() {
     try{
     await this.validateLink();
@@ -185,6 +197,7 @@ export class HappierEndpoint {
     },timeout,this.lifecycle.signal);
     if (z.object({ id: z.string() }).passthrough().parse(profile).id !== this.options.principal)
       throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH', 403);
+    this.bindNativeSource();
     this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
     this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateLink(),{signal:this.lifecycle.signal,timeoutMs:timeout});
     // Fetching authorized pages may take time; re-read current structured state before activating RPC.
@@ -238,15 +251,17 @@ export class HappierEndpoint {
     const selected=prior?.command?.payload?.workflow??template?.workflow??'baseline-synthetic-v1';
     if(selected==='semantic-proposal-v1'&&(!this.options.semanticPlanning||this.runtime.executionMode!=='execution'))throw new Refusal('SEMANTIC_PLANNING_DISABLED');
     let payload:Command['payload'];
-    if(selected==='semantic-proposal-v1'){
+    if(selected==='engineering-native-v1'&&(!this.runtime.nativeImplementation||this.runtime.executionMode!=='execution'))throw new Refusal('NATIVE_EXECUTION_NOT_CONFIGURED');
+    if(selected==='engineering-native-v1')this.bindNativeSource();
+    if(selected==='semantic-proposal-v1'||selected==='engineering-native-v1'){
       const existing=prior?Command.parse(prior.command):undefined;
-      if(existing?.payload.workflow==='semantic-proposal-v1'){
+      if(existing&&(existing.payload.workflow==='semantic-proposal-v1'||existing.payload.workflow==='engineering-native-v1')&&existing.payload.workflow===selected){
         if(existing.payload.localId!==q.localId||existing.payload.messageDigest!==digest(q.text))throw new Refusal('INTENT_PAYLOAD_CONFLICT');
         payload=existing.payload;
       }else{
-        if(!template||template.workflow!=='semantic-proposal-v1')throw new Refusal('TEMPLATE_REQUIRED');
+        if(!template||(template.workflow!=='semantic-proposal-v1'&&template.workflow!=='engineering-native-v1')||template.workflow!==selected)throw new Refusal('TEMPLATE_REQUIRED');
         payload={workflow:selected,localId:q.localId,messageDigest:digest(q.text),messageRef:`message:${stableId(this.options.authority.contextId+'\0'+q.localId)}`,
-          qualityRevision:template.qualityRevision,targetRef:template.targetRef};
+          qualityRevision:template.qualityRevision,targetRef:template.targetRef,...(template.workflow==='engineering-native-v1'?{writePaths:template.writePaths}:{})} as Command['payload'];
       }
     }else{
       if(selected!=='baseline-synthetic-v1'&&selected!=='engineering-synthetic-v1')throw new Refusal('WORKFLOW_NOT_ADMITTED');
@@ -432,5 +447,5 @@ export class HappierEndpoint {
     }
   }
   connectionState(): 'connected'|'disconnected' {return this.socket.connected?'connected':'disconnected';}
-  close() { this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.socket.disconnect(); }
+  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.socket.disconnect(); }
 }

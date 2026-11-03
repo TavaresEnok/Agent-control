@@ -79,7 +79,20 @@ export class NativeQa{
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uncertain',clock_timestamp()+$10::int*interval '1 millisecond')`,[stage.id,authority.contextId,intentId,artifact.id,grantId,stage.session_id,authority.epoch,hash,this.verifierDigest,this.contract.timeoutMs]);
    await c.query("UPDATE ac_stage_operations SET state='uncertain',grant_id=$2 WHERE id=$1",[stage.id,grantId]);await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[grantId]);
   });
-  const p=this.paths(stage.id);await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);
+  const p=this.paths(stage.id);
+  try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);}
+  catch(error){
+   // This catch covers only preparation, before the first Docker request.
+   // A later create/start failure remains uncertain and is never freed here.
+   const diagnostic=Buffer.from(JSON.stringify({source:'controller',error:'QA_PREPARATION_FAILED'}));
+   const receipt={schemaVersion:1,jobId:stage.id,artifactId:artifact.id,grantId,sessionId:stage.session_id,contractDigest:this.verifierDigest,executionStarted:false,exitCode:-1,status:'missing_result',logSha256:createHash('sha256').update(diagnostic).digest('hex'),logsAvailable:false,synthetic:false,modelInference:false,failureCode:error instanceof Refusal?error.code:'QA_PREPARATION_FAILED'};
+   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
+    const row=(await c.query("SELECT state,container_id FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE",[stage.id])).rows[0];
+    const grant=(await c.query('SELECT state FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
+    if(row?.state!=='uncertain'||row.container_id||grant?.state!=='uncertain')throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
+    await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
+   });return {state:'failed' as const,receipt};
+  }
   const image=this.contract.image;
   const id=await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);

@@ -29,6 +29,7 @@ type Input=z.infer<typeof NativeExecutionRequest>;
 export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;socketPath?:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
  workerEnv:readonly string[];toolsEnv:readonly string[]};
+export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null};
 const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export const nativeExecutionExecutorDigest=(workerImage:string,toolsImage:string)=>digest({contract:'native-execution-v1',workerImage,toolsImage});
 const toolsEntrypoint=['node','/opt/agent-control/dist/src/native-tools-worker.mjs'];
@@ -75,7 +76,9 @@ export class NativeExecutionSupervisor{
   if(input.role==='programmer'&&policy.requireSpecialistBeforeImplementation)throw new Refusal('NATIVE_SPECIALIST_GATE_UNAVAILABLE');
   if(input.role==='programmer'){
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[input.jobId,input.intentId])).rows[0];
-   const frozen=(await c.query('SELECT base_id,snapshot,digest FROM ac_managed_delivery_inputs WHERE intent_id=$1',[input.intentId])).rows[0];
+   const intent=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0];
+   const table=intent?.command?.payload?.workflow==='engineering-native-v1'?'ac_native_task_inputs':'ac_managed_delivery_inputs';
+   const frozen=(await c.query(`SELECT base_id,snapshot,digest FROM ${table} WHERE intent_id=$1`,[input.intentId])).rows[0];
    if(!op||op.state!=='registered'||op.grant_id!==input.grantId||op.execution_attempt_id!==g.attempt_id||Number(op.manager_epoch)!==authority.epoch||!frozen||frozen.base_id!==input.base||digest(frozen.snapshot)!==frozen.digest||digest(frozen.snapshot.writePaths)!==digest(input.writePaths))throw new Refusal('NATIVE_EXECUTION_INPUT_MISMATCH');
    // Native activation is not allowed to consume a synthetic-only contract.
    const synthetic=(await c.query(`SELECT 1 FROM ac_managed_executions e JOIN ac_intents i ON i.parent_intent_id=e.parent_intent_id WHERE i.id=$1 AND e.recipe->>'mode'='synthetic-only'`,[input.intentId])).rowCount;
@@ -196,7 +199,7 @@ export class NativeExecutionSupervisor{
   catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'||exitCode===0)throw error;result={schemaVersion:1,jobId:input.jobId,output:'',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:'WORKER_EXITED_WITHOUT_RESULT',exitCode:exitCode};}
   return result;
  }
- async reconcile(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
+ async reconcile(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>):Promise<NativeExecutionOutcome>{
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);await this.validateReplay(principal,authority,input,job);
   if(job.state==='completed'||job.state==='failed'){
@@ -232,10 +235,18 @@ export class NativeExecutionSupervisor{
     const finalizer=new NativeArtifactFinalizer(this.ledger,this.config.hostRoot);
     const binding={jobId:input.jobId,intentId:input.intentId,grantId:input.grantId,inputDigest:job.input_digest,base:input.base,writePaths:input.writePaths};
     if(cancellation)await finalizer.stop(principal,authority,binding);
-    finalization=await finalizer.finalize(principal,authority,binding,async()=>{
+    try{finalization=await finalizer.finalize(principal,authority,binding,async()=>{
      const [w,t]=await Promise.all([this.docker.inspect(worker.Id),this.docker.inspect(tools.Id)]);
      if(!w||!t||w.Id!==worker.Id||t.Id!==tools.Id||w.State.Running||t.State.Running||w.State.Status!=='exited'||t.State.Status!=='exited')throw new Refusal('NATIVE_FINALIZER_PHYSICAL_UNCONFIRMED');
-    });
+    });}catch(error){
+     // Another observer may finish the same immutable job between our initial
+     // read and finalizer admission. Replay its signed terminal result only.
+     if(error instanceof Refusal&&error.code==='NATIVE_FINALIZER_BINDING_MISMATCH'){
+      const current=(await this.ledger.pool.query('SELECT state FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
+      if(current&&['completed','failed'].includes(current.state))return this.reconcile(principal,authority,input);
+     }
+     throw error;
+    }
     if(finalization.status==='uncertain')return {state:'uncertain' as const};
     if(!cancellation&&finalization.status==='ready')artifact=NativeArtifactIdentity.parse(finalization.identity);
    }

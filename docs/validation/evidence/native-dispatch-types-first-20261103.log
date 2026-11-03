@@ -1,0 +1,15 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+src/happier.ts(259,12): error TS18048: 'existing' is possibly 'undefined'.
+src/happier.ts(259,29): error TS2339: Property 'localId' does not exist on type '{ workflow: "baseline-synthetic-v1" | "engineering-synthetic-v1"; messageRef: string; } | { workflow: "semantic-proposal-v1"; messageRef: string; localId: string; messageDigest: string; qualityRevision: number; targetRef: string; } | { ...; } | { ...; }'.
+  Property 'localId' does not exist on type '{ workflow: "baseline-synthetic-v1" | "engineering-synthetic-v1"; messageRef: string; }'.
+src/happier.ts(259,50): error TS18048: 'existing' is possibly 'undefined'.
+src/happier.ts(259,67): error TS2339: Property 'messageDigest' does not exist on type '{ workflow: "baseline-synthetic-v1" | "engineering-synthetic-v1"; messageRef: string; } | { workflow: "semantic-proposal-v1"; messageRef: string; localId: string; messageDigest: string; qualityRevision: number; targetRef: string; } | { ...; } | { ...; }'.
+  Property 'messageDigest' does not exist on type '{ workflow: "baseline-synthetic-v1" | "engineering-synthetic-v1"; messageRef: string; }'.
+src/happier.ts(260,17): error TS18048: 'existing' is possibly 'undefined'.
+src/happier.ts(264,36): error TS2339: Property 'qualityRevision' does not exist on type '{ workflow: "baseline-synthetic-v1"; } | { workflow: "engineering-synthetic-v1" | "semantic-proposal-v1"; qualityRevision: number; targetRef: string; } | { workflow: "engineering-native-v1"; qualityRevision: number; targetRef: string; writePaths: string[]; }'.
+  Property 'qualityRevision' does not exist on type '{ workflow: "baseline-synthetic-v1"; }'.
+src/happier.ts(264,71): error TS2339: Property 'targetRef' does not exist on type '{ workflow: "baseline-synthetic-v1"; } | { workflow: "engineering-synthetic-v1" | "semantic-proposal-v1"; qualityRevision: number; targetRef: string; } | { workflow: "engineering-native-v1"; qualityRevision: number; targetRef: string; writePaths: string[]; }'.
+  Property 'targetRef' does not exist on type '{ workflow: "baseline-synthetic-v1"; }'.

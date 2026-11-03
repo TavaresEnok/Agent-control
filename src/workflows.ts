@@ -17,6 +17,10 @@ const nodes=[
 export const engineeringWorkflow=workflowDefSchema.parse({name:'engineering-synthetic-v1',source:'built-in',
  steps:nodes.map(({id,name,prompt})=>({id,name,prompt})),graph:{version:2,nodes:[{id:'start',type:'start'},...nodes,{id:'done',type:'end',status:'success'}],
  edges:[{from:'start',to:'implement'},{from:'implement',to:'qa'},{from:'qa',to:'review'},{from:'review',to:'judge'},{from:'judge',to:'integrate'},{from:'integrate',to:'done'}]}});
+const nativeNodes=nodes.map(node=>({...node,name:node.name.replace(/Synthetic/gi,'Native'),prompt:'Execute the frozen native engineering stage through its admitted controller adapter.'}));
+export const engineeringNativeWorkflow=workflowDefSchema.parse({...engineeringWorkflow,name:'engineering-native-v1',
+ steps:nativeNodes.map(({id,name,prompt})=>({id,name,prompt})),
+ graph:{...engineeringWorkflow.graph,nodes:[{id:'start',type:'start'},...nativeNodes,{id:'done',type:'end',status:'success'}]}});
 // Frozen intent marker for the manager's planning effect. It is never dispatched
 // to Cezar as an execution graph; Cezar remains sole owner of work DAGs.
 export const semanticProposalWorkflow=workflowDefSchema.parse({name:'semantic-proposal-v1',source:'built-in',steps:[],
@@ -25,5 +29,6 @@ export function workflowFor(name:string){
  if(name===semanticProposalWorkflow.name)return semanticProposalWorkflow;
  if(name===baselineWorkflow.name)return baselineWorkflow;
  if(name===engineeringWorkflow.name)return engineeringWorkflow;
+ if(name===engineeringNativeWorkflow.name)return engineeringNativeWorkflow;
  throw new Refusal('WORKFLOW_NOT_ADMITTED');
 }

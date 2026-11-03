@@ -41,7 +41,7 @@ const waitSchema=z.discriminatedUnion('resource_kind',[
  z.object({...waitBase,resource_kind:z.literal('model'),desired_profile:z.string().uuid().nullable()}),
  z.object({...waitBase,resource_kind:z.literal('local_compositor'),desired_profile:z.null()}),
 ])
-const resourcesSchema=z.object({installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
+const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
  canAuthorizeRemoteSource:z.boolean(),remoteSourceHosts:z.array(z.object({id:z.string().uuid(),label:z.string()})).max(100),
  remoteSourceAuthorizations:z.array(z.object({authorizationId:z.string().uuid(),intentId:z.string().uuid(),hostId:z.string().uuid(),
@@ -82,6 +82,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const [eligibility,setEligibility]=useState<'documented_supported'|'requires_clarification'|'unsupported_for_mode'|'not_assessed'>('not_assessed')
  const [eligibilitySource,setEligibilitySource]=useState('synthetic://manual-registration'),[accountConcurrency,setAccountConcurrency]=useState(1)
  const [requiredReviews,setRequiredReviews]=useState(1),[requireHuman,setRequireHuman]=useState(false),[requireJudge,setRequireJudge]=useState(false),[requireSpecialist,setRequireSpecialist]=useState(false)
+ const [nativePaths,setNativePaths]=useState('');
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
  const contexts=useQuery({queryKey:['ac-contexts',projectId],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
@@ -279,23 +280,25 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
     </form>
    </SettingsField>
    <SettingsField title="Fluxo da conversa" hint={`Revisão ativa: ${data.activeTemplateRevision??'padrão'}. Solicitações anteriores mantêm seu fluxo congelado.`}>
-    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();const template=templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1'
-     ?{workflow:templateWorkflow,qualityRevision:Number(qualityRevision),targetRef}:{workflow:templateWorkflow}
+    <form className="flex flex-col gap-2" onSubmit={e=>{e.preventDefault();const template=templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1'||templateWorkflow==='engineering-native-v1'
+     ?{workflow:templateWorkflow,qualityRevision:Number(qualityRevision),targetRef,...(templateWorkflow==='engineering-native-v1'?{writePaths:nativePaths.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)}:{})}:{workflow:templateWorkflow}
      mutate.mutate({action:'template.publish',payload:{expectedRevision:data.templates.at(-1)?.revision??0,template}})}}>
      <select aria-label="Fluxo" className={selectStyle} value={templateWorkflow} onChange={e=>setTemplateWorkflow(e.target.value)}>
       <option value="baseline-synthetic-v1">Fluxo básico de teste</option>
       <option value="engineering-synthetic-v1">Implementação, QA, revisão e integração — teste</option>
       <option value="semantic-proposal-v1" disabled={!semanticAvailable}>Gerente planeja a solicitação{semanticAvailable?'':' — indisponível'}</option>
+      <option value="engineering-native-v1" disabled={!data.nativeExecutionEnabled}>Implementar com QA e revisão{data.nativeExecutionEnabled?'':' — indisponível'}</option>
      </select>
-     {(templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&<>
+     {templateWorkflow==='engineering-native-v1'&&<label>Arquivos ou diretórios autorizados (um por linha)<textarea aria-label="Escopo de programação" className={selectStyle} value={nativePaths} onChange={e=>setNativePaths(e.target.value)} required/></label>}
+     {(templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1'||templateWorkflow==='engineering-native-v1')&&<>
       <select aria-label="Política de revisão" className={selectStyle} required value={qualityRevision} onChange={e=>setQualityRevision(e.target.value)}>
-       <option value="">Selecione a revisão</option>{data.qualityPolicies.map(p=><option key={p.revision} value={p.revision} disabled={templateWorkflow==='semantic-proposal-v1'&&p.revision!==latestQualityRevision}>Revisão {p.revision}</option>)}
+       <option value="">Selecione a revisão</option>{data.qualityPolicies.map(p=><option key={p.revision} value={p.revision} disabled={(templateWorkflow==='semantic-proposal-v1'||templateWorkflow==='engineering-native-v1')&&p.revision!==latestQualityRevision}>Revisão {p.revision}</option>)}
       </select>
       <Input aria-label="Branch de destino" value={targetRef} onChange={e=>setTargetRef(e.target.value)} required/>
      </>}
-     <Button disabled={busy||((templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1')&&(!qualityRevision||!targetRef))||(templateWorkflow==='semantic-proposal-v1'&&(!semanticAvailable||Number(qualityRevision)!==latestQualityRevision))} type="submit">Publicar e usar fluxo</Button>
+     <Button disabled={busy||(templateWorkflow==='engineering-native-v1'&&(!data.nativeExecutionEnabled||!nativePaths.trim()||Number(qualityRevision)!==latestQualityRevision))||((templateWorkflow==='engineering-synthetic-v1'||templateWorkflow==='semantic-proposal-v1'||templateWorkflow==='engineering-native-v1')&&(!qualityRevision||!targetRef))||(templateWorkflow==='semantic-proposal-v1'&&(!semanticAvailable||Number(qualityRevision)!==latestQualityRevision))} type="submit">Publicar e usar fluxo</Button>
     </form>
-    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='semantic-proposal-v1'&&(!semanticAvailable||t.snapshot.qualityRevision!==latestQualityRevision))}
+    <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='engineering-native-v1'&&(!data.nativeExecutionEnabled||t.snapshot.qualityRevision!==latestQualityRevision))||(t.snapshot.workflow==='semantic-proposal-v1'&&(!semanticAvailable||t.snapshot.qualityRevision!==latestQualityRevision))}
      onClick={()=>mutate.mutate({action:'template.assign',payload:{revision:t.revision}})}>Usar fluxo {t.revision}</Button>)}</div>
    </SettingsField>
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">

@@ -1,0 +1,18 @@
+ Container ac-implementation-db-1  Running
+TAP version 13
+# {"proof":"canonical-native-cezar-flow","encryptedSource":true,"codeGeneration":"synthetic model substitute","qa":"real isolated Docker","review":"synthetic model substitute","gitIntegration":"real exact CAS","duplicateRequestDeduplicated":true,"modelCalls":0}
+# Subtest: canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration
+ok 1 - canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration
+  ---
+  duration_ms: 8170.97418
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9833.908422

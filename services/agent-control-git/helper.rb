@@ -15,6 +15,7 @@ begin
   input = JSON.parse(STDIN.read(65_537))
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
   expected = case input['action']
+    when 'head' then %w[action repo targetRef]
     when 'identity-at' then %w[action base candidate repo sourceRepo]
     when 'verify-composition' then %w[action base candidate repo sourceRepo sources]
     when 'import' then %w[action base candidate repo sourceRepo]
@@ -26,7 +27,14 @@ begin
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[identity diff observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[head identity diff observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
+  if input['action'] == 'head'
+    ref = input.fetch('targetRef')
+    raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
+    repo = File.realpath(input.fetch('repo')); commit = git(repo, 'rev-parse', '--verify', ref)
+    raise 'INVALID_GIT_ID' unless commit.match?(/\A[0-9a-f]{40}\z/)
+    puts JSON.generate({commit: commit, targetRef: ref}); exit 0
+  end
   (input['action'] == 'compose' ? %w[base] : %w[base candidate]).each do |key|
     raise 'INVALID_GIT_ID' unless input[key].is_a?(String) && input[key].match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/)
   end
@@ -137,6 +145,10 @@ begin
     AcSafeGit.with_repository(repo) do |metadata|
       _out, _error, cloned = AcSafeGit.capture('clone', '--no-local', '--no-checkout', '--', metadata, destination)
       raise 'GIT_OPERATION_FAILED' unless cloned.success?
+      # Imported native artifacts may be reachable only by their immutable ID,
+      # not by a branch. Transfer that exact object before checkout.
+      _out, _error, fetched = AcSafeGit.capture('-C', destination, 'fetch', '--no-tags', metadata, candidate)
+      raise 'GIT_OPERATION_FAILED' unless fetched.success?
     end
     git(destination, 'checkout', '--detach', candidate)
     raise 'GIT_OPERATION_FAILED' unless AcArtifactIdentity.digest(repo: destination, commit: candidate, base: base) == identity[:legacyDigest]
