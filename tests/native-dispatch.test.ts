@@ -47,10 +47,12 @@ test('canonical encrypted request follows the native Cezar graph through real QA
    const input=NativeExecutionRequest.parse(raw);launches++;if(input.role==='programmer')assert.equal(JSON.parse(input.task).request,marker);
    const g=(await db.pool.query('SELECT g.*,p.model,p.effort FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id WHERE g.id=$1',[input.grantId])).rows[0];
    const workerId=createHash('sha256').update(input.jobId+'worker').digest('hex'),toolsId=createHash('sha256').update(input.jobId+'tools').digest('hex'),inputDigest=digest(input),fingerprint=createHash('sha256').update(keys.publicKey.export({format:'der',type:'spki'})).digest('hex');
-   await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
+   await db.tx(async c=>{await db.authorize(c,principal,a.contextId);await db.fence(c,a);
+   await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,$14,'running',$15,$16,$17)`,[input.jobId,input.grantId,input.intentId,a.contextId,a.epoch,input.sessionId,g.account_id,g.profile_id,digest({accountId:g.account_id,profileId:g.profile_id,model:g.model,effort:g.effort,role:g.role}),supervisor.executorDigest,fingerprint,inputDigest,input.base,input.role,workerId,toolsId,'d'.repeat(64)]);
-   await db.pool.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[input.grantId]);
-   if(input.role==='programmer')await db.pool.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);else await db.pool.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
+   await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[input.grantId]);
+   if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
+   });
    const dir=join(spool,input.jobId);await mkdir(dir,{mode:0o700});await mkdir(join(dir,'output'),{mode:0o700});await writeFile(join(dir,'request.json'),JSON.stringify(input),{mode:0o600});let output='fixture implementation complete';
    if(input.role==='programmer'){await artifacts.snapshot(input.base,input.base,join(dir,'work'));await writeFile(join(dir,'work/src/example.ts'),'export const value = 2;\n');}
    else{const ar=(await db.pool.query('SELECT * FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];output=JSON.stringify({schemaVersion:1,kind:'review',artifactId:ar.id,policyRevision:ar.policy_revision,commit:ar.commit_id,tree:ar.tree_id,base:ar.base_id,verdict:'pass',findings:[]});}
@@ -59,8 +61,12 @@ test('canonical encrypted request follows the native Cezar graph through real QA
    const w=item(workerId),t=item(toolsId);physical.set(workerId,w);physical.set(toolsId,t);physical.set('ac-native-worker-'+input.jobId,w);physical.set('ac-native-tools-'+input.jobId,t);
    if(input.role==='programmer')throw Error('FIXTURE_START_ACK_LOST');return {state:'running'};
   }});
-  const native=new NativeImplementation(db,repo,quality,[supervisor]),nativeQa=new NativeQa(db,quality,repo,qaRoot,qaContract,signer),nativeVerification=new NativeVerification(db,quality,[supervisor],signer);
-  runtime=new CezarRuntime(db,repo,project,{quality,git:artifacts,verifierKey:signer,allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification},undefined,undefined,{nativeExecutions:[supervisor],nativeImplementation:native});await runtime.start();
+  // A second registered executor belongs to another account. It must never
+  // receive this account's work even when it appears first in the registry.
+  const unrelated=new Proxy(supervisor,{get(target,key){if(key==='supportsAccount')return ()=>false;if(key==='keyFingerprint')return 'e'.repeat(64);if(key==='start')return ()=>{throw Error('WRONG_ACCOUNT_EXECUTOR');};return Reflect.get(target,key,target);}});
+  const registry=[unrelated,supervisor];
+  const native=new NativeImplementation(db,repo,quality,registry),nativeQa=new NativeQa(db,quality,repo,qaRoot,qaContract,signer),nativeVerification=new NativeVerification(db,quality,registry,signer);
+  runtime=new CezarRuntime(db,repo,project,{quality,git:artifacts,verifierKey:signer,allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification},undefined,undefined,{nativeExecutions:registry,nativeImplementation:native});await runtime.start();
   const boundary=await loadHappier();endpoint=Object.create(HappierEndpoint.prototype) as HappierEndpoint;
   Object.defineProperties(endpoint,{ledger:{value:db},runtime:{value:runtime},boundary:{value:boundary},options:{value:{baseUrl:'http://127.0.0.1',token:'synthetic',key:chatKey,principal,sessionId:session,machineId:'fixture',authority}},lifecycle:{value:new AbortController()},socket:{value:{connected:true,emit:()=>{},disconnect:()=>{}}},notifications:{value:{observe:async()=>{}}},receivePending:{value:async()=>{}},flushNotifications:{value:async()=>{}},deliverQueuedMessages:{value:async()=>{}},seal:{value:(v:unknown)=>boundary.encodeBase64(boundary.encrypt(chatKey,'legacy',v))}});
   const request={localId:'native-'+randomUUID(),text:marker};const accepted=await endpoint.accept(request);assert.equal((await endpoint.accept(request)).result.intentId,accepted.result.intentId);await assert.rejects(endpoint.accept({...request,text:'collision'}),/INTENT_PAYLOAD_CONFLICT/);
@@ -76,6 +82,17 @@ test('canonical encrypted request follows the native Cezar graph through real QA
   const cleanup=native.bindSource(successor,async()=>marker);endpoint.close();assert(native.hasSource(successor));
   await assert.rejects(endpoint.accept({localId:'stale-'+randomUUID(),text:marker}),/STALE_MANAGER/);
   assert(await native.prepareRecovery(recorded,successor));assert.equal(launches,2);cleanup();
+  // A missing target is a preparation failure, not a launched worker. Ensure
+  // it cannot strand a global programmer slot or fabricate a QA verdict.
+  const failedCommand={...recorded.command,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
+  const failedIntent=await db.accept(principal,failedCommand,successor,'happier',async()=>{});
+  native.bindSource(successor,async()=>marker);git('update-ref','-d','refs/heads/protected');
+  const failed=native.start(failedIntent,successor,{sessionId:randomUUID()} as Parameters<NativeImplementation['start']>[2]);
+  await assert.rejects(failed.result);assert.equal(launches,2);
+  const failedState=(await db.pool.query("SELECT o.state,g.state grant_state,g.physical_receipt FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id WHERE o.id=$1",[failedIntent.operation_id])).rows[0];
+  assert.equal(failedState.state,'completed');assert.equal(failedState.grant_state,'released');assert.equal(failedState.physical_receipt.state,'not_started');
+  assert.equal((await db.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE id=$1',[failedIntent.operation_id])).rowCount,0);
+  git('update-ref','refs/heads/protected',artifact.commit_id);
   const snapshots=(await db.pool.query('SELECT command::text value FROM ac_intents UNION ALL SELECT snapshot::text FROM ac_native_task_inputs')).rows;assert(!JSON.stringify(snapshots).includes(marker));
   console.log(JSON.stringify({proof:'canonical-native-cezar-flow',encryptedSource:true,codeGeneration:'synthetic model substitute',qa:'real isolated Docker',review:'synthetic model substitute',gitIntegration:'real exact CAS',duplicateRequestDeduplicated:true,modelCalls:0}));
  }finally{endpoint?.close();await runtime?.close();const docker=new DockerDaemon();if((await db.pool.query("SELECT to_regclass('ac_native_qa_jobs') relation")).rows[0].relation)for(const j of (await db.pool.query('SELECT id FROM ac_native_qa_jobs')).rows){const p=await docker.inspect('ac-native-qa-'+j.id);if(p&&p.Config.Labels['agent-control.job']===j.id){if(p.State.Running)await docker.stop(p.Id);await docker.remove(p.Id);}}await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}

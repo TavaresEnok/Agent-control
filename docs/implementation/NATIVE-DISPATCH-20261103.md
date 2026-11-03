@@ -33,6 +33,14 @@ Logs das falhas iniciais foram preservados. Os rótulos do grafo nativo foram al
 
 Esta é uma tarefa raiz com escopo fixado, não a execução nativa de um plano semântico com múltiplos filhos, correções e composição. Não demonstra recuperação de todos os intervalos de falha nem isolamento hostil completo. Fonte autorizada é restabelecida pelo endpoint da nova época; não há plaintext durável como atalho.
 
-O bootstrap configurável ainda é administrativo. Ativação de contas reais permanece bloqueada; elegibilidade oficial e autorização específica continuam necessárias. Permanecem pendentes integração configurável do runtime nativo, roteamento completo entre supervisores/provedores, planejamento e correções nativos, coletores reais, homologação móvel e revisão independente. QA ainda usa a concessão de avaliação existente; separação de recurso local permanece evolução aberta.
+O bootstrap configurável ainda é administrativo. Ativação de contas reais permanece bloqueada; elegibilidade oficial e autorização específica continuam necessárias. Permanecem pendentes integração configurável do runtime nativo, fallback real entre provedores e homologação do roteamento, planejamento e correções nativos, coletores reais, homologação móvel e revisão independente. QA ainda usa a concessão de avaliação existente; separação de recurso local permanece evolução aberta.
 
 Todos os 111 critérios continuam sem aceite final. Nenhum gate de produto ou prontidão de produção é declarado por esta prova.
+
+## Continuação: concessão e roteamento por conta
+
+A escolha do supervisor passa a considerar a conta da concessão, além do digest e da chave em recuperações históricas. Programação e revisão não escolhem mais o primeiro executor apenas por haver um único registro. O fixture integrado inclui um executor incompatível na primeira posição e exige que ele nunca receba o trabalho. Isso não ativa contas nem implementa detecção de cota real; Capacity continua responsável pela seleção de perfil.
+
+A falha de preparação foi exercitada removendo somente a ref de destino do repositório descartável: nenhum job de modelo foi criado, nenhuma chamada adicional ocorreu e a concessão foi liberada com `not_started`. Evidência verde: `native-dispatch-preparation-second-20261103.log`; o primeiro log preserva erro do próprio teste por campo extra, corrigido sem modificar a validação de produção. O teste de roteamento integrado inclui essa contraprova. Não demonstra recuperação de queda entre transações.
+
+A rodada de roteamento encontrou duas falhas preservadas nos logs: a consulta de observação não projetava `account_id` (corrigida em produção) e o substituto de modelo inseria o job sem a ordem de locks da implementação real, causando deadlock com o tick. O substituto agora adquire contexto/época antes da inserção, como o supervisor real. Nenhum retry cego de efeito externo foi acrescentado para mascarar o deadlock.

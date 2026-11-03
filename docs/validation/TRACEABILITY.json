@@ -135,12 +135,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/original-reserve-global-20261102.log",
+    "evidence": "docs/validation/evidence/original-reserve-global-20261102.log;docs/validation/evidence/native-account-routing-integrated-third-20261103.log",
     "files": "src/capacity.ts;tests/capacity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Global original-account reserve admission tested with synthetic quotas; live providers and safe transition of running tasks remain open."
+    "limitation": "Global original-account reserve admission tested with synthetic quotas; live providers and safe transition of running tasks remain open. Native supervisor selection now binds to the granted account and historical executor/key; tested with an incompatible registered executor. Live quota fallback and provider activation are not homologated."
   },
   {
     "id": "RF-12",
@@ -291,12 +291,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/semantic-planning-http-final-20261102.log;docs/validation/evidence/semantic-conversation-cancellation-first-20261103.log;docs/validation/evidence/native-planning-cancellation-takeover-20261103.log;docs/validation/evidence/native-worker-security-forwarder-20261103.log;docs/validation/evidence/native-tool-forwarder-isolated-20261103.log;docs/implementation/NATIVE-DISPATCH-20261103.md;docs/validation/evidence/native-dispatch-cezar-release-final-20261103.log",
+    "evidence": "docs/validation/evidence/isolated-start-ack-recovery-20261102.log;docs/validation/evidence/broker-restart-neutralization-20261102.log;docs/validation/evidence/native-graph-recovery-final-20261102.log;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/managed-recovery-negative-final-20261102.log;docs/implementation/CORE-INDEPENDENT-REVIEW-20261102.md;docs/validation/evidence/semantic-planning-http-final-20261102.log;docs/validation/evidence/semantic-conversation-cancellation-first-20261103.log;docs/validation/evidence/native-planning-cancellation-takeover-20261103.log;docs/validation/evidence/native-worker-security-forwarder-20261103.log;docs/validation/evidence/native-tool-forwarder-isolated-20261103.log;docs/implementation/NATIVE-DISPATCH-20261103.md;docs/validation/evidence/native-dispatch-cezar-release-final-20261103.log;docs/validation/evidence/native-account-routing-integrated-third-20261103.log",
     "files": "src/isolated-implementation.ts;src/sandbox-broker.ts;src/cezar.ts;tests/native-recovery.test.ts;tests/isolated-recovery.test.ts;tests/managed-recovery.test.ts;tests/managed-recovery-negative.test.ts;src/semantic-planning.ts;db/migrations/048_semantic_planning.sql;db/migrations/049_semantic_executor_bindings.sql;src/happier.ts;src/semantic-planning.ts;tests/semantic-conversation.test.ts;src/native-planning-supervisor.ts;tests/native-planning-cancellation.test.ts;src/native-execution-worker.ts;src/native-tool-forwarder.ts;src/native-worker-security.ts;src/native-implementation.ts;tests/native-dispatch.test.ts;db/migrations/054_native_task_inputs.sql",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Semantic call ACK loss reuses original executor/session after takeover; paused ready proposal publishes once after resume. Native Docker supervisor positive recovery remains unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. The original native planning job can be canceled by an authorized successor after identity/key verification and terminal observation; proof uses a Docker stub, not a physical native process. Signed worker entry and fixed private tool forwarding are prepared; byte transport was tested within a disposable container. Physical broker, isolated peer identity, authenticated CLI, Git artifact and network boundary remain unverified. Scoped native root workflow connected to canonical encrypted input, real Git/QA/CAS with synthetic programming/review substitutes. Native bootstrap, multi-task plans, provider activation and independent acceptance remain pending."
+    "limitation": "SIGKILL at completed verifier nodes, physical QA result and uncertain CAS boundaries verified; Registered QA/integration prelaunch recovery verified; missing result, other uncertain boundaries and real providers remain open. Two synthetic managed SIGKILL points passed with two tasks and composition; the orphan-fork negative uses simulated RunStore. Other crashes, orphan compositor and external divergent writer remain open. Semantic call ACK loss reuses original executor/session after takeover; paused ready proposal publishes once after resume. Native Docker supervisor positive recovery remains unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. The original native planning job can be canceled by an authorized successor after identity/key verification and terminal observation; proof uses a Docker stub, not a physical native process. Signed worker entry and fixed private tool forwarding are prepared; byte transport was tested within a disposable container. Physical broker, isolated peer identity, authenticated CLI, Git artifact and network boundary remain unverified. Scoped native root workflow connected to canonical encrypted input, real Git/QA/CAS with synthetic programming/review substitutes. Native bootstrap, multi-task plans, provider activation and independent acceptance remain pending. Native supervisor selection now binds to the granted account and historical executor/key; tested with an incompatible registered executor. Live quota fallback and provider activation are not homologated."
   },
   {
     "id": "RF-24",
@@ -577,12 +577,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/CORE-C-broker-terminal-recovery-first-20261102.log",
+    "evidence": "docs/validation/evidence/implementation-increment-final.log;docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/managed-recovery-kill-fourth-20261102.log;docs/validation/evidence/CORE-C-broker-terminal-recovery-first-20261102.log;docs/validation/evidence/native-account-routing-integrated-third-20261103.log",
     "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/sandbox-broker.ts;src/isolated-verification.ts;tests/broker-terminal-recovery.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication. Receipt consistency and fenced recovery were tested in limited synthetic fixtures; full ingress and provider equivalence remain open."
+    "limitation": "Synthetic contract/integration scope only. No official live providers, durable fairness, special original-account global mode or complete human control authentication. Receipt consistency and fenced recovery were tested in limited synthetic fixtures; full ingress and provider equivalence remain open. Native supervisor selection now binds to the granted account and historical executor/key; tested with an incompatible registered executor. Live quota fallback and provider activation are not homologated."
   },
   {
     "id": "RF-46",
@@ -629,12 +629,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/managed-process-reaper-green-20261102.log",
+    "evidence": "docs/validation/evidence/isolated-verification-final-20261102.log;docs/validation/evidence/managed-process-reaper-green-20261102.log;docs/validation/evidence/native-account-routing-integrated-third-20261103.log",
     "files": "src/isolated-verification.ts;src/sandbox-broker.ts;upstream/cezar/packages/cezar/src/workflows/run.ts;tests/engineering.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Known controller paths unavailable to synthetic verifiers and native ID-based reaper disabled in managed mode; real account boundaries remain unverified."
+    "limitation": "Known controller paths unavailable to synthetic verifiers and native ID-based reaper disabled in managed mode; real account boundaries remain unverified. Native supervisor selection now binds to the granted account and historical executor/key; tested with an incompatible registered executor. Live quota fallback and provider activation are not homologated."
   },
   {
     "id": "RF-50",

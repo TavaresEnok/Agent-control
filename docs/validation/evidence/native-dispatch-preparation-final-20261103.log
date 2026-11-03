@@ -1,0 +1,38 @@
+ Container ac-implementation-db-1  Running
+TAP version 13
+# Subtest: canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration
+not ok 1 - canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration
+  ---
+  duration_ms: 6756.461628
+  type: 'test'
+  location: '/home/app/projects/agent-control-implementation/tests/native-dispatch.test.ts:1:1254'
+  failureType: 'testCodeFailure'
+  error: |-
+    [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "planRevision"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"planRevision\""
+      }
+    ]
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Ledger.accept (/home/app/projects/agent-control-implementation/src/ledger.ts:125:29)
+    TestContext.<anonymous> (/home/app/projects/agent-control-implementation/tests/native-dispatch.test.ts:82:31)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8068.694266
+

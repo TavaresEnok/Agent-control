@@ -25,8 +25,10 @@ export class NativeVerification{
  async run(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,artifact:ArtifactRow,kind:'qa'|'review'|'judge',isCanceled:()=>boolean){
   if(kind==='qa')throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
   if(isCanceled())throw new Refusal('STAGE_CANCELED');
-  const previous=(await this.ledger.pool.query('SELECT executor_digest,key_fingerprint FROM ac_native_execution_jobs WHERE id=$1',[stage.id])).rows[0];
-  const supervisor=previous?this.supervisors.find(s=>s.executorDigest===previous.executor_digest&&s.keyFingerprint===previous.key_fingerprint):this.supervisors.length===1?this.supervisors[0]:undefined;
+  const previous=(await this.ledger.pool.query('SELECT executor_digest,key_fingerprint,account_id FROM ac_native_execution_jobs WHERE id=$1',[stage.id])).rows[0];
+  const grant=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
+  const candidates=this.supervisors.filter(s=>s.supportsAccount(grant?.account_id)&&(!previous||previous.account_id===grant?.account_id&&s.executorDigest===previous.executor_digest&&s.keyFingerprint===previous.key_fingerprint));
+  const supervisor=candidates.length===1?candidates[0]:undefined;
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   await this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,Boolean(previous));await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
@@ -47,7 +49,7 @@ export class NativeVerification{
   z.uuid().parse(jobId);
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2',[jobId,authority.contextId])).rows[0];
   if(!job||!['reviewer','judge'].includes(job.role))throw new Refusal('NATIVE_VERIFICATION_JOB_MISMATCH');
-  const supervisor=this.supervisors.find(s=>s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
+  const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   const observed=await supervisor.reconcileRegistered(principal,authority,jobId);
   if(observed.state!=='completed'||!('output' in observed)||typeof observed.output!=='string')throw new Refusal('NATIVE_VERIFICATION_EXECUTION_UNCONFIRMED');

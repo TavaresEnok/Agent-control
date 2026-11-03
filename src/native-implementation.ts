@@ -32,7 +32,7 @@ export class NativeImplementation{
  async prepareRecovery(intent:Intent,authority:Authority){
   const owner=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;if(!owner)throw new Refusal('INTENT_MISSING');
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rows[0];
-  if(job){const supervisor=this.supervisors.find(s=>s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);return true;}
+  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);return true;}
   return this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,false,c);if(!this.hasSource(authority))return false;
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];if(op?.state!=='registered'||op.handle||op.native_session_id)return false;
    if((await c.query('SELECT 1 FROM ac_execution_launches WHERE operation_id=$1 UNION ALL SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount)return false;
@@ -58,8 +58,8 @@ export class NativeImplementation{
    const command=Command.parse(intent.command),p=command.payload;if(p.workflow!=='engineering-native-v1'||intent.context_id!==authority.contextId)throw new Refusal('NATIVE_IMPLEMENTATION_INPUT_MISMATCH');
    const owner=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;if(!owner)throw new Refusal('INTENT_MISSING');
    const prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rows[0];
-   const supervisor=prior?this.supervisors.find(s=>s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint):this.supervisors.length===1?this.supervisors[0]:undefined;
-   if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
+   let supervisor=prior?this.supervisors.find(s=>s.supportsAccount(prior.account_id)&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint):undefined;
+   if(prior&&!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
    if(!prior){
     const source=this.sources.get(authority.contextId);if(!this.hasSource(authority)||!source)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');
     const text=await source.resolve(intent,authority);if(digest(text)!==p.messageDigest)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
@@ -75,6 +75,9 @@ export class NativeImplementation{
      const bound=await c.query("UPDATE ac_operations SET grant_id=$2 WHERE id=$1 AND intent_id=$3 AND state='registered' AND manager_epoch=$4 AND (grant_id IS NULL OR grant_id=$2) RETURNING id",[intent.operation_id,grant!.id,intent.id,authority.epoch]);
      if(!bound.rowCount)throw new Refusal('NATIVE_IMPLEMENTATION_RECONCILIATION_REQUIRED');
     });
+    const eligible=this.supervisors.filter(s=>s.supportsAccount(grant!.account_id));
+    if(eligible.length!==1)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
+    supervisor=eligible[0]!;
     const frozen=await this.ledger.tx(async c=>{
      await this.authorize(owner,authority,intent.id,false,c);
      let row=(await c.query('SELECT * FROM ac_native_task_inputs WHERE intent_id=$1',[intent.id])).rows[0];
@@ -101,6 +104,7 @@ export class NativeImplementation{
       });throw error;
      }}
    }
+   if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
    for(;;){
     if(canceled||!this.active){await supervisor.reconcileCancellation(owner,authority,intent.operation_id);throw new Refusal('STAGE_CANCELED');}
     const observed=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);

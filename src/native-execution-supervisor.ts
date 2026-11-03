@@ -39,6 +39,7 @@ const workerEntrypoint=['node','/opt/agent-control/dist/src/native-execution-wor
  * approval or Git integration occurs here. Not wired to production bootstrap. */
 export class NativeExecutionSupervisor{
  readonly executorDigest:string;
+ supportsAccount(accountId:string){return this.subjects.has(accountId);}
  get keyFingerprint(){return this.fingerprint;}private readonly key;private readonly publicKey:string;private readonly fingerprint:string;
  private readonly subjects=new Map<string,string>();private readonly docker:DockerDaemon;private readonly user:string;
  constructor(readonly ledger:Ledger,private readonly config:NativeExecutionSupervisorConfig,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){

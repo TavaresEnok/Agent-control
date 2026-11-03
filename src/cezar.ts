@@ -538,7 +538,7 @@ export class CezarRuntime {
     }
     if(this.nativeExecutions.length){
       if(!principal)throw new Refusal('NATIVE_EXECUTION_PRINCIPAL_REQUIRED');
-      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.role,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
+      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.role,j.account_id,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
         LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id AND x.context_id=j.context_id
         WHERE j.context_id=$1 AND (j.state IN ('uncertain','running') OR x.state='requested' OR
          (j.state='completed' AND j.role='programmer' AND j.receipt->'payload'->'artifact'->>'commit' IS NOT NULL AND
@@ -546,7 +546,7 @@ export class CezarRuntime {
          (j.state='completed' AND j.role IN ('reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state<>'completed')))
         ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId])).rows;
       for(const job of jobs){
-        const supervisor=this.nativeExecutions.find(s=>s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
+        const supervisor=this.nativeExecutions.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
         if(!supervisor)throw new Refusal('NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE');
         await this.ledger.heartbeat(authority);
         if(job.cancellation_state==='requested')await supervisor.reconcileCancellation(principal,authority,job.id);
