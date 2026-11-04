@@ -21,6 +21,7 @@ import { refuseCurrentProtectedGate } from './quality.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
 import { baselineWorkflow,workflowFor } from './workflows.ts';
+import {AGENT_CONTROL_RUNTIME_BUILD,AGENT_CONTROL_RUNTIME_VERSION,currentWorkflow,resolveFrozenWorkflow,WORKFLOW_VERSION_RETIRED,type FrozenWorkflowResolution,type WorkflowDef,type WorkflowVersionPin} from './workflow-versions.ts';
 import { EngineeringStages,type EngineeringOptions } from './engineering.ts';
 import { Template } from './templates.ts';
 import {IsolatedImplementation} from './isolated-implementation.ts';
@@ -59,6 +60,7 @@ export class CezarRuntime {
   private readonly managedRecoveryPermits=new Map<string,{intentId:string;epoch:number;stateDigest:string}>();
   private readonly managedReplayLaunches=new Map<string,number>();
   private readonly specialistPreparedLaunches=new Map<string,number>();
+  private readonly admittedWorkflows=new Map<string,unknown>();
   private readonly children = new Set<ChildProcess>();
   private readonly recovering = new Set<string>();
   private readonly recoveryAt = new Map<string,number>();
@@ -126,8 +128,11 @@ export class CezarRuntime {
           this.authorities.set(unit.runId,authority);return unit.runId;
         }
         const current = this.invocation.getStore();
-        const expected=current?.intent.command.payload.workflow==='managed-synthetic-v1'
-          ?this.managedPlans.get(current.intent.run_id)?.recipe.workflow:current?workflowFor(current.intent.command.payload.workflow):undefined;
+        const managed=current?.intent.command.payload.workflow==='managed-synthetic-v1'
+          ?this.managedPlans.get(current.intent.run_id)?.recipe.workflow:undefined;
+        // Only the definition reconciled against the frozen snapshot may start. There is no upgrade onto workflowFor(current).
+        const admitted=current?this.admittedWorkflows.get(current.intent.run_id):undefined;
+        const expected=managed??admitted;
         if (!current || !expected || digest(workflow) !== digest(expected) || input.task !== `Intent ${current.intent.id}`)
           throw new Refusal('UNAPPROVED_PLAN');
         return current.intent.run_id;
@@ -161,23 +166,27 @@ export class CezarRuntime {
         return this.ledger.tx(async c=>{
           await this.ledger.fence(c,current.authority);
           await this.ledger.assertIntentActive(c,current.authority.contextId,current.intent.id);
-          const bound=(await c.query(`SELECT i.principal_id,i.command,i.plan_revision,o.state,g.state grant_state,j.state job_state,f.digest
+          const bound=(await c.query(`SELECT i.principal_id,i.command,i.plan_revision,i.manager_epoch,o.state,g.state grant_state,j.state job_state,f.digest,f.snapshot,
+            p.workflow_version,p.workflow_digest,p.manager_epoch AS pin_epoch,p.runtime_version,p.runtime_build,p.policy
             FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id
             JOIN ac_capacity_grants g ON g.id=o.grant_id LEFT JOIN ac_sandbox_jobs j ON j.id=o.id
             JOIN ac_frozen_plans f ON f.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id
+            LEFT JOIN ac_workflow_version_pins p ON p.intent_id=i.id
             WHERE i.id=$1 AND i.run_id=$2 AND i.context_id=$3 AND x.project_id=$4 AND o.id=$5`,
             [current.intent.id,run.id,current.authority.contextId,this.projectId,current.intent.operation_id])).rows[0];
           if(!bound)return false;
           await this.ledger.authorize(c,bound.principal_id,current.authority.contextId);
+          const pinned=resolveFrozenWorkflow({commandWorkflow:bound.command.payload.workflow,snapshot:bound.snapshot,storedDigest:bound.digest,
+            pin:bound.workflow_version?{workflowVersion:bound.workflow_version,workflowDigest:bound.workflow_digest,managerEpoch:Number(bound.pin_epoch),
+              runtimeVersion:bound.runtime_version,runtimeBuild:bound.runtime_build,policy:bound.policy}:null,intentEpoch:Number(bound.manager_epoch)});
           return bound.state==='completed'&&bound.grant_state==='released'&&(cursor!=='implement'||bound.job_state==='completed')&&
             bound.plan_revision===current.intent.plan_revision&&digest(bound.command)===digest(current.intent.command)&&
-            bound.digest===digest(workflowFor(current.intent.command.payload.workflow))&&
-            digest(run.workflowDef)===bound.digest;
+            pinned.ok&&bound.digest===pinned.digest&&digest(run.workflowDef)===bound.digest;
         });
       },
     } });
     this.native = createApp({ repoRoot: repo, store: this.store, manager: this.manager,
-      bootProjectId: projectId, semaphore:this.semaphore,version: 'agent-control-0.1.0' });
+      bootProjectId: projectId, semaphore:this.semaphore,version: AGENT_CONTROL_RUNTIME_VERSION });
   }
   async start(mode:'execution'|'administration-only'='execution') {
     if(this.nativeBootstrapAttachment&&mode==='execution')throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
@@ -240,6 +249,62 @@ export class CezarRuntime {
     }
     return result;
   }
+  private pinFrom(row: {workflow_version?: string; workflow_digest?: string; pin_epoch?: string|number; runtime_version?: string; runtime_build?: string; policy?: string} | undefined): WorkflowVersionPin | null {
+    if(!row?.workflow_version)return null;
+    return {workflowVersion:row.workflow_version,workflowDigest:String(row.workflow_digest??''),managerEpoch:Number(row.pin_epoch),
+      runtimeVersion:String(row.runtime_version??''),runtimeBuild:String(row.runtime_build??''),policy:String(row.policy??'')};
+  }
+  private async insertWorkflowVersionBlock(c: import('pg').PoolClient, intent: Intent, reason: 'unregistered'|'divergent', workflowName: string, digestValue: string) {
+    const name=/^[A-Za-z0-9._():-]{1,120}$/.test(workflowName)?workflowName:'redacted';
+    const detail={intentId:intent.id,cause:WORKFLOW_VERSION_RETIRED,reason,workflowName:name,digest:/^[a-f0-9]{64}$/.test(digestValue)?digestValue:null};
+    await c.query(`INSERT INTO ac_audit(context_id,kind,detail)
+      SELECT $1,'workflow.version_retired',$2::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM ac_audit WHERE context_id=$1 AND kind='workflow.version_retired'
+        AND detail->>'intentId'=$3 AND detail->>'cause'=$4 AND detail->>'reason'=$5)`,
+      [intent.context_id,JSON.stringify(detail),intent.id,WORKFLOW_VERSION_RETIRED,reason]);
+  }
+  private async ensureWorkflowPin(c: import('pg').PoolClient, intent: Intent, decision: Extract<FrozenWorkflowResolution,{ok:true}>) {
+    const name=decision.definition.name;
+    await c.query(`INSERT INTO ac_workflow_version_pins(intent_id,context_id,manager_epoch,workflow_name,workflow_version,workflow_digest,runtime_version,runtime_build,policy)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pinned') ON CONFLICT(intent_id) DO NOTHING`,
+      [intent.id,intent.context_id,Number(intent.manager_epoch),name,decision.version,decision.digest,AGENT_CONTROL_RUNTIME_VERSION,AGENT_CONTROL_RUNTIME_BUILD]);
+  }
+  /**
+   * Bind an already frozen execution to its recorded snapshot. A missing pin is derived and then recorded.
+   * Retirement writes one audit and does not reserve capacity, dispatch, or change the operation.
+   */
+  async reconcileWorkflowVersion(intent: Intent, authority: Authority): Promise<
+    | {state:'current'|'retained'|'dynamic'; definition: WorkflowDef; version: string; digest: string}
+    | {state:'absent'}
+    | {state:'retired'; cause: typeof WORKFLOW_VERSION_RETIRED; reason:'unregistered'|'divergent'}> {
+    return this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority);
+      if(intent.context_id!==authority.contextId)throw new Refusal('EFFECT_SCOPE_MISMATCH');
+      const row=(await c.query(`SELECT i.principal_id,i.context_id,i.run_id,i.operation_id,i.plan_revision,i.manager_epoch,i.command,f.snapshot,f.digest,
+        p.workflow_version,p.workflow_digest,p.manager_epoch AS pin_epoch,p.runtime_version,p.runtime_build,p.policy
+        FROM ac_intents i LEFT JOIN ac_frozen_plans f ON f.intent_id=i.id
+        LEFT JOIN ac_workflow_version_pins p ON p.intent_id=i.id
+        WHERE i.id=$1 AND i.context_id=$2`,[intent.id,authority.contextId])).rows[0];
+      if(!row||row.context_id!==intent.context_id||row.run_id!==intent.run_id||row.operation_id!==intent.operation_id||
+        Number(row.plan_revision)!==Number(intent.plan_revision)||digest(row.command)!==digest(intent.command))throw new Refusal('INTENT_IDENTITY_MISMATCH',403);
+      await this.ledger.authorize(c,row.principal_id,authority.contextId);
+      if(!row.snapshot)return {state:'absent' as const};
+      const decision=resolveFrozenWorkflow({commandWorkflow:row.command.payload.workflow,snapshot:row.snapshot,storedDigest:row.digest,
+        pin:this.pinFrom(row),intentEpoch:Number(row.manager_epoch)});
+      const snapshotName=row.snapshot&&typeof row.snapshot==='object'&&typeof row.snapshot.name==='string'?row.snapshot.name:'unknown';
+      if(!decision.ok){await this.insertWorkflowVersionBlock(c,intent,decision.reason,snapshotName,String(row.digest??''));return {state:'retired' as const,cause:decision.cause,reason:decision.reason};}
+      if(Number(row.manager_epoch)!==Number(intent.manager_epoch)){
+        await this.insertWorkflowVersionBlock(c,intent,'divergent',snapshotName,decision.digest);return {state:'retired' as const,cause:WORKFLOW_VERSION_RETIRED,reason:'divergent' as const};
+      }
+      await this.ensureWorkflowPin(c,{...intent,manager_epoch:String(row.manager_epoch)},decision);
+      const saved=(await c.query('SELECT workflow_version,workflow_digest,manager_epoch,policy FROM ac_workflow_version_pins WHERE intent_id=$1',[intent.id])).rows[0];
+      if(!saved||saved.workflow_version!==decision.version||saved.workflow_digest!==decision.digest||Number(saved.manager_epoch)!==Number(row.manager_epoch)||saved.policy!=='pinned'){
+        await this.insertWorkflowVersionBlock(c,intent,'divergent',snapshotName,decision.digest);return {state:'retired' as const,cause:WORKFLOW_VERSION_RETIRED,reason:'divergent' as const};
+      }
+      const state=decision.kind==='dynamic'?'dynamic':currentWorkflow(decision.definition.name)?.version===decision.version?'current':'retained';
+      return {state,definition:decision.definition,version:decision.version,digest:decision.digest};
+    });
+  }
   async dispatch(intent: Intent, authority: Authority) {
     if(!this.executionEnabled)throw new Refusal('ADMINISTRATION_ONLY');
     if(intent.command.payload.workflow==='engineering-native-v1'&&(!this.nativeImplementation||!this.engineering?.options.nativeQa||!this.engineering?.options.nativeVerification||!this.nativeImplementation.hasSource(authority)))throw new Refusal('NATIVE_EXECUTION_NOT_CONFIGURED');
@@ -249,13 +314,21 @@ export class CezarRuntime {
     if(!delivery)throw new Refusal('INTENT_MISSING');
     if(delivery.parent_intent_id)throw new Refusal('SUBDELIVERY_DISPATCH_FORBIDDEN',403);
     await this.refreshSchedulerBudget();
+    const pinned=await this.reconcileWorkflowVersion(intent,authority);
+    // Returning the stored run would let the Happier tick project status and events.
+    // Retirement stays parked: no reserve, no spawn, no outbox or operation change.
+    if(pinned.state==='retired')return;
     const recipe=intent.command.payload.workflow==='managed-synthetic-v1'?await readManagedRecipe(this.ledger,intent.id):undefined;
     if(recipe?.schemaVersion===3&&!syntheticSpecialistAdviceAuthorized(this.ledger))throw new Refusal('MANAGED_SPECIALIST_EXECUTOR_UNAVAILABLE');
     if(recipe&&recipe.mode!=='native'&&recipe.units.some(unit=>(unit.correctionRevision??0)>0)&&!syntheticManagedCorrectionsAuthorized(this.ledger))throw new Refusal('MANAGED_CORRECTION_EXECUTOR_UNAVAILABLE');
     // A native plan uses the programmer, QA and review adapters. It does not require the synthetic sandbox.
     if(recipe?.mode==='native'){if(!this.nativeExecutionReady)throw new Refusal('NATIVE_EXECUTION_NOT_CONFIGURED');}
     else if(recipe&&!this.managedExecutionReady())throw new Refusal('MANAGED_RUNTIME_NOT_READY');
-    const workflow=recipe?.workflow??workflowFor(intent.command.payload.workflow);
+    const workflow=recipe?.workflow??(pinned.state==='absent'?workflowFor(intent.command.payload.workflow):pinned.definition);
+    if(pinned.state!=='absent'&&digest(workflow)!==pinned.digest){
+      await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.insertWorkflowVersionBlock(c,intent,'divergent',workflow.name,pinned.digest);});
+      return;
+    }
     if(['engineering-synthetic-v1','engineering-native-v1'].includes(workflow.name)&&!this.engineering)throw new Refusal('ENGINEERING_NOT_CONFIGURED');
     const identity = (await this.ledger.pool.query(`SELECT i.*,o.execution_attempt_id,o.state operation_state,x.project_id
       FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1`,[intent.id])).rows[0];
@@ -284,6 +357,11 @@ export class CezarRuntime {
         [intent.context_id, intent.plan_revision, intent.id, digest(workflow), workflow]);
       const snapshot = await c.query('SELECT digest FROM ac_frozen_plans WHERE intent_id=$1', [intent.id]);
       if (snapshot.rows[0]?.digest !== digest(workflow)) throw new Refusal('FROZEN_PLAN_MISMATCH');
+      if(pinned.state==='absent'){
+        const decision=resolveFrozenWorkflow({commandWorkflow:intent.command.payload.workflow,snapshot:workflow,storedDigest:digest(workflow),pin:null,intentEpoch:Number(intent.manager_epoch)});
+        if(!decision.ok)throw new Refusal(WORKFLOW_VERSION_RETIRED);
+        await this.ensureWorkflowPin(c,intent,decision);
+      }
       if(workflow.name==='engineering-synthetic-v1'||workflow.name==='engineering-native-v1'){
         const chosen=(await c.query('SELECT snapshot,digest FROM ac_intent_templates WHERE intent_id=$1',[intent.id])).rows[0];
         if(!chosen)throw new Refusal('TEMPLATE_REQUIRED');
@@ -300,6 +378,7 @@ export class CezarRuntime {
       const existing = this.store.getRun(intent.run_id);
       if (existing) return;
       if (current.rows[0].state !== 'registered') throw new Refusal('OPERATION_UNCERTAIN');
+      this.admittedWorkflows.set(intent.run_id,workflow);
       this.authorities.set(intent.run_id, authority);
       if(recipe)this.managedPlans.set(intent.run_id,{recipe,used:new Set()});
       // startRun persists a stable run ID before enqueue; the runner checks epoch again at spawn.
@@ -830,7 +909,7 @@ export class CezarRuntime {
   /** Rejoin the native graph only after reconciling the interrupted implementation.
    * Called by the existing conversation heartbeat, never by a second scheduler. */
   async recoverManaged(authority:Authority){
-    if((!this.isolated&&!this.engineering)||!this.running||!this.lock||this.recovering.has(authority.contextId)||
+    if(!this.running||!this.lock||this.recovering.has(authority.contextId)||
        Date.now()-(this.recoveryAt.get(authority.contextId)??0)<1000)return;
     this.recovering.add(authority.contextId);this.recoveryAt.set(authority.contextId,Date.now());
     try{
@@ -840,6 +919,14 @@ export class CezarRuntime {
         const run=this.store.getRun(intent.run_id);
         if(run?.status!=='waiting'||run.error!=='Managed execution awaiting authoritative reconciliation'||run.askParked||run.attentionRequest)continue;
         try{
+          const pinned=await this.reconcileWorkflowVersion(intent,authority);
+          if(pinned.state==='retired'||pinned.state==='absent')continue;
+          if(!run.workflowDef||digest(run.workflowDef)!==pinned.digest){
+            await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.insertWorkflowVersionBlock(c,intent,'divergent',String(run.workflowDef&&typeof run.workflowDef==='object'&&'name' in run.workflowDef?run.workflowDef.name:'unknown'),pinned.digest);});
+            continue;
+          }
+          this.admittedWorkflows.set(intent.run_id,pinned.definition);
+          if(!this.isolated&&!this.engineering)continue;
           if(intent.command.payload.workflow==='managed-synthetic-v1'){
             await this.recoverManagedGraph(intent,authority);continue;
           }

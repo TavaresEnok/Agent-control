@@ -3,6 +3,7 @@ import type {Ledger} from './ledger.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import type {AgentControlDiagnosticFinding} from '../upstream/cezar/packages/contract/src/agent-control-operations.ts';
 import {projectNativeTerminalFailure, type NativeTerminalFailureSource} from './native-failure-diagnostics.ts';
+import {readWorkflowVersionSnapshot, type WorkflowVersionSnapshot} from './workflow-versions.ts';
 
 export type DiagnosticFinding=AgentControlDiagnosticFinding;
 /** Only stored, context-scoped facts are reported; this service never initiates recovery. */
@@ -111,6 +112,23 @@ export class ContextDiagnostics{
    await c.query('COMMIT');
    return {contextId,findings,truncated,assessment:findings.length?'observed':'unknown',
     ...(findings.length?{}:{explanation:'Nenhuma causa foi comprovada nos registros consultados; o estado de parada é desconhecido.'})};
+  }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
+ }
+ /** Same authorization and read-only transaction as read(). The closed diagnostics HTTP schema is unchanged. */
+ async workflowVersions(principal:string,contextId:string):Promise<WorkflowVersionSnapshot>{
+  Id.parse(contextId);if(!principal)throw new Refusal('AUTH_REQUIRED',401);
+  const c=await this.ledger.pool.connect();
+  try{
+   await c.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+   await c.query("SET LOCAL statement_timeout = '2500ms'");
+   const context=(await c.query(`SELECT x.project_id FROM ac_contexts x
+    JOIN ac_memberships m ON m.project_id=x.project_id AND m.principal_id=$2
+    WHERE x.id=$1 AND NOT x.archived`,[contextId,principal])).rows[0];
+   if(!context)throw new Refusal('CONTEXT_FORBIDDEN',403);
+   if(context.project_id!==this.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+   const report=await readWorkflowVersionSnapshot(c,contextId);
+   await c.query('COMMIT');
+   return report;
   }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
  }
 }

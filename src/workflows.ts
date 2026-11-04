@@ -27,10 +27,10 @@ export const engineeringNativeWorkflow=workflowDefSchema.parse({...engineeringWo
 // to Cezar as an execution graph; Cezar remains sole owner of work DAGs.
 export const semanticProposalWorkflow=workflowDefSchema.parse({name:'semantic-proposal-v1',source:'built-in',steps:[],
  graph:{version:2,nodes:[{id:'start',type:'start'},{id:'done',type:'end',status:'success'}],edges:[{from:'start',to:'done'}]}});
+/** Current built-ins only. A new execution never selects a retained snapshot; those stay in src/workflow-versions.ts. */
+export const currentBuiltInWorkflows=Object.freeze([semanticProposalWorkflow,baselineWorkflow,engineeringWorkflow,engineeringNativeWorkflow]);
 export function workflowFor(name:string){
- if(name===semanticProposalWorkflow.name)return semanticProposalWorkflow;
- if(name===baselineWorkflow.name)return baselineWorkflow;
- if(name===engineeringWorkflow.name)return engineeringWorkflow;
- if(name===engineeringNativeWorkflow.name)return engineeringNativeWorkflow;
- throw new Refusal('WORKFLOW_NOT_ADMITTED');
+ const found=currentBuiltInWorkflows.find(item=>item.name===name);
+ if(!found)throw new Refusal('WORKFLOW_NOT_ADMITTED');
+ return found;
 }
