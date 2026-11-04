@@ -9,12 +9,16 @@ import {Authority,Command,digest,Refusal} from './contracts.ts';
 import {GitArtifacts} from './git.ts';
 import {Quality} from './quality.ts';
 import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
-import {nativeManagedTaskText,readManagedUnit} from './managed-plan.ts';
+import {nativeManagedTaskText,readManagedInput,readManagedUnit} from './managed-plan.ts';
 import {ManagerPlan} from './planning.ts';
 import type {AgentRunSpec,AgentSession,AgentEvent} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 const execFileAsync=promisify(execFile);
 type Source=(intent:Intent,authority:Authority)=>Promise<string>;
 type Binding={authority:Authority;resolve:Source};
+/** A correction attempt must produce a new commit and tree. The rejected object stays in history only. */
+export function assertNativeCorrectionDistinct(commit:string,tree:string,priorCommit:string,priorTree:string){
+ if(commit===priorCommit||tree===priorTree)throw new Refusal('NATIVE_CORRECTION_REUSED_COMMIT');
+}
 /** Runs the implementation stage of the existing native Cezar graph. Source
  * decryption is supplied only by an authorized, live Happier endpoint. */
 export class NativeImplementation{
@@ -69,10 +73,17 @@ export class NativeImplementation{
   const head=(await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'rev-parse','HEAD'],{env,timeout:10000})).stdout.trim();
   if(head!==commit)throw new Refusal('NATIVE_TASK_WORKTREE_MISMATCH');
  }
+ private async refuseReusedCorrection(intent:Intent,artifact:{commit_id:string;tree_id:string}){
+  const managed=await readManagedUnit(this.ledger,intent);
+  if(!managed||managed.recipe.mode!=='native'||(managed.unit.correctionRevision??0)===0)return;
+  const input=await readManagedInput(this.ledger,intent.id);
+  if(!input.correction||input.correction.revision!==managed.unit.correctionRevision||input.correction.taskId!==managed.unit.taskId)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
+  assertNativeCorrectionDistinct(artifact.commit_id,artifact.tree_id,input.correction.priorCommit,input.correction.priorTree);
+ }
  async prepareRecovery(intent:Intent,authority:Authority){
   const owner=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;if(!owner)throw new Refusal('INTENT_MISSING');
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rows[0];
-  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);await this.materializeManagedCommit(intent,artifact.commit_id);return true;}
+  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);await this.refuseReusedCorrection(intent,artifact);await this.materializeManagedCommit(intent,artifact.commit_id);return true;}
   return this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,false,c);if(!this.hasSource(authority))return false;
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];if(op?.state!=='registered'||op.handle||op.native_session_id)return false;
    if((await c.query('SELECT 1 FROM ac_execution_launches WHERE operation_id=$1 UNION ALL SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount)return false;
@@ -102,8 +113,8 @@ export class NativeImplementation{
    if(prior&&!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
    if(!prior){
     const managed=await readManagedUnit(this.ledger,intent);
-    let text:string;
-    if(managed?.recipe.mode==='native')text=await this.frozenTaskText(intent,p.messageDigest,p.writePaths);
+    let text:string,managedBase:string|undefined,correction:Awaited<ReturnType<typeof readManagedInput>>['correction'];
+    if(managed?.recipe.mode==='native'){const input=await readManagedInput(this.ledger,intent.id);managedBase=input.base;correction=input.correction;text=await this.frozenTaskText(intent,p.messageDigest,p.writePaths);}
     else{const source=this.sources.get(authority.contextId);if(!this.hasSource(authority)||!source)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');text=await source.resolve(intent,authority);}
     if(digest(text)!==p.messageDigest)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
     const operation=(await this.ledger.pool.query('SELECT execution_attempt_id FROM ac_operations WHERE id=$1 AND intent_id=$2',[intent.operation_id,intent.id])).rows[0];
@@ -125,17 +136,17 @@ export class NativeImplementation{
      await this.authorize(owner,authority,intent.id,false,c);
      let row=(await c.query('SELECT * FROM ac_native_task_inputs WHERE intent_id=$1',[intent.id])).rows[0];
      if(!row){
-      const base=await new GitArtifacts(this.repository).resolveTarget(p.targetRef);
+      const base=managedBase??await new GitArtifacts(this.repository).resolveTarget(p.targetRef);
       const input={schemaVersion:1,intentId:intent.id,contextId:authority.contextId,base,writePaths:p.writePaths,qualityRevision:p.qualityRevision,targetRef:p.targetRef,messageRef:p.messageRef,messageDigest:p.messageDigest};
       await c.query('INSERT INTO ac_native_task_inputs VALUES($1,$2,$3,$4)',[intent.id,base,input,digest(input)]);row={base_id:base,snapshot:input,digest:digest(input)};
      }
-     if(digest(row.snapshot)!==row.digest||row.snapshot.messageDigest!==p.messageDigest||row.snapshot.targetRef!==p.targetRef||digest(row.snapshot.writePaths)!==digest(p.writePaths))throw new Refusal('NATIVE_TASK_INPUT_CONFLICT');
+     if(digest(row.snapshot)!==row.digest||row.snapshot.messageDigest!==p.messageDigest||row.snapshot.targetRef!==p.targetRef||digest(row.snapshot.writePaths)!==digest(p.writePaths)||(managedBase!==undefined&&row.base_id!==managedBase))throw new Refusal('NATIVE_TASK_INPUT_CONFLICT');
      const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];
      if(op?.state!=='registered'||Number(op.manager_epoch)!==authority.epoch||!grant||grant.state!=='reserved'||(op.grant_id&&op.grant_id!==grant.id))throw new Refusal('NATIVE_IMPLEMENTATION_RECONCILIATION_REQUIRED');
      await c.query('UPDATE ac_operations SET grant_id=$2 WHERE id=$1',[intent.operation_id,grant.id]);return {base:row.base_id,grantId:grant.id};
     });
     if(canceled||!this.active)throw new Refusal('STAGE_CANCELED');
-    const task=JSON.stringify({instruction:'Implement the authorized request within the frozen write paths. Tests and independent review are enforced by the controller. Do not approve, integrate, publish or deploy.',request:text,sourceRef:p.messageRef,writePaths:p.writePaths,base:frozen.base});
+    const task=JSON.stringify({instruction:'Implement the authorized request within the frozen write paths. Tests and independent review are enforced by the controller. Do not approve, integrate, publish or deploy.',request:text,sourceRef:p.messageRef,writePaths:p.writePaths,base:frozen.base,...(correction?{correction:{taskId:correction.taskId,revision:correction.revision,priorCommit:correction.priorCommit,priorTree:correction.priorTree,priorArtifactId:correction.priorArtifactId,decisionDigest:correction.decisionDigest,failedEvidenceIds:correction.failedEvidenceIds}}:{})});
     try{await supervisor.start(owner,authority,{jobId:intent.operation_id,intentId:intent.id,grantId:frozen.grantId,sessionId:z.uuid().parse(spec.sessionId),base:frozen.base,role:'programmer',task,writePaths:p.writePaths});}
     catch(error){const exists=(await this.ledger.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rowCount;if(!exists){
       await this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,true,c);
@@ -154,6 +165,7 @@ export class NativeImplementation{
     if(observed.state==='failed')throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');
     if(observed.state==='completed'){
      const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);
+     await this.refuseReusedCorrection(intent,artifact);
      await this.materializeManagedCommit(intent,artifact.commit_id);
      const row=(await this.ledger.pool.query('SELECT g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1',[intent.operation_id])).rows[0];
      const tokens=row?.physical_receipt?.normalizedTokensUsed;

@@ -17,6 +17,21 @@ export async function measureDiskCapacity(path:string){
  }catch(error){if(error instanceof Refusal)throw error;throw new Refusal('DISK_OBSERVATION_UNAVAILABLE');}
 }
 
+export type DiskAdmissionVerdict={admitted:boolean;code:'ADMITTED'|'STORAGE_LOW_SPACE';reason:string};
+/** Floor shared with the dry-run retention plan. A shortfall refuses new work
+ * and never deletes. `additionalReservedBytes` is added whole, matching the
+ * historical guard (callers may already have scaled pending estimates). */
+export function requiredFreeBytes(minFreeBytes:number,estimatedWriteBytes:number,additionalReservedBytes=0n):bigint{
+ if(!Number.isSafeInteger(minFreeBytes)||minFreeBytes<0||!Number.isSafeInteger(estimatedWriteBytes)||estimatedWriteBytes<=0)throw new Refusal('DISK_POLICY_INVALID',400);
+ if(additionalReservedBytes<0n)throw new Refusal('DISK_RESERVATION_INVALID',400);
+ return additionalReservedBytes+BigInt(estimatedWriteBytes)+BigInt(minFreeBytes);
+}
+export function explainDiskAdmission(availableBytes:bigint,requiredBytes:bigint):DiskAdmissionVerdict{
+ if(availableBytes<0n||requiredBytes<0n)throw new Refusal('DISK_OBSERVATION_UNAVAILABLE');
+ if(availableBytes<requiredBytes)return {admitted:false,code:'STORAGE_LOW_SPACE',reason:`STORAGE_LOW_SPACE: ${availableBytes} bytes free is below ${requiredBytes} bytes required (additional reservation + estimated write + minimum free). New work is refused. The dry-run plan may list regenerable caches first and does not delete acceptance evidence, backups without a proven restore, unique valid backups, or referenced or uncertain artifacts.`};
+ return {admitted:true,code:'ADMITTED',reason:`ADMITTED: ${availableBytes} bytes free covers ${requiredBytes} bytes required (additional reservation + estimated write + minimum free).`};
+}
+
 /** Trusted startup configuration only. Workers/model requests cannot choose
  * paths or disable this guard. Absence means disabled, never an invented disk
  * reading. It complements PG admission; statfs is not a quota or an ENOSPC
@@ -29,12 +44,21 @@ export function diskPolicyFromEnvironment(env:NodeJS.ProcessEnv=process.env):Dis
 export class DiskAdmissionGuard implements DiskGuard{
  readonly policy:DiskAdmissionPolicy;
  constructor(raw:DiskAdmissionPolicy){this.policy=DiskAdmissionPolicy.parse(raw);}
- async assertAdmission(additionalReservedBytes=0n){
-  if(additionalReservedBytes<0n)throw new Refusal('DISK_RESERVATION_INVALID',400);
+ async assess(additionalReservedBytes=0n){
+  const requiredBytes=requiredFreeBytes(this.policy.minFreeBytes,this.policy.estimatedWriteBytes,additionalReservedBytes);
+  let tightest:{path:string;availableBytes:bigint}|undefined;
   for(const path of this.policy.paths){
    const measurement=await measureDiskCapacity(path);
-   if(measurement.availableBytes<additionalReservedBytes+BigInt(this.policy.estimatedWriteBytes)+BigInt(this.policy.minFreeBytes))throw new Refusal('STORAGE_LOW_SPACE');
+   if(!tightest||measurement.availableBytes<tightest.availableBytes)tightest={path,availableBytes:measurement.availableBytes};
+   const verdict=explainDiskAdmission(measurement.availableBytes,requiredBytes);
+   if(!verdict.admitted)return {schemaVersion:1 as const,...verdict,path,availableBytes:measurement.availableBytes,requiredBytes};
   }
+  if(!tightest)throw new Refusal('DISK_POLICY_INVALID',400);
+  const verdict=explainDiskAdmission(tightest.availableBytes,requiredBytes);
+  return {schemaVersion:1 as const,...verdict,path:tightest.path,availableBytes:tightest.availableBytes,requiredBytes};
+ }
+ async assertAdmission(additionalReservedBytes=0n){
+  if(!(await this.assess(additionalReservedBytes)).admitted)throw new Refusal('STORAGE_LOW_SPACE');
  }
 }
 export function diskGuardFromEnvironment():DiskGuard|undefined{

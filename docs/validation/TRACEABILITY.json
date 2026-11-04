@@ -36,7 +36,7 @@
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven. Optional explicitly configured vault-backed manager transport added. Runtime stays administration-only; no semantic manager or real inference enabled. Access boundary tested with simulated ledger only; native connection and operational takeover remain unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. Scoped native root workflow connected to canonical encrypted input, real Git/QA/CAS with synthetic programming/review substitutes. Native bootstrap opt-in is default-off and activation-blocked (docs/implementation/NATIVE-BOOTSTRAP-20261103.md; docs/validation/evidence/native-bootstrap-focused-20261103.log). Each source read requires the injected registry and calls Ledger.fence plus endpoint.lastError before the resolver. A missing registry is refused before the resolver and is not replaced by the frozen contract. A known authority error, a closed registry, or a ledger takeover while the old registry stays open also refuses with zero resolver calls. Shutdown continues after a rejected close or release query, preserves an uncertain grant without blind replay, and a later call does not report an empty cleanup as finished. Configured serve attaches that blocked report to the project runtime and still refuses execution. It does not enable real accounts, inference or acceptance. Multi-task plans, provider activation and independent acceptance remain pending."
+    "limitation": "Native V3 browser authentication and existing-session linking; canonical conversation remains Happier. Manager key custody and real provider handover remain unverified. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG and autostart remain unproven. A pure in-memory rotation plan exists (docs/implementation/KEY-ROTATION-PLAN-20261103.md); operational rotation and custody remain unproven. This does not accept the requirement. Optional explicitly configured vault-backed manager transport added. Runtime stays administration-only; no semantic manager or real inference enabled. Access boundary tested with simulated ledger only; native connection and operational takeover remain unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. Scoped native root workflow connected to canonical encrypted input, real Git/QA/CAS with synthetic programming/review substitutes. Native bootstrap opt-in is default-off and activation-blocked (docs/implementation/NATIVE-BOOTSTRAP-20261103.md; docs/validation/evidence/native-bootstrap-focused-20261103.log). Each source read requires the injected registry and calls Ledger.fence plus endpoint.lastError before the resolver. A missing registry is refused before the resolver and is not replaced by the frozen contract. A known authority error, a closed registry, or a ledger takeover while the old registry stays open also refuses with zero resolver calls. Shutdown continues after a rejected close or release query, preserves an uncertain grant without blind replay, and a later call does not report an empty cleanup as finished. Configured serve attaches that blocked report to the project runtime and still refuses execution. It does not enable real accounts, inference or acceptance. Multi-task plans, provider activation and independent acceptance remain pending."
   },
   {
     "id": "RF-04",
@@ -49,7 +49,7 @@
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven. Optional explicitly configured vault-backed manager transport added. Runtime stays administration-only; no semantic manager or real inference enabled. Access boundary tested with simulated ledger only; native connection and operational takeover remain unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. Scoped native root workflow connected to canonical encrypted input, real Git/QA/CAS with synthetic programming/review substitutes. Native bootstrap opt-in is default-off and activation-blocked (docs/implementation/NATIVE-BOOTSTRAP-20261103.md; docs/validation/evidence/native-bootstrap-focused-20261103.log). Each source read requires the injected registry and calls Ledger.fence plus endpoint.lastError before the resolver. A missing registry is refused before the resolver and is not replaced by the frozen contract. A known authority error, a closed registry, or a ledger takeover while the old registry stays open also refuses with zero resolver calls. Shutdown continues after a rejected close or release query, preserves an uncertain grant without blind replay, and a later call does not report an empty cleanup as finished. Configured serve attaches that blocked report to the project runtime and still refuses execution. It does not enable real accounts, inference or acceptance. Multi-task plans, provider activation and independent acceptance remain pending."
+    "limitation": "Per-context singleflight lifecycle, epoch turnover, private key copies and conditional lease release proven with synthetic endpoint callbacks. Semantic model management and real provider recovery remain open. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG and autostart remain unproven. A pure in-memory rotation plan exists (docs/implementation/KEY-ROTATION-PLAN-20261103.md); operational rotation and custody remain unproven. This does not accept the requirement. Optional explicitly configured vault-backed manager transport added. Runtime stays administration-only; no semantic manager or real inference enabled. Access boundary tested with simulated ledger only; native connection and operational takeover remain unverified. Encrypted Happier-library input and typed planning intent are connected in an injected synthetic manager tick; ACK loss, pause and output collision retain one proposal and do not dispatch programming. Native phone, real inference, continuous manager bootstrap and autonomous programming remain open. Scoped native root workflow connected to canonical encrypted input, real Git/QA/CAS with synthetic programming/review substitutes. Native bootstrap opt-in is default-off and activation-blocked (docs/implementation/NATIVE-BOOTSTRAP-20261103.md; docs/validation/evidence/native-bootstrap-focused-20261103.log). Each source read requires the injected registry and calls Ledger.fence plus endpoint.lastError before the resolver. A missing registry is refused before the resolver and is not replaced by the frozen contract. A known authority error, a closed registry, or a ledger takeover while the old registry stays open also refuses with zero resolver calls. Shutdown continues after a rejected close or release query, preserves an uncertain grant without blind replay, and a later call does not report an empty cleanup as finished. Configured serve attaches that blocked report to the project runtime and still refuses execution. It does not enable real accounts, inference or acceptance. Multi-task plans, provider activation and independent acceptance remain pending."
   },
   {
     "id": "RF-05",
@@ -122,12 +122,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
-    "files": "src/providers.ts;src/capacity.ts;tests/providers.test.ts",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log;docs/implementation/PROVIDER-COLLECTOR-PARSERS-20261103.md",
+    "files": "src/providers.ts;src/capacity.ts;tests/providers.test.ts;src/provider-collector-parsers.ts;tests/provider-collector-parsers.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic read-only collectors distinguish transport, invalid response, expired and reported quota. Real CLI protocol and eligibility not homologated."
+    "limitation": "Synthetic read-only collectors distinguish transport, invalid response, expired and reported quota. Pure parsers map synthetic Codex, Claude and Grok fixtures to available, exhausted, recovery or unknown; Antigravity stays unknown. No CLI spawn, network, credential or quota insert. Real CLI protocol and eligibility are not homologated. This does not accept the requirement."
   },
   {
     "id": "RF-11",
@@ -252,12 +252,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log",
-    "files": "src/managed-plan.ts;src/engineering.ts;src/quality.ts;src/cezar.ts",
+    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log;docs/implementation/NATIVE-CORRECTIONS-20261103.md",
+    "files": "src/managed-plan.ts;src/engineering.ts;src/quality.ts;src/cezar.ts;src/native-implementation.ts;tests/native-corrections.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Bounded synthetic correction uses fresh attempt/session/grant/worktree and new evaluation; exact approved selection composes and CAS-integrates. No real provider workflow homologated."
+    "limitation": "Bounded synthetic correction uses fresh attempt/session/grant/worktree and new evaluation; exact approved selection composes and CAS-integrates. Native multitask corrections add a schema-v2 native recipe: authenticated QA or review rejection starts a new intent, run, operation, attempt, session and evaluation up to maxCorrections. Infrastructure failure does not record a decision or launch the next attempt. A rejected commit is not selected or reused. Native review evidence is recognized by EngineeringStages; quality.ts was not changed, so a direct Quality call without that installation still rejects it. The bench fixture now keeps the approved protected commit after gamma and requires the exhausted-limit and infrastructure scenarios to leave that ref in place. Product behavior was not changed to roll the integration back. Administration reported a disposable container with this worktree mounted read-only, no accounts and no Docker socket: tests/native-corrections.test.ts 2/2 and tests/native-multitask.test.ts 3/3, zero skips, synthetic substitutes, no inference and no homologation. The cited report directories are not mounted on this generic runner and were not reopened. This runner still has no AC_TEST_DATABASE_URL, so the authenticated test is skipped (typecheck exit 0; native-corrections pass 1 skip 1; native-multitask pass 2 skip 1). No real provider workflow is homologated and this does not accept the requirement."
   },
   {
     "id": "RF-21",
@@ -265,12 +265,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/implementation/MANAGED-EXECUTION-LIMITS.md;docs/validation/evidence/managed-corrections-final-20261102.log",
-    "files": "src/managed-plan.ts;tests/managed-core-negative.test.ts;src/engineering.ts;src/quality.ts",
+    "evidence": "docs/implementation/MANAGED-EXECUTION-LIMITS.md;docs/validation/evidence/managed-corrections-final-20261102.log;docs/implementation/NATIVE-CORRECTIONS-20261103.md",
+    "files": "src/managed-plan.ts;tests/managed-core-negative.test.ts;src/engineering.ts;src/quality.ts;tests/native-corrections.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Maximum five corrections; infrastructure failure does not authorize correction. Recovery at all boundaries remains unproven."
+    "limitation": "Maximum five corrections; infrastructure failure does not authorize correction. The native recipe ends the last authenticated rejection at the failed node and does not create another attempt. A non-zero native container exit is not a review verdict and does not consume an attempt. Recovery at all boundaries remains unproven. The bench fixture keeps the already approved protected commit when the limit is exhausted and when infrastructure fails. Administration reported a disposable container with this worktree mounted read-only, no accounts and no Docker socket: tests/native-corrections.test.ts 2/2 and tests/native-multitask.test.ts 3/3, zero skips, synthetic substitutes, no inference and no homologation. The cited report directories are not mounted on this generic runner and were not reopened. This runner still has no AC_TEST_DATABASE_URL, so the authenticated test is skipped (typecheck exit 0; native-corrections pass 1 skip 1; native-multitask pass 2 skip 1). This does not accept the requirement."
   },
   {
     "id": "RF-22",
@@ -382,12 +382,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/provider-control-final-20261102.log",
-    "files": "src/providers.ts;src/control.ts;src/usage.ts",
+    "evidence": "docs/validation/evidence/provider-control-final-20261102.log;docs/implementation/PROVIDER-COLLECTOR-PARSERS-20261103.md",
+    "files": "src/providers.ts;src/control.ts;src/usage.ts;src/provider-collector-parsers.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Normalized synthetic percentage/reset only when reported and fresh; unknown otherwise. No actual subscription balance or collector homologation."
+    "limitation": "Normalized synthetic percentage/reset only when reported and fresh; unknown otherwise. Parser fixtures keep unknown when the source has no verifiable quota. No actual subscription balance or collector homologation. This does not accept the requirement."
   },
   {
     "id": "RF-31",
@@ -395,12 +395,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/observability-final-20261102.log;docs/validation/evidence/provider-control-final-20261102.log",
-    "files": "src/observability.ts;src/observability-api.ts;src/providers.ts;src/planning.ts",
+    "evidence": "docs/validation/evidence/observability-final-20261102.log;docs/validation/evidence/provider-control-final-20261102.log;docs/implementation/SLO-EVALUATION-20261103.md;docs/implementation/SLO-API-20261103.md;docs/implementation/SLO-UI-20261103.md",
+    "files": "src/observability.ts;src/observability-api.ts;src/providers.ts;src/planning.ts;src/slo-evaluation.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Read-only admin aggregate telemetry and durable audits; logs are not a full production audit/retention certification."
+    "limitation": "Read-only admin aggregate telemetry and durable audits; logs are not a full production audit/retention certification. A pure bench SLO evaluator, GET /api/v1/ac/observability/slo and the settings panel exist. They do not measure RNF-12 and do not accept the requirement."
   },
   {
     "id": "RF-32",
@@ -408,12 +408,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
-    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log;docs/implementation/MOBILE-PLANS-20261103.md;docs/implementation/MOBILE-APPROVAL-20261103.md",
+    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-integration-approval.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified."
+    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. jsdom covers the narrow proposal list and the integration-approval card at 360/390 with a 44px target. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified. This does not accept the requirement."
   },
   {
     "id": "RF-33",
@@ -525,12 +525,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/integration-approval-native-20261102.log;docs/validation/evidence/integration-approval-ui-20261102.log",
-    "files": "src/approvals.ts;src/control.ts;src/api.ts;src/engineering.ts;tests/native-pause.test.ts",
+    "evidence": "docs/validation/evidence/integration-approval-native-20261102.log;docs/validation/evidence/integration-approval-ui-20261102.log;docs/implementation/MOBILE-APPROVAL-20261103.md",
+    "files": "src/approvals.ts;src/control.ts;src/api.ts;src/engineering.ts;tests/native-pause.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-integration-approval.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-fetch.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Signed artifact/target approval and native wait verified with synthetic QA and real Git; independent delivery/publication/deploy workflows and mobile login remain open."
+    "limitation": "Signed artifact/target approval and native wait verified with synthetic QA and real Git. The narrow approval card reuses the posted intent and mints a new delivery id; a corrupt record does not call approval. Independent delivery/publication/deploy workflows, a physical device and mobile login remain open. This does not accept the requirement."
   },
   {
     "id": "RF-42",
@@ -785,12 +785,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log",
-    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/validation/evidence/managed-workspace-stream-revocation-20261102.log;docs/implementation/MOBILE-PLANS-20261103.md;docs/implementation/MOBILE-APPROVAL-20261103.md",
+    "files": "src/workspace-stream.ts;src/api.ts;scripts/prove-product-mobile.mjs;tests/workspace-stream.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-integration-approval.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified."
+    "limitation": "Chromium 360/390px, native project switching, scoped proposal/cache and actual EventSource open confirmed; native run frames PG/project filtered with auth/ACL revocation and shutdown. jsdom covers the narrow proposal list and the integration-approval card at 360/390 with a 44px target. Physical Android/iOS, suspension/active-correction full journey and production latency remain unverified. This does not accept the requirement."
   },
   {
     "id": "RNF-05",
@@ -842,7 +842,7 @@
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG and autostart remain unproven. A pure in-memory rotation plan exists (docs/implementation/KEY-ROTATION-PLAN-20261103.md); operational rotation and custody remain unproven. This does not accept the requirement."
   },
   {
     "id": "RNF-09",
@@ -863,12 +863,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
-    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/RESTORE-VERIFIER-20261103.md;docs/implementation/RETENTION-DISK-FULL-20261103.md",
+    "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs;src/restore-verifier.ts;src/retention-plan.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic copy restore and Git/runtime read verified; no operational disaster recovery or RPO/RTO measurement."
+    "limitation": "Synthetic copy restore and Git/runtime read verified. verifyRestore classifies an in-memory manifest and never performs a restore or authorizes admission. planRetention is a dry-run and does not delete acceptance evidence. No operational disaster recovery or RPO/RTO measurement. This does not accept the requirement."
   },
   {
     "id": "RNF-11",
@@ -876,12 +876,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/storage-admission-final-20261102.log;docs/validation/evidence/observability-final-20261102.log",
-    "files": "src/disk-admission.ts;src/storage.ts;src/sandbox-broker.ts;src/isolated-verification.ts",
+    "evidence": "docs/validation/evidence/storage-admission-final-20261102.log;docs/validation/evidence/observability-final-20261102.log;docs/implementation/RETENTION-DISK-FULL-20261103.md",
+    "files": "src/disk-admission.ts;src/storage.ts;src/sandbox-broker.ts;src/isolated-verification.ts;src/retention-plan.ts;tests/disk-admission.test.ts;tests/retention-plan.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Opt-in free-space guard and private disposable-spool reservations, preserving uncertain grants. Not hard disk quota or full memory/CPU/disk exhaustion homologation."
+    "limitation": "Opt-in free-space guard and private disposable-spool reservations, preserving uncertain grants. explainDiskAdmission refuses new admission with STORAGE_LOW_SPACE and does not delete files. planRetention only classifies an in-memory inventory. Not hard disk quota or full memory/CPU/disk exhaustion homologation. This does not accept the requirement."
   },
   {
     "id": "RNF-12",
@@ -1045,12 +1045,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log",
-    "files": "tests/managed-corrections.test.ts",
+    "evidence": "docs/validation/evidence/managed-corrections-final-20261102.log;docs/implementation/NATIVE-CORRECTIONS-20261103.md",
+    "files": "tests/managed-corrections.test.ts;tests/native-corrections.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic physical regression correction proven in bounded scenario; real agents and all recovery windows remain unverified."
+    "limitation": "Synthetic physical regression correction proven in bounded scenario. Native review or QA rejection is wired to a fresh evaluation and must not merge the rejected commit. The graph and the native review evidence predicate passed without a database. The bench fixture keeps the approved protected commit for the later limit and infrastructure scenarios and does not ask the product to roll that integration back. Real agents, the injected-adapter database bench and all recovery windows remain unverified in this runner, which has no AC_TEST_DATABASE_URL, /usr/bin/ruby or Docker socket. This does not accept the scenario."
   },
   {
     "id": "T10",
@@ -1180,7 +1180,7 @@
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Explicit registry restart revalidates caller-supplied credentials; an opt-in vault and explicit key source exist, while operational restart and automated activation remain unproven. Transport-disconnected and fenced manager authority were distinguished in the focused synthetic test; operational restart remains unproven. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG, autostart, full rotation and operational custody remain unproven."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Explicit registry restart revalidates caller-supplied credentials; an opt-in vault and explicit key source exist, while operational restart and automated activation remain unproven. Transport-disconnected and fenced manager authority were distinguished in the focused synthetic test; operational restart remains unproven. Opt-in AES-GCM vault and explicit registry key source have a focused PG/memory-timeout proof; CLI with PG and autostart remain unproven. A pure in-memory rotation plan exists (docs/implementation/KEY-ROTATION-PLAN-20261103.md); operational rotation and custody remain unproven. This does not accept the requirement."
   },
   {
     "id": "T20",
