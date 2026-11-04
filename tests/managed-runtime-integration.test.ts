@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile} from 'node:fs/promises';
+import {randomUUID,createHmac} from 'node:crypto';
+import {mkdtemp,mkdir,readFile,writeFile} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {Ledger} from '../src/ledger.ts';
@@ -11,10 +11,10 @@ import {Capacity} from '../src/capacity.ts';
 import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 import {claimWorktreeWriter} from '../src/worktree-lease.ts';
-import {Refusal} from '../src/contracts.ts';
-import {digest} from '../src/contracts.ts';
+import {Refusal,digest,canonical} from '../src/contracts.ts';
 import {ProjectTemplates} from '../src/project-templates.ts';
 import {authorizeExplicitQaWaiver} from '../src/quality.ts';
+import {SandboxClient} from '../src/sandbox-client.ts';
 
 // The caller provisions a new disposable DB and broker bound to that DB.
 test('managed fork joins verified unit artifacts and verifies the composition',{timeout:180000,skip:process.env.AC_MANAGED_RUNTIME_TEST!=='1'},async(t)=>{
@@ -63,12 +63,24 @@ test('managed fork joins verified unit artifacts and verifies the composition',{
   await runtime.observe(intent,authority);
   const parent=(await db.pool.query('SELECT state,grant_id,receipt FROM ac_operations WHERE id=$1',[intent.operation_id])).rows[0];
   assert.equal(parent.state,'completed');assert.equal(parent.grant_id,null);assert.equal(parent.receipt.kind,'managed-aggregate-v1');
-  const children=(await db.pool.query('SELECT i.*,o.receipt,o.native_session_id,o.grant_id,o.state operation_state FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id WHERE i.parent_intent_id=$1 ORDER BY i.parent_unit_id',[intent.id])).rows;
+  const children=(await db.pool.query('SELECT i.*,o.receipt,o.native_session_id,o.grant_id,o.execution_attempt_id,o.state operation_state FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id WHERE i.parent_intent_id=$1 ORDER BY i.parent_unit_id',[intent.id])).rows;
   const writers=(await db.pool.query('SELECT * FROM ac_worktree_writers WHERE parent_intent_id=$1',[intent.id])).rows;
   assert.equal(writers.length,2);
   for(const writer of writers){
-   assert.equal(writer.state,'held');
+   assert.equal(writer.state,'neutralized');
    const child=children.find(row=>row.id===writer.holder_intent_id);assert(child);assert.equal(child.run_id,writer.run_id);
+   const proof=writer.revocation_proof;
+   assert.equal(proof.payload.kind,'sandbox-container-removed');assert.equal(proof.payload.jobId,child.operation_id);
+   assert.equal(proof.payload.holderIntentId,child.id);assert.equal(proof.payload.writerEpoch,Number(writer.manager_epoch));
+   assert.equal(proof.payload.contextId,context);assert.equal(proof.payload.grantId,child.grant_id);assert.equal(proof.payload.attemptId,child.execution_attempt_id);
+   assert.equal(writer.proof_digest,digest(proof));
+   const key=await readFile('/run/ac-broker/key');
+   assert.equal(proof.signature,createHmac('sha256',key).update('agent-control:sandbox-writer-retirement:v1\n').update(canonical(proof.payload)).digest('hex'));
+   const launch=(await db.pool.query('SELECT snapshot FROM ac_execution_launches WHERE operation_id=$1',[child.operation_id])).rows[0];
+   assert.deepEqual(await new SandboxClient().perform('cleanup',child.operation_id,child.grant_id,authority,launch.snapshot),{jobId:child.operation_id,state:'cleaned'});
+   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.writer_revoked' AND detail->>'jobId'=$1",[child.operation_id])).rows[0].n,1);
+   await assert.rejects(db.pool.query('UPDATE ac_sandbox_writer_retirements SET log_sha256=$2 WHERE job_id=$1',[child.operation_id,'f'.repeat(64)]),/WORKTREE_RETIREMENT_IMMUTABLE/);
+   await assert.rejects(db.pool.query('DELETE FROM ac_sandbox_writer_retirements WHERE job_id=$1',[child.operation_id]),/WORKTREE_RETIREMENT_IMMUTABLE/);
    await assert.rejects(db.tx(c=>claimWorktreeWriter(c,{parentIntentId:intent.id,runId:writer.run_id,intentId:randomUUID(),epoch:authority.epoch+1})),
     (error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_WRITER_BUSY');
   }
@@ -115,6 +127,15 @@ test('managed fork joins verified unit artifacts and verifies the composition',{
   await db.pool.query('UPDATE ac_operations SET receipt=$2 WHERE id=$1',[altered.operation_id,{...altered.receipt,exitCode:1}]);
   await assert.rejects(runtime.observe(intent,authority),/MANAGED_AGGREGATE_INCOMPLETE/);
   await db.pool.query('UPDATE ac_operations SET receipt=$2 WHERE id=$1',[altered.operation_id,altered.receipt]);
+  clearInterval(heartbeat);
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+  const successor=await db.acquire(principal,context,randomUUID(),'synthetic-manager',60);
+  const oldWriter=writers[0]!,oldChild=children.find(row=>row.id===oldWriter.holder_intent_id)!;
+  const oldLaunch=(await db.pool.query('SELECT snapshot FROM ac_execution_launches WHERE operation_id=$1',[oldChild.operation_id])).rows[0].snapshot;
+  const client=new SandboxClient();
+  await assert.rejects(client.perform('cleanup',oldChild.operation_id,oldChild.grant_id,authority,oldLaunch),/STALE_MANAGER/);
+  assert.deepEqual(await client.perform('cleanup',oldChild.operation_id,oldChild.grant_id,successor,oldLaunch),{jobId:oldChild.operation_id,state:'cleaned'});
+  assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.writer_revoked' AND detail->>'jobId'=$1",[oldChild.operation_id])).rows[0].n,1);
  }finally{clearInterval(heartbeat);await runtime.close();}
 });
 

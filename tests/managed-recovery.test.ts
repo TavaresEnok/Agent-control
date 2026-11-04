@@ -50,6 +50,8 @@ for(const stop of ['physical','cas'] as const)test(`managed SIGKILL after ${stop
    const unit=tasks.find(row=>row.operation_id===markerData.jobId);assert(unit);
    const job=(await db.pool.query('SELECT state,receipt FROM ac_sandbox_jobs WHERE id=$1',[unit.operation_id])).rows[0];
    assert.equal(job?.state,'completed');assert.equal(job.receipt.exitCode,0);assert.notEqual(unit.operation_state,'completed');assert.equal(git('rev-parse','protected'),base);
+   const writer=(await db.pool.query('SELECT state FROM ac_worktree_writers WHERE parent_intent_id=$1 AND run_id=$2',[intent.id,unit.run_id])).rows[0];
+   assert.equal(writer?.state,'held');
    markedReceiptDigest=digest(job.receipt);markedContainer=job.receipt.containerId;assert.match(markedContainer!,/^[a-f0-9]{64}$/);
   }else assert.notEqual(git('rev-parse','protected'),base);
   await db.pause(principal,context,true);await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
@@ -74,6 +76,12 @@ for(const stop of ['physical','cas'] as const)test(`managed SIGKILL after ${stop
   if(stop==='physical'){
    const job=(await db.pool.query('SELECT receipt FROM ac_sandbox_jobs WHERE id=$1',[markerData.jobId])).rows[0];
    assert.equal(digest(job.receipt),markedReceiptDigest);assert.equal(job.receipt.containerId,markedContainer);
+   const writer=(await db.pool.query(`SELECT w.state,w.revocation_proof,r.state retirement_state FROM ac_worktree_writers w
+    JOIN ac_sandbox_writer_retirements r ON r.parent_intent_id=w.parent_intent_id AND r.run_id=w.run_id
+    WHERE w.parent_intent_id=$1 AND w.run_id=$2`,[intent.id,pausedUnit.run_id])).rows[0];
+   assert.equal(writer?.state,'neutralized');assert.equal(writer.retirement_state,'revoked');
+   assert.equal(writer.revocation_proof.payload.jobId,markerData.jobId);assert.equal(writer.revocation_proof.payload.writerEpoch,authority.epoch);
+   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.writer_revoked' AND detail->>'jobId'=$1",[markerData.jobId])).rows[0].n,1);
   }
   const grantsAfter=(await db.pool.query('SELECT id,attempt_id,intent_id FROM ac_capacity_grants WHERE intent_id=ANY($1::uuid[]) ORDER BY id',[children.map(row=>row.id)])).rows;
   for(const before of grantsBefore)assert(grantsAfter.some(after=>after.id===before.id&&after.attempt_id===before.attempt_id&&after.intent_id===before.intent_id));

@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: broker startup neutralizes a persisted writer before admitting work
+ok 1 - broker startup neutralizes a persisted writer before admitting work
+  ---
+  duration_ms: 410.67191
+  type: 'test'
+  ...
+# Subtest: accepts only the expected isolated pair and rejects drift
+ok 2 - accepts only the expected isolated pair and rejects drift
+  ---
+  duration_ms: 16.312177
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2121.318109

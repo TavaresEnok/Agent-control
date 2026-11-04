@@ -1,0 +1,3 @@
+PostgreSQL exit 0; revoked containers 2
+docker inspect 92fd86e4bcb6... exit 1; not found
+docker inspect d370bad9f747... exit 1; not found

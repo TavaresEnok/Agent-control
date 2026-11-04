@@ -2,6 +2,8 @@
 
 ## Continuação vigente: dispensa de QA e worktree — 04/11/2026
 
+A retirada do escritor managed sintético concluído foi ligada ao broker: log preservado, diário `prepared`, remoção/ausência física e recibo HMAC precedem `neutralized`. O registro de cópia permanece imutável e sem reuso. Falha/cancelamento e execução native continuam bloqueados; queda de broker exige reconciliação e não retomou automaticamente o grafo. Revisão independente pendente. Ver `implementation/SANDBOX-WRITER-RETIREMENT-20261104.md`.
+
 No grafo com broker/workers Docker sintéticos reais, a receita v1 sintética agora registra a identidade da tarefa para permitir a dispensa autorizada. O ensaio passou sem criar grant, job ou aprovação de QA para a tarefa dispensada; receitas históricas sem identidade continuam conservadoras. A falha anterior e os limites estão em `implementation/CONTINUACAO-SYNTHETIC-WAIVER-20261104.md`.
 
 Backup/restauração foram repetidos com dados sintéticos em checkout e banco próprios, incluindo rejeição de corrupção, pausa e concessão incerta, relocação de uma worktree e boot do runtime da cópia com admissão fechada. Zero runs nativos na segunda cópia. Ver `implementation/CONTINUACAO-RESTORE-20261104.md`.
@@ -10,7 +12,7 @@ A bancada isolada reproduziu worker Docker vivo, takeover e parada, preservando 
 
 O painel permite ao titular assinar autorização de dispensa para tarefa, política e template ativos, e informa que o alcance é o projeto. O grafo com PostgreSQL e worktrees Git reais, modelos e QA sintéticos passou nas variantes válida, ausente, desabilitada, divergente e ambígua. A variante válida também foi observada após reinício com contexto pausado. A aprovação de QA não foi fabricada e a revisão continua obrigatória. Não é prova de interrupção durante o efeito.
 
-A cópia managed não é mais entregue a outra intenção, inclusive após neutralização legada; a operação de neutralização recusa até existir prova física. Isso evita o reaproveitamento por esta via, mas ainda não revoga acesso, não encerra processo nem entrega recuperação física. Os registros abaixo sobre reassumir a mesma cópia são históricos e foram superados. RF-54, T34, RF-57 e T38 continuam parciais e sem aceite. Revisão independente continua pendente. Detalhes e limites em `implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.
+A cópia managed não é mais entregue a outra intenção, inclusive após neutralização legada; a operação de neutralização recusa até existir prova física. Essa contenção, por si só, não revoga acesso nem encerra processo; o broker sintético acrescentado depois observa e retira o contêiner nos casos concluídos descritos acima. Os registros abaixo sobre reassumir a mesma cópia são históricos e foram superados. RF-54, T34, RF-57 e T38 continuam parciais e sem aceite. Revisão independente continua pendente. Detalhes e limites em `implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.
 
 ## Incremento: template ativo, ingresso da dispensa e lease de worktree — 04/11/2026
 

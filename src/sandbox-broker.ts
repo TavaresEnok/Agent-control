@@ -1,7 +1,8 @@
 import { createHash,createHmac,randomBytes,randomUUID,timingSafeEqual } from 'node:crypto';
 import { createServer,request as httpRequest,type IncomingMessage,type ServerResponse } from 'node:http';
 import { createConnection } from 'node:net';
-import { chmod,chown,lstat,mkdir,readFile,realpath,rm,unlink,writeFile } from 'node:fs/promises';
+import { chmod,chown,lstat,mkdir,open,readFile,realpath,rm,unlink,writeFile } from 'node:fs/promises';
+import {constants} from 'node:fs';
 import { join,resolve,sep } from 'node:path';
 import { z } from 'zod';
 import {execFile} from 'node:child_process';
@@ -506,6 +507,12 @@ export class SandboxBroker{
  }
  private async cleanup(value:SandboxRequest,prior:Record<string,unknown>,spec:string,work:string){
   if(!['completed','failed'].includes(String(prior.state)))throw new Refusal('SANDBOX_STILL_ACTIVE');
+  if(value.profile==='synthetic-implementation-v1'){
+   const managed=(await this.ledger.pool.query(`SELECT i.parent_intent_id FROM ac_operations o JOIN ac_intents i ON i.id=o.intent_id
+    WHERE o.id=$1 AND i.context_id=$2`,[value.jobId,value.authority.contextId])).rows[0];
+   if(!managed)throw new Refusal('SANDBOX_OPERATION_MISMATCH',403);
+   if(managed.parent_intent_id)return this.retireManagedWriter(value,spec,work);
+  }
   return this.ledger.tx(async c=>{
    await this.ledger.fence(c,value.authority,true);
    const inspected=await this.docker.inspect('ac-synthetic-'+value.jobId);
@@ -525,6 +532,110 @@ export class SandboxBroker{
    if(workInfo){if(workInfo.isSymbolicLink()||!workInfo.isDirectory()||(await realpath(work))!==work)throw new Refusal('SANDBOX_WORKSPACE_FORBIDDEN',403);
     await exec('/bin/chown',['-R','-h','0:0',work],{timeout:10000});await chmod(work,0o700);}
    await rm(job,{recursive:true,force:true});return {jobId:value.jobId,state:'cleaned'};
+  });
+ }
+ /** Archive the terminal logs before removing the exact stopped container. The
+  * managed copy remains in place and is never reassigned. */
+ private async retireManagedWriter(value:SandboxRequest,spec:string,work:string){
+  const root=await realpath(this.config.hostRoot),jobPath=resolve(root,value.jobId),logPath=join(jobPath,'terminal-container.log');
+  if(root!==resolve(this.config.hostRoot)||!jobPath.startsWith(root+sep))throw new Refusal('SANDBOX_WORKSPACE_FORBIDDEN',403);
+  const info=await lstat(jobPath).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Refusal('SANDBOX_RETIREMENT_DATA_MISSING');throw error;});
+  if(!info.isDirectory()||info.isSymbolicLink()||await realpath(jobPath)!==jobPath)throw new Refusal('SANDBOX_WORKSPACE_FORBIDDEN',403);
+  const readLog=async()=>{
+   const file=await open(logPath,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK).catch(error=>{
+    if(['ENOENT','ELOOP'].includes(String((error as NodeJS.ErrnoException).code)))throw new Refusal('SANDBOX_RETIREMENT_LOG_INVALID');throw error;
+   });
+   try{const stat=await file.stat();if(!stat.isFile()||stat.nlink!==1||stat.uid!==0||(stat.mode&0o077)!==0||stat.size>1048576)throw new Refusal('SANDBOX_RETIREMENT_LOG_INVALID');
+    return createHash('sha256').update(await file.readFile()).digest('hex');}finally{await file.close();}
+  };
+  const locked=async(c:pg.PoolClient)=>{
+   await this.ledger.fence(c,value.authority,true);
+   const row=(await c.query(`SELECT i.id intent_id,i.context_id intent_context,i.parent_intent_id,i.run_id,o.state operation_state,o.receipt operation_receipt,
+    o.grant_id operation_grant,o.execution_attempt_id,o.manager_epoch operation_epoch,
+    j.id,j.context_id,j.grant_id,j.manager_epoch,j.state,j.container_id,j.receipt,j.profile,j.spec_digest,
+    g.state grant_state,g.physical_receipt,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.role grant_role,g.attempt_id grant_attempt,
+    w.holder_intent_id,w.manager_epoch writer_epoch,w.state writer_state,w.proof_digest,w.revocation_job_id,w.revocation_proof
+    FROM ac_sandbox_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_operations o ON o.id=j.id
+    JOIN ac_intents i ON i.id=o.intent_id JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id
+    WHERE j.id=$1 AND j.context_id=$2 AND j.grant_id=$3 FOR UPDATE OF j,g,o,w`,[value.jobId,value.authority.contextId,value.grantId])).rows[0];
+   if(!row||row.profile!=='synthetic-implementation-v1'||row.spec_digest!==spec||row.holder_intent_id!==row.intent_id||
+    Number(row.writer_epoch)!==Number(row.manager_epoch)||Number(row.grant_epoch)!==Number(row.manager_epoch)||Number(row.operation_epoch)>value.authority.epoch||
+    row.intent_context!==value.authority.contextId||row.operation_grant!==row.grant_id||row.execution_attempt_id!==row.grant_attempt||row.grant_intent!==row.intent_id||
+    row.grant_context!==value.authority.contextId||row.grant_role!=='programmer'||Number(row.manager_epoch)>value.authority.epoch||row.operation_state!=='completed'||
+    row.grant_state!=='released'||row.state!=='completed'||!row.receipt?.implementation||digest(row.operation_receipt)!==digest(row.receipt.implementation)||
+    digest(row.receipt)!==digest(row.physical_receipt)||row.receipt.jobId!==value.jobId||row.receipt.containerId!==row.container_id||
+    row.receipt.exitCode!==0||!Number.isFinite(Date.parse(row.receipt.finishedAt))||row.receipt.finishedAt.startsWith('0001-'))
+    throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   return row;
+  };
+  const payloadFor=(row:Record<string,any>,saved:Record<string,any>)=>({schemaVersion:1,kind:'sandbox-container-removed',jobId:value.jobId,
+   contextId:row.context_id,grantId:row.grant_id,attemptId:row.grant_attempt,parentIntentId:row.parent_intent_id,
+   runId:row.run_id,holderIntentId:row.intent_id,writerEpoch:Number(row.writer_epoch),
+   containerId:saved.container_id,terminalDigest:saved.terminal_digest,logSha256:saved.log_sha256});
+  const confirmedRevocation=async(row:Record<string,any>,saved:Record<string,any>|undefined)=>{
+   if(!saved||saved.state!=='revoked'||saved.parent_intent_id!==row.parent_intent_id||saved.run_id!==row.run_id||saved.holder_intent_id!==row.intent_id||
+    Number(saved.writer_epoch)!==Number(row.writer_epoch)||saved.container_id!==row.container_id||saved.terminal_digest!==digest(row.receipt)||
+    row.revocation_job_id!==value.jobId||!saved.proof?.payload||digest(saved.proof.payload)!==digest(payloadFor(row,saved))||
+    typeof saved.proof.signature!=='string'||!/^[a-f0-9]{64}$/.test(saved.proof.signature)||
+    !timingSafeEqual(Buffer.from(saved.proof.signature,'hex'),createHmac('sha256',this.key).update('agent-control:sandbox-writer-retirement:v1\n').update(canonical(saved.proof.payload)).digest())||
+    digest(saved.proof)!==row.proof_digest||digest(saved.proof)!==digest(row.revocation_proof)||await readLog()!==saved.log_sha256)
+    throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   if(await this.docker.inspect(saved.container_id)||await this.docker.inspect('ac-synthetic-'+value.jobId))throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+  };
+  const prepared=await this.ledger.tx(async c=>{
+   const row=await locked(c),saved=(await c.query('SELECT * FROM ac_sandbox_writer_retirements WHERE job_id=$1 FOR UPDATE',[value.jobId])).rows[0];
+   if(row.writer_state==='neutralized'){
+    await confirmedRevocation(row,saved);
+    return {done:true as const};
+   }
+   if(row.writer_state!=='held')throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   const inspected=await this.docker.inspect('ac-synthetic-'+value.jobId);
+   if(inspected){
+    const original={...value,authority:{...value.authority,epoch:Number(row.manager_epoch)}};
+    this.inspectExpected(inspected,original,spec,work);
+    if(inspected.Id!==row.container_id||inspected.State.Running||inspected.State.Status!=='exited'||inspected.State.ExitCode!==row.receipt.exitCode||inspected.State.FinishedAt!==row.receipt.finishedAt)
+     throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   }else if(!saved)throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   if(!saved){
+    const bytes=await this.docker.logs(row.container_id),logSha=createHash('sha256').update(bytes).digest('hex');
+    try{const file=await open(logPath,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+    if(await readLog()!==logSha)throw new Refusal('SANDBOX_RETIREMENT_LOG_INVALID');
+    await c.query(`INSERT INTO ac_sandbox_writer_retirements(job_id,parent_intent_id,run_id,holder_intent_id,writer_epoch,container_id,terminal_digest,log_sha256,state)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,'prepared')`,[value.jobId,row.parent_intent_id,row.run_id,row.intent_id,row.writer_epoch,row.container_id,digest(row.receipt),logSha]);
+   }else if(saved.state!=='prepared'||saved.parent_intent_id!==row.parent_intent_id||saved.run_id!==row.run_id||saved.holder_intent_id!==row.intent_id||
+    Number(saved.writer_epoch)!==Number(row.writer_epoch)||saved.container_id!==row.container_id||saved.terminal_digest!==digest(row.receipt)||await readLog()!==saved.log_sha256)
+    throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   return {done:false as const};
+  });
+  if(prepared.done)return {jobId:value.jobId,state:'cleaned'};
+  return this.ledger.tx(async c=>{
+   const row=await locked(c),saved=(await c.query('SELECT * FROM ac_sandbox_writer_retirements WHERE job_id=$1 FOR UPDATE',[value.jobId])).rows[0];
+   if(row.writer_state==='neutralized'){
+    await confirmedRevocation(row,saved);return {jobId:value.jobId,state:'cleaned'};
+   }
+   if(!saved||saved.state!=='prepared'||row.writer_state!=='held'||saved.parent_intent_id!==row.parent_intent_id||saved.run_id!==row.run_id||
+    saved.holder_intent_id!==row.intent_id||Number(saved.writer_epoch)!==Number(row.writer_epoch)||saved.container_id!==row.container_id||
+    saved.terminal_digest!==digest(row.receipt)||await readLog()!==saved.log_sha256)throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   const inspected=await this.docker.inspect('ac-synthetic-'+value.jobId);
+   if(inspected){
+    const original={...value,authority:{...value.authority,epoch:Number(row.manager_epoch)}};
+    this.inspectExpected(inspected,original,spec,work);
+    if(inspected.Id!==saved.container_id||inspected.State.Running||inspected.State.Status!=='exited'||inspected.State.ExitCode!==row.receipt.exitCode||inspected.State.FinishedAt!==row.receipt.finishedAt)
+     throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+    await this.docker.remove(inspected.Id);
+   }
+   if(await this.docker.inspect(saved.container_id)||await this.docker.inspect('ac-synthetic-'+value.jobId))throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   const payload=payloadFor(row,saved);
+   const proof={payload,signature:createHmac('sha256',this.key).update('agent-control:sandbox-writer-retirement:v1\n').update(canonical(payload)).digest('hex')};
+   await c.query("UPDATE ac_sandbox_writer_retirements SET state='revoked',proof=$2 WHERE job_id=$1 AND state='prepared'",[value.jobId,proof]);
+   const changed=await c.query(`UPDATE ac_worktree_writers SET state='neutralized',proof_digest=$5,revocation_job_id=$6,revocation_proof=$7
+    WHERE parent_intent_id=$1 AND run_id=$2 AND holder_intent_id=$3 AND manager_epoch=$4 AND state='held'`,
+    [row.parent_intent_id,row.run_id,row.intent_id,row.writer_epoch,digest(proof),value.jobId,proof]);
+   if(!changed.rowCount)throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
+   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'worktree.writer_revoked',$2)",
+    [value.authority.contextId,{jobId:value.jobId,parentIntentId:row.parent_intent_id,runId:row.run_id,proofDigest:digest(proof)}]);
+   return {jobId:value.jobId,state:'cleaned'};
   });
  }
  /** On broker restart, do not leave an old writer running without a fence monitor.

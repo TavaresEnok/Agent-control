@@ -2,6 +2,8 @@
 
 ## Continuação de QA e contenção de escritor — 04/11/2026
 
+O supervisor de sandbox sintético registra prova HMAC somente depois de preservar log, observar saída e remover/confirmar ausência do contêiner. Diários preparados foram reconciliados após perda de ACK e reinício real do broker; SIGKILL do controlador e CAS foram provados em percursos separados. A execução native, jobs falhos/cancelados e retomada automática do grafo após queda do broker permanecem abertas. Ver `../implementation/SANDBOX-WRITER-RETIREMENT-20261104.md`.
+
 O ensaio com workers Docker reais de fixture encontrou omissão de `taskId` na receita sintética v1: autorização válida era ignorada e QA executava. As novas receitas incluem a identidade; receitas antigas continuam legíveis e conservadoras. A prova corrigida registrou `not_required` sem grant, job ou aprovação QA e preservou revisão. Falha inicial preservada. Ver `../implementation/CONTINUACAO-SYNTHETIC-WAIVER-20261104.md`.
 
 As suítes de templates por projeto e espera de capacidade antes puladas por ausência de PostgreSQL passaram nesta bancada: cinco testes, sem skips. Ver `../implementation/CONTINUACAO-PG-20261104.md`; não há aceite operacional.
@@ -12,7 +14,7 @@ O broker físico de fixture observou worker vivo no takeover e reteve capacidade
 
 A prova `continuation-git-cas-race-20261104.log` exercita dois CAS Git concorrentes na mesma base e uma atualização externa em repositório descartável. Exatamente um concorrente integrou e a base alterada foi recusada. O perdedor pode ficar incerto quando a falha ocorre no helper. T10 passa a parcial, mas o fluxo de dois chats, reconciliação e revalidação continuam sem prova e sem aceite.
 
-A correção fecha o reaproveitamento da mesma cópia inclusive após `neutralized` legado e recusa a neutralização genérica sem prova física. A implementação anterior que liberava por flag não era uma prova de parada ou de revogação. A migração 062 só reserva campos; não constitui isolamento. O teste com processo sintético vivo verifica a recusa da posse, não isolamento físico. O grafo ainda não chama o supervisor para neutralização e a recuperação pode ficar bloqueada. RF-54/T34 continuam abertos.
+A correção fecha o reaproveitamento da mesma cópia inclusive após `neutralized` legado e recusa a neutralização genérica sem prova física. A implementação anterior que liberava por flag não era uma prova de parada ou de revogação. A migração 062 só reserva campos; não constitui isolamento. O teste com processo sintético vivo verifica a recusa da posse, não isolamento físico. A ligação posterior cobre apenas o broker sintético concluído; o caminho native e outros estados ainda podem ficar bloqueados. RF-54/T34 continuam abertos.
 
 O owner tem ingresso visual para `qa.waiver.authorize`, com alcance de projeto explicitado, binding ativo e controle assinado. O grafo com PG/Git reais e executores sintéticos cobriu dispensa válida, ausência, desabilitação, divergência e ambiguidade. Em `not_required` não houve grant nem recibo aprovado de QA; revisão independente e identidade continuam exigidas. Reinício com pausa foi exercitado após conclusão, não durante efeito. Uma asserção esperava recusa errada para viewer e falhou; o log negativo está preservado e a correção verificou a recusa central real. RF-57/T38 continuam sem aceite. A revisão independente do código final está pendente, pois a configuração vigente autoriza só o agente principal. Comandos, versões e limites: `../implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.
 

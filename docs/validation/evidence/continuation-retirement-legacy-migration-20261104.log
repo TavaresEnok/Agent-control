@@ -1,0 +1,35 @@
+TAP version 13
+# Subtest: worktree writer lease
+    # Subtest: a copy is never reassigned, even after a legacy neutralization
+    ok 1 - a copy is never reassigned, even after a legacy neutralization
+      ---
+      duration_ms: 91.3911
+      type: 'test'
+      ...
+    # Subtest: a live old writer keeps the same copy blocked across epochs and neutralization attempts
+    ok 2 - a live old writer keeps the same copy blocked across epochs and neutralization attempts
+      ---
+      duration_ms: 166.800888
+      type: 'test'
+      ...
+    # Subtest: legacy neutralized rows survive additive migration without becoming reusable
+    ok 3 - legacy neutralized rows survive additive migration without becoming reusable
+      ---
+      duration_ms: 43.999288
+      type: 'test'
+      ...
+    1..3
+ok 1 - worktree writer lease
+  ---
+  duration_ms: 2146.496981
+  type: 'suite'
+  ...
+1..1
+# tests 3
+# suites 1
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2618.300175

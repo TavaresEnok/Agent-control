@@ -38,12 +38,15 @@ describe('worktree writer lease', { skip }, () => {
     assert.deepEqual(await db.tx(c => claimWorktreeWriter(c, key)), { state: 'held', acquired: 'same' });
     const other = { ...key, intentId: randomUUID(), epoch: 4 };
     await assert.rejects(db.tx(c => claimWorktreeWriter(c, other)), (error: unknown) => error instanceof Refusal && error.code === 'WORKTREE_WRITER_BUSY');
+    await assert.rejects(db.pool.query('UPDATE ac_worktree_writers SET holder_intent_id=$3 WHERE parent_intent_id=$1 AND run_id=$2',[key.parentIntentId,key.runId,other.intentId]),/WORKTREE_WRITER_IMMUTABLE/);
     await assert.rejects(db.tx(c => neutralizeWorktreeWriter(c, other)), (error: unknown) => error instanceof Refusal && error.code === 'WORKTREE_WRITER_NOT_HELD');
     await assert.rejects(db.tx(c => neutralizeWorktreeWriter(c, key)), (error: unknown) => error instanceof Refusal && error.code === 'WORKTREE_TERMINAL_PROOF_REQUIRED');
-    await assert.rejects(db.pool.query("UPDATE ac_worktree_writers SET state='neutralized',sealed_mode=256 WHERE parent_intent_id=$1 AND run_id=$2",[key.parentIntentId,key.runId]),(error:unknown)=>(error as {code?:string}).code==='23514');
-    await db.pool.query("UPDATE ac_worktree_writers SET state='neutralized',proof_digest=$3,sealed_mode=256 WHERE parent_intent_id=$1 AND run_id=$2", [key.parentIntentId,key.runId,'a'.repeat(64)]);
+    await assert.rejects(db.pool.query("UPDATE ac_worktree_writers SET state='neutralized' WHERE parent_intent_id=$1 AND run_id=$2",[key.parentIntentId,key.runId]),(error:unknown)=>(error as {code?:string}).code==='23514');
+    await assert.rejects(db.pool.query("UPDATE ac_worktree_writers SET state='neutralized',proof_digest=$3,revocation_job_id=$4 WHERE parent_intent_id=$1 AND run_id=$2",[key.parentIntentId,key.runId,'a'.repeat(64),randomUUID()]),(error:unknown)=>(error as {code?:string}).code==='23514');
+    await db.pool.query("UPDATE ac_worktree_writers SET state='neutralized',proof_digest=$3,revocation_job_id=$4,revocation_proof=$5 WHERE parent_intent_id=$1 AND run_id=$2", [key.parentIntentId,key.runId,'a'.repeat(64),randomUUID(),{fixture:true}]);
     await assert.rejects(db.tx(c => claimWorktreeWriter(c, other)), (error: unknown) => error instanceof Refusal && error.code === 'WORKTREE_WRITER_BUSY');
     await assert.rejects(db.tx(c => claimWorktreeWriter(c, key)), (error: unknown) => error instanceof Refusal && error.code === 'WORKTREE_WRITER_BUSY');
+    await assert.rejects(db.pool.query('UPDATE ac_worktree_writers SET proof_digest=$3 WHERE parent_intent_id=$1 AND run_id=$2',[key.parentIntentId,key.runId,'b'.repeat(64)]),/WORKTREE_WRITER_IMMUTABLE/);
     const newCopy={...other,runId:randomUUID()};
     assert.deepEqual(await db.tx(c => claimWorktreeWriter(c,newCopy)), {state:'held',acquired:'new'});
   });
@@ -68,5 +71,20 @@ describe('worktree writer lease', { skip }, () => {
       assert.match(await readFile(file,'utf8'),/write/);
       await assert.rejects(db.tx(c=>claimWorktreeWriter(c,successor)),(error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_WRITER_BUSY');
     }finally{child.kill('SIGTERM');await closed;await rm(area,{recursive:true,force:true});}
+  });
+
+  test('legacy neutralized rows survive additive migration without becoming reusable',async()=>{
+    const c=await db.pool.connect(),key={parentIntentId:randomUUID(),runId:randomUUID(),intentId:randomUUID(),epoch:1};
+    try{
+      await c.query('BEGIN');await c.query('CREATE SCHEMA ac_retirement_legacy_fixture');await c.query('SET LOCAL search_path TO ac_retirement_legacy_fixture');
+      await c.query(await readFile(new URL('../db/migrations/061_worktree_writers.sql',import.meta.url),'utf8'));
+      await c.query("INSERT INTO ac_worktree_writers VALUES($1,$2,$3,$4,'neutralized')",[key.parentIntentId,key.runId,key.intentId,key.epoch]);
+      await c.query(await readFile(new URL('../db/migrations/062_worktree_writer_proof.sql',import.meta.url),'utf8'));
+      await c.query('CREATE TABLE ac_sandbox_jobs(id uuid PRIMARY KEY)');
+      await c.query(await readFile(new URL('../db/migrations/063_sandbox_writer_retirement.sql',import.meta.url),'utf8'));
+      await assert.rejects(claimWorktreeWriter(c,{...key,intentId:randomUUID(),epoch:2}),(error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_WRITER_BUSY');
+      const row=(await c.query('SELECT state,holder_intent_id,proof_digest,revocation_proof FROM ac_worktree_writers')).rows[0];
+      assert.deepEqual(row,{state:'neutralized',holder_intent_id:key.intentId,proof_digest:null,revocation_proof:null});
+    }finally{await c.query('ROLLBACK');c.release();}
   });
 });

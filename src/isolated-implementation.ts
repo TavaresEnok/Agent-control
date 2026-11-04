@@ -52,6 +52,13 @@ export class IsolatedImplementation{
   if(await realpath(cwd)!==cwd)throw new Refusal('MANAGED_WORKTREE_FORBIDDEN');return cwd;
  }
  close(){this.active=false;for(const stop of this.stops)stop();}
+ private async cleanup(jobId:string,grantId:string,authority:Authority,launch:z.infer<typeof Launch>){
+  try{return await this.client.perform('cleanup',jobId,grantId,authority,launch);}
+  catch(error){
+   if(!(error instanceof Refusal)||!['DOCKER_UNCERTAIN','DOCKER_REMOVE_UNCERTAIN','SANDBOX_RESPONSE_UNCERTAIN'].includes(error.code))throw error;
+   return this.client.perform('cleanup',jobId,grantId,authority,launch);
+  }
+ }
  start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void,unit?:ManagedUnit):AgentSession{
   let open=true,canceled=false,grantId:string|undefined,execution:z.infer<typeof Launch>|undefined;
   const stop=()=>{if(canceled)return;canceled=true;if(grantId&&execution)void this.client.perform('stop',intent.operation_id,grantId,authority,execution).catch(()=>{});};
@@ -78,6 +85,7 @@ export class IsolatedImplementation{
     return artifact;
    });
    if(saved){
+    if(unit&&await this.reconcileManagedTask(intent,authority,unit)!=='completed')throw new Refusal('MANAGED_RECEIPT_MISMATCH');
     const text=`Reconciled isolated result replayed: ${saved.commit}`;
     onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
    }
@@ -140,7 +148,7 @@ export class IsolatedImplementation{
     }
     if(!receipt)throw new Refusal('SANDBOX_RESULT_UNCERTAIN');
     const committed=await this.apply(principal,intent,authority,spec.cwd,receipt,execution,Boolean(unit));
-    await this.client.perform('cleanup',intent.operation_id,grantId,authority,execution);
+    await this.cleanup(intent.operation_id,grantId,authority,execution);
     const text=`Isolated synthetic implementation completed: ${committed.commit}`;
     onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
    }finally{await rm(temporary,{recursive:true,force:true});}
@@ -205,10 +213,11 @@ export class IsolatedImplementation{
       await git(cwd,['rev-parse','HEAD^{tree}'])!==receipt.implementation.tree||await git(cwd,['rev-parse','HEAD^'])!==input.base||
       await git(cwd,['diff-tree','--no-commit-id','--name-only','-r','HEAD'])!==input.writePaths[0]||
       await git(cwd,['show',`HEAD:${input.writePaths[0]}`])!==await expectedOutput(cwd,launch,intent.operation_id))throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   await this.cleanup(intent.operation_id,initial.grant_id,authority,launch);
    return 'completed';
   }
   await this.apply(initial.principal_id,intent,authority,cwd,receipt,launch,true);
-  await this.client.perform('cleanup',intent.operation_id,initial.grant_id,authority,launch);
+  await this.cleanup(intent.operation_id,initial.grant_id,authority,launch);
   return 'completed';
  }
  async reconcileExisting(intent:Intent,authority:Authority,cwd:string):Promise<'uncertain'|'completed'|'failed'>{

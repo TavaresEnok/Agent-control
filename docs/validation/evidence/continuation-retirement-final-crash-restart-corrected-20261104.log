@@ -1,0 +1,18 @@
+time="2026-11-04T21:51:03Z" level=warning msg="Found orphan containers ([ac-continuation-crashfinal-broker]) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+TAP version 13
+# Reconciled 2 prepared synthetic retirements without replaying a worker.
+# Subtest: a new manager reconciles retirement after the broker disappeared after removal
+ok 1 - a new manager reconciles retirement after the broker disappeared after removal
+  ---
+  duration_ms: 278.511872
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1166.071425

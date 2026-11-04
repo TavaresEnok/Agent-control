@@ -1,0 +1,54 @@
+TAP version 13
+# Subtest: explicit QA waiver stage
+    # Subtest: signed control authorizes only an owner and deduplicates delivery
+    ok 1 - signed control authorizes only an owner and deduplicates delivery
+      ---
+      duration_ms: 148.267037
+      type: 'test'
+      ...
+    # Subtest: the QA settlement records not_required for one artifact and blocks failed evidence
+    ok 2 - the QA settlement records not_required for one artifact and blocks failed evidence
+      ---
+      duration_ms: 328.277822
+      type: 'test'
+      ...
+    1..2
+ok 1 - explicit QA waiver stage
+  ---
+  duration_ms: 2249.758055
+  type: 'suite'
+  ...
+# Subtest: worktree writer lease
+    # Subtest: a copy is never reassigned, even after a legacy neutralization
+    ok 1 - a copy is never reassigned, even after a legacy neutralization
+      ---
+      duration_ms: 95.966174
+      type: 'test'
+      ...
+    # Subtest: a live old writer keeps the same copy blocked across epochs and neutralization attempts
+    ok 2 - a live old writer keeps the same copy blocked across epochs and neutralization attempts
+      ---
+      duration_ms: 163.907169
+      type: 'test'
+      ...
+    # Subtest: legacy neutralized rows survive additive migration without becoming reusable
+    ok 3 - legacy neutralized rows survive additive migration without becoming reusable
+      ---
+      duration_ms: 38.45356
+      type: 'test'
+      ...
+    1..3
+ok 2 - worktree writer lease
+  ---
+  duration_ms: 2166.324214
+  type: 'suite'
+  ...
+1..2
+# tests 5
+# suites 2
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6038.46857

@@ -1,0 +1,25 @@
+TAP version 13
+# Subtest: managed fork joins verified unit artifacts and verifies the composition
+not ok 1 - managed fork joins verified unit artifacts and verifies the composition
+  ---
+  duration_ms: 2264.809571
+  type: 'test'
+  location: '/workspace/tests/managed-runtime-integration.test.ts:1:961'
+  failureType: 'testCodeFailure'
+  error: 'MANAGED_FAILED {"error":"workflow ended at \\"failed\\"","steps":[{"id":"launch-0","name":"Fork","kind":"check","status":"done","iterations":1,"tokensUsed":0,"startedAt":"2026-11-04T21:50:09.339Z","finishedAt":"2026-11-04T21:50:10.751Z"},{"id":"task-one-implement","name":"task-one","kind":"agent","status":"failed","iterations":0,"tokensUsed":0,"startedAt":"2026-11-04T21:50:09.372Z","error":"subtask ended failed","finishedAt":"2026-11-04T21:50:10.748Z"},{"id":"task-two-implement","name":"task-two","kind":"agent","status":"failed","iterations":0,"tokensUsed":0,"startedAt":"2026-11-04T21:50:09.372Z","error":"subtask ended failed","finishedAt":"2026-11-04T21:50:10.749Z"},{"id":"task-one-qa","name":"task-one: qa","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"task-one-review","name":"task-one: review","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"task-two-qa","name":"task-two: qa","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"task-two-review","name":"task-two: review","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"compose-0-launch","name":"compose-0","kind":"check","status":"pending","iterations":0,"tokensUsed":0},{"id":"compose-0-qa","name":"compose-0: qa","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"compose-0-review","name":"compose-0: review","kind":"agent","status":"pending","iterations":0,"tokensUsed":0},{"id":"compose-0-integrate","name":"compose-0: integrate","kind":"agent","status":"pending","iterations":0,"tokensUsed":0}]}'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/workspace/tests/managed-runtime-integration.test.ts:58:36)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4281.724787
+
