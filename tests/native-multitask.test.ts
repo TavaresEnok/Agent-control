@@ -14,6 +14,8 @@ import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-ex
 import {NativeVerification,nativeReviewVerifierDigest} from '../src/native-verification.ts';
 import type {NativeQa} from '../src/native-qa.ts';
 import {Templates} from '../src/templates.ts';
+import {ProjectTemplates} from '../src/project-templates.ts';
+import {authorizeExplicitQaWaiver} from '../src/quality.ts';
 import {canonical,digest,Refusal} from '../src/contracts.ts';
 import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {engineeringNativePlanWorkflowPrefix} from '../src/workflows.ts';
@@ -86,7 +88,8 @@ test('native recipe keeps real acceptances and several write paths, and orders d
  assert(!graph.edges.some(edge=>edge.from==='start'&&edge.to==='launch-1'));
 });
 
-test('native plan runs independent tasks together, then the dependent task, and refuses invalid plans before effects',{timeout:180000,skip:labSkip},async()=>{
+for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as const) test(`native plan runs independent tasks and dependent tasks; QA authorization ${waiverMode}`,{timeout:180000,skip:labSkip},async()=>{
+ const waiverEnabled=waiverMode!=='disabled';
  const baseUrl=labDatabase;if(!baseUrl)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(baseUrl,'nativemulti'),db=new Ledger(fixture.url);
  const area=await mkdtemp(join(tmpdir(),'native-multi-'));
@@ -108,12 +111,24 @@ test('native plan runs independent tasks together, then the dependent task, and 
   await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
   const {revision,options}=await provisionEngineering(db,principal,project,repo,1,false,false);
   const qaDigest=createHash('sha256').update('native-multitask-qa-substitute-v1').digest('hex');
-  const qualityRevision=await options.quality.publish(principal,project,1,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:qaDigest});
+  const qualityRevision=await options.quality.publish(principal,project,1,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:waiverEnabled,requireHumanIntegration:false,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:qaDigest});
   assert.equal(qualityRevision,2);
   const context=await db.createContext(principal,project,randomUUID());
   await new Capacity(db).assignPolicy(principal,context,revision);
   const authority=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
-  await new Templates(db).publish(principal,context,0,{workflow:'engineering-native-v1',qualityRevision,targetRef:'refs/heads/protected',writePaths:['src'],execution:'plan'});
+  const template={workflow:'engineering-native-v1' as const,qualityRevision,targetRef:'refs/heads/protected',writePaths:['src'],execution:'plan' as const};
+  if(waiverEnabled){
+   const templateId=randomUUID(),catalog=new ProjectTemplates(db);
+   await catalog.publish(principal,context,{templateId,expectedRevision:0,name:'Fluxo com dispensa',template,digest:digest(template)});
+   await catalog.apply(principal,context,{templateId,revision:1,expectedRevision:1,expectedContextRevision:0});
+   const authorize=(id:string)=>db.tx(c=>authorizeExplicitQaWaiver(c,principal,context,{policyRevision:qualityRevision,templateId:id,templateRevision:1,taskId:'alpha',riskRule:'explicit-low'}));
+   if(waiverMode==='valid'||waiverMode==='ambiguous')await authorize(templateId);
+   if(waiverMode==='mismatch'||waiverMode==='ambiguous'){
+    const otherId=randomUUID();
+    await catalog.publish(principal,context,{templateId:otherId,expectedRevision:0,name:'Outro fluxo',template,digest:digest(template)});
+    await authorize(otherId);
+   }
+  }else await new Templates(db).publish(principal,context,0,template);
   const account=(await db.pool.query('SELECT account_id AS id FROM ac_account_access WHERE project_id=$1',[project])).rows[0].id as string;
   const keys=generateKeyPairSync('ed25519'),modelImage='sha256:'+'a'.repeat(64);
   const supervisor=new NativeExecutionSupervisor(db,{id:'fixture-model-native',workerImage:modelImage,toolsImage:modelImage,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'b'.repeat(64),accountSubjects:[{accountId:account,subjectDigest:'c'.repeat(64)}],workerEnv:[],toolsEnv:[]});
@@ -204,10 +219,33 @@ test('native plan runs independent tasks together, then the dependent task, and 
   const evidence=(await db.pool.query('SELECT * FROM ac_verification_evidence WHERE artifact_id=ANY($1::uuid[])',[artifacts.map(row=>row.id)])).rows;
   for(const artifact of artifacts){
    const checks=evidence.filter(row=>row.artifact_id===artifact.id);
-   assert.deepEqual(checks.map(row=>row.kind).sort(),['qa','review']);
-   assert.equal(new Set(checks.map(row=>row.session_id)).size,2);
    const child=children.find(row=>row.id===artifact.intent_id)!;
+   const waived=waiverMode==='valid'&&child.parent_unit_id==='task-alpha';
+   assert.deepEqual(checks.map(row=>row.kind).sort(),waived?['review']:['qa','review']);
+   assert.equal(new Set(checks.map(row=>row.session_id)).size,waived?1:2);
    assert(checks.every(row=>row.session_id!==child.native_session_id&&row.grant_id!==child.grant_id));
+   if(waived){
+    assert.equal(artifact.risk,'low');
+    const stages=(await db.pool.query("SELECT state,receipt,grant_id FROM ac_stage_operations WHERE intent_id=$1 AND node_id='qa'",[child.id])).rows;
+    assert.equal(stages.length,1);assert.equal(stages[0].state,'completed');
+    assert.equal(stages[0].receipt.qaWaiver.basis,'not_required');assert.equal(stages[0].grant_id,null);
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers WHERE artifact_id=$1',[artifact.id])).rows[0].n,1);
+   }
+  }
+  if(waiverMode==='valid'){
+   const before=(await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers')).rows[0].n;
+   const evidenceBefore=(await db.pool.query('SELECT count(*)::int n FROM ac_verification_evidence')).rows[0].n;
+   await db.pause(principal,context,true);
+   await runtime.close();
+   const recoveredNative=new NativeImplementation(db,repo,options.quality,[supervisor]);
+   const recoveredVerification=new NativeVerification(db,options.quality,[supervisor],options.verifierKey);
+   runtime=new CezarRuntime(db,repo,project,{...options,allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification:recoveredVerification},undefined,undefined,{nativeExecutions:[supervisor],nativeImplementation:recoveredNative});
+   await runtime.start();
+   await runtime.observe(intent,authority);
+   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers')).rows[0].n,before);
+   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_verification_evidence')).rows[0].n,evidenceBefore);
+   assert.equal((await db.pool.query('SELECT paused FROM ac_contexts WHERE id=$1',[context])).rows[0].paused,true);
+   await db.pause(principal,context,false);
   }
   for(const id of ['alpha','beta','gamma']){
    const child=unit('task-'+id)!;

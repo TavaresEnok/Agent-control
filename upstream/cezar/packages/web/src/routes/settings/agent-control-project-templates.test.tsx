@@ -21,11 +21,11 @@ function resources(projectTemplates?:unknown,canManage=true){
 function stubWidth(width:number){
  vi.stubGlobal('matchMedia',(query:string)=>({matches:width<=Number(/max-width:\s*(\d+)px/.exec(query)?.[1]??-1),media:query,addEventListener(){},removeEventListener(){}}))
 }
-function renderSection(options:{projectTemplates?:unknown;canManage?:boolean;controlStatus?:number;controlError?:string}={}){
+function renderSection(options:{projectTemplates?:unknown;canManage?:boolean;controlStatus?:number;controlError?:string;qaWaiver?:unknown}={}){
  const posts:Array<Record<string,unknown>>=[]
  let resourceCalls=0
  vi.stubGlobal('fetch',vi.fn(async(path:string,init?:RequestInit)=>{
-  if(path.endsWith('/resources')){resourceCalls++;return new Response(JSON.stringify(resources(options.projectTemplates,options.canManage??true)))}
+  if(path.endsWith('/resources')){resourceCalls++;return new Response(JSON.stringify({...resources(options.projectTemplates,options.canManage??true),...(options.qaWaiver?{qaWaiver:options.qaWaiver}:{})}))}
   if(path.endsWith('/manager'))return new Response(JSON.stringify({contextId:context,state:'stopped',executionEnabled:false,semanticManagerEnabled:false}))
   if(path.endsWith('/contexts'))return new Response(JSON.stringify({contexts:[{id:context,paused:false,pause_revision:0,draining:false,drain_revision:0,policy_revision:1}]}))
   if(path.endsWith('/operator/identity'))return new Response(JSON.stringify({principalId:'fixture',projectId:installation,installationId:installation,operatorDeviceIds:[]}))
@@ -34,7 +34,7 @@ function renderSection(options:{projectTemplates?:unknown;canManage?:boolean;con
    const body=JSON.parse(String(init?.body)) as Record<string,unknown>
    posts.push(body)
    if(options.controlStatus)return new Response(JSON.stringify({error:options.controlError}),{status:options.controlStatus})
-   return new Response(JSON.stringify({intentId:body.intentId,state:'applied',result:{revision:1}}))
+   return new Response(JSON.stringify({intentId:body.intentId,state:'applied',result:body.action==='qa.waiver.authorize'?{authorizationId:templateId}:{revision:1}}))
   }
   return new Response('{}',{status:404})
  }))
@@ -43,6 +43,32 @@ function renderSection(options:{projectTemplates?:unknown;canManage?:boolean;con
  return {posts,resourceCalls:()=>resourceCalls,client}
 }
 const catalog=[{templateId,revision:1,headRevision:2,name:'Fluxo de laboratório',digest,snapshot:{workflow:'baseline-synthetic-v1'}},{templateId,revision:2,headRevision:2,name:'Fluxo de laboratório',digest:'cd'.repeat(32),snapshot:{workflow:'engineering-synthetic-v1',qualityRevision:1,targetRef:'refs/heads/protected'}}]
+
+it('authorizes the displayed project-wide task binding through signed control',async()=>{
+ const qaWaiver={canAuthorize:true,active:{templateId,templateRevision:2,templateName:'Fluxo de laboratório',templateDigest:digest,policyRevision:4,policyDigest:'cd'.repeat(32)},authorizations:[],truncated:false}
+ const {posts,client}=renderSection({qaWaiver})
+ await screen.findByText(/Alcance: projeto inteiro/)
+ fireEvent.change(screen.getByLabelText('Identificador da tarefa para dispensa de QA'),{target:{value:'docs'}})
+ fireEvent.click(screen.getByRole('button',{name:'Autorizar dispensa de QA para esta tarefa'}))
+ await waitFor(()=>expect(posts).toHaveLength(1))
+ expect(posts[0]).toMatchObject({action:'qa.waiver.authorize',contextId:context,payload:{policyRevision:4,templateId,templateRevision:2,taskId:'docs',riskRule:'explicit-low'}})
+ expect(await screen.findByText(`Autorização registrada: ${templateId}`)).toBeTruthy()
+ client.clear()
+})
+
+it('does not allow a viewer or an incomplete authorization list to submit',async()=>{
+ const active={templateId,templateRevision:2,templateName:'Fluxo',templateDigest:digest,policyRevision:4,policyDigest:'cd'.repeat(32)}
+ const viewer=renderSection({qaWaiver:{canAuthorize:false,active,authorizations:[],truncated:false}})
+ await screen.findByText('Somente o titular do projeto pode autorizar.')
+ expect(screen.queryByRole('button',{name:'Autorizar dispensa de QA para esta tarefa'})).toBeNull()
+ viewer.client.clear();cleanup()
+ const truncated=renderSection({qaWaiver:{canAuthorize:true,active,authorizations:[],truncated:true}})
+ await screen.findByText(/lista de autorizações está incompleta/)
+ fireEvent.change(screen.getByLabelText('Identificador da tarefa para dispensa de QA'),{target:{value:'docs'}})
+ expect((screen.getByRole('button',{name:'Autorizar dispensa de QA para esta tarefa'}) as HTMLButtonElement).disabled).toBe(true)
+ expect(truncated.posts).toHaveLength(0)
+ truncated.client.clear()
+})
 
 it('publishes the current flow and applies the selected revision through the signed control mutation',async()=>{
  const {posts,client}=renderSection({projectTemplates:catalog})

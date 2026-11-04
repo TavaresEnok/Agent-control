@@ -197,6 +197,24 @@ export class Control {
    const remoteOperations=(await c.query(`SELECT r.id,r.intent_id,r.task_id,r.state,h.label host_label
     FROM ac_remote_operations r JOIN ac_remote_hosts h ON h.id=r.host_id WHERE r.context_id=$1 ORDER BY r.created_at DESC LIMIT 100`,[contextId])).rows;
    const qualityPolicies=(await c.query('SELECT revision,snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
+   // Only the active catalog binding is offered by the panel; the command revalidates it independently.
+   const activeWaiverRow=(await c.query(`SELECT p.template_id,p.revision,p.name,p.digest,p.snapshot,t.digest context_digest
+    FROM ac_context_templates t JOIN ac_project_templates p ON p.project_id=t.source_project_id
+     AND p.template_id=t.source_template_id AND p.revision=t.source_revision
+    WHERE t.context_id=$1 AND t.revision=$2 AND p.project_id=$3`,[contextId,context.active_template_revision,context.project_id])).rows[0];
+   const activeSnapshot=Template.safeParse(activeWaiverRow?.snapshot);
+   const qualityRevision=activeSnapshot.success&&'qualityRevision' in activeSnapshot.data?activeSnapshot.data.qualityRevision:undefined;
+   const activeQuality=qualityPolicies.find(row=>Number(row.revision)===qualityRevision);
+   const parsedQuality=QualityPolicy.safeParse(activeQuality?.snapshot);
+   const activeQaWaiver=activeSnapshot.success&&activeWaiverRow.digest===digest(activeSnapshot.data)&&
+    activeWaiverRow.context_digest===activeWaiverRow.digest&&parsedQuality.success&&
+    digest(parsedQuality.data)===activeQuality?.digest&&parsedQuality.data.allowLowRiskQaWaiver
+    ?{templateId:activeWaiverRow.template_id,templateRevision:Number(activeWaiverRow.revision),templateName:activeWaiverRow.name,
+      templateDigest:activeWaiverRow.digest,policyRevision:Number(activeQuality.revision),policyDigest:activeQuality.digest}:null;
+   const waiverRows=context.role==='owner'?(await c.query(`SELECT id,policy_revision,template_id,template_revision,task_id
+    FROM ac_qa_waiver_authorizations WHERE project_id=$1 ORDER BY created_at DESC,id LIMIT 101`,[context.project_id])).rows:[];
+   const qaWaiver={canAuthorize:context.role==='owner',active:activeQaWaiver,authorizations:waiverRows.slice(0,100).map(row=>({
+    authorizationId:row.id,policyRevision:Number(row.policy_revision),templateId:row.template_id,templateRevision:Number(row.template_revision),taskId:row.task_id})),truncated:waiverRows.length>100};
    const remoteSourceHosts=(await c.query(`SELECT id,label FROM ac_remote_hosts WHERE project_id=$1 AND enabled
     AND 'git-export'=ANY(allowed_tasks) ORDER BY label,id LIMIT 100`,[context.project_id])).rows;
    const remoteSourceAuthorizations=(await c.query(`SELECT control_intent_id AS "authorizationId",intent_id AS "intentId",host_id AS "hostId",
@@ -215,7 +233,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=this.qualityExecutors.reviewDigest??createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier-wide.mjs',import.meta.url))).digest('hex');
    const specialistVerifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-specialist.mjs',import.meta.url))).digest('hex');
-   return {schemaVersion:1,installationId:installation.id,principalId:principal,nativeExecutionEnabled:this.qualityExecutors.nativeExecutionEnabled===true,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,projectTemplates:projectTemplateCatalog.templates,projectTemplatesTruncated:projectTemplateCatalog.truncated,canManageProjectTemplates:context.role==='owner',qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
+   return {schemaVersion:1,installationId:installation.id,principalId:principal,nativeExecutionEnabled:this.qualityExecutors.nativeExecutionEnabled===true,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,projectTemplates:projectTemplateCatalog.templates,projectTemplatesTruncated:projectTemplateCatalog.truncated,canManageProjectTemplates:context.role==='owner',qualityPolicies,qaWaiver,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
     accounts,providerBindings,providerAdapters,providerEligibility,administrative,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
     remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner',workflowVersions};
   });

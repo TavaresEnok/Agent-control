@@ -1,0 +1,13 @@
+
+> test
+> vitest run packages/web/src/routes/settings/agent-control-project-templates.test.tsx
+
+
+ RUN  v4.1.10 /home/app/srv_projetos/workspace/agent-control-implementation/upstream/cezar
+
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  21:04:15
+   Duration  4.39s (transform 813ms, setup 69ms, import 1.39s, tests 1.54s, environment 1.16s)
+

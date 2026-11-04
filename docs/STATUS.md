@@ -1,5 +1,11 @@
 # Agent Control — estado atual de implementação
 
+## Continuação vigente: dispensa de QA e worktree — 04/11/2026
+
+O painel permite ao titular assinar autorização de dispensa para tarefa, política e template ativos, e informa que o alcance é o projeto. O grafo com PostgreSQL e worktrees Git reais, modelos e QA sintéticos passou nas variantes válida, ausente, desabilitada, divergente e ambígua. A variante válida também foi observada após reinício com contexto pausado. A aprovação de QA não foi fabricada e a revisão continua obrigatória. Não é prova de interrupção durante o efeito.
+
+A cópia managed não é mais entregue a outra intenção, inclusive após neutralização legada; a operação de neutralização recusa até existir prova física. Isso evita o reaproveitamento por esta via, mas ainda não revoga acesso, não encerra processo nem entrega recuperação física. Os registros abaixo sobre reassumir a mesma cópia são históricos e foram superados. RF-54, T34, RF-57 e T38 continuam parciais e sem aceite. Revisão independente continua pendente. Detalhes e limites em `implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.
+
 ## Incremento: template ativo, ingresso da dispensa e lease de worktree — 04/11/2026
 
 A dispensa só classifica a primeira tentativa como risco baixo quando a única autorização casa com o template de catálogo ativo do contexto. Sem esse template, o QA executa. O owner registra a autorização pelo comando assinado `qa.waiver.authorize` em `POST /api/v1/ac/control`, com a mesma prova de operador dos outros comandos. O painel ainda não tem botão para esse comando.

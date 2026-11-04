@@ -1,5 +1,15 @@
 # Continuação no Cursor — 04/11/2026
 
+## Continuação mais recente — prevalece sobre os resumos históricos abaixo
+
+- Conferido HEAD inicial `2c58dc29`, branch `continuation/cursor-20261104`; havia somente `db/migrations/062_worktree_writer_proof.sql` sem rastreamento, preservado em evidência antes de ajuste. Nenhum reset ou descarte.
+- Matriz após a prova de CAS: 111 itens, 94 `partial`, 17 `not_implemented`, nenhum aceito. Escritor único e dispensa seguem parciais.
+- Cópias não são reassumidas após neutralização legada. A neutralização sem prova física recusa e não é chamada pelo grafo. Isso não neutraliza o executor e pode bloquear recuperação. É necessário completar a prova física e a ligação com supervisor/grafo, inclusive parada, incerteza, fencing e preservação de logs e artefatos.
+- Autorização do owner no painel, usando template de catálogo e política ativos e controle assinado. Alcance é projeto/tarefa/política/template, não uma dispensa genérica nem um resultado QA aprovado. Falta revogação.
+- Grafo Cezar/PG/Git com executores sintéticos passou para autorização válida, ausente, desabilitada, template divergente e ambígua. Pausa/reinício foram provados somente após conclusão. Persistem provas durante efeito, cancelamento/perda no grafo e cenário físico hostil. Ver `docs/implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.
+- Próxima etapa: protocolo de neutralização física que preserve evidências e não confunda remoção de contêiner ou chmod com prova completa; em paralelo, outras lacunas sintéticas da matriz. Não ativar subagentes: a configuração vigente autoriza somente o principal. Revisão independente de todas as alterações posteriores a `2c58dc29` permanece pendente.
+- O projeto Compose separado desta rodada é `ac-continuation-20261104` com `deploy/compose.lab.yml`, serviços `db` e `runtime`; não compartilha volume PG com a bancada `ac-implementation`. Guia de acesso e reprodução: `docs/operations/LAB.md`. Não usar contas reais, inferência paga, deploy nem migração operacional.
+
 Produto em implementação. Esta página não declara gate completo, homologação nem aceite de requisito.
 
 ## 1. Partida

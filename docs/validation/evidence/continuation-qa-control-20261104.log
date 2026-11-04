@@ -1,0 +1,63 @@
+TAP version 13
+# Subtest: explicit QA waiver stage
+    # Subtest: signed control authorizes only an owner and deduplicates delivery
+    not ok 1 - signed control authorizes only an owner and deduplicates delivery
+      ---
+      duration_ms: 223.720055
+      type: 'test'
+      location: '/workspace/tests/qa-waiver-stage.test.ts:5:236'
+      failureType: 'testCodeFailure'
+      error: |-
+        The validation function is expected to return "true". Received false
+        
+        Caught error:
+        
+        Error: CONTEXT_FORBIDDEN
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      stack: |-
+        process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+        async TestContext.<anonymous> (/workspace/tests/qa-waiver-stage.test.ts:112:5)
+        async Test.run (node:internal/test_runner/test:1054:7)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1442:7)
+        async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+      ...
+    # Subtest: the QA settlement records not_required for one artifact and blocks failed evidence
+    ok 2 - the QA settlement records not_required for one artifact and blocks failed evidence
+      ---
+      duration_ms: 586.344603
+      type: 'test'
+      ...
+    1..2
+not ok 1 - explicit QA waiver stage
+  ---
+  duration_ms: 3572.136802
+  type: 'suite'
+  location: '/workspace/tests/qa-waiver-stage.test.ts:1:781'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: worktree writer lease
+    # Subtest: a copy is never reassigned, even after a legacy neutralization
+    ok 1 - a copy is never reassigned, even after a legacy neutralization
+      ---
+      duration_ms: 34.155297
+      type: 'test'
+      ...
+    1..1
+ok 2 - worktree writer lease
+  ---
+  duration_ms: 2345.30634
+  type: 'suite'
+  ...
+1..2
+# tests 3
+# suites 2
+# pass 2
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8289.538834

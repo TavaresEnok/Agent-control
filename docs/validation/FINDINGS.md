@@ -1,5 +1,14 @@
 # Achados canônicos — implementação 0.1.0
 
+## Continuação de QA e contenção de escritor — 04/11/2026
+
+A prova `continuation-git-cas-race-20261104.log` exercita dois CAS Git concorrentes na mesma base e uma atualização externa em repositório descartável. Exatamente um concorrente integrou e a base alterada foi recusada. O perdedor pode ficar incerto quando a falha ocorre no helper. T10 passa a parcial, mas o fluxo de dois chats, reconciliação e revalidação continuam sem prova e sem aceite.
+
+A correção fecha o reaproveitamento da mesma cópia inclusive após `neutralized` legado e recusa a neutralização genérica sem prova física. A implementação anterior que liberava por flag não era uma prova de parada ou de revogação. A migração 062 só reserva campos; não constitui isolamento. O teste com processo sintético vivo verifica a recusa da posse, não isolamento físico. O grafo ainda não chama o supervisor para neutralização e a recuperação pode ficar bloqueada. RF-54/T34 continuam abertos.
+
+O owner tem ingresso visual para `qa.waiver.authorize`, com alcance de projeto explicitado, binding ativo e controle assinado. O grafo com PG/Git reais e executores sintéticos cobriu dispensa válida, ausência, desabilitação, divergência e ambiguidade. Em `not_required` não houve grant nem recibo aprovado de QA; revisão independente e identidade continuam exigidas. Reinício com pausa foi exercitado após conclusão, não durante efeito. Uma asserção esperava recusa errada para viewer e falhou; o log negativo está preservado e a correção verificou a recusa central real. RF-57/T38 continuam sem aceite. A revisão independente do código final está pendente, pois a configuração vigente autoriza só o agente principal. Comandos, versões e limites: `../implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.
+
+
 Este registro distingue requisito ausente, limitação de prova e defeito observado. Nenhum item aberto autoriza migração ou inferência real.
 
 ## Dispensa de QA vinculada — 04/11/2026

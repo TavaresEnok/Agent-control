@@ -1,0 +1,6 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+tests/git-cas-concurrency.test.ts(29,60): error TS2339: Property 'reason' does not exist on type '{ status: "rejected"; reason: "BASE_MOVED"; } | { commit: string; base: string; tree: string; legacyDigest: string; source: "AcSafeGit+AcArtifactIdentity"; status: "integrated"; operationId: string; targetRef: string; }'.
+  Property 'reason' does not exist on type '{ commit: string; base: string; tree: string; legacyDigest: string; source: "AcSafeGit+AcArtifactIdentity"; status: "integrated"; operationId: string; targetRef: string; }'.

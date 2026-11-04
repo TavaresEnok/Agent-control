@@ -1,0 +1,23 @@
+TAP version 13
+# Subtest: worktree writer lease
+    # Subtest: a copy is never reassigned, even after a legacy neutralization
+    ok 1 - a copy is never reassigned, even after a legacy neutralization
+      ---
+      duration_ms: 78.53687
+      type: 'test'
+      ...
+    1..1
+ok 1 - worktree writer lease
+  ---
+  duration_ms: 1891.579511
+  type: 'suite'
+  ...
+1..1
+# tests 1
+# suites 1
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2341.890195

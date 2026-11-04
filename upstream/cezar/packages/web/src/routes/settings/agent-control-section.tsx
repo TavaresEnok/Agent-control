@@ -23,6 +23,7 @@ import {AgentControlPortableExport} from './agent-control-portable-export'
 import {AgentControlManagerStatus,useAgentControlManagerStatus} from './agent-control-manager-status'
 import {AgentControlCapacityWaits,capacityWaitSchema} from './agent-control-capacity-waits'
 import {AgentControlProjectTemplates,conversationTemplateDraft} from './agent-control-project-templates'
+import {AgentControlQaWaiver,qaWaiverViewSchema} from './agent-control-qa-waiver'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -59,6 +60,7 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  projectTemplates:z.array(z.object({templateId:z.string().uuid(),revision:z.number().int().positive(),headRevision:z.number().int().positive(),name:z.string().min(1).max(80),digest:z.string().regex(/^[a-f0-9]{64}$/),snapshot:z.object({workflow:z.enum(['baseline-synthetic-v1','engineering-synthetic-v1','semantic-proposal-v1','engineering-native-v1']),qualityRevision:z.number().int().positive().optional(),targetRef:z.string().optional(),writePaths:z.array(z.string()).max(64).optional(),execution:z.enum(['root','plan']).optional()}).strict()})).max(100).optional(),
  projectTemplatesTruncated:z.boolean().optional(),
  canManageProjectTemplates:z.boolean().optional(),
+ qaWaiver:qaWaiverViewSchema.optional(),
  plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
  waits:z.array(capacityWaitSchema),
  grants:z.array(grantSchema)})
@@ -162,6 +164,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
+  {mutate.isSuccess&&mutate.variables.action==='qa.waiver.authorize'&&<p role="status">Autorização registrada: {z.object({result:z.object({authorizationId:z.string().uuid()})}).safeParse(mutate.data).success?z.object({result:z.object({authorizationId:z.string().uuid()})}).parse(mutate.data).result.authorizationId:'consulte a lista após atualizar'}</p>}
+  {data?.qaWaiver&&<AgentControlQaWaiver key={`qa-waiver-${contextId}`} view={data.qaWaiver} busy={busy} onAuthorize={payload=>mutate.mutate({action:'qa.waiver.authorize',payload})}/>}
   {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
   {data&&<AgentControlManagerStatus key={`manager-status-${contextId}`} contextId={contextId}/>}
   {data&&<AgentControlPortableExport key={`portable-export-${contextId}`} contextId={contextId} canExport={data.canApproveIntegration}/>}

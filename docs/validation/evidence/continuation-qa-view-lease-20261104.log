@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: explicit QA waiver stage
+    # Subtest: the QA settlement records not_required for one artifact and blocks failed evidence
+    ok 1 - the QA settlement records not_required for one artifact and blocks failed evidence
+      ---
+      duration_ms: 420.227294
+      type: 'test'
+      ...
+    1..1
+ok 1 - explicit QA waiver stage
+  ---
+  duration_ms: 2031.421409
+  type: 'suite'
+  ...
+# Subtest: worktree writer lease
+    # Subtest: a copy is never reassigned, even after a legacy neutralization
+    ok 1 - a copy is never reassigned, even after a legacy neutralization
+      ---
+      duration_ms: 28.620821
+      type: 'test'
+      ...
+    1..1
+ok 2 - worktree writer lease
+  ---
+  duration_ms: 2217.877684
+  type: 'suite'
+  ...
+1..2
+# tests 2
+# suites 2
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6015.754022

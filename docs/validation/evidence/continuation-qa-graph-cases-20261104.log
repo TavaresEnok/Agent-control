@@ -1,0 +1,45 @@
+TAP version 13
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization disabled
+ok 1 - native plan runs independent tasks and dependent tasks; QA authorization disabled
+  ---
+  duration_ms: 11312.386499
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization valid
+ok 2 - native plan runs independent tasks and dependent tasks; QA authorization valid
+  ---
+  duration_ms: 11835.611777
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization missing
+ok 3 - native plan runs independent tasks and dependent tasks; QA authorization missing
+  ---
+  duration_ms: 11138.513734
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization mismatch
+ok 4 - native plan runs independent tasks and dependent tasks; QA authorization mismatch
+  ---
+  duration_ms: 14931.43032
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization ambiguous
+ok 5 - native plan runs independent tasks and dependent tasks; QA authorization ambiguous
+  ---
+  duration_ms: 11810.669777
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 62356.946278

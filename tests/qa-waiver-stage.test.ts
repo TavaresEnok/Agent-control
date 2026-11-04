@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, generateKeyPairSync, sign } from 'node:crypto';
 import { describe, test } from 'node:test';
 import { digest, Refusal } from '../src/contracts.ts';
 import type { Ledger } from '../src/ledger.ts';
 import { isolatedDatabase } from './fixtures/isolated-database.ts';
+import { Control } from '../src/control.ts';
+import { Operators, operatorMessage } from '../src/operator.ts';
 
 const skip = process.env.AC_TEST_DATABASE_URL ? false : 'AC_TEST_DATABASE_URL ausente; prova PG reservada ao laboratório isolado';
 const verifier = 'ab'.repeat(32);
@@ -86,6 +88,31 @@ describe('explicit QA waiver stage', { skip }, () => {
     return artifactId;
   }
 
+  test('signed control authorizes only an owner and deduplicates delivery',async()=>{
+    const env=await project('signed-owner-'+randomUUID()),control=new Control(db),operators=new Operators(db);
+    const installation=(await db.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0].id as string;
+    const signer=async(principal:string)=>{
+      await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+      const deviceId=randomUUID(),keys=generateKeyPairSync('ed25519');
+      await operators.enroll(principal,principal,deviceId,keys.publicKey.export({format:'der',type:'spki'}).toString('base64'));
+      return (command:Record<string,unknown>)=>{
+        const data={deviceId,expiresAt:Date.now()+120000};
+        return {...data,signature:sign(null,Buffer.from(operatorMessage(principal,command,data,installation)),keys.privateKey).toString('hex')};
+      };
+    };
+    const proof=await signer(env.owner);
+    const command={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:env.context,action:'qa.waiver.authorize' as const,payload:env.binding};
+    const first=await control.execute(env.owner,command,proof(command));
+    assert.deepEqual(await control.execute(env.owner,command,proof(command)),first);
+    const repeated={...command,deliveryAttemptId:randomUUID()};
+    assert.deepEqual(await control.execute(env.owner,repeated,proof(repeated)),first);
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waiver_authorizations WHERE project_id=$1',[env.id])).rows[0].n,1);
+    const viewer='signed-viewer-'+randomUUID();await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'viewer')",[env.id,viewer]);
+    const viewerProof=await signer(viewer),forbidden={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
+    await assert.rejects(control.execute(viewer,forbidden,viewerProof(forbidden)),(error:unknown)=>error instanceof Refusal&&error.code==='CONTEXT_FORBIDDEN');
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waiver_authorizations WHERE project_id=$1',[env.id])).rows[0].n,1);
+  });
+
   test('the QA settlement records not_required for one artifact and blocks failed evidence', async () => {
     const env = await project('stage-owner');
     await db.tx(c => authorizeExplicitQaWaiver(c, env.owner, env.context, env.binding));
@@ -96,6 +123,15 @@ describe('explicit QA waiver stage', { skip }, () => {
     assert.equal((await db.tx(c => settleExplicitQaWaiver(c, { contextId: env.context, artifactId, taskId: 'docs', correctionRevision: 0 }))).disposition, 'run');
     assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers WHERE artifact_id=$1', [artifactId])).rows[0].n, 0);
     await new ProjectTemplates(db).apply(env.owner, env.context, { templateId: env.binding.templateId, revision: env.binding.templateRevision, expectedRevision: env.binding.templateRevision, expectedContextRevision: 0 });
+    const view=await new Control(db).view(env.owner,env.context);
+    assert.equal(view.qaWaiver.active?.templateId,env.binding.templateId);
+    assert.equal(view.qaWaiver.active?.policyRevision,env.binding.policyRevision);
+    assert.equal(view.qaWaiver.authorizations[0]?.taskId,'docs');
+    const viewer='qa-viewer-'+randomUUID();
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'viewer')",[env.id,viewer]);
+    const readonly=await new Control(db).view(viewer,env.context);
+    assert.equal(readonly.qaWaiver.canAuthorize,false);
+    assert.equal(readonly.qaWaiver.authorizations.length,0);
     const first = await db.tx(c => settleExplicitQaWaiver(c, { contextId: env.context, artifactId, taskId: 'docs', correctionRevision: 0 }));
     assert.equal(first.disposition, 'not_required');
     if (first.disposition !== 'not_required') return;
