@@ -29,14 +29,24 @@ export function sourceSnapshot(row:unknown,expected:{operationId:string;contextI
   throw new Refusal('REMOTE_GIT_REPLAY_MISMATCH');
  return {schemaVersion:1 as const,kind:'source_snapshot' as const,reviewStatus:'not_reviewed' as const,...expected};
 }
-function git(args:string[]):Promise<string>{return new Promise((resolvePromise,reject)=>{
- const child=spawn('/usr/bin/python3',[new URL('../services/remote-git/limited_git.py',import.meta.url).pathname,...args],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1',GIT_TERMINAL_PROMPT:'0'},stdio:['ignore','pipe','ignore'],detached:true});
+function git(args:string[],input?:Buffer):Promise<string>{return new Promise((resolvePromise,reject)=>{
+ const child=spawn('/usr/bin/python3',[new URL('../services/remote-git/limited_git.py',import.meta.url).pathname,...args],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LC_ALL:'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1',GIT_TERMINAL_PROMPT:'0'},stdio:[input?'pipe':'ignore','pipe','ignore'],detached:true});
  const kill=()=>{try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}};
  let output='';const timer=setTimeout(kill,15000);
- child.stdout.on('data',chunk=>{output+=String(chunk);if(output.length>65536)kill();});
- child.on('error',()=>{clearTimeout(timer);reject(new Refusal('REMOTE_GIT_MATERIALIZATION_FAILED'));});
+ const fail=()=>{clearTimeout(timer);reject(new Refusal('REMOTE_GIT_MATERIALIZATION_FAILED'));};
+ const stdout=child.stdout;if(!stdout){fail();return;}
+ stdout.on('data',chunk=>{output+=String(chunk);if(output.length>65536)kill();});
+ child.on('error',fail);
+ if(input){child.stdin?.on('error',()=>{});child.stdin?.end(input);}
  child.on('close',code=>{clearTimeout(timer);code===0?resolvePromise(output.trim()):reject(new Refusal('REMOTE_GIT_MATERIALIZATION_FAILED'));});
  });}
+/** Bundle header ends at the first blank line. Fetch would fork index-pack and die once the UID is already at RLIMIT_NPROC. */
+function bundlePack(bundle:Buffer){
+ const split=bundle.indexOf('\n\n');
+ const pack=split<0?undefined:bundle.subarray(split+2);
+ if(!pack||pack.length<12||pack.subarray(0,4).toString()!=='PACK')throw new Refusal('REMOTE_GIT_BUNDLE_MISMATCH');
+ return pack;
+}
 /** Destination is controller configuration; operationId selects a fresh bare repo. */
 export class RemoteGitMaterializer{
  constructor(private readonly root:string){}
@@ -60,8 +70,11 @@ export class RemoteGitMaterializer{
    temporary=await mkdtemp(join(root,'.remote-git-'));
    const repo=join(temporary,'repo'),file=join(temporary,'input.bundle');await writeFile(file,bundle,{mode:0o600});
    await git(['init','--bare',...(commit.length===64?['--object-format=sha256']:[]),repo]);
-   await git(['-C',repo,'bundle','verify',file]);
-   await git(['-C',repo,'fetch','--no-tags',file,'refs/heads/agent-control-export:refs/heads/agent-control-export']);
+   const verified=await git(['-C',repo,'bundle','verify',file]);
+   const advertised=verified.split('\n').find(line=>line.endsWith(' refs/heads/agent-control-export'))?.split(' ')[0];
+   if(advertised!==commit)throw new Refusal('REMOTE_GIT_IDENTITY_MISMATCH');
+   await git(['-C',repo,'unpack-objects'],bundlePack(bundle));
+   await git(['-C',repo,'update-ref','refs/heads/agent-control-export',commit]);
    if(await git(['-C',repo,'rev-parse','refs/heads/agent-control-export^{commit}'])!==commit||await git(['-C',repo,'rev-parse',commit+'^{tree}'])!==tree)
     throw new Refusal('REMOTE_GIT_IDENTITY_MISMATCH');
    // The private root and per-operation lock exclude other publishers.
