@@ -9,7 +9,9 @@ import {digest} from './contracts.ts';
  * manifest at backup time. Absence of that proof is unfit
  * (`integridade do manifesto não comprovada`). A different value is unfit.
  * The optional `digest` field inside the manifest does not replace that proof.
- * `scripts/backup-lab.mjs` does not record it yet. `createdAt` is
+ * `scripts/backup-lab.mjs` records that proof as `manifestDigest` on the
+ * sidecar `<archive>.json` through `backupArchiveSidecar`. The encrypted
+ * archive bytes stay unchanged. `createdAt` is
  * written after the file scan and `pg_dump`, so it is only a posterior threshold.
  * A cutoff later than `createdAt` is unfit. No field of this manifest is a cut
  * proven to precede the snapshot: a job, grant, or receipt is uncertain and
@@ -144,12 +146,33 @@ function emptyFiles():Record<FileComponent,FileRec[]>{
  return {vault:[],context:[],ui_state:[],plan_receipts:[]};
 }
 /** Canonical digest of a manifest body. A `digest` field on the input is ignored.
- * `scripts/backup-lab.mjs` does not record this value. The verifier requires it
- * from outside the manifest, as `expectedManifestDigest`. */
+ * The verifier requires this value from outside the manifest, as
+ * `expectedManifestDigest`. */
 export function backupManifestDigest(manifest:Plain){
  const body:Plain={};
  for(const key of Object.keys(manifest))if(key!=='digest')body[key]=manifest[key];
  return digest(body);
+}
+export type BackupArchiveSidecar={
+ scope:string;
+ archive:string;
+ tagFile:string;
+ keyFile:string;
+ sha256:string;
+ sourceFiles:number;
+ size:number;
+ warning:string;
+ manifestDigest:string;
+};
+/** Sidecar object written to `<archive>.json`. The digest is `backupManifestDigest`
+ * of `manifest`. This function does not read or modify the encrypted archive. */
+export function backupArchiveSidecar(input:{
+ scope:string;archive:string;tagFile:string;keyFile:string;sha256:string;
+ sourceFiles:number;size:number;warning:string;manifest:Plain;
+}):BackupArchiveSidecar{
+ return {scope:input.scope,archive:input.archive,tagFile:input.tagFile,keyFile:input.keyFile,
+  sha256:input.sha256,sourceFiles:input.sourceFiles,size:input.size,warning:input.warning,
+  manifestDigest:backupManifestDigest(input.manifest)};
 }
 function serializedLength(value:Plain){
  try{

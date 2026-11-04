@@ -1,10 +1,39 @@
 // Backup of this isolated laboratory only. Production quiescence/key custody remain separate gates.
 import { createCipheriv,createHash,randomBytes } from 'node:crypto';
-import { createReadStream,createWriteStream } from 'node:fs';
-import { mkdir,readFile,writeFile,stat,lstat,readdir,rm } from 'node:fs/promises';
+import { createReadStream,createWriteStream,realpathSync } from 'node:fs';
+import { mkdir,writeFile,stat,lstat,readdir,rm } from 'node:fs/promises';
 import { spawn,execFileSync } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { resolve,join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const verifierUrl=new URL('../src/restore-verifier.ts',import.meta.url);
+let sidecarFn;
+async function loadBackupArchiveSidecar(){
+ if(sidecarFn)return sidecarFn;
+ const {tsImport}=await import('tsx/esm/api');
+ const mod=await tsImport(verifierUrl.href,import.meta.url);
+ if(typeof mod?.backupArchiveSidecar!=='function')throw Error('BACKUP_MANIFEST_DIGEST_UNAVAILABLE');
+ sidecarFn=mod.backupArchiveSidecar;
+ return sidecarFn;
+}
+/** Canonical `manifestDigest` for `<archive>.json`, via `backupArchiveSidecar`.
+ * Does not open a database or build the encrypted archive. */
+export async function backupArchiveSidecarFromProducer(manifest,fields){
+ const build=await loadBackupArchiveSidecar();
+ return build({...fields,manifest});
+}
+/** Cleartext header of the encrypted archive. `manifestDigest` is not part of it. */
+export function encryptedBackupHeader(backupId,ivBase64){
+ return JSON.stringify({schemaVersion:1,backupId,algorithm:'aes-256-gcm',iv:ivBase64})+'\n';
+}
+function runningAsScript(){
+ const entry=process.argv[1];
+ if(!entry)return false;
+ try{return import.meta.url===pathToFileURL(realpathSync(entry)).href;}
+ catch{return false;}
+}
+async function main(){
 const root=resolve(new URL('..',import.meta.url).pathname);
 if(process.cwd()!==root)throw Error('RUN_FROM_ISOLATED_REPOSITORY');
 const compose=['compose','-f','deploy/compose.lab.yml'];
@@ -36,7 +65,7 @@ try{
   limitation:'Requires the same isolated root for absolute Git worktree links. No production restore/admission is authorized.'};
  await writeFile(join(work,'MANIFEST.json'),JSON.stringify(manifest,null,2),{mode:0o600});
  const key=randomBytes(32),iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
- const header=Buffer.from(JSON.stringify({schemaVersion:1,backupId,algorithm:'aes-256-gcm',iv:iv.toString('base64')})+'\n');
+ const header=Buffer.from(encryptedBackupHeader(backupId,iv.toString('base64')));
  cipher.setAAD(header);
  await writeFile(keyFile,key,{mode:0o600,flag:'wx'});
  const output=createWriteStream(archive,{mode:0o600,flags:'wx'});output.write(header);
@@ -45,8 +74,10 @@ try{
  await Promise.all([pipeline(tar.stdout,cipher,output),tarDone]);
  await writeFile(archive+'.tag',cipher.getAuthTag(),{mode:0o600,flag:'wx'});
  const hash=createHash('sha256');for await(const chunk of createReadStream(archive))hash.update(chunk);
- const result={scope:manifest.scope,archive,tagFile:archive+'.tag',keyFile,sha256:hash.digest('hex'),sourceFiles:files.length,
-  size:(await stat(archive)).size,warning:'Key material is local and separate from the archive. Off-host custody is not provided.'};
+ const result=await backupArchiveSidecarFromProducer(manifest,{scope:manifest.scope,archive,tagFile:archive+'.tag',keyFile,sha256:hash.digest('hex'),sourceFiles:files.length,
+  size:(await stat(archive)).size,warning:'Key material is local and separate from the archive. Off-host custody is not provided.'});
  await writeFile(archive+'.json',JSON.stringify(result,null,2),{mode:0o600});console.log(JSON.stringify(result));
 }catch(error){for(const path of [archive,archive+'.tag',archive+'.json',keyFile])await rm(path,{force:true});throw error;}
 finally{await rm(work,{recursive:true,force:true});}
+}
+if(runningAsScript())await main();
