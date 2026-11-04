@@ -16,6 +16,15 @@ import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
+ // Retention dry-run. One private descriptor. No installation, ledger, vault, provider CLI, or deletion.
+ if(command==='retention-plan'){
+  const {executeRetentionPlan}=await import('./retention-cli.ts');
+  const result=await executeRetentionPlan(path,extra);
+  if(result.exitCode===1){console.error(result.code);process.exitCode=1;return;}
+  console.log(JSON.stringify(result.plan));
+  process.exitCode=result.exitCode;
+  return;
+ }
  // Rotation apply never opens the installation, the ledger or the descriptor's key bytes.
  // Usage: context-key-rotate-apply <descriptor> [--confirm-apply]
  if(command==='context-key-rotate-apply'){
