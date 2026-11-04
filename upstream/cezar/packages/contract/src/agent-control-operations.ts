@@ -38,10 +38,16 @@ export const agentControlSloReportSchema=z.object({
   ctx.addIssue({code:'custom',path:['results'],message:'duplicate slo'});
  }
 });
-export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact','specialist','administrative_operation','semantic_planning','native_planning_job']),id:z.uuid()}).strict();
+export const agentControlDiagnosticEvidenceSchema=z.object({kind:z.enum(['context','cancellation','capacity_wait','operation','sandbox_job','stage','integration','artifact','specialist','administrative_operation','semantic_planning','native_planning_job','native_execution_job']),id:z.uuid()}).strict();
+/** Closed observation of a stored native terminal failure. Reading a receipt does not verify its signature. */
+export const nativeTerminalFailureObservationSchema=z.object({
+ cause:z.enum(['worker_exited_without_result','finalizer_exited_without_result','invalid_scope','no_changes','finalization_failed','execution_failed','execution_timeout','execution_canceled','execution_native_turn_failed','execution_output_too_large','execution_native_failed','unknown']),
+ origin:z.enum(['stored_agreement','unreconciled']),
+}).strict();
 export const agentControlDiagnosticFindingSchema=z.object({code:z.enum(['context_paused','context_draining','cancellation_requested','cancellation_confirmed',
- 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing','admission_closed','manager_unavailable','specialist_uncertain','specialist_rejected','administrative_effect_uncertain','planning_pending','planning_result_uncertain','planning_publication_pending','planning_rejected','native_planning_uncertain']),
- meaning:z.string(),owner:z.string(),nextCondition:z.string(),evidence:z.array(agentControlDiagnosticEvidenceSchema)}).strict();
+ 'capacity_wait','effect_uncertain','managed_effect_uncertain','stage_uncertain','physical_receipt_unconfirmed','integration_uncertain','policy_unknown','approval_missing','admission_closed','manager_unavailable','specialist_uncertain','specialist_rejected','administrative_effect_uncertain','planning_pending','planning_result_uncertain','planning_publication_pending','planning_rejected','native_planning_uncertain','native_execution_failed']),
+ meaning:z.string(),owner:z.string(),nextCondition:z.string(),evidence:z.array(agentControlDiagnosticEvidenceSchema),
+ nativeFailure:nativeTerminalFailureObservationSchema.optional()}).strict();
 export const agentControlDiagnosticsSchema=z.object({contextId:z.uuid(),findings:z.array(agentControlDiagnosticFindingSchema),truncated:z.boolean(),
  assessment:z.enum(['observed','unknown']),explanation:z.string().optional()}).strict();
 export type AgentControlProviderBinding=z.infer<typeof agentControlProviderBindingSchema>;

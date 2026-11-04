@@ -395,12 +395,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/observability-final-20261102.log;docs/validation/evidence/provider-control-final-20261102.log;docs/implementation/SLO-EVALUATION-20261103.md;docs/implementation/SLO-API-20261103.md;docs/implementation/SLO-UI-20261103.md",
-    "files": "src/observability.ts;src/observability-api.ts;src/providers.ts;src/planning.ts;src/slo-evaluation.ts",
+    "evidence": "docs/validation/evidence/observability-final-20261102.log;docs/validation/evidence/provider-control-final-20261102.log;docs/implementation/SLO-EVALUATION-20261103.md;docs/implementation/SLO-API-20261103.md;docs/implementation/SLO-UI-20261103.md;docs/implementation/NATIVE-FAILURE-DIAGNOSTICS-20261104.md",
+    "files": "src/observability.ts;src/observability-api.ts;src/providers.ts;src/planning.ts;src/slo-evaluation.ts;src/diagnostics.ts;src/native-failure-diagnostics.ts;tests/native-failure-diagnostics.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Read-only admin aggregate telemetry and durable audits; logs are not a full production audit/retention certification. A pure bench SLO evaluator, GET /api/v1/ac/observability/slo and the settings panel exist. They do not measure RNF-12 and do not accept the requirement."
+    "limitation": "Read-only admin aggregate telemetry and durable audits; logs are not a full production audit/retention certification. A pure bench SLO evaluator, GET /api/v1/ac/observability/slo and the settings panel exist. They do not measure RNF-12 and do not accept the requirement. Context diagnostics can project one stored terminal native execution failure with a closed cause or unknown, without raw output or a verified receipt. This does not prove the native-multitask incident and does not accept the requirement."
   },
   {
     "id": "RF-32",
@@ -642,12 +642,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
-    "files": "src/managed-plan.ts;src/workspace-stream.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/managed-runtime-fourth-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log;docs/implementation/NATIVE-FAILURE-DIAGNOSTICS-20261104.md",
+    "files": "src/managed-plan.ts;src/workspace-stream.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-diagnostics.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-native-failure-diagnostics.test.tsx;upstream/cezar/packages/contract/src/agent-control-operations.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Native graph and scoped event projection reused. Mobile proof demonstrates proposal view and unavailable-manager honesty; no physical-phone live correction graph or end-to-end restart guarantee. Third mobile run covered registration, preview and geometry but counted two diagnostics headings. Keys and root aria-label were fixed; the subsequent final Chromium check passed with one diagnostic heading. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
+    "limitation": "Native graph and scoped event projection reused. Mobile proof demonstrates proposal view and unavailable-manager honesty; no physical-phone live correction graph or end-to-end restart guarantee. Third mobile run covered registration, preview and geometry but counted two diagnostics headings. Keys and root aria-label were fixed; the subsequent final Chromium check passed with one diagnostic heading. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance. The existing diagnostics panel can show a stored terminal native failure, its closed or unknown cause and the job reference. It does not prove the native-multitask incident and does not accept the requirement."
   },
   {
     "id": "RF-51",

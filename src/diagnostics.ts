@@ -2,6 +2,7 @@ import {Id,Refusal,digest} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import type {AgentControlDiagnosticFinding} from '../upstream/cezar/packages/contract/src/agent-control-operations.ts';
+import {projectNativeTerminalFailure, type NativeTerminalFailureSource} from './native-failure-diagnostics.ts';
 
 export type DiagnosticFinding=AgentControlDiagnosticFinding;
 /** Only stored, context-scoped facts are reported; this service never initiates recovery. */
@@ -40,6 +41,27 @@ export class ContextDiagnostics{
    }
    const nativePlanning=await c.query(`SELECT id FROM ac_native_planning_jobs WHERE context_id=$1 AND state='uncertain' ORDER BY created_at,id LIMIT 101`,[contextId]);
    for(const row of nativePlanning.rows.slice(0,100))findings.push({code:'native_planning_uncertain',meaning:'O lançamento ou resultado do contêiner de planejamento ainda não está confirmado.',owner:'Supervisor de planejamento',nextCondition:'Observar o mesmo contêiner e sua saída; preservar a concessão até existir prova terminal.',evidence:[{kind:'native_planning_job',id:row.id}]});
+   const nativeFailures=await c.query(`SELECT j.id,j.intent_id,j.role,j.state,j.receipt AS job_receipt,
+    o.id AS operation_id,o.receipt AS operation_receipt,
+    s.id AS stage_id,s.node_id AS stage_node,s.receipt AS stage_receipt,
+    f.state AS finalizer_state,f.receipt AS finalizer_receipt
+    FROM ac_native_execution_jobs j
+    JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+    LEFT JOIN ac_operations o ON j.role='programmer' AND o.id=j.id AND o.intent_id=j.intent_id
+    LEFT JOIN ac_stage_operations s ON j.role IN ('qa','reviewer','judge') AND s.id=j.id AND s.intent_id=j.intent_id
+    LEFT JOIN ac_native_artifact_finalizations f ON j.role='programmer' AND f.job_id=j.id AND f.context_id=j.context_id
+    WHERE j.context_id=$1 AND j.state='failed'
+    ORDER BY j.created_at,j.id LIMIT 101`,[contextId]);
+   for(const row of nativeFailures.rows.slice(0,100)){
+    const role=row.role as NativeTerminalFailureSource['role'];
+    if(!['programmer','qa','reviewer','judge','specialist'].includes(role))continue;
+    const source:NativeTerminalFailureSource={jobId:row.id,intentId:row.intent_id,contextId,role,state:row.state,
+     jobReceipt:row.job_receipt,operationId:row.operation_id,operationReceipt:row.operation_receipt,
+     stageId:row.stage_id,stageNode:row.stage_node,stageReceipt:row.stage_receipt,
+     finalizerState:row.finalizer_state,finalizerReceipt:row.finalizer_receipt};
+    const finding=projectNativeTerminalFailure(source);
+    if(finding)findings.push(finding);
+   }
    const advice=await c.query(`SELECT id,state,receipt->>'status' verdict FROM ac_specialist_advice WHERE context_id=$1
     AND (state IN ('running','uncertain') OR (state='completed' AND receipt->>'status'='rejected')) ORDER BY id LIMIT 101`,[contextId]);
    for(const row of advice.rows.slice(0,100))findings.push(row.state==='completed'
@@ -85,7 +107,7 @@ export class ContextDiagnostics{
     if(!policy.success||digest(policy.data)!==row.digest){findings.push({code:'policy_unknown',meaning:'Não foi possível verificar a política congelada.',owner:'Administrador do projeto',nextCondition:'Conciliar a política e sua integridade.',evidence:[{kind:'artifact',id:row.id}]});continue;}
     if(policy.data.requireHumanIntegration)findings.push({code:'approval_missing',meaning:'A aprovação exigida para este artefato e destino ainda não consta.',owner:'Aprovador autorizado',nextCondition:'Decisão autorizada sobre o artefato e destino congelados.',evidence:[{kind:'artifact',id:row.id},{kind:'stage',id:row.stage_id}]});
    }
-   const truncated=[planning,nativePlanning,advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
+   const truncated=[planning,nativePlanning,nativeFailures,advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
    await c.query('COMMIT');
    return {contextId,findings,truncated,assessment:findings.length?'observed':'unknown',
     ...(findings.length?{}:{explanation:'Nenhuma causa foi comprovada nos registros consultados; o estado de parada é desconhecido.'})};
