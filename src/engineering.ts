@@ -1,13 +1,13 @@
-import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile, lstat, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { z } from 'zod';
-import { Authority, canonical, digest, Refusal } from './contracts.ts';
+import { Authority, canonical, digest, Id, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
 import { GitArtifacts } from './git.ts';
-import { Quality,QualityPolicy, type VerificationReceipt,type ArtifactRow } from './quality.ts';
+import { Quality,QualityPolicy, VerificationReceipt,type ArtifactRow } from './quality.ts';
 import { Integrator } from './integration.ts';
 import {IsolatedVerification,type IsolatedVerificationResult} from './isolated-verification.ts';
 import type {NativeQa} from './native-qa.ts';
@@ -22,6 +22,64 @@ const nodeSchema=z.enum(['qa','review','judge','integrate']);
 function artifactId(intentId:string,commit:string){const h=digest({domain:'artifact-v1',intentId,commit});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function reviewSession(parent:string,index:number){const h=digest({domain:'review-session-v1',parent,index});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function stop(child:ChildProcess|undefined){if(!child||child.exitCode!==null||child.signalCode!==null)return;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}}
+type CorrectionClient=Parameters<Quality['assertCorrectionFailures']>[0];
+/** A finished reviewer turn may reject. Container exit other than zero is infrastructure, not a verdict, and must not open a correction. Judge output never does. */
+export function nativeReviewCorrectionEvidenceAccepted(input:{kind:string;sessionId:string;grantId:string;intentId:string;stageId:string;physical:unknown;payload:unknown;executionSignature:unknown}){
+ const physical=input.physical as Record<string,unknown>|null,payload=input.payload as Record<string,unknown>|null;
+ return input.kind==='review'&&!!payload&&!!physical&&digest(physical)===payload.physicalDigest&&
+  payload.sessionId===input.sessionId&&payload.grantId===input.grantId&&payload.intentId===input.intentId&&payload.jobId===input.stageId&&
+  payload.exitCode===0&&payload.workerExitCode===0&&physical.exitCode===0&&physical.workerExitCode===0&&physical.synthetic===false&&physical.jobId===input.stageId&&
+  /^[a-f0-9]{64}$/.test(String(physical.containerId??''))&&/^[a-f0-9]{64}$/.test(String(physical.toolsContainerId??''))&&
+  Number.isFinite(Date.parse(String(physical.finishedAt)))&&!String(physical.finishedAt).startsWith('0001-')&&
+  typeof input.executionSignature==='string'&&/^[a-f0-9]{128}$/.test(input.executionSignature);
+}
+const nativeReviewGate=new WeakSet<Quality>();
+function installNativeReviewCorrectionGate(quality:Quality,verifierKey:Buffer){
+ if(nativeReviewGate.has(quality))return;nativeReviewGate.add(quality);
+ const original=quality.assertCorrectionFailures.bind(quality);
+ quality.assertCorrectionFailures=async(c:CorrectionClient,artifactId:string,evidenceIds:readonly string[],authority:Authority)=>{
+  const ids=z.array(Id).min(1).max(32).parse(evidenceIds);
+  if(new Set(ids).size!==ids.length)return original(c,artifactId,ids,authority);
+  try{return await original(c,artifactId,ids,authority);}
+  catch(error){
+   if(!(error instanceof Refusal)||error.code!=='CORRECTION_EVIDENCE_INVALID')throw error;
+   let artifact:ArtifactRow|undefined,sawReview=false;
+   for(const id of ids){
+    try{artifact=await original(c,artifactId,[id],authority);}
+    catch(inner){
+     if(!(inner instanceof Refusal)||inner.code!=='CORRECTION_EVIDENCE_INVALID')throw inner;
+     artifact=await assertSingleNativeReviewRejection(quality,verifierKey,c,artifactId,id,authority);sawReview=true;
+    }
+   }
+   if(!sawReview||!artifact)throw error;return artifact;
+  }
+ };
+}
+async function assertSingleNativeReviewRejection(quality:Quality,verifierKey:Buffer,c:CorrectionClient,artifactId:string,evidenceId:string,authority:Authority){
+ await quality.ledger.fence(c,authority,true);
+ const artifact=(await c.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[Id.parse(artifactId),authority.contextId])).rows[0];
+ if(!artifact)throw new Refusal('ARTIFACT_FORBIDDEN',403);
+ await quality.ledger.assertIntentActive(c,authority.contextId,artifact.intent_id);
+ const row=(await c.query(`SELECT e.*,s.id stage_id,s.intent_id stage_intent,s.node_id,s.session_id stage_session,s.grant_id stage_grant,
+   s.manager_epoch stage_epoch,s.state stage_state,s.receipt stage_receipt,g.state grant_state,g.role grant_role,
+   g.resource_kind,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.physical_receipt
+   FROM ac_verification_evidence e JOIN ac_stage_operations s ON s.grant_id=e.grant_id AND s.session_id=e.session_id
+   JOIN ac_capacity_grants g ON g.id=e.grant_id WHERE e.id=$1 AND e.artifact_id=$2`,[evidenceId,artifact.id])).rows[0];
+ const parsed=VerificationReceipt.safeParse(row?.receipt),signature=row?.stage_receipt?.signature,receipt=parsed.success?parsed.data:undefined;
+ const mac=receipt&&typeof signature==='string'&&/^[a-f0-9]{64}$/.test(signature)?createHmac('sha256',verifierKey).update(canonical(receipt)).digest():undefined;
+ const execution=row?.stage_receipt?.nativeExecution;
+ if(!row||!receipt||!mac||!timingSafeEqual(mac,Buffer.from(signature,'hex'))||digest(receipt)!==row.receipt_digest||!row.stage_receipt?.verification||digest(row.stage_receipt.verification)!==digest(receipt)||
+  receipt.id!==row.id||receipt.artifactId!==artifact.id||row.kind!==receipt.kind||receipt.status!=='failed'||row.status!=='failed'||receipt.exitCode<=0||
+  receipt.commit!==artifact.commit_id||receipt.tree!==artifact.tree_id||receipt.base!==artifact.base_id||receipt.policyRevision!==artifact.policy_revision||
+  receipt.sessionId===artifact.implementation_session_id||receipt.grantId===artifact.implementation_grant_id||
+  receipt.sessionId!==row.stage_session||receipt.grantId!==row.stage_grant||row.stage_intent!==artifact.intent_id||row.grant_intent!==artifact.intent_id||
+  row.grant_context!==artifact.context_id||row.stage_state!=='completed'||row.grant_state!=='released'||row.resource_kind!=='model'||
+  row.node_id!=='review'||row.grant_role!=='reviewer'||row.kind!=='review'||
+  Number(row.stage_epoch)!==Number(row.grant_epoch)||Number(row.stage_epoch)>authority.epoch||
+  !nativeReviewCorrectionEvidenceAccepted({kind:receipt.kind,sessionId:receipt.sessionId,grantId:receipt.grantId,intentId:artifact.intent_id,stageId:row.stage_id,physical:row.physical_receipt,payload:execution?.payload,executionSignature:execution?.signature}))
+  throw new Refusal('CORRECTION_EVIDENCE_INVALID');
+ return artifact;
+}
 
 /** Fixed engineering template adapter. Every invocation comes from an existing Cezar node.
  * Verifiers are synthetic; the isolated runtime uses broker containers for each session. */
@@ -35,6 +93,7 @@ export class EngineeringStages{
   if(options.isolatedVerification&&options.isolatedVerification.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   if(options.isolatedAdvice&&options.isolatedAdvice.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
+  installNativeReviewCorrectionGate(options.quality,this.key);
  }
  async assertSpecialistApproved(c:import('pg').PoolClient,intentId:string,authority:Authority,writer?:{sessionId:string;grantId:string}){
   return assertPreimplementationAdvice(c,this.key,intentId,authority,writer);
