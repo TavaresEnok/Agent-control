@@ -15,6 +15,7 @@ import {authorizeRemoteSource,RemoteSourcePayload} from './remote-source-authori
 import {ProviderEligibility,ProviderEligibilityInput} from './provider-eligibility.ts';
 import {AdministrativeOperations,AdministrativePolicy} from './administrative-operations.ts';
 import {capacityWaitExclusions} from './observability.ts';
+import {readWorkflowVersionSnapshot} from './workflow-versions.ts';
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('administrative.policy.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:AdministrativePolicy}).strict()}).strict(),
@@ -203,6 +204,7 @@ export class Control {
    const capacity=config?{revision:config.revision,programmingLimit:config.programming_limit,evaluationLimit:config.evaluation_limit,
     originalFallback:canConfigureCapacity&&config.original_account_id?{accountId:config.original_account_id,programmingLimit:config.original_programming_limit,
      evaluationLimit:config.original_evaluation_limit}:null}:null;
+   const workflowVersions=await readWorkflowVersionSnapshot(c,contextId);
    const installation=(await c.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
    const operatorDeviceIds=(await c.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
@@ -210,7 +212,7 @@ export class Control {
    const specialistVerifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-specialist.mjs',import.meta.url))).digest('hex');
    return {schemaVersion:1,installationId:installation.id,principalId:principal,nativeExecutionEnabled:this.qualityExecutors.nativeExecutionEnabled===true,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,projectTemplates:projectTemplateCatalog.templates,projectTemplatesTruncated:projectTemplateCatalog.truncated,canManageProjectTemplates:context.role==='owner',qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
     accounts,providerBindings,providerAdapters,providerEligibility,administrative,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
-    remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner'};
+    remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner',workflowVersions};
   });
  }
 }

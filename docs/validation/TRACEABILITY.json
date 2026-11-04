@@ -668,12 +668,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log",
-    "files": "scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/WORKFLOW-VERSIONING-20261104.md;docs/architecture/ADR-012-VERSOES-DE-WORKFLOW.md",
+    "files": "scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs;src/workflow-versions.ts;src/workflows.ts;src/cezar.ts;src/diagnostics.ts;src/control.ts;db/migrations/058_workflow_versions.sql;tests/workflow-versioning.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Restored database fenced and managed runtime starts without dispatch; version rollout and full application startup pending."
+    "limitation": "Restored database remains fenced. Pinned current and retained workflow versions and additive migration 058 are in code. A frozen plan without a pin is derived from its digest and is not retired. Start admits only the reconciled snapshot. Continue-As-New does not apply to Cezar. Physical worker retention is not homologated. On this resume typecheck exited 0 and the catalog test passed. PostgreSQL proof did not run because AC_TEST_DATABASE_URL was still absent; completed-node recovery exited 1 with ISOLATED_DATABASE_REQUIRED before the product. Full application startup remains pending."
   },
   {
     "id": "RF-53",
@@ -1341,15 +1341,15 @@
   {
     "id": "T32",
     "normative_row": "T32\tUpdate de worker e Continue-As-New com pendências\tVersão compatível, mensagens/pausas/operações preservadas, antigos workers retidos conforme necessidade\tRF-22/52\tI5/I7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/WORKFLOW-VERSIONING-20261104.md;docs/architecture/ADR-012-VERSOES-DE-WORKFLOW.md",
+    "files": "src/workflow-versions.ts;src/workflows.ts;src/cezar.ts;src/diagnostics.ts;src/control.ts;db/migrations/058_workflow_versions.sql;tests/workflow-versioning.test.ts;docs/architecture/ADR-012-VERSOES-DE-WORKFLOW.md;docs/implementation/WORKFLOW-VERSIONING-20261104.md",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "Continue-As-New does not apply to this Cezar engine. The slice pins the frozen snapshot and parks WORKFLOW_VERSION_RETIRED without dispatch. Physical retention of old workers is not homologated. On this resume the pure catalog test passed and typecheck exited 0. PostgreSQL cases did not run and completed-node recovery exited 1 with ISOLATED_DATABASE_REQUIRED because AC_TEST_DATABASE_URL was still absent."
   },
   {
     "id": "T33",
