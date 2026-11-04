@@ -19,7 +19,8 @@ it('pins remote tools before the first turn and refuses disconnected or substitu
  const spec={cwd:process.cwd(),userPrompt:'offline tools fixture',isolatedAppServer:true,model:'fixture-sol',reasoningEffort:'medium' as const,
   executionEnvironment:{id:'job_tools',url:'ws://127.0.0.1:8765',cwd:'/work',authBearerToken:'a'.repeat(48)},env:{MOCK_CODEX_EXPECT_REMOTE:'1'}};
  expect((await runner.run(spec)).text.length).toBeGreaterThan(0);
- for(const env of [{MOCK_CODEX_REMOTE_STATE:'disconnected'},{MOCK_CODEX_REMOTE_WRONG:'1'}]){
+ const faults:Array<Record<string,string>>=[{MOCK_CODEX_REMOTE_STATE:'disconnected'},{MOCK_CODEX_REMOTE_WRONG:'1'}];
+ for(const env of faults){
   await expect(runner.run({...spec,env:{...spec.env,...env}})).rejects.toThrow(/EXECUTION_ENVIRONMENT_(NOT_READY|PROFILE_MISMATCH)/);
  }
  expect(()=>runner.startSession({...spec,executionEnvironment:{...spec.executionEnvironment,url:'ws://provider:8765'}})).toThrow('EXECUTION_ENVIRONMENT_INVALID');
