@@ -142,7 +142,8 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
       });
       histories.push(decoded);
       const text = JSON.stringify(decoded);
-      assert(text.includes(texts[index])); assert(!text.includes(texts[1 - index])); assert(text.includes('Cezar'));
+      assert(text.includes(texts[index])); assert(!text.includes(texts[1 - index]));
+      assert(text.includes('execução concluída') && text.includes('"kind":"completion"'), 'canonical history must include this conversation runtime completion');
       assert.equal(decoded.filter(m => typeof m === 'object' && m && 'role' in m && m.role === 'user').length, 1);
     }
     assert.notEqual(contexts[0], contexts[1]); assert.notEqual(sessions[0], sessions[1]);

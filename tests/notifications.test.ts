@@ -69,7 +69,7 @@ test('durable completion batching and immediate blockers use one encrypted outbo
   // the native crypto boundary remains real; only transport/runtime dispatch
   // are intercepted. There are no execution intents in this fixture.
   const socket={connected:true,onAny(){},on(){return this;},emit(){},disconnect(){}} as unknown as Socket;
-  const runtime={repo:'/tmp/notification-fixture',async reconcileCancellations(){},async recoverManaged(){}} as unknown as CezarRuntime;
+  const runtime={repo:'/tmp/notification-fixture',projectId:project,async reconcileCancellations(){},async recoverManaged(){}} as unknown as CezarRuntime;
   const endpoint=new HappierEndpoint(ledger,runtime,{...native,
    createSessionSocketTransport:()=>({socket,transport:{async connect(){}}}),
    materializeNextPendingQueueV2Message:async()=>({didMaterialize:false})},
