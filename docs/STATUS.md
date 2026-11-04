@@ -1,5 +1,13 @@
 # Agent Control — estado atual de implementação
 
+## Incremento: template ativo, ingresso da dispensa e lease de worktree — 04/11/2026
+
+A dispensa só classifica a primeira tentativa como risco baixo quando a única autorização casa com o template de catálogo ativo do contexto. Sem esse template, o QA executa. O owner registra a autorização pelo comando assinado `qa.waiver.authorize` em `POST /api/v1/ac/control`, com a mesma prova de operador dos outros comandos. O painel ainda não tem botão para esse comando.
+
+A materialização managed passa a exigir uma posse em `ac_worktree_writers`. Outra intenção recebe `WORKTREE_WRITER_BUSY`. A mesma intenção repete a posse. Um diretório já existente na primeira posse é `WORKTREE_RESIDUE` e não é apagado. Depois de `neutralized`, outra intenção pode reassumir a mesma cópia. O grafo ainda não chama a neutralização, e a função não mata processo nem altera permissão. RF-54, T34, RF-57 e T38 continuam `not_accepted`.
+
+A revisão independente dos commits anteriores está registrada em `CONTINUACAO-CURSOR.md`. Nesta rodada o typecheck saiu 0. As provas puras e PostgreSQL descartável saíram 0. O container descartável foi removido depois. O banco de laboratório já em execução não foi alterado.
+
 ## Incremento: o nó de QA respeita a dispensa explícita — 04/11/2026
 
 Quando existe uma única autorização do owner para a tarefa, na revisão de política do contrato, a primeira tentativa registra o artefato como `low` e o nó de QA grava `not_required` sem recibo de verificação, sem concessão e sem lançar o verificador. Duas autorizações para a mesma tarefa não dispensam. Correção (`correctionRevision` maior que zero) continua em risco alto e executa QA. Evidência `failed`, `canceled`, `missing_result` ou `stale` bloqueia e não grava a dispensa. Outro artefato não reutiliza a linha anterior; a mesma autorização pode gerar uma linha nova só para ele. A retomada de um estágio concluído com esse recibo não chama `quality.record`.

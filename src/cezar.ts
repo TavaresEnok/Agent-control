@@ -3,7 +3,7 @@ import type {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { join,sep } from 'node:path';
-import { mkdir, readFile,realpath } from 'node:fs/promises';
+import { mkdir, readFile,realpath,lstat } from 'node:fs/promises';
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
@@ -17,6 +17,7 @@ import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/d
 import {childTaskEnvelope} from '../upstream/cezar/packages/cezar/dist/dispatch/engine.js';
 import type { AgentRunner, AgentSession, AgentEvent, AgentRunResult } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import { Authority, Command, digest, Refusal } from './contracts.ts';
+import { claimWorktreeWriter } from './worktree-lease.ts';
 import { refuseCurrentProtectedGate } from './quality.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
@@ -529,10 +530,19 @@ export class CezarRuntime {
     if(await realpath(parentDir)!==parentDir)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
     for(const unit of members){
       if(unit.kind!=='task')continue;
-      const cwd=join(parentDir,unit.runId);await mkdir(cwd,{mode:0o700});
-      const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
-      await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','clone','--no-local','--no-hardlinks','--',repoRoot,cwd],{env,timeout:30000});
-      await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'checkout','--detach',base],{env,timeout:10000});
+      const claim=await this.ledger.tx(async c=>{
+       await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,parent.id);
+       return claimWorktreeWriter(c,{parentIntentId:parent.id,runId:unit.runId,intentId:unit.intentId,epoch:authority.epoch});
+      });
+      const cwd=join(parentDir,unit.runId);
+      const existing=await lstat(cwd).catch(()=>null);
+      if(existing&&(claim.acquired==='new'||existing.isSymbolicLink()||!existing.isDirectory()))throw new Refusal('WORKTREE_RESIDUE');
+      if(!existing){
+       await mkdir(cwd,{mode:0o700});
+       const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
+       await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','clone','--no-local','--no-hardlinks','--',repoRoot,cwd],{env,timeout:30000});
+       await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'checkout','--detach',base],{env,timeout:10000});
+      }
       if(await realpath(cwd)!==cwd)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
       await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,parent.id);});
     }
@@ -610,10 +620,19 @@ export class CezarRuntime {
     if(await realpath(parentDir)!==parentDir)throw new Refusal('MANAGED_SOURCE_PATH_FORBIDDEN',403);
     for(const unit of members){
       if(unit.kind!=='task')continue;
-      const cwd=join(parentDir,unit.runId);await mkdir(cwd,{mode:0o700});
+      const claim=await this.ledger.tx(async c=>{
+       await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,parent.id);
+       return claimWorktreeWriter(c,{parentIntentId:parent.id,runId:unit.runId,intentId:unit.intentId,epoch:authority.epoch});
+      });
+      const cwd=join(parentDir,unit.runId);
+      const existing=await lstat(cwd).catch(()=>null);
+      if(existing&&(claim.acquired==='new'||existing.isSymbolicLink()||!existing.isDirectory()))throw new Refusal('WORKTREE_RESIDUE');
       const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
-      await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','clone','--no-local','--no-hardlinks','--',repoRoot,cwd],{env,timeout:30000});
-      await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'checkout','--detach',base],{env,timeout:10000});
+      if(!existing){
+       await mkdir(cwd,{mode:0o700});
+       await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','clone','--no-local','--no-hardlinks','--',repoRoot,cwd],{env,timeout:30000});
+       await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'checkout','--detach',base],{env,timeout:10000});
+      }
       if(correction){
         await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'fetch','--no-tags',repoRoot,correction.priorCommit],{env,timeout:10000});
         await execFileAsync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',cwd,'update-ref','refs/agent-control/correction-source',correction.priorCommit],{env,timeout:10000});

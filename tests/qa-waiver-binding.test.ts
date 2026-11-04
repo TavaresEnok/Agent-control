@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { evaluateQaWaiverGate, qaWaiverStageReceipt, type QaWaiverBindingRecord } from '../src/qa-waiver-binding.ts';
+import { ControlCommand } from '../src/control.ts';
 
 const digest = 'ab'.repeat(32);
 const waiver: QaWaiverBindingRecord = {
@@ -59,6 +60,13 @@ test('a stage waiver receipt is not a passed verification receipt', () => {
   assert.equal(qaWaiverStageReceipt(receipt)?.basis, 'not_required');
   assert.equal(qaWaiverStageReceipt({ ...receipt, verification: { status: 'passed' } }), null);
   assert.equal(qaWaiverStageReceipt({ qaWaiver: { ...receipt.qaWaiver, basis: 'passed' } }), null);
+});
+
+test('the signed control command accepts an owner QA waiver authorization', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const parsed = ControlCommand.parse({ schemaVersion: 1, intentId: id, deliveryAttemptId: id, contextId: id, action: 'qa.waiver.authorize', payload: { policyRevision: 1, templateId: id, templateRevision: 1, taskId: 'docs', riskRule: 'explicit-low' } });
+  assert.equal(parsed.action, 'qa.waiver.authorize');
+  assert.throws(() => ControlCommand.parse({ schemaVersion: 1, intentId: id, deliveryAttemptId: id, contextId: id, action: 'qa.waiver.authorize', payload: { policyRevision: 1, templateId: id, templateRevision: 1, taskId: 'docs', riskRule: 'explicit-low', note: 'não precisa testar' } }));
 });
 
 test('high risk and a disabled policy stay missing instead of becoming not_required', () => {

@@ -123,13 +123,23 @@ export async function findUniqueExplicitQaWaiver(c:pg.PoolClient,projectId:strin
   return rows.length===1?rows[0]:null;
 }
 
-/** Low only when one owner authorization names this first attempt. A correction stays high. */
+async function activeCatalogTemplate(c:pg.PoolClient,contextId:string){
+  const row=(await c.query(`SELECT t.source_project_id,t.source_template_id,t.source_revision,x.project_id
+    FROM ac_contexts x JOIN ac_context_templates t ON t.context_id=x.id AND t.revision=x.active_template_revision
+    WHERE x.id=$1`,[contextId])).rows[0];
+  if(!row?.source_template_id||row.source_project_id!==row.project_id||!row.source_revision)return null;
+  return {templateId:row.source_template_id as string,revision:Number(row.source_revision)};
+}
+
+/** Low only when one owner authorization names this first attempt and the active catalog template. A correction stays high. */
 export async function expectedArtifactRisk(c:pg.PoolClient,intentId:string,contextId:string,policyRevision:number){
   const scope=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[contextId])).rows[0];
   if(!scope)return 'high' as const;
   const task=await managedTaskBinding(c,intentId,contextId);
   if(!task.taskId||task.correctionRevision>0)return 'high' as const;
-  return await findUniqueExplicitQaWaiver(c,scope.project_id,policyRevision,task.taskId)?'low' as const:'high' as const;
+  const template=await activeCatalogTemplate(c,contextId);
+  const authorization=await findUniqueExplicitQaWaiver(c,scope.project_id,policyRevision,task.taskId);
+  return authorization&&template&&authorization.template_id===template.templateId&&Number(authorization.template_revision)===template.revision?'low' as const:'high' as const;
 }
 
 /** Apply the owner authorization to this artifact only. No QA receipt is written.
@@ -140,7 +150,8 @@ export async function settleExplicitQaWaiver(c:pg.PoolClient,input:{contextId:st
     ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1 AND a.context_id=$2`,[input.artifactId,input.contextId])).rows[0];
   if(!artifact||artifact.risk!=='low')return {disposition:'run' as const};
   const authorization=await findUniqueExplicitQaWaiver(c,artifact.project_id,Number(artifact.policy_revision),input.taskId);
-  if(!authorization)return {disposition:'run' as const};
+  const template=await activeCatalogTemplate(c,input.contextId);
+  if(!authorization||!template||authorization.template_id!==template.templateId||Number(authorization.template_revision)!==template.revision)return {disposition:'run' as const};
   const evidence=(await c.query(`SELECT status FROM ac_verification_evidence WHERE artifact_id=$1 AND kind='qa'`,[artifact.id])).rows;
   if(evidence.some(row=>row.status!=='passed'))return {disposition:'blocked' as const};
   if(evidence.length)return {disposition:'run' as const};

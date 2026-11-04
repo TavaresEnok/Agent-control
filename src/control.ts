@@ -8,6 +8,7 @@ import { Operators,type OperatorProof } from './operator.ts';
 import { Admission } from './admission.ts';
 import { Templates,Template } from './templates.ts';
 import { ProjectTemplateApply, ProjectTemplatePublish, ProjectTemplates, readProjectTemplates } from './project-templates.ts';
+import { authorizeExplicitQaWaiver, QaWaiverBinding } from './quality.ts';
 import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
 import {ProviderCollectors,ProviderBinding,projectProviderSnapshot,type ProviderAdapter} from './providers.ts';
 import {IntegrationApproval,approveIntegration} from './approvals.ts';
@@ -27,6 +28,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('template.assign'),payload:z.object({revision:z.number().int().positive()}).strict()}).strict(),
  z.object({...base,action:z.literal('project-template.publish'),payload:ProjectTemplatePublish}).strict(),
  z.object({...base,action:z.literal('project-template.apply'),payload:ProjectTemplateApply}).strict(),
+ z.object({...base,action:z.literal('qa.waiver.authorize'),payload:QaWaiverBinding}).strict(),
  z.object({...base,action:z.literal('device.enroll'),payload:z.object({deviceId:Id,publicKey:z.string().min(40).max(200)}).strict()}).strict(),
  z.object({...base,action:z.literal('device.revoke'),payload:z.object({deviceId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('admission.set'),payload:z.object({enabled:z.boolean(),expectedRevision:z.number().int().positive(),reason:z.string().min(1).max(200)}).strict()}).strict(),
@@ -85,6 +87,9 @@ export class Control {
      case 'template.assign':result=await new Templates(this.ledger,c).assign(principal,command.contextId,command.payload.revision);break;
      case 'project-template.publish':result=await new ProjectTemplates(this.ledger,c).publish(principal,command.contextId,command.payload);break;
      case 'project-template.apply':result=await new ProjectTemplates(this.ledger,c).apply(principal,command.contextId,command.payload);break;
+     case 'qa.waiver.authorize':
+      if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+      result=await authorizeExplicitQaWaiver(c,principal,command.contextId,command.payload);break;
      case 'device.enroll':await new Operators(this.ledger).enrollFromDevice(c,principal,command.payload.deviceId,command.payload.publicKey);result={deviceId:command.payload.deviceId};break;
      case 'device.revoke':await new Operators(this.ledger).revokeFromDevice(c,principal,command.payload.deviceId);result={deviceId:command.payload.deviceId};break;
      case 'admission.set':result=await new Admission(this.ledger,c).set(principal,command.payload);break;

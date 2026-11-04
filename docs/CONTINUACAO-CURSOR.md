@@ -49,7 +49,15 @@ Itens ainda `not_implemented` na matriz, em ordem de dependência interna:
 7. Autoridade única de credencial na migração: RF-46. Depende de autorização de migração, que não existe.
 8. Meta de tempo RNF-12. Exige ambiente homologado e medição separada de autenticação externa.
 
+## Revisão independente
+
+Os commits `e28cf4ba` e `b579d3af` foram revisados por uma sessão Composer, distinta do autor. Sonnet e Sol não abriram porque o uso adicional da conta está desligado; isso não foi tratado como aprovação. O veredito foi aprovar a fatia, sem aceite de RF-57 ou T38, com dois achados médios: a autorização não precisava coincidir com o template ativo, e não havia ingresso do owner.
+
+A correção liga o risco baixo e o assentamento ao template de catálogo ativo do contexto e acrescenta o comando assinado `qa.waiver.authorize` na rota de controle já existente. Uma segunda sessão Composer pediu correção no lease de worktree antes de promovê-lo. O resíduo agora só bloqueia a primeira posse quando o diretório já existe. A retomada depois de `neutralized` pode reutilizar a cópia. `neutralizeWorktreeWriter` ainda não é chamado pelo grafo, não mata processo e não apaga o diretório. RF-54 e T34 continuam sem aceite.
+
 ## 5. Próxima entrega funcional
+
+O próximo bloqueio executável do fluxo é ligar a neutralização do escritor ao término comprovado da tentativa, sem liberar um processo ainda vivo, e uma sessão do nó de QA no grafo com worktree. Contas reais, aparelho, SSH operacional e migração continuam impedimentos externos.
 
 O nó de QA já grava `not_required` para a primeira tentativa quando há uma única autorização do owner. A prova cobriu o assentamento e o gate em PostgreSQL descartável, não uma sessão completa do grafo com worktree. A entrega seguinte que ainda não depende de conta ou aparelho é o escritor único por worktree (RF-54/T34): neutralizar o acesso antigo antes de reutilizar a cópia. Correção de QA dispensado continua executando o verificador.
 

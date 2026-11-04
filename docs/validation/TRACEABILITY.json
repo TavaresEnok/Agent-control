@@ -691,15 +691,15 @@
   {
     "id": "RF-54",
     "normative_row": "RF-54\tP0\tGarantir um único escritor autorizado por worktree e neutralizar acesso antigo antes de compartilhar a mesma cópia com nova tentativa\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "src/worktree-lease.ts;tests/worktree-lease.test.ts;db/migrations/061_worktree_writers.sql",
+    "files": "src/worktree-lease.ts;src/cezar.ts;db/migrations/061_worktree_writers.sql;tests/worktree-lease.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A managed materialization now claims ac_worktree_writers. A second intent is WORKTREE_WRITER_BUSY while the row is held. The same intent may repeat. A pre-existing directory on the first claim is WORKTREE_RESIDUE and is not deleted. After neutralized, another intent may reclaim the same copy. neutralizeWorktreeWriter is not called by the graph, does not kill a process, and does not remove the directory. The PostgreSQL lease test exited 0. A live old writer is not covered. This does not accept the requirement."
   },
   {
     "id": "RF-55",
@@ -734,11 +734,11 @@
     "code_state": "partial",
     "test_result": "partial_scope_only",
     "evidence": "docs/implementation/QA-WAIVER-BINDING-20261104.md;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts",
-    "files": "src/quality.ts;src/qa-waiver-binding.ts;src/engineering.ts;src/native-execution-supervisor.ts;db/migrations/060_qa_waiver_binding.sql;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts",
+    "files": "src/quality.ts;src/qa-waiver-binding.ts;src/engineering.ts;src/native-execution-supervisor.ts;db/migrations/060_qa_waiver_binding.sql;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts;src/control.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "The QA node now settles not_required for a first managed attempt when exactly one owner authorization matches the task and policy revision. The stage receipt is not a passed verification receipt and replay does not call quality.record. A correction stays high and still runs QA. Two authorizations for the same task do not waive. Failed, canceled, missing_result and stale QA evidence block before a waiver row is written. Another artifact does not reuse the previous waiver row. PostgreSQL proof on a disposable database exited 0 with 10 tests, including tests/qa-waiver-stage.test.ts and tests/quality-gate-integrity.test.ts. A full EngineeringStages session with a worktree was not run. Independent review remains pending. This does not accept the requirement."
+    "limitation": "The QA node now settles not_required for a first managed attempt when exactly one owner authorization matches the task and policy revision. The stage receipt is not a passed verification receipt and replay does not call quality.record. A correction stays high and still runs QA. Two authorizations for the same task do not waive. Failed, canceled, missing_result and stale QA evidence block before a waiver row is written. Another artifact does not reuse the previous waiver row. PostgreSQL proof on a disposable database exited 0 with 10 tests, including tests/qa-waiver-stage.test.ts and tests/quality-gate-integrity.test.ts. A full EngineeringStages session with a worktree was not run. Independent review remains pending. This does not accept the requirement. The follow-up requires the active catalog template to match the single authorization; otherwise QA still runs. The signed command qa.waiver.authorize is on the existing control route. Independent review of e28cf4ba and b579d3af approved that slice and did not accept the requirement. A full graph session is still absent."
   },
   {
     "id": "RNF-01",
@@ -1367,15 +1367,15 @@
   {
     "id": "T34",
     "normative_row": "T34\tEscritor antigo continua vivo quando outra tentativa é preparada\tNunca compartilham a mesma cópia gravável; resultado e acesso antigos tratados antes de retomar\tRF-23/28/54\tI5",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "tests/worktree-lease.test.ts",
+    "files": "src/worktree-lease.ts;src/cezar.ts;tests/worktree-lease.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "The lease stops a second intent from holding the same worktree record. It does not prove the previous process is gone or that the writable copy was neutralized before reuse. This does not accept the scenario."
   },
   {
     "id": "T35",

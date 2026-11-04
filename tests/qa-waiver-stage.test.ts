@@ -93,6 +93,9 @@ describe('explicit QA waiver stage', { skip }, () => {
     assert.equal(await db.tx(c => expectedArtifactRisk(c, plain, env.context, env.revision)), 'high');
     const passed = [{ kind: 'review' as const, status: 'passed' }];
     const artifactId = await artifact(env, 'b'.repeat(40), passed);
+    assert.equal((await db.tx(c => settleExplicitQaWaiver(c, { contextId: env.context, artifactId, taskId: 'docs', correctionRevision: 0 }))).disposition, 'run');
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers WHERE artifact_id=$1', [artifactId])).rows[0].n, 0);
+    await new ProjectTemplates(db).apply(env.owner, env.context, { templateId: env.binding.templateId, revision: env.binding.templateRevision, expectedRevision: env.binding.templateRevision, expectedContextRevision: 0 });
     const first = await db.tx(c => settleExplicitQaWaiver(c, { contextId: env.context, artifactId, taskId: 'docs', correctionRevision: 0 }));
     assert.equal(first.disposition, 'not_required');
     if (first.disposition !== 'not_required') return;
