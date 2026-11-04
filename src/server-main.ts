@@ -16,6 +16,18 @@ import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
+ // Rotation apply never opens the installation, the ledger or the descriptor's key bytes.
+ // Usage: context-key-rotate-apply <descriptor> [--confirm-apply]
+ if(command==='context-key-rotate-apply'){
+  const confirm=extra[0]==='--confirm-apply';
+  if(!path||extra.length!==(confirm?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
+  const {executeContextKeyRotateApply}=await import('./context-vault-cli.ts');
+  const result=await executeContextKeyRotateApply(path,confirm);
+  if(result.exitCode===1){console.error(result.code);process.exitCode=1;return;}
+  console.log(JSON.stringify(result.report));
+  process.exitCode=result.exitCode;
+  return;
+ }
  const descriptorCommand=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command);
  if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
  // Inventory dry-run. The installation path is not opened. No ledger and no vault.

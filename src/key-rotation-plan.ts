@@ -49,6 +49,8 @@ const Observation=z.object({
 
 export type KeyRotationPlan=z.infer<typeof Plan>;
 export type KeyRotationCheckpoint=z.infer<typeof Checkpoint>;
+export const parseKeyRotationPlan=(input:unknown):KeyRotationPlan=>Plan.parse(input);
+export const parseKeyRotationCheckpoint=(input:unknown):KeyRotationCheckpoint=>Checkpoint.parse(input);
 export type RotationEntryRef={id:string;keyVersion:number};
 /**
  * Durable port. `observe` is read-only and must already show every effect that completed,
