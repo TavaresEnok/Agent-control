@@ -2,6 +2,8 @@
 
 ## Continuação de QA e contenção de escritor — 04/11/2026
 
+Backup e restore foram repetidos em checkout separado com dados sintéticos: corrupção recusada, pausa e concessão incerta preservadas, worktree Git relocada e runtime restaurado iniciado com admissão fechada. A cópia tinha zero runs nativos e a prova não reconcilia efeitos externos. Detalhes em `../implementation/CONTINUACAO-RESTORE-20261104.md`.
+
 O broker físico de fixture observou worker vivo no takeover e reteve capacidade até recibo terminal; a cópia continuou bloqueada. A prova não trata executor inacessível nem revogação completa do acesso à worktree. T20 passa a parcial. Dois hosts SSH descartáveis também passaram perda de ACK, reinício e exportação Git. Ver `../implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`.
 
 A prova `continuation-git-cas-race-20261104.log` exercita dois CAS Git concorrentes na mesma base e uma atualização externa em repositório descartável. Exatamente um concorrente integrou e a base alterada foi recusada. O perdedor pode ficar incerto quando a falha ocorre no helper. T10 passa a parcial, mas o fluxo de dois chats, reconciliação e revalidação continuam sem prova e sem aceite.

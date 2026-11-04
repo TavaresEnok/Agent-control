@@ -434,12 +434,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/IMPORT-PREVIEW-20261102.md",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/IMPORT-PREVIEW-20261102.md;docs/implementation/CONTINUACAO-RESTORE-20261104.md;docs/validation/evidence/continuation-restore-proof-20261104.log;docs/validation/evidence/continuation-restored-worktrees-20261104.log",
     "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/relocate-restored-worktrees.mjs;src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Encrypted synthetic backup, new database, relocated Git/native metadata and managed runtime startup verified; full UI, external effects and off-host custody pending. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore."
+    "limitation": "Encrypted synthetic backup, new database, relocated Git/native metadata and managed runtime startup verified; full UI, external effects and off-host custody pending. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore. A new isolated synthetic backup/restore run rejected archive and dump tampering, preserved pause and uncertain grant, and started a managed runtime with admission closed after relocating one Git worktree; it contained zero native runs. External effects, real conversations, off-host custody and RPO/RTO remain unverified."
   },
   {
     "id": "RF-35",
@@ -668,12 +668,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/WORKFLOW-VERSIONING-20261104.md;docs/architecture/ADR-012-VERSOES-DE-WORKFLOW.md",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/WORKFLOW-VERSIONING-20261104.md;docs/architecture/ADR-012-VERSOES-DE-WORKFLOW.md;docs/implementation/CONTINUACAO-RESTORE-20261104.md;docs/validation/evidence/continuation-restore-proof-20261104.log;docs/validation/evidence/continuation-restored-worktrees-20261104.log",
     "files": "scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs;src/workflow-versions.ts;src/workflows.ts;src/cezar.ts;src/diagnostics.ts;src/control.ts;db/migrations/058_workflow_versions.sql;tests/workflow-versioning.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Restored database remains fenced. Pinned current and retained workflow versions and additive migration 058 are in code. A frozen plan without a pin is derived from its digest and is not retired. Start admits only the reconciled snapshot. Continue-As-New does not apply to Cezar. Physical worker retention is not homologated. On this resume typecheck exited 0 and the catalog test passed. PostgreSQL proof did not run because AC_TEST_DATABASE_URL was still absent; completed-node recovery exited 1 with ISOLATED_DATABASE_REQUIRED before the product. Full application startup remains pending."
+    "limitation": "Restored database remains fenced. Pinned current and retained workflow versions and additive migration 058 are in code. A frozen plan without a pin is derived from its digest and is not retired. Start admits only the reconciled snapshot. Continue-As-New does not apply to Cezar. Physical worker retention is not homologated. On this resume typecheck exited 0 and the catalog test passed. PostgreSQL proof did not run because AC_TEST_DATABASE_URL was still absent; completed-node recovery exited 1 with ISOLATED_DATABASE_REQUIRED before the product. Full application startup remains pending. A new isolated synthetic backup/restore run rejected archive and dump tampering, preserved pause and uncertain grant, and started a managed runtime with admission closed after relocating one Git worktree; it contained zero native runs. External effects, real conversations, off-host custody and RPO/RTO remain unverified."
   },
   {
     "id": "RF-53",
@@ -863,12 +863,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/RESTORE-VERIFIER-20261103.md;docs/implementation/RETENTION-DISK-FULL-20261103.md",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/RESTORE-VERIFIER-20261103.md;docs/implementation/RETENTION-DISK-FULL-20261103.md;docs/implementation/CONTINUACAO-RESTORE-20261104.md;docs/validation/evidence/continuation-restore-proof-20261104.log;docs/validation/evidence/continuation-restored-worktrees-20261104.log",
     "files": "scripts/backup-lab.mjs;scripts/restore-lab.mjs;scripts/import-restored-lab-database.mjs;scripts/prove-restored-worktrees.mjs;src/restore-verifier.ts;src/retention-plan.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic copy restore and Git/runtime read verified. verifyRestore classifies an in-memory manifest and never performs a restore or authorizes admission. planRetention is a dry-run and does not delete acceptance evidence. No operational disaster recovery or RPO/RTO measurement. This does not accept the requirement."
+    "limitation": "Synthetic copy restore and Git/runtime read verified. verifyRestore classifies an in-memory manifest and never performs a restore or authorizes admission. planRetention is a dry-run and does not delete acceptance evidence. No operational disaster recovery or RPO/RTO measurement. This does not accept the requirement. A new isolated synthetic backup/restore run rejected archive and dump tampering, preserved pause and uncertain grant, and started a managed runtime with admission closed after relocating one Git worktree; it contained zero native runs. External effects, real conversations, off-host custody and RPO/RTO remain unverified."
   },
   {
     "id": "RNF-11",
@@ -1162,12 +1162,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/IMPORT-PREVIEW-20261102.md",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/validation/evidence/restored-worktrees-final-20261102.log;docs/implementation/IMPORT-PREVIEW-20261102.md;docs/implementation/CONTINUACAO-RESTORE-20261104.md;docs/validation/evidence/continuation-restore-proof-20261104.log;docs/validation/evidence/continuation-restored-worktrees-20261104.log",
     "files": "scripts/prove-backup-restore.mjs;scripts/prove-restored-worktrees.mjs;tests/fixtures/restored-runtime-smoke.ts;src/import-preview.ts;src/import-preview-api.ts;tests/import-preview.test.ts;tests/backup-preview.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore."
+    "limitation": "Archive/database hashes, corruption refusals, Git/native metadata relocation and no-dispatch runtime read verified; complete app/history UI startup remains unverified. Import and manifest previews are sanitized only; they do not authenticate files or implement staging, export or restore. A new isolated synthetic backup/restore run rejected archive and dump tampering, preserved pause and uncertain grant, and started a managed runtime with admission closed after relocating one Git worktree; it contained zero native runs. External effects, real conversations, off-host custody and RPO/RTO remain unverified."
   },
   {
     "id": "T19",
@@ -1318,12 +1318,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log",
+    "evidence": "docs/validation/evidence/backup-restore-first-20261102.log;docs/implementation/CONTINUACAO-RESTORE-20261104.md;docs/validation/evidence/continuation-restore-proof-20261104.log;docs/validation/evidence/continuation-restored-worktrees-20261104.log",
     "files": "scripts/import-restored-lab-database.mjs;scripts/prove-backup-restore.mjs",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Paused context and uncertain grants preserved without starting an executor; external live effect reconciliation still pending."
+    "limitation": "Paused context and uncertain grants preserved without starting an executor; external live effect reconciliation still pending. A new isolated synthetic backup/restore run rejected archive and dump tampering, preserved pause and uncertain grant, and started a managed runtime with admission closed after relocating one Git worktree; it contained zero native runs. External effects, real conversations, off-host custody and RPO/RTO remain unverified."
   },
   {
     "id": "T31",

@@ -2,6 +2,8 @@
 
 ## Continuação vigente: dispensa de QA e worktree — 04/11/2026
 
+Backup/restauração foram repetidos com dados sintéticos em checkout e banco próprios, incluindo rejeição de corrupção, pausa e concessão incerta, relocação de uma worktree e boot do runtime da cópia com admissão fechada. Zero runs nativos na segunda cópia. Ver `implementation/CONTINUACAO-RESTORE-20261104.md`.
+
 A bancada isolada reproduziu worker Docker vivo, takeover e parada, preservando a posse bloqueada, além de dois hosts SSH sintéticos com perda de ACK, reinício e exportação Git. Os limites e logs estão em `implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`. Não houve aceite dos cenários integrais.
 
 O painel permite ao titular assinar autorização de dispensa para tarefa, política e template ativos, e informa que o alcance é o projeto. O grafo com PostgreSQL e worktrees Git reais, modelos e QA sintéticos passou nas variantes válida, ausente, desabilitada, divergente e ambígua. A variante válida também foi observada após reinício com contexto pausado. A aprovação de QA não foi fabricada e a revisão continua obrigatória. Não é prova de interrupção durante o efeito.
