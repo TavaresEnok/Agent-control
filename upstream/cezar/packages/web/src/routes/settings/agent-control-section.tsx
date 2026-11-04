@@ -21,6 +21,7 @@ import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './a
 import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent-control-administrative-policy'
 import {AgentControlPortableExport} from './agent-control-portable-export'
 import {AgentControlManagerStatus,useAgentControlManagerStatus} from './agent-control-manager-status'
+import {AgentControlCapacityWaits,capacityWaitSchema} from './agent-control-capacity-waits'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -35,11 +36,6 @@ const grantBase={id:z.string(),role:z.string(),state:z.string()}
 const grantSchema=z.discriminatedUnion('resource_kind',[
  z.object({...grantBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),emergency:z.boolean()}),
  z.object({...grantBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),emergency:z.literal(false)}),
-])
-const waitBase={attempt_id:z.string(),role:z.string(),reason:z.string().nullable()}
-const waitSchema=z.discriminatedUnion('resource_kind',[
- z.object({...waitBase,resource_kind:z.literal('model'),desired_profile:z.string().uuid().nullable()}),
- z.object({...waitBase,resource_kind:z.literal('local_compositor'),desired_profile:z.null()}),
 ])
 const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
  approvals:z.array(approvalSchema),canApproveIntegration:z.boolean(),
@@ -60,7 +56,7 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
  activeTemplateRevision:z.number().nullable(),
  plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
- waits:z.array(waitSchema),
+ waits:z.array(capacityWaitSchema),
  grants:z.array(grantSchema)})
 async function request(path:string,body?:unknown,extraHeaders:Record<string,string>={}):Promise<unknown>{
  const response=await agentControlFetch(path,{method:body?'POST':'GET',headers:{...(body?{'content-type':'application/json'}:{}),...extraHeaders},
@@ -302,9 +298,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      onClick={()=>mutate.mutate({action:'template.assign',payload:{revision:t.revision}})}>Usar fluxo {t.revision}</Button>)}</div>
    </SettingsField>
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
-    <ul className="flex flex-col gap-2">{data.waits.map(w=><li key={w.attempt_id} className="break-words rounded-md border p-3">
-     {w.resource_kind==='local_compositor'?'Composição determinística local':w.role} · {w.reason==='CAPACITY_BUSY'?'Aguardando vaga':w.reason==='CAPACITY_QUEUED'?'Aguardando sua vez':w.resource_kind==='local_compositor'?'Aguardando capacidade local':'Nenhum perfil elegível disponível'}
-    </li>)}</ul>
+    <AgentControlCapacityWaits waits={data.waits} profiles={data.profiles} accounts={data.accounts}/>
     <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">
      {g.resource_kind==='local_compositor'?'Composição determinística local':g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
     </li>)}</ul>

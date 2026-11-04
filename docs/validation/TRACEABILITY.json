@@ -96,12 +96,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/catalog-profile-ui-20261102.log;docs/validation/evidence/catalog-profile-control-20261102.log;docs/validation/evidence/native-remote-selection-final-20261102.log;docs/validation/evidence/codex-execution-adapter-final-20261103.log;docs/validation/evidence/codex-worker-runner-autonomy-20261103.log",
-    "files": "src/capacity.ts;src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-profile-editor.tsx;upstream/cezar/packages/cezar/src/core/codex-app-server-runner.ts;src/codex-execution-adapter.ts;tests/codex-execution-adapter.test.ts",
+    "evidence": "docs/validation/evidence/catalog-profile-ui-20261102.log;docs/validation/evidence/catalog-profile-control-20261102.log;docs/validation/evidence/native-remote-selection-final-20261102.log;docs/validation/evidence/codex-execution-adapter-final-20261103.log;docs/validation/evidence/codex-worker-runner-autonomy-20261103.log;docs/implementation/CAPACITY-WAIT-COCKPIT-20261104.md",
+    "files": "src/capacity.ts;src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-profile-editor.tsx;upstream/cezar/packages/cezar/src/core/codex-app-server-runner.ts;src/codex-execution-adapter.ts;tests/codex-execution-adapter.test.ts;src/observability.ts;tests/capacity-wait-resources.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Synthetic catalog validates model/effort/role and UI only offers scoped combinations; official provider discovery and live model eligibility pending. Explicit effort reaches native turn; unknown ceilings rejected. Real model eligibility/catalogue and signed-in invocation remain unverified. Native runner adapter pins model, effort, role and remote environment and rejects failed turns; role isolation and artifact identity still require a physical supervisor and authenticated integration proof."
+    "limitation": "Synthetic catalog validates model/effort/role and UI only offers scoped combinations; official provider discovery and live model eligibility pending. Explicit effort reaches native turn; unknown ceilings rejected. Real model eligibility/catalogue and signed-in invocation remain unverified. Native runner adapter pins model, effort, role and remote environment and rejects failed turns; role isolation and artifact identity still require a physical supervisor and authenticated integration proof. Stored per-profile refusal reasons can be shown on the existing resources view; that display is not catalog acceptance. The isolated PG proof of Control.view was skipped in this runner because AC_TEST_DATABASE_URL was absent. Root typecheck exited 0. Isolated web UI tests exited 0 with 3 tests. Isolated web typecheck exited 0 after a gitignored local protocol types file outside this slice. This does not accept the requirement."
   },
   {
     "id": "RF-09",
@@ -109,12 +109,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-control-20261102.log",
-    "files": "src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx",
+    "evidence": "docs/validation/evidence/capacity-ui-tests-20261102.log;docs/validation/evidence/capacity-ui-control-20261102.log;docs/implementation/CAPACITY-WAIT-COCKPIT-20261104.md",
+    "files": "src/control.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.test.tsx;tests/capacity-wait-resources.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Global/context revisions and wait states displayed; complete per-profile choice explanations and mobile acceptance pending."
+    "limitation": "Global/context revisions and wait states displayed. The existing resources cockpit can list the ordered stored exclusion reasons in Portuguese, using a profile label only when that profile is already in the authorized view. Queue and saturation stay distinct from ineligibility. Mobile acceptance, a full explanation of why a profile was chosen, and the isolated PG proof of Control.view remain pending: AC_TEST_DATABASE_URL was absent and that skip is missing evidence. Root typecheck exited 0. Isolated web UI tests exited 0 with 3 tests. Isolated web typecheck exited 0 after a gitignored local protocol types file outside this slice. This does not accept the requirement."
   },
   {
     "id": "RF-10",
@@ -707,12 +707,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md",
-    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts;src/native-planning-supervisor.ts;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql",
+    "evidence": "docs/validation/evidence/implementation-increment-final.log; docs/implementation/I1-I4-IMPLEMENTACAO.md;docs/validation/evidence/provider-eligibility-first-20261102.log;docs/validation/evidence/native-planning-guard-first-20261102.log;docs/validation/evidence/native-supervisor-final-integration-20261103.log;docs/validation/evidence/native-two-container-protocol-forwarded-20261103.log;docs/implementation/NATIVE-EXECUTION-SUPERVISOR-20261103.md;docs/implementation/CAPACITY-WAIT-COCKPIT-20261104.md",
+    "files": "src/capacity.ts;src/control.ts;src/cezar.ts;src/api.ts;db/migrations/004-007;tests/capacity.test.ts;tests/control.test.ts;src/provider-eligibility.ts;src/account-homes.ts;src/native-planning-supervisor.ts;src/native-execution-supervisor.ts;src/native-worker-gate.ts;src/native-tools-worker.ts;tests/native-execution-supervisor.test.ts;db/migrations/051_native_execution_jobs.sql;src/observability.ts;tests/capacity-wait-resources.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof. Native planning requires fresh adapter/mode eligibility and matching account identity in code, while SQL real-account guards remain closed. No provider/plan has been operationally approved by this increment. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending; no acceptance promotion."
+    "limitation": "Owner-declared eligibility metadata with expiry and adapter/authentication identity; not official terms verification or provider homologation. Tightened locking/descriptor checks added after focused proof. Native planning requires fresh adapter/mode eligibility and matching account identity in code, while SQL real-account guards remain closed. No provider/plan has been operationally approved by this increment. Native supervisor observation/cancellation was exercised with real disposable PG/Cezar and mocked Docker; separate official CLI metadata passed across two containers without accounts/inference. Full physical start, native recipe dispatch, code artifact finalization and real review remain pending. The cockpit labels stored ineligible and quota_unknown differently from quota_exhausted and does not open a paid API or another transport. The isolated PG proof of that resources read was skipped because AC_TEST_DATABASE_URL was absent. Root typecheck exited 0. Isolated web UI tests exited 0 with 3 tests. Isolated web typecheck exited 0 after a gitignored local protocol types file outside this slice. No acceptance promotion."
   },
   {
     "id": "RF-56",
@@ -1211,15 +1211,15 @@
   {
     "id": "T22",
     "normative_row": "T22\tPolítica tenta ativar Astra/esforço proibido/conta removida\tRejeição antes do lançamento e motivo legível\tRF-08/09\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/CAPACITY-WAIT-COCKPIT-20261104.md",
+    "files": "src/control.ts;src/observability.ts;tests/capacity-wait-resources.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.test.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. The existing resources view and cockpit can show the ordered reasons Capacity already stored, including a removed profile without looking it up outside the project. UI tests passed in an isolated run, exit 0, 3 tests. Root typecheck exited 0. Isolated web typecheck exited 0 after a gitignored local protocol types file outside this slice. The isolated PG proof was skipped because AC_TEST_DATABASE_URL was absent; that skip is missing evidence. No real account or inference."
   },
   {
     "id": "T23",
@@ -1432,14 +1432,14 @@
   {
     "id": "T39",
     "normative_row": "T39\tIntegração tecnicamente funcional mas inelegível para o plano/modo\tRecusa prévia e legível, sem marcar cota falsamente nem habilitar API paga ou transporte alternativo\tRF-55/RF-06/RF-10\tI3",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
-    "files": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/CAPACITY-WAIT-COCKPIT-20261104.md",
+    "files": "src/control.ts;src/observability.ts;tests/capacity-wait-resources.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.tsx;upstream/cezar/packages/web/src/routes/settings/agent-control-capacity-waits.test.tsx",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. Stored ineligible and quota_unknown reasons stay distinct from quota exhausted, and the cockpit does not present queue or saturation as ineligibility. No paid API or alternate transport is enabled. UI tests passed in an isolated run, exit 0, 3 tests. Root typecheck exited 0. Isolated web typecheck exited 0 after a gitignored local protocol types file outside this slice. The isolated PG proof was skipped because AC_TEST_DATABASE_URL was absent; that skip is missing evidence. Official eligibility remains unassessed."
   }
 ]

@@ -13,6 +13,7 @@ import {IntegrationApproval,approveIntegration} from './approvals.ts';
 import {authorizeRemoteSource,RemoteSourcePayload} from './remote-source-authorizations.ts';
 import {ProviderEligibility,ProviderEligibilityInput} from './provider-eligibility.ts';
 import {AdministrativeOperations,AdministrativePolicy} from './administrative-operations.ts';
+import {capacityWaitExclusions} from './observability.ts';
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('administrative.policy.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:AdministrativePolicy}).strict()}).strict(),
@@ -168,7 +169,12 @@ export class Control {
    const policies=(await c.query('SELECT revision,digest,snapshot,published_at FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
    const grants=(await c.query(`SELECT id,attempt_id,intent_id,resource_kind,profile_id,account_id,role,policy_revision,emergency,state,created_at
     FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
-   const waits=(await c.query('SELECT attempt_id,resource_kind,role,reason,desired_profile,priority,sequence FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence',[contextId])).rows;
+   const waits=(await c.query(`SELECT attempt_id,resource_kind,role,reason,desired_profile,priority,sequence,exclusions
+    FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence`,[contextId])).rows.map(row=>{
+    const exclusions=capacityWaitExclusions(row.exclusions);
+    const {exclusions:_stored,...rest}=row;
+    return exclusions?{...rest,exclusions}:rest;
+   });
    const plans=(await c.query(`SELECT i.id,i.run_id,i.plan_revision,i.state,c.state cancellation_state
     FROM ac_intents i LEFT JOIN ac_plan_cancellations c ON c.intent_id=i.id WHERE i.context_id=$1 AND i.parent_intent_id IS NULL ORDER BY i.created_at DESC LIMIT 100`,[contextId])).rows;
    const approvals=(await c.query(`SELECT a.id,a.commit_id,a.tree_id,a.base_id,a.identity_digest,a.policy_revision,x.target_ref,
