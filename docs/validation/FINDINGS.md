@@ -2,6 +2,12 @@
 
 Este registro distingue requisito ausente, limitação de prova e defeito observado. Nenhum item aberto autoriza migração ou inferência real.
 
+## Dispensa de QA vinculada — 04/11/2026
+
+| ID | Tipo / severidade | Estado | Local e evidência | Condição de encerramento |
+|---|---|---|---|---|
+| AC-IMP-0114 | Contrato de qualidade / alta | parcial; aberto | A autorização do owner e a linha de dispensa passam a gravar política, template, regra `explicit-low`, tarefa e digest do artefato. O avaliador puro distingue `not_required` de QA passado, falho, cancelado, ausente ou obsoleto: `tests/qa-waiver-binding.test.ts` saiu 0, 5 testes. A suíte PostgreSQL não executou neste processo porque `AC_TEST_DATABASE_URL` está ausente. O grafo nativo continua com artefato `high` e nó de QA. RF-57 e T38 seguem sem aceite. `docs/implementation/QA-WAIVER-BINDING-20261104.md`. | Prova PostgreSQL da migração 060 e do `assertReady`, e o grafo deixar de lançar QA só depois da dispensa válida do artefato exato, com revisão independente. |
+
 | ID | Tipo / severidade | Estado | Local e evidência | Condição de encerramento |
 |---|---|---|---|---|
 | AC-IMP-0001 | Requisito ausente / alta | aberto | I1: contratos de política/conta/grants/aprovações foram acrescentados nas migrações 004–008 e em capacity/control/quality. A integração completa de todos os ingressos ainda falta. Apenas superfícies explicitamente admitidas foram habilitadas; demais rotas recusam. `src/api.ts`, matrizes RF/RNF/T. | Completar schema/admissão e contraprovas I1/I3/I4, sem habilitar bypass. |

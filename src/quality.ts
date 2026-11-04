@@ -7,6 +7,8 @@ import type { GitArtifacts } from './git.ts';
 import { QualityPolicy,QualityPolicies } from './quality-policy.ts';
 import { writePathsIntersectProtectedGate } from './quality-gate-paths.ts';
 import {ManagedRecipe} from './managed-plan.ts';
+import { evaluateQaWaiverGate, type QaWaiverBindingRecord } from './qa-waiver-binding.ts';
+import { Template } from './templates.ts';
 export { QualityPolicy } from './quality-policy.ts';
 const GitId=z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 export const ArtifactInput=z.object({id:Id,contextId:Id,intentId:Id,implementationGrantId:Id,implementationSessionId:Id,
@@ -20,9 +22,53 @@ export type VerificationReceipt=z.infer<typeof VerificationReceipt>;
 export type ArtifactRow={id:string;context_id:string;intent_id:string;implementation_grant_id:string;implementation_session_id:string;
   project_id:string;policy_revision:number;commit_id:string;tree_id:string;base_id:string;identity_digest:string;risk:string};
 
+export const QaWaiverBinding=z.object({
+  policyRevision:z.number().int().positive(),
+  templateId:Id,
+  templateRevision:z.number().int().positive(),
+  taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/),
+  riskRule:z.literal('explicit-low'),
+}).strict();
+export type QaWaiverBinding=z.infer<typeof QaWaiverBinding>;
+
+/** Owner decision before a waiver. It does not create a QA receipt or attach
+ * itself to an artifact. A later commit needs its own waiver. */
+export async function authorizeExplicitQaWaiver(c:pg.PoolClient,principal:string,contextId:string,raw:z.input<typeof QaWaiverBinding>){
+  const binding=QaWaiverBinding.parse(raw),context=Id.parse(contextId);
+  const scope=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1 AND NOT archived',[context])).rows[0];
+  if(!scope)throw new Refusal('CONTEXT_FORBIDDEN',403);
+  if(!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[scope.project_id,principal])).rowCount)
+    throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+  const policyRow=(await c.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[scope.project_id,binding.policyRevision])).rows[0];
+  if(!policyRow)throw new Refusal('QUALITY_POLICY_REQUIRED');
+  const policy=QualityPolicy.parse(policyRow.snapshot);
+  if(digest(policy)!==policyRow.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
+  if(!policy.allowLowRiskQaWaiver)throw new Refusal('QA_WAIVER_FORBIDDEN',403);
+  const templateRow=(await c.query('SELECT snapshot,digest FROM ac_project_templates WHERE project_id=$1 AND template_id=$2 AND revision=$3',
+    [scope.project_id,binding.templateId,binding.templateRevision])).rows[0];
+  if(!templateRow)throw new Refusal('PROJECT_TEMPLATE_NOT_FOUND');
+  const template=Template.parse(templateRow.snapshot);
+  if(digest(template)!==templateRow.digest)throw new Refusal('PROJECT_TEMPLATE_DIGEST_MISMATCH');
+  const id=randomUUID();
+  const inserted=await c.query(`INSERT INTO ac_qa_waiver_authorizations(id,project_id,policy_revision,policy_digest,template_id,template_revision,template_digest,task_id,risk_rule,principal_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(project_id,policy_revision,template_id,template_revision,task_id) DO NOTHING RETURNING id`,
+    [id,scope.project_id,binding.policyRevision,policyRow.digest,binding.templateId,binding.templateRevision,templateRow.digest,binding.taskId,binding.riskRule,principal]);
+  if(!inserted.rowCount){
+    const prior=(await c.query(`SELECT id,policy_digest,template_digest,risk_rule,principal_id FROM ac_qa_waiver_authorizations
+      WHERE project_id=$1 AND policy_revision=$2 AND template_id=$3 AND template_revision=$4 AND task_id=$5`,
+      [scope.project_id,binding.policyRevision,binding.templateId,binding.templateRevision,binding.taskId])).rows[0];
+    if(!prior||prior.principal_id!==principal||prior.policy_digest!==policyRow.digest||prior.template_digest!==templateRow.digest||prior.risk_rule!==binding.riskRule)
+      throw new Refusal('QA_WAIVER_AUTHORIZATION_CONFLICT');
+    return {authorizationId:prior.id as string};
+  }
+  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waiver_authorized',$2)",[context,{authorizationId:id,taskId:binding.taskId,policyRevision:binding.policyRevision}]);
+  return {authorizationId:id};
+}
+
 /** Invoke only within the authenticated control transaction. The waiver does
  * not create a QA receipt, remove failed evidence or approve integration. */
-export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,contextId:string,artifactId:string,reasonRef:string){
+export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,contextId:string,artifactId:string,reasonRef:string,raw:z.input<typeof QaWaiverBinding>){
+  const binding=QaWaiverBinding.parse(raw);
   const context=Id.parse(contextId),artifact=Id.parse(artifactId),reason=z.string().min(1).max(200).parse(reasonRef);
   const row=(await c.query(`SELECT a.*,p.snapshot,p.digest policy_digest FROM ac_artifacts a JOIN ac_quality_policies p
     ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1 AND a.context_id=$2`,[artifact,context])).rows[0];
@@ -32,12 +78,28 @@ export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,cont
   const policy=QualityPolicy.parse(row.snapshot);
   if(digest(policy)!==row.policy_digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
   if(row.risk!=='low'||!policy.allowLowRiskQaWaiver)throw new Refusal('QA_WAIVER_FORBIDDEN',403);
-  const inserted=await c.query('INSERT INTO ac_qa_waivers(artifact_id,principal_id,reason_ref) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING artifact_id',
-    [artifact,principal,reason]);
+  if(binding.policyRevision!==row.policy_revision)throw new Refusal('QA_WAIVER_STALE');
+  const authorization=(await c.query(`SELECT * FROM ac_qa_waiver_authorizations WHERE project_id=$1 AND policy_revision=$2
+    AND template_id=$3 AND template_revision=$4 AND task_id=$5 AND risk_rule='explicit-low'`,
+    [row.project_id,binding.policyRevision,binding.templateId,binding.templateRevision,binding.taskId])).rows[0];
+  if(!authorization)throw new Refusal('QA_WAIVER_AUTHORIZATION_REQUIRED');
+  if(authorization.principal_id!==principal||authorization.policy_digest!==row.policy_digest)throw new Refusal('QA_WAIVER_AUTHORIZATION_CONFLICT');
+  const template=(await c.query('SELECT digest FROM ac_project_templates WHERE project_id=$1 AND template_id=$2 AND revision=$3',
+    [row.project_id,binding.templateId,binding.templateRevision])).rows[0];
+  if(!template||template.digest!==authorization.template_digest)throw new Refusal('QA_WAIVER_STALE');
+  const record:QaWaiverBindingRecord={policyRevision:row.policy_revision,policyDigest:row.policy_digest,templateId:binding.templateId,
+    templateRevision:binding.templateRevision,templateDigest:authorization.template_digest,riskRule:'explicit-low',taskId:binding.taskId,artifactDigest:row.identity_digest};
+  const inserted=await c.query(`INSERT INTO ac_qa_waivers(artifact_id,principal_id,reason_ref,policy_revision,policy_digest,template_id,template_revision,template_digest,risk_rule,task_id,artifact_digest,authorization_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING RETURNING artifact_id`,
+    [artifact,principal,reason,record.policyRevision,record.policyDigest,record.templateId,record.templateRevision,record.templateDigest,record.riskRule,record.taskId,record.artifactDigest,authorization.id]);
   if(!inserted.rowCount){
-    const prior=(await c.query('SELECT principal_id,reason_ref FROM ac_qa_waivers WHERE artifact_id=$1',[artifact])).rows[0];
-    if(!prior||prior.principal_id!==principal||prior.reason_ref!==reason)throw new Refusal('QA_WAIVER_CONFLICT');
-  }else await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[context,{artifactId:artifact,reasonRef:reason}]);
+    const prior=(await c.query(`SELECT principal_id,reason_ref,policy_revision,policy_digest,template_id,template_revision,template_digest,risk_rule,task_id,artifact_digest,authorization_id
+      FROM ac_qa_waivers WHERE artifact_id=$1`,[artifact])).rows[0];
+    if(!prior||prior.principal_id!==principal||prior.reason_ref!==reason||Number(prior.policy_revision)!==record.policyRevision||prior.policy_digest!==record.policyDigest||
+      prior.template_id!==record.templateId||Number(prior.template_revision)!==record.templateRevision||prior.template_digest!==record.templateDigest||
+      prior.risk_rule!==record.riskRule||prior.task_id!==record.taskId||prior.artifact_digest!==record.artifactDigest||prior.authorization_id!==authorization.id)
+      throw new Refusal('QA_WAIVER_CONFLICT');
+  }else await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[context,{artifactId:artifact,reasonRef:reason,taskId:record.taskId,authorizationId:authorization.id}]);
   return {artifactId:artifact,waived:true as const};
 }
 
@@ -230,12 +292,18 @@ export class Quality {
     const policy=QualityPolicy.parse(row?.snapshot);
     if(digest(policy)!==row.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
     const evidence=(await c.query('SELECT kind,status,session_id,grant_id FROM ac_verification_evidence WHERE artifact_id=$1',[artifactId])).rows;
-    if(evidence.some(e=>e.status!=='passed'))throw new Refusal('VERIFICATION_NOT_PASSED');
     if(new Set(evidence.map(e=>e.session_id)).size!==evidence.length||new Set(evidence.map(e=>e.grant_id)).size!==evidence.length)
       throw new Refusal('VERIFICATION_NOT_INDEPENDENT');
-    const qa=evidence.filter(e=>e.kind==='qa');
-    const waived=(await c.query('SELECT 1 FROM ac_qa_waivers WHERE artifact_id=$1',[artifactId])).rowCount;
-    if(!qa.length&&!(waived&&artifact.risk==='low'&&policy.allowLowRiskQaWaiver))throw new Refusal('QA_MISSING');
+    const stored=(await c.query(`SELECT policy_revision,policy_digest,template_id,template_revision,template_digest,risk_rule,task_id,artifact_digest
+      FROM ac_qa_waivers WHERE artifact_id=$1`,[artifactId])).rows[0];
+    const template=stored?.template_id?(await c.query('SELECT digest FROM ac_project_templates WHERE project_id=$1 AND template_id=$2 AND revision=$3',
+      [artifact.project_id,stored.template_id,stored.template_revision])).rows[0]:undefined;
+    const waiver:QaWaiverBindingRecord|null=stored?.policy_digest?{policyRevision:Number(stored.policy_revision),policyDigest:stored.policy_digest,
+      templateId:stored.template_id,templateRevision:Number(stored.template_revision),templateDigest:stored.template_digest,riskRule:stored.risk_rule,
+      taskId:stored.task_id,artifactDigest:stored.artifact_digest}:null;
+    const decision=evaluateQaWaiverGate({allowLowRiskQaWaiver:policy.allowLowRiskQaWaiver,risk:artifact.risk,evidence,
+      policyRevision:artifact.policy_revision,policyDigest:row.digest,artifactDigest:artifact.identity_digest,waiver,templateDigest:template?.digest??null});
+    if(!decision.ok)throw new Refusal(decision.code);
     if(evidence.filter(e=>e.kind==='review').length<policy.requiredReviews)throw new Refusal('REVIEWS_MISSING');
     if(policy.requireJudge&&!options.ignoreJudge&&evidence.filter(e=>e.kind==='judge').length!==1)throw new Refusal('JUDGMENT_MISSING');
     const native=(await c.query('SELECT snapshot,digest FROM ac_native_task_inputs WHERE intent_id=$1',[artifact.intent_id])).rows[0];

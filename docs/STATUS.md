@@ -1,5 +1,13 @@
 # Agent Control — estado atual de implementação
 
+## Incremento: vínculo explícito da dispensa de QA — 04/11/2026
+
+A dispensa deixa de ser só principal e motivo. O owner autoriza antes, numa linha imutável, a revisão da política, o template, a regra `explicit-low` e a tarefa. A dispensa do artefato copia esses digests e o digest do próprio artefato. `assertReady` só aceita essa combinação como condição de QA sem recibo. Evidência `failed`, `canceled`, `missing_result` ou `stale` continua `VERIFICATION_NOT_PASSED`. Outro commit não herda a linha. Risco que não seja `low` não vira dispensa. O grafo nativo segue registrando artefato `high` e executando QA. Revisão independente continua obrigatória.
+
+Neste processo `npm run typecheck` saiu 0. O avaliador puro saiu 0, com 5 testes e 0 skips. A suíte PostgreSQL de integridade do gate saiu 0 sem executar casos, porque `AC_TEST_DATABASE_URL` está ausente. Essa ausência não prova autorização, migração nem `assertReady`. RF-57 e T38 continuam `not_accepted`. Detalhes em `implementation/QA-WAIVER-BINDING-20261104.md` e `CONTINUACAO-CURSOR.md`.
+
+
+
 Atualizado em 03/11/2026. Branch local `task/2f963b0e4808/consolidate-integration-lines`, a partir de `orchestration/ebfe5a1009ce`, com o conteúdo de `orchestration/5e95aef73635` e `orchestration/dcbac224b999`. Os merges `--no-ff` das duas linhas foram gravados no host pelo gerente, porque o Git do sandbox do trabalhador é somente leitura; o conflito em `agent-control-fetch.test.ts` manteve os testes dos dois lados.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.

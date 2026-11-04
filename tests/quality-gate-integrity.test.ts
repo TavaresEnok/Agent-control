@@ -23,13 +23,16 @@ describe('quality gate integrity', { skip }, () => {
   let Templates: typeof import('../src/templates.ts').Templates;
   let NativeImplementation: typeof import('../src/native-implementation.ts').NativeImplementation;
   let Quality: typeof import('../src/quality.ts').Quality;
+  let authorizeExplicitQaWaiver: typeof import('../src/quality.ts').authorizeExplicitQaWaiver;
+  let ProjectTemplates: typeof import('../src/project-templates.ts').ProjectTemplates;
   const quality = () => new Quality(db, randomBytes(32), { identity: async () => { throw new Error('unused'); } });
 
   test.before(async () => {
     const base = process.env.AC_TEST_DATABASE_URL;
     if (!base) throw new Error('ISOLATED_DATABASE_REQUIRED');
     ({ QualityPolicies } = await import('../src/quality-policy.ts'));
-    ({ Quality, waiveQaInTransaction } = await import('../src/quality.ts'));
+    ({ Quality, waiveQaInTransaction, authorizeExplicitQaWaiver } = await import('../src/quality.ts'));
+    ({ ProjectTemplates } = await import('../src/project-templates.ts'));
     ({ Capacity } = await import('../src/capacity.ts'));
     ({ Templates } = await import('../src/templates.ts'));
     ({ NativeImplementation } = await import('../src/native-implementation.ts'));
@@ -99,9 +102,15 @@ describe('quality gate integrity', { skip }, () => {
     const stored = (await db.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2', [env.id, env.revision])).rows[0];
     assert.equal(stored.digest, digest(historical));
     assert.equal(stored.snapshot.protectedGatePaths, undefined);
+    const templateBody = { workflow: 'engineering-synthetic-v1' as const, qualityRevision: env.revision, targetRef: 'refs/heads/lab' };
+    const templateId = randomUUID();
+    const published = await new ProjectTemplates(db).publish(env.owner, env.context, { templateId, expectedRevision: 0, name: 'Baixo risco', template: templateBody, digest: digest(templateBody) });
+    const binding = { policyRevision: env.revision, templateId, templateRevision: published.revision, taskId: 'docs', riskRule: 'explicit-low' as const };
+    await db.tx(c => authorizeExplicitQaWaiver(c, env.owner, env.context, binding));
     const passed = [{ kind: 'review' as const, status: 'passed' }];
     const low = await artifact(env, { risk: 'low', commit: 'a'.repeat(40), evidence: passed });
-    const waive = (principal: string, id: string, reason: string) => db.tx(c => waiveQaInTransaction(c, principal, env.context, id, reason));
+    const waive = (principal: string, id: string, reason: string, next = binding) => db.tx(c => waiveQaInTransaction(c, principal, env.context, id, reason, next));
+    await assert.rejects(db.tx(c => waiveQaInTransaction(c, env.owner, env.context, low, 'reason:explicit', { ...binding, taskId: 'other' })), (error: unknown) => error instanceof Refusal && error.code === 'QA_WAIVER_AUTHORIZATION_REQUIRED');
     assert.deepEqual(await waive(env.owner, low, 'reason:explicit'), { artifactId: low, waived: true });
     assert.deepEqual(await waive(env.owner, low, 'reason:explicit'), { artifactId: low, waived: true });
     assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers WHERE artifact_id=$1', [low])).rows[0].n, 1);
