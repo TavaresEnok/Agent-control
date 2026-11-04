@@ -2,6 +2,8 @@
 
 ## Continuação mais recente — prevalece sobre os resumos históricos abaixo
 
+- As suítes antes puladas de templates por projeto e projeção de esperas foram executadas em PostgreSQL descartável: cinco testes passaram, sem skips. Detalhes em `docs/implementation/CONTINUACAO-PG-20261104.md`.
+
 - Ensaio de backup/restauração sintéticos em checkout `/tmp/ac-continuation-restore-20261104` e Compose `ac-continuation-restore-20261104`: corrupção de arquivo e dump recusadas; pausa e grant incerto preservados; uma worktree relocada e runtime da cópia iniciado com admissão fechada. Zero runs nativos no segundo ensaio; os limites estão em `docs/implementation/CONTINUACAO-RESTORE-20261104.md`. Nenhuma migração operacional.
 
 - O sandbox físico passou com worker sem socket/rede e, em projeto Compose e banco separados, um worker vivo foi observado e parado após takeover; a posse permaneceu bloqueada mesmo depois do recibo terminal. Dois hosts SSH sintéticos passaram lost ACK, retomada, reinício e exportação Git. Ver `docs/implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`. Isso não completa a ligação de revogação física ao grafo nem homologa SSH operacional.

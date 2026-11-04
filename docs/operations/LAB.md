@@ -1,5 +1,22 @@
 # Reprodução e encerramento da bancada
 
+## Bancada desta continuação — 04/11/2026
+
+No checkout principal, use um nome de projeto próprio para não tocar a bancada `ac-implementation` ou outros serviços:
+
+```sh
+cd /home/app/srv_projetos/workspace/agent-control-implementation
+docker compose -p ac-continuation-20261104 -f deploy/compose.lab.yml up -d db runtime
+docker compose -p ac-continuation-20261104 -f deploy/compose.lab.yml exec -T runtime node --version
+docker compose -p ac-continuation-20261104 -f deploy/compose.lab.yml exec -T runtime node --import tsx --test tests/worktree-lease.test.ts
+```
+
+`runtime` é um shell de testes e o compose não publica portas; esses comandos não iniciam um aplicativo acessível por navegador nem ativam modelos. Para o cockpit e pareamento é necessária a configuração administrativa documentada em `docs/implementation/BOOTSTRAP-OPERACAO.md`, com identidade e sessão próprias da bancada; não reutilize dados operacionais. O build do cockpit Agent Control exige `VITE_AGENT_CONTROL_MANAGED=1`.
+
+Para o perfil de sandbox, passe `AC_LAB_PROJECT_DIR` com o caminho absoluto deste checkout. O broker controlador recebe socket Docker e permissões adicionais; os workers não recebem socket nem home operacional. A prova de SSH usa `--profile ssh-test` e seus próprios volumes. Detalhes, comandos e limites da rodada em `docs/implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`. Não sobrescreva marcadores e fixtures privadas de outras rodadas.
+
+O ensaio de restore usou um checkout e projeto Compose separados, documentados em `docs/implementation/CONTINUACAO-RESTORE-20261104.md`. Para parar somente os serviços da bancada desta continuação, use `docker compose -p ac-continuation-20261104 -f deploy/compose.lab.yml stop`; isso não remove volumes. Não execute `down -v` nem prune.
+
 Requisitos observados: Linux/Docker Compose, Node 22.23.3/Yarn 1.22.22 da imagem de laboratório, PostgreSQL 16 fixado por digest. Dependências são públicas. Nenhuma conta de IA é necessária. Reserve espaço para os fontes e dependências Happier (cache inicial ~7 GiB, removível depois do restore dos opcionais), Cezar, PostgreSQL e builds; os testes não devem disputar recursos sem limites com produção.
 
 A imagem local utilizada foi `ac-proof-v3-complete:20261101`. `deploy/Dockerfile.lab` registra uma receita equivalente a partir de Node fixado; reconstrução em outra VM ainda deve passar GI7. O compose não publica portas, monta apenas este repositório e usa rede interna. Não há socket Docker, SSH administrativo ou homes operacionais no container.
