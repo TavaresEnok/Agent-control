@@ -16,8 +16,17 @@ import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
- const descriptorCommand=['context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command);
- if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
+ const descriptorCommand=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command);
+ if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
+ // Inventory dry-run. The installation path is not opened. No ledger and no vault.
+ if(command==='context-key-rotate-plan'){
+  const {executeContextKeyRotatePlan}=await import('./context-vault-cli.ts');
+  const result=await executeContextKeyRotatePlan(extra[0]!);
+  if(result.exitCode===1){console.error(result.code);process.exitCode=1;return;}
+  console.log(JSON.stringify(result.plan));
+  process.exitCode=result.exitCode;
+  return;
+ }
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);

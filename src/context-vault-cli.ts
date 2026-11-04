@@ -6,6 +6,7 @@ import {z} from 'zod';
 import {Id,Refusal} from './contracts.ts';
 import {ContextKeys,keyFingerprint} from './context-keys.ts';
 import {ContextVault} from './context-vault.ts';
+import {executeKeyRotationPlan} from './key-rotation-cli.ts';
 import {privateDirectory,readPrivateFile,type Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 
@@ -71,6 +72,10 @@ export async function executeContextKey(command:'context-key-authorize'|'context
   else await new ContextVault(ledger,env.installationId,env.vault.directory,env.vault.masterFile,env.repositories).importKey(input,key);
   return {state:command==='context-key-authorize'?'authorized' as const:'imported' as const};
  }finally{descriptorBytes?.fill(0);key?.fill(0);}
+}
+/** Dry-run only. The descriptor is an inventory; this does not open the vault or the ledger. */
+export async function executeContextKeyRotatePlan(descriptorPath:string){
+ return executeKeyRotationPlan(descriptorPath);
 }
 export async function executeVaultBackup(command:'vault-backup'|'vault-restore',config:Installation,ledger:Ledger,descriptorPath:string){
  const env=await environment(config,ledger);let bytes:Buffer|undefined;

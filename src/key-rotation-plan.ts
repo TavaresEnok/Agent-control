@@ -98,6 +98,18 @@ function ready(plan:KeyRotationPlan,checkpoint:KeyRotationCheckpoint){
   &&matchesList(checkpoint.verifications,sealed)
   &&checkpoint.verifications.every(entry=>entry.result==='verified');
 }
+function sortedInventory(entries:readonly {id:string;keyVersion:number;state:'sealed'|'uncertain'|'corrupted'}[]){
+ const copy=entries.map(entry=>({id:entry.id,keyVersion:entry.keyVersion,state:entry.state}));
+ const seen=new Set<string>();
+ for(const entry of copy){
+  const identity=identityOf(entry);
+  if(seen.has(identity))throw new Refusal('KEY_ROTATION_DUPLICATE_ENTRY',409);
+  seen.add(identity);
+ }
+ copy.sort((left,right)=>left.id<right.id?-1:left.id>right.id?1:left.keyVersion-right.keyVersion);
+ const blockers=copy.flatMap(entry=>entry.state==='sealed'?[]:[{id:entry.id,keyVersion:entry.keyVersion,state:entry.state}]);
+ return {entries:copy,blockers};
+}
 function encodingsOf(key:Uint8Array){
  const bytes=Buffer.from(key);
  try{return [bytes.toString('hex'),bytes.toString('base64'),bytes.toString('base64url')];}
@@ -192,21 +204,60 @@ export function createKeyRotationPlan(input:{entries:unknown;currentKey:Uint8Arr
   if(oldKeyFingerprint===newKeyFingerprint)throw new Refusal('KEY_ROTATION_UNCHANGED',409);
   const leaked=[...encodingsOf(current),...encodingsOf(next)];
   if(input.entries.some(entry=>typeof entry==='object'&&entry!==null&&'id'in entry&&leaked.some(secret=>String((entry as {id:unknown}).id).includes(secret))))throw new Refusal('KEY_ROTATION_MATERIAL_REJECTED',409);
-  const entries=z.array(InventoryEntry).parse(input.entries).map(entry=>({id:entry.id,keyVersion:entry.keyVersion,state:entry.state}));
-  const seen=new Set<string>();
-  for(const entry of entries){
-   const identity=identityOf(entry);
-   if(seen.has(identity))throw new Refusal('KEY_ROTATION_DUPLICATE_ENTRY',409);
-   seen.add(identity);
-  }
-  entries.sort((left,right)=>left.id<right.id?-1:left.id>right.id?1:left.keyVersion-right.keyVersion);
-  const blockers=entries.filter(entry=>entry.state!=='sealed').map(entry=>({id:entry.id,keyVersion:entry.keyVersion,state:entry.state as 'uncertain'|'corrupted'}));
+  const parsed=z.array(InventoryEntry).parse(input.entries).map(entry=>({id:entry.id,keyVersion:entry.keyVersion,state:entry.state}));
+  const {entries,blockers}=sortedInventory(parsed);
   const materialSeals=[...new Set(leaked.map(materialSeal))].sort();
   return Plan.parse({
    schemaVersion:1,kind:'context-vault-key-rotation',phases:[...KEY_ROTATION_PHASES],
    oldKeyFingerprint,newKeyFingerprint,materialSeals,batchSize,entries,blockers,
   });
  }finally{current.fill(0);next.fill(0);}
+}
+
+export type KeyRotationDryRunPlan={
+ schemaVersion:1;
+ kind:'context-vault-key-rotation';
+ dryRun:true;
+ applied:false;
+ phases:['prepare','reenvelope','verify','promote','retire'];
+ currentKeyVersion:number;
+ nextKeyVersion:number;
+ batchSize:number;
+ entries:{id:string;keyVersion:number;state:'sealed'|'uncertain'|'corrupted'}[];
+ blockers:{id:string;keyVersion:number;state:'uncertain'|'corrupted'}[];
+ blockedReason?:'KEY_ROTATION_UNCHANGED'|'KEY_ROTATION_ENTRY_BLOCKED';
+ planDigest:string;
+};
+
+/**
+ * Inventory projection for the product dry-run. Versions identify the wrapping keys.
+ * No key bytes, fingerprints, plaintext, vault, ledger, or executor effects.
+ * Equal versions block the plan. An uncertain or corrupted entry blocks it too.
+ */
+export function describeKeyRotationPlan(input:{entries:unknown;currentKeyVersion:unknown;nextKeyVersion:unknown;batchSize?:unknown}):KeyRotationDryRunPlan{
+ const currentKeyVersion=keyVersion.safeParse(input.currentKeyVersion);
+ const nextKeyVersion=keyVersion.safeParse(input.nextKeyVersion);
+ if(!currentKeyVersion.success||!nextKeyVersion.success)throw new Refusal('KEY_ROTATION_DESCRIPTOR_INVALID',400);
+ let batchSize=KEY_ROTATION_DEFAULT_BATCH_SIZE;
+ if(input.batchSize!==undefined){
+  if(typeof input.batchSize!=='number'||!Number.isInteger(input.batchSize)||input.batchSize<1||input.batchSize>256)throw new Refusal('KEY_ROTATION_LIMIT',400);
+  batchSize=input.batchSize;
+ }
+ if(!Array.isArray(input.entries))throw new Refusal('KEY_ROTATION_LIMIT',400);
+ if(input.entries.length<1)throw new Refusal('KEY_ROTATION_EMPTY',409);
+ if(input.entries.length>KEY_ROTATION_MAX_ENTRIES)throw new Refusal('KEY_ROTATION_LIMIT',400);
+ const parsed=z.array(InventoryEntry).safeParse(input.entries);
+ if(!parsed.success)throw new Refusal('KEY_ROTATION_DESCRIPTOR_INVALID',400);
+ const inventory=sortedInventory(parsed.data);
+ const blockedReason=currentKeyVersion.data===nextKeyVersion.data?'KEY_ROTATION_UNCHANGED' as const:inventory.blockers.length?'KEY_ROTATION_ENTRY_BLOCKED' as const:undefined;
+ const plan={
+  schemaVersion:1 as const,kind:'context-vault-key-rotation' as const,dryRun:true as const,applied:false as const,
+  phases:[...KEY_ROTATION_PHASES] as ['prepare','reenvelope','verify','promote','retire'],
+  currentKeyVersion:currentKeyVersion.data,nextKeyVersion:nextKeyVersion.data,batchSize,
+  entries:inventory.entries,blockers:inventory.blockers,
+ };
+ const body=blockedReason?{...plan,blockedReason}:plan;
+ return {...body,planDigest:digest(body)};
 }
 
 /** Checkpoint before any executor effect. Safe to persist: it has no key material. */
