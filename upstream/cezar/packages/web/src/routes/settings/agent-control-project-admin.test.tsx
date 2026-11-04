@@ -73,6 +73,23 @@ it('allows discarding a draft if signing fails before any request is sent',async
  fireEvent.click(screen.getByText('Cadastrar projeto'));fireEvent.click(await screen.findByText('Descartar rascunho recusado'))
  expect(fetchMock).toHaveBeenCalledTimes(1);expect(sessionStorage.length).toBe(0);client.clear()
 })
+it('shows a redacted read-only ssh origin and ignores credentials in the payload',async()=>{
+ const hostId='00000000-0000-4000-8000-000000000010',project='00000000-0000-4000-8000-000000000011'
+ const commit='ab'.repeat(20),tree='cd'.repeat(20)
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({principalId:'fixture',installationId:'00000000-0000-4000-8000-000000000001',operatorDeviceIds:[],canRegister:false,
+  server:{kind:'local',remoteManagement:false},roots:[],remoteSources:[{projectId:project,hostId,commit,tree,state:'materialized',reviewStatus:'not_reviewed',proof:'super-secret-proof',publicKey:'ssh-ed25519 SECRET'}]}))))
+ const client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})
+ render(<QueryClientProvider client={client}><AgentControlProjectAdmin/></QueryClientProvider>)
+ expect(await screen.findByText(/Origem SSH somente leitura/)).toBeTruthy()
+ expect(screen.getByText(new RegExp(hostId))).toBeTruthy()
+ expect(screen.getByText(new RegExp(commit))).toBeTruthy()
+ expect(screen.getByText(new RegExp(tree))).toBeTruthy()
+ expect(screen.getByText(/não revisada/)).toBeTruthy()
+ expect(screen.queryByText(/super-secret-proof/)).toBeNull()
+ expect(screen.queryByText(/ssh-ed25519/)).toBeNull()
+ expect(screen.queryByRole('button',{name:'Materializar'})).toBeNull()
+ client.clear()
+})
 it('does not discard an uncertain earlier submission when a later signature fails',async()=>{
  vi.mocked(signControl).mockRejectedValueOnce(Error('DEVICE_KEY_UNAVAILABLE'))
  sessionStorage.setItem('ac-project-register:fixture:00000000-0000-4000-8000-000000000001',JSON.stringify({semantic:JSON.stringify({label:'Example',rootId:'fixture',relativePath:'repo'}),intentId:'00000000-0000-4000-8000-000000000002',projectId:'00000000-0000-4000-8000-000000000003',uncertain:true}))

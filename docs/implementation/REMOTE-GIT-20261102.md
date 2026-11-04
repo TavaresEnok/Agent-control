@@ -20,20 +20,30 @@ recebe credenciais de IA, remoto Git, alteração de refs ou push.
 
 `RemoteGitMaterializer` confere o bundle com Git e verifica commit e tree em um
 repositório bare novo sob uma raiz privada, canônica, pertencente ao processo e
-localizada em tmpfs de até 128 MiB. Git é executado em grupo próprio com limite
-de memória, CPU e tamanho de arquivo; timeout encerra o grupo. O helper remoto
-aplica limites ao empacotamento. A capacidade tmpfs limita o uso agregado do
-filesystem, que pode ser compartilhado com outros processos. O chamador deve
-passar o resultado de `exportGit`; o destino é publicado por rename depois de
-validado sob lock exclusivo por operationId. Lock preexistente é recusado; após
-crash requer reconciliação manual. Replay aceita destino existente apenas com a
-mesma identidade. O proprietário pode ler qualquer OID disponível no projeto
-autorizado do host após uma autorização complementar assinada para intenção, host,
-commit e tree. O payload original da intenção não é reescrito, e a fonte não é
-convertida em artefato aprovado. A materialização é uma primitiva local: ainda não há vínculo de
-produto com cadastro de projeto, interface ou execução gerenciada automática.
-O limite de 64 KiB é explícito e exclui projetos maiores nesta primeira fatia;
-nenhuma inferência de prontidão geral de RF-51 decorre desta prova.
+localizada em tmpfs de até 128 MiB. Git continua no helper `limited_git.py`, em
+grupo próprio, com os mesmos limites de memória, CPU, arquivo e `RLIMIT_NPROC`
+1024. Esse teto não foi aumentado. A importação usa `bundle verify`,
+`unpack-objects` e `update-ref` da ref para não depender de `git fetch` e
+`index-pack`. Nesta retomada `ulimit -u` está ilimitado e um bundle sintético
+de 323 bytes passou pelo helper e pelo checkout. O `EAGAIN` de quando o
+processo já estava no teto 1024 não foi reproduzido, e o `pack-objects` de
+20 MiB não foi reexecutado. A ref publicada continua
+`refs/heads/agent-control-export`, ainda pelo helper. Timeout encerra o grupo.
+O helper remoto aplica limites ao empacotamento. A capacidade tmpfs limita o
+uso agregado do filesystem, que pode ser compartilhado com outros processos. O
+chamador deve passar o resultado de `exportGit`; o destino é publicado por
+rename depois de validado sob lock exclusivo por operationId. Lock preexistente
+é recusado; após crash requer reconciliação manual. Replay aceita destino
+existente apenas com a mesma identidade. O proprietário pode ler qualquer OID
+disponível no projeto autorizado do host após uma autorização complementar
+assinada para intenção, host, commit e tree. O payload original da intenção não
+é reescrito, e a fonte não é convertida em artefato aprovado. A fatia de
+04/11/2026 liga essa primitiva ao cadastro do projeto; ver
+`REMOTE-SOURCE-PROJECT-20261104.md`. Isso não fecha devolução controlada, não
+sobe o limite de 64 KiB e não aceita RF-51. A recuperação de 04/11/2026 no
+perfil oficial `ssh-controller` relatou a fixture SSH sintética e as provas
+PostgreSQL do vínculo; o runtime comum continua sem Python. Essa fixture não
+homologa o vínculo de produto sobre o transporte real conjunto.
 
 ## Vínculo com a intenção original
 
@@ -110,7 +120,21 @@ Os registros seguintes são da versão anterior ao hardening:
   união de `Refusal`. A falha foi comunicada à frente proprietária; não é
   evidência de sucesso do typecheck integrado.
 
-Não foi testado servidor SSH operacional, repositório grande, interrupção no
+Não foi testado, nesta nota de 02/11, servidor SSH operacional, repositório grande, interrupção no
 meio de transferência real ou integração do materializador ao fluxo de produto.
 O limite de 64 KiB e a disponibilidade de `git`/Python no host são restrições
 atuais. Não houve conta real, inferência, GitHub, push, migração ou publicação.
+
+A recuperação administrativa de 04/11/2026 executou o mesmo snapshot em
+`deploy/compose.lab.yml`, perfil `ssh-controller`. O runtime comum não tem
+Python; o negativo permanece em `pg-focused.log` e a correção foi apenas o
+perfil oficial, com Python, Git e SSH. A gerência relatou exit 0, 6/6 e zero
+skips para `tests/remote-project-materialization.test.ts`,
+`tests/remote-source-authorization.test.ts` e `tests/project-admin.test.ts`
+juntos, e exit 0, 1/1 e zero skips para `two pinned SSH fixture` em
+`tests/remote-git.test.ts` com duas identidades sintéticas. Este executor não
+reabriu `/home/app/srv_projetos/orchestration/reports/l17-recovery-20261104` nem
+comparou `delivery-sha256.json` com `artifact-sha256.json`: o diretório não
+está montado. A fixture SSH não homologa o vínculo de produto no transporte
+real conjunto, a devolução controlada, contas reais nem o aceite de RF-51/T25.
+Devolução e o teto de 64 KiB continuam pendentes. A revisão seguinte passou a classificar locks, staging e `remote-sources` com `lstat` antes de qualquer efeito, e a excluir materializações com advisory lock de sessão e token de posse. Essa prova PostgreSQL não rodou neste executor: falta `AC_TEST_DATABASE_URL`. A fixture SSH anterior não cobre esse vínculo.

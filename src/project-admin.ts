@@ -7,13 +7,18 @@ import {Id,Refusal,digest} from './contracts.ts';
 import {Operators,type OperatorProof} from './operator.ts';
 import {Ledger} from './ledger.ts';
 import {projectRepositoryIdentity} from './project-repository.ts';
+import {materializeRemoteProjectSource,RemoteSourceMaterializationPayload} from './remote-source-materialization.ts';
 
 export const ProjectRoot=z.object({id:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),label:z.string().min(1).max(100),path:z.string().min(1)}).strict();
 export type ProjectRoot=z.infer<typeof ProjectRoot>;
 const RelativePath=z.string().min(1).max(512).refine(path=>!path.startsWith('/')&&!path.includes('\\')&&!/[\x00-\x1f\x7f]/.test(path)&&
  path.split('/').every(part=>part!==''&&part!=='.'&&part!=='..'&&part!=='.git'));
-export const ProjectAdminCommand=z.object({schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,action:z.literal('project.register'),
- payload:z.object({projectId:Id,label:z.string().min(1).max(200).refine(value=>value.trim().length>0),rootId:ProjectRoot.shape.id,relativePath:RelativePath}).strict()}).strict();
+const AdminBase={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id};
+export const ProjectAdminCommand=z.discriminatedUnion('action',[
+ z.object({...AdminBase,action:z.literal('project.register'),payload:z.object({projectId:Id,label:z.string().min(1).max(200).refine(value=>value.trim().length>0),rootId:ProjectRoot.shape.id,relativePath:RelativePath}).strict()}).strict(),
+ z.object({...AdminBase,action:z.literal('project.materializeRemoteSource'),payload:RemoteSourceMaterializationPayload}).strict(),
+]);
+export type ProjectAdminOptions={remoteSourceTmpfs?:string;beforeRemoteSourceRegister?:()=>Promise<void>};
 
 /** No directory enumeration; every component must be a real directory beneath a trusted startup root. */
 async function repository(root:ProjectRoot,relative:string){
@@ -34,16 +39,19 @@ async function repository(root:ProjectRoot,relative:string){
  return {repo:canonical,identity};
 }
 export class ProjectAdmin{
- constructor(readonly ledger:Ledger,readonly roots:readonly ProjectRoot[],readonly privateDirectory:string){}
+ constructor(readonly ledger:Ledger,readonly roots:readonly ProjectRoot[],readonly privateDirectory:string,readonly options:ProjectAdminOptions={}){}
  async view(principal:string){
   const admin=!!(await this.ledger.pool.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
   const installation=(await this.ledger.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
   if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
   const devices=(await this.ledger.pool.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
-  return {principalId:principal,installationId:installation.id,operatorDeviceIds:devices,canRegister:admin,server:{kind:'local',remoteManagement:false},roots:admin?this.roots.map(({id,label})=>({id,label})):[]};
+  const remoteSources=(await this.ledger.pool.query(`SELECT m.project_id AS "projectId",m.host_id AS "hostId",m.commit_id AS commit,m.tree_id AS tree,
+   'materialized'::text AS state,'not_reviewed'::text AS "reviewStatus" FROM ac_remote_source_materializations m
+   JOIN ac_memberships mb ON mb.project_id=m.project_id AND mb.principal_id=$1 ORDER BY m.created_at DESC,m.id LIMIT 100`,[principal])).rows;
+  return {principalId:principal,installationId:installation.id,operatorDeviceIds:devices,canRegister:admin,server:{kind:'local',remoteManagement:false},roots:admin?this.roots.map(({id,label})=>({id,label})):[],remoteSources};
  }
  async execute(principal:string,raw:unknown,proof:OperatorProof){
-  const command=ProjectAdminCommand.parse(raw),root=this.roots.find(item=>item.id===command.payload.rootId);
+  const command=ProjectAdminCommand.parse(raw);
   const authorize=async(c:import('pg').PoolClient)=>{
    if(!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1 FOR SHARE',[principal])).rowCount)throw new Refusal('CONTROL_ADMIN_REQUIRED',403);
    await new Operators(this.ledger).verify(c,principal,command,proof);
@@ -65,6 +73,8 @@ export class ProjectAdmin{
    return prior?.result;
   });
   if(replay)return replay;
+  if(command.action==='project.materializeRemoteSource')return materializeRemoteProjectSource(this,principal,command,hash,authorize,delivery);
+  const root=this.roots.find(item=>item.id===command.payload.rootId);
   if(!root)throw new Refusal('PROJECT_ROOT_FORBIDDEN',403);
   const privatePath=resolve(this.privateDirectory),candidate=resolve(root.path,command.payload.relativePath);
   if(privatePath!==this.privateDirectory||candidate===privatePath||candidate.startsWith(privatePath+sep)||privatePath.startsWith(candidate+sep))throw new Refusal('PROJECT_PRIVATE_DIRECTORY_CONFLICT',403);
