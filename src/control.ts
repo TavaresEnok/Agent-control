@@ -7,6 +7,7 @@ import { Ledger } from './ledger.ts';
 import { Operators,type OperatorProof } from './operator.ts';
 import { Admission } from './admission.ts';
 import { Templates,Template } from './templates.ts';
+import { ProjectTemplateApply, ProjectTemplatePublish, ProjectTemplates, readProjectTemplates } from './project-templates.ts';
 import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
 import {ProviderCollectors,ProviderBinding,projectProviderSnapshot,type ProviderAdapter} from './providers.ts';
 import {IntegrationApproval,approveIntegration} from './approvals.ts';
@@ -23,6 +24,8 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('quality.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:QualityPolicy}).strict()}).strict(),
  z.object({...base,action:z.literal('template.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),template:Template}).strict()}).strict(),
  z.object({...base,action:z.literal('template.assign'),payload:z.object({revision:z.number().int().positive()}).strict()}).strict(),
+ z.object({...base,action:z.literal('project-template.publish'),payload:ProjectTemplatePublish}).strict(),
+ z.object({...base,action:z.literal('project-template.apply'),payload:ProjectTemplateApply}).strict(),
  z.object({...base,action:z.literal('device.enroll'),payload:z.object({deviceId:Id,publicKey:z.string().min(40).max(200)}).strict()}).strict(),
  z.object({...base,action:z.literal('device.revoke'),payload:z.object({deviceId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('admission.set'),payload:z.object({enabled:z.boolean(),expectedRevision:z.number().int().positive(),reason:z.string().min(1).max(200)}).strict()}).strict(),
@@ -79,6 +82,8 @@ export class Control {
      case 'quality.publish':result={revision:await new QualityPolicies(this.ledger,c).publish(principal,context.project_id,command.payload.expectedRevision,command.payload.policy)};break;
      case 'template.publish':result=await new Templates(this.ledger,c).publish(principal,command.contextId,command.payload.expectedRevision,command.payload.template);break;
      case 'template.assign':result=await new Templates(this.ledger,c).assign(principal,command.contextId,command.payload.revision);break;
+     case 'project-template.publish':result=await new ProjectTemplates(this.ledger,c).publish(principal,command.contextId,command.payload);break;
+     case 'project-template.apply':result=await new ProjectTemplates(this.ledger,c).apply(principal,command.contextId,command.payload);break;
      case 'device.enroll':await new Operators(this.ledger).enrollFromDevice(c,principal,command.payload.deviceId,command.payload.publicKey);result={deviceId:command.payload.deviceId};break;
      case 'device.revoke':await new Operators(this.ledger).revokeFromDevice(c,principal,command.payload.deviceId);result={deviceId:command.payload.deviceId};break;
      case 'admission.set':result=await new Admission(this.ledger,c).set(principal,command.payload);break;
@@ -192,6 +197,7 @@ export class Control {
     commit_id AS commit,tree_id AS tree,'source_read_authorization'::text AS kind FROM ac_remote_source_authorizations
     WHERE context_id=$1 AND project_id=$2 ORDER BY created_at DESC,control_intent_id LIMIT 100`,[contextId,context.project_id])).rows;
    const templates=(await c.query('SELECT revision,snapshot,digest FROM ac_context_templates WHERE context_id=$1 ORDER BY revision',[contextId])).rows;
+   const projectTemplateCatalog=await readProjectTemplates(c,context.project_id);
    const canConfigureCapacity=context.role!=='viewer'&&!!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount;
    const config=(await c.query('SELECT * FROM ac_capacity_config WHERE id=1')).rows[0];
    const capacity=config?{revision:config.revision,programmingLimit:config.programming_limit,evaluationLimit:config.evaluation_limit,
@@ -202,7 +208,7 @@ export class Control {
    if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
    const verifierDigest=this.qualityExecutors.reviewDigest??createHash('sha256').update(await readFile(new URL('../scripts/synthetic-verifier-wide.mjs',import.meta.url))).digest('hex');
    const specialistVerifierDigest=createHash('sha256').update(await readFile(new URL('../scripts/synthetic-specialist.mjs',import.meta.url))).digest('hex');
-   return {schemaVersion:1,installationId:installation.id,principalId:principal,nativeExecutionEnabled:this.qualityExecutors.nativeExecutionEnabled===true,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
+   return {schemaVersion:1,installationId:installation.id,principalId:principal,nativeExecutionEnabled:this.qualityExecutors.nativeExecutionEnabled===true,verifierDigest,qaVerifierDigest:this.qualityExecutors.qaDigest??null,specialistVerifierDigest,contextId,waits,templates,projectTemplates:projectTemplateCatalog.templates,projectTemplatesTruncated:projectTemplateCatalog.truncated,canManageProjectTemplates:context.role==='owner',qualityPolicies,capacity,canConfigureCapacity,activeTemplateRevision:context.active_template_revision,projectId:context.project_id,assignedPolicyRevision:context.capacity_policy_revision,
     accounts,providerBindings,providerAdapters,providerEligibility,administrative,profiles,catalog,policies,grants,plans,approvals,remoteOperations,
     remoteSourceHosts,remoteSourceAuthorizations,canAuthorizeRemoteSource:context.role==='owner',operatorDeviceIds,canApproveIntegration:context.role==='owner'};
   });

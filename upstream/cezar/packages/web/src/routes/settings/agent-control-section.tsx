@@ -22,6 +22,7 @@ import {AgentControlAdministrativePolicy,administrativeViewSchema} from './agent
 import {AgentControlPortableExport} from './agent-control-portable-export'
 import {AgentControlManagerStatus,useAgentControlManagerStatus} from './agent-control-manager-status'
 import {AgentControlCapacityWaits,capacityWaitSchema} from './agent-control-capacity-waits'
+import {AgentControlProjectTemplates,conversationTemplateDraft} from './agent-control-project-templates'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
@@ -55,6 +56,9 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  qualityPolicies:z.array(z.object({revision:z.number(),snapshot:z.object({requireSpecialistBeforeImplementation:z.boolean().optional()}).passthrough().optional()})),
  templates:z.array(z.object({revision:z.number(),snapshot:z.object({workflow:z.string(),qualityRevision:z.number().optional(),targetRef:z.string().optional()})})),
  activeTemplateRevision:z.number().nullable(),
+ projectTemplates:z.array(z.object({templateId:z.string().uuid(),revision:z.number().int().positive(),headRevision:z.number().int().positive(),name:z.string().min(1).max(80),digest:z.string().regex(/^[a-f0-9]{64}$/),snapshot:z.object({workflow:z.enum(['baseline-synthetic-v1','engineering-synthetic-v1','semantic-proposal-v1','engineering-native-v1']),qualityRevision:z.number().int().positive().optional(),targetRef:z.string().optional(),writePaths:z.array(z.string()).max(64).optional(),execution:z.enum(['root','plan']).optional()}).strict()})).max(100).optional(),
+ projectTemplatesTruncated:z.boolean().optional(),
+ canManageProjectTemplates:z.boolean().optional(),
  plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
  waits:z.array(capacityWaitSchema),
  grants:z.array(grantSchema)})
@@ -112,7 +116,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    return result
   },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-resources',contextId]});void cache.invalidateQueries({queryKey:['ac-contexts']})},
   onError:error=>{
-   if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','PROVIDER_BINDING_CONFLICT','PROVIDER_PROBE_IN_PROGRESS','PROVIDER_PROBE_UNCERTAIN','PROVIDER_ELIGIBILITY_REVISION_CONFLICT','POLICY_CONFLICT','QUALITY_POLICY_CONFLICT','ADMIN_POLICY_REVISION_CONFLICT','PLAN_ALREADY_TERMINAL','PLAN_REVISION_MISMATCH'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})
+   if(['ACCOUNT_PROFILE_REVISION_CONFLICT','CAPACITY_CONFIG_CONFLICT','PROVIDER_BINDING_CONFLICT','PROVIDER_PROBE_IN_PROGRESS','PROVIDER_PROBE_UNCERTAIN','PROVIDER_ELIGIBILITY_REVISION_CONFLICT','POLICY_CONFLICT','QUALITY_POLICY_CONFLICT','ADMIN_POLICY_REVISION_CONFLICT','PLAN_ALREADY_TERMINAL','PLAN_REVISION_MISMATCH','PROJECT_TEMPLATE_REVISION_CONFLICT','TEMPLATE_REVISION_CONFLICT'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-resources',contextId]})
    if(['PAUSE_REVISION_CONFLICT','DRAIN_REVISION_CONFLICT'].includes(error.message))void cache.invalidateQueries({queryKey:['ac-contexts']})
   }})
  const bootstrap=useMutation({mutationFn:async()=>{
@@ -297,6 +301,12 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
     <div className="flex flex-wrap gap-2">{data.templates.map(t=><Button key={t.revision} disabled={busy||data.activeTemplateRevision===t.revision||(t.snapshot.workflow==='engineering-native-v1'&&(!data.nativeExecutionEnabled||t.snapshot.qualityRevision!==latestQualityRevision))||(t.snapshot.workflow==='semantic-proposal-v1'&&(!semanticAvailable||t.snapshot.qualityRevision!==latestQualityRevision))}
      onClick={()=>mutate.mutate({action:'template.assign',payload:{revision:t.revision}})}>Usar fluxo {t.revision}</Button>)}</div>
    </SettingsField>
+   <AgentControlProjectTemplates key={`${contextId}:${(data.projectTemplates??[]).map(item=>item.templateId+':'+item.revision).join()}`}
+    canManage={data.canManageProjectTemplates===true} templates={data.projectTemplates} truncated={data.projectTemplatesTruncated}
+    draft={conversationTemplateDraft({workflow:templateWorkflow,qualityRevision,targetRef,nativePaths})}
+    expectedContextRevision={data.templates.at(-1)?.revision??0} busy={busy} statusMessage={mutate.error?.message??null}
+    onPublish={payload=>mutate.mutate({action:'project-template.publish',payload})}
+    onApply={payload=>mutate.mutate({action:'project-template.apply',payload})}/>
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
     <AgentControlCapacityWaits waits={data.waits} profiles={data.profiles} accounts={data.accounts}/>
     <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">
