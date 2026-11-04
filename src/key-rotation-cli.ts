@@ -3,6 +3,7 @@ import {open,realpath} from 'node:fs/promises';
 import {isAbsolute,resolve} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
+import {applyContextKeyRotation,type KeyRotationApplyReport} from './key-rotation-apply.ts';
 import {describeKeyRotationPlan,KEY_ROTATION_MAX_ENTRIES,type KeyRotationDryRunPlan} from './key-rotation-plan.ts';
 
 /** Product dry-run. Reads one inventory descriptor and prints a plan. Never applies it. */
@@ -22,6 +23,16 @@ const Descriptor=z.object({
  nextKeyVersion:version,
  batchSize:z.number().int().min(1).max(256).optional(),
  entries:z.array(Entry).min(1).max(KEY_ROTATION_MAX_ENTRIES),
+}).strict();
+const absolutePath=z.string().refine(path=>isAbsolute(path)&&resolve(path)===path);
+const ApplyDescriptor=z.object({
+ schemaVersion:z.literal(1),
+ root:absolutePath,
+ masterFile:absolutePath,
+ nextKeyVersion:version,
+ nextMasterFile:absolutePath,
+ checkpointFile:absolutePath,
+ batchSize:z.number().int().min(1).max(256).optional(),
 }).strict();
 
 export type KeyRotationPlanCommandResult=
@@ -68,6 +79,27 @@ export async function executeKeyRotationPlan(descriptorPath:string):Promise<KeyR
  }catch(error){
   if(error instanceof Refusal)return {exitCode:1,code:error.code};
   const code=(error as NodeJS.ErrnoException).code;
+  if(code)return {exitCode:1,code:'KEY_ROTATION_DESCRIPTOR_INVALID'};
+  throw error;
+ }
+}
+
+export type KeyRotationApplyCommandResult=
+ |{exitCode:0|3;report:KeyRotationApplyReport}
+ |{exitCode:1;code:string};
+
+/** Apply only when `confirm` is true. The descriptor carries paths and a version, never key bytes. */
+export async function executeKeyRotationApply(descriptorPath:string,confirm:boolean):Promise<KeyRotationApplyCommandResult>{
+ try{
+  const raw=await readDescriptor(descriptorPath);
+  rejectKeyFields(raw);
+  const parsed=ApplyDescriptor.safeParse(raw);
+  if(!parsed.success)throw new Refusal('KEY_ROTATION_DESCRIPTOR_INVALID',400);
+  return applyContextKeyRotation({...parsed.data,confirm});
+ }catch(error){
+  if(error instanceof Refusal)return {exitCode:1,code:error.code};
+  const code=(error as NodeJS.ErrnoException).code;
+  if(code==='ENOENT'||code==='ELOOP'||code==='ENOTDIR')return {exitCode:1,code:'VAULT_PATH_UNSAFE'};
   if(code)return {exitCode:1,code:'KEY_ROTATION_DESCRIPTOR_INVALID'};
   throw error;
  }

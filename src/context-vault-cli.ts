@@ -6,7 +6,7 @@ import {z} from 'zod';
 import {Id,Refusal} from './contracts.ts';
 import {ContextKeys,keyFingerprint} from './context-keys.ts';
 import {ContextVault} from './context-vault.ts';
-import {executeKeyRotationPlan} from './key-rotation-cli.ts';
+import {executeKeyRotationApply,executeKeyRotationPlan} from './key-rotation-cli.ts';
 import {privateDirectory,readPrivateFile,type Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 
@@ -76,6 +76,10 @@ export async function executeContextKey(command:'context-key-authorize'|'context
 /** Dry-run only. The descriptor is an inventory; this does not open the vault or the ledger. */
 export async function executeContextKeyRotatePlan(descriptorPath:string){
  return executeKeyRotationPlan(descriptorPath);
+}
+/** File rotation. `confirm` is the process flag, not a descriptor field. No ledger. */
+export async function executeContextKeyRotateApply(descriptorPath:string,confirm:boolean){
+ return executeKeyRotationApply(descriptorPath,confirm);
 }
 export async function executeVaultBackup(command:'vault-backup'|'vault-restore',config:Installation,ledger:Ledger,descriptorPath:string){
  const env=await environment(config,ledger);let bytes:Buffer|undefined;
