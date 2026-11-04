@@ -7,12 +7,16 @@ import {SettingsField} from './settings-field'
 import {signControl} from './agent-control-operator'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
+import {AgentControlRemoteSourceImport} from './agent-control-remote-source-import'
 
 const RemoteSource=z.object({projectId:z.string().uuid(),hostId:z.string().uuid(),commit:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
  tree:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),state:z.literal('materialized'),reviewStatus:z.literal('not_reviewed')})
+const RemoteCandidate=z.object({projectId:z.string().uuid(),contextId:z.string().uuid(),operationId:z.string().uuid(),hostId:z.string().uuid(),
+ label:z.string().min(1).max(200),commit:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),tree:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+ sha256:z.string().regex(/^[a-f0-9]{64}$/),state:z.literal('exported'),reviewStatus:z.literal('not_reviewed')}).refine(value=>value.commit.length===value.tree.length)
 const View=z.object({principalId:z.string(),installationId:z.string().uuid(),operatorDeviceIds:z.array(z.string().uuid()),canRegister:z.boolean(),
  server:z.object({kind:z.literal('local'),remoteManagement:z.literal(false)}),roots:z.array(z.object({id:z.string(),label:z.string()})),
- remoteSources:z.array(RemoteSource).max(100).optional()})
+ remoteSources:z.array(RemoteSource).max(100).optional(),remoteSourceCandidates:z.array(RemoteCandidate).max(100).optional()})
 const Result=z.object({state:z.literal('applied'),projectId:z.string().uuid()})
 async function json(response:Response){
  const value:unknown=await response.json()
@@ -45,12 +49,14 @@ export function AgentControlProjectAdmin(){
   sessionStorage.removeItem(key);setRefusedKey(null);return result
  },onSuccess:()=>{setLabel('');setRelativePath('');void cache.invalidateQueries({queryKey:['projects']});void cache.invalidateQueries({queryKey:['workspace','projects']})}})
  const sources=(view.data?.remoteSources??[]).filter(source=>!projectId||source.projectId===projectId)
+ const candidates=(view.data?.remoteSourceCandidates??[]).filter(candidate=>!projectId||candidate.projectId===projectId)
  return <SettingsField title="Projetos e servidor" hint="Cadastre um repositório Git existente dentro de uma raiz autorizada na inicialização.">
   <p>Servidor local. Administração remota de servidores ainda não está disponível.</p>
   {sources.length>0&&<div>
    <p>Origem SSH somente leitura. O snapshot permanece não revisado e não autoriza integração.</p>
    {sources.map(source=><p key={`${source.projectId}:${source.commit}`}>Host {source.hostId}; commit {source.commit}; tree {source.tree}; estado materializado; revisão não revisada.</p>)}
   </div>}
+  {view.data?.remoteSourceCandidates&&<AgentControlRemoteSourceImport principalId={view.data.principalId} installationId={view.data.installationId} candidates={candidates}/>}
   {view.isPending&&<p role="status">Carregando permissões…</p>}
   {view.error&&<p role="alert">Não foi possível carregar a administração de projetos.</p>}
   {view.data&&!view.data.canRegister&&<p>O cadastro de projetos exige administrador global.</p>}
