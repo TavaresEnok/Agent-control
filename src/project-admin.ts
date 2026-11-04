@@ -19,6 +19,13 @@ export const ProjectAdminCommand=z.discriminatedUnion('action',[
  z.object({...AdminBase,action:z.literal('project.materializeRemoteSource'),payload:RemoteSourceMaterializationPayload}).strict(),
 ]);
 export type ProjectAdminOptions={remoteSourceTmpfs?:string;beforeRemoteSourceRegister?:()=>Promise<void>};
+const ObjectId=/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+/** Closed projection. A candidate is not a revalidated authorization. */
+const RemoteSourceCandidate=z.object({
+ projectId:Id,contextId:Id,operationId:Id,hostId:Id,label:z.string().min(1).max(200),
+ commit:z.string().regex(ObjectId),tree:z.string().regex(ObjectId),sha256:z.string().regex(/^[a-f0-9]{64}$/),
+ state:z.literal('exported'),reviewStatus:z.literal('not_reviewed'),
+}).strict().refine(value=>value.commit.length===value.tree.length);
 
 /** No directory enumeration; every component must be a real directory beneath a trusted startup root. */
 async function repository(root:ProjectRoot,relative:string){
@@ -48,7 +55,36 @@ export class ProjectAdmin{
   const remoteSources=(await this.ledger.pool.query(`SELECT m.project_id AS "projectId",m.host_id AS "hostId",m.commit_id AS commit,m.tree_id AS tree,
    'materialized'::text AS state,'not_reviewed'::text AS "reviewStatus" FROM ac_remote_source_materializations m
    JOIN ac_memberships mb ON mb.project_id=m.project_id AND mb.principal_id=$1 ORDER BY m.created_at DESC,m.id LIMIT 100`,[principal])).rows;
-  return {principalId:principal,installationId:installation.id,operatorDeviceIds:devices,canRegister:admin,server:{kind:'local',remoteManagement:false},roots:admin?this.roots.map(({id,label})=>({id,label})):[],remoteSources};
+  const base={principalId:principal,installationId:installation.id,operatorDeviceIds:devices,canRegister:admin,server:{kind:'local' as const,remoteManagement:false as const},roots:admin?this.roots.map(({id,label})=>({id,label})):[],remoteSources};
+  const response=base as typeof base & {remoteSourceCandidates?:z.infer<typeof RemoteSourceCandidate>[]};
+  if(!admin)return response;
+  const rows=(await this.ledger.pool.query(`SELECT p.id AS "projectId",p.label,x.id AS "contextId",o.id AS "operationId",h.id AS "hostId",
+   o.intent_id AS "intentId",o.request_digest AS "requestDigest",o.remote_receipt->>'commit' AS commit,o.remote_receipt->>'tree' AS tree,
+   o.remote_receipt->>'bundleSha256' AS sha256
+   FROM ac_remote_operations o
+   JOIN ac_contexts x ON x.id=o.context_id AND NOT x.archived
+   JOIN ac_projects p ON p.id=x.project_id
+   JOIN ac_memberships mb ON mb.project_id=p.id AND mb.principal_id=$1 AND mb.role='owner'
+   JOIN ac_remote_hosts h ON h.id=o.host_id AND h.project_id=p.id
+   WHERE o.task_id='git-export' AND o.state='completed' AND o.intent_id IS NOT NULL
+   AND o.remote_receipt->>'commit' ~ '^([a-f0-9]{40}|[a-f0-9]{64})$'
+   AND o.remote_receipt->>'tree' ~ '^([a-f0-9]{40}|[a-f0-9]{64})$'
+   AND char_length(o.remote_receipt->>'commit')=char_length(o.remote_receipt->>'tree')
+   AND o.remote_receipt->>'bundleSha256' ~ '^[a-f0-9]{64}$'
+   AND char_length(p.label) BETWEEN 1 AND 200 AND btrim(p.label)=p.label AND p.label !~ '[[:cntrl:]]'
+   AND EXISTS (SELECT 1 FROM ac_remote_source_authorizations s WHERE s.context_id=o.context_id AND s.project_id=p.id
+    AND s.intent_id=o.intent_id AND s.host_id=o.host_id AND s.commit_id=o.remote_receipt->>'commit' AND s.tree_id=o.remote_receipt->>'tree')
+   AND NOT EXISTS (SELECT 1 FROM ac_project_repositories r WHERE r.project_id=p.id)
+   AND NOT EXISTS (SELECT 1 FROM ac_project_repository_identity i WHERE i.project_id=p.id)
+   AND NOT EXISTS (SELECT 1 FROM ac_remote_source_materializations m WHERE m.project_id=p.id OR m.operation_id=o.id)
+   ORDER BY o.created_at DESC,o.id LIMIT 100`,[principal])).rows;
+  const remoteSourceCandidates=rows.flatMap(row=>{
+   const commit=String(row.commit),tree=String(row.tree);
+   if(row.requestDigest!==digest({action:'git-export',operationId:row.operationId,intentId:row.intentId,contextId:row.contextId,hostId:row.hostId,commit,tree}))return [];
+   const candidate=RemoteSourceCandidate.safeParse({projectId:row.projectId,contextId:row.contextId,operationId:row.operationId,hostId:row.hostId,label:row.label,commit,tree,sha256:row.sha256,state:'exported',reviewStatus:'not_reviewed'});
+   return candidate.success?[candidate.data]:[];
+  });
+  return {...base,remoteSourceCandidates};
  }
  async execute(principal:string,raw:unknown,proof:OperatorProof){
   const command=ProjectAdminCommand.parse(raw);
