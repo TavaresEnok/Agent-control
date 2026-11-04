@@ -17,6 +17,7 @@ import { requireManagedRunnerBoundary } from '../upstream/cezar/packages/cezar/d
 import {childTaskEnvelope} from '../upstream/cezar/packages/cezar/dist/dispatch/engine.js';
 import type { AgentRunner, AgentSession, AgentEvent, AgentRunResult } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import { Authority, Command, digest, Refusal } from './contracts.ts';
+import { refuseCurrentProtectedGate } from './quality.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
 import { baselineWorkflow,workflowFor } from './workflows.ts';
@@ -426,12 +427,15 @@ export class CezarRuntime {
         if(saved?.digest!==digest(input))throw new Refusal('MANAGED_BASE_CHANGED');
       }
       if(recipe.mode==='native'){
+        const projectId=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[authority.contextId])).rows[0]?.project_id;
+        if(!projectId)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
         for(const unit of members){
           if(unit.kind!=='task')continue;
           const child=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
           const command=Command.parse(child?.command);
           const payload=command.payload;
           if(payload.workflow!=='engineering-native-v1'||payload.targetRef!==unit.targetRef||payload.qualityRevision!==unit.qualityRevision||digest(payload.writePaths)!==digest(unit.writePaths))throw new Refusal('NATIVE_TASK_INPUT_MISMATCH');
+          await refuseCurrentProtectedGate(c,projectId,payload.writePaths);
           const frozen={schemaVersion:1,intentId:unit.intentId,contextId:authority.contextId,base,writePaths:payload.writePaths,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,messageRef:payload.messageRef,messageDigest:payload.messageDigest};
           await c.query('INSERT INTO ac_native_task_inputs VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[unit.intentId,base,frozen,digest(frozen)]);
           const row=(await c.query('SELECT base_id,snapshot,digest FROM ac_native_task_inputs WHERE intent_id=$1',[unit.intentId])).rows[0];
@@ -505,11 +509,14 @@ export class CezarRuntime {
         await c.query('INSERT INTO ac_managed_delivery_inputs(intent_id,base_id,snapshot,digest) VALUES($1,$2,$3,$4)',[unit.intentId,base,input,digest(input)]);
       }
       if(recipe.mode==='native'){
+        const projectId=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[authority.contextId])).rows[0]?.project_id;
+        if(!projectId)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
         for(const unit of members){
           if(unit.kind!=='task')continue;
           const child=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
           const command=Command.parse(child?.command),payload=command.payload;
           if(payload.workflow!=='engineering-native-v1'||payload.targetRef!==unit.targetRef||payload.qualityRevision!==unit.qualityRevision||digest(payload.writePaths)!==digest(unit.writePaths))throw new Refusal('NATIVE_TASK_INPUT_MISMATCH');
+          await refuseCurrentProtectedGate(c,projectId,payload.writePaths);
           const frozen={schemaVersion:1,intentId:unit.intentId,contextId:authority.contextId,base,writePaths:payload.writePaths,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,messageRef:payload.messageRef,messageDigest:payload.messageDigest};
           await c.query('INSERT INTO ac_native_task_inputs VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[unit.intentId,base,frozen,digest(frozen)]);
           const saved=(await c.query('SELECT base_id,snapshot,digest FROM ac_native_task_inputs WHERE intent_id=$1',[unit.intentId])).rows[0];

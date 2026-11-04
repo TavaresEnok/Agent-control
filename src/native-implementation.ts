@@ -7,7 +7,7 @@ import {z} from 'zod';
 import {Ledger,type Intent} from './ledger.ts';
 import {Authority,Command,digest,Refusal} from './contracts.ts';
 import {GitArtifacts} from './git.ts';
-import {Quality} from './quality.ts';
+import {Quality,refuseCurrentProtectedGate} from './quality.ts';
 import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import {nativeManagedTaskText,readManagedInput,readManagedUnit} from './managed-plan.ts';
 import {ManagerPlan} from './planning.ts';
@@ -134,6 +134,9 @@ export class NativeImplementation{
     supervisor=eligible[0]!;
     const frozen=await this.ledger.tx(async c=>{
      await this.authorize(owner,authority,intent.id,false,c);
+     const projectId=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[authority.contextId])).rows[0]?.project_id;
+     if(!projectId)throw new Refusal('NATIVE_IMPLEMENTATION_SCOPE_MISMATCH');
+     await refuseCurrentProtectedGate(c,projectId,p.writePaths);
      let row=(await c.query('SELECT * FROM ac_native_task_inputs WHERE intent_id=$1',[intent.id])).rows[0];
      if(!row){
       const base=managedBase??await new GitArtifacts(this.repository).resolveTarget(p.targetRef);
