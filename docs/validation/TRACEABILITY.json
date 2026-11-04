@@ -876,12 +876,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/storage-admission-final-20261102.log;docs/validation/evidence/observability-final-20261102.log;docs/implementation/RETENTION-DISK-FULL-20261103.md",
-    "files": "src/disk-admission.ts;src/storage.ts;src/sandbox-broker.ts;src/isolated-verification.ts;src/retention-plan.ts;tests/disk-admission.test.ts;tests/retention-plan.test.ts",
+    "evidence": "docs/validation/evidence/storage-admission-final-20261102.log;docs/validation/evidence/observability-final-20261102.log;docs/implementation/RETENTION-DISK-FULL-20261103.md;docs/implementation/RETENTION-CLI-20261104.md",
+    "files": "src/disk-admission.ts;src/storage.ts;src/sandbox-broker.ts;src/isolated-verification.ts;src/retention-plan.ts;tests/disk-admission.test.ts;tests/retention-plan.test.ts;src/retention-cli.ts;src/server-main.ts;tests/retention-cli.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Opt-in free-space guard and private disposable-spool reservations, preserving uncertain grants. explainDiskAdmission refuses new admission with STORAGE_LOW_SPACE and does not delete files. planRetention only classifies an in-memory inventory. Not hard disk quota or full memory/CPU/disk exhaustion homologation. This does not accept the requirement."
+    "limitation": "Opt-in free-space guard and private disposable-spool reservations, preserving uncertain grants. The inventory and the disk observation are supplied to planRetention; they are not discovered or attested. explainDiskAdmission refuses new admission with STORAGE_LOW_SPACE and does not delete files. The retention-plan CLI prints that dry-run from one bounded private descriptor opened through a no-follow directory-fd chain. An ancestor replaced by a symlink before the read is refused and not read. The swap is a test-process loader, not a product hook. The CLI does not read RETENTION_PLAN_OPEN_BARRIER and does not create or open any other file. Mode 0644 on a single-link file is refused by itself. The CLI does not free space, delete artifacts, open the installation, PostgreSQL, the vault, or provider CLIs, write a checkpoint, or schedule retention. Not hard disk quota, operational retention, backup homologation, or full memory/CPU/disk exhaustion. This does not accept RNF-11 or phase I7."
   },
   {
     "id": "RNF-12",
