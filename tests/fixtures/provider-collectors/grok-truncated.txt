@@ -1,0 +1,1 @@
+{"schema":"grok.subscription.status","schemaVersion":1
