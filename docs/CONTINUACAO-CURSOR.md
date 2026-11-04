@@ -2,6 +2,8 @@
 
 ## Continuação mais recente — prevalece sobre os resumos históricos abaixo
 
+- A prova de QA no grafo com workers Docker sintéticos reais revelou que receitas sintéticas v1 omitiam `taskId` e executavam QA mesmo com autorização válida. As receitas novas registram a tarefa; as antigas continuam legíveis e conservadoras. O grafo físico confirmou `not_required` sem grant, job ou evidência aprovada de QA, com revisão; a repetição não duplicou dispensa. Falha inicial preservada. Ver `docs/implementation/CONTINUACAO-SYNTHETIC-WAIVER-20261104.md`. A neutralização física ainda não está ligada ao grafo.
+
 - As suítes antes puladas de templates por projeto e projeção de esperas foram executadas em PostgreSQL descartável: cinco testes passaram, sem skips. Detalhes em `docs/implementation/CONTINUACAO-PG-20261104.md`.
 
 - Ensaio de backup/restauração sintéticos em checkout `/tmp/ac-continuation-restore-20261104` e Compose `ac-continuation-restore-20261104`: corrupção de arquivo e dump recusadas; pausa e grant incerto preservados; uma worktree relocada e runtime da cópia iniciado com admissão fechada. Zero runs nativos no segundo ensaio; os limites estão em `docs/implementation/CONTINUACAO-RESTORE-20261104.md`. Nenhuma migração operacional.

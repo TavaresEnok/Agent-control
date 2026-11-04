@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: credential-bearing origins require TLS outside loopback in both configuration and relay
+ok 1 - credential-bearing origins require TLS outside loopback in both configuration and relay
+  ---
+  duration_ms: 11.955734
+  type: 'test'
+  ...
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 2 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 305.631913
+  type: 'test'
+  ...
+# Subtest: signed pause is deduplicated and stale commands cannot undo a newer decision
+ok 3 - signed pause is deduplicated and stale commands cannot undo a newer decision
+  ---
+  duration_ms: 200.774714
+  type: 'test'
+  ...
+# Subtest: SLO read requires a principal and does not call the service or intercept public pairing
+ok 4 - SLO read requires a principal and does not call the service or intercept public pairing
+  ---
+  duration_ms: 40.202482
+  type: 'test'
+  ...
+# Subtest: a fresh complete snapshot returns the fixed evaluation report and is read-only
+ok 5 - a fresh complete snapshot returns the fixed evaluation report and is read-only
+  ---
+  duration_ms: 4.551609
+  type: 'test'
+  ...
+# Subtest: a partial or stale snapshot is unknown and never ok
+ok 6 - a partial or stale snapshot is unknown and never ok
+  ---
+  duration_ms: 2.90382
+  type: 'test'
+  ...
+# Subtest: a snapshot failure is a generic 500 and never an ok report
+ok 7 - a snapshot failure is a generic 500 and never an ok report
+  ---
+  duration_ms: 1.938642
+  type: 'test'
+  ...
+# Subtest: browser session stores encrypted bearer, limits origin and revokes access
+ok 8 - browser session stores encrypted bearer, limits origin and revokes access
+  ---
+  duration_ms: 130.023228
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3558.892955

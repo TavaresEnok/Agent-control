@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: a complete explicit waiver is not_required and does not invent a passed receipt
+ok 1 - a complete explicit waiver is not_required and does not invent a passed receipt
+  ---
+  duration_ms: 2.50368
+  type: 'test'
+  ...
+# Subtest: passed QA satisfies the gate without a waiver
+ok 2 - passed QA satisfies the gate without a waiver
+  ---
+  duration_ms: 0.336905
+  type: 'test'
+  ...
+# Subtest: failed, canceled, missing and stale evidence block even when the waiver matches
+ok 3 - failed, canceled, missing and stale evidence block even when the waiver matches
+  ---
+  duration_ms: 0.311468
+  type: 'test'
+  ...
+# Subtest: another artifact digest, another policy or a missing template does not inherit the waiver
+ok 4 - another artifact digest, another policy or a missing template does not inherit the waiver
+  ---
+  duration_ms: 0.205647
+  type: 'test'
+  ...
+# Subtest: a stage waiver receipt is not a passed verification receipt
+ok 5 - a stage waiver receipt is not a passed verification receipt
+  ---
+  duration_ms: 3.278627
+  type: 'test'
+  ...
+# Subtest: the signed control command accepts an owner QA waiver authorization
+ok 6 - the signed control command accepts an owner QA waiver authorization
+  ---
+  duration_ms: 2.911161
+  type: 'test'
+  ...
+# Subtest: high risk and a disabled policy stay missing instead of becoming not_required
+ok 7 - high risk and a disabled policy stay missing instead of becoming not_required
+  ---
+  duration_ms: 0.326461
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 806.740265

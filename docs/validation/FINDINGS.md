@@ -2,6 +2,8 @@
 
 ## Continuação de QA e contenção de escritor — 04/11/2026
 
+O ensaio com workers Docker reais de fixture encontrou omissão de `taskId` na receita sintética v1: autorização válida era ignorada e QA executava. As novas receitas incluem a identidade; receitas antigas continuam legíveis e conservadoras. A prova corrigida registrou `not_required` sem grant, job ou aprovação QA e preservou revisão. Falha inicial preservada. Ver `../implementation/CONTINUACAO-SYNTHETIC-WAIVER-20261104.md`.
+
 As suítes de templates por projeto e espera de capacidade antes puladas por ausência de PostgreSQL passaram nesta bancada: cinco testes, sem skips. Ver `../implementation/CONTINUACAO-PG-20261104.md`; não há aceite operacional.
 
 Backup e restore foram repetidos em checkout separado com dados sintéticos: corrupção recusada, pausa e concessão incerta preservadas, worktree Git relocada e runtime restaurado iniciado com admissão fechada. A cópia tinha zero runs nativos e a prova não reconcilia efeitos externos. Detalhes em `../implementation/CONTINUACAO-RESTORE-20261104.md`.

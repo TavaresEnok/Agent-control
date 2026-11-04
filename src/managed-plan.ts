@@ -184,7 +184,7 @@ function managedBatchRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentInt
  });
  for(const [batchIndex,batch] of batches.entries()){
   const members=batch.map(id=>{const task=tasks.get(id)!;return unit(`task-${id}`,'task',task.qualityRevision,task.writePaths,
-   native?[...task.acceptanceRefs]:syntheticAcceptance,[],native?task.id:undefined);});
+   native?[...task.acceptanceRefs]:syntheticAcceptance,[],task.id);});
   const launch=`launch-${batchIndex}`;
   if(members.length===1){const u=members[0]!;nodes.push({id:launch,type:'dispatch',name:u.id,prompt:`AC_MANAGED_UNIT:${u.id}`});launches[launch]=[u.id];edge(launch);checks(u,true);}
   else{

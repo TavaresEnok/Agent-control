@@ -2,6 +2,8 @@
 
 ## Continuação vigente: dispensa de QA e worktree — 04/11/2026
 
+No grafo com broker/workers Docker sintéticos reais, a receita v1 sintética agora registra a identidade da tarefa para permitir a dispensa autorizada. O ensaio passou sem criar grant, job ou aprovação de QA para a tarefa dispensada; receitas históricas sem identidade continuam conservadoras. A falha anterior e os limites estão em `implementation/CONTINUACAO-SYNTHETIC-WAIVER-20261104.md`.
+
 Backup/restauração foram repetidos com dados sintéticos em checkout e banco próprios, incluindo rejeição de corrupção, pausa e concessão incerta, relocação de uma worktree e boot do runtime da cópia com admissão fechada. Zero runs nativos na segunda cópia. Ver `implementation/CONTINUACAO-RESTORE-20261104.md`.
 
 A bancada isolada reproduziu worker Docker vivo, takeover e parada, preservando a posse bloqueada, além de dois hosts SSH sintéticos com perda de ACK, reinício e exportação Git. Os limites e logs estão em `implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`. Não houve aceite dos cenários integrais.
