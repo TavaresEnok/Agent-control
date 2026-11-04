@@ -1,6 +1,6 @@
 # Agent Control — estado atual de implementação
 
-Atualizado em 02/11/2026. Branch local `implementation/i0-i2`.
+Atualizado em 03/11/2026. Branch local `task/2f963b0e4808/consolidate-integration-lines`, a partir de `orchestration/ebfe5a1009ce`, com o conteúdo de `orchestration/5e95aef73635` e `orchestration/dcbac224b999`. Os merges `--no-ff` das duas linhas foram gravados no host pelo gerente, porque o Git do sandbox do trabalhador é somente leitura; o conflito em `agent-control-fetch.test.ts` manteve os testes dos dois lados.
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
@@ -12,7 +12,15 @@ O bootstrap nativo passou a ter configuração discriminada e opt-in. O padrão 
 
 Correções nativas limitadas após reprovação autenticada de QA ou revisão estão implementadas para planos com várias tarefas. Cada tentativa nova tem intenção, execução, operação, sessão e avaliação próprias, até o `maxCorrections` do plano. Falha de infraestrutura não grava decisão nem lança a tentativa seguinte. O commit reprovado permanece no histórico e não é selecionado nem reutilizado. A receita v2/v3 sintética continua só como referência de contrato. `nativeExecutionRecipe` ainda recusa correção, para o plano nativo sem correção permanecer o contrato anterior. O reconhecimento da revisão nativa fica em `EngineeringStages`; `src/quality.ts` não mudou. A bancada com adaptadores injetados captura a ref protegida depois da integração aprovada de `gamma` e exige que o limite esgotado e a falha de infraestrutura deixem esse commit no lugar. O produto não foi alterado para desfazer essa integração. A administração relatou a prova isolada em contêiner descartável, com este worktree somente leitura, sem contas e sem socket Docker: `tests/native-corrections.test.ts` 2/2 e `tests/native-multitask.test.ts` 3/3, zero skips, com substitutos sintéticos, sem inferência e sem homologação. Os diretórios citados não estão montados neste runner e os logs não foram reabertos. Aqui `AC_TEST_DATABASE_URL` continua ausente, então o teste autenticado segue ignorado: `npm run typecheck` saiu 0, `native-corrections.test.ts` passou 1 e ignorou 1, `native-multitask.test.ts` passou 2 e ignorou 1. Nenhum dos 111 foi aceito. Detalhes em `implementation/NATIVE-CORRECTIONS-20261103.md`.
 
-Permanecem pendentes provedores/cotas reais, homologação móvel e revisão independente. As seções abaixo são registros históricos de incrementos; suas pendências devem ser lidas com este estado mais recente. O projeto continua incompleto. Nenhum dos 111 requisitos está aceito.
+A linha ebfe, já neste branch, acrescenta avaliação pura de SLOs, `GET /api/v1/ac/observability/slo`, o painel administrativo, o plano puro de rotação da custódia local, o verificador puro de restore e o percurso móvel de propostas até 390 px. Nenhuma dessas provas usa conta real, inferência, deploy ou migração, e nenhuma aceita requisito. Ver `implementation/SLO-EVALUATION-20261103.md`, `implementation/SLO-API-20261103.md`, `implementation/SLO-UI-20261103.md`, `implementation/KEY-ROTATION-PLAN-20261103.md`, `implementation/RESTORE-VERIFIER-20261103.md` e `implementation/MOBILE-PLANS-20261103.md`.
+
+Parsers puros de cota estão em `src/provider-collector-parsers.ts`. Codex, Claude e Grok projetam disponível, esgotado, recuperação ou desconhecido a partir de fixtures sintéticas. Antigravity permanece desconhecido: a origem não traz cota verificável. Não há spawn, rede, credencial, scheduler nem gravação de observação. Ver `implementation/PROVIDER-COLLECTOR-PARSERS-20261103.md`.
+
+A retenção é um plano dry-run em memória (`src/retention-plan.ts`). Evidência de aceite, evidência genérica, item ativo ou incerto e backup sem restore comprovado não entram em `propose`. Disco cheio recusa admissão nova com `STORAGE_LOW_SPACE` em `src/disk-admission.ts` e não apaga arquivo. Ver `implementation/RETENTION-DISK-FULL-20261103.md`.
+
+A carta de aprovação de integração em largura até 390 px mostra digest, política, destino e diff, com alvo de 44 px. Intenção e entrega saem do POST observado; registro corrompido não chama a aprovação. A prova é jsdom, sem aparelho. Ver `implementation/MOBILE-APPROVAL-20261103.md`.
+
+Permanecem pendentes contas e cotas reais, coleta operacional, retenção aplicada, homologação de disco cheio, aparelho móvel e revisão independente. As seções abaixo são registros históricos de incrementos; suas pendências devem ser lidas com este estado mais recente. O projeto continua incompleto. Nenhum dos 111 requisitos está aceito.
 
 ## Estado vigente: QA funcional real
 
