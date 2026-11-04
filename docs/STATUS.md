@@ -4,6 +4,10 @@ Atualizado em 03/11/2026. Branch local `task/2f963b0e4808/consolidate-integratio
 
 **Produto em implementação. Nenhum gate completo ou homologação de produção está declarado.** A arquitetura autorizada permanece Cezar + Happier + PostgreSQL. As instalações operacionais não foram migradas ou reconfiguradas. Não há inferência com contas reais nesta bancada.
 
+## Incremento: falha terminal nativa no diagnóstico — 04/11/2026
+
+O diagnóstico já autorizado do contexto passa a mostrar job nativo armazenado como `failed`. O motivo fica num conjunto fechado do controlador ou do finalizador, ou `unknown` quando o código falta, é desconhecido ou diverge. A resposta antiga continua válida. A leitura não verifica assinatura, não copia texto bruto e não muda execução, seleção ou recuperação. Isso torna a falha observável. Não prova nem encerra a causa desconhecida do native-multitask do L11. Neste runner `npm run typecheck` saiu 0. `tests/native-failure-diagnostics.test.ts` passou 4 e ignorou a suíte PostgreSQL: `AC_TEST_DATABASE_URL` ausente. Esse skip é ausência de prova. O teste de UI saiu 0, 1 teste. O typecheck web saiu 0 depois de `dist` local ignorado do Cezar e de `@happier-dev/protocol`; sem esses artefatos os mesmos comandos falhavam por módulo ausente, fora do diff. Nenhum dos 111 requisitos foi aceito. Detalhes em `implementation/NATIVE-FAILURE-DIAGNOSTICS-20261104.md`.
+
 ## Incremento: motivos de espera no cockpit — 04/11/2026
 
 `Control.view` passa a incluir `exclusions` na espera já devolvida por `/resources` quando o jsonb armazenado passa na validação fechada de `capacityWaitExclusions`. A leitura continua na mesma transação de `authorize` e de `projectScope`. Lista nula, histórica ou inválida omite o campo. O cockpit existente mostra a lista ordenada em português. O rótulo do perfil só aparece se ele já está na view autorizada; perfil ausente usa identificação curta, sem consulta fora do projeto. `CAPACITY_BUSY` e `CAPACITY_QUEUED` continuam distintos de inelegibilidade, e a composição local não ganha motivos de perfil. Não houve mudança de grant, cota, seleção, catálogo, migração nem autoridade.
