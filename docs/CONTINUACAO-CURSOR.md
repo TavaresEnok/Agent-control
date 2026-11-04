@@ -2,8 +2,10 @@
 
 ## Continuação mais recente — prevalece sobre os resumos históricos abaixo
 
+- O sandbox físico passou com worker sem socket/rede e, em projeto Compose e banco separados, um worker vivo foi observado e parado após takeover; a posse permaneceu bloqueada mesmo depois do recibo terminal. Dois hosts SSH sintéticos passaram lost ACK, retomada, reinício e exportação Git. Ver `docs/implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`. Isso não completa a ligação de revogação física ao grafo nem homologa SSH operacional.
+
 - Conferido HEAD inicial `2c58dc29`, branch `continuation/cursor-20261104`; havia somente `db/migrations/062_worktree_writer_proof.sql` sem rastreamento, preservado em evidência antes de ajuste. Nenhum reset ou descarte.
-- Matriz após a prova de CAS: 111 itens, 94 `partial`, 17 `not_implemented`, nenhum aceito. Escritor único e dispensa seguem parciais.
+- Matriz após as provas de CAS e broker: 111 itens, 95 `partial`, 16 `not_implemented`, nenhum aceito. Escritor único e dispensa seguem parciais.
 - Cópias não são reassumidas após neutralização legada. A neutralização sem prova física recusa e não é chamada pelo grafo. Isso não neutraliza o executor e pode bloquear recuperação. É necessário completar a prova física e a ligação com supervisor/grafo, inclusive parada, incerteza, fencing e preservação de logs e artefatos.
 - Autorização do owner no painel, usando template de catálogo e política ativos e controle assinado. Alcance é projeto/tarefa/política/template, não uma dispensa genérica nem um resultado QA aprovado. Falta revogação.
 - Grafo Cezar/PG/Git com executores sintéticos passou para autorização válida, ausente, desabilitada, template divergente e ambígua. Pausa/reinício foram provados somente após conclusão. Persistem provas durante efeito, cancelamento/perda no grafo e cenário físico hostil. Ver `docs/implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.

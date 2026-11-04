@@ -1,0 +1,64 @@
+TAP version 13
+# Subtest: signed global registration is scoped, idempotent and refuses untrusted paths
+ok 1 - signed global registration is scoped, idempotent and refuses untrusted paths
+  ---
+  duration_ms: 1417.519728
+  type: 'test'
+  ...
+# Subtest: signed materialization refuses a missing or invalid authorization and a divergent snapshot
+ok 2 - signed materialization refuses a missing or invalid authorization and a divergent snapshot
+  ---
+  duration_ms: 1413.337804
+  type: 'test'
+  ...
+# Subtest: materialization refuses an unsafe root, another repository identity and a conflicting destination
+ok 3 - materialization refuses an unsafe root, another repository identity and a conflicting destination
+  ---
+  duration_ms: 1500.652711
+  type: 'test'
+  ...
+# Subtest: authorized snapshot becomes the project repository with immutable provenance and crash recovery
+ok 4 - authorized snapshot becomes the project repository with immutable provenance and crash recovery
+  ---
+  duration_ms: 1285.380663
+  type: 'test'
+  ...
+# Subtest: two concurrent materializations of one project leave a single binding
+ok 5 - two concurrent materializations of one project leave a single binding
+  ---
+  duration_ms: 1340.267243
+  type: 'test'
+  ...
+# Subtest: a killed process resumes once and an incomplete lock is reclaimed without a second binding
+ok 6 - a killed process resumes once and an incomplete lock is reclaimed without a second binding
+  ---
+  duration_ms: 2909.06493
+  type: 'test'
+  ...
+# Subtest: unsafe symlinks and writable descendants are refused before any outside change
+ok 7 - unsafe symlinks and writable descendants are refused before any outside change
+  ---
+  duration_ms: 1240.797221
+  type: 'test'
+  ...
+# Subtest: signed owner authorizes only the specified remote source and replay revalidates it
+ok 8 - signed owner authorizes only the specified remote source and replay revalidates it
+  ---
+  duration_ms: 1493.86494
+  type: 'test'
+  ...
+# Subtest: two pinned SSH hosts reconcile detached work, lost ack and paused takeover
+ok 9 - two pinned SSH hosts reconcile detached work, lost ack and paused takeover
+  ---
+  duration_ms: 5465.229209
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21423.863783

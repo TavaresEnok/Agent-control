@@ -2,6 +2,8 @@
 
 ## Continuação vigente: dispensa de QA e worktree — 04/11/2026
 
+A bancada isolada reproduziu worker Docker vivo, takeover e parada, preservando a posse bloqueada, além de dois hosts SSH sintéticos com perda de ACK, reinício e exportação Git. Os limites e logs estão em `implementation/CONTINUACAO-SANDBOX-SSH-20261104.md`. Não houve aceite dos cenários integrais.
+
 O painel permite ao titular assinar autorização de dispensa para tarefa, política e template ativos, e informa que o alcance é o projeto. O grafo com PostgreSQL e worktrees Git reais, modelos e QA sintéticos passou nas variantes válida, ausente, desabilitada, divergente e ambígua. A variante válida também foi observada após reinício com contexto pausado. A aprovação de QA não foi fabricada e a revisão continua obrigatória. Não é prova de interrupção durante o efeito.
 
 A cópia managed não é mais entregue a outra intenção, inclusive após neutralização legada; a operação de neutralização recusa até existir prova física. Isso evita o reaproveitamento por esta via, mas ainda não revoga acesso, não encerra processo nem entrega recuperação física. Os registros abaixo sobre reassumir a mesma cópia são históricos e foram superados. RF-54, T34, RF-57 e T38 continuam parciais e sem aceite. Revisão independente continua pendente. Detalhes e limites em `implementation/CONTINUACAO-QA-WORKTREE-20261104.md`.

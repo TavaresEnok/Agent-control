@@ -1,0 +1,18 @@
+sandbox-broker-1  | node:internal/modules/run_main:123
+sandbox-broker-1  |     triggerUncaughtException(
+sandbox-broker-1  |     ^
+sandbox-broker-1  | 
+sandbox-broker-1  | Error: Cannot find package '/home/app/srv_projetos/workspace/agent-control-implementation/upstream/cezar/node_modules/zod/index.js' imported from /home/app/srv_projetos/workspace/agent-control-implementation/upstream/cezar/packages/cezar/dist/workflows/types.js
+sandbox-broker-1  | Did you mean to import "zod/index.cjs"?
+sandbox-broker-1  |     at legacyMainResolve (node:internal/modules/esm/resolve:205:26)
+sandbox-broker-1  |     at packageResolve (node:internal/modules/esm/resolve:782:12)
+sandbox-broker-1  |     at moduleResolve (node:internal/modules/esm/resolve:859:18)
+sandbox-broker-1  |     at defaultResolve (node:internal/modules/esm/resolve:989:11)
+sandbox-broker-1  |     at #cachedDefaultResolve (node:internal/modules/esm/loader:747:20)
+sandbox-broker-1  |     at ModuleLoader.resolve (node:internal/modules/esm/loader:724:38)
+sandbox-broker-1  |     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:320:38)
+sandbox-broker-1  |     at ModuleJob._link (node:internal/modules/esm/module_job:182:49) {
+sandbox-broker-1  |   code: 'ERR_MODULE_NOT_FOUND'
+sandbox-broker-1  | }
+sandbox-broker-1  | 
+sandbox-broker-1  | Node.js v22.23.3

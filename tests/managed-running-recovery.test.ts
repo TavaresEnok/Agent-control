@@ -5,7 +5,8 @@ import {execFileSync} from 'node:child_process';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
-import {digest} from '../src/contracts.ts';
+import {digest,Refusal} from '../src/contracts.ts';
+import {claimWorktreeWriter,neutralizeWorktreeWriter} from '../src/worktree-lease.ts';
 import {SandboxClient} from '../src/sandbox-client.ts';
 import {provisionCapacity} from './fixtures/provision-capacity.ts';
 
@@ -22,6 +23,8 @@ test('successor observes and stops the same live physical broker job',{timeout:9
   await fixture.service.assignPolicy(principal,contextId,fixture.revision);
   const old=await db.acquire(principal,contextId,randomUUID(),'synthetic-manager',60);
   const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:slow-recovery'}},old,'api');
+  const writer={parentIntentId:intent.id,runId:intent.run_id,intentId:intent.id,epoch:old.epoch};
+  await db.tx(c=>claimWorktreeWriter(c,writer));
   const grant=await fixture.service.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId,role:'programmer'},old);
   git('init','-q');git('config','user.name','fixture');git('config','user.email','fixture@example.invalid');
   await writeFile(join(dir,'base.txt'),'base\n');git('add','base.txt');git('commit','-qm','base');const base=git('rev-parse','HEAD');
@@ -36,6 +39,9 @@ test('successor observes and stops the same live physical broker job',{timeout:9
   assert.equal(observed.state,'running','Docker must observe the old writer running');
   await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[contextId]);
   const successor=await db.acquire(principal,contextId,randomUUID(),'synthetic-manager',60);assert(successor.epoch>old.epoch);
+  const replacement={...writer,intentId:randomUUID(),epoch:successor.epoch};
+  await assert.rejects(db.tx(c=>claimWorktreeWriter(c,replacement)),(error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_WRITER_BUSY');
+  await assert.rejects(db.tx(c=>neutralizeWorktreeWriter(c,writer)),(error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_TERMINAL_PROOF_REQUIRED');
   await assert.rejects(client.perform('start',intent.operation_id,grant.id,successor,execution),/SANDBOX_RECONCILIATION_REQUIRED/);
   const stopped=await client.perform('reconcile',intent.operation_id,grant.id,successor,execution) as {state?:string;reason?:string};
   assert.equal(stopped.state,'uncertain');assert.equal(stopped.reason,'OLD_WRITER_STOP_REQUESTED','the broker must inspect a live old-epoch writer');
@@ -53,6 +59,9 @@ test('successor observes and stops the same live physical broker job',{timeout:9
    FROM ac_sandbox_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1`,[intent.operation_id])).rows[0];
   assert.equal(saved.id,intent.operation_id);assert.equal(saved.grant_id,grant.id);assert.equal(saved.container_id,started.containerId);
   assert.equal(saved.state,'failed');assert.equal(saved.grant_state,'released');assert.deepEqual(saved.receipt,terminal);assert.deepEqual(saved.physical_receipt,terminal);
+  // A broker terminal receipt does not yet prove durable revocation of this managed copy.
+  await assert.rejects(db.tx(c=>claimWorktreeWriter(c,replacement)),(error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_WRITER_BUSY');
+  await assert.rejects(db.tx(c=>neutralizeWorktreeWriter(c,writer)),(error:unknown)=>error instanceof Refusal&&error.code==='WORKTREE_TERMINAL_PROOF_REQUIRED');
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_sandbox_jobs WHERE grant_id=$1',[grant.id])).rows[0].n,1);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_capacity_grants WHERE intent_id=$1',[intent.id])).rows[0].n,1);
   await client.perform('cleanup',intent.operation_id,grant.id,successor,execution);

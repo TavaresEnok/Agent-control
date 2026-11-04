@@ -234,31 +234,31 @@ services:
     user: '0:0'
     init: true
     cap_drop: [ALL]
-    cap_add: [CHOWN]
+    cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt: [no-new-privileges:true]
     mem_limit: 512m
     networks: [lab]
-    working_dir: /home/app/projects/agent-control-implementation
+    working_dir: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}
     command: [node, services/sandbox-broker/main.mjs]
     environment:
       AC_SANDBOX_DATABASE_URL: postgresql://ac_lab:synthetic-sandbox-only@sandbox-db:5432/ac_sandbox_test
-      AC_SANDBOX_HOST_ROOT: /home/app/projects/agent-control-implementation/.state/sandbox
-      AC_SANDBOX_PROBE: /home/app/projects/agent-control-implementation/scripts/sandbox-probe.mjs
+      AC_SANDBOX_HOST_ROOT: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/.state/sandbox
+      AC_SANDBOX_PROBE: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/scripts/sandbox-probe.mjs
       AC_SANDBOX_PROBE_SHA256: ffbcfcb6bbaec702ff886ed0d72d4458265ad0e8410dd1d5d9b4c70eec2fba66
-      AC_SANDBOX_IMPLEMENTATION: /home/app/projects/agent-control-implementation/scripts/synthetic-worker.mjs
+      AC_SANDBOX_IMPLEMENTATION: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/scripts/synthetic-worker.mjs
       AC_SANDBOX_IMPLEMENTATION_SHA256: f019c0cb891f6b1891e6f5589a007e41a95b4c83ae0d3468921417545d0fbc4b
-      AC_SANDBOX_VERIFICATION: /home/app/projects/agent-control-implementation/scripts/sandbox-verifier.mjs
+      AC_SANDBOX_VERIFICATION: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/scripts/sandbox-verifier.mjs
       AC_SANDBOX_VERIFICATION_SHA256: 5f648bd2e30bd4188fc8c73cfd79bfdf0702759593e6046403234b6f49683015
-      AC_SANDBOX_VERIFIER: /home/app/projects/agent-control-implementation/scripts/synthetic-verifier.mjs
-      AC_SANDBOX_WIDE_VERIFIER: /home/app/projects/agent-control-implementation/scripts/synthetic-verifier-wide.mjs
+      AC_SANDBOX_VERIFIER: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/scripts/synthetic-verifier.mjs
+      AC_SANDBOX_WIDE_VERIFIER: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/scripts/synthetic-verifier-wide.mjs
       AC_SANDBOX_WIDE_VERIFIER_SHA256: eb9eeb85bcdf686741dcdca6c406708d5708b38a42dc4143a5fd3faa25edacbd
-      AC_SANDBOX_SPECIALIST: /home/app/projects/agent-control-implementation/scripts/synthetic-specialist.mjs
+      AC_SANDBOX_SPECIALIST: ${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/scripts/synthetic-specialist.mjs
       AC_SANDBOX_SPECIALIST_SHA256: dd1316dcc69608c535d9056aca2acb2e1a6df377e4d22ea37f726d64a2da4dc6
       AC_SANDBOX_VERIFIER_SHA256: e43333eb2436790d76d3d37d9e5a27f140eba92b69804f5854f190a2663b3968
       AC_SANDBOX_IMAGE: sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3
     volumes:
-      - ..:/home/app/projects/agent-control-implementation:ro
-      - ../.state/sandbox:/home/app/projects/agent-control-implementation/.state/sandbox:rw
+      - ..:${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}:ro
+      - ../.state/sandbox:${AC_LAB_PROJECT_DIR:-/home/app/projects/agent-control-implementation}/.state/sandbox:rw
       - broker-socket:/run/ac-broker
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
