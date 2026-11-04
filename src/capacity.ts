@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type pg from 'pg';
 import { Authority, digest, Id, Refusal } from './contracts.ts';
+import { ChainProfileFacts, classifyProfileExclusion, orderedProfileExclusions } from './capacity-exclusions.ts';
 import { Ledger } from './ledger.ts';
 import {ManagedRecipe} from './managed-plan.ts';
 
@@ -35,7 +36,7 @@ export const LocalCompositorGrantRequest=z.object({attemptId:Id,intentId:Id,cont
 export type LocalCompositorGrant={id:string;attempt_id:string;intent_id:string;context_id:string;manager_epoch:string;
  resource_kind:'local_compositor';account_id:null;profile_id:null;role:'programmer';state:string;request_digest:string;emergency:false};
 
-type Candidate = { id: string; account_id: string; eligibility: string; quota: string; enabled: boolean; max_concurrent: number };
+type LoadedProfile = ChainProfileFacts & { accountId: string | null; maxConcurrent: number | null };
 const evaluations: Role[] = ['reviewer','qa','specialist','judge'];
 
 /** Only the PG ledger admits capacity. This service never advances a Cezar DAG. */
@@ -161,6 +162,22 @@ export class Capacity {
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.policy.assigned',$2)", [contextId,{revision}]);
     });
   }
+  /** Read-only chain lookup. Missing ids stay in order so the refusal can name them. */
+  private async chainFacts(c: pg.PoolClient, ids: string[], projectId: string): Promise<LoadedProfile[]> {
+    const found = await c.query<{profile_id:string;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number}>(
+      `SELECT p.id profile_id,a.mode,a.enabled account_enabled,p.enabled profile_enabled,a.eligibility,
+        EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=$2) project_access,
+        CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE NULL END fresh_quota,
+        a.id account_id,a.max_concurrent
+        FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
+        LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[])`, [ids, projectId]);
+    const byId = new Map(found.rows.map(row => [row.profile_id, row]));
+    return ids.map(profileId => {
+      const row = byId.get(profileId);
+      if (!row) return { profileId, profilePresent: false, projectAccess: false, mode: null, accountEnabled: false, profileEnabled: false, eligibility: null, freshQuotaStatus: null, accountId: null, maxConcurrent: null };
+      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent };
+    });
+  }
   async reserve(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority): Promise<Grant> {
     const request = GrantRequest.parse(raw);
     const result = await this.tx<Grant|{blockedCode:string}>(async c => {
@@ -197,19 +214,16 @@ export class Capacity {
         [request.contextId,request.role,context.capacity_policy_revision])).rows[0]?.profile_id;
       const regular = preferred && chain.regular.includes(preferred) ? [preferred,...chain.regular.filter(p=>p!==preferred)] : chain.regular;
       const ids = [...regular,...chain.emergency];
-      const candidates = await c.query<Candidate>(`SELECT p.id,a.id account_id,a.eligibility,a.max_concurrent,
-        (a.enabled AND p.enabled) enabled,CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE 'unknown' END quota
-        FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id JOIN ac_account_access x ON x.account_id=a.id
-        LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[]) AND x.project_id=$2 AND a.mode='synthetic'`, [ids,context.project_id]);
-      const available = (id: string) => candidates.rows.find(p=>p.id===id && p.enabled && p.eligibility==='documented_supported' && p.quota==='available');
-      // Saturation does not imply exhausted quota: wait rather than spilling into another subscription.
-      const selectedId = ids.find(id=>available(id));
-      if (!selectedId) {
-        await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY' WHERE attempt_id=$1",[request.attemptId]);
+      const loaded = await this.chainFacts(c, ids, context.project_id);
+      // Saturation is a later gate. This path never writes quota and never leaves the chain.
+      const choice = loaded.find(row => classifyProfileExclusion(row) === null && row.accountId && row.maxConcurrent != null);
+      if (!choice?.accountId || choice.maxConcurrent == null) {
+        const exclusions = orderedProfileExclusions(loaded);
+        await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);
         return {blockedCode:'NO_ELIGIBLE_CAPACITY'};
       }
-      const selected = available(selectedId)!;
-      await c.query('UPDATE ac_capacity_waits SET desired_profile=$2 WHERE attempt_id=$1',[request.attemptId,selected.id]);
+      const selected = { id: choice.profileId, account_id: choice.accountId, max_concurrent: choice.maxConcurrent };
+      await c.query('UPDATE ac_capacity_waits SET desired_profile=$2,exclusions=NULL WHERE attempt_id=$1',[request.attemptId,selected.id]);
       const first=(await c.query(`SELECT w.attempt_id FROM ac_capacity_waits w JOIN ac_profiles p ON p.id=w.desired_profile
         JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
         JOIN ac_intents i ON i.id=w.intent_id

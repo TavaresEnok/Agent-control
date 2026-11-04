@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {Ledger} from './ledger.ts';
-import {Refusal} from './contracts.ts';
+import {Id,Refusal} from './contracts.ts';
+import {CAPACITY_EXCLUSION_REASONS,type ProfileExclusion} from './capacity-exclusions.ts';
 import {DiskAdmissionPolicy,measureDiskCapacity} from './disk-admission.ts';
 
 const metricStates={
@@ -136,6 +137,32 @@ export class OperationalObservability{
    gauge('disk_below_admission_floor','Fresh available bytes below configured floor plus one write estimate.',belowFloor));
   return {schemaVersion:1,scope:'installation_aggregate',observedAt:result.clock.toISOString(),databaseReadOnly:true,diskObservation,metrics:result.metrics};
  }
+}
+
+/** Same columns the context wait list already exposes, plus optional exclusions.
+ * NULL (historical rows) omits the field. Profile ids stay off the aggregate snapshot. */
+export type CapacityWaitView={
+ attempt_id:string;resource_kind:string;role:string;reason:string|null;desired_profile:string|null;
+ priority:number;sequence:string;exclusions?:ProfileExclusion[]};
+const StoredExclusion=z.object({profileId:Id,reason:z.enum(CAPACITY_EXCLUSION_REASONS)}).strict();
+export function capacityWaitExclusions(value:unknown):ProfileExclusion[]|undefined{
+ if(value==null)return undefined;
+ const parsed=z.array(StoredExclusion).safeParse(value);
+ return parsed.success?parsed.data:undefined;
+}
+export async function readCapacityWaits(ledger:Ledger,principal:string,contextId:string):Promise<CapacityWaitView[]>{
+ return ledger.tx(async c=>{
+  await ledger.authorize(c,principal,Id.parse(contextId),false);
+  const rows=(await c.query(`SELECT attempt_id,resource_kind,role,reason,desired_profile,priority,sequence::text AS sequence,exclusions
+    FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence`,[contextId])).rows;
+  return rows.map(row=>{
+   const view:CapacityWaitView={attempt_id:row.attempt_id,resource_kind:row.resource_kind,role:row.role,reason:row.reason,
+    desired_profile:row.desired_profile,priority:Number(row.priority),sequence:String(row.sequence)};
+   const exclusions=capacityWaitExclusions(row.exclusions);
+   if(exclusions)view.exclusions=exclusions;
+   return view;
+  });
+ });
 }
 
 export function prometheus(snapshot:OperationalSnapshot){
