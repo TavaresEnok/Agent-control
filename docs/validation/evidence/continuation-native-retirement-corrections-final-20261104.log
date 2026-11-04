@@ -1,0 +1,32 @@
+TAP version 13
+# Subtest: native correction recipe gives each rejection a new identity and stops at the configured limit
+ok 1 - native correction recipe gives each rejection a new identity and stops at the configured limit
+  ---
+  duration_ms: 69.053363
+  type: 'test'
+  ...
+# fatal: path 'src/solo/a.ts' does not exist in '3700258163a5432b35158edc08f7ab3c2c6fd329'
+# fatal: path 'src/solo/a.ts' does not exist in 'c6b497440ae2e629311e346ee20ee2afe3472a9a'
+# fatal: path 'src/beta/a.ts' does not exist in 'c6b497440ae2e629311e346ee20ee2afe3472a9a'
+# fatal: path 'src/alpha/a.ts' does not exist in '40245cc689249e3204a6b273800670689e4f7981'
+# fatal: path 'src/solo/a.ts' does not exist in '40245cc689249e3204a6b273800670689e4f7981'
+# fatal: path 'src/alpha/a.ts' does not exist in '231863b48bcd28e99ed186400e9fffa30d7b610f'
+# fatal: path 'src/solo/a.ts' does not exist in '231863b48bcd28e99ed186400e9fffa30d7b610f'
+# fatal: path 'src/solo/a.ts' does not exist in '2e52f6b004c085a9435ac3ef70d36febefd81a7b'
+# fatal: path 'src/solo/a.ts' does not exist in '9efd06555cd172c1fd78fe5dcd400342a51d7f35'
+# {"proof":"native-corrections","tasks":3,"corrections":2,"parallelProgrammers":2,"modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute"}
+# Subtest: authenticated native rejection corrects once, an exhausted limit stops, and infrastructure does not consume an attempt
+ok 2 - authenticated native rejection corrects once, an exhausted limit stops, and infrastructure does not consume an attempt
+  ---
+  duration_ms: 23108.370677
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 25298.899436

@@ -1,5 +1,8 @@
 # Achados canônicos — implementação 0.1.0
 
+
+**Atualização 04/11/2026:** a retirada native de programadores managed concluídos foi ligada e demonstrada com pares Docker sintéticos reais, perda de ACK e fencing. Lançamento e artefato são fixtures; morte do controlador entre remoções, falha/cancelamento e execução real permanecem abertos. A cópia não é reassumida. RF-54/T34 continuam parciais e sem aceite; revisão independente pendente. Ver `docs/implementation/NATIVE-WRITER-RETIREMENT-20261104.md`. Esta atualização prevalece sobre descrições históricas abaixo.
+
 ## Continuação de QA e contenção de escritor — 04/11/2026
 
 O supervisor de sandbox sintético registra prova HMAC somente depois de preservar log, observar saída e remover/confirmar ausência do contêiner. Diários preparados foram reconciliados após perda de ACK e reinício real do broker; SIGKILL do controlador e CAS foram provados em percursos separados. A execução native, jobs falhos/cancelados e retomada automática do grafo após queda do broker permanecem abertas. Ver `../implementation/SANDBOX-WRITER-RETIREMENT-20261104.md`.

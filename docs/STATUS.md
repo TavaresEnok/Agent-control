@@ -1,5 +1,9 @@
 # Agent Control — estado atual de implementação
 
+## Continuação vigente: retirada native managed — 04/11/2026
+
+O supervisor agora arquiva os logs e retira o par de contêineres de programador managed concluído após validar recibo e vínculos; diário preparado, prova Ed25519 e fencing preservam a confirmação. Uma prova com pares Docker sintéticos reais cobriu perda de ACK e troca de gerente, mas usa fixture para o lançamento e o artefato. Falha/cancelamento, morte do controlador entre remoções e agentes reais continuam pendentes. Revisão independente é condição de promoção. RF-54 e T34 seguem parciais e sem aceite. Detalhes em `implementation/NATIVE-WRITER-RETIREMENT-20261104.md`.
+
 ## Continuação vigente: dispensa de QA e worktree — 04/11/2026
 
 A retirada do escritor managed sintético concluído foi ligada ao broker: log preservado, diário `prepared`, remoção/ausência física e recibo HMAC precedem `neutralized`. O registro de cópia permanece imutável e sem reuso. Falha/cancelamento e execução native continuam bloqueados; queda de broker exige reconciliação e não retomou automaticamente o grafo. Revisão independente pendente. Ver `implementation/SANDBOX-WRITER-RETIREMENT-20261104.md`.

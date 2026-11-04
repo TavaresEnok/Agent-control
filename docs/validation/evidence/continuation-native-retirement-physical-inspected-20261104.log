@@ -1,0 +1,17 @@
+TAP version 13
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"physicalPair":true,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization valid
+ok 1 - native plan runs independent tasks and dependent tasks; QA authorization valid
+  ---
+  duration_ms: 14848.554996
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17505.407595

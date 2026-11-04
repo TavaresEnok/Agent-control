@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash,createHmac,generateKeyPairSync,randomBytes,randomUUID} from 'node:crypto';
+import {createHash,createHmac,generateKeyPairSync,randomBytes,randomUUID,verify} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -16,6 +16,7 @@ import type {NativeQa} from '../src/native-qa.ts';
 import {Templates} from '../src/templates.ts';
 import {ProjectTemplates} from '../src/project-templates.ts';
 import {authorizeExplicitQaWaiver} from '../src/quality.ts';
+import {DockerDaemon} from '../src/sandbox-broker.ts';
 import {canonical,digest,Refusal} from '../src/contracts.ts';
 import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {engineeringNativePlanWorkflowPrefix} from '../src/workflows.ts';
@@ -96,7 +97,10 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
  const waiverEnabled=waiverMode!=='disabled';
  const baseUrl=labDatabase;if(!baseUrl)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(baseUrl,'nativemulti'),db=new Ledger(fixture.url);
- const area=await mkdtemp(join(tmpdir(),'native-multi-'));
+ const physicalMode=process.env.AC_NATIVE_RETIREMENT_PHYSICAL==='1';
+ const physicalRoot=process.env.AC_NATIVE_RETIREMENT_ROOT;
+ if(physicalMode&&(!physicalRoot||!physicalRoot.endsWith('/.state/native-dispatch-physical')))throw Error('ISOLATED_NATIVE_RETIREMENT_ROOT_REQUIRED');
+ const area=await mkdtemp(join(physicalMode?physicalRoot!:tmpdir(),'native-multi-'));
  let runtime:CezarRuntime|undefined,heartbeat:ReturnType<typeof setInterval>|undefined;
  try{
   await db.migrate();
@@ -134,10 +138,18 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
    }
   }else await new Templates(db).publish(principal,context,0,template);
   const account=(await db.pool.query('SELECT account_id AS id FROM ac_account_access WHERE project_id=$1',[project])).rows[0].id as string;
-  const keys=generateKeyPairSync('ed25519'),modelImage='sha256:'+'a'.repeat(64);
+  const keys=generateKeyPairSync('ed25519'),modelImage=physicalMode?'sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3':'sha256:'+'a'.repeat(64);
   const supervisor=new NativeExecutionSupervisor(db,{id:'fixture-model-native',workerImage:modelImage,toolsImage:modelImage,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'b'.repeat(64),accountSubjects:[{accountId:account,subjectDigest:'c'.repeat(64)}],workerEnv:[],toolsEnv:[]});
   const physical=new Map<string,{Id:string;Image:string;Config:{Labels:Record<string,string>};State:{Status:string;Running:boolean;ExitCode:number;FinishedAt:string}}>();
-  Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,stop:async()=>{}}});
+  let lostRetirementAck=false;
+  const physicalDocker=physicalMode?new DockerDaemon():undefined;
+  if(!physicalMode)Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
+   remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);
+    if(process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1'&&!lostRetirementAck){lostRetirementAck=true;throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}}}});
+  if(physicalMode&&process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1'){
+   const docker=(supervisor as unknown as {docker:DockerDaemon}).docker,remove=docker.remove.bind(docker);
+   docker.remove=async id=>{await remove(id);if(!lostRetirementAck){lostRetirementAck=true;throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}};
+  }
   let openProgrammers=0,maxProgrammers=0,parallelArrivals=0;const programmerOrder:string[]=[];
   Object.defineProperty(supervisor,'start',{value:async(_principal:string,a:typeof authority,raw:unknown)=>{
    const input=NativeExecutionRequest.parse(raw);
@@ -147,7 +159,12 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
     const until=Date.now()+4000;while(parallelArrivals<2&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,20));}
    try{
     const g=(await db.pool.query('SELECT g.*,p.model,p.effort FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id WHERE g.id=$1',[input.grantId])).rows[0];
-    const workerId=createHash('sha256').update(input.jobId+'worker').digest('hex'),toolsId=createHash('sha256').update(input.jobId+'tools').digest('hex'),inputDigest=digest(input);
+    const inputDigest=digest(input);
+    const labels={'agent-control.job':input.jobId,'agent-control.launch':inputDigest,'agent-control.contract':'native-execution-v1','agent-control.fixture':'native-retirement'};
+    const config={Image:modelImage,User:'10001:10001',Entrypoint:['node','-e',"process.stdout.write('synthetic native fixture\\n')"],Labels:labels,
+     HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:64,Memory:268435456,NanoCpus:1000000000,Init:true}};
+    const workerId=physicalDocker?await physicalDocker.create('ac-native-worker-'+input.jobId,config):createHash('sha256').update(input.jobId+'worker').digest('hex');
+    const toolsId=physicalDocker?await physicalDocker.create('ac-native-tools-'+input.jobId,config):createHash('sha256').update(input.jobId+'tools').digest('hex');
     await db.tx(async c=>{await db.authorize(c,principal,a.contextId);await db.fence(c,a);
      await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,$14,'running',$15,$16,$17)`,[input.jobId,input.grantId,input.intentId,a.contextId,a.epoch,input.sessionId,g.account_id,g.profile_id,digest({accountId:g.account_id,profileId:g.profile_id,model:g.model,effort:g.effort,role:g.role}),supervisor.executorDigest,supervisor.keyFingerprint,inputDigest,input.base,input.role,workerId,toolsId,'d'.repeat(64)]);
@@ -163,7 +180,21 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
      output=JSON.stringify({schemaVersion:1,kind:'review',artifactId:artifact.id,policyRevision:artifact.policy_revision,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,verdict:'pass',findings:[]});}
     await writeFile(join(dir,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:input.jobId,output,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
     const item=(id:string)=>({Id:id,Image:modelImage,Config:{Labels:{'agent-control.job':input.jobId,'agent-control.launch':inputDigest,'agent-control.contract':'native-execution-v1'}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:new Date().toISOString()}});
-    const worker=item(workerId),tools=item(toolsId);physical.set(workerId,worker);physical.set(toolsId,tools);physical.set('ac-native-worker-'+input.jobId,worker);physical.set('ac-native-tools-'+input.jobId,tools);
+    if(physicalDocker){
+     await Promise.all([physicalDocker.start(workerId),physicalDocker.start(toolsId)]);
+     for(let i=0;i<100;i++){
+      const [worker,tools]=await Promise.all([physicalDocker.inspect(workerId),physicalDocker.inspect(toolsId)]);
+      if(worker?.State.Status==='exited'&&tools?.State.Status==='exited'){
+       for(const container of [worker,tools]){
+        assert.equal(container.Config.User,'10001:10001');assert.equal(container.HostConfig.NetworkMode,'none');
+        assert.equal(container.HostConfig.ReadonlyRootfs,true);assert.equal(container.HostConfig.Privileged,false);
+        assert(container.HostConfig.CapDrop?.includes('ALL'));assert.equal(container.Mounts.length,0);
+       }
+       break;
+      }
+      if(i===99)throw Error('SYNTHETIC_NATIVE_PAIR_NOT_EXITED');await new Promise(resolve=>setTimeout(resolve,50));
+     }
+    }else{const worker=item(workerId),tools=item(toolsId);physical.set(workerId,worker);physical.set(toolsId,tools);physical.set('ac-native-worker-'+input.jobId,worker);physical.set('ac-native-tools-'+input.jobId,tools);}
     if(input.role==='programmer')throw Error('FIXTURE_START_ACK_LOST');
     return {state:'running' as const};
    }finally{if(parallel)openProgrammers--;}
@@ -200,6 +231,19 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
   assert(maxProgrammers>=2);assert.equal(parallelArrivals,2);
   const children=(await db.pool.query('SELECT i.parent_unit_id,i.id,o.receipt,o.state,o.native_session_id,o.grant_id FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id WHERE i.parent_intent_id=$1',[intent.id])).rows;
   assert.equal(children.length,4);assert(children.every(row=>row.state==='completed'));
+  const retired=(await db.pool.query('SELECT * FROM ac_worktree_writers WHERE parent_intent_id=$1',[intent.id])).rows;
+  assert.equal(retired.length,3);
+  for(const row of retired){
+   assert.equal(row.state,'neutralized');const proof=row.revocation_proof;
+   assert.equal(proof.payload.kind,'native-container-pair-removed');assert.equal(row.proof_digest,digest(proof));
+   assert(verify(null,Buffer.from('agent-control:native-writer-retirement:v1\n'+canonical(proof.payload)),keys.publicKey,Buffer.from(proof.signature,'hex')));
+   for(const [name,hash] of [['worker-terminal.log',proof.payload.workerLogSha256],['tools-terminal.log',proof.payload.toolsLogSha256]] as const)
+    assert.equal(createHash('sha256').update(await readFile(join(spool,proof.payload.jobId,name))).digest('hex'),hash);
+   assert.equal((await supervisor.retireManagedWriter(principal,authority,proof.payload.jobId)).state,'neutralized');
+   if(physicalDocker){assert.equal(await physicalDocker.inspect(proof.payload.workerId),null);assert.equal(await physicalDocker.inspect(proof.payload.toolsId),null);}
+   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.native_writer_revoked' AND detail->>'jobId'=$1",[proof.payload.jobId])).rows[0].n,1);
+  }
+  if(process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1')assert(lostRetirementAck);
   const unit=(name:string)=>children.find(row=>row.parent_unit_id===name);
   const alpha=unit('task-alpha'),beta=unit('task-beta'),gamma=unit('task-gamma'),composed=children.find(row=>row.parent_unit_id.startsWith('compose-'));
   assert(alpha&&beta&&gamma&&composed);
@@ -260,7 +304,7 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
   assert.equal(parent.state,'completed');assert.equal(parent.receipt.kind,'managed-aggregate-v1');
   const workflow=(await db.pool.query('SELECT snapshot->>\'name\' AS name FROM ac_frozen_plans WHERE intent_id=$1',[intent.id])).rows[0];
   assert.equal(workflow.name,`engineering-native-plan-${intent.id}`);
-  console.log(JSON.stringify({proof:'native-multitask',tasks:3,parallelProgrammers:maxProgrammers,dependency:'gamma',modelCalls:0,qa:'injected substitute',review:'synthetic model substitute',git:'real finalizer and CAS'}));
+  console.log(JSON.stringify({proof:'native-multitask',tasks:3,parallelProgrammers:maxProgrammers,dependency:'gamma',modelCalls:0,physicalPair:physicalMode,qa:'injected substitute',review:'synthetic model substitute',git:'real finalizer and CAS'}));
 
   const effects=async()=>Number((await db.pool.query("SELECT (SELECT count(*) FROM ac_intents WHERE context_id=$1)+(SELECT count(*) FROM ac_native_execution_jobs WHERE context_id=$1)+(SELECT count(*) FROM ac_native_task_inputs n JOIN ac_intents i ON i.id=n.intent_id WHERE i.context_id=$1) AS n",[context])).rows[0].n);
   const before=await effects();
@@ -283,5 +327,12 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
   const rooted=await new ManagerPlans(db).publish(principal,otherAuthority,0,plan(other,[{...task('solo'),qualityRevision}]));
   await assert.rejects(db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:other,policyRevision:1,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'encrypted:root',proposalRevision:rooted.revision,proposalDigest:rooted.digest,native:true}},otherAuthority,'api'),/NATIVE_PLAN_TEMPLATE_REQUIRED/);
   assert.equal(Number((await db.pool.query('SELECT count(*) AS n FROM ac_intents WHERE context_id=$1',[other])).rows[0].n),0);
- }finally{if(heartbeat)clearInterval(heartbeat);await runtime?.close();await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
+  if(heartbeat){clearInterval(heartbeat);heartbeat=undefined;}
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+  const successor=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
+  const retiredJob=retired[0].revocation_proof.payload.jobId;
+  await assert.rejects(supervisor.retireManagedWriter(principal,authority,retiredJob),/STALE_MANAGER/);
+  assert.equal((await supervisor.retireManagedWriter(principal,successor,retiredJob)).state,'neutralized');
+  assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.native_writer_revoked' AND detail->>'jobId'=$1",[retiredJob])).rows[0].n,1);
+ }finally{if(heartbeat)clearInterval(heartbeat);await runtime?.close();await db.close();if(!physicalMode){await fixture.close();await rm(area,{recursive:true,force:true});}}
 });

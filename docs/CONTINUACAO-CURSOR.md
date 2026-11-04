@@ -2,6 +2,8 @@
 
 ## Continuação mais recente — prevalece sobre os resumos históricos abaixo
 
+- O supervisor native agora retira o par de programador managed concluído com diário, logs e prova Ed25519. A bancada física cobriu ACK perdido e fencing, com lançamento e artefato por fixture; ainda faltam morte do controlador entre remoções e casos failed/canceled. Ver `docs/implementation/NATIVE-WRITER-RETIREMENT-20261104.md`; revisão independente pendente. Esta nota prevalece sobre referências históricas abaixo que dizem que o caminho native não está ligado.
+
 - O broker sintético managed agora arquiva log, registra `prepared`, remove o contêiner encerrado, confirma ausência e assina recibo antes de marcar a posse `neutralized`; a mesma cópia continua sem reuso. A prova física cobriu ACK perdido, queda do broker com duas entradas preparadas, retomada direta por nova época, SIGKILL do controlador com pausa/takeover e CAS. O grafo que falha na queda do broker não retomou automaticamente; failed/canceled e o supervisor nativo continuam sem retirada integrada. Detalhes e comandos em `docs/implementation/SANDBOX-WRITER-RETIREMENT-20261104.md`. Revisão independente do código final segue pendente.
 
 - A prova de QA no grafo com workers Docker sintéticos reais revelou que receitas sintéticas v1 omitiam `taskId` e executavam QA mesmo com autorização válida. As receitas novas registram a tarefa; as antigas continuam legíveis e conservadoras. O grafo físico confirmou `not_required` sem grant, job ou evidência aprovada de QA, com revisão; a repetição não duplicou dispensa. Falha inicial preservada. Ver `docs/implementation/CONTINUACAO-SYNTHETIC-WAIVER-20261104.md`. A neutralização física do caminho native ainda não está ligada ao grafo.
