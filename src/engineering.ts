@@ -7,7 +7,8 @@ import { Authority, canonical, digest, Id, Refusal } from './contracts.ts';
 import { Ledger, type Intent } from './ledger.ts';
 import { Capacity } from './capacity.ts';
 import { GitArtifacts } from './git.ts';
-import { Quality,QualityPolicy, VerificationReceipt,type ArtifactRow } from './quality.ts';
+import { Quality,QualityPolicy, VerificationReceipt,type ArtifactRow,expectedArtifactRisk,explicitQaWaiverStageReady,settleExplicitQaWaiver } from './quality.ts';
+import { qaWaiverStageReceipt } from './qa-waiver-binding.ts';
 import { Integrator } from './integration.ts';
 import {IsolatedVerification,type IsolatedVerificationResult} from './isolated-verification.ts';
 import type {NativeQa} from './native-qa.ts';
@@ -394,6 +395,11 @@ export class EngineeringStages{
    if(node==='judge'&&!policy.requireJudge)return {principal:bound.principal_id,stages:[],skip:true};
    if(stages.length!==sessions.length||stages.some(s=>s.state!=='completed'||Number(s.manager_epoch)>authority.epoch))return null;
    for(const stage of stages){
+    const waiver=node==='qa'?qaWaiverStageReceipt(stage.receipt):null;
+    if(waiver){
+     if(stage.grant_id||!await explicitQaWaiverStageReady(c,authority.contextId,waiver.artifactId))return null;
+     continue;
+    }
     if(node==='integrate'){
      const applied=(await c.query(`SELECT x.receipt FROM ac_integration_intents x JOIN ac_artifacts a ON a.id=x.artifact_id
       WHERE a.intent_id=$1 AND x.target_ref=$2 AND x.state IN ('integrated','rejected')`,[intent.id,bound.target_ref])).rows[0];
@@ -408,7 +414,7 @@ export class EngineeringStages{
   });
   if(!saved)return false;
   for(const stage of saved.stages){
-   if(node==='integrate')continue;
+   if(node==='integrate'||qaWaiverStageReceipt(stage.receipt))continue;
    await this.options.quality.record(saved.principal,stage.receipt.verification,stage.receipt.signature,authority);
   }
   return true;
@@ -547,10 +553,15 @@ export class EngineeringStages{
     if(node==='integrate'){
      if(stage.receipt?.integration?.status!=='integrated')throw new Refusal('INTEGRATION_REJECTED');
     }else{
-     const expected=node==='review'?'review':node;
-     if(stage.receipt?.verification?.kind!==expected)throw new Refusal('VERIFICATION_RECEIPT_MISSING');
-     await this.options.quality.record(principal,stage.receipt.verification,stage.receipt.signature,authority);
-     if(stage.receipt.verification.status!=='passed'||stage.receipt.verification.exitCode!==0)throw new Refusal('VERIFICATION_FAILED');
+     const waiver=node==='qa'?qaWaiverStageReceipt(stage.receipt):null;
+     if(waiver){
+      if(!await this.ledger.tx(c=>explicitQaWaiverStageReady(c,authority.contextId,waiver.artifactId)))throw new Refusal('QA_WAIVER_STALE');
+     }else{
+      const expected=node==='review'?'review':node;
+      if(stage.receipt?.verification?.kind!==expected)throw new Refusal('VERIFICATION_RECEIPT_MISSING');
+      await this.options.quality.record(principal,stage.receipt.verification,stage.receipt.signature,authority);
+      if(stage.receipt.verification.status!=='passed'||stage.receipt.verification.exitCode!==0)throw new Refusal('VERIFICATION_FAILED');
+     }
     }
     return {text:`Recorded ${node} result ${stage.id}`,toolCalls:[],tokensUsed:0};
    }
@@ -560,7 +571,10 @@ export class EngineeringStages{
    const source=implementation.receipt;
    const managed=await readManagedUnit(this.ledger,intent);
    const nativeStage=source.synthetic===false||managed?.recipe.mode==='native';
-   if(nativeStage&&node==='qa'&&!this.options.nativeQa)throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
+   const taskId=managed?.unit.kind==='task'?managed.unit.taskId??null:null;
+   const correctionRevision=managed?.unit.correctionRevision??0;
+   const risk=await this.ledger.tx(c=>expectedArtifactRisk(c,intent.id,authority.contextId,contract.quality_revision));
+   if(nativeStage&&node==='qa'&&risk!=='low'&&!this.options.nativeQa)throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
    if(nativeStage&&node!=='qa'&&node!=='integrate'&&!this.options.nativeVerification)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
    if(managed?.unit.kind==='task'&&source.synthetic!==false){
     await this.options.git.assertManagedPath(managed.parentIntentId,managed.unit.runId,spec.cwd,true);
@@ -574,8 +588,22 @@ export class EngineeringStages{
    }
    const artifact=await this.options.quality.register(principal,{id:artifactId(intent.id,source.commit),contextId:intent.context_id,intentId:intent.id,
     implementationGrantId:implementation.grant_id,implementationSessionId:implementation.native_session_id,policyRevision:contract.quality_revision,
-    commit:source.commit,tree:source.tree,base:source.base,risk:'high'},authority);
+    commit:source.commit,tree:source.tree,base:source.base,risk},authority);
    if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
+   if(node==='qa'){
+    const settled=await this.ledger.tx(c=>settleExplicitQaWaiver(c,{contextId:authority.contextId,artifactId:artifact.id,taskId,correctionRevision}));
+    if(settled.disposition==='blocked')throw new Refusal('VERIFICATION_NOT_PASSED');
+    if(settled.disposition==='not_required'){
+     await this.ledger.tx(async c=>{
+      await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+      const updated=await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND state='registered' AND grant_id IS NULL",[stage.id,settled.receipt]);
+      if(!updated.rowCount)throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
+     });
+     const text=`QA not required for artifact ${artifact.id}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
+     return {text,toolCalls:[],tokensUsed:0};
+    }
+   }
+   if(nativeStage&&node==='qa'&&!this.options.nativeQa)throw new Refusal('NATIVE_QA_EXECUTOR_REQUIRED');
    if(node==='judge')await this.ledger.tx(c=>this.options.quality.assertReady(c,artifact.id,authority,{ignoreJudge:true}));
    if(node==='integrate'){
     const prepare=()=>this.options.quality.prepareIntegration(principal,artifact.id,authority,contract.target_ref);

@@ -733,12 +733,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/implementation/QA-WAIVER-BINDING-20261104.md;tests/qa-waiver-binding.test.ts",
-    "files": "src/quality.ts;src/qa-waiver-binding.ts;db/migrations/060_qa_waiver_binding.sql;tests/qa-waiver-binding.test.ts;tests/quality-gate-integrity.test.ts",
+    "evidence": "docs/implementation/QA-WAIVER-BINDING-20261104.md;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts",
+    "files": "src/quality.ts;src/qa-waiver-binding.ts;src/engineering.ts;src/native-execution-supervisor.ts;db/migrations/060_qa_waiver_binding.sql;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "Owner authorization and the waiver row now bind policy revision and digest, template revision and digest, explicit-low rule, task and artifact digest. assertReady treats only that complete binding as not_required. Failed, canceled, missing_result and stale evidence still block, and another commit does not inherit the waiver. The pure evaluator passed 5 tests with exit 0. The PostgreSQL suite was not executed because AC_TEST_DATABASE_URL was absent; that skip is not proof. The native graph still registers managed artifacts as high and still runs QA. Independent review remains pending. This does not accept the requirement."
+    "limitation": "The QA node now settles not_required for a first managed attempt when exactly one owner authorization matches the task and policy revision. The stage receipt is not a passed verification receipt and replay does not call quality.record. A correction stays high and still runs QA. Two authorizations for the same task do not waive. Failed, canceled, missing_result and stale QA evidence block before a waiver row is written. Another artifact does not reuse the previous waiver row. PostgreSQL proof on a disposable database exited 0 with 10 tests, including tests/qa-waiver-stage.test.ts and tests/quality-gate-integrity.test.ts. A full EngineeringStages session with a worktree was not run. Independent review remains pending. This does not accept the requirement."
   },
   {
     "id": "RNF-01",
@@ -1422,12 +1422,12 @@
     "status": "partially_examined",
     "code_state": "partial",
     "test_result": "partial_scope_only",
-    "evidence": "docs/implementation/QA-WAIVER-BINDING-20261104.md;tests/qa-waiver-binding.test.ts",
-    "files": "src/qa-waiver-binding.ts;src/quality.ts;tests/qa-waiver-binding.test.ts;tests/quality-gate-integrity.test.ts;db/migrations/060_qa_waiver_binding.sql",
+    "evidence": "docs/implementation/QA-WAIVER-BINDING-20261104.md;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts",
+    "files": "src/quality.ts;src/qa-waiver-binding.ts;src/engineering.ts;src/native-execution-supervisor.ts;db/migrations/060_qa_waiver_binding.sql;tests/qa-waiver-binding.test.ts;tests/qa-waiver-stage.test.ts;tests/quality-gate-integrity.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "The pure gate distinguishes not_required from passed, failed, canceled, missing_result and stale, and a different artifact digest does not satisfy the stored waiver. Five pure tests exited 0. PostgreSQL authorization, migration 060 and assertReady were not executed in this process because AC_TEST_DATABASE_URL was absent. The native QA node still runs. This does not accept the scenario."
+    "limitation": "The disposable PostgreSQL proof shows not_required is distinct from a passed QA receipt, and failed, canceled, missing_result and stale evidence block without writing a waiver. A successor artifact is QA_MISSING until its own settlement. The full graph session with a worktree was not executed. This does not accept the scenario."
   },
   {
     "id": "T39",

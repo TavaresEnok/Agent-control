@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { evaluateQaWaiverGate, type QaWaiverBindingRecord } from '../src/qa-waiver-binding.ts';
+import { evaluateQaWaiverGate, qaWaiverStageReceipt, type QaWaiverBindingRecord } from '../src/qa-waiver-binding.ts';
 
 const digest = 'ab'.repeat(32);
 const waiver: QaWaiverBindingRecord = {
@@ -52,6 +52,13 @@ test('another artifact digest, another policy or a missing template does not inh
   const missingTemplate = evaluateQaWaiverGate({ ...base, templateDigest: null });
   assert.equal(missingTemplate.ok, false);
   if (!missingTemplate.ok) assert.equal(missingTemplate.code, 'QA_WAIVER_STALE');
+});
+
+test('a stage waiver receipt is not a passed verification receipt', () => {
+  const receipt = { qaWaiver: { schemaVersion: 1, basis: 'not_required', artifactId: '11111111-1111-4111-8111-111111111111', authorizationId: '22222222-2222-4222-8222-222222222222', taskId: 'docs' } };
+  assert.equal(qaWaiverStageReceipt(receipt)?.basis, 'not_required');
+  assert.equal(qaWaiverStageReceipt({ ...receipt, verification: { status: 'passed' } }), null);
+  assert.equal(qaWaiverStageReceipt({ qaWaiver: { ...receipt.qaWaiver, basis: 'passed' } }), null);
 });
 
 test('high risk and a disabled policy stay missing instead of becoming not_required', () => {

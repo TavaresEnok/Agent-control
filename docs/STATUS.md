@@ -1,5 +1,11 @@
 # Agent Control — estado atual de implementação
 
+## Incremento: o nó de QA respeita a dispensa explícita — 04/11/2026
+
+Quando existe uma única autorização do owner para a tarefa, na revisão de política do contrato, a primeira tentativa registra o artefato como `low` e o nó de QA grava `not_required` sem recibo de verificação, sem concessão e sem lançar o verificador. Duas autorizações para a mesma tarefa não dispensam. Correção (`correctionRevision` maior que zero) continua em risco alto e executa QA. Evidência `failed`, `canceled`, `missing_result` ou `stale` bloqueia e não grava a dispensa. Outro artefato não reutiliza a linha anterior; a mesma autorização pode gerar uma linha nova só para ele. A retomada de um estágio concluído com esse recibo não chama `quality.record`.
+
+Neste processo o typecheck saiu 0. As provas puras e as duas suítes PostgreSQL, num banco descartável criado para esta rodada, saíram 0: 10 testes, 0 falhas, 0 skips. O banco de laboratório já em execução e os demais contêineres não foram alterados. O container descartável foi removido depois da prova. Não houve sessão completa de `EngineeringStages` com worktree e verificador. RF-57 e T38 continuam `not_accepted`.
+
 ## Incremento: vínculo explícito da dispensa de QA — 04/11/2026
 
 A dispensa deixa de ser só principal e motivo. O owner autoriza antes, numa linha imutável, a revisão da política, o template, a regra `explicit-low` e a tarefa. A dispensa do artefato copia esses digests e o digest do próprio artefato. `assertReady` só aceita essa combinação como condição de QA sem recibo. Evidência `failed`, `canceled`, `missing_result` ou `stale` continua `VERIFICATION_NOT_PASSED`. Outro commit não herda a linha. Risco que não seja `low` não vira dispensa. O grafo nativo segue registrando artefato `high` e executando QA. Revisão independente continua obrigatória.

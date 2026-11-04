@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { Id } from './contracts.ts';
+
 /** Explicit QA waiver versus missing, failed, canceled or stale evidence.
  * A passed QA receipt satisfies the QA condition by itself. Not_required is
  * only the complete owner binding. This module does not launch a verifier. */
@@ -41,4 +44,19 @@ export function evaluateQaWaiverGate(input: {
     && waiver.taskId.length > 0;
   if (!bound) return { ok: false, code: 'QA_WAIVER_STALE' };
   return { ok: true, basis: 'not_required' };
+}
+
+/** Stage completion for a waiver. It is not a verification receipt and has no signature. */
+export const QaWaiverStageReceipt = z.object({
+  schemaVersion: z.literal(1),
+  basis: z.literal('not_required'),
+  artifactId: Id,
+  authorizationId: Id,
+  taskId: z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/),
+}).strict();
+
+export function qaWaiverStageReceipt(receipt: unknown) {
+  if (!receipt || typeof receipt !== 'object' || !('qaWaiver' in receipt) || Object.keys(receipt).length !== 1) return null;
+  const parsed = QaWaiverStageReceipt.safeParse((receipt as { qaWaiver: unknown }).qaWaiver);
+  return parsed.success ? parsed.data : null;
 }

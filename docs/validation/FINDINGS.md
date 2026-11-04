@@ -6,7 +6,7 @@ Este registro distingue requisito ausente, limitação de prova e defeito observ
 
 | ID | Tipo / severidade | Estado | Local e evidência | Condição de encerramento |
 |---|---|---|---|---|
-| AC-IMP-0114 | Contrato de qualidade / alta | parcial; aberto | A autorização do owner e a linha de dispensa passam a gravar política, template, regra `explicit-low`, tarefa e digest do artefato. O avaliador puro distingue `not_required` de QA passado, falho, cancelado, ausente ou obsoleto: `tests/qa-waiver-binding.test.ts` saiu 0, 5 testes. A suíte PostgreSQL não executou neste processo porque `AC_TEST_DATABASE_URL` está ausente. O grafo nativo continua com artefato `high` e nó de QA. RF-57 e T38 seguem sem aceite. `docs/implementation/QA-WAIVER-BINDING-20261104.md`. | Prova PostgreSQL da migração 060 e do `assertReady`, e o grafo deixar de lançar QA só depois da dispensa válida do artefato exato, com revisão independente. |
+| AC-IMP-0114 | Contrato de qualidade / alta | parcial; aberto | A autorização do owner vincula política, template, regra `explicit-low`, tarefa e digest do artefato. O nó de QA da primeira tentativa, com uma única autorização, termina em `not_required` sem recibo de verificação. Correção e autorização ambígua não dispensam. Prova PostgreSQL descartável: 10 testes, saída 0, incluindo `tests/qa-waiver-stage.test.ts` e `tests/quality-gate-integrity.test.ts`. Não houve sessão completa de `EngineeringStages`. RF-57 e T38 seguem sem aceite. `docs/implementation/QA-WAIVER-BINDING-20261104.md`. | Revisão independente e uma sessão do grafo com worktree que mostre o verificador ausente só nesse caso. |
 
 | ID | Tipo / severidade | Estado | Local e evidência | Condição de encerramento |
 |---|---|---|---|---|

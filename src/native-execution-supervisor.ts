@@ -11,7 +11,7 @@ import {AccountHomes} from './account-homes.ts';
 import {ProviderEligibility} from './provider-eligibility.ts';
 import {GitArtifacts} from './git.ts';
 import {NativeArtifactFinalizer,NativeArtifactIdentity} from './native-artifact-finalizer.ts';
-import type {Quality} from './quality.ts';
+import {expectedArtifactRisk,type Quality} from './quality.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {inspectNativeExecutionPair,dockerReadOnly} from './native-execution-docker-observation.ts';
@@ -303,7 +303,8 @@ export class NativeExecutionSupervisor{
    if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');return contract.quality_revision;
   });
   const hash=digest({domain:'artifact-v1',intentId:input.intentId,commit:artifact.commit}),id=`${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
-  return quality.register(principal,{id,contextId:authority.contextId,intentId:input.intentId,implementationGrantId:input.grantId,implementationSessionId:input.sessionId,policyRevision:revision,commit:artifact.commit,tree:artifact.tree,base:artifact.base,risk:'high'},authority);
+  const risk=await this.ledger.tx(c=>expectedArtifactRisk(c,input.intentId,authority.contextId,revision));
+  return quality.register(principal,{id,contextId:authority.contextId,intentId:input.intentId,implementationGrantId:input.grantId,implementationSessionId:input.sessionId,policyRevision:revision,commit:artifact.commit,tree:artifact.tree,base:artifact.base,risk},authority);
  }
  async stop(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);await this.validateReplay(principal,authority,input,job);

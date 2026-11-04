@@ -51,7 +51,7 @@ Itens ainda `not_implemented` na matriz, em ordem de dependência interna:
 
 ## 5. Próxima entrega funcional
 
-O vínculo da dispensa ficou nesta branch e ainda não entra no nó de QA. A entrega seguinte é o grafo consultar a autorização do owner e a dispensa do artefato exato antes de lançar o verificador, sem gravar recibo `passed` no lugar da dispensa e sem herdar a decisão num commit novo. A revisão independente continua obrigatória. Isso também não aceita RF-57 nem T38. A prova PostgreSQL depende de `AC_TEST_DATABASE_URL` no laboratório isolado.
+O nó de QA já grava `not_required` para a primeira tentativa quando há uma única autorização do owner. A prova cobriu o assentamento e o gate em PostgreSQL descartável, não uma sessão completa do grafo com worktree. A entrega seguinte que ainda não depende de conta ou aparelho é o escritor único por worktree (RF-54/T34): neutralizar o acesso antigo antes de reutilizar a cópia. Correção de QA dispensado continua executando o verificador.
 
 ## 6. Impedimentos externos
 

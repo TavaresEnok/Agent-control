@@ -78,7 +78,7 @@ export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,cont
   const policy=QualityPolicy.parse(row.snapshot);
   if(digest(policy)!==row.policy_digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
   if(row.risk!=='low'||!policy.allowLowRiskQaWaiver)throw new Refusal('QA_WAIVER_FORBIDDEN',403);
-  if(binding.policyRevision!==row.policy_revision)throw new Refusal('QA_WAIVER_STALE');
+  if(Number(binding.policyRevision)!==Number(row.policy_revision))throw new Refusal('QA_WAIVER_STALE');
   const authorization=(await c.query(`SELECT * FROM ac_qa_waiver_authorizations WHERE project_id=$1 AND policy_revision=$2
     AND template_id=$3 AND template_revision=$4 AND task_id=$5 AND risk_rule='explicit-low'`,
     [row.project_id,binding.policyRevision,binding.templateId,binding.templateRevision,binding.taskId])).rows[0];
@@ -101,6 +101,73 @@ export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,cont
       throw new Refusal('QA_WAIVER_CONFLICT');
   }else await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[context,{artifactId:artifact,reasonRef:reason,taskId:record.taskId,authorizationId:authorization.id}]);
   return {artifactId:artifact,waived:true as const};
+}
+
+async function managedTaskBinding(c:pg.PoolClient,intentId:string,contextId:string){
+  const row=(await c.query(`SELECT i.parent_intent_id,i.parent_unit_id,m.recipe,m.recipe_digest FROM ac_intents i
+    LEFT JOIN ac_managed_executions m ON m.parent_intent_id=i.parent_intent_id
+    WHERE i.id=$1 AND i.context_id=$2`,[intentId,contextId])).rows[0];
+  if(!row?.parent_intent_id)return {taskId:null as string|null,correctionRevision:0};
+  if(!row.recipe)throw new Refusal('MANAGED_RECIPE_MISMATCH');
+  const recipe=ManagedRecipe.parse(row.recipe);
+  if(digest(recipe)!==row.recipe_digest||recipe.parentIntentId!==row.parent_intent_id)throw new Refusal('MANAGED_RECIPE_MISMATCH');
+  const unit=recipe.units.find(value=>value.id===row.parent_unit_id);
+  if(!unit||unit.kind!=='task'||!unit.taskId)return {taskId:null as string|null,correctionRevision:0};
+  return {taskId:unit.taskId,correctionRevision:unit.correctionRevision??0};
+}
+
+export async function findUniqueExplicitQaWaiver(c:pg.PoolClient,projectId:string,policyRevision:number,taskId:string){
+  const rows=(await c.query(`SELECT id,principal_id,policy_revision,template_id,template_revision,task_id,risk_rule
+    FROM ac_qa_waiver_authorizations WHERE project_id=$1 AND policy_revision=$2 AND task_id=$3 AND risk_rule='explicit-low'`,
+    [projectId,policyRevision,taskId])).rows;
+  return rows.length===1?rows[0]:null;
+}
+
+/** Low only when one owner authorization names this first attempt. A correction stays high. */
+export async function expectedArtifactRisk(c:pg.PoolClient,intentId:string,contextId:string,policyRevision:number){
+  const scope=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[contextId])).rows[0];
+  if(!scope)return 'high' as const;
+  const task=await managedTaskBinding(c,intentId,contextId);
+  if(!task.taskId||task.correctionRevision>0)return 'high' as const;
+  return await findUniqueExplicitQaWaiver(c,scope.project_id,policyRevision,task.taskId)?'low' as const:'high' as const;
+}
+
+/** Apply the owner authorization to this artifact only. No QA receipt is written.
+ * Failed or incomplete QA evidence blocks. A passed receipt keeps the normal verifier path. */
+export async function settleExplicitQaWaiver(c:pg.PoolClient,input:{contextId:string;artifactId:string;taskId:string|null;correctionRevision:number}){
+  if(!input.taskId||input.correctionRevision>0)return {disposition:'run' as const};
+  const artifact=(await c.query(`SELECT a.*,p.digest policy_digest FROM ac_artifacts a JOIN ac_quality_policies p
+    ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1 AND a.context_id=$2`,[input.artifactId,input.contextId])).rows[0];
+  if(!artifact||artifact.risk!=='low')return {disposition:'run' as const};
+  const authorization=await findUniqueExplicitQaWaiver(c,artifact.project_id,Number(artifact.policy_revision),input.taskId);
+  if(!authorization)return {disposition:'run' as const};
+  const evidence=(await c.query(`SELECT status FROM ac_verification_evidence WHERE artifact_id=$1 AND kind='qa'`,[artifact.id])).rows;
+  if(evidence.some(row=>row.status!=='passed'))return {disposition:'blocked' as const};
+  if(evidence.length)return {disposition:'run' as const};
+  const binding={policyRevision:Number(artifact.policy_revision),templateId:authorization.template_id,templateRevision:Number(authorization.template_revision),taskId:authorization.task_id,riskRule:'explicit-low' as const};
+  await waiveQaInTransaction(c,authorization.principal_id,input.contextId,artifact.id,`authorization:${authorization.id}`,binding);
+  return {disposition:'not_required' as const,receipt:{qaWaiver:{schemaVersion:1 as const,basis:'not_required' as const,artifactId:artifact.id,authorizationId:authorization.id,taskId:authorization.task_id}}};
+}
+
+export async function explicitQaWaiverStageReady(c:pg.PoolClient,contextId:string,artifactId:string){
+  const artifact=(await c.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[artifactId,contextId])).rows[0];
+  if(!artifact)return false;
+  const policy=(await c.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[artifact.project_id,artifact.policy_revision])).rows[0];
+  if(!policy)return false;
+  let parsed;
+  try{parsed=QualityPolicy.parse(policy.snapshot);}catch{return false;}
+  if(digest(parsed)!==policy.digest)return false;
+  const stored=(await c.query(`SELECT policy_revision,policy_digest,template_id,template_revision,template_digest,risk_rule,task_id,artifact_digest
+    FROM ac_qa_waivers WHERE artifact_id=$1`,[artifact.id])).rows[0];
+  const template=stored?.template_id?(await c.query('SELECT digest FROM ac_project_templates WHERE project_id=$1 AND template_id=$2 AND revision=$3',
+    [artifact.project_id,stored.template_id,stored.template_revision])).rows[0]:undefined;
+  const evidence=(await c.query('SELECT kind,status FROM ac_verification_evidence WHERE artifact_id=$1',[artifact.id])).rows;
+  const waiver:QaWaiverBindingRecord|null=stored?.policy_digest?{policyRevision:Number(stored.policy_revision),policyDigest:stored.policy_digest,
+    templateId:stored.template_id,templateRevision:Number(stored.template_revision),templateDigest:stored.template_digest,riskRule:stored.risk_rule,
+    taskId:stored.task_id,artifactDigest:stored.artifact_digest}:null;
+  const decision=evaluateQaWaiverGate({allowLowRiskQaWaiver:parsed.allowLowRiskQaWaiver,risk:artifact.risk,evidence,
+    policyRevision:Number(artifact.policy_revision),policyDigest:policy.digest,artifactDigest:artifact.identity_digest,waiver,templateDigest:template?.digest??null});
+  return decision.ok&&decision.basis==='not_required';
 }
 
 /** The project's latest policy is the one in force when a native task input is frozen.
@@ -154,6 +221,7 @@ export class Quality {
           throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
       }else if(grant.resource_kind!=='model'||!grant.account_id||!grant.profile_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
       await this.assertFreshCorrectionSession(c,value.intentId,value.implementationSessionId,value.implementationGrantId,authority);
+      if((await expectedArtifactRisk(c,value.intentId,value.contextId,value.policyRevision))!==value.risk)throw new Refusal('ARTIFACT_RISK_MISMATCH');
       if(!(await c.query('SELECT 1 FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[context.project_id,value.policyRevision])).rowCount)
         throw new Refusal('QUALITY_POLICY_REQUIRED');
       const identity=digest({commit:value.commit,tree:value.tree,base:value.base});
