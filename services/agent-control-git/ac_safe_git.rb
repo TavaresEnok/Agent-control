@@ -27,23 +27,21 @@ class AcSafeGit
     end
   end
 
+  # Paths whose disappearance is repository identity or an external reference.
+  ESSENTIAL_INSPECTION_PATHS = %w[objects refs HEAD packed-refs shallow commondir objects/info/alternates].freeze
+  # Git 2.39 names that regularly disappear between a directory walk and lstat.
+  TRANSIENT_OBJECT = %r{\Aobjects/[0-9a-f]{2}/tmp_obj_[^/]+\z}
+  TRANSIENT_PACK = %r{\Aobjects/pack/tmp_pack_[^/]+\z}
+  TRANSIENT_LOCK = %r{\A(?:[^/]+/)*[^/]+\.lock\z}
+
   # Only object/ref data are shared. Configuration, hooks, grafts and includes
   # come from a disposable controller-owned directory, including upload-pack.
   def self.with_repository(repo)
     repo = File.realpath(repo)
     git_dir = File.join(repo, ".git")
-    unless File.directory?(git_dir) && !File.symlink?(git_dir) && !repo.include?("\n")
-      raise ArgumentError, "Repositório deve ser autocontido"
-    end
-    %w[commondir objects/info/alternates].each do |relative|
-      raise ArgumentError, "Referência Git externa não autorizada" if File.exist?(File.join(git_dir, relative))
-    end
-    Dir.glob(File.join(git_dir, "**", "*"), File::FNM_DOTMATCH).each do |path|
-      info = File.lstat(path)
-      unless info.file? || info.directory?
-        raise ArgumentError, "Metadado Git deve ser arquivo regular ou diretório"
-      end
-    end
+    assert_contained!(repo, git_dir)
+    inspect_metadata!(git_dir)
+    assert_contained!(repo, git_dir)
     Dir.mktmpdir("ac-safe-git-") do |metadata|
       %w[objects refs].each do |name|
         source = File.join(git_dir, name)
@@ -61,6 +59,49 @@ class AcSafeGit
     end
   end
 
+  def self.assert_contained!(repo, git_dir)
+    unless File.directory?(git_dir) && !File.symlink?(git_dir) && !repo.include?("\n")
+      raise ArgumentError, "Repositório deve ser autocontido"
+    end
+    %w[commondir objects/info/alternates].each do |relative|
+      raise ArgumentError, "Referência Git externa não autorizada" if File.exist?(File.join(git_dir, relative))
+    end
+  end
+
+  # Dir.glob can observe a regular temporary entry that Git removes before
+  # File.lstat. Only that walk rescues ENOENT, and only for the known
+  # temporary names above. Roots, essential metadata, hooks, config and every
+  # later Git call stay unrescued.
+  def self.inspect_metadata!(git_dir)
+    Dir.glob(File.join(git_dir, "**", "*"), File::FNM_DOTMATCH).each do |path|
+      begin
+        info = File.lstat(path)
+      rescue Errno::ENOENT
+        raise unless transient_vanished_metadata?(git_dir, path)
+        next
+      end
+      unless info.file? || info.directory?
+        raise ArgumentError, "Metadado Git deve ser arquivo regular ou diretório"
+      end
+    end
+  end
+
+  def self.inspection_relative(git_dir, path)
+    prefix = "#{git_dir}/"
+    return nil unless path.start_with?(prefix)
+    relative = path.delete_prefix(prefix)
+    parts = relative.split("/", -1)
+    return nil if parts.empty? || parts.any? { |part| part.empty? || part == "." || part == ".." }
+    relative
+  end
+
+  def self.transient_vanished_metadata?(git_dir, path)
+    relative = inspection_relative(git_dir, path)
+    return false unless relative
+    return false if ESSENTIAL_INSPECTION_PATHS.include?(relative)
+    relative.match?(TRANSIENT_OBJECT) || relative.match?(TRANSIENT_PACK) || relative.match?(TRANSIENT_LOCK)
+  end
+
   def self.invoke(*args, index_path: nil)
     environment = { "PATH" => "/usr/bin:/bin", "HOME" => "/nonexistent", "LANG" => "C.UTF-8",
                     "GIT_AUTHOR_NAME" => "Agent Control", "GIT_AUTHOR_EMAIL" => "agent-control@invalid",
@@ -69,5 +110,5 @@ class AcSafeGit
     environment["GIT_INDEX_FILE"] = index_path if index_path
     Open3.capture3(environment, "git", *OPTIONS, *args, unsetenv_others: true)
   end
-  private_class_method :invoke
+  private_class_method :assert_contained!, :inspect_metadata!, :inspection_relative, :transient_vanished_metadata?, :invoke
 end
