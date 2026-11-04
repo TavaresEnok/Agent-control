@@ -2,9 +2,11 @@ import { z } from 'zod';
 import type pg from 'pg';
 import { digest,Refusal } from './contracts.ts';
 import type { Ledger } from './ledger.ts';
+import { protectedGatePathsSchema } from './quality-gate-paths.ts';
 export const QualityPolicy=z.object({schemaVersion:z.literal(1),requiredReviews:z.number().int().min(1).max(3),
  allowLowRiskQaWaiver:z.boolean(),requireJudge:z.boolean().optional(),requireSpecialistBeforeImplementation:z.boolean().optional(),
- specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),requireHumanIntegration:z.boolean().default(true)}).strict();
+ specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/).optional(),requireHumanIntegration:z.boolean().default(true),
+ protectedGatePaths:protectedGatePathsSchema}).strict();
 export class QualityPolicies{
  constructor(readonly ledger:Ledger,private readonly client?:pg.PoolClient){}
  private tx<T>(fn:(c:pg.PoolClient)=>Promise<T>){return this.client?fn(this.client):this.ledger.tx(fn);}

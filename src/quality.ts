@@ -5,6 +5,7 @@ import { Authority, Id, digest, canonical, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import type { GitArtifacts } from './git.ts';
 import { QualityPolicy,QualityPolicies } from './quality-policy.ts';
+import { writePathsIntersectProtectedGate } from './quality-gate-paths.ts';
 import {ManagedRecipe} from './managed-plan.ts';
 export { QualityPolicy } from './quality-policy.ts';
 const GitId=z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
@@ -38,6 +39,16 @@ export async function waiveQaInTransaction(c:pg.PoolClient,principal:string,cont
     if(!prior||prior.principal_id!==principal||prior.reason_ref!==reason)throw new Refusal('QA_WAIVER_CONFLICT');
   }else await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'qa.waived',$2)",[context,{artifactId:artifact,reasonRef:reason}]);
   return {artifactId:artifact,waived:true as const};
+}
+
+/** The project's latest policy is the one in force when a native task input is frozen.
+ * An absent or empty protectedGatePaths list leaves the historical scope check unchanged. */
+export async function refuseCurrentProtectedGate(c:pg.PoolClient,projectId:string,writePaths:readonly string[]){
+  const row=(await c.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[projectId])).rows[0];
+  if(!row)return;
+  const policy=QualityPolicy.parse(row.snapshot);
+  if(digest(policy)!==row.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
+  if(writePathsIntersectProtectedGate(writePaths,policy.protectedGatePaths??[]))throw new Refusal('QUALITY_GATE_PATH_PROTECTED');
 }
 
 /** Gates only: Cezar remains the sole owner of sequencing and correction loops. */
@@ -227,6 +238,13 @@ export class Quality {
     if(!qa.length&&!(waived&&artifact.risk==='low'&&policy.allowLowRiskQaWaiver))throw new Refusal('QA_MISSING');
     if(evidence.filter(e=>e.kind==='review').length<policy.requiredReviews)throw new Refusal('REVIEWS_MISSING');
     if(policy.requireJudge&&!options.ignoreJudge&&evidence.filter(e=>e.kind==='judge').length!==1)throw new Refusal('JUDGMENT_MISSING');
+    const native=(await c.query('SELECT snapshot,digest FROM ac_native_task_inputs WHERE intent_id=$1',[artifact.intent_id])).rows[0];
+    if(native){
+      if(digest(native.snapshot)!==native.digest)throw new Refusal('NATIVE_TASK_INPUT_CONFLICT');
+      const declared=native.snapshot?.writePaths;
+      if(!Array.isArray(declared)||declared.some((path:unknown)=>typeof path!=='string'))throw new Refusal('NATIVE_TASK_INPUT_CONFLICT');
+      if(writePathsIntersectProtectedGate(declared,policy.protectedGatePaths??[]))throw new Refusal('QUALITY_GATE_PATH_PROTECTED');
+    }
     return artifact;
   }
   async prepareIntegration(principal:string,artifactId:string,authority:Authority,targetRef:string){
