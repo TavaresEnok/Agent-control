@@ -102,7 +102,9 @@ export class ProjectEnvironments{
    if((head?.revision??0)!==expectedRevision)throw new Refusal('PROJECT_ENVIRONMENT_REVISION_CONFLICT',409);
    const busy=(await c.query(`SELECT EXISTS(SELECT 1 FROM ac_capacity_grants WHERE project_id=$1 AND state<>'released') OR
     EXISTS(SELECT 1 FROM ac_execution_contracts b JOIN ac_intents i ON i.id=b.intent_id WHERE b.project_id=$1 AND i.state NOT IN ('done','failed','canceled')) OR
-    EXISTS(SELECT 1 FROM ac_integration_intents t JOIN ac_artifacts a ON a.id=t.artifact_id WHERE a.project_id=$1 AND t.state IN ('registered','uncertain')) busy`,[projectId])).rows[0].busy;
+    EXISTS(SELECT 1 FROM ac_integration_intents t JOIN ac_artifacts a ON a.id=t.artifact_id WHERE a.project_id=$1 AND t.state IN ('registered','uncertain')) OR
+    EXISTS(SELECT 1 FROM ac_remote_operations o JOIN ac_contexts x ON x.id=o.context_id WHERE x.project_id=$1 AND o.state NOT IN ('completed','failed','canceled_confirmed')) OR
+    EXISTS(SELECT 1 FROM ac_remote_development_workspaces w WHERE w.project_id=$1 AND w.state='uncertain') busy`,[projectId])).rows[0].busy;
    if(busy)throw new Refusal('PROJECT_ENVIRONMENT_IN_USE',409);
    for(const env of config.environments)for(const dest of env.destinations)if(dest.kind==='remote'){
     const host=(await c.query('SELECT allowed_tasks,fingerprint,registration_digest FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR SHARE',[dest.hostId,projectId])).rows[0];

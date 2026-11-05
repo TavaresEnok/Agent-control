@@ -152,6 +152,9 @@ test('signed immutable project environments enforce real Git source, directories
   await db.pool.query("UPDATE ac_capacity_grants SET state='released' WHERE id=$1",[grantId]);
   await db.pool.query("UPDATE ac_intents SET state='canceled' WHERE context_id=$1",[context]);
   const remoteOnly={...config,environments:[{...config.environments[0],destinations:config.environments[0].destinations.filter(d=>d.kind==='remote')}]};
+  const pendingRemote=randomUUID();await db.pool.query("INSERT INTO ac_remote_operations(id,context_id,host_id,task_id,request_digest,manager_epoch,state,intent_id) VALUES($1,$2,$3,'git-export','fixture',1,'uncertain',$4)",[pendingRemote,context,hostIds[0],child]);
+  assert.equal((await post(command(project.id,1,remoteOnly))).status,409,'uncertain remote operation prevents environment replacement even after intent cancellation');
+  await db.pool.query("UPDATE ac_remote_operations SET state='canceled_confirmed' WHERE id=$1",[pendingRemote]);
   assert.equal((await post(command(project.id,1,remoteOnly))).status,200);
   await assert.rejects(db.tx(c=>requireProjectEnvironmentLaunch(c,{intentId:child,base:original})),/PROJECT_ENVIRONMENT_BINDING_REQUIRED/,'new effects cannot use a stale environment revision');
   const newIntent=await intent(['src/a.txt']);await contract(newIntent);const remoteOnlyArtifact=await artifact(newIntent,later,original);
