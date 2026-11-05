@@ -83,6 +83,8 @@ def execute(config_path, operation):
         guard = remote_supervisor.authority(config, root, atomic) if config.get('executionBackend') == 'docker' else contextlib.nullcontext()
         with guard:
             item = json.loads(record.read_text())
+            if config.get('recoveryInventoryRequired') is True and item.get('recoveryEpoch') != config.get('authorityEpoch'):
+                raise ValueError('RECOVERY_REMOTE_EPOCH_FENCED')
             if item['state'] != 'uncertain':
                 return
             cancel_path = root / (operation + '.cancel.json')
@@ -201,7 +203,35 @@ def dispatch(config_path, config, root):
         value = config['resourceAuthority']
         return {'schemaVersion': 1, 'operationId': operation, 'authorityId': value['authorityId'],
                 'anchorId': value['anchorId'], 'installationId': config['installationId'], 'stateRoot': str(root),
-                'authorityEpoch': config['authorityEpoch']}
+                'authorityEpoch': config['authorityEpoch'], 'recoveryRequired': config.get('recoveryInventoryRequired') is True}
+    if action == 'recovery-sweep':
+        if set(request) != {'schemaVersion', 'operationId', 'action'} or config.get('executionBackend') != 'docker' or config.get('recoveryInventoryRequired') is not True or not isinstance(config.get('resourceAuthority'), dict):
+            raise ValueError('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED')
+        # dispatch is already inside resource + local authority locks. Every
+        # older executor must pass those locks again before it can create/start.
+        import resource_authority
+        checked = []
+        for path in sorted(root.glob('*.json')):
+            try: identity = str(uuid.UUID(path.stem))
+            except ValueError: continue
+            if path.name != identity + '.json': continue
+            if len(checked) >= 10000: raise ValueError('RECOVERY_REMOTE_INVENTORY_UNCERTAIN')
+            item = json.loads(path.read_text())
+            if item.get('operationId') != identity: raise ValueError('RECOVERY_REMOTE_INVENTORY_UNCERTAIN')
+            if item.get('state') not in remote_supervisor.TERMINAL:
+                item = remote_supervisor.recover(config, root, item, atomic)
+            if item.get('state') not in remote_supervisor.TERMINAL:
+                raise ValueError('RECOVERY_REMOTE_INVENTORY_UNCERTAIN')
+            if not (item.get('groupRemovalConfirmed') is True or item.get('canceledWithoutStart') is True):
+                raise ValueError('RECOVERY_REMOTE_INVENTORY_UNCERTAIN')
+            checked.append(identity)
+        value = config['resourceAuthority']
+        groups = resource_authority.docker('ps', '-aq', '--no-trunc', '--filter', 'label=ac.resources.authority='+value['authorityId']).splitlines()
+        if list(resource_authority._reservation_paths(config)) or any(group != value['anchorId'] for group in groups):
+            raise ValueError('RECOVERY_REMOTE_INVENTORY_UNCERTAIN')
+        return {'schemaVersion': 1, 'operationId': operation, 'state': 'neutralized', 'authorityId': value['authorityId'],
+                'anchorId': value['anchorId'], 'installationId': config['installationId'], 'stateRoot': str(root),
+                'authorityEpoch': config['authorityEpoch'], 'operations': checked}
     if action in ('git-workspace-prepare', 'git-workspace-snapshot'):
         module = workspace_module()
         return module.prepare(config, request) if action == 'git-workspace-prepare' else module.snapshot(config, request)
@@ -244,6 +274,10 @@ def dispatch(config_path, config, root):
         # Missing or reused identities are uncertainty, never proof of completion.
         return remote_supervisor.recover(config, root, item, atomic) if (item.get('stableGroup') or item.get('groupIntent')) else observed(item)
     start_keys = {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'root', 'epoch'}
+    if config.get('recoveryInventoryRequired') is True:
+        start_keys = start_keys | {'recoveryEpoch'}
+        if request.get('recoveryEpoch') != config.get('authorityEpoch') or type(request.get('recoveryEpoch')) is not int:
+            raise ValueError('RECOVERY_REMOTE_EPOCH_FENCED')
     if action != 'start' or set(request) not in (start_keys, start_keys | {'workspaceId'}):
         raise ValueError('INVALID_REQUEST')
     project, task = request['projectId'], request['taskId']
@@ -305,6 +339,8 @@ def dispatch(config_path, config, root):
                     raise ValueError('REMOTE_WORKSPACE_JOURNAL_MISSING')
             item = {'schemaVersion': 1, 'operationId': operation, 'state': 'uncertain', 'projectId': project,
                     'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
+            if 'recoveryEpoch' in request:
+                item['recoveryEpoch'] = request['recoveryEpoch']
             if 'workspaceId' in request:
                 item['workspaceId'] = str(uuid.UUID(request['workspaceId']))
             # Persist before launching. A crash in this gap remains uncertain and is not blindly retried.
