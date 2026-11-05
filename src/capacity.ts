@@ -225,21 +225,6 @@ export class Capacity {
       }
       const selected = { id: choice.profileId, account_id: choice.accountId, max_concurrent: choice.maxConcurrent };
       await c.query('UPDATE ac_capacity_waits SET desired_profile=$2,exclusions=NULL WHERE attempt_id=$1',[request.attemptId,selected.id]);
-      const first=(await c.query(`SELECT w.attempt_id FROM ac_capacity_waits w JOIN ac_profiles p ON p.id=w.desired_profile
-        JOIN ac_accounts a ON a.id=p.account_id
-        JOIN ac_quota_observations q ON q.account_id=a.id
-        JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
-        JOIN ac_intents i ON i.id=w.intent_id
-        JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
-        WHERE w.resource_kind='model' AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
-        AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp()
-        AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
-        AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
-        AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))
-        AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
-        ORDER BY (w.created_at <= clock_timestamp()-interval '5 minutes') DESC,
-          CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
-      if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const isEvaluation = evaluations.includes(request.role);
       const group = isEvaluation ? evaluations : request.role==='programmer' ? ['programmer'] : ['manager'];
       const counts = (await c.query(`SELECT
@@ -271,6 +256,30 @@ export class Capacity {
       }
       if (Number(counts.account)>=selected.max_concurrent || Number(counts.context)>=localLimit || Number(counts.global)>=globalLimit || Number(counts.account_role)>=originalLimit)
         {await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_BUSY' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_BUSY'};}
+      const first=(await c.query(`SELECT w.attempt_id FROM ac_capacity_waits w JOIN ac_profiles p ON p.id=w.desired_profile
+        JOIN ac_accounts a ON a.id=p.account_id
+        JOIN ac_quota_observations q ON q.account_id=a.id
+        JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
+        JOIN ac_intents i ON i.id=w.intent_id
+        JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
+        WHERE w.resource_kind='model' AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
+        AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp()
+        AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
+        AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
+        AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))
+        AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
+        AND (SELECT count(*) FROM ac_capacity_grants g WHERE g.state<>'released' AND g.context_id=w.context_id
+          AND ((w.role='programmer' AND g.role='programmer') OR (w.role='manager' AND g.role='manager')
+            OR (w.role IN ('reviewer','qa','specialist','judge') AND g.role IN ('reviewer','qa','specialist','judge'))))
+          < CASE WHEN w.role='programmer' THEN (r.snapshot->>'maxProgrammersPerContext')::integer
+            WHEN w.role='manager' THEN 1 ELSE (r.snapshot->>'maxEvaluatorsPerContext')::integer END
+        AND (w.role='manager' OR (SELECT count(*) FROM ac_capacity_grants g WHERE g.state<>'released'
+          AND ((w.role='programmer' AND g.role='programmer') OR
+            (w.role IN ('reviewer','qa','specialist','judge') AND g.role IN ('reviewer','qa','specialist','judge'))))
+          < CASE WHEN w.role='programmer' THEN $2::integer ELSE $3::integer END)
+        ORDER BY (w.created_at <= clock_timestamp()-interval '5 minutes') DESC,
+          CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`,[selected.account_id,config.programming_limit,config.evaluation_limit])).rows[0];
+      if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const emergency = chain.emergency.includes(selected.id);
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)
