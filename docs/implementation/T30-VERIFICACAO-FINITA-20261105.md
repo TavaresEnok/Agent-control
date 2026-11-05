@@ -23,6 +23,8 @@ Estado: **em revisão**. A prova do autor é delimitada à bancada descartável 
 
 Somente composição controlada pelo bootstrap pode fornecer catálogo e adapters. Uma representação JSON ou callback de transporte não equivale às capacidades emitidas; o teste PG do autor verifica que transporte forjado é recusado antes de qualquer exchange. A configuração de factories e a política de quais endpoints permanecem ativos no processo instalado requerem revisão integrada do principal.
 
+A composição deve ser enforced antes do primeiro efeito coberto e antes do backup: controladores antigos sem esses guards, factories paralelas sem `resourceAuthority` ou emissões por fora do catálogo não são cercados por esta prova. O modo não converte retroativamente instalações legacy nem descobre fontes não registradas. O bootstrap precisa garantir que versões antigas não possam permanecer como emissores ativos fora das autoridades inventariadas.
+
 ## Prova física do autor
 
 Comando da bancada: `/tmp/node-v22.23.3-linux-x64/bin/node scripts/r5-recovery-isolated.mjs`. O runner cria seu próprio container PostgreSQL com labels `ac.r3.front=migration` e `ac.disposable=true`, porta loopback dinâmica, banco sintético e senha sintética. O teste cria duas autoridades de recursos com identificadores aleatórios, anchors próprios, um SSH server descartável identificado por label, chaves sintéticas e diretórios temporários. O cleanup verifica identidades/labels e remove somente recursos criados pela própria execução. URLs e portas são geradas a cada execução; não há host operacional ou credencial real.
