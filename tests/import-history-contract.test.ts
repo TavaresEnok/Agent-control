@@ -21,7 +21,7 @@ test('v2 rejects changed payload, missing references, cycles, and arbitrary clea
  const input=await fixture();
  const broken=structuredClone(input);broken.contexts[0].history.plans[0].payloadDigest='0'.repeat(64);assert.equal(ImportBundle.safeParse(broken).success,false);
  const missing=structuredClone(input);missing.contexts[0].history.evidence[0].planRef.id=digest('missing');assert.equal(ImportBundle.safeParse(missing).success,false);
- const cycle=structuredClone(input);cycle.contexts[0].history.plans[0].contract.tasks[0].dependsOn=[cycle.contexts[0].history.plans[0].contract.tasks[1].idDigest];assert.equal(ImportBundle.safeParse(cycle).success,false);
+ const cycle=structuredClone(input),cyclePlan=cycle.contexts[0].history.plans[0];if(cyclePlan.format!=='structured-plan-v1')throw Error('structured fixture required');cyclePlan.contract.tasks[0].dependsOn=[cyclePlan.contract.tasks[1].idDigest];assert.equal(ImportBundle.safeParse(cycle).success,false);
  const clear=structuredClone(input);clear.contexts[0].history.plans[0].payload={secret:'cleartext'};clear.contexts[0].history.plans[0].payloadDigest=digest(clear.contexts[0].history.plans[0].payload);assert.equal(ImportBundle.safeParse(clear).success,false);
 });
 
