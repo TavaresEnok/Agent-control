@@ -35,3 +35,5 @@ Sandbox `c90bc930` acrescenta ensaio relatado por API pública/socket e reiníci
 A frente relata prova com supervisor nativo e QA Docker reais, três tarefas, quatro reviewers e retomada após SIGKILL logo depois da retirada de um programador. Foram verificadas assinaturas e ausência física dos recursos de reviewers. Capacidade, home, elegibilidade e alocador de rede são substituídos; trabalhadores são fixos sem inferência. Não reexecutei; isto não demonstra queda durante efeito, falha ou cancelamento físicos do grafo completo. O relatório da frente explicita falhas anteriores e limites.
 
 `aa2b6ec9` impede estaticamente `verifier.record` para estado de cancelamento existente, inclusive `confirmed`, antes da retirada. Solicitei teste específico que confirme ausência de record e ocorrência da retirada; não havia teste correspondente no commit.
+
+`035111db` cobre a ramificação confirmada com substitutos para banco e supervisor: exige reconcile e retire e ausência de record. O autor relata 2/2 focados; não reexecutei. O teste verifica o fluxo do controlador, não seleção SQL real nem retirada Docker.
