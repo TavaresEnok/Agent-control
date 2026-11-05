@@ -111,3 +111,9 @@ Aprovada por inspeção a montagem delimitada: consulta policy PG, verifica iden
 ## Integração de proteção de segredos 6dccfbbe
 
 Inspeção da composição com T22/T30 confirma os guards de modelo e inventário preservados no supervisor, junto ao snapshot, redação e gate de artefato. O log físico do autor registra programador nativo com inferência determinística, canário em objeto Git recusado, nenhum artefato registrado, target intacto e writer retirado; negativos de setup e label foram preservados. Aceite limitado à integração e ao cenário testado, sem fechar RNF08 ou provar composição worker CLI real → vault/export.
+
+## Entradas locais e cartões R6
+
+6e07eee6: aprovado por inspeção o comando local delimitado, com descriptor privado, admin para sweep/release, escopo e epoch de authorities; backup é restrito pelo helper a PG de laboratório descartável identificado. Teste mock é do autor; prova PG e integração final são avaliações separadas, sem afirmar restauração operacional.
+
+24644ec7/a7fe548e: aprovado o componente de cartões por inspeção, preservando identidade e estado da projeção; responsável de etapa não é inventado, perfil é identificado e a idade exibida refere-se à recepção local, não à latência do servidor. O teste de componente é do autor; browser móvel e T35 integral seguem pendentes.
