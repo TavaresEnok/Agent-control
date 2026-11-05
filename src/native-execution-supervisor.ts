@@ -1,4 +1,5 @@
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
+import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {mkdir,lstat,realpath,writeFile,open,rename} from 'node:fs/promises';
@@ -254,12 +255,14 @@ export class NativeExecutionSupervisor{
     FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_operations o ON o.id=j.id AND o.intent_id=j.intent_id
     JOIN ac_intents i ON i.id=j.intent_id JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id
     WHERE j.id=$1 AND j.context_id=$2 AND j.grant_id=$3 FOR UPDATE OF j,g,o,w`,[jobId,authority.contextId,input.grantId])).rows[0];
+   const continuationDigest=row&&Number(row.writer_epoch)!==Number(row.manager_epoch)?await verifiedWorktreeWriterContinuation(c,{parentIntentId:row.parent_intent_id,runId:row.run_id,intentId:row.intent_id,writerEpoch:Number(row.writer_epoch),epoch:Number(row.manager_epoch)}):undefined;
+   if(row)row.writer_continuation_digest=continuationDigest;
    const receipt=row?.receipt,payload=receipt?.payload,physical=row?.physical_receipt;
    if(!row||row.role!=='programmer'||!['completed','failed'].includes(row.state)||row.grant_state!=='released'||row.operation_state!=='completed'||
     row.intent_id!==input.intentId||row.intent_context!==authority.contextId||row.grant_context!==authority.contextId||row.grant_intent!==row.intent_id||
     row.grant_role!=='programmer'||row.grant_resource_kind!=='model'||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||
     row.operation_grant!==row.grant_id||row.grant_attempt!==row.execution_attempt_id||
-    Number(row.grant_epoch)!==Number(row.manager_epoch)||Number(row.writer_epoch)!==Number(row.manager_epoch)||Number(row.operation_epoch)>authority.epoch||
+    Number(row.grant_epoch)!==Number(row.manager_epoch)||(Number(row.writer_epoch)!==Number(row.manager_epoch)&&!continuationDigest)||Number(row.operation_epoch)>authority.epoch||
     row.holder_intent_id!==row.intent_id||row.executor_digest!==this.executorDigest||row.key_fingerprint!==this.fingerprint||row.input_digest!==digest(input)||
     row.session_id!==input.sessionId||!payload||typeof receipt.signature!=='string'||!/^[a-f0-9]{128}$/.test(receipt.signature)||
     !verify(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(receipt.signature,'hex'))||
@@ -293,7 +296,7 @@ export class NativeExecutionSupervisor{
   };
   const payloadFor=(row:Record<string,any>,saved:Record<string,any>)=>({schemaVersion:1,kind:'native-container-pair-removed',jobId,
    contextId:row.context_id,grantId:row.grant_id,attemptId:row.grant_attempt,parentIntentId:row.parent_intent_id,runId:row.run_id,
-   holderIntentId:row.intent_id,writerEpoch:Number(row.writer_epoch),workerId:saved.worker_id,toolsId:saved.tools_id,terminalDigest:saved.terminal_digest,
+   holderIntentId:row.intent_id,writerEpoch:Number(row.writer_epoch),...(row.writer_continuation_digest?{writerContinuationDigest:row.writer_continuation_digest}:{}),workerId:saved.worker_id,toolsId:saved.tools_id,terminalDigest:saved.terminal_digest,
    workerLogSha256:saved.worker_log_sha256,toolsLogSha256:saved.tools_log_sha256});
   const checked=async(row:Record<string,any>,saved:Record<string,any>|undefined)=>{
    if(!saved||saved.parent_intent_id!==row.parent_intent_id||saved.run_id!==row.run_id||saved.holder_intent_id!==row.intent_id||

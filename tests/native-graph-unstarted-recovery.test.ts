@@ -99,7 +99,7 @@ test('prejournal managed writer continuation preserves original identity and unk
   docker.callResource=async(action)=>{if(action==='admit'){admissions++;return {};}if(action==='cancel_admission'){if(unknown)throw new Refusal('NATIVE_RESOURCE_UNCERTAIN');return {proof:'no_groups_no_create_claims'};}throw Error('UNEXPECTED_PHYSICAL_EFFECT');};
   const names=['ac-native-tools-'+intent.operation_id,'ac-native-worker-'+intent.operation_id];
   await admitNativeResources({docker,ledger:db,principal,authority,intentId:intent.id,grantId:oldGrant.id,jobId:intent.operation_id,names});
-  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);const successor=await db.acquire(principal,context,randomUUID(),'continuation-successor',60);
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);let successor=await db.acquire(principal,context,randomUUID(),'continuation-successor',60);
   const claim=()=>db.tx(async c=>{await db.fence(c,successor);return claimWorktreeWriter(c,{...writerKey,epoch:successor.epoch});});
   await assert.rejects(claim(),/WORKTREE_WRITER_BUSY/);unknown=true;
   await assert.rejects(reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor}),/NATIVE_RESOURCE_RECONCILIATION_UNCERTAIN/);
@@ -107,11 +107,31 @@ test('prejournal managed writer continuation preserves original identity and unk
   assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[oldGrant.id])).rows[0].state,'reserved');
   await assert.rejects(native.prepareRecovery(intent,authority),/STALE_MANAGER/);
   unknown=false;await reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor});
+  const second=successor;
+  // The second controller can die after no-effect release/continuation commit,
+  // before it reserved another grant. A third needs a fresh host proof.
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);successor=await db.acquire(principal,context,randomUUID(),'continuation-third',60);
+  await assert.rejects(claim(),/WORKTREE_WRITER_BUSY/);unknown=true;
+  await assert.rejects(reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor}),/NATIVE_RESOURCE_RECONCILIATION_UNCERTAIN/);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations')).rows[0].n,1);
+  await assert.rejects(native.prepareRecovery(intent,second),/STALE_MANAGER/);
+  unknown=false;await reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor});
   assert.deepEqual(await claim(),{state:'held',acquired:'same'});assert.deepEqual(await claim(),{state:'held',acquired:'same'});
   assert.equal((await db.pool.query('SELECT manager_epoch FROM ac_worktree_writers WHERE holder_intent_id=$1',[intent.id])).rows[0].manager_epoch,String(authority.epoch));
-  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations')).rows[0].n,1);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations')).rows[0].n,2);
   await assert.rejects(db.pool.query('DELETE FROM ac_worktree_writer_continuations'),/WORKTREE_CONTINUATION_IMMUTABLE/);
   assert.equal(await native.prepareRecovery(intent,successor),true);
+  // A fourth controller covers death after the operation cleared its old grant.
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);successor=await db.acquire(principal,context,randomUUID(),'continuation-fourth',60);
+  await assert.rejects(claim(),/WORKTREE_WRITER_BUSY/);await reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor});assert.deepEqual(await claim(),{state:'held',acquired:'same'});
+  assert.equal(await native.prepareRecovery(intent,successor),true);
+  // A fifth covers death after Capacity.reserve but before admission registration.
+  const gapAttempt=randomUUID(),gapGrant=await capacity.reserve(principal,{attemptId:gapAttempt,contextId:context,intentId:intent.id,role:'programmer'},successor);
+  await db.pool.query('UPDATE ac_operations SET grant_id=$2,execution_attempt_id=$3 WHERE id=$1',[intent.operation_id,gapGrant.id,gapAttempt]);
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);successor=await db.acquire(principal,context,randomUUID(),'continuation-fifth',60);
+  await assert.rejects(claim(),/WORKTREE_WRITER_BUSY/);await reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor});assert.deepEqual(await claim(),{state:'held',acquired:'same'});
+  assert.equal(await native.prepareRecovery(intent,successor),true);assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[gapGrant.id])).rows[0].state,'released');
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations')).rows[0].n,4);
   const nextGrant=await capacity.reserve(principal,{attemptId:randomUUID(),contextId:context,intentId:intent.id,role:'programmer'},successor);
   await db.pool.query('UPDATE ac_operations SET grant_id=$2,execution_attempt_id=$3 WHERE id=$1',[intent.operation_id,nextGrant.id,nextGrant.attempt_id]);
   await admitNativeResources({docker,ledger:db,principal,authority:successor,intentId:intent.id,grantId:nextGrant.id,jobId:intent.operation_id,names});

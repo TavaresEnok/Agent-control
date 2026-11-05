@@ -111,7 +111,11 @@ export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaem
  const docker=input.docker,errors:unknown[]=[];
  await new ReconciliationHistory(input.ledger).run(input.authority,'native-resource:'+docker.authorityId+':'+docker.stateRoot+':'+(input.recoverSource??'prejournal'),'ac_native_resource_admissions',async(ids,retain)=>{
   const rows=await input.ledger.tx(async c=>{await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);return (await c.query(`SELECT r.*,g.intent_id FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id
-   WHERE r.context_id=$1 AND r.authority_id=$2 AND r.state_root=$3 AND r.state<>'canceled' AND g.state<>'released' AND r.job_id=ANY($4::uuid[])
+   WHERE r.context_id=$1 AND r.authority_id=$2 AND r.state_root=$3 AND ((r.state<>'canceled' AND g.state<>'released') OR (r.state='canceled' AND g.state='released' AND EXISTS(
+     SELECT 1 FROM ac_operations o JOIN ac_intents child ON child.id=o.intent_id
+      JOIN ac_worktree_writers w ON w.parent_intent_id=child.parent_intent_id AND w.run_id=child.run_id AND w.holder_intent_id=child.id
+     WHERE o.id=r.job_id AND child.id=g.intent_id AND o.state='registered' AND w.state='held')))
+    AND r.job_id=ANY($4::uuid[])
     AND ((NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=g.id)
     AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=g.id)
     AND NOT EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=g.id))
@@ -121,8 +125,8 @@ export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaem
   retain(rows.map(row=>row.job_id));
   for(const row of rows){try{const recoverJob=await input.ledger.tx(async c=>{
    await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);
-   const current=(await c.query(`SELECT r.*,g.intent_id FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id
-    WHERE r.job_id=$1 AND r.admission_id=$2 AND r.context_id=$3 AND r.authority_id=$4 AND r.state_root=$5 AND r.state<>'canceled' FOR UPDATE OF g,r`,[row.job_id,row.admission_id,input.authority.contextId,docker.authorityId,docker.stateRoot])).rows[0];
+   const current=(await c.query(`SELECT r.*,g.intent_id,g.state grant_state FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id
+    WHERE r.job_id=$1 AND r.admission_id=$2 AND r.context_id=$3 AND r.authority_id=$4 AND r.state_root=$5 FOR UPDATE OF g,r`,[row.job_id,row.admission_id,input.authority.contextId,docker.authorityId,docker.stateRoot])).rows[0];
    if(!current)return;
    const job=(await c.query('SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1 UNION ALL SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=$1 UNION ALL SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=$1',[row.grant_id])).rowCount;
    const terminal=(await c.query(`SELECT 1 FROM ac_intents i WHERE i.id=$1 AND (i.state IN ('failed','canceled','cancelled') OR EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN(i.id,i.parent_intent_id)))`,[current.intent_id])).rowCount;
@@ -167,7 +171,8 @@ async function recoverNeverCreatedManagedWriter(c:import('pg').PoolClient,input:
  const expected=['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId].sort();
  if(!Array.isArray(input.admission.names)||JSON.stringify([...input.admission.names].sort())!==JSON.stringify(expected))return;
  const held=(await c.query(`SELECT i.id,i.parent_intent_id,i.run_id,w.manager_epoch,(i.state IN ('failed','canceled','cancelled') OR EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN(i.id,i.parent_intent_id))) terminal FROM ac_intents i
-  JOIN ac_operations o ON o.id=i.operation_id AND o.id=$1 AND o.grant_id=$2 AND o.state='registered'
+  JOIN ac_operations o ON o.id=i.operation_id AND o.id=$1 AND o.state='registered'
+  JOIN ac_capacity_grants previous ON previous.id=$2 AND previous.intent_id=i.id AND previous.context_id=i.context_id
   JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id AND w.holder_intent_id=i.id AND w.state='held'
   WHERE i.context_id=$3 AND (w.manager_epoch=$4 OR EXISTS(SELECT 1 FROM ac_worktree_writer_continuations t WHERE t.parent_intent_id=w.parent_intent_id AND t.run_id=w.run_id AND t.holder_intent_id=w.holder_intent_id AND t.writer_epoch=w.manager_epoch AND t.manager_epoch=$4))
    AND NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$2)

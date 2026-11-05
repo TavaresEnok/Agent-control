@@ -8,7 +8,7 @@ CREATE TABLE ac_worktree_writer_continuations(
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(parent_intent_id,run_id,manager_epoch),
  FOREIGN KEY(parent_intent_id,run_id) REFERENCES ac_worktree_writers,
- UNIQUE(admission_id));
+ UNIQUE(admission_id,manager_epoch));
 CREATE FUNCTION ac_immutable_writer_continuation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'WORKTREE_CONTINUATION_IMMUTABLE'; END $$;
 CREATE TRIGGER immutable_writer_continuation BEFORE UPDATE OR DELETE ON ac_worktree_writer_continuations
