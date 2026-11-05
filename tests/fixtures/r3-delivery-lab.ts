@@ -23,7 +23,7 @@ import {isolatedDatabase} from './isolated-database.ts';
 const command=(binary:string,args:string[])=>execFileSync(binary,args,{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 export const labGit=(repo:string,...args:string[])=>command('git',['-C',repo,...args]);
 /** New disposable resources only; no inherited accounts, credentials or daemon changes. */
-export async function remoteDevelopmentLab(base:string,options:{requireJudge?:boolean;configureEnvironment?:boolean;principal?:string}={}){
+export async function remoteDevelopmentLab(base:string,options:{requireJudge?:boolean;configureEnvironment?:boolean;principal?:string;sessionId?:string}={}){
  const isolated=await isolatedDatabase(base,'r3dev'),db=new Ledger(isolated.url),root=await mkdtemp(join(tmpdir(),'ac-r3-dev-')),scratch=await mkdtemp('/dev/shm/ac-r3-dev-');
  const name='ac-r3-delivery-dev-'+randomUUID().slice(0,8),installationId='ac-r3-delivery-dev-'+randomUUID();let container=false,mounted=false;
  const close=async()=>{
@@ -68,7 +68,7 @@ export async function remoteDevelopmentLab(base:string,options:{requireJudge?:bo
   const profiles={programmer:randomUUID(),qa:randomUUID(),reviewer:randomUUID(),judge:randomUUID()};
   for(const role of ['programmer','qa','reviewer','judge'] as const){await capacity.registerModel(principal,{provider:'r3-delivery-fixed',model:'fixed-'+role,efforts:['medium'],roles:[role],source:'synthetic://r3-delivery'});await capacity.addProfile(principal,projectId,{id:profiles[role],accountId,model:'fixed-'+role,effort:'medium',role});}
   await capacity.publish(principal,projectId,0,{schemaVersion:1,maxProgrammersPerContext:2,maxEvaluatorsPerContext:2,roles:{programmer:{regular:[profiles.programmer],emergency:[]},qa:{regular:[profiles.qa],emergency:[]},reviewer:{regular:[profiles.reviewer],emergency:[]},judge:{regular:[profiles.judge],emergency:[]}}});
-  const contextId=await db.createContext(principal,projectId,randomUUID()),authority=await db.acquire(principal,contextId,randomUUID(),'fixture',60);
+  const contextId=await db.createContext(principal,projectId,options.sessionId??randomUUID()),authority=await db.acquire(principal,contextId,randomUUID(),'fixture',60);
   await capacity.assignPolicy(principal,contextId,1);
   const ssh=new OpenSshTransport(async id=>{assert.equal(id,credentialId);return join(root,'controller');},new Set(['127.0.0.1'])),remote=new RemoteOperations(db,ssh);
   await remote.registerHost(principal,projectId,{id:hostId,label:'Disposable workspace host',hostname:'127.0.0.1',port,username:'node',publicKey:(await readFile(join(root,'host.pub'),'utf8')).trim(),fingerprint,credentialRef:credentialId,remoteRoot:bare,allowedTasks:['git-export','git-return','git-workspace','implement'],maxConcurrent:2});
