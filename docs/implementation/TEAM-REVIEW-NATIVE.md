@@ -23,3 +23,7 @@ As quatro variantes de saída sintética assinada verificam rejeição de campo 
 ## Revisão da prova com Git ativo — commits 2cc1f728 e cbd47ac1
 
 A identidade do órfão é capturada antes das asserções que motivaram o apontamento anterior. A nova variante observa o `git add --all` filho, `index.lock` e objeto temporário não vazio, congela o grupo e mata o controlador; uma autoridade sucessora em outro processo reconcilia o cancelamento. Aprovação estática desse recorte, sem reexecução independente. Docker é simulado; escrita iniciada não equivale a commit concluído, recuperação do grafo ou operação em produção.
+
+## Revisão do isolamento físico de credenciais — commit 45254bba
+
+A prova usa dois contêineres físicos, verifica namespaces PID distintos, controla a leitura da própria sentinela e procura reciprocamente a sentinela externa por caminhos, links e `/proc`, inclusive varrendo PIDs locais; a conclusão não depende apenas de um PID do host ser válido no namespace do contêiner. A asserção observa stdout/stderr, não todas as possíveis vias de exfiltração; CLI real e topologia completa não são cobertos. A limpeza tenta remover ambos os contêineres, mas ignora erros de `docker rm`; se o daemon falhar, um contêiner pode restar sem que a prova sinalize falha de limpeza. Recomenda-se verificar ausência dos nomes e registrar erro. Revisão estática sem reexecução independente; T24 não é aceito por esta prova.
