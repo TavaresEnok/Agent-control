@@ -6,7 +6,7 @@ const {promisify}=require('node:util');const run=promisify(execFile);
 const op=JSON.parse(process.argv[1]);
 if(!/^[a-f0-9-]{36}$/.test(op.id)||!/^sha256:[a-f0-9]{64}$/.test(op.worker_image)||!['version','rpc'].includes(op.phase)||op.container_name!=='ac-protocol-'+op.phase+'-'+op.id||!Number.isSafeInteger(Number(op.deadline_ms)))process.exit(70);
 const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'};
-let id=null,created=false,stopped=false,started=false,attached,cleaning;
+let terminalCode=null;let id=null,created=false,stopped=false,started=false,attached,cleaning;
 const send=value=>{if(process.connected)try{process.send(value,()=>{});}catch{}};
 const inspect=async name=>{try{return JSON.parse((await run('/usr/bin/docker',['inspect',name],{env,timeout:10000,maxBuffer:262144})).stdout)[0];}catch(error){if(String(error.stderr??'').includes('No such object'))return null;throw error;}};
 const valid=value=>value&&value.Image===op.worker_image&&value.Config?.Labels?.['agent-control.protocol-operation']===op.id&&value.Config?.Labels?.['agent-control.protocol-deadline']===String(op.deadline_ms)&&(!id||value.Id===id)&&/^[a-f0-9]{64}$/.test(value.Id);
@@ -14,8 +14,8 @@ const cleanup=()=>{
  stopped=true;if(!created)return;
  if(cleaning)return cleaning;
  cleaning=(async()=>{try{
-  const physical=await inspect(id??op.container_name);if(physical){if(!valid(physical))throw Error('identity');id=physical.Id;await run('/usr/bin/docker',['rm','-f',id],{env,timeout:10000,maxBuffer:65536});if(await inspect(id))throw Error('removal');}
-  attached?.kill('SIGKILL');send({type:'retired',id});setTimeout(()=>process.exit(0),10);
+  const physical=await inspect(id??op.container_name);if(physical){if(!physical.State?.Running&&physical.State?.Status==='exited'&&Number.isInteger(physical.State?.ExitCode))terminalCode=physical.State.ExitCode;if(!valid(physical))throw Error('identity');id=physical.Id;await run('/usr/bin/docker',['rm','-f',id],{env,timeout:10000,maxBuffer:65536});if(await inspect(id))throw Error('removal');}
+  attached?.kill('SIGKILL');send({type:'retired',id,exitCode:terminalCode});setTimeout(()=>process.exit(0),10);
  }catch{send({type:'uncertain'});process.exit(75);}})();return cleaning;
 };
 const timer=setTimeout(()=>void cleanup(),Math.max(1,Number(op.deadline_ms)-Date.now()));

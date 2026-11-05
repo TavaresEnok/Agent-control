@@ -26,25 +26,26 @@ type Probe={id:string;executor_digest:string;worker_image:string;phase:'version'
  * parent binds the immutable daemon ID durably before acknowledging any start. */
 async function launchProbe(ledger:Ledger,op:Probe){
  const child=spawn('/proc/'+process.pid+'/exe',['-e',nativeProtocolHostSupervisor,JSON.stringify(op)],{env,detached:true,stdio:['pipe','pipe','pipe','ipc']}) as ChildProcessWithoutNullStreams;
- let writes=Promise.resolve();let creationSettled=false;
+ let writes=Promise.resolve();let creationSettled=false,terminalCode:number|null=null;const closed=new Promise<void>(resolve=>child.once('close',()=>resolve()));
  const created=new Promise<void>((resolve,reject)=>{
   child.on('error',()=>{creationSettled=true;reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED'));});
   child.once('exit',()=>{if(!creationSettled)reject(new Refusal('NATIVE_PROTOCOL_PROCESS_EXITED'));});
-  child.on('message',(raw:unknown)=>{const message=raw as {type?:string;id?:string|null};
+  child.on('message',(raw:unknown)=>{const message=raw as {type?:string;id?:string|null;exitCode?:number|null};
    if(message.type==='created'){
     if(!message.id||!/^[a-f0-9]{64}$/.test(message.id)){child.send?.({stop:true});reject(new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH'));return;}
     writes=writes.then(async()=>{const row=(await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET container_id=$2 WHERE id=$1 AND (container_id IS NULL OR container_id=$2) RETURNING *',[op.id,message.id])).rows[0];if(!row)throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');op.container_id=message.id!;creationSettled=true;resolve();child.send?.({start:true,id:message.id});}).catch(error=>{creationSettled=true;child.send?.({stop:true});reject(error);});
    }else if(message.type==='retired'){
     if(message.id!==null&&op.container_id&&message.id!==op.container_id)return;
-    op.retired=true;writes=writes.then(async()=>{await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);});
+    terminalCode=Number.isInteger(message.exitCode)?message.exitCode!:null;op.retired=true;writes=writes.then(async()=>{await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);});void writes.catch(()=>{});
    }
   });
  });
  // IPC and pipe failures request cleanup; killing this helper would remove the
  // independent lifetime authority while candidate code might still run.
  child.stdin.on('error',()=>{if(child.connected)child.send?.({stop:true});});
- try{await created;}catch(error){if(child.connected)child.send?.({stop:true});await writes;throw error;}
- return {child,flush:()=>writes};
+ const stopAndWait=async()=>{if(child.connected)child.send?.({stop:true});let timer:ReturnType<typeof setTimeout>|undefined;try{await Promise.race([closed,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN')),30000);})]);await writes;}finally{if(timer)clearTimeout(timer);}};
+ try{await created;}catch(error){try{await stopAndWait();}catch{throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}throw error;}
+ return {child,flush:()=>writes,exitCode:()=>terminalCode,stopAndWait};
 }
 async function inspectProbe(name:string){
  try{return JSON.parse((await run('docker',['inspect',name],{env,timeout:10000,maxBuffer:262144})).stdout)[0] as Record<string,any>;}
@@ -54,7 +55,7 @@ async function retireProbe(ledger:Ledger,op:Probe){
  const container=await inspectProbe(op.container_name);
  if(!container){
   // Before the absolute deadline a delayed create remains possible. Keep the
-  // operation uncertain. A late watchdog refuses any spawn after that deadline.
+  // operation uncertain. The trusted host helper refuses any start after that deadline.
   if(!op.retired&&Date.now()<Number(op.deadline_ms))throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');
   await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);return;
  }
@@ -74,7 +75,7 @@ async function observe(spec:NativeProtocolSpec,ledger:Ledger){
  let cliVersion:string;
  try{
   const owned=await launchProbe(ledger,version),chunks:Buffer[]=[];let size=0,stderr=0;
-  const output=await new Promise<string>((resolve,reject)=>{owned.child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>8192){owned.child.send?.({stop:true});reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));}else chunks.push(chunk);});owned.child.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.length;});owned.child.stdout.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.stderr.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.on('close',()=>{if(stderr||!chunks.length)reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));else resolve(Buffer.concat(chunks).toString('utf8'));});});
+  const output=await new Promise<string>((resolve,reject)=>{owned.child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>8192){owned.child.send?.({stop:true});reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));}else chunks.push(chunk);});owned.child.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.length;});owned.child.stdout.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.stderr.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.on('close',()=>{if(stderr||!chunks.length||owned.exitCode()!==0)reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));else resolve(Buffer.concat(chunks).toString('utf8'));});});
   await owned.flush();cliVersion=z.string().regex(/^codex(?:-cli)? \d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/).parse(output.trim());
  }catch(error){throw error instanceof Refusal?error:new Refusal('NATIVE_PROTOCOL_VERSION_INVALID');}finally{await retireProbe(ledger,version);}
  const rpc=await begin('rpc');const owned=await launchProbe(ledger,rpc),child=owned.child;
@@ -106,7 +107,7 @@ async function observe(spec:NativeProtocolSpec,ledger:Ledger){
   }
   throw new Refusal('NATIVE_PROTOCOL_PAGE_LIMIT');
  }catch(error){throw error instanceof Refusal?error:new Refusal('NATIVE_PROTOCOL_OUTPUT_INVALID');}
- finally{clearTimeout(timer);lines.close();if(child.connected)child.send?.({stop:true});await retireProbe(ledger,rpc);await owned.flush();child.stdin.destroy();}
+ finally{clearTimeout(timer);lines.close();await owned.stopAndWait();await retireProbe(ledger,rpc);child.stdin.destroy();}
 }
 async function admin(c:pg.PoolClient,principal:string){if(!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount)throw new Refusal('CONTROL_ADMIN_REQUIRED',403);}
 /** Host-local verifier only. The HTTP/control APIs cannot submit receipt bodies.

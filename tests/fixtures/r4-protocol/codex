@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const readline=require('node:readline');
 const mode=process.env.FIXTURE_PROTOCOL_MODE;
-if(process.argv[2]==='--version'){console.log('codex-cli '+(mode==='new'?'2.0.0':'1.0.0'));process.exit(0);}
+if(process.argv[2]==='--version'){console.log('codex-cli '+(mode==='new'?'2.0.0':'1.0.0'));process.exit(mode==='version-failed'?73:0);}
 if(process.argv[2]!=='app-server')process.exit(71);
 if(mode==='early-exit')process.exit(73);
 const input=readline.createInterface({input:process.stdin});
