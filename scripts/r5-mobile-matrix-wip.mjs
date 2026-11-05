@@ -171,14 +171,18 @@ try{
   await page.getByLabel('Revisão para editar',{exact:true}).selectOption(String(revision));
   await page.getByRole('button',{name:'Carregar revisão',exact:true}).click();
   await page.getByLabel('Programadores por conversa',{exact:true}).fill(String(limit));
-  await page.getByLabel('Programação — adicionar reserva',{exact:true}).selectOption(newProfiles[width===360?0:1]);
+  if(width===360){
+   await page.getByLabel('Programação — adicionar regular',{exact:true}).selectOption(newProfiles[0]);
+   await page.getByLabel('Programação — adicionar reserva',{exact:true}).selectOption(newProfiles[1]);
+  }
+  await page.getByRole('button',{name:'Subir Programação regular 2',exact:true}).click();
   let dropped=false;await page.route('**/api/v1/ac/control',async route=>{if(!dropped){dropped=true;const response=await route.fetch();assert.equal(response.status(),200);await route.abort('failed')}else await route.continue()});
   const publish=page.getByRole('button',{name:'Publicar nova revisão',exact:true}),before=controlCommands.length;
   await publish.click();await page.waitForFunction(()=>document.body.textContent.includes('Failed to fetch'),null,{timeout:5000}).catch(()=>{});
   await publish.click({timeout:5000});await page.unroute('**/api/v1/ac/control');
   await page.getByLabel('Revisão para editar',{exact:true}).locator(`option[value="${revision+1}"]`).waitFor({state:'attached'});
   const attempts=controlCommands.slice(before);assert.equal(attempts.length,2);assert.equal(attempts[0].intentId,attempts[1].intentId);assert.notEqual(attempts[0].deliveryAttemptId,attempts[1].deliveryAttemptId);
-  const stored=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project.id,revision+1])).rows[0];assert.equal(stored.snapshot.maxProgrammersPerContext,limit);assert(stored.snapshot.roles.programmer.emergency.includes(newProfiles[width===360?0:1]));
+  const stored=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project.id,revision+1])).rows[0];assert.equal(stored.snapshot.maxProgrammersPerContext,limit);assert(stored.snapshot.roles.programmer.emergency.includes(newProfiles[1]));assert.equal(stored.snapshot.roles.programmer.regular.indexOf(newProfiles[0]),width===360?0:1);
   const deliveries=(await db.pool.query('SELECT count(*)::int n FROM ac_control_deliveries WHERE intent_id=$1',[attempts[0].intentId])).rows[0];assert.equal(deliveries.n,2);
  }
  console.log('PASS signed policy retry same intent after dropped acknowledgment at 360 and 390');
