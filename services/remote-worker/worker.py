@@ -206,7 +206,7 @@ def rpc(config_path):
             prior = json.loads(record.read_text())
             if prior['requestDigest'] != fingerprint:
                 raise ValueError('OPERATION_ID_CONFLICT')
-            return prior
+            return observed(prior)
         item = {'schemaVersion': 1, 'operationId': operation, 'state': 'uncertain', 'projectId': project,
                 'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
         # Persist before launching. A crash in this gap remains uncertain and is not blindly retried.
