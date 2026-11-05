@@ -262,7 +262,17 @@ export class Capacity {
         JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
         JOIN ac_intents i ON i.id=w.intent_id
         JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
-        WHERE w.resource_kind='model' AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
+        CROSS JOIN LATERAL (SELECT EXISTS(SELECT 1 FROM ac_contexts ox JOIN ac_managers om ON om.context_id=ox.id
+          JOIN ac_policy_revisions opr ON opr.project_id=ox.project_id AND opr.revision=ox.capacity_policy_revision
+          CROSS JOIN LATERAL jsonb_each(opr.snapshot->'roles') chain
+          CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(chain.value->'regular','[]'::jsonb)||COALESCE(chain.value->'emergency','[]'::jsonb)) member
+          JOIN ac_profiles op ON op.id=member.value::uuid JOIN ac_accounts oa ON oa.id=op.account_id
+          JOIN ac_account_access access ON access.account_id=oa.id AND access.project_id=ox.project_id
+          JOIN ac_quota_observations oq ON oq.account_id=oa.id
+          WHERE NOT ox.paused AND om.lease_until>clock_timestamp() AND oa.id<>a.id AND oa.enabled AND op.enabled AND oa.mode='synthetic'
+          AND ((w.role='programmer' AND op.role='programmer') OR (w.role<>'programmer' AND op.role IN ('reviewer','qa','specialist','judge')))
+          AND oa.eligibility='documented_supported' AND oq.status='available' AND oq.expires_at>clock_timestamp()) AS available) alternative
+        WHERE w.resource_kind='model'  AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
         AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp()
         AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
         AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
@@ -277,8 +287,13 @@ export class Capacity {
           AND ((w.role='programmer' AND g.role='programmer') OR
             (w.role IN ('reviewer','qa','specialist','judge') AND g.role IN ('reviewer','qa','specialist','judge'))))
           < CASE WHEN w.role='programmer' THEN $2::integer ELSE $3::integer END)
+        AND (a.id IS DISTINCT FROM $4::uuid OR w.role='manager' OR
+          (alternative.available AND w.role<>'programmer') OR (NOT alternative.available AND
+            (SELECT count(*) FROM ac_capacity_grants g WHERE g.state<>'released' AND g.account_id=a.id AND
+              ((w.role='programmer' AND g.role='programmer') OR (w.role<>'programmer' AND g.role IN ('reviewer','qa','specialist','judge'))))
+              < CASE WHEN w.role='programmer' THEN $5::integer ELSE $6::integer END))
         ORDER BY (w.created_at <= clock_timestamp()-interval '5 minutes') DESC,
-          CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`,[selected.account_id,config.programming_limit,config.evaluation_limit])).rows[0];
+          CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`,[selected.account_id,config.programming_limit,config.evaluation_limit,config.original_account_id,config.original_programming_limit,config.original_evaluation_limit])).rows[0];
       if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const emergency = chain.emergency.includes(selected.id);
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants

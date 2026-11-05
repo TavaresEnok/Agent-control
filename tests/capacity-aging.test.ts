@@ -74,5 +74,19 @@ test('database queue preserves initial priority then bounds overtaking across co
   await other.transition(principal,evaluation.id,authorities[2]!,'released',{processId:'fixture',state:'not_started'});
   await capacity.transition(principal,occupying.id,authorities[1]!,'released',{processId:'fixture',state:'not_started'});
   const resumed=await capacity.reserve(principal,saturated,authorities[1]!);assert.equal(resumed.profile_id,programmer);
+  const alternate=randomUUID(),alternateProfile=randomUUID();
+  await capacity.addAccount(principal,project,{id:alternate,provider:'synthetic',label:'alternate',resourceIdentity:randomUUID(),mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'fixture',maxConcurrent:1});
+  await capacity.addProfile(principal,project,{id:alternateProfile,accountId:alternate,model:'fixture',effort:'medium',role:'programmer'});
+  await capacity.observeQuota(principal,alternate,{status:'exhausted',source:'fixture',ttlSeconds:3600});
+  const alternatePolicy=await capacity.publish(principal,project,limited,{schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:1,roles:{programmer:{regular:[alternateProfile],emergency:[]}}});
+  await capacity.assignPolicy(principal,contexts[0]!,alternatePolicy);
+  await capacity.configure(principal,{programmingLimit:2,evaluationLimit:2,originalFallback:{accountId:account,programmingLimit:1,evaluationLimit:1}});
+  await db.pool.query('UPDATE ac_accounts SET max_concurrent=1 WHERE id=$1',[account]);
+  const originalWait=req(2,'programmer');await assert.rejects(other.reserve(principal,originalWait,authorities[2]!),/CAPACITY_BUSY/);
+  await db.pool.query("UPDATE ac_capacity_waits SET created_at=clock_timestamp()-interval '6 minutes' WHERE attempt_id=$1",[originalWait.attemptId]);
+  await db.pool.query('UPDATE ac_accounts SET max_concurrent=2 WHERE id=$1',[account]);
+  await capacity.observeQuota(principal,alternate,{status:'available',source:'fixture',ttlSeconds:3600});
+  const originalEvaluation=await other.reserve(principal,req(2,'qa'),authorities[2]!);
+  assert.equal(originalEvaluation.profile_id,qa);
  }finally{await otherDb.close();await db.close();await database.close();}
 });
