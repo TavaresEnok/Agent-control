@@ -1,0 +1,46 @@
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+PASS signed account rename and immutable profile revision after creation at 360 and 390
+PASS signed pause and resume retry same intent after dropped acknowledgment at 360 and 390, four effects and eight deliveries
+PASS signed policy retry same intent after dropped acknowledgment at 360 and 390
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+PASS signed pause/resume ACK loss followed by reload reconciles authoritative state at 360/390
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+PASS signed policy ACK loss followed by reload reveals committed revision at 360/390
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/providers/status
+HTTP_SEEN 403 PUT http://127.0.0.1:40049/api/v1/workspace/ui-state
+HTTP_SEEN 403 GET http://127.0.0.1:40049/api/v1/star-count
+HTTP_SEEN 403 POST http://127.0.0.1:40049/api/v1/telemetry/error
+PASS authenticated start reconnect/reload and retry at 360/390, distinct proposals/intents, no native worker started

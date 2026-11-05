@@ -184,6 +184,28 @@ try{
  }
  console.log('PASS signed policy retry same intent after dropped acknowledgment at 360 and 390');
 
+ for(const width of [360,390]){
+  await page.setViewportSize({width,height:844});
+  for(const [label,after] of [['Pausar novas etapas','Retomar etapas'],['Retomar etapas','Pausar novas etapas']]){
+   stage=`control reconnect ${width} ${label}`;const button=page.getByRole('button',{name:label,exact:true});
+   await page.waitForFunction(label=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()===label);return !!b&&!b.disabled},label,{timeout:15000});
+   let dropped=false;await page.route('**/api/v1/ac/control',async route=>{if(!dropped){dropped=true;await route.fetch();await route.abort('failed')}else await route.continue()});
+   const before=controlCommands.length;await button.click();await page.waitForTimeout(500);await page.reload();await page.getByRole('button',{name:after,exact:true}).waitFor();await page.unroute('**/api/v1/ac/control');
+   const sent=controlCommands.slice(before);assert.equal(sent.length,1);const found=(await db.pool.query('SELECT count(*)::int n FROM ac_control_intents WHERE id=$1',[sent[0].intentId])).rows[0];assert.equal(found.n,1);
+  }
+ }
+ const stateAfterReconnect=(await db.pool.query('SELECT paused,pause_revision FROM ac_contexts WHERE id=$1',[contextId])).rows[0];assert.equal(stateAfterReconnect.paused,false);assert.equal(stateAfterReconnect.pause_revision,8);
+ console.log('PASS signed pause/resume ACK loss followed by reload reconciles authoritative state at 360/390');
+ for(const [width,revision,limit] of [[360,3,4],[390,4,5]]){
+  stage=`policy reconnect ${width}`;await page.setViewportSize({width,height:844});
+  await page.getByLabel('Revisão para editar',{exact:true}).selectOption(String(revision));await page.getByRole('button',{name:'Carregar revisão',exact:true}).click();
+  await page.getByLabel('Programadores por conversa',{exact:true}).fill(String(limit));
+  let dropped=false;await page.route('**/api/v1/ac/control',async route=>{if(!dropped){dropped=true;await route.fetch();await route.abort('failed')}else await route.continue()});
+  const before=controlCommands.length;await page.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();await page.waitForTimeout(500);await page.reload();
+  await page.getByLabel('Revisão para editar',{exact:true}).locator(`option[value="${revision+1}"]`).waitFor({state:'attached'});await page.unroute('**/api/v1/ac/control');
+  const sent=controlCommands.slice(before);assert.equal(sent.length,1);const row=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project.id,revision+1])).rows[0];assert.equal(row.snapshot.maxProgrammersPerContext,limit);
+ }
+ console.log('PASS signed policy ACK loss followed by reload reveals committed revision at 360/390');
  const startCommands=[];page.on('request',req=>{if(req.url().endsWith('/api/v1/ac/commands')&&req.method()==='POST')startCommands.push(req.postDataJSON())});
  for(const [width,revision] of [[360,1],[390,2]]){
   stage=`authenticated start ${width}`;await page.setViewportSize({width,height:844});
