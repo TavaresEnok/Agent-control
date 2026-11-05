@@ -27,3 +27,7 @@ Projeção cifrada limitada, ainda sem ponto de entrada montado; `restorable:fal
 ## Grafo móvel: 22dd70de e checkpoints seguintes
 
 Em desenvolvimento. A leitura de digest seguida de rename não constitui CAS atômico contra edição externa concorrente; o autor confirmou a lacuna. Também foi identificada ambiguidade de adoção de arquivo legado preexistente idêntico no primeiro intent. Pais existentes com modo 0755 são recusados pelo contrato de diretórios privados; o percurso precisa apresentar essa condição. Não há aprovação enquanto gateway, navegador e correções estiverem pendentes.
+
+## Desenvolvimento remoto canônico: d0a6eac6 e scripts ancestrais
+
+Aprovada a prova delimitada do autor em `/tmp/ac-r5-canonical-result3.log`: settings/browser e registry reais, SSH/Docker, artefato inicialmente não revisado, QA/review/judge, aprovação humana UI, integração backend e devolução UI à origem SSH. O script exporta a fonte via `lab.remote.exportGit` após autorização UI assinada; estágios de verificação e integração são chamados pelo harness, não pelo browser; inferência é fixture determinística. O resultado anterior `/tmp/ac-r5-canonical-result2.log` é negativo com `NATIVE_EXECUTION_INSPECTION_MISMATCH` e não é convertido em sucesso. A prova citada é execução do autor, não reexecução independente.
