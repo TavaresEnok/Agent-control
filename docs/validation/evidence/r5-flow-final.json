@@ -1,0 +1,255 @@
+{
+  "fixture": "r3-conversation-flow",
+  "inference": "deterministic-only",
+  "substitutions": [
+    "deterministic planning/model output",
+    "private subnet allocator"
+  ],
+  "providerGuards": "intact",
+  "tools": {
+    "kind": "actual native-tools-worker with public Codex exec-server",
+    "version": "codex-cli 0.166.0",
+    "publicBinarySha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+    "transport": "authenticated WebSocket capability token",
+    "operations": [
+      "initialize",
+      "initialized",
+      "fs/createDirectory",
+      "fs/writeFile",
+      "fs/readFile"
+    ],
+    "inference": false,
+    "writeReadProofs": 3,
+    "readOnlyRefusals": 4,
+    "badCapabilityRefusals": 7,
+    "accountHomeAbsent": true
+  },
+  "resourceLimits": {
+    "cpuMax": "200000 100000",
+    "memoryMax": 1073741824,
+    "pidsMax": 256
+  },
+  "scopedQuota": {
+    "unknownModelUnavailable": true,
+    "models": [
+      "fixed-judge",
+      "fixed-manager",
+      "fixed-programmer",
+      "fixed-qa",
+      "fixed-reviewer"
+    ],
+    "mode": "model",
+    "source": "deterministic fixture observation",
+    "programmerExhaustionBlockedProduct": true,
+    "reviewerRemainedAvailable": true,
+    "zeroNativeLaunchesWhileBlocked": true,
+    "exactModelRestored": true
+  },
+  "productPlanningRetirementConfirmed": true,
+  "commandLatency": {
+    "schemaVersion": 1,
+    "scope": "synthetic-local-benchmark",
+    "homologated": false,
+    "clock": "monotonic performance.now",
+    "environment": {
+      "node": "v22.23.3",
+      "platform": "linux",
+      "kernel": "7.0.0-38-generic",
+      "logicalCpus": 10,
+      "memoryBytes": 16761257984
+    },
+    "externalProvider": {
+      "exercised": false,
+      "latencyMs": null,
+      "reason": "deterministic synthetic fixtures; no external inference"
+    },
+    "metrics": {
+      "commandAcceptance": {
+        "samples": 8,
+        "p50Ms": 25.095359000000826,
+        "p95Ms": 195.4821350000002,
+        "maxMs": 195.4821350000002
+      },
+      "authentication": {
+        "samples": 8,
+        "p50Ms": 12.81,
+        "p95Ms": 32.146,
+        "maxMs": 32.146
+      },
+      "application": {
+        "samples": 8,
+        "p50Ms": 8.255,
+        "p95Ms": 172.491,
+        "maxMs": 172.491
+      }
+    },
+    "transport": "production Hono handler → real Happier authentication → PostgreSQL",
+    "network": "in-process handler invocation; not a network benchmark",
+    "commandMix": {
+      "newIntents": 1,
+      "idempotentDeliveryRetries": 7
+    },
+    "thresholds": {
+      "commandAcceptanceMs": 2000
+    }
+  },
+  "eventLatency": {
+    "schemaVersion": 1,
+    "scope": "synthetic-local-benchmark",
+    "homologated": false,
+    "clock": "monotonic performance.now",
+    "environment": {
+      "node": "v22.23.3",
+      "platform": "linux",
+      "kernel": "7.0.0-38-generic",
+      "logicalCpus": 10,
+      "memoryBytes": 16761257984
+    },
+    "externalProvider": {
+      "exercised": false,
+      "latencyMs": null,
+      "reason": "deterministic synthetic fixtures; no external inference"
+    },
+    "metrics": {
+      "committedEventUpdateUpperBound": {
+        "samples": 10,
+        "p50Ms": 101.14963399999397,
+        "p95Ms": 155.70247600000584,
+        "maxMs": 155.70247600000584
+      },
+      "eventReadAuthentication": {
+        "samples": 10,
+        "p50Ms": 11.691,
+        "p95Ms": 22.598,
+        "maxMs": 22.598
+      }
+    },
+    "transport": "committed PostgreSQL projection → authenticated product events endpoint",
+    "network": "in-process Hono request; real authentication network; includes 50ms polling interval",
+    "eventClock": "conservative upper bound from start of previous PG snapshot query (which lacked the event) to authenticated API observation; includes DB query/auth/polling",
+    "thresholds": {
+      "committedEventUpdateMs": 5000
+    },
+    "requestedSamples": 10,
+    "complete": true
+  },
+  "canonicalPublication": {
+    "providerIdSequenceReceiptMatched": true,
+    "localIdAndCiphertextStableAcrossAckLoss": true,
+    "completionRetryAttempts": 2,
+    "parentRunOnly": true,
+    "managedChildRuntimeNotifications": 0,
+    "receiptStableAfterReconnect": true
+  },
+  "positive": {
+    "planningJobs": 1,
+    "executionJobs": [
+      {
+        "id": "95473e7d-4ce8-42ec-8bb1-30f979a162f5",
+        "role": "reviewer",
+        "state": "completed"
+      },
+      {
+        "id": "b24567b2-069a-5c21-aa50-c78be9eac770",
+        "role": "programmer",
+        "state": "completed"
+      },
+      {
+        "id": "38e01346-12cc-5d84-abb6-82b8e9764f3e",
+        "role": "programmer",
+        "state": "completed"
+      },
+      {
+        "id": "16e186e9-e315-408a-b504-c3d1652a655e",
+        "role": "reviewer",
+        "state": "completed"
+      },
+      {
+        "id": "415984c9-dd48-5c93-a971-8f50de0dd5b2",
+        "role": "programmer",
+        "state": "completed"
+      },
+      {
+        "id": "41901c8a-4b98-4dc2-af47-d538e9ea070a",
+        "role": "reviewer",
+        "state": "completed"
+      },
+      {
+        "id": "48723312-ae7c-4e77-8a81-a0ca840450e8",
+        "role": "reviewer",
+        "state": "completed"
+      }
+    ],
+    "qaJobs": 4,
+    "protectedCommit": "7e76b6ac0837c9673bb35bcfd780b921f5c67338",
+    "capacity": "actual",
+    "eligibility": "actual",
+    "home": "actual",
+    "conversation": "real Happier E2EE",
+    "canonicalCompletion": true,
+    "publicationAckLoss": true,
+    "reconnectRecovered": true
+  },
+  "runningResourceMembers": [
+    "a5176a0ec4f1fcf61f5362f9ec6d636b2cb10dcefd09b8ae9c86b60a2cc999ab",
+    "b0c1190227cec19af24429758690342e74c51e18db4b6875c7a3faedb6784d97"
+  ],
+  "secretCanary": {
+    "synthetic": true,
+    "surfaces": [
+      "execution/planning requests, launches, outputs and retained logs",
+      "QA retained logs",
+      "protected Git artifact files",
+      "decrypted canonical Happier messages"
+    ],
+    "generatedFilesScanned": 121,
+    "wrongOwnerRefused": true,
+    "leaks": 0,
+    "excluded": [
+      "vault (not configured)",
+      "portable export (not exercised)",
+      "real provider secrets"
+    ]
+  },
+  "environment": {
+    "revision": 1,
+    "id": "lab",
+    "sourceCommit": "b93e3a0340e5275fe68e0a113b76e14b80944cde",
+    "subsequentSourceCommit": "7e76b6ac0837c9673bb35bcfd780b921f5c67338",
+    "boundIntents": 8
+  },
+  "prejournalWait": {
+    "persisted": true,
+    "sameAdmissionAfterSigkill": true,
+    "canceledBySuccessor": true,
+    "hostAbsenceProof": true,
+    "noThirdLaunch": true
+  },
+  "resourceAdmissions": [
+    {
+      "state": "admitted",
+      "n": 14
+    },
+    {
+      "state": "canceled",
+      "n": 1
+    }
+  ],
+  "cancel": {
+    "authenticated": "real Happier bearer → encrypted browser session → Origin cookie",
+    "signed": true,
+    "paused": true,
+    "controllerSigkill": true,
+    "successorEpoch": 2,
+    "physicallyRunningBeforeRequest": 2,
+    "confirmed": true,
+    "remainingGrants": 0
+  },
+  "resourceRetirement": {
+    "containersRemaining": 0,
+    "pendingHostReservations": 0,
+    "ownedAuthorityFilesRetired": true,
+    "ownedInstallationBindingRetired": true,
+    "emptyParentRetained": true
+  }
+}
