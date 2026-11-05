@@ -53,3 +53,5 @@ O browser d963e0dd e `/tmp/ac-r5-graph-browser-final.log` acrescentam remoção 
 ## RNF08 — contraprova de capability
 
 `1bed0f6a` repetido independentemente: 1/1. Um `AgentRunner` determinístico injetado devolve em output bem-sucedido a capability sintética que recebeu em `executionEnvironment`, ausente dos prompts. A contraprova aponta exposição no retorno do adapter; não é prova de vazamento em contêiner, inferência real ou toda superfície downstream. Exige correção e prova composta; as 23 superfícies antes aprovadas mantêm apenas seu escopo original.
+
+Follow-up f8dc8f90/11ca74c5: log e diff do gateway temporário foram versionados. O roteiro agora salva edição textual na revisão 2, confirma após reload e remove na revisão 3, em 360/390. Aprovada essa fatia da execução do autor; chave inscrita por fixture, gateway temporário e ausência de execução/Android continuam limites.
