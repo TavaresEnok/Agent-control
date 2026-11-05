@@ -18,11 +18,13 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
  const row={id:jobId,context_id:contextId,intent_id:intentId,grant_id:grantId,session_id:sessionId,role:'reviewer',input_digest:digest(input),executor_digest:executor,key_fingerprint:fingerprint,manager_epoch:1,grant_epoch:1,grant_state:'released',state:'failed',receipt,physical_receipt:physical,worker_id:worker,tools_id:tools,network_id:network,account_id:'account',profile_id:'profile',grant_account:'account',grant_profile:'profile',grant_intent:intentId,grant_context:contextId,grant_role:'reviewer',resource_kind:'model'};
  const labels={'agent-control.job':jobId,'agent-control.launch':digest(input),'agent-control.contract':'native-execution-v1'};
  const containers=new Map([[worker,{Id:worker,Image:'worker',Config:{Labels:labels},State:{Running:false,Status:'exited',FinishedAt:physical.finishedAt,ExitCode:1}}],[tools,{Id:tools,Image:'tools',Config:{Labels:labels},State:{Running:false,Status:'exited',FinishedAt:physical.toolsFinishedAt,ExitCode:0}}]]);
+ let canceled=true;
  let net:any={Id:network,Name:'ac-native-exec-'+jobId,Internal:true,Labels:labels,Containers:{}},saved:any,loseAck=true;
  const docker={inspect:async(id:string)=>containers.get(id==='ac-native-worker-'+jobId?worker:id==='ac-native-tools-'+jobId?tools:id),logs:async(id:string)=>Buffer.from(id===worker?'worker log':'tools log'),remove:async(id:string)=>{containers.delete(id);if(loseAck){loseAck=false;throw new Error('lost ack');}},inspectPrivateNetwork:async()=>net,removePrivateNetwork:async()=>{net=undefined;}};
  const client={query:async(sql:string,args:any[])=>{
   if(sql.includes('FROM ac_native_execution_jobs j JOIN'))return {rows:[row]};
-  if(sql.startsWith('SELECT 1 FROM ac_plan_cancellations'))return {rowCount:0,rows:[]};
+  if(sql.startsWith('SELECT 1 FROM ac_plan_cancellations'))return {rowCount:canceled?1:0,rows:[]};
+  if(sql.startsWith('SELECT * FROM ac_stage_operations'))return {rows:[]};
   if(sql.startsWith('SELECT * FROM ac_native_terminal_retirements'))return {rows:saved?[saved]:[]};
   if(sql.startsWith('INSERT INTO ac_native_terminal_retirements')){saved={binding:args[1],state:'prepared',proof:null};return {rows:[]};}
   if(sql.startsWith('UPDATE ac_native_terminal_retirements')){saved={...saved,state:'removed',proof:args[1]};return {rows:[]};}
@@ -33,6 +35,8 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
  Object.assign(supervisor,{ledger:{tx:async(fn:any)=>fn(client)},config:{hostRoot:root,providerNetworkId:provider,workerImage:'worker',toolsImage:'tools'},key:keys.privateKey,executorDigest:executor,fingerprint,docker});
  supervisor.scope=async()=>{};supervisor.registeredInput=async()=>input;supervisor.reconcile=async()=>({state:'failed',receipt,output:'',artifact:null});
  try{
+  await assert.rejects(supervisor.retireTerminal('owner',{contextId,epoch:1},jobId),/NATIVE_RETIREMENT_EVIDENCE_MISSING/);
+  assert.equal(containers.size,2);assert.equal(saved,undefined);canceled=false;
   await assert.rejects(supervisor.retireTerminal('owner',{contextId,epoch:1},jobId),/lost ack/);
   assert.equal(saved.state,'prepared');assert.equal((await readFile(join(root,jobId,'worker-terminal.log'))).toString(),'worker log');
   assert.deepEqual(await supervisor.retireTerminal('owner',{contextId,epoch:2},jobId),{state:'removed'});
