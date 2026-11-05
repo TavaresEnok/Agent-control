@@ -28,8 +28,8 @@ export async function reconcileWorkflowFile(repo:string,identity:unknown,name:st
    const s=await dir.stat();if(s.uid!==process.getuid?.()||(s.mode&0o077)!==0)throw Error('unsafe directory');
   }
   const base=`/proc/self/fd/${dir.fd}`,leaf=join(base,`${name}.yaml`);
-  const read=async()=>{let f:FileHandle;try{f=await open(leaf,constants.O_RDONLY|nofollow);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return null;throw e;}
-   try{const s=await f.stat();if(!s.isFile()||s.uid!==process.getuid?.()||(s.mode&0o077)!==0||s.size>256*1024)throw Error('unsafe file');return hash(await f.readFile());}finally{await f.close();}};
+  const read=async()=>{let f:FileHandle;try{f=await open(leaf,constants.O_RDONLY|nofollow|constants.O_NONBLOCK);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return null;throw e;}
+   try{const s=await f.stat();if(!s.isFile()||s.nlink!==1||s.uid!==process.getuid?.()||(s.mode&0o077)!==0||s.size>256*1024)throw Error('unsafe file');return hash(await f.readFile());}finally{await f.close();}};
   let current=await read();if(current===desiredDigest)return;
   if(current!==oldDigest)throw new Refusal('WORKFLOW_FILE_CONFLICT',409);
   temp=join(base,`.ac-${randomUUID()}.tmp`);
