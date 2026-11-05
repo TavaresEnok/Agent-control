@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,chmod,symlink,link,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,appendFile,open,chmod,symlink,link,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {z} from 'zod';
@@ -20,6 +20,21 @@ test('private worker input refuses links, non-regular files and oversized conten
   await assert.rejects(readPrivateWorkerFile(dir,100),/INVALID_WORKER_PRIVATE_FILE/);
   await assert.rejects(readPrivateWorkerFile(file,-1),/INVALID_WORKER_PRIVATE_FILE/);
  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('private worker read rejects a file that grows after stat',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ac-worker-race-')),file=join(dir,'input');
+ let prototype:any,original:any;
+ try{
+  await writeFile(file,'small',{mode:0o600});
+  const probe=await open(file,'r');prototype=Object.getPrototypeOf(probe);original=prototype.stat;await probe.close();
+  // Test-only barrier: grow the file after the descriptor's actual stat, before
+  // the caller resumes and reads. No hooks are exposed by the worker.
+  let intercepted=false;
+  prototype.stat=async function(...args:unknown[]){const info=await original.apply(this,args);if(!intercepted){intercepted=true;await appendFile(file,'-over-limit');}return info;};
+  await assert.rejects(readPrivateWorkerFile(file,5),/INVALID_WORKER_PRIVATE_FILE/);
+  assert.equal(intercepted,true);
+ }finally{if(prototype&&original)prototype.stat=original;await rm(dir,{recursive:true,force:true});}
 });
 
 test('worker accepts only a signed scoped request and the matching private subscription identity',async()=>{

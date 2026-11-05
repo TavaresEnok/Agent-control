@@ -15,6 +15,21 @@ export const NativeQaContract=NativeQaSchema;
 export type NativeQaContract=NativeQaValue;
 export {nativeQaContractDigest};
 function evidenceId(id:string){const h=digest({domain:'native-qa-evidence-v1',id});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
+/** Docker non-TTY logs are a sequence of 8-byte multiplex headers and
+ * payloads. Never accept a partially received header or payload as evidence. */
+export function assertCompleteQaLogs(logs:Buffer){
+ let offset=0;
+ while(offset<logs.length){
+  if(logs.length-offset<8||![1,2].includes(logs[offset])||logs[offset+1]!==0||logs[offset+2]!==0||logs[offset+3]!==0)throw new Refusal('NATIVE_QA_LOGS_INVALID');
+  const length=logs.readUInt32BE(offset+4);offset+=8;
+  if(length>logs.length-offset)throw new Refusal('NATIVE_QA_LOGS_INVALID');
+  offset+=length;
+ }
+}
+export async function collectQaLogs(fetch:()=>Promise<Buffer>){
+ try{const logs=await fetch();assertCompleteQaLogs(logs);return {logs,logsAvailable:true};}
+ catch{return {logs:Buffer.from(JSON.stringify({source:'controller',error:'QA_LOG_COLLECTION_UNAVAILABLE'})),logsAvailable:false};}
+}
 /** Executes only a trusted, policy-pinned command in a credential-free Docker
  * sandbox. Docker exit status is authoritative; test stdout cannot mint QA.
  * No model, account home, shell supplied by an agent or second scheduler. */
@@ -128,8 +143,7 @@ export class NativeQa{
   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical)return {state:'uncertain' as const};this.inspect(physical,job);
   if(physical.State.Running){if(job.deadline_elapsed)await this.stop(principal,authority,id,'timeout');return {state:'running' as const};}
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return {state:'uncertain' as const};
-  let logs:Buffer,logsAvailable=true;
-  try{logs=await this.docker.logs(physical.Id);}catch{logsAvailable=false;logs=Buffer.from(JSON.stringify({source:'controller',error:'QA_LOG_COLLECTION_UNAVAILABLE'}));}
+  const {logs,logsAvailable}=await collectQaLogs(()=>this.docker.logs(physical.Id));
   const logSha256=createHash('sha256').update(logs).digest('hex');
   const pending=join(this.paths(id).area,'qa-logs-'+randomUUID()+'.pending');
   const file=await open(pending,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
