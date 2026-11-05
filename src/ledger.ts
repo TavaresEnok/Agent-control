@@ -1,3 +1,4 @@
+import {RuntimeIdentity,assertGenerationFence,assertGenerationIntent,enrollWorkflowAdmission} from './workflow-generations.ts';
 import {fenceInstallationContext,type InstallationFenceToken} from './installation-authority-fence.ts';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -11,7 +12,7 @@ export type Intent = { id: string; context_id: string; operation_id: string; run
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
 export class Ledger {
   readonly pool: pg.Pool;
-  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken) { this.pool = new pg.Pool({ connectionString, max: 8 }); }
+  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8 }); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
     try { await c.query('BEGIN'); const v = await fn(c); await c.query('COMMIT'); return v; }
@@ -78,6 +79,7 @@ export class Ledger {
       WHERE x.id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until>clock_timestamp() FOR UPDATE OF x,m`,
     [a.contextId, a.instanceId, a.epoch]);
     if (!r.rowCount) throw new Refusal('STALE_MANAGER');
+    await assertGenerationFence(c,a.contextId,allowPaused);
     await fenceInstallationContext(c,a.contextId,this.installationAuthority,allowPaused);
     if (r.rows[0].paused && !allowPaused) throw new Refusal('HUMAN_PAUSED');
     const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
@@ -92,6 +94,7 @@ export class Ledger {
   /** Must run after fence/authorize has locked the context. Cancellation then
    * serializes with the physical-effect transaction, not only a UI flag. */
   async assertIntentActive(c:pg.PoolClient,contextId:string,intentId:string){
+    await assertGenerationIntent(c,intentId,this.runtimeIdentity);
     if(!(await c.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2',[intentId,contextId])).rowCount)
       throw new Refusal('INTENT_SCOPE_MISMATCH',403);
     if((await c.query('SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 OR intent_id=(SELECT parent_intent_id FROM ac_intents WHERE id=$1)',[intentId])).rowCount)
@@ -180,6 +183,7 @@ export class Ledger {
           ?await freezeManagedExecution(this,c,intent,principal,a,command.payload.proposalRevision,command.payload.proposalDigest)
           :workflowFor(command.payload.workflow);
         await c.query('INSERT INTO ac_frozen_plans VALUES($1,$2,$3,$4,$5)',[command.contextId,revision,intent.id,digest(workflow),workflow]);
+        await enrollWorkflowAdmission(c,intent.id);
         await c.query('INSERT INTO ac_operations(id,intent_id,state,manager_epoch) VALUES($1,$2,\'registered\',$3)', [intent.operation_id, intent.id, a.epoch]);
         await c.query('INSERT INTO ac_outbox(id,intent_id) VALUES($1,$2)', [randomUUID(), intent.id]);
         if (checkpoint) await c.query('UPDATE ac_checkpoints SET epoch=$2,snapshot=$3,updated_at=now() WHERE context_id=$1',

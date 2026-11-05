@@ -1,3 +1,4 @@
+import {assertCurrentRuntimeBuild} from './local-workflow-runtime.ts';
 import type {NativeImplementation} from './native-implementation.ts';
 import type {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -279,9 +280,11 @@ export class CezarRuntime {
     | {state:'current'|'retained'|'dynamic'; definition: WorkflowDef; version: string; digest: string}
     | {state:'absent'}
     | {state:'retired'; cause: typeof WORKFLOW_VERSION_RETIRED; reason:'unregistered'|'divergent'}> {
+    if(this.ledger.runtimeIdentity)await assertCurrentRuntimeBuild(this.ledger.runtimeIdentity.buildId);
     return this.ledger.tx(async c=>{
       await this.ledger.fence(c,authority);
       if(intent.context_id!==authority.contextId)throw new Refusal('EFFECT_SCOPE_MISMATCH');
+      await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       const row=(await c.query(`SELECT i.principal_id,i.context_id,i.run_id,i.operation_id,i.plan_revision,i.manager_epoch,i.command,f.snapshot,f.digest,
         p.workflow_version,p.workflow_digest,p.manager_epoch AS pin_epoch,p.runtime_version,p.runtime_build,p.policy
         FROM ac_intents i LEFT JOIN ac_frozen_plans f ON f.intent_id=i.id
