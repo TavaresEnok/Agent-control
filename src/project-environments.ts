@@ -121,13 +121,25 @@ export class ProjectEnvironments{
 
 /** Exact current immutable environment for real remote effects. Remote filesystem
  * paths remain governed by the remote host's existing root/workspace authority. */
-export async function requireProjectEnvironment(c:pg.PoolClient,input:{projectId:string;contextId?:string;hostId?:string;destinationRef?:string;purpose:'remote-development'|'remote-return'}){
+export async function requireProjectEnvironment(c:pg.PoolClient,input:{projectId:string;contextId?:string;intentId?:string;hostId?:string;destinationRef?:string;purpose:'remote-development'|'remote-return'}){
  Id.parse(input.projectId);if(input.hostId)Id.parse(input.hostId);
+ // Match publication and SQL admission order: project before environment head.
+ await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[input.projectId]);
  if(input.contextId){const row=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[input.contextId])).rows[0];if(row?.project_id!==input.projectId)throw new Refusal('PROJECT_ENVIRONMENT_FORBIDDEN',403);}
  const row=(await c.query(`SELECT r.* FROM ac_project_environment_heads h JOIN ac_project_environment_revisions r USING(project_id,revision) WHERE h.project_id=$1 FOR SHARE OF h`,[input.projectId])).rows[0];
  if(!row)throw new Refusal('PROJECT_ENVIRONMENT_REQUIRED',403);
  const config=ProjectEnvironmentConfig.parse(row.snapshot);if(digest({config,filesystem:row.filesystem})!==row.digest)throw new Refusal('PROJECT_ENVIRONMENT_DIGEST_MISMATCH',409);
- const candidates=config.environments.filter(env=>(!input.destinationRef||env.targetRef===input.destinationRef)&&env.destinations.some(d=>d.kind==='remote'&&d.hostId===input.hostId&&d.allowedPurposes.includes(input.purpose)));
+ let binding:{environment_id:string;target_ref:string}|undefined;
+ if(input.intentId){
+  Id.parse(input.intentId);
+  binding=(await c.query(`SELECT b.environment_id,x.target_ref FROM ac_project_environment_bindings b
+   JOIN ac_execution_contracts x ON x.intent_id=b.intent_id AND x.digest=b.contract_digest
+   JOIN ac_intents i ON i.id=b.intent_id JOIN ac_contexts ctx ON ctx.id=i.context_id
+   WHERE b.intent_id=$1 AND b.project_id=$2 AND b.revision=$3 AND ctx.project_id=$2
+    AND ($4::uuid IS NULL OR i.context_id=$4)`,[input.intentId,input.projectId,row.revision,input.contextId??null])).rows[0];
+  if(!binding)throw new Refusal('PROJECT_ENVIRONMENT_BINDING_REQUIRED',403);
+ }
+ const candidates=config.environments.filter(env=>(!binding||(env.id===binding.environment_id&&env.targetRef===binding.target_ref))&&(!input.destinationRef||env.targetRef===input.destinationRef)&&env.destinations.some(d=>d.kind==='remote'&&d.hostId===input.hostId&&d.allowedPurposes.includes(input.purpose)));
  const env=candidates.length===1?candidates[0]:undefined;
  const host=input.hostId?(await c.query('SELECT allowed_tasks,fingerprint,registration_digest FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR SHARE',[input.hostId,input.projectId])).rows[0]:undefined;
  const pinnedHost=row.filesystem.remoteHosts?.find((h:{id:string})=>h.id===input.hostId);
@@ -142,6 +154,7 @@ export async function requireProjectEnvironmentLaunch(c:pg.PoolClient,input:{int
  Id.parse(input.intentId);if(!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.base))throw new Refusal('PROJECT_ENVIRONMENT_SOURCE_BASE_MISMATCH',403);
  const owner=(await c.query('SELECT i.context_id,x.project_id,coalesce(i.parent_intent_id,i.id) parent_id FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1',[input.intentId])).rows[0];
  if(!owner)throw new Refusal('PROJECT_ENVIRONMENT_BINDING_REQUIRED',403);
+ await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[owner.project_id]);
  const row=(await c.query(`SELECT r.*,b.environment_id,b.contract_digest,x.digest current_contract_digest,x.target_ref FROM ac_project_environment_heads h
   JOIN ac_project_environment_revisions r USING(project_id,revision)
   LEFT JOIN ac_project_environment_bindings b ON b.intent_id=$2 AND b.project_id=h.project_id AND b.revision=h.revision

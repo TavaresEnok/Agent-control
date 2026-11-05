@@ -62,9 +62,35 @@ test('signed immutable project environments enforce real Git source, directories
   const wrongTarget=await intent(['src/a.txt']);await assert.rejects(contract(wrongTarget,'refs/heads/main'),/PROJECT_ENVIRONMENT_TARGET_FORBIDDEN/);
   const parent=await intent([]),child=await intent(['src/a.txt'],parent);await contract(child);
   const pin=(await db.pool.query('SELECT * FROM ac_project_environment_bindings WHERE intent_id=$1',[child])).rows[0];assert.equal(pin.revision,1);assert.equal(pin.environment_id,'lab');
+  assert.equal((await db.tx(c=>requireProjectEnvironment(c,{projectId:project.id,contextId:context,intentId:child,hostId:hostIds[0],destinationRef:'refs/heads/protected',purpose:'remote-development'}))).environmentId,'lab');
+  await assert.rejects(db.tx(c=>requireProjectEnvironment(c,{projectId:project.id,contextId:context,intentId:wrongTarget,hostId:hostIds[0],purpose:'remote-development'})),/PROJECT_ENVIRONMENT_BINDING_REQUIRED/);
+  await assert.rejects(db.tx(c=>requireProjectEnvironment(c,{projectId:project.id,contextId:context,intentId:child,hostId:hostIds[0],destinationRef:'refs/heads/main',purpose:'remote-development'})),/PROJECT_ENVIRONMENT_DESTINATION_FORBIDDEN/);
   const original=git(project.repo,'rev-parse','refs/heads/main');
   await assert.rejects(db.tx(c=>requireProjectEnvironmentLaunch(c,{intentId:child,base:'f'.repeat(40)})),/PROJECT_ENVIRONMENT_SOURCE_BASE_MISMATCH/);
   const source=await db.tx(c=>requireProjectEnvironmentLaunch(c,{intentId:child,base:original}));assert.equal(source!.sourceCommit,original);
+  // Publication takes project then head locks. Effects must wait on project
+  // before taking head; taking head first creates a publication/admission cycle.
+  for(const gate of [
+   (c:import('pg').PoolClient)=>requireProjectEnvironmentLaunch(c,{intentId:child,base:original}),
+   (c:import('pg').PoolClient)=>requireProjectEnvironment(c,{projectId:project.id,intentId:child,hostId:hostIds[0],purpose:'remote-development'}),
+  ]){
+   const publisher=await db.pool.connect(),effect=await db.pool.connect();let pending:Promise<unknown>|undefined;
+   try{
+    await publisher.query('BEGIN');await effect.query('BEGIN');await effect.query("SET LOCAL statement_timeout='3s'");
+    await publisher.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE',[project.id]);
+    const pid=(await effect.query('SELECT pg_backend_pid() pid')).rows[0].pid;
+    pending=gate(effect);let blocked=false;
+    for(let attempt=0;attempt<100;attempt++){
+     blocked=(await publisher.query('SELECT cardinality(pg_blocking_pids($1))>0 blocked',[pid])).rows[0].blocked;
+     if(blocked)break;await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert(blocked,'effect reached project publication lock');
+    await publisher.query('SELECT project_id FROM ac_project_environment_heads WHERE project_id=$1 FOR UPDATE NOWAIT',[project.id]);
+    await publisher.query('COMMIT');await pending;await effect.query('COMMIT');
+   }finally{
+    await publisher.query('ROLLBACK');await pending?.catch(()=>{});await effect.query('ROLLBACK');publisher.release();effect.release();
+   }
+  }
   // Branch movement cannot silently repin the accepted parent plan.
   await writeFile(join(project.repo,'src','a.txt'),'later');git(project.repo,'add','.');git(project.repo,'commit','-m','later');const later=git(project.repo,'rev-parse','HEAD');
   assert.equal((await db.tx(c=>requireProjectEnvironmentLaunch(c,{intentId:child,base:original})))!.sourceCommit,original);
