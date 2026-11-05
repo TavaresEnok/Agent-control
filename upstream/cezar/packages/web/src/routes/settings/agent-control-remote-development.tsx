@@ -29,7 +29,7 @@ export function AgentControlRemoteDevelopment({principalId,installationId,projec
   setDiscardable(false);sessionStorage.setItem(key,JSON.stringify({...record,uncertain:true}));setRevision(value=>value+1)
   const response=await agentControlFetch('/api/v1/ac/project-admin/remote-development',{method:'POST',headers:{'content-type':'application/json','x-ac-operator-proof':proof},body:JSON.stringify(command)})
   const value:unknown=await response.json().catch(()=>null)
-  if(!response.ok){if(!record.uncertain&&[400,403,413,415].includes(response.status))setDiscardable(true);const error=z.object({error:z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/)}).safeParse(value);throw Error(error.success?error.data.error:`HTTP_${response.status}`)}
+  if(!response.ok){const error=z.object({error:z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/)}).safeParse(value);throw Error(error.success?error.data.error:`HTTP_${response.status}`)}
   const result=Result.safeParse(value),expected=semantic.action==='project.prepareRemoteDevelopment'?'prepared':semantic.action==='project.launchRemoteDevelopment'?'launched':'registered'
   if(!result.success||result.data.state!==expected||result.data.projectId!==projectId||result.data.contextId!==semantic.payload.contextId||result.data.workspaceId!==semantic.payload.workspaceId||expected==='registered'&&result.data.state!=='registered')throw Error('COMMAND_RESPONSE_MISMATCH')
   sessionStorage.removeItem(key);setDiscardable(false);setRevision(value=>value+1)
