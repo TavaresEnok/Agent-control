@@ -63,7 +63,31 @@ CREATE TABLE ac_workflow_runtime_snapshots(
  workflow_digest text NOT NULL CHECK(workflow_digest ~ '^[a-f0-9]{64}$'),
  source_intent_id uuid NOT NULL REFERENCES ac_intents,
  created_at timestamptz NOT NULL DEFAULT now(),
- PRIMARY KEY(project_id,instance_id,workflow_digest),
+ PRIMARY KEY(project_id,instance_id,workflow_digest,source_intent_id),
  FOREIGN KEY(project_id,instance_id) REFERENCES ac_workflow_runtime_instances(project_id,instance_id));
 CREATE TRIGGER ac_workflow_runtime_snapshot_immutable BEFORE UPDATE OR DELETE ON ac_workflow_runtime_snapshots
  FOR EACH ROW EXECUTE FUNCTION ac_reject_workflow_version_mutation();
+-- No domain FKs here: the setter must hold only the exclusive project advisory
+-- gate, never wait on project/context row locks held by shared-gate dispatchers.
+-- Owner and project/context scope are checked before insertion by the service.
+CREATE TABLE ac_workflow_project_handoffs(
+ project_id uuid NOT NULL,
+ request_id uuid NOT NULL,
+ context_id uuid NOT NULL,
+ intent_id uuid NOT NULL,
+ target_build text NOT NULL,
+ request_digest text NOT NULL CHECK(request_digest ~ '^[a-f0-9]{64}$'),
+ state text NOT NULL CHECK(state IN ('active','released')),
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(project_id,request_id));
+CREATE UNIQUE INDEX ac_workflow_project_handoff_active ON ac_workflow_project_handoffs(project_id) WHERE state='active';
+CREATE FUNCTION ac_guard_workflow_project_handoff() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'PROJECT_HANDOFF_IMMUTABLE'; END IF;
+ IF ROW(NEW.project_id,NEW.request_id,NEW.context_id,NEW.intent_id,NEW.target_build,NEW.request_digest,NEW.created_at)
+ IS DISTINCT FROM ROW(OLD.project_id,OLD.request_id,OLD.context_id,OLD.intent_id,OLD.target_build,OLD.request_digest,OLD.created_at)
+ OR NOT (NEW.state=OLD.state OR (OLD.state='active' AND NEW.state='released'))
+ THEN RAISE EXCEPTION 'PROJECT_HANDOFF_IMMUTABLE'; END IF; RETURN NEW;
+END $$;
+CREATE TRIGGER ac_workflow_project_handoff_guard BEFORE UPDATE OR DELETE ON ac_workflow_project_handoffs
+ FOR EACH ROW EXECUTE FUNCTION ac_guard_workflow_project_handoff();

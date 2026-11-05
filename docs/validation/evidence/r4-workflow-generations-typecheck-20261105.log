@@ -1,2 +1,0 @@
-src/workflow-generations.ts(171,66): error TS2345: Argument of type '{ instanceId: string; buildId: string; } | undefined' is not assignable to parameter of type '{ instanceId: string; buildId: string; }'.
-  Type 'undefined' is not assignable to type '{ instanceId: string; buildId: string; }'.

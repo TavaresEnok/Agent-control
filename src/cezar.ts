@@ -213,6 +213,16 @@ export class CezarRuntime {
       await this.manager.recover();
     }
   }
+  /** Local handoff only: the existing Cezar lock remains the writer fence. */
+  get ownsRuntimeLock(){return this.running&&Boolean(this.lock);}
+  async flushForGenerationHandoff(intent:Intent,authority:Authority){
+    if(!this.ownsRuntimeLock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+    const frozen=await this.reconcileWorkflowVersion(intent,authority,true);
+    if(frozen.state==='retired'||frozen.state==='absent')throw new Refusal('WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE');
+    const run=this.store.getRun(intent.run_id);
+    if(run?.workflowDef&&digest(run.workflowDef)!==frozen.digest)throw new Refusal('FROZEN_PLAN_MISMATCH');
+    this.store.flush({throwOnError:true});
+  }
   get nativeBootstrapReport(){return this.nativeBootstrapAttachment?.report;}
   /** Authorized bench source only. A missing or closed registry, takeover, or mismatched context, epoch or instance never reaches the resolver. */
   async readAuthorizedBootstrapSource(authority:Authority){
@@ -277,13 +287,13 @@ export class CezarRuntime {
    * Bind an already frozen execution to its recorded snapshot. A missing pin is derived and then recorded.
    * Retirement writes one audit and does not reserve capacity, dispatch, or change the operation.
    */
-  async reconcileWorkflowVersion(intent: Intent, authority: Authority): Promise<
+  async reconcileWorkflowVersion(intent: Intent, authority: Authority,administrativeHandoff=false): Promise<
     | {state:'current'|'retained'|'dynamic'; definition: WorkflowDef; version: string; digest: string}
     | {state:'absent'}
     | {state:'retired'; cause: typeof WORKFLOW_VERSION_RETIRED; reason:'unregistered'|'divergent'}> {
     if(this.ledger.runtimeIdentity)await assertCurrentRuntimeBuild(this.ledger.runtimeIdentity.buildId);
     return this.ledger.tx(async c=>{
-      await this.ledger.fence(c,authority);
+      await this.ledger.fence(c,authority,administrativeHandoff);
       if(intent.context_id!==authority.contextId)throw new Refusal('EFFECT_SCOPE_MISMATCH');
       await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       const row=(await c.query(`SELECT i.principal_id,i.context_id,i.run_id,i.operation_id,i.plan_revision,i.manager_epoch,i.command,f.snapshot,f.digest,

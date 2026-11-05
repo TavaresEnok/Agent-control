@@ -32,8 +32,8 @@ async function setup(incompatible=false){
  await cp(resolve('src'),join(installed,'src'),{recursive:true});
  if(incompatible){const versions=join(installed,'src/workflow-versions.ts');await writeFile(versions,(await readFile(versions,'utf8')).replace("  entry(baselineWorkflow, 'v1', 'current'), entry(baselineWorkflow, 'v0', 'retained'),\n",''));}
  await writeFile(join(installed,'src/cezar.ts'),(await readFile(join(installed,'src/cezar.ts'),'utf8'))+'\n// Compatible installed build: identical frozen graph protocol, new package bytes.\n');
- for(const name of ['node_modules','upstream','db','package.json'])await symlink(resolve(name),join(installed,name));
- const nextModule=await import(pathToFileURL(join(installed,'src/local-workflow-runtime.ts')).href),nextLedger=await import(pathToFileURL(join(installed,'src/ledger.ts')).href),nextGenerations=await import(pathToFileURL(join(installed,'src/workflow-generations.ts')).href),nextCezar=await import(pathToFileURL(join(installed,'src/cezar.ts')).href);
+ for(const name of ['node_modules','upstream','db','package.json','package-lock.json','adapters'])await symlink(resolve(name),join(installed,name));
+ const nextModule=await import(pathToFileURL(join(installed,'src/local-workflow-runtime.ts')).href),nextLedger=await import(pathToFileURL(join(installed,'src/ledger.ts')).href),nextGenerations=await import(pathToFileURL(join(installed,'src/workflow-generations.ts')).href),nextCezar=await import(pathToFileURL(join(installed,'src/cezar.ts')).href),nextHandoff=await import(pathToFileURL(join(installed,'src/workflow-runtime-handoff.ts')).href);
  const oldCapability=await createLocalWorkflowRuntime(),nextCapability=await nextModule.createLocalWorkflowRuntime();
  const oldIdentity=oldCapability.identity,nextIdentity=nextCapability.identity;assert.notEqual(oldIdentity.buildId,nextIdentity.buildId);
  const old=new Ledger(fixture.url,undefined,oldIdentity),next:Ledger=new nextLedger.Ledger(fixture.url,undefined,nextIdentity),generations=new WorkflowGenerations(old),newGenerations:WorkflowGenerations=new nextGenerations.WorkflowGenerations(next);
@@ -42,7 +42,7 @@ async function setup(incompatible=false){
  await generations.selectForNew(principal,project,oldIdentity.buildId);
  const accept=async(ledger=old)=>ledger.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:synthetic-generation'}},authority,'api');
  const intent=await accept();
- return {oldCapability,nextCapability,nextCezar,project,session,context,authority,intent,old,next,generations,newGenerations,oldIdentity,nextIdentity,accept,close:async()=>{await old.close();await next.close();await rm(installed,{recursive:true,force:true});}};
+ return {oldCapability,nextCapability,nextCezar,nextHandoff,project,session,context,authority,intent,old,next,generations,newGenerations,oldIdentity,nextIdentity,accept,close:async()=>{await old.close();await next.close();await rm(installed,{recursive:true,force:true});}};
 }
 const code=(wanted:string)=>(error:unknown)=>{assert.equal((error as {code?:string}).code,wanted);return true;};
 test('two live installed runtime identities preserve old routing and route only new admissions to selected build',async()=>{
@@ -240,4 +240,26 @@ test('future managed plan is locally resolver-approved atomically without rewrit
   assert.equal((await runtime!.reconcileWorkflowVersion(dynamic,next.authority)).state,'dynamic');
   await assert.rejects(s.old.pool.query('DELETE FROM ac_workflow_runtime_snapshots WHERE instance_id=$1',[s.oldIdentity.instanceId]),/WORKFLOW_VERSION_PIN_IMMUTABLE/);
  }finally{await runtime?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
+});
+
+test('actual prepared package handoff closes old Cezar lock, retries committed transfer, and lost ACK returns one live successor',async()=>{
+ const s=await setup();let folder:string|undefined,source:CezarRuntime|undefined,successor:CezarRuntime|undefined,competitor:CezarRuntime|undefined;
+ try{
+  folder=await mkdtemp(join(tmpdir(),'ac-r4-real-package-handoff-'));source=new CezarRuntime(s.old,folder,s.project);
+  source.store.createRun({id:s.intent.run_id,title:'Actual package handoff',task:'Intent '+s.intent.id,workflow:'baseline-synthetic-v1',steps:[{id:'implement',name:'Pending implementation',kind:'agent'}]});
+  source.store.updateRun(s.intent.run_id,{status:'waiting',error:'Managed execution awaiting authoritative reconciliation',workflowDef:workflowVersionRegistry.find(x=>x.name==='baseline-synthetic-v1'&&x.status==='current')!.definition,graphState:{cursor:'implement',outputs:{},loops:{},taken:[]}});
+  source.store.appendEvent(s.intent.run_id,{type:'note',message:'Safe durable handoff event.'});source.store.flush();await source.start('administration-only');assert.equal(source.ownsRuntimeLock,true);
+  competitor=new s.nextCezar.CezarRuntime(s.next,folder,s.project);await assert.rejects(competitor!.start('administration-only'),/RUNTIME_ALREADY_ACTIVE/);await competitor!.close();competitor=undefined;
+  const request={authority:s.authority,intentId:s.intent.id,expectedGeneration:0,requestId:randomUUID(),successorManagerInstance:randomUUID()};
+  const denied=await s.nextHandoff.prepareWorkflowRuntime({ledger:s.next,capability:s.nextCapability,principal,runtimeArguments:[s.next,folder,s.project]});
+  await assert.rejects(denied.handoffFrom(source,request,{mode:'execution'}),/RUNTIME_EXECUTION_ACTIVATION_NOT_AUTHORIZED/);assert.equal(source.ownsRuntimeLock,true);await s.old.heartbeat(s.authority);
+  const prepared=await s.nextHandoff.prepareWorkflowRuntime({ledger:s.next,capability:s.nextCapability,principal,runtimeArguments:[s.next,folder,s.project],allowExecutionActivation:true});
+  await assert.rejects(prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime)=>{assert.equal(source!.ownsRuntimeLock,false);assert.equal(administration.ownsRuntimeLock,true);assert.equal(administration.executionMode,'administration-only');throw Error('SYNTHETIC_RECONCILER_RETRY');}}),/SYNTHETIC_RECONCILER_RETRY/);
+  assert.equal((await s.next.pool.query("SELECT state FROM ac_workflow_generations WHERE intent_id=$1 AND generation=1",[s.intent.id])).rows[0].state,'reconciling');assert.equal(source.ownsRuntimeLock,false);
+  const outcome=await prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime,authority:typeof s.authority)=>{assert.equal(administration.ownsRuntimeLock,true);await assert.rejects(s.next.tx(c=>s.next.fence(c,authority)),code('WORKFLOW_GENERATION_RECONCILIATION_REQUIRED'));}});
+  successor=outcome.runtime;assert.equal(successor!.ownsRuntimeLock,true);assert.equal(successor!.executionMode,'execution');assert.equal(successor!.store.getRun(s.intent.run_id)?.graphState?.cursor,'implement');assert.equal(successor!.store.readEvents(s.intent.run_id)[0]?.type,'note');
+  successor!.store.appendEvent(s.intent.run_id,{type:'note',message:'Safe successor event after ACK loss.'});
+  const replay=await prepared.handoffFrom(source,request,{mode:'execution'});assert.equal(replay.runtime,successor);assert.equal(replay.authority.epoch,s.authority.epoch+1);assert.equal(successor!.store.getRun(s.intent.run_id)?.lastSeq,2);
+  assert.equal((await s.next.pool.query('SELECT count(*) FROM ac_workflow_generations WHERE intent_id=$1',[s.intent.id])).rows[0].count,'2');await assert.rejects(s.old.heartbeat(s.authority),code('STALE_MANAGER'));
+ }finally{await competitor?.close();await source?.close();await successor?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
 });

@@ -1,4 +1,4 @@
-import {RuntimeIdentity,assertGenerationFence,assertGenerationIntent,enrollWorkflowAdmission} from './workflow-generations.ts';
+import {RuntimeIdentity,assertGenerationFence,assertGenerationIntent,enrollWorkflowAdmission,lockWorkflowProjectShared} from './workflow-generations.ts';
 import {fenceInstallationContext,type InstallationFenceToken} from './installation-authority-fence.ts';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -34,6 +34,7 @@ export class Ledger {
     });
   }
   async authorize(c: pg.PoolClient, principal: string, contextId: string, write = true) {
+    await lockWorkflowProjectShared(c,contextId);
     const r = await c.query(`SELECT x.*,m.role FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id
       WHERE x.id=$1 AND m.principal_id=$2 AND NOT x.archived FOR UPDATE OF x`, [contextId, principal]);
     if (!r.rowCount || (write && r.rows[0].role === 'viewer')) throw new Refusal('CONTEXT_FORBIDDEN', 403);
@@ -73,6 +74,7 @@ export class Ledger {
   }
   async fence(c: pg.PoolClient, authority: Authority, allowPaused = false) {
     const a = Authority.parse(authority);
+    await lockWorkflowProjectShared(c,a.contextId);
     // Context anchor precedes manager/domain locks in acquire and fence alike.
     await c.query('SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE',[a.contextId]);
     const r = await c.query(`SELECT x.paused,m.epoch FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id

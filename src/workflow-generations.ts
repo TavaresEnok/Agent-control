@@ -1,3 +1,4 @@
+import {ManagedRecipe} from './managed-plan.ts';
 import {resolveFrozenWorkflow} from './workflow-versions.ts';
 import {verifyLocalWorkflowRuntime,assertLoadedRuntime,registeredProcessAlive,GENERATION_COMPATIBILITY,type LocalWorkflowRuntime} from './local-workflow-runtime.ts';
 import {z} from 'zod';
@@ -57,7 +58,7 @@ export class WorkflowGenerations{
    const row=(await c.query(`SELECT i.context_id,x.project_id,f.digest FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
     JOIN ac_frozen_plans f ON f.intent_id=i.id WHERE i.id=$1 AND i.context_id=$2`,[intentId,authority.contextId])).rows[0];
    if(!row)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
-   await requireRuntime(c,row.project_id,buildId,row.digest);
+   await requireRuntime(c,row.project_id,buildId,row.digest,intentId);
    const old=(await c.query('SELECT build_id FROM ac_workflow_generations WHERE intent_id=$1 ORDER BY generation DESC LIMIT 1',[intentId])).rows[0];
    if(old){if(old.build_id!==buildId)throw new Refusal('GENERATION_ALREADY_ENROLLED');return;}
    await c.query(`INSERT INTO ac_workflow_generations(intent_id,generation,build_id,state,workflow_digest,continuation)
@@ -82,7 +83,7 @@ export class WorkflowGenerations{
    const previous=(await c.query("SELECT * FROM ac_workflow_generations WHERE intent_id=$1 AND state='active' FOR UPDATE",[input.intentId])).rows[0];
    if(!previous||previous.generation!==input.expectedGeneration||previous.workflow_digest!==row.workflow_digest)throw new Refusal('GENERATION_CONFLICT');
    if(['completed','done','review','failed','canceled','cancelled'].includes(row.state))throw new Refusal('GENERATION_TERMINAL');
-   await requireRuntime(c,row.project_id,input.targetBuild,row.workflow_digest);
+   await requireRuntime(c,row.project_id,input.targetBuild,row.workflow_digest,input.intentId);
    // Store only stable references/counts/cursors, never a copy of ciphertext,
    // event history, prompts, keys, or an alternative graph state.
    const continuity=(await c.query(`SELECT o.id AS operation_id,o.state AS operation_state,
@@ -115,10 +116,42 @@ export class WorkflowGenerations{
     JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1 AND i.context_id=$2 AND g.state IN ('active','reconciling') FOR UPDATE OF g`,[intentId,authority.contextId])).rows[0];
    if(!row)throw new Refusal('GENERATION_MISSING');
    await assertGenerationIntent(c,intentId,this.ledger.runtimeIdentity);
-   await requireRuntime(c,row.project_id,row.build_id,row.workflow_digest);
+   await requireRuntime(c,row.project_id,row.build_id,row.workflow_digest,intentId);
    await assertContextEffectsQuiescent(c,authority.contextId);
    await c.query("UPDATE ac_workflow_generations SET state='active' WHERE intent_id=$1 AND generation=$2",[intentId,row.generation]);
    return {generation:row.generation,state:'active' as const};
+  });
+ }
+ /** Exclusive advisory gate precedes every domain lock. The barrier row has
+ * no FKs so this short transaction never waits on a context/project row held
+ * by a dispatcher waiting for this same gate. */
+ async beginProjectHandoff(principal:string,projectId:string,capability:LocalWorkflowRuntime,request:{authority:Authority;intentId:string;expectedGeneration:number;requestId:string;successorManagerInstance:string}){
+  const evidence=await verifyLocalWorkflowRuntime(capability),requestDigest=digest({...request,targetBuild:evidence.identity.buildId});
+  await this.ledger.tx(async c=>{
+   await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,82001))",[projectId]);
+   const owner=(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[projectId,principal])).rowCount;
+   if(!owner)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+   if(!(await c.query('SELECT 1 FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1 AND i.context_id=$2 AND x.project_id=$3',[request.intentId,request.authority.contextId,projectId])).rowCount)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+   const old=(await c.query('SELECT * FROM ac_workflow_project_handoffs WHERE project_id=$1 AND request_id=$2',[projectId,request.requestId])).rows[0];
+   if(old){if(old.request_digest!==requestDigest)throw new Refusal('PROJECT_HANDOFF_REQUEST_CONFLICT');return;}
+   if((await c.query("SELECT 1 FROM ac_workflow_project_handoffs WHERE project_id=$1 AND state='active'",[projectId])).rowCount)throw new Refusal('PROJECT_HANDOFF_ALREADY_ACTIVE');
+   await c.query("INSERT INTO ac_workflow_project_handoffs(project_id,request_id,context_id,intent_id,target_build,request_digest,state) VALUES($1,$2,$3,$4,$5,$6,'active')",[projectId,request.requestId,request.authority.contextId,request.intentId,evidence.identity.buildId,requestDigest]);
+  });
+ }
+ async assertOtherProjectContextsQuiescent(principal:string,projectId:string,exceptContext:string){
+  const contexts=(await this.ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND id<>$2 ORDER BY id',[projectId,exceptContext])).rows;
+  for(const context of contexts)await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,context.id);await assertContextEffectsQuiescent(c,context.id);});
+ }
+ async endProjectHandoff(principal:string,projectId:string,capability:LocalWorkflowRuntime,requestId:string,abortBeforeTransfer=false){
+  const evidence=await verifyLocalWorkflowRuntime(capability);
+  await this.ledger.tx(async c=>{
+   await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,82001))",[projectId]);
+   if(!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[projectId,principal])).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+   const row=(await c.query('SELECT * FROM ac_workflow_project_handoffs WHERE project_id=$1 AND request_id=$2',[projectId,requestId])).rows[0];
+   if(!row||row.target_build!==evidence.identity.buildId)throw new Refusal('PROJECT_HANDOFF_REQUEST_CONFLICT');
+   const generation=(await c.query('SELECT state FROM ac_workflow_generations WHERE request_id=$1',[requestId])).rows[0];
+   if(abortBeforeTransfer?Boolean(generation):generation?.state!=='active')throw new Refusal('PROJECT_HANDOFF_RECONCILIATION_REQUIRED');
+   await c.query("UPDATE ac_workflow_project_handoffs SET state='released' WHERE project_id=$1 AND request_id=$2",[projectId,requestId]);
   });
  }
  /** Small routing DTO; definitions, prompts, messages and execution logs stay private. */
@@ -156,9 +189,9 @@ export class WorkflowGenerations{
  }
 }
 function receipt(contextId:string,row:Record<string,any>){return {intentId:String(row.intent_id),generation:Number(row.generation),state:String(row.state),authority:Authority.parse({contextId,instanceId:row.successor_instance,epoch:Number(row.successor_epoch)}),continuation:row.continuation};}
-async function requireRuntime(c:PoolClient,projectId:string,buildId:string,workflowDigest?:string){
+async function requireRuntime(c:PoolClient,projectId:string,buildId:string,workflowDigest?:string,intentId?:string){
  const live=(await c.query(`SELECT process_id,process_start FROM ac_workflow_runtime_instances WHERE project_id=$1 AND build_id=$2 AND lease_until>clock_timestamp()
-  AND ($3::text IS NULL OR workflow_digests ? $3 OR EXISTS(SELECT 1 FROM ac_workflow_runtime_snapshots s WHERE s.project_id=ac_workflow_runtime_instances.project_id AND s.instance_id=ac_workflow_runtime_instances.instance_id AND s.workflow_digest=$3)) AND protocol='cezar-frozen-graph-generation-v1' FOR SHARE`,[projectId,buildId,workflowDigest??null])).rows;
+  AND ($3::text IS NULL OR workflow_digests ? $3 OR EXISTS(SELECT 1 FROM ac_workflow_runtime_snapshots s WHERE s.project_id=ac_workflow_runtime_instances.project_id AND s.instance_id=ac_workflow_runtime_instances.instance_id AND s.workflow_digest=$3 AND s.source_intent_id=$4)) AND protocol='cezar-frozen-graph-generation-v1' FOR SHARE`,[projectId,buildId,workflowDigest??null,intentId??null])).rows;
  for(const candidate of live)if(await registeredProcessAlive(candidate.process_id,candidate.process_start))return;
  throw new Refusal(workflowDigest?'WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE':'WORKFLOW_RUNTIME_UNAVAILABLE');
 }
@@ -168,22 +201,23 @@ export async function enrollWorkflowAdmission(c:PoolClient,intentId:string,ident
  const row=(await c.query(`SELECT d.build_id,x.project_id,i.id,i.manager_epoch,i.command,f.digest,f.snapshot FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
   JOIN ac_frozen_plans f ON f.intent_id=i.id JOIN ac_workflow_runtime_defaults d ON d.project_id=x.project_id WHERE i.id=$1`,[intentId])).rows[0];
  if(!row)return;
- if(identity?.buildId===row.build_id)await approveSnapshot(c,row,identity);
- await requireRuntime(c,row.project_id,row.build_id,row.digest);
+ if(identity&&identity.buildId===row.build_id)await approveSnapshot(c,row,identity);
+ await requireRuntime(c,row.project_id,row.build_id,row.digest,row.id);
  await c.query(`INSERT INTO ac_workflow_generations(intent_id,generation,build_id,state,workflow_digest,continuation)
   VALUES($1,0,$2,'active',$3,$4)`,[intentId,row.build_id,row.digest,{schemaVersion:1,historyAfterSeq:0}]);
 }
 export async function assertGenerationFence(c:PoolClient,contextId:string,allowReconciliation:boolean){
+ if(!allowReconciliation&&(await c.query(`SELECT 1 FROM ac_workflow_project_handoffs h JOIN ac_contexts x ON x.project_id=h.project_id WHERE x.id=$1 AND h.state='active' LIMIT 1`,[contextId])).rowCount)throw new Refusal('WORKFLOW_PROJECT_HANDOFF_REQUIRED');
  if(!allowReconciliation&&(await c.query(`SELECT 1 FROM ac_workflow_generations g JOIN ac_intents i ON i.id=g.intent_id
   WHERE i.context_id=$1 AND g.state='reconciling' LIMIT 1`,[contextId])).rowCount)throw new Refusal('WORKFLOW_GENERATION_RECONCILIATION_REQUIRED');
 }
 export async function assertGenerationIntent(c:PoolClient,intentId:string,identity?:RuntimeIdentity){
- const row=(await c.query(`SELECT g.build_id,g.workflow_digest,x.project_id FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
+ const row=(await c.query(`SELECT g.intent_id AS generation_intent_id,g.build_id,g.workflow_digest,x.project_id FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
   JOIN ac_workflow_generations g ON g.intent_id=COALESCE(i.parent_intent_id,i.id) WHERE i.id=$1 AND g.state IN ('active','reconciling')`,[intentId])).rows[0];
  if(!row)return;
  if(!identity||identity.buildId!==row.build_id)throw new Refusal('WORKFLOW_RUNTIME_ROUTE_MISMATCH');
  const live=(await c.query(`SELECT process_id,process_start FROM ac_workflow_runtime_instances WHERE project_id=$1 AND instance_id=$2 AND build_id=$3
-  AND lease_until>clock_timestamp() AND (workflow_digests ? $4 OR EXISTS(SELECT 1 FROM ac_workflow_runtime_snapshots s WHERE s.project_id=ac_workflow_runtime_instances.project_id AND s.instance_id=ac_workflow_runtime_instances.instance_id AND s.workflow_digest=$4)) AND protocol=$5`,[row.project_id,identity.instanceId,row.build_id,row.workflow_digest,GENERATION_COMPATIBILITY])).rows[0];
+  AND lease_until>clock_timestamp() AND (workflow_digests ? $4 OR EXISTS(SELECT 1 FROM ac_workflow_runtime_snapshots s WHERE s.project_id=ac_workflow_runtime_instances.project_id AND s.instance_id=ac_workflow_runtime_instances.instance_id AND s.workflow_digest=$4 AND s.source_intent_id=$6)) AND protocol=$5`,[row.project_id,identity.instanceId,row.build_id,row.workflow_digest,GENERATION_COMPATIBILITY,row.generation_intent_id])).rows[0];
  if(!live)throw new Refusal('WORKFLOW_RUNTIME_UNAVAILABLE');
  await assertLoadedRuntime(identity.buildId,live.process_id,live.process_start);
 }
@@ -238,7 +272,7 @@ async function assertContextEffectsQuiescent(c:PoolClient,contextId:string){
  }
 }
 
-const runtimeParkingReasons=new Set(['WORKFLOW_GENERATION_RECONCILIATION_REQUIRED','WORKFLOW_RUNTIME_ROUTE_MISMATCH','WORKFLOW_RUNTIME_UNAVAILABLE','WORKFLOW_RUNTIME_PROCESS_MISMATCH','CEZAR_RUNTIME_PACKAGE_MISMATCH','WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE']);
+const runtimeParkingReasons=new Set(['WORKFLOW_PROJECT_HANDOFF_REQUIRED','WORKFLOW_GENERATION_RECONCILIATION_REQUIRED','WORKFLOW_RUNTIME_ROUTE_MISMATCH','WORKFLOW_RUNTIME_UNAVAILABLE','WORKFLOW_RUNTIME_PROCESS_MISMATCH','CEZAR_RUNTIME_PACKAGE_MISMATCH','WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE']);
 /** Package-local Refusal classes may differ across retained loaded builds.
  * Only these closed, non-authorizing reasons are adapted for per-intent waits. */
 export function workflowRuntimeParkingReason(error:unknown):string|undefined{
@@ -252,5 +286,17 @@ async function approveSnapshot(c:PoolClient,row:Record<string,any>,identity:Runt
  await assertLoadedRuntime(identity.buildId,live.process_id,live.process_start);
  const decision=resolveFrozenWorkflow({commandWorkflow:row.command.payload.workflow,snapshot:row.snapshot,storedDigest:row.digest,pin:null,intentEpoch:Number(row.manager_epoch)});
  if(!decision.ok)throw new Refusal('RUNTIME_SNAPSHOT_INCOMPATIBLE');
+ if(decision.kind==='dynamic'){
+  const managed=(await c.query('SELECT recipe,recipe_digest FROM ac_managed_executions WHERE parent_intent_id=$1',[row.id])).rows[0];
+  const recipe=ManagedRecipe.safeParse(managed?.recipe);
+  if(!recipe.success||digest(recipe.data)!==managed.recipe_digest||recipe.data.parentIntentId!==row.id||digest(recipe.data.workflow)!==decision.digest)throw new Refusal('RUNTIME_MANAGED_CONTRACT_INCOMPATIBLE');
+ }
  await c.query(`INSERT INTO ac_workflow_runtime_snapshots(project_id,instance_id,workflow_digest,source_intent_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[row.project_id,identity.instanceId,decision.digest,row.id]);
+}
+
+/** Every normal authorize/fence enters this shared gate BEFORE context locks.
+ * Project handoff setters enter its exclusive side without domain row locks. */
+export async function lockWorkflowProjectShared(c:PoolClient,contextId:string){
+ const project=(await c.query('SELECT project_id FROM ac_contexts WHERE id=$1',[contextId])).rows[0]?.project_id;
+ if(project)await c.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,82001))',[project]);
 }
