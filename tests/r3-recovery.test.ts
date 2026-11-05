@@ -20,7 +20,7 @@ import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('R3 encrypted physical PG recovery preserves history/policies/vault and reimport dedupe while inactive',{timeout:60000},async()=>{
  const base=process.env.AC_TEST_DATABASE_URL!,database=await isolatedDatabase(base,'r3recovery'),db=new Ledger(database.url),folder=await mkdtemp(join(tmpdir(),'ac-r3-recovery-'));
- const containerId=(await promisify(execFile)('docker',['inspect','--format','{{.Id}}','ac-r3-migration-20261105-pg'])).stdout.trim();
+ const containerId=process.env.AC_R3_MIGRATION_CONTAINER_ID??(await promisify(execFile)('docker',['inspect','--format','{{.Id}}','ac-r3-migration-20261105-pg'])).stdout.trim();
  const principal='r3-recovery-fixture',project=randomUUID(),session=randomUUID(),key=randomBytes(32);
  const encrypt=(text:string)=>{const nonce=randomBytes(24);return Buffer.concat([nonce,Buffer.from(nacl.secretbox(Buffer.from(JSON.stringify({role:'user',content:{type:'text',text}})),nonce,key))]).toString('base64');};
  const decrypt=(encoded:string)=>{const bytes=Buffer.from(encoded,'base64'),opened=nacl.secretbox.open(bytes.subarray(24),bytes.subarray(0,24),key);if(!opened)throw Error('CIPHERTEXT_INVALID');return JSON.parse(Buffer.from(opened).toString('utf8'));};

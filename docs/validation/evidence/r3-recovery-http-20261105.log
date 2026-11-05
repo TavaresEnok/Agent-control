@@ -1,0 +1,25 @@
+R3_RECOVERY_RUNNER {"label":"ac-r3-recovery-d7d2da05","disposable":true,"node":"22.23.3"}
+TAP version 13
+# R3_HAPPIER_SOURCE_PROVENANCE {"tree":"4ae0cecbddbd6cfd96351c346a3f969f120a59d0","files":1164,"sourceSha256":"6084780b8c5211f3477f3783fbe06334de863158476ce022cc42331fa797b6a5","cacheMatchesVendored":true}
+# R3_RECOVERY_MEASUREMENTS {"scope":"single-disposable-lab-trace","sourceStoppedAt":"2026-11-05T12:07:11.819Z","postgresCheckpoint":{"snapshotId":"00000004-00000008-1","capturedAt":"2026-11-05T12:07:11.890Z","artifacts":{"historySha256":"6e20782542d84c3ce57162279cd53a5a162e4d34a0b6b292deef3affadcfe93f","vaultSha256":"9dae03e2e45f6326aa46daed3ca03e9b833c4cea6737fd6432ca132bb125aa27","happierSha256":"a2a5ee2d3e70930ce21baa76e547870540a3bc5a8c8f022bd1f3fd1e7fa32079","happierCapturedAt":"2026-11-05T12:07:11.823Z"}},"happierSnapshotCapturedAt":"2026-11-05T12:07:11.823Z","acceptedMessages":2,"recoveredMessages":2,"lostAcceptedMessages":0,"sourceFilesStableAcrossBackup":true,"backupMs":367,"recoveryToReadableHistoryMs":7347,"providerActivation":false,"admission":"closed","uiProof":false}
+# Subtest: R3 actual Happier snapshot restart and fresh-identity vault rewrap preserve paused readable history
+ok 1 - R3 actual Happier snapshot restart and fresh-identity vault rewrap preserve paused readable history
+  ---
+  duration_ms: 20884.179515
+  type: 'test'
+  ...
+# Subtest: R3 encrypted physical PG recovery preserves history/policies/vault and reimport dedupe while inactive
+ok 2 - R3 encrypted physical PG recovery preserves history/policies/vault and reimport dedupe while inactive
+  ---
+  duration_ms: 4691.728709
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 28184.711613
