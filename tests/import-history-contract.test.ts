@@ -39,8 +39,11 @@ test('v2 journal survives lost acknowledgement and restart, pages every record, 
   assert.equal(pages.length,3);assert.deepEqual(pages.flatMap(p=>p.records).map((r:any)=>r.kind),['run','plan','evidence']);assert(pages.every(p=>p.historicalOnly&&!p.executable&&!p.sourceClaimsVerified&&p.payloadIntegrityVerified));
   await assert.rejects(archive.page(other,project,input.importId),/IMPORT_FORBIDDEN/);await assert.rejects(archive.page(principal,project,input.importId,'bad'),/IMPORT_HISTORY_CURSOR_INVALID/);
   const reimport={...input,importId:randomUUID()};await importer.stage(principal,reimport);await importer.deliver(principal,reimport.importId);const aliases=[];for await(const page of archive.exportPages(principal,project,reimport.importId,1))aliases.push(page);assert.equal(aliases.flatMap(p=>p.records).length,3);assert.equal(delivered.size,1);
+  await assert.rejects(importer.archive(principal,input.importId),/IMPORT_SOURCE_IN_USE/);await importer.archive(principal,reimport.importId);
+  const originalContext=(await db.pool.query('SELECT context_id FROM ac_import_entries WHERE batch_id=$1',[input.importId])).rows[0].context_id;assert.equal((await db.pool.query('SELECT archived FROM ac_contexts WHERE id=$1',[originalContext])).rows[0].archived,false);
   const conflict=structuredClone(reimport);conflict.importId=randomUUID();conflict.contexts[0].sourcePaused=true;await assert.rejects(importer.stage(principal,conflict),/IMPORT_SOURCE_CONTEXT_CONFLICT/);
   const entry=(await db.pool.query('SELECT context_id FROM ac_import_entries WHERE batch_id=$1',[input.importId])).rows[0];assert.equal((await db.pool.query('SELECT paused FROM ac_contexts WHERE id=$1',[entry.context_id])).rows[0].paused,true);
+  await importer.archive(principal,input.importId);const afterArchive={...input,importId:randomUUID()};await assert.rejects(importer.stage(principal,afterArchive),/IMPORT_SOURCE_PENDING/);
   for(const table of ['ac_intents','ac_managers'])assert.equal(Number((await db.pool.query(`SELECT count(*) n FROM ${table} WHERE context_id=$1`,[entry.context_id])).rows[0].n),0);
  }finally{await db.close();await isolated.close();}
 });
