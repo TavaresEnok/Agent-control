@@ -49,7 +49,7 @@ export const agentControlDiagnosticFindingSchema=z.object({code:z.enum(['context
  meaning:z.string(),owner:z.string(),nextCondition:z.string(),evidence:z.array(agentControlDiagnosticEvidenceSchema),
  capacityWait:z.object({reason:z.enum(['NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','CAPACITY_BUSY','CAPACITY_QUEUED','GLOBAL_CAPACITY_LIMIT','CONTEXT_CAPACITY_LIMIT','ACCOUNT_CAPACITY_LIMIT','unknown']),exclusions:z.array(z.object({profileId:z.uuid(),reason:z.enum(['profile_missing','access_removed','account_disabled','profile_disabled','not_synthetic','ineligible','quota_exhausted','quota_unknown'])}).strict())}).strict().optional(),
  nativeFailure:nativeTerminalFailureObservationSchema.optional()}).strict();
-export const agentControlDiagnosticsSchema=z.object({contextId:z.uuid(),findings:z.array(agentControlDiagnosticFindingSchema),truncated:z.boolean(),
+export const agentControlDiagnosticsSchema=z.object({contextId:z.uuid(),intentId:z.uuid().optional(),findings:z.array(agentControlDiagnosticFindingSchema),truncated:z.boolean(),
  assessment:z.enum(['observed','unknown']),explanation:z.string().optional()}).strict();
 export type AgentControlProviderBinding=z.infer<typeof agentControlProviderBindingSchema>;
 export type AgentControlProviderAdapter=z.infer<typeof agentControlProviderAdapterSchema>;

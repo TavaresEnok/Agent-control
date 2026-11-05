@@ -107,5 +107,29 @@ test('actual PG/API diagnostics include per-intent uncertainty, SSH, QA, wait ex
   for(let index=0;index<101;index++)await db.pool.query(`INSERT INTO ac_remote_operations(id,context_id,host_id,task_id,request_digest,manager_epoch,state,intent_id)
    VALUES($1,$2,$3,'fixture',$4,$5,'uncertain',$6)`,[randomUUID(),context,host,'a'.repeat(64),authority.epoch,remoteIntent.id]);
   const limited=await service.read(owner,context);assert(limited.truncated);assert.equal(limited.findings.filter(f=>f.code==='remote_effect_uncertain').length,100);
+  // A stopped task after a full page remains addressable independently.
+  for(let index=0;index<101;index++)await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,state,created_at)
+   VALUES($1,$2,$3,$4,'{}',$5,$6,$7,1,'failed','2001-01-01T00:00:00Z')`,[randomUUID(),context,owner,'a'.repeat(64),randomUUID(),randomUUID(),authority.epoch]);
+  assert(!(await service.read(owner,context)).findings.some(f=>f.code==='task_diagnosis_unknown'&&f.evidence.some(e=>e.id===unknown.id)),'fixture must put selected stopped task beyond first page');
+  const child=randomUUID(),stage=randomUUID();
+  await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,state,parent_intent_id,parent_unit_id)
+   VALUES($1,$2,$3,$4,'{}',$5,$6,$7,$8,'running',$9,'fixture-child')`,[child,context,owner,'a'.repeat(64),randomUUID(),randomUUID(),authority.epoch,unknown.plan_revision,unknown.id]);
+  await db.pool.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state)
+   VALUES($1,$2,'qa',$3,$4,$5,'uncertain')`,[stage,child,randomUUID(),randomUUID(),authority.epoch]);
+  const targeted=await service.read(owner,context,unknown.id);assert.equal(targeted.intentId,unknown.id);assert.equal(targeted.truncated,false);
+  assert(targeted.findings.some(f=>f.code==='task_diagnosis_unknown'&&f.evidence.some(e=>e.id===unknown.id)));
+  assert(targeted.findings.some(f=>f.code==='stage_uncertain'&&f.evidence.some(e=>e.kind==='intent'&&e.id===child)),'targeted root includes child stages');
+  assert(!targeted.findings.some(f=>f.code==='remote_effect_uncertain'),'other task evidence must not cross target');
+  const qaTarget=await service.read(owner,context,qaIntent.id);assert(qaTarget.findings.some(f=>f.code==='native_qa_missing_result'));
+  const remoteTarget=await service.read(owner,context,remoteIntent.id);assert(remoteTarget.findings.some(f=>f.code==='remote_effect_uncertain'));
+  const waitTarget=await service.read(owner,context,waitIntent.id);assert(waitTarget.findings.some(f=>f.code==='capacity_wait'));
+  assert.equal((await app.request(path+'?intentId='+unknown.id,{headers:{'x-test-principal':owner}})).status,200);
+  assert.equal((await app.request(path+'?intentId=invalid',{headers:{'x-test-principal':owner}})).status,400);
+  assert.equal((await app.request(path+'?intentId='+randomUUID(),{headers:{'x-test-principal':owner}})).status,403);
+  const alien=randomUUID();await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,state)
+   VALUES($1,$2,$3,$4,'{}',$5,$6,1,1,'failed')`,[alien,other,outsider,'a'.repeat(64),randomUUID(),randomUUID()]);
+  assert.equal((await app.request(path+'?intentId='+alien,{headers:{'x-test-principal':owner}})).status,403);
+  assert.equal((await app.request(path+'?intentId='+unknown.id,{headers:{'x-test-principal':outsider}})).status,403);
+
  }finally{await db.close();await fixture.close();}
 });

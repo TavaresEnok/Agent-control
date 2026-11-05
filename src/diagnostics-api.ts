@@ -14,7 +14,9 @@ export function createDiagnosticsApi(ledger:Ledger,projectId:string){
  app.onError((error,c)=>error instanceof Refusal?c.json({error:error.code},error.status):c.json({error:'DIAGNOSTICS_UNAVAILABLE'},500));
  app.get('/contexts/:id/diagnostics',async c=>{
   const id=Id.safeParse(c.req.param('id'));if(!id.success)throw new Refusal('INVALID_CONTEXT_ID',400);
-  return c.json(agentControlDiagnosticsSchema.parse(await service.read(c.get('principal'),id.data)));
+  const requested=c.req.query('intentId');const intent=requested===undefined?undefined:Id.safeParse(requested);
+  if(intent&&!intent.success)throw new Refusal('INVALID_INTENT_ID',400);
+  return c.json(agentControlDiagnosticsSchema.parse(await service.read(c.get('principal'),id.data,intent?.success?intent.data:undefined)));
  });
  return app;
 }

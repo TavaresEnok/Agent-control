@@ -14,6 +14,6 @@ Integração: UI invoca o helper por opt-in `AC_R3_UI_LATENCY=1`; fluxo incorpor
 
 ## Execuções integradas locais
 
-A bancada browser com opt-in executou doze comandos assinados: aceitação p50 76,20 ms e p95/máximo 235,44 ms; atualização DOM p50 156,46 ms e p95/máximo 319,55 ms. Autenticação teve p95/máximo 31,349 ms. A evidência pertence a `r3-ui-latency.json`, produzida pelo autor da UI.
+A bancada browser com opt-in executou doze comandos assinados: aceitação p50 75,45 ms e p95/máximo 95,83 ms; atualização DOM p50 180,87 ms e p95/máximo 208,21 ms. Autenticação teve p95/máximo 17,573 ms. A evidência pertence a `r3-ui-latency.json`, produzida pelo autor da UI.
 
 O fluxo isolado executou oito samples de comando (um novo e sete retries idempotentes): p50 38,54 ms e p95/máximo 253,32 ms. Dez projeções reais comprometidas tiveram limite superior de visibilidade p50 150,54 ms e p95/máximo 611,84 ms; autenticação das leituras p95 63,44 ms. O runner completo passou 1/1 sem skips em 100,4 s, incluindo a execução física que já integrava o fixture. Sua evidência `r3-flow.json` pertence ao autor do fluxo. As parcelas de inferência continuam fora desses objetivos: o probe de evento começa no snapshot PG, depois da geração do evento, e não na solicitação de uma resposta do provedor.
