@@ -1,24 +1,39 @@
 # R4 — revisão independente de protocolo084/085
 
-Estado: **não aprovado nesta versão**. Base do reviewer `da2c899e`; fontes do autor `9ef5aa80` e `7ab13f8c` aplicadas somente na worktree de revisão. Não houve alteração de produto pelo revisor, uso de conta real ou reexecução física redundante. Runtime mantém a revisão de hooks de recursos/rollover/fluxo; esta frente cobre a implementação do protocolo, watchdog/reaper e desenho da prova finita.
+**Aprovado no escopo delimitado abaixo.** Base do reviewer `da2c899e`. Fontes do autor revisadas: `9ef5aa80`, `7ab13f8c`, `a92a8aec`, `afa2d505`, `7993003d`, `0fd3869c` e `d22fdac3`; documentação intermediária `43c21fdc`. O reviewer não alterou produto e não repetiu a prova física pesada. Este parecer substitui o checkpoint bloqueado `2abfd052`.
 
-## Bloqueadores enviados ao autor e principal
+## Evidência e proveniência
 
-1. O watchdog de `native-protocol-compatibility.ts` é executado por `/usr/local/bin/node` da imagem candidata. A imagem pode substituir esse binário e ignorar o script `-e`/prazo; o fim do controlador deixaria o processo sem a limitação declarada. A limitação deve vir de autoridade/runtime confiável independente dos bytes candidatos. A prova final precisa incluir imagem cujo node candidato ignore o script/prazo, além de SIGKILL do controlador e descendente em sessão distinta. Achado inicialmente transmitido por runtime e confirmado nesta leitura; nenhum aceite duplicado é inferido.
-2. O `finally` de `r4-native-protocol-compatibility.test.ts` envia SIGKILL ao controlador sem aguardar sua saída, remove o scratch e tenta remover tags antes de fechar/dropar o banco. Se o corpo falhar antes de reconciliar os probes, podem restar contêineres; uma exceção ao retirar imagem pode impedir o restante do cleanup e encobrir a falha inicial. É necessário aguardar o filho e limpar identidades próprias verificadas pelo journal, executando cada etapa de cleanup mesmo se outra falhar e preservando o erro inicial.
+O autor executou a suíte física final, em slot serial autorizado pelo principal, com fonte `d22fdac3`. O reviewer leu o fonte integral, as assertivas e o log completo: **1/1, zero skips, exit0, 65,515s**. Não é apresentado como reexecução física independente. Log `docs/validation/evidence/r4-native-protocol-compatibility-20261105.log`, SHA256 `1834f3ad595f93f257f614d043c44fa382cdf0af75bc195d711ce71b9f90106f`. O readback do reviewer não encontrou contêiner com `agent-control.protocol-check=true`. O autor está versionando o log, typecheck e confirmação de cleanup em seu fechamento; o principal integra essa evidência junto deste parecer.
 
-## Inspeção estática sem achado impeditivo adicional
+A prova usa PostgreSQL real, subprocessos host e Docker reais, onze imagens próprias com CLIs sintéticas e nenhum login/inferência. Observa versão/initialize/model-list, bloqueio antes da promoção, modelo/esforço divergente, pin imutável, publicação/revogação de promoção e preservação do pin anterior. Sete candidatos são recusados: wire shape incompatível, auth recusada, timeout, saída precoce, versão com stdout válido/exit73, versão com stdout acima do limite e imagem com VOLUME inesperado. As últimas três recusas não são atribuídas a elegibilidade oficial.
 
-O spec é estrito e não aceita `passed`, runner, comandos, transcrições ou sucesso fornecido pelo consumidor. O digest precisa corresponder ao tipo/imagens calculados. A administração é verificada antes de observar e antes de gravar o recibo. Version/initialize/model-list são chamadas fixas, sem login ou inferência; as respostas têm limites de tamanho/modelos/páginas e cursor repetido é recusado. Erros de stream/processo reprovam a observação.
+Há contraprovas físicas de SIGKILL do controlador com descendente em setsid, node candidato hostil, prazo já vencido antes de create/start e recolhimento posterior de resíduo criado parado. Um probe vivo impede concorrente por `NATIVE_PROTOCOL_PROBE_BUSY`. Os casos mortos aguardam o deadline persistido antes da reconciliação; as linhas62/90 do teste já faziam isso, portanto a suspeita intermediária do reviewer sobre falta dessa espera foi retirada sem exigir alteração.
 
-Recibos e pins são imutáveis no PostgreSQL. Promoção exige recibo existente e revisão CAS; revogação é revisão CAS e sincroniza com o pin por lock de linha. Uma tentativa nova só recebe recibo promovido não revogado com mesmo tipo/executor/modelo/esforço. O replay de uma tentativa já fixada exige exatamente o mesmo executor/modelo/esforço e conserva o recibo antigo após revogação; isso não promove novas tentativas.
+## Achados fechados pela autoria
 
-O journal085 é gravado antes do efeito e conserva nome, operação, imagem, fase, prazo e identidade de contêiner observada. O reaper confere envelope e identidade antes de retirar por ID. Uma ausência anterior ao prazo mantém incerteza; tombstones aposentadas continuam elegíveis para varredura depois do prazo para recolher criação tardia. Essa segurança de criação tardia depende do watchdog realmente confiável, ainda bloqueado no item1. Não foi atribuído um passe físico aos casos ainda não executados na versão corrigida.
+| Achado | Correção revisada |
+| --- | --- |
+| Watchdog sob node da imagem candidata podia ignorar o prazo | `a92a8aec`: supervisor destacado sob inode Node já carregado do host; código e comandos fixos; create sem start; ACK só depois do ID persistido; deadline/desconexão retiram a identidade própria |
+| Shutdown/falha de teste podia pular cleanup ou mascarar o erro inicial | `a92a8aec`: aguarda filho, cleanup por operações/tags próprias, etapas independentes e preservação da falha original |
+| Wrapper perdeu o exit status físico de --version | `afa2d505`: IPC confiável traz State.ExitCode; versão exige0; fixture stdout válido/exit73 é recusada |
+| Reaper e helper competiam pelo mesmo rm; writes IPC podiam chegar depois do retorno | `afa2d505`: stopAndWait aguarda close e drena writes antes do reaper; handlers de rejeição não transformam falha em sucesso |
+| Caminho de overflow/erro de stream da versão ainda não aguardava o helper | `7993003d`: finally incondicional do helper e fixture de9000 caracteres |
+| VOLUME da imagem criava montagem gravável antes da validação | `0fd3869c`: recusa Config.Volumes antes do create; valida envelope antes de created/ACK/start; separa identidade de ownership da decisão de isolamento; cleanup exato com rm-f-v |
+| CLI Docker local usa mensagem de objeto ausente com caixa diferente | `d22fdac3`: somente no-such-object/no-such-container são ausência, sem depender de caixa; demais falhas permanecem incertas. Log negativo anterior preservado |
 
-## Limites necessários ao eventual aceite
+## Segurança observada no fonte
 
-O ensaio é de worker/version/app-server initialize/model-list sem credenciais. `toolsImage` participa do digest de execução, mas o exec-server da imagem de tools não é observado; não demonstra compatibilidade completa do par. As imagens CLI old/new/incompatible/auth são fixtures sintéticas, sem elegibilidade oficial. Os pins9ef5aa80/7ab13f8c não contêm chamadas de hook nos supervisores; a integração de admissão real precisa do aceite separado do principal/runtime. A prova de reinício dos collectors é distinta e não foi reexecutada nem aceita em lote por esta revisão.
+Spec estrito recusa runner, comando, caminho, transcript e flag `passed` do chamador. O executor deve corresponder ao digest calculado do tipo/imagens. Administração é verificada antes de observar e antes de gravar recibo. As chamadas são fixas e limitadas em tamanho, páginas, modelos e cursor; não há operação de login/inferência nesta interface.
 
-## Próxima evidência exigida
+Recibos e pins são imutáveis no PostgreSQL. Promoção exige recibo existente e revisão CAS; revogação usa revisão CAS e sincroniza com a fixação por lock de linha. Uma tentativa nova exige promoção ativa do mesmo tipo/executor/modelo/esforço. Um replay só conserva o recibo antigo se esses campos forem idênticos. Não há conversão de revogação em aprovação para nova tentativa.
 
-Pin corrigido de fonte/teste, execução física serial autorizada com log completo, incluindo watchdog confiável contra runtime candidato hostil, SIGKILL do controlador, descendente setsid, criação atrasada e cleanup de falha. O reviewer pode inspecionar essa mesma execução final com proveniência explícita de autor; não declarará uma repetição independente que não ocorreu. Este documento será atualizado com o pin e parecer efetivos.
+Journal085 precede o efeito. O helper confiável cria por imagem exata, verifica isolamento e comunica o ID; só recebe start depois da persistência desse ID. A propriedade de duração depende do host confiável, não da imagem candidata. O cleanup valida ownership e retira por ID; o reaper valida identidade/envelope, mantém incerteza quando a ausência é prematura e inclui tombstones aposentadas para recolher resíduos de create tardio. A admissão global serial usa lock transacional e recusa uma operação nova enquanto existir operação não aposentada. Nenhum PID externo é reciclado como identidade e não há prune global.
+
+## Limites do aceite
+
+Aprova o módulo de confirmação local de **worker/version/app-server initialize/model-list**, o journal/watchdog/reaper e sua prova sintética delimitada. `toolsImage` participa do digest de execução, mas o exec-server da imagem de tools não é observado: não aprova compatibilidade completa do par. As imagens old/new/auth são fixtures, sem elegibilidade ou autenticação oficial.
+
+Os hooks de novos jobs dos supervisores pertencem à revisão de resources/runtime e não recebem aceite implícito deste parecer. Capacity, quota, credenciais, isolamento de execução e elegibilidade continuam gates separados. Falha do daemon/supervisor preserva estado incerto; não se afirma prazo físico garantido com Docker indisponível. A prova anterior de reinícios dos collectors é distinta e não foi aceita em lote nem reexecutada por este reviewer.
+
+Sem conta real, API paga, deploy ou migração operacional. Este parecer não promove RNF13/T26/RF21 ou outros requisitos inteiros e não altera a matriz global.
