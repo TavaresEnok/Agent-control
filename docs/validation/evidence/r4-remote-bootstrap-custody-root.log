@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: remote development bootstrap is explicit synthetic opt-in with isolated custody and fixed configured projects
+ok 1 - remote development bootstrap is explicit synthetic opt-in with isolated custody and fixed configured projects
+  ---
+  duration_ms: 16.711328
+  type: 'test'
+  ...
+# Subtest: configured verifier custody binds the opened descriptor to its canonical path, rejecting parent aliases
+ok 2 - configured verifier custody binds the opened descriptor to its canonical path, rejecting parent aliases
+  ---
+  duration_ms: 9.534216
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1219.62707

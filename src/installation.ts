@@ -63,9 +63,10 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  .superRefine((value,ctx)=>{const code=nativeBootstrapSchemaError(value);if(code)ctx.addIssue({code:'custom',message:code});});
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
-export async function readPrivateFile(path:string,maxBytes=65536){
+export async function readPrivateFile(path:string,maxBytes=65536,options:{canonical?:boolean}={}){
  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
  try{
+  if(options.canonical&&(resolve(path)!==path||await realpath(path)!==path||await realpath('/proc/self/fd/'+file.fd)!==path))throw new Refusal('NON_CANONICAL_PRIVATE_FILE',403);
   const info=await file.stat();
   if(!info.isFile()||info.nlink!==1||(info.mode&0o077)!==0||info.uid!==process.getuid?.()||info.size>maxBytes)throw new Refusal('UNSAFE_PRIVATE_FILE',403);
   const bytes=await file.readFile();if(bytes.length>maxBytes){bytes.fill(0);throw new Refusal('PRIVATE_FILE_TOO_LARGE');}return bytes;

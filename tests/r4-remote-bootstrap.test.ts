@@ -1,7 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {Installation} from '../src/installation.ts';
+import {Installation,readPrivateFile} from '../src/installation.ts';
+import {mkdtemp,mkdir,writeFile,symlink,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {configuredRemoteDevelopment} from '../src/remote-development-config.ts';
 
 test('remote development bootstrap is explicit synthetic opt-in with isolated custody and fixed configured projects',()=>{
@@ -19,4 +22,17 @@ test('remote development bootstrap is explicit synthetic opt-in with isolated cu
   {tmpfsRoot:'/projects/future'},{tmpfsRoot:'/private/ac/workspace'},{tmpfsRoot:'/private'},{tmpfsRoot:'/dev/shm/../other'}])assert.equal(Installation.safeParse(change(update)).success,false,JSON.stringify(update));
  for(const path of ['/projects/future/key','/dev/shm/ac-lab/key'])assert.equal(Installation.safeParse({...config,remoteDevelopment:{...remoteDevelopment,transport:{...remoteDevelopment.transport,credentials:[{id:randomUUID(),path}]}}}).success,false);
  assert.equal(Installation.safeParse({...config,remoteDevelopment:{...remoteDevelopment,mode:'real-provider'}}).success,false);
+});
+
+
+test('configured verifier custody binds the opened descriptor to its canonical path, rejecting parent aliases',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'ac-r4-verifier-'));
+ try{
+  const writable=join(root,'project'),privateRoot=join(root,'private');await mkdir(writable,{mode:0o700});await mkdir(privateRoot,{mode:0o700});
+  const key=Buffer.alloc(32,7);await writeFile(join(writable,'key'),key,{mode:0o600});
+  await symlink(writable,join(privateRoot,'alias'));
+  await assert.rejects(readPrivateFile(join(privateRoot,'alias','key'),32,{canonical:true}),/NON_CANONICAL_PRIVATE_FILE/);
+  await writeFile(join(privateRoot,'key'),key,{mode:0o600});
+  assert.deepEqual(await readPrivateFile(join(privateRoot,'key'),32,{canonical:true}),key);
+ }finally{await rm(root,{recursive:true,force:true});}
 });

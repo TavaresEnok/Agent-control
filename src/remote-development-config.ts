@@ -27,7 +27,7 @@ export function configuredRemoteDevelopment(ledger:Ledger,raw:z.input<typeof Rem
   const repository=(await ledger.pool.query('SELECT r.repo FROM ac_project_repositories r JOIN ac_contexts x ON x.project_id=r.project_id AND x.id=$2 WHERE r.project_id=$1 AND NOT x.archived',[projectId,contextId])).rows[0];
   if(!repository)throw new Refusal('REMOTE_DEVELOPMENT_SCOPE_MISMATCH');
   const {readPrivateFile}=await import('./installation.ts');
-  const key=await readPrivateFile(project.verifierKeyFile,32);
+  const key=await readPrivateFile(project.verifierKeyFile,32,{canonical:true});
   if(key.length!==32){key.fill(0);throw new Refusal('REMOTE_DEVELOPMENT_VERIFIER_KEY_INVALID');}
   const quality=new Quality(ledger,Buffer.from(key),new GitArtifacts(repository.repo));key.fill(0);
   const development=new RemoteDevelopment(ledger,transport,{implementationProfiles:new Map(project.profiles.map(({profileId,...binding})=>[profileId,binding]))});
