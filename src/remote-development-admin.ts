@@ -76,13 +76,20 @@ export async function executeRemoteDevelopmentAdmin(admin:ProjectAdmin,principal
 export async function remoteDevelopmentAdminView(admin:ProjectAdmin,principal:string,isAdmin:boolean){
  const configured=isAdmin&&!!admin.options.remoteDevelopment;
  if(!isAdmin)return {configured:false,candidates:[],workspaces:[]};
- const candidates=configured?(await admin.ledger.pool.query(`SELECT s.project_id AS "projectId",s.context_id AS "contextId",s.host_id AS "hostId",s.operation_id AS "sourceOperationId",o.intent_id AS "intentId",s.commit_id AS commit,s.tree_id AS tree,p.label
-  FROM ac_remote_source_materializations s JOIN ac_remote_operations o ON o.id=s.operation_id AND o.state='completed'
+ const candidates=configured?(await admin.ledger.pool.query(`SELECT s.project_id AS "projectId",s.context_id AS "contextId",s.host_id AS "hostId",o.id AS "sourceOperationId",o.intent_id AS "intentId",s.commit_id AS commit,s.tree_id AS tree,p.label,o.request_digest AS "requestDigest"
+  FROM ac_remote_source_materializations s JOIN ac_remote_operations o ON o.context_id=s.context_id AND o.host_id=s.host_id
+   AND o.task_id='git-export' AND o.state='completed' AND o.remote_receipt->>'commit'=s.commit_id AND o.remote_receipt->>'tree'=s.tree_id
+  JOIN ac_managers live ON live.context_id=s.context_id AND live.epoch=o.manager_epoch AND live.lease_until>clock_timestamp()
+  JOIN ac_intents i ON i.id=o.intent_id AND i.context_id=s.context_id AND i.state NOT IN ('done','review','failed','canceled','cancelled','cancellation_requested')
+  JOIN ac_operations implementation ON implementation.intent_id=i.id AND implementation.id=i.operation_id AND implementation.manager_epoch=live.epoch
   JOIN ac_projects p ON p.id=s.project_id JOIN ac_contexts x ON x.id=s.context_id AND NOT x.archived
   JOIN ac_memberships m ON m.project_id=s.project_id AND m.principal_id=$1 AND m.role='owner'
-  JOIN ac_remote_hosts h ON h.id=s.host_id AND h.enabled AND 'git-workspace'=ANY(h.allowed_tasks)
-  WHERE NOT EXISTS(SELECT 1 FROM ac_remote_development_workspaces w WHERE w.intent_id=o.intent_id)
-  ORDER BY s.created_at DESC,s.id LIMIT 100`,[principal])).rows.filter(row=>admin.options.remoteDevelopment?.supports?.(row.projectId,row.hostId)??true):[];
+  JOIN ac_remote_hosts h ON h.id=s.host_id AND h.project_id=s.project_id AND h.enabled AND 'git-workspace'=ANY(h.allowed_tasks)
+  WHERE EXISTS(SELECT 1 FROM ac_remote_source_authorizations a JOIN ac_control_intents control ON control.id=a.control_intent_id AND control.action='remote.source.authorize'
+   WHERE a.project_id=s.project_id AND a.context_id=s.context_id AND a.intent_id=o.intent_id AND a.host_id=s.host_id AND a.commit_id=s.commit_id AND a.tree_id=s.tree_id)
+   AND NOT EXISTS(SELECT 1 FROM ac_remote_development_workspaces w WHERE w.intent_id=o.intent_id)
+   AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations cancel WHERE cancel.intent_id=i.id OR cancel.intent_id=i.parent_intent_id)
+  ORDER BY o.created_at DESC,o.id LIMIT 100`,[principal])).rows.flatMap(({requestDigest,...row})=>requestDigest===digest({action:'git-export',operationId:row.sourceOperationId,intentId:row.intentId,contextId:row.contextId,hostId:row.hostId,commit:row.commit,tree:row.tree})&&(admin.options.remoteDevelopment?.supports?.(row.projectId,row.hostId)??true)?[row]:[]):[];
  const workspaces=(await admin.ledger.pool.query(`SELECT w.id AS "workspaceId",w.project_id AS "projectId",w.context_id AS "contextId",w.host_id AS "hostId",w.state,
   o.state AS "implementationState",e.phase AS "emissionPhase",s.commit_id AS commit,s.tree_id AS tree,a.id AS "artifactId"
   FROM ac_remote_development_workspaces w JOIN ac_memberships m ON m.project_id=w.project_id AND m.principal_id=$1 AND m.role='owner'
