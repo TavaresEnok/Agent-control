@@ -1,0 +1,20 @@
+TAP version 13
+# R3_REMOTE_QUALITY_LAB_READY
+# R3_REMOTE_QUALITY_WORKSPACE_PREPARED
+# R3_REMOTE_QUALITY_REMOTE_COMPLETED
+# {"proof":"remote-source-to-real-quality-and-return","source":"6032838e32bf6f28cb074327e54b39b87de909f2","commit":"d8e05fcf93395d996479085d8ea1a6be662a500c","tree":"3ac503e9b614e57f3ea0237aa7e18159cc30f8d3","implementation":"actual SSH+Docker fixed executable","qa":"NativeQa actual Node assertion","review":"NativeVerification physical deterministic inference","tools":"actual native-tools-worker/public Codex exec-server read-only FS","signedHumanApproval":true,"integrator":"real Quality+Git CAS","returnSshCalls":2,"lostReturnAckRecovered":true,"evidence":[{"kind":"judge","status":"passed"},{"kind":"qa","status":"passed"},{"kind":"review","status":"passed"}],"seededApprovedGate":false,"providerInference":false}
+# Subtest: R3 real SSH artifact passes physical QA/review/judge then signed integration and exact remote CAS return
+ok 1 - R3 real SSH artifact passes physical QA/review/judge then signed integration and exact remote CAS return
+  ---
+  duration_ms: 17799.714915
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 18531.721289
