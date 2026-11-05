@@ -6,6 +6,8 @@ export const CAPACITY_EXCLUSION_REASONS = [
   'access_removed',
   'account_disabled',
   'profile_disabled',
+  'model_disabled_by_policy',
+  'model_effort_not_in_catalog',
   'not_synthetic',
   'ineligible',
   'quota_exhausted',
@@ -26,6 +28,8 @@ export type CapacityWaitExclusion = z.infer<typeof exclusionSchema>
 
 export const EXCLUSION_TEXT: Record<CapacityExclusionReason, string> = {
   profile_missing: 'Perfil removido',
+  model_disabled_by_policy: 'Modelo desabilitado pela política',
+  model_effort_not_in_catalog: 'Modelo ou esforço não homologado',
   access_removed: 'Acesso ao projeto removido',
   account_disabled: 'Conta desativada',
   profile_disabled: 'Perfil desativado',

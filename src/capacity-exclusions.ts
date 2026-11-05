@@ -5,6 +5,8 @@ export const CAPACITY_EXCLUSION_REASONS = [
   'access_removed',
   'account_disabled',
   'profile_disabled',
+  'model_disabled_by_policy',
+  'model_effort_not_in_catalog',
   'not_synthetic',
   'ineligible',
   'quota_exhausted',
@@ -27,6 +29,8 @@ export type ChainProfileFacts = {
   mode: string | null;
   accountEnabled: boolean;
   profileEnabled: boolean;
+  modelDisabled?: boolean;
+  catalogValid?: boolean;
   eligibility: string | null;
   freshQuotaStatus: string | null;
 };
@@ -41,6 +45,8 @@ export function classifyProfileExclusion(facts: ChainProfileFacts): CapacityExcl
   if (facts.mode !== 'synthetic') return 'not_synthetic';
   if (!facts.accountEnabled) return 'account_disabled';
   if (!facts.profileEnabled) return 'profile_disabled';
+  if (facts.modelDisabled) return 'model_disabled_by_policy';
+  if (facts.catalogValid === false) return 'model_effort_not_in_catalog';
   if (facts.eligibility !== 'documented_supported') return 'ineligible';
   if (facts.freshQuotaStatus === 'available') return null;
   if (facts.freshQuotaStatus === 'exhausted') return 'quota_exhausted';

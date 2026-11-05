@@ -1,3 +1,4 @@
+import {assertModelAllowed,modelDisabledByPolicy} from './model-policy.ts';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type pg from 'pg';
@@ -77,6 +78,7 @@ export class Capacity {
   async registerModel(principal: string, raw: {provider: string; model: string; efforts: string[]; roles: Role[]; source: string}) {
     const input=z.object({provider:z.string().min(1).max(80),model:z.string().min(1).max(100),
       efforts:z.array(z.enum(['low','medium','high'])).min(1).max(3),roles:z.array(Role).min(1).max(6),source:z.string().min(1).max(500)}).strict().parse(raw);
+    assertModelAllowed(input.model);
     await this.tx(async c=>{await this.admin(c,principal);
       await c.query('INSERT INTO ac_model_catalog VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
         [input.provider,input.model,input.efforts,input.roles,input.source]);
@@ -132,7 +134,7 @@ export class Capacity {
     });
   }
   async reviseProfile(principal:string,projectId:string,raw:z.input<typeof ProfileRevisionInput>){
-    const input=ProfileRevisionInput.parse(raw);
+    const input=ProfileRevisionInput.parse(raw);assertModelAllowed(input.model);
     await this.tx(async c=>{
       const membership=await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner' FOR SHARE",[projectId,principal]);
       if(!membership.rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
@@ -149,7 +151,7 @@ export class Capacity {
     });
   }
   async addProfile(principal: string, projectId: string, raw: z.input<typeof ProfileInput>) {
-    const p = ProfileInput.parse(raw);
+    const p = ProfileInput.parse(raw);assertModelAllowed(p.model);
     await this.tx(async c => {
       await this.owner(c, principal, projectId);
       const account=(await c.query('SELECT a.mode FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a', [p.accountId, principal, projectId])).rows[0];
@@ -195,9 +197,11 @@ export class Capacity {
       const revision = Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_policy_revisions WHERE project_id=$1', [projectId])).rows[0].revision);
       if (revision !== expectedRevision) throw new Refusal('POLICY_CONFLICT');
       for (const [role, chain] of Object.entries(policy.roles)) if (chain) for (const id of [...chain.regular,...chain.emergency]) {
-        const found = await c.query(`SELECT 1 FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
+        const found = await c.query(`SELECT p.model,EXISTS(SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider WHERE a.id=p.account_id AND m.model=p.model AND p.effort=ANY(m.efforts) AND p.role=ANY(m.roles)) catalog_valid FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
           WHERE p.id=$1 AND p.role=$2 AND x.project_id=$3`, [id,role,projectId]);
         if (!found.rowCount) throw new Refusal('POLICY_PROFILE_FORBIDDEN', 403);
+        assertModelAllowed(found.rows[0].model);
+        if(!found.rows[0].catalog_valid)throw new Refusal('MODEL_EFFORT_NOT_IN_CATALOG');
       }
       await c.query('INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,$2,$3,$4,$5)',
         [projectId,revision+1,digest(policy),policy,principal]);
@@ -208,16 +212,23 @@ export class Capacity {
     await this.tx(async c => {
       const context = await this.ledger.authorize(c, principal, Id.parse(contextId));
       await this.owner(c, principal, context.project_id);
-      if (!(await c.query('SELECT 1 FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2', [context.project_id, revision])).rowCount)
-        throw new Refusal('POLICY_MISSING');
+      const stored=(await c.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[context.project_id,revision])).rows[0];
+      if(!stored)throw new Refusal('POLICY_MISSING');
+      const policy=CapacityPolicy.parse(stored.snapshot);
+      for(const [role,chain] of Object.entries(policy.roles))if(chain)for(const id of [...chain.regular,...chain.emergency]){
+        const profile=(await c.query(`SELECT p.model,EXISTS(SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider WHERE a.id=p.account_id AND m.model=p.model AND p.effort=ANY(m.efforts) AND p.role=ANY(m.roles)) catalog_valid
+         FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id WHERE p.id=$1 AND p.role=$2 AND x.project_id=$3`,[id,role,context.project_id])).rows[0];
+        if(!profile)throw new Refusal('POLICY_PROFILE_FORBIDDEN',403);
+        assertModelAllowed(profile.model);if(!profile.catalog_valid)throw new Refusal('MODEL_EFFORT_NOT_IN_CATALOG');
+      }
       await c.query('UPDATE ac_contexts SET capacity_policy_revision=$2 WHERE id=$1', [contextId,revision]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.policy.assigned',$2)", [contextId,{revision}]);
     });
   }
   /** Read-only chain lookup. Missing ids stay in order so the refusal can name them. */
   private async chainFacts(c: pg.PoolClient, ids: string[], projectId: string): Promise<LoadedProfile[]> {
-    const found = await c.query<{profile_id:string;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number}>(
-      `SELECT p.id profile_id,a.mode,a.enabled account_enabled,p.enabled profile_enabled,a.eligibility,
+    const found = await c.query<{profile_id:string;model:string;catalog_valid:boolean;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number}>(
+      `SELECT p.id profile_id,p.model,EXISTS(SELECT 1 FROM ac_model_catalog m WHERE m.provider=a.provider AND m.model=p.model AND p.effort=ANY(m.efforts) AND p.role=ANY(m.roles)) catalog_valid,a.mode,a.enabled account_enabled,p.enabled profile_enabled,a.eligibility,
         EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=$2) project_access,
         ac_profile_quota_status(a.id,p.model) fresh_quota,
         a.id account_id,a.max_concurrent
@@ -227,7 +238,7 @@ export class Capacity {
     return ids.map(profileId => {
       const row = byId.get(profileId);
       if (!row) return { profileId, profilePresent: false, projectAccess: false, mode: null, accountEnabled: false, profileEnabled: false, eligibility: null, freshQuotaStatus: null, accountId: null, maxConcurrent: null };
-      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent };
+      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, modelDisabled:modelDisabledByPolicy(row.model), catalogValid:row.catalog_valid, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent };
     });
   }
   async reserve(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority): Promise<Grant> {

@@ -176,7 +176,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   <AgentControlImportPreview/>
   <AgentControlProjectAdmin/>
   {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}
-  {mutate.error&&<p role="alert">{mutate.error.message}</p>}
+  {mutate.error&&<p role="alert">{({ModelDisabledByPolicy:'Este modelo está desabilitado pela política.',MODEL_EFFORT_NOT_IN_CATALOG:'Modelo ou esforço não homologado para esta função.',POLICY_PROFILE_FORBIDDEN:'Perfil indisponível ou conta removida deste projeto.'} as Record<string,string>)[mutate.error.message]??mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
   {mutate.isSuccess&&mutate.variables.action==='qa.waiver.authorize'&&<p role="status">Autorização registrada: {z.object({result:z.object({authorizationId:z.string().uuid()})}).safeParse(mutate.data).success?z.object({result:z.object({authorizationId:z.string().uuid()})}).parse(mutate.data).result.authorizationId:'consulte a lista após atualizar'}</p>}
   {data?.qaWaiver&&<AgentControlQaWaiver key={`qa-waiver-${contextId}`} view={data.qaWaiver} busy={busy} onAuthorize={payload=>mutate.mutate({action:'qa.waiver.authorize',payload})} onRevoke={authorizationId=>mutate.mutate({action:'qa.waiver.revoke',payload:{authorizationId}})}/>}
