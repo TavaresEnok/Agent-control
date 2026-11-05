@@ -6,14 +6,16 @@ import {readPrivateFile,type Installation} from './installation.ts';
 import {ManagerRegistry,happierEndpointFactory} from './managers.ts';
 import {ContextVault} from './context-vault.ts';
 import {loadHappier} from './happier.ts';
+import type {Control} from './control.ts';
 import type {Ledger} from './ledger.ts';
 import type {CezarRuntime} from './cezar.ts';
 import {assertManagerTransportAllowed} from './native-bootstrap.ts';
 
 /** Optional configured transport only. Cezar still owns dispatch; no model login,
- * inference, unpause, policy edit or account activation occurs here. A bench
+ * inference or account activation occurs during bootstrap. Human signed typed
+ * configuration RPCs remain available after the transport starts. A bench
  * bootstrap cannot open this transport: substitutes are injected by the caller. */
-export async function startConfiguredManagerTransport(config:Installation,ledger:Ledger,runtime:CezarRuntime):Promise<ManagerRegistry|undefined>{
+export async function startConfiguredManagerTransport(config:Installation,ledger:Ledger,runtime:CezarRuntime,configurationControl?:Control):Promise<ManagerRegistry|undefined>{
  assertManagerTransportAllowed(config);
  const options=config.managerTransport;if(!options)return;
  const contexts=options.contexts.filter(item=>item.projectId===runtime.projectId);if(!contexts.length)return;
@@ -33,7 +35,7 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
   if(!identity)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
   const source=new ContextVault(ledger,identity.id,config.contextVault.directory,config.contextVault.masterFile,repositories);
   registry=new ManagerRegistry(ledger,runtime.projectId,happierEndpointFactory(ledger,runtime,await loadHappier(),{
-   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:true}));
+   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:true,configurationControl}));
   for(const item of contexts){
    const {projectId,...request}=item;
    if(projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);

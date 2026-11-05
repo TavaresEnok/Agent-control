@@ -50,9 +50,10 @@ export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning,quotaRegistry?:{configurationDigest:string;reconcile(accountId?:string):Promise<number>;report:{state:string;realActivation:'blocked';inferenceEnabled:false;registered:number}}) {
+  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning,quotaRegistry?:{configurationDigest:string;reconcile(accountId?:string):Promise<number>;report:{state:string;realActivation:'blocked';inferenceEnabled:false;registered:number}},configurationControl?:Control) {
   const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
-  const control = new Control(ledger,providerAdapters,runtime.projectId,administrative,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
+  const control = configurationControl??new Control(ledger,providerAdapters,runtime.projectId,administrative,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
+  if(control.ledger!==ledger)throw new Refusal('CONFIGURATION_LEDGER_MISMATCH');
   app.use('/api/v1/ac/*',async(c,next)=>{
     c.set('timingStarted',performance.now());c.set('authenticationMs',0);
     try{await next();}finally{

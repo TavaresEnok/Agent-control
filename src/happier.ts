@@ -9,6 +9,9 @@ import { Template } from './templates.ts';
 import type { CezarRuntime } from './cezar.ts';
 import type { SemanticPlanning } from './semantic-planning.ts';
 import { managerPlanPublishedSchema } from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
+import {chatConfigurationHandler} from './chat-control.ts';
+import type {Control} from './control.ts';
+import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 
 type Rpc = {
@@ -129,7 +132,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; semanticPlanning?:SemanticPlanning; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
@@ -145,6 +148,20 @@ export class HappierEndpoint {
     boundary.registerSessionUserMessageSendHandler(this.rpc, { workingDirectory: runtime.repo,
       revalidateExplicitUserRequest: async () => ({ status: 'ready' }),
       sessionRuntimeControls: { handleUserMessage: raw => this.accept(raw) } });
+    if(options.configurationControl){
+      if(options.configurationControl.ledger!==ledger)throw new Refusal('CONFIGURATION_LEDGER_MISMATCH');
+      if(!this.rpc.registerHandler)throw new Refusal('CONFIGURATION_RPC_UNAVAILABLE');
+      const configure=chatConfigurationHandler(options.configurationControl,{authority:options.authority,principal:options.principal,
+        sessionId:options.sessionId,keyVersion:options.keyVersion??1,encryptionVariant:options.encryptionVariant??'legacy',keyFingerprint:keyFingerprint(options.key)});
+      this.rpc.registerHandler('agent-control.configure',async raw=>{
+        try{
+          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
+          await this.validateLink();
+          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
+          return {ok:true,result:await configure(raw)};
+        }catch{return {ok:false,error:'CONFIGURATION_REQUEST_FAILED'};}
+      });
+    }
     if(options.administrativeHandler){
       if(!this.rpc.registerHandler)throw new Refusal('ADMIN_RPC_UNAVAILABLE');
       this.rpc.registerHandler('agent-control.admin',async raw=>{
@@ -206,7 +223,7 @@ export class HappierEndpoint {
     const connecting=this.transport.connect();
     void connecting.then(()=>{if(this.lifecycle.signal.aborted)this.socket.disconnect();},()=>{});
     await boundedNetwork(()=>connecting,timeout,this.lifecycle.signal);
-    const methods=['session.userMessage.send',...(this.options.administrativeHandler?['agent-control.admin']:[])];
+    const methods=['session.userMessage.send',...(this.options.configurationControl?['agent-control.configure']:[]),...(this.options.administrativeHandler?['agent-control.admin']:[])];
     const registered = await boundedNetwork(()=>this.rpc.waitForRegisteredHandlers(methods, { timeoutMs: timeout }),timeout,this.lifecycle.signal);
     if (registered.status !== 'ready') {
       this.socket.disconnect();
