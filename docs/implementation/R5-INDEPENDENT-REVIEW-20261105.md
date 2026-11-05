@@ -75,3 +75,5 @@ Aprovado o entrypoint `config-export`/`config-read` por inspeção independente 
 ## Edição de conta e versão de perfil: 091
 
 Aprovado o escopo 9c1b60d7/f419d425: owner, acesso e fonte são verificados sob locks na transação; digest e CAS impedem uso de estado obsoleto, nova versão preserva perfil anterior, grants e políticas, e lineage é imutável. O autor testou em PG revogação concorrente de acesso/membership, conflito e replay; browser 360/390 usou dispositivo inscrito por fixture e gateway temporário. A montagem integrada e o conjunto literal de RF07 são avaliações separadas.
+
+A prova física do autor 4134196e (`/tmp/ac-r5-native-log-physical-3.log`) passa 1/1 em reviewer sintético: capability em duas escritas é removida do arquivo, hash vinculado ao recibo e replay da retirada é estável. Aprovação restrita a esse cenário; não usa o worker Codex real nem cobre composição, rotação ou provedores.
