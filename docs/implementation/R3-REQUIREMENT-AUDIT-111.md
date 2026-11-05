@@ -32,7 +32,7 @@ Versão-base `ae2e141b60e6ea90125dd43babb97e9a0abc0f16`. O JSON associado conté
 | RF-24 | integration_evidence_missing | not_accepted |
 | RF-25 | implemented_slice_missing_integration | do_not_accept_full_requirement |
 | RF-26 | integration_evidence_missing | not_accepted |
-| RF-27 | complete_slice_verification_pending | not_accepted |
+| RF-27 | implemented_verified_supported_scope | accepted_supported_runtime_contract |
 | RF-28 | integration_evidence_missing | not_accepted |
 | RF-29 | integration_evidence_missing | not_accepted |
 | RF-30 | implemented_slice_missing_integration | do_not_accept_full_requirement |
@@ -73,7 +73,7 @@ Versão-base `ae2e141b60e6ea90125dd43babb97e9a0abc0f16`. O JSON associado conté
 | RNF-08 | implemented_slice_missing_integration | do_not_accept_full_requirement |
 | RNF-09 | complete_slice_verification_pending | not_accepted |
 | RNF-10 | implemented_slice_missing_integration | do_not_accept_full_requirement |
-| RNF-11 | integration_evidence_missing | not_accepted |
+| RNF-11 | implementation_and_evidence_gap | not_accepted |
 | RNF-12 | missing_named_capability_or_scenario | do_not_accept_full_requirement |
 | RNF-13 | complete_slice_verification_pending | not_accepted |
 | RNF-14 | criterion_largely_implemented_pending_final_version_proof | candidate_for_acceptance_after_final_integrated_proof_of_exact_criterion |

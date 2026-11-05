@@ -171,6 +171,78 @@
       "implemented_delta": "Actual Capacity/ProviderCollectors/PG named synthetic ordered chain, persisted specific exclusion/handoff reasons, sticky selection and healthy reserve grant drain, encrypted messageRef unchanged.",
       "remaining": "Synthetic grant state, no physical worker/conversation continuity/official login. Web enum/selection DTO sync in UI front required; same-provider model quota scope still separate next implementation.",
       "recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions"
+    },
+    {
+      "id": "RF-40",
+      "reviewed_commit": "5d1d2a73",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-usage-final.log",
+      "result": "1/1 final central API/PG report test passed; zero skips",
+      "implemented_delta": "Cumulative deltas/unknown baselines; attempt/profile/rework export, finite period simple comparison, reliable stage lifecycle wall duration incl unknown ambiguous/running stages, microsecond pagination/CSV injection defense,10s statement timeout.",
+      "remaining": "Exact UI time-source mapping final proof pending. Current profile metadata, server observation attribution, per-request snapshots explicitly scoped; no active inference duration or statistical provider conclusions.",
+      "recommendation": "RF40_local_contract_candidate_for_acceptance_after_final_UI_API_combined_proof"
+    },
+    {
+      "id": "T17",
+      "reviewed_commit": "5d1d2a73",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-usage-final.log",
+      "result": "1/1 final central API/PG report test passed; zero skips",
+      "implemented_delta": "Cumulative deltas/unknown baselines; attempt/profile/rework export, finite period simple comparison, reliable stage lifecycle wall duration incl unknown ambiguous/running stages, microsecond pagination/CSV injection defense,10s statement timeout.",
+      "remaining": "Exact UI time-source mapping final proof pending. Current profile metadata, server observation attribution, per-request snapshots explicitly scoped; no active inference duration or statistical provider conclusions.",
+      "recommendation": "recommend_accept_exact_cumulative_unknown_balance_arithmetic_criterion_on_final_integrated_rerun"
+    },
+    {
+      "id": "RF-10",
+      "reviewed_commit": "c5c6ef46",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-model-quota-final.log",
+      "result": "1/1 final scoped shared-account test passed; zero skips",
+      "implemented_delta": "Exact model quota scopes under shared physical account, permanent scoped-mode promotion, unavailable global gate, capture invalidation/missing/expired scopes unknown, stale percentage/reset cleared, late launch account prelocks.",
+      "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately.",
+      "recommendation": "approve_scoped_contract_not_official_provider_homologation"
+    },
+    {
+      "id": "RF-30",
+      "reviewed_commit": "c5c6ef46",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-model-quota-final.log",
+      "result": "1/1 final scoped shared-account test passed; zero skips",
+      "implemented_delta": "Exact model quota scopes under shared physical account, permanent scoped-mode promotion, unavailable global gate, capture invalidation/missing/expired scopes unknown, stale percentage/reset cleared, late launch account prelocks.",
+      "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately.",
+      "recommendation": "approve_scoped_contract_not_official_provider_homologation"
+    },
+    {
+      "id": "RNF-14",
+      "reviewed_commit": "c5c6ef46",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-model-quota-final.log",
+      "result": "1/1 final scoped shared-account test passed; zero skips",
+      "implemented_delta": "Exact model quota scopes under shared physical account, permanent scoped-mode promotion, unavailable global gate, capture invalidation/missing/expired scopes unknown, stale percentage/reset cleared, late launch account prelocks.",
+      "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately.",
+      "recommendation": "recommend_accept_unknown_balance_transparency_criterion_after_UI_sync_integrated_proof"
+    },
+    {
+      "id": "T31",
+      "reviewed_commit": "c5c6ef46",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-model-quota-final.log",
+      "result": "1/1 final scoped shared-account test passed; zero skips",
+      "implemented_delta": "Exact model quota scopes under shared physical account, permanent scoped-mode promotion, unavailable global gate, capture invalidation/missing/expired scopes unknown, stale percentage/reset cleared, late launch account prelocks.",
+      "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately.",
+      "recommendation": "approve_scoped_contract_not_official_provider_homologation"
+    },
+    {
+      "id": "RF-42",
+      "reviewed_commit": "4766e6b3",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-ui-final.log",
+      "result": "24/24 focused UI tests independently passed; author real authenticated browser evidence inspected, not independently rerun",
+      "implemented_delta": "Signed stale policy edit rejected409; historical snapshot restored exactly into new revision; signed per-project template publish/reuse frozen snapshot verified PG.",
+      "remaining": "Root final combined authenticated browser rerun on integrated version. No official provider account required by these literal local criteria.",
+      "recommendation": "recommend_accept_literal_local_criterion_after_final_integrated_browser_proof"
+    },
+    {
+      "id": "RF-43",
+      "reviewed_commit": "4766e6b3",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-ui-final.log",
+      "result": "24/24 focused UI tests independently passed; author real authenticated browser evidence inspected, not independently rerun",
+      "implemented_delta": "Signed stale policy edit rejected409; historical snapshot restored exactly into new revision; signed per-project template publish/reuse frozen snapshot verified PG.",
+      "remaining": "Root final combined authenticated browser rerun on integrated version. No official provider account required by these literal local criteria.",
+      "recommendation": "recommend_accept_literal_local_criterion_after_final_integrated_browser_proof"
     }
   ]
 }
