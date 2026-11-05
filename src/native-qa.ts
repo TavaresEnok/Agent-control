@@ -1,5 +1,5 @@
 import {constants} from 'node:fs';
-import {createHash,createHmac,randomUUID} from 'node:crypto';
+import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {mkdir,lstat,realpath,open,rename} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {z} from 'zod';
@@ -163,25 +163,93 @@ export class NativeQa{
   });
   return {state:status==='passed'?'completed' as const:'failed' as const,receipt};
  }
- async reconcileContext(principal:string,authority:Authority){
-  const jobs=await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
-   return (await c.query(`SELECT j.*,x.state cancellation_state,s.state stage_state FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id
-    LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id WHERE j.context_id=$1 AND
-    (j.state IN ('uncertain','running') OR s.state<>'completed') ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId])).rows;
+ /** Remove only the exact stopped QA container after durable logs and evidence. */
+ async retire(principal:string,authority:Authority,id:string){
+  z.uuid().parse(id);
+  const validate=async(c:import('pg').PoolClient)=>{
+   const job=(await c.query('SELECT * FROM ac_native_qa_jobs WHERE id=$1 AND context_id=$2 FOR UPDATE',[id,authority.contextId])).rows[0];
+   if(!job)throw new Refusal('NATIVE_QA_JOB_NOT_FOUND');
+   await this.authorize(c,principal,authority,job.intent_id,true);
+   if(job.contract_digest!==this.verifierDigest||Number(job.manager_epoch)>authority.epoch)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
+   if(!job.container_id)return null;
+   const artifact=(await c.query('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2 AND intent_id=$3',[job.artifact_id,job.context_id,job.intent_id])).rows[0];
+   if(!artifact||job.request_digest!==digest({stageId:id,intentId:job.intent_id,contextId:job.context_id,grantId:job.grant_id,sessionId:job.session_id,artifactId:job.artifact_id,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,policyRevision:artifact.policy_revision,contractDigest:job.contract_digest}))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   const stage=(await c.query('SELECT * FROM ac_stage_operations WHERE id=$1 FOR UPDATE',[id])).rows[0];
+   const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[job.grant_id])).rows[0];
+   const machine=job.receipt;
+   if(!['completed','failed'].includes(job.state)||!machine||machine.jobId!==id||machine.containerId!==job.container_id||machine.grantId!==job.grant_id||machine.artifactId!==job.artifact_id||machine.sessionId!==job.session_id||machine.contractDigest!==job.contract_digest||machine.logsAvailable!==true||!/^([a-f0-9]{64})$/.test(machine.logSha256)||
+    !stage||stage.state!=='completed'||stage.grant_id!==job.grant_id||stage.intent_id!==job.intent_id||stage.session_id!==job.session_id||digest(stage.receipt?.nativeQa)!==digest(machine)||
+    !grant||grant.state!=='released'||grant.role!=='qa'||grant.intent_id!==job.intent_id||grant.context_id!==job.context_id||Number(grant.manager_epoch)!==Number(job.manager_epoch)||digest(grant.physical_receipt)!==digest(machine))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   const cancellation=(await c.query("SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND state IN ('requested','confirmed')",[job.intent_id])).rowCount;
+   if(stage.receipt?.cancellation===true){if(!cancellation||machine.status!=='canceled')throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');}
+   else {
+    const verification=stage.receipt?.verification,signature=stage.receipt?.signature;
+    const evidence=(await c.query('SELECT receipt,receipt_digest FROM ac_verification_evidence WHERE id=$1 AND artifact_id=$2 AND grant_id=$3 AND session_id=$4',[evidenceId(id),job.artifact_id,job.grant_id,job.session_id])).rows[0];
+    const expected=createHmac('sha256',this.key).update(canonical(verification)).digest('hex');
+    if(!verification||typeof signature!=='string'||signature!==expected||!evidence||digest(evidence.receipt)!==digest(verification)||evidence.receipt_digest!==digest(verification))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   }
+   const area=this.paths(id).area,dir=await lstat(area);
+   if(!dir.isDirectory()||dir.isSymbolicLink()||await realpath(area)!==area)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   const file=await open(join(area,'qa-logs.bin'),constants.O_RDONLY|constants.O_NOFOLLOW);let bytes:Buffer;
+   try{if(!(await file.stat()).isFile())throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');bytes=await file.readFile();}finally{await file.close();}
+   if(createHash('sha256').update(bytes).digest('hex')!==machine.logSha256)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   return {job,identity:{jobId:id,contextId:job.context_id,intentId:job.intent_id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,managerEpoch:Number(job.manager_epoch),containerId:job.container_id,image:this.contract.image,contractDigest:job.contract_digest,requestDigest:job.request_digest,receiptDigest:digest(machine),logSha256:machine.logSha256}};
+  };
+  const prepare=await this.ledger.tx(async c=>{
+   const verified=await validate(c);if(!verified)return false;
+   const old=(await c.query('SELECT * FROM ac_native_qa_retirements WHERE job_id=$1 FOR UPDATE',[id])).rows[0];
+   if(old){if(digest(old.identity)!==digest(verified.identity))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');return true;}
+   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   this.inspect(physical,verified.job);if(physical.State.Running||physical.State.Status!=='exited'||physical.Id!==verified.job.container_id||physical.State.ExitCode!==verified.job.receipt.exitCode||physical.State.FinishedAt!==verified.job.receipt.finishedAt)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   await c.query("INSERT INTO ac_native_qa_retirements(job_id,identity,state) VALUES($1,$2,'prepared')",[id,verified.identity]);return true;
   });
-  for(const job of jobs){
-   if(job.contract_digest!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
-   await this.ledger.heartbeat(authority);
-   if(job.cancellation_state==='requested')await this.stop(principal,authority,job.id,'canceled');
-   const result=await this.reconcile(principal,authority,job.id);
-   if(result.state==='completed'||result.state==='failed'){
-    if(job.cancellation_state==='requested'){
-     await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
-      await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND grant_id=$3 AND state IN ('uncertain','running')",[job.id,{cancellation:true,nativeQa:result.receipt},job.grant_id]);});
-    }else await this.record(principal,authority,job.id);
+  if(!prepare)return;
+  await this.ledger.tx(async c=>{
+   const verified=await validate(c);if(!verified)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   const saved=(await c.query('SELECT * FROM ac_native_qa_retirements WHERE job_id=$1 FOR UPDATE',[id])).rows[0];
+   if(!saved||digest(saved.identity)!==digest(verified.identity))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   const signature=createHmac('sha256',this.key).update('agent-control:native-qa-retirement:v1\n').update(canonical(verified.identity)).digest();
+   if(saved.state==='removed'){
+    if(typeof saved.proof?.signature!=='string'||!/^[a-f0-9]{64}$/.test(saved.proof.signature)||!timingSafeEqual(Buffer.from(saved.proof.signature,'hex'),signature)||digest(saved.proof.identity)!==digest(verified.identity))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   }else{
+    const byName=await this.docker.inspect('ac-native-qa-'+id),byId=await this.docker.inspect(verified.job.container_id);
+    if(byName||byId){if(!byName||!byId||byName.Id!==byId.Id)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');this.inspect(byId,verified.job);
+     if(byId.State.Running||byId.State.Status!=='exited'||byId.State.ExitCode!==verified.job.receipt.exitCode||byId.State.FinishedAt!==verified.job.receipt.finishedAt)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');await this.docker.remove(byId.Id);}
+   }
+   if(await this.docker.inspect(verified.job.container_id)||await this.docker.inspect('ac-native-qa-'+id))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   if(saved.state==='prepared')await c.query("UPDATE ac_native_qa_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[id,{identity:verified.identity,signature:signature.toString('hex')}]);
+  });
+ }
+ async reconcileContext(principal:string,authority:Authority){
+  let cursor:{created_at:string;id:string}|null=null;
+  for(;;){
+   const jobs:Record<string,any>[]=await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+    return (await c.query(`SELECT j.*,j.created_at::text cursor_created_at,x.state cancellation_state,s.state stage_state FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id
+     LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id WHERE j.context_id=$1 AND
+     (j.state IN ('uncertain','running') OR s.state<>'completed' OR (j.container_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ac_native_qa_retirements r WHERE r.job_id=j.id AND r.state='removed')))
+     AND ($2::timestamptz IS NULL OR (j.created_at,j.id)>($2::timestamptz,$3::uuid))
+     ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId,cursor?.created_at??null,cursor?.id??null])).rows;
+   });
+   if(!jobs.length)break;
+   for(const job of jobs){
+    cursor={created_at:job.cursor_created_at,id:job.id};
+    await this.ledger.heartbeat(authority);
+    try{
+     if(job.contract_digest!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
+     if(job.cancellation_state==='requested')await this.stop(principal,authority,job.id,'canceled');
+     const result=await this.reconcile(principal,authority,job.id);
+     if(result.state==='completed'||result.state==='failed'){
+      if(job.cancellation_state==='requested'){
+       await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
+        await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND grant_id=$3 AND state IN ('uncertain','running')",[job.id,{cancellation:true,nativeQa:result.receipt},job.grant_id]);});
+       await this.retire(principal,authority,job.id);
+      }else await this.record(principal,authority,job.id);
+     }
+    }catch{/* A single unconfirmed job must not prevent reconciliation of later jobs. */}
    }
   }
  }
+
  async record(principal:string,authority:Authority,id:string){
   const observed=await this.reconcile(principal,authority,id);if(observed.state!=='completed'&&observed.state!=='failed')throw new Refusal('NATIVE_QA_RESULT_UNCONFIRMED');
   const job=(await this.ledger.pool.query('SELECT j.*,a.* FROM ac_native_qa_jobs j JOIN ac_artifacts a ON a.id=j.artifact_id WHERE j.id=$1',[id])).rows[0];
@@ -196,6 +264,6 @@ export class NativeQa{
    if(!['uncertain','running'].includes(row.state))throw new Refusal('NATIVE_QA_STAGE_MISMATCH');
    await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[id,{verification:receipt,signature,nativeQa:machine}]);
   });
-  await this.quality.record(principal,receipt,signature,authority);return receipt;
+  await this.quality.record(principal,receipt,signature,authority);await this.retire(principal,authority,id);return receipt;
  }
 }
