@@ -53,7 +53,8 @@ try {
 } catch(error) { failure=error } finally {
  const errors=[]
  try { await browser?.close() } catch(error) { errors.push(error) }
- try { await stop(server);await stop(backend?.child) } catch(error) { errors.push(error) }
+ try { await stop(server) } catch(error) { errors.push(error) }
+ try { await stop(backend?.child) } catch(error) { errors.push(error) }
  for(const path of created)try { await rm(path) } catch(error) { errors.push(error) }
  if(temporary)try { await rm(temporary,{recursive:true}) } catch(error) { errors.push(error) }
  if(errors.length)throw new AggregateError(failure?[failure,...errors]:errors,'Browser proof cleanup failed')
