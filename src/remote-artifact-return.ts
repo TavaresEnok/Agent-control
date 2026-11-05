@@ -3,6 +3,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import type pg from 'pg';
 import {z} from 'zod';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {Id,Refusal,digest} from './contracts.ts';
 import {GitObjectId} from './remote-git.ts';
 import {projectRepositoryIdentity} from './project-repository.ts';
@@ -76,6 +77,7 @@ export async function returnRemoteArtifact(admin:ProjectAdmin,principal:string,c
    if(bytes.length>65536||createHash('sha256').update(bytes).digest('hex')!==exported.bundleSha256)throw new Refusal('REMOTE_RETURN_BUNDLE_MISMATCH');
    const request={schemaVersion:1,action:'git-return',operationId:command.intentId,projectId:p.projectId,artifactId:p.artifactId,commit:row.commit_id,tree:row.tree_id,
     expectedCommit:row.source_commit,destinationRef:p.destinationRef,bundle:exported.bundle,bundleSha256:exported.bundleSha256};
+   if(await requireRecoveryInventory(c,admin.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    const receipt=RemoteArtifactReturnReceipt.parse(await transport.exchange({id:p.hostId,hostname:row.hostname,port:row.port,username:row.username,public_key:row.public_key,fingerprint:row.fingerprint,credential_ref:row.credential_ref,remote_root:row.remote_root} satisfies RemoteHost,request));
    for(const key of ['operationId','projectId','artifactId','commit','tree','expectedCommit','destinationRef','bundleSha256'] as const)
     if(receipt[key]!==request[key])throw new Refusal('REMOTE_RETURN_RECEIPT_MISMATCH');

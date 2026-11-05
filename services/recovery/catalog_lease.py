@@ -15,10 +15,12 @@ def main():
     if len(line) > 65536:
         raise ValueError('CATALOG_REQUEST_INVALID')
     request = json.loads(line)
-    if set(request) != {'directory', 'installationId', 'catalogId', 'epoch', 'kind', 'authority', 'operation', 'requestDigest'}:
+    if set(request) != {'directory', 'installationId', 'catalogId', 'manifestHash', 'epoch', 'kind', 'authority', 'identity', 'operation', 'requestDigest'}:
         raise ValueError('CATALOG_REQUEST_INVALID')
     with Catalog(request['directory'], request['installationId'], request['catalogId']) as catalog:
-        catalog.begin(request['epoch'], request['kind'], request['authority'], request['operation'], request['requestDigest'])
+        if catalog.manifest_hash != request['manifestHash']:
+            raise ValueError('CATALOG_MANIFEST_MISMATCH')
+        catalog.begin(request['epoch'], request['kind'], request['authority'], request['operation'], request['requestDigest'], request['identity'])
         print(json.dumps({'state': 'pending'}), flush=True)
         while sys.stdin.buffer.read(4096):
             pass

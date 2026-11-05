@@ -185,12 +185,15 @@ class Catalog:
         self._append({'type': 'epoch', 'epoch': epoch + 1})
         return epoch + 1
 
-    def begin(self, epoch, kind, authority, operation, request_digest):
+    def begin(self, epoch, kind, authority, operation, request_digest, identity):
         current, pending = self.state()
         if current != epoch:
             fail('CATALOG_EPOCH_FENCED')
-        if (kind, authority) not in {(a['kind'], a['id']) for a in self.manifest['authorities']}:
+        matches = [a for a in self.manifest['authorities'] if a['kind'] == kind and a['id'] == authority]
+        if not matches:
             fail('CATALOG_AUTHORITY_NOT_REGISTERED')
+        if matches[0]['identity'] != identity:
+            fail('CATALOG_AUTHORITY_IDENTITY_MISMATCH')
         seen = {row['entry'].get('operation') for row in self.entries if row['entry'].get('type') == 'pending'}
         if operation in seen or not isinstance(operation, str) or not operation or not isinstance(request_digest, str) or len(request_digest) != 64 or any(c not in '0123456789abcdef' for c in request_digest):
             fail('CATALOG_OPERATION_INVALID')

@@ -22,8 +22,9 @@ class CatalogTest(unittest.TestCase):
             helper = pathlib.Path(catalog.__file__).with_name('catalog_lease.py')
             child = subprocess.Popen([sys.executable, str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             successor = None
-            request = {'directory': root, 'installationId': installation, 'catalogId': manifest['catalogId'], 'epoch': 1,
-                       'kind': 'native', 'authority': 'fixture', 'operation': 'effect', 'requestDigest': 'a' * 64}
+            manifest_hash = __import__('hashlib').sha256((pathlib.Path(root) / 'manifest.json').read_bytes()).hexdigest()
+            request = {'directory': root, 'installationId': installation, 'catalogId': manifest['catalogId'], 'manifestHash': manifest_hash, 'epoch': 1,
+                       'kind': 'native', 'authority': 'fixture', 'identity': {'anchor': 'a' * 64}, 'operation': 'effect', 'requestDigest': 'a' * 64}
             try:
                 child.stdin.write(json.dumps(request) + '\n')
                 child.stdin.flush()
@@ -55,7 +56,7 @@ with m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]) as c: print(c.advance(1),flu
             manifest = catalog.initialize(root, installation, [{'kind': 'ssh', 'id': 'fixture', 'identity': {'hostKey': 'fixture'}}])
             code = '''import importlib.util,sys,time
 s=importlib.util.spec_from_file_location("cat",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","postcut","a"*64);print("READY",flush=True);time.sleep(60)
+c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","postcut","a"*64,{"hostKey":"fixture"});print("READY",flush=True);time.sleep(60)
 '''
             child = subprocess.Popen([sys.executable, '-c', code, str(pathlib.Path(catalog.__file__)), root, installation, manifest['catalogId']], stdout=subprocess.PIPE, text=True)
             try:
@@ -66,7 +67,7 @@ c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","post
                     self.assertIn('postcut', recovered.state()[1])
                     self.assertEqual(recovered.advance(1), 2)
                     with self.assertRaisesRegex(ValueError, 'CATALOG_EPOCH_FENCED'):
-                        recovered.begin(1, 'ssh', 'fixture', 'late', 'b' * 64)
+                        recovered.begin(1, 'ssh', 'fixture', 'late', 'b' * 64, {'hostKey': 'fixture'})
             finally:
                 if child.poll() is None:
                     child.kill()
@@ -79,11 +80,13 @@ c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","post
             manifest = catalog.initialize(root, installation, [{'kind': 'native', 'id': 'fixture-native', 'identity': {'anchor': 'a' * 64}}, {'kind': 'ssh', 'id': 'fixture-ssh', 'identity': {'hostKey': 'fixture'}}])
             with catalog.Catalog(root, installation, manifest['catalogId']) as c:
                 checkpoint = c.checkpoint()
-                c.begin(1, 'native', 'fixture-native', 'operation-1', 'a' * 64)
+                c.begin(1, 'native', 'fixture-native', 'operation-1', 'a' * 64, {'anchor': 'a' * 64})
+                with self.assertRaisesRegex(ValueError, 'CATALOG_AUTHORITY_IDENTITY_MISMATCH'):
+                    c.begin(1, 'ssh', 'fixture-ssh', 'wrong-host', 'b' * 64, {'hostKey': 'changed'})
                 later = c.checkpoint()
                 self.assertEqual(c.advance(1), 2)
                 with self.assertRaisesRegex(ValueError, 'CATALOG_EPOCH_FENCED'):
-                    c.begin(1, 'ssh', 'fixture-ssh', 'operation-2', 'b' * 64)
+                    c.begin(1, 'ssh', 'fixture-ssh', 'operation-2', 'b' * 64, {'hostKey': 'fixture'})
                 self.assertIn('operation-1', c.state()[1])
             with catalog.Catalog(root, installation, manifest['catalogId']) as c:
                 c.require_checkpoint(checkpoint)

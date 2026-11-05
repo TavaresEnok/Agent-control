@@ -2,6 +2,7 @@ import {assertModelAllowed} from './model-policy.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {mkdir,lstat,realpath,writeFile,open,rename} from 'node:fs/promises';
@@ -157,6 +158,8 @@ export class NativeExecutionSupervisor{
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
   const g=await this.ledger.tx(async c=>{const grant=await this.identity(c,principal,authority,input);assertModelAllowed(grant.model);
+   // This path creates a private network outside the fenced resource bridge.
+   if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    // identity/scope validates an issued WeakSet synthetic capability. A JSON
    // flag cannot reach this bypass. Real attempts pin compatibility before any
    // aggregate slot, file preparation, Docker network or group is created.

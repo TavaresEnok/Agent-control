@@ -195,6 +195,13 @@ def dispatch(config_path, config, root):
     operation = str(uuid.UUID(request['operationId']))
     record = operation_path(root, operation)
     action = request.get('action')
+    if action == 'recovery-authority':
+        if set(request) != {'schemaVersion', 'operationId', 'action'} or config.get('executionBackend') != 'docker' or not isinstance(config.get('resourceAuthority'), dict):
+            raise ValueError('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED')
+        value = config['resourceAuthority']
+        return {'schemaVersion': 1, 'operationId': operation, 'authorityId': value['authorityId'],
+                'anchorId': value['anchorId'], 'installationId': config['installationId'], 'stateRoot': str(root),
+                'authorityEpoch': config['authorityEpoch']}
     if action in ('git-workspace-prepare', 'git-workspace-snapshot'):
         module = workspace_module()
         return module.prepare(config, request) if action == 'git-workspace-prepare' else module.snapshot(config, request)

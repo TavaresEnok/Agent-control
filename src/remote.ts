@@ -10,6 +10,7 @@ import { Ledger } from './ledger.ts';
 import {GitExportRequest,sourceSnapshot,verifyGitExport} from './remote-git.ts';
 import {beginRemoteImplementationEmission} from './remote-emission.ts';
 import {requireRemoteSource} from './remote-source-authorizations.ts';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 export const RemoteHostInput=z.object({id:Id,label:z.string().min(1).max(100),hostname:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/),
  port:z.number().int().min(1).max(65535),username:z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
  publicKey:z.string().min(30).max(16384).refine(s=>!/[\r\n]/.test(s)),fingerprint:z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
@@ -85,6 +86,7 @@ export class RemoteOperations{
    const previous=(await c.query('SELECT * FROM ac_remote_operations WHERE id=$1 FOR UPDATE',[input.operationId])).rows[0];
    if(previous&&previous.request_digest!==requestDigest)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[input.contextId]);
+   if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    const result=verifyGitExport(await this.transport.exchange(host,{schemaVersion:1,action:'git-export',operationId:input.operationId,
     projectId:context.project_id,commit:input.commit,tree:input.tree}),{operationId:input.operationId,projectId:context.project_id,commit:input.commit,tree:input.tree});
    let saved=previous;
@@ -143,6 +145,7 @@ export class RemoteOperations{
   if(admitted.existing)return this.reconcile(principal,input.operationId,authority);
   const effect=await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);
+   const inventory=await requireRecoveryInventory(c,this.ledger);
    await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
    if(input.workspaceId){
@@ -150,8 +153,17 @@ export class RemoteOperations{
     if(emission.blocked)return {blocked:emission.blocked} as const;
    }
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
-   const response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,
+   let lease:Awaited<ReturnType<NonNullable<typeof inventory>['lease']>>|undefined;
+   if(inventory){
+    const physical=z.object({schemaVersion:z.literal(1),operationId:Id,authorityId:z.string(),anchorId:z.string().regex(/^[a-f0-9]{64}$/),installationId:z.string(),stateRoot:z.string(),authorityEpoch:z.number().int().positive()}).strict().parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'recovery-authority',operationId:input.operationId}));
+    if(physical.operationId!==input.operationId||physical.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');
+    const identity={hostId:input.hostId,hostFingerprint:admitted.host.fingerprint,authorityId:physical.authorityId,anchorId:physical.anchorId,installationId:physical.installationId,stateRoot:physical.stateRoot};
+    lease=await inventory.lease('ssh',input.hostId,identity,digest({input,projectId:admitted.projectId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch}));
+   }
+   let response:z.infer<typeof Reply>;
+   try{response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,
     projectId:admitted.projectId,taskId:input.taskId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch,...(input.workspaceId?{workspaceId:input.workspaceId}:{})}));
+   }finally{await lease?.release();}
    if(response.operationId!==input.operationId)throw new Refusal('REMOTE_RECEIPT_ID_MISMATCH');
    if(input.workspaceId&&(response.workspaceId!==input.workspaceId||response.root!==admitted.workspaceRoot))throw new Refusal('REMOTE_WORKSPACE_RECEIPT_MISMATCH');
    if(response.state==='unknown')throw new Refusal('REMOTE_START_UNCERTAIN');

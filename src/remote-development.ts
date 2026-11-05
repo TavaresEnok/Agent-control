@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import type pg from 'pg';
 import {Authority,Command,Id,Refusal,digest} from './contracts.ts';
 import {GitObjectId,RemoteGitMaterializer,verifyGitExport} from './remote-git.ts';
@@ -62,6 +63,7 @@ export class RemoteDevelopment{
    await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[input.contextId]);
    await requireProjectEnvironment(c,{projectId:workspace.project_id,contextId:input.contextId,hostId:input.hostId,purpose:'remote-development'});
+   if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    const reply=Prepared.parse(await this.transport.exchange(host,{schemaVersion:1,action:'git-workspace-prepare',operationId:input.workspaceId,projectId:workspace.project_id,commit:workspace.source_commit,tree:workspace.source_tree}));
    if(reply.operationId!==input.workspaceId||reply.projectId!==workspace.project_id||reply.commit!==workspace.source_commit||reply.tree!==workspace.source_tree)throw new Refusal('REMOTE_WORKSPACE_RECEIPT_MISMATCH');
    await c.query("UPDATE ac_remote_development_workspaces SET state='prepared',remote_receipt=$2,manager_epoch=$3 WHERE id=$1",[input.workspaceId,reply,authority.epoch]);
@@ -195,6 +197,7 @@ export class RemoteDevelopment{
    const host=(await c.query("SELECT * FROM ac_remote_hosts WHERE id=$1 AND enabled AND 'git-workspace'=ANY(allowed_tasks) FOR SHARE",[workspace.host_id])).rows[0];
    if(!host)throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
    await requireProjectEnvironment(c,{projectId:workspace.project_id,contextId:value.contextId,intentId:workspace.intent_id,hostId:workspace.host_id,purpose:'remote-development'});
+   if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    const reply=Snapshot.parse(await this.transport.exchange(host,{schemaVersion:1,action:'git-workspace-snapshot',operationId:value.workspaceId,projectId:workspace.project_id,executionOperationId:value.executionOperationId}));
    if(reply.workspaceId!==value.workspaceId||reply.operationId!==value.workspaceId||reply.executionOperationId!==value.executionOperationId||reply.base!==workspace.source_commit)throw new Refusal('REMOTE_WORKSPACE_SNAPSHOT_MISMATCH');
    const exported=verifyGitExport({schemaVersion:reply.schemaVersion,operationId:reply.operationId,projectId:reply.projectId,commit:reply.commit,tree:reply.tree,bundle:reply.bundle,bundleSha256:reply.bundleSha256},

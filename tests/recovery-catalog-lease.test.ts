@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {acquireRecoveryCatalogLease} from '../src/recovery-catalog-lease.ts';
@@ -14,7 +14,7 @@ test('transport lease persists pending intent and rejects a stale epoch',async()
  const run=async(code:string,args:string[])=>exec('/usr/bin/python3',['-c',`import importlib.util,sys,json\ns=importlib.util.spec_from_file_location('catalog',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n${code}`,modulePath,...args]);
  try{
   const init=await run("print(json.dumps(m.initialize(sys.argv[2],sys.argv[3],[{'kind':'ssh','id':'fixture','identity':{'hostKey':'fixture'}}])))",[directory,installationId]);
-  const catalogId=JSON.parse(init.stdout).catalogId,request={directory,installationId,catalogId,epoch:1,kind:'ssh' as const,authority:'fixture',operation:'effect-1',requestDigest:'a'.repeat(64)};
+  const catalogId=JSON.parse(init.stdout).catalogId,manifestHash=createHash('sha256').update(await readFile(join(directory,'manifest.json'))).digest('hex'),request={directory,installationId,catalogId,manifestHash,epoch:1,kind:'ssh' as const,authority:'fixture',identity:{hostKey:'fixture'},operation:'effect-1',requestDigest:'a'.repeat(64)};
   const lease=await acquireRecoveryCatalogLease(request);await lease.release();
   const state=await run("\nwith m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]) as c:\n print(json.dumps(c.state()))\n c.advance(1)",[directory,installationId,catalogId]);
   assert.ok(JSON.parse(state.stdout)[1]['effect-1']);

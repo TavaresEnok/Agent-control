@@ -6,6 +6,8 @@ import {resolve} from 'node:path';
 import {z} from 'zod';
 import {DockerDaemon} from './sandbox-broker.ts';
 import {digest,Refusal} from './contracts.ts';
+import {requireRecoveryInventory,type RecoveryInventoryCapability} from './recovery-inventory.ts';
+import pg from 'pg';
 /** Trusted injection only. Provisioning is a separate disposable-lab action.
  * Every group shares the same kernel parent across controllers/state roots. */
 export const NativeResourceEnvelope=z.object({stateRoot:z.string().refine(p=>resolve(p)===p),
@@ -17,11 +19,29 @@ export type NativeResourceEnvelope=z.infer<typeof NativeResourceEnvelope>;
 const bridge=fileURLToPath(new URL('../services/remote-worker/native_resource_bridge.py',import.meta.url));
 export class NativeResourceDockerDaemon extends DockerDaemon{
  private readonly envelope:NativeResourceEnvelope;private readonly admissions=new Map<string,string>();private readonly admissionAttempts=new Map<string,string>();
+ private inventory?:RecoveryInventoryCapability;
+ private inventoryLedger?:import('./ledger.ts').Ledger;
  get stateRoot(){return this.envelope.stateRoot;}
  get authorityId(){return this.envelope.resourceAuthority.authorityId;}
  constructor(raw:NativeResourceEnvelope){super();this.envelope=NativeResourceEnvelope.parse(raw);}
+ bindRecoveryInventory(inventory:RecoveryInventoryCapability){if(this.envelope.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');this.inventory=inventory;}
+ bindRecoveryLedger(ledger:import('./ledger.ts').Ledger){if(this.inventoryLedger&&this.inventoryLedger!==ledger)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');this.inventoryLedger=ledger;}
  async callResource(action:string,value:Record<string,unknown>):Promise<any>{
-  return new Promise((resolve,reject)=>{
+  if(this.inventoryLedger&&['admit','create','start'].includes(action)){
+   const ledger=this.inventoryLedger;
+   // Dedicated client avoids exhausting the Ledger pool when every outer
+   // domain transaction concurrently waits for a nested physical operation.
+   const c=new pg.Client(ledger.pool.options);await c.connect();
+   try{await c.query('BEGIN');const inventory=await requireRecoveryInventory(c,ledger);if(inventory)this.bindRecoveryInventory(inventory);else this.inventory=undefined;const result=await this.callResourceFenced(action,value);await c.query('COMMIT');return result;}
+   catch(error){await c.query('ROLLBACK').catch(()=>{});throw error;}finally{await c.end();}
+  }
+  return this.callResourceFenced(action,value);
+ }
+ private async callResourceFenced(action:string,value:Record<string,unknown>):Promise<any>{
+  const identity={installationId:this.envelope.installationId,authorityId:this.envelope.resourceAuthority.authorityId,anchorId:this.envelope.resourceAuthority.anchorId,stateRoot:this.envelope.stateRoot};
+  const lease=this.inventory&&['admit','create','start'].includes(action)?await this.inventory.lease('native',this.authorityId+':'+this.stateRoot,identity,digest({action,value})):undefined;
+  try{
+  return await new Promise((resolve,reject)=>{
    const child=spawn('/usr/bin/python3',[bridge],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'},stdio:['pipe','pipe','pipe']});let bytes=0,output='',failed=false;
    const timer=setTimeout(()=>{failed=true;child.kill('SIGKILL');},25000);
    child.stdout.on('data',(data:Buffer)=>{bytes+=data.length;if(bytes>1048576){failed=true;child.kill('SIGKILL');}else output+=data.toString('utf8');});
@@ -30,6 +50,7 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
     if(code!==0||result.error)return reject(new Refusal(typeof result.error==='string'&&/^[A-Z][A-Z0-9_]{1,100}$/.test(result.error)?result.error:'NATIVE_RESOURCE_UNCERTAIN'));resolve(result);});
    const {stateRoot,...authority}=this.envelope;child.stdin.end(JSON.stringify({action,authority,stateRoot,...value}));
   });
+  }finally{await lease?.release();}
  }
  bindAdmission(names:string[],token:string){for(const name of names){this.admissions.set(name,token);this.admissionAttempts.set(name,token);}}
  async admit(names:string[],allowed:()=>Promise<boolean>,persist?:(token:string)=>Promise<void>,token?:string){
@@ -55,8 +76,11 @@ export function nativeDockerDaemon(socketPath?:string,envelope?:NativeResourceEn
  * while the context fence is locked, so takeover cannot race a stale cleanup. */
 export async function admitNativeResources(input:{docker:DockerDaemon;ledger:import('./ledger.ts').Ledger;principal:string;
  authority:import('./contracts.ts').Authority;intentId:string;grantId:string;jobId:string;names:string[];isCanceled?:()=>boolean}){
- if(!(input.docker instanceof NativeResourceDockerDaemon))return;
+ const inventory=await input.ledger.tx(c=>requireRecoveryInventory(c,input.ledger));
+ if(!(input.docker instanceof NativeResourceDockerDaemon)){if(inventory)throw new Refusal('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED');return;}
  const docker=input.docker;
+ docker.bindRecoveryLedger(input.ledger);
+ if(inventory)docker.bindRecoveryInventory(inventory);
  const validate=async(c:import('pg').PoolClient,active:boolean)=>{
   const context=await input.ledger.authorize(c,input.principal,input.authority.contextId);
   await input.ledger.fence(c,input.authority,true);
