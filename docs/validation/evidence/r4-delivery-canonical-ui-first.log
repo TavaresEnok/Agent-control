@@ -1,0 +1,18 @@
+R3_HAPPIER_SOURCE_PROVENANCE {"tree":"7b8ace4cfc8e1c24b03529a8015951adf09f1f7b","files":1164,"sourceSha256":"6084780b8c5211f3477f3783fbe06334de863158476ce022cc42331fa797b6a5","cacheMatchesVendored":true}
+R4_CANONICAL_STAGE canonical settings and real device activation
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+locator.waitFor: Timeout 20000ms exceeded.
+Call log:
+[2m  - waiting for getByTestId('ac-remote-development') to be visible[22m
+
+    at <anonymous> (/tmp/ac-r4-20261105-delivery-canonical/scripts/r4-delivery-canonical-browser.mjs:56:282) {
+  log: [
+    "  - waiting for getByTestId('ac-remote-development') to be visible"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v22.23.3

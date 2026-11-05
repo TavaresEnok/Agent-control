@@ -1,0 +1,126 @@
+R3_HAPPIER_SOURCE_PROVENANCE {"tree":"7b8ace4cfc8e1c24b03529a8015951adf09f1f7b","files":1164,"sourceSha256":"6084780b8c5211f3477f3783fbe06334de863158476ce022cc42331fa797b6a5","cacheMatchesVendored":true}
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+R4_CANONICAL_STAGE actual downstream QA review judge
+CANONICAL_PAGE_TEXT R3 direct remote development
+/
+Agent Control
+‹ General settings
+General
+Agent Control
+Issue tracker
+Secrets
+Webhooks
+External integrations
+Agents
+Instructions
+Tasks
+Agent config
+Worktrees
+Bookmarklets
+Agent Control
+
+Contas de laboratório, políticas publicadas e capacidade confirmada.
+
+Vincular conversa existente do Happier
+Vincular conversa
+
+O acesso é verificado no Happier. Vincular não inicia gerente ou trabalhadores.
+
+Conversa
+c621d124-6224-4179-95a9-19c0bd3e7888
+Ativa
+Pausar novas etapas
+Concluir planos aceitos e aguardar
+
+Novos planos permitidos, sujeitos à pausa, às políticas e à capacidade. A pausa impede novas etapas; não confirma cancelamento de processos.
+
+Sair deste navegador
+Fonte de quota Codex
+
+O registro da fonte e o saldo disponível são informações distintas.
+
+Desabilitada; fontes registradas: 0.
+
+Ativação de contas reais bloqueada. Inferência desabilitada.
+
+Autoridade de instalação — laboratório
+
+Somente domínios sintéticos previamente cadastrados. A ativação operacional continua bloqueada.
+
+Domínio de laboratório
+Consultar autoridade
+Importação e restauração
+
+Confira um pacote JSON de importação. A prévia não importa dados nem verifica acesso às sessões ou chaves.
+
+Pacote JSON Ver prévia
+Prévia de restauração do laboratório
+
+Selecione o MANIFEST.json de um backup sintético do laboratório. A análise acontece neste navegador.
+
+Manifesto JSON Verificar manifesto
+
+Exportação de backup e restauração de dados não estão disponíveis por esta tela.
+
+Projetos e servidor
+
+Cadastre um repositório Git existente dentro de uma raiz autorizada na inicialização.
+
+Servidor local. Origens SSH, desenvolvimento remoto e devoluções de artefatos estão disponíveis conforme as permissões e a configuração deste servidor.
+
+Origem SSH somente leitura. O snapshot permanece não revisado e não autoriza integração.
+
+Host 00ed3726-30f5-4804-be5d-33fb6a6d915d; commit b79cda6809ffa02d968bcd7020719cd9d9574459; tree 1da295f69f40be67ca3336547f2354c8daceb5e5; estado materializado; revisão não revisada.
+
+Materializar origem SSH de uma exportação Git já concluída. O snapshot permanece não revisado e esta ação não aprova integração.
+
+Nenhuma exportação Git concluída deste projeto está disponível para materializar.
+
+Devolver artefato à origem SSH
+
+Apenas artefatos integrados e aprovados aparecem aqui. A referência remota só avança se ainda apontar ao commit esperado.
+
+Nenhum artefato aprovado disponível para devolução.
+
+Ambientes e destinos do projeto
+
+Configure branches existentes, diretórios relativos já existentes e destinos autorizados. A publicação cria uma revisão e não inicia execução.
+
+Revisão publicada: 1.
+
+Carregar configuração de ambientes
+Branch de origem
+Adicionar ambiente
+Publicar ambientes e destinos
+
+Desenvolvimento remoto. A execução usa a tarefa configurada e o gerente ativo do contexto. O artefato permanece não revisado; QA, revisão e aprovação são etapas posteriores.
+
+Workspace df49bbfe-af22-4278-8833-b540f46fde1c; contexto c621d124-6224-4179-95a9-19c
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+'failed' !== 'passed'
+
+    at <anonymous> (/tmp/ac-r4-20261105-delivery-canonical/scripts/r4-delivery-canonical-browser.mjs:73:227)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 'failed',
+  expected: 'passed',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.3
