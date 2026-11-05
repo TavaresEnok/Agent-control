@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import pathlib
 import subprocess
@@ -13,6 +14,28 @@ spec.loader.exec_module(catalog)
 
 
 class CatalogTest(unittest.TestCase):
+    def test_lease_eof_preserves_pending(self):
+        with tempfile.TemporaryDirectory(prefix='ac-t30-catalog-lease-') as root:
+            installation = str(uuid.uuid4())
+            manifest = catalog.initialize(root, installation, [{'kind': 'native', 'id': 'fixture', 'identity': {'anchor': 'a' * 64}}])
+            helper = pathlib.Path(catalog.__file__).with_name('catalog_lease.py')
+            child = subprocess.Popen([sys.executable, str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            request = {'directory': root, 'installationId': installation, 'catalogId': manifest['catalogId'], 'epoch': 1,
+                       'kind': 'native', 'authority': 'fixture', 'operation': 'effect', 'requestDigest': 'a' * 64}
+            try:
+                child.stdin.write(json.dumps(request) + '\n')
+                child.stdin.flush()
+                self.assertEqual(json.loads(child.stdout.readline()), {'state': 'pending'})
+                child.stdin.close()
+                self.assertEqual(child.wait(timeout=5), 0)
+                with catalog.Catalog(root, installation, manifest['catalogId']) as recovered:
+                    self.assertIn('effect', recovered.state()[1])
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+                child.stdout.close()
+
     def test_killed_controller_leaves_pending_and_releases_lock(self):
         with tempfile.TemporaryDirectory(prefix='ac-t30-catalog-crash-') as root:
             installation = str(uuid.uuid4())
