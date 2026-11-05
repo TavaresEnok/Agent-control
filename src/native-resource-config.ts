@@ -1,5 +1,5 @@
 import {lstat,realpath} from 'node:fs/promises';
-import {resolve,sep} from 'node:path';
+import {dirname,basename,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {NativeResourceEnvelope} from './native-resource-envelope.ts';
@@ -38,18 +38,28 @@ async function directory(path:string){
   return {device:info.dev,inode:info.ino};
  }catch(error){if(error instanceof Refusal)throw error;throw new Refusal('NATIVE_RESOURCE_ROOT_UNSAFE',403);}
 }
+async function protectedPath(path:string){
+ const suffix:string[]=[];let current=path;
+ for(;;){try{const canonical=resolve(await realpath(current),...suffix);if(canonical!==path)throw new Refusal('NATIVE_RESOURCE_PROTECTED_PATH_UNSAFE',403);return;}
+  catch(error){if(error instanceof Refusal)throw error;if((error as NodeJS.ErrnoException).code!=='ENOENT'||dirname(current)===current)throw new Refusal('NATIVE_RESOURCE_PROTECTED_PATH_UNSAFE',403);suffix.unshift(basename(current));current=dirname(current);}
+ }
+}
 export function assertNativeResourceAttachment(value:NativeResourceAttachment){if(!issued.has(value))throw new Refusal('NATIVE_RESOURCE_ATTACHMENT_INVALID',403);}
 /** Caller supplies the actual database singleton identity read by the trusted
  * bootstrap. No authority label is inferred from it and no host RPC runs here. */
-export async function prepareNativeResourceAttachment(raw:NativeResourceConfiguration,actualDatabaseInstallationId:string):Promise<NativeResourceAttachment>{
+export async function prepareNativeResourceAttachment(raw:NativeResourceConfiguration,actualDatabaseInstallationId:string,scope:{protectedPaths:readonly string[]}={protectedPaths:[]}):Promise<NativeResourceAttachment>{
  const config=frozen(NativeResourceConfiguration.parse(raw));
  if(!z.uuid().safeParse(actualDatabaseInstallationId).success||config.databaseInstallationId!==actualDatabaseInstallationId)throw new Refusal('NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH',403);
+ const protectedPaths=Object.freeze([...scope.protectedPaths]);
+ const assertProtected=async()=>{for(const path of protectedPaths){if(resolve(path)!==path||Object.values(config.roots).some(root=>overlaps(root,path)))throw new Refusal('NATIVE_RESOURCE_ROOT_FORBIDDEN',403);await protectedPath(path);}};
+ await assertProtected();
  const identities={} as Record<NativeResourceKind,Awaited<ReturnType<typeof directory>>>;
  for(const kind of ['planning','execution','qa'] as const)identities[kind]=await directory(config.roots[kind]);
  const {authorityId:_authority,anchorId:_anchor,...limits}=config.authority.resourceAuthority;
  const report=frozen<NativeResourceConfigurationReport>({state:'configured-inactive',physicalVerification:'not-requested',databaseIdentity:'verified',executionEnabled:false,limits});
  const attachment=frozen<NativeResourceAttachment>({report,envelopeForRoot:async kind=>{
   if(!['planning','execution','qa'].includes(kind))throw new Refusal('NATIVE_RESOURCE_SUPERVISOR_INVALID');
+  await assertProtected();
   const current=await directory(config.roots[kind]),previous=identities[kind];
   if(current.device!==previous.device||current.inode!==previous.inode)throw new Refusal('NATIVE_RESOURCE_ROOT_IDENTITY_CHANGED',403);
   return frozen(NativeResourceEnvelope.parse({...config.authority,stateRoot:config.roots[kind]}));

@@ -83,7 +83,7 @@ export function nativeBootstrapRuntimeAttachment(projectId:string,report:NativeB
 
 /** Synchronous binding checks. A returned code means the configuration is refused before files, database writes, Docker or models. */
 export function nativeBootstrapSchemaError(value:{project:{id:string;repo:string};projects:{repo:string}[];dataDirectory:string;
- contextVault?:{directory:string;masterFile:string};accountHomesDirectory?:string;remoteReturn?:{credentials:{path:string}[]};managerTransport?:{tokenFile?:string;contexts:{projectId:string;contextId:string}[]};nativeBootstrap?:NativeBootstrapConfig}):string|undefined{
+ contextVault?:{directory:string;masterFile:string};accountHomesDirectory?:string;remoteReturn?:{credentials:{path:string}[]};remoteDevelopment?:{transport:{credentials:{path:string}[]};projects:{verifierKeyFile:string;tmpfsRoot:string}[]};managerTransport?:{tokenFile?:string;contexts:{projectId:string;contextId:string}[]};nativeBootstrap?:NativeBootstrapConfig}):string|undefined{
  const boot=value.nativeBootstrap;if(!boot||boot.state==='disabled')return;
  if(boot.projectId!==value.project.id)return 'NATIVE_BOOTSTRAP_PROJECT_MISMATCH';
  if(new Set(boot.accounts.map(account=>account.accountId)).size!==boot.accounts.length)return 'NATIVE_BOOTSTRAP_ACCOUNT_DUPLICATE';
@@ -105,7 +105,7 @@ export function nativeBootstrapSchemaError(value:{project:{id:string;repo:string
  const keys=[boot.planning.signingKeyFile,boot.execution.signingKeyFile,boot.review.signingKeyFile];
  if(new Set(keys).size!==keys.length||keys.some(key=>roots.some(root=>overlaps(key,root))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
  if(value.contextVault&&[value.contextVault.directory,value.contextVault.masterFile].some(vault=>paths.some(path=>overlaps(path,vault))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
- if(boot.resources){const error=nativeResourceConfigurationError(boot.resources,{dataDirectory:value.dataDirectory,planningRoot:boot.planning.hostRoot,executionRoot:boot.execution.hostRoot,protectedPaths:[...repos,...keys,boot.planning.accountRoot,boot.execution.accountRoot,...(value.accountHomesDirectory?[value.accountHomesDirectory]:[]),...(value.managerTransport?.tokenFile?[value.managerTransport.tokenFile]:[]),...(value.remoteReturn?.credentials.map(item=>item.path)??[]),...(value.contextVault?[value.contextVault.directory,value.contextVault.masterFile]:[])]});if(error)return error;}
+ if(boot.resources){const error=nativeResourceConfigurationError(boot.resources,{dataDirectory:value.dataDirectory,planningRoot:boot.planning.hostRoot,executionRoot:boot.execution.hostRoot,protectedPaths:[...repos,...keys,boot.planning.accountRoot,boot.execution.accountRoot,...(value.accountHomesDirectory?[value.accountHomesDirectory]:[]),...(value.managerTransport?.tokenFile?[value.managerTransport.tokenFile]:[]),...(value.remoteReturn?.credentials.map(item=>item.path)??[]),...(value.remoteDevelopment?.transport.credentials.map(item=>item.path)??[]),...(value.remoteDevelopment?.projects.flatMap(item=>[item.verifierKeyFile,item.tmpfsRoot])??[]),...(value.contextVault?[value.contextVault.directory,value.contextVault.masterFile]:[])]});if(error)return error;}
  return;
 }
 
@@ -215,7 +215,12 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
   if(boot.resources){
    const identity=await client.query('SELECT id FROM ac_installation_identity WHERE singleton=true');
    if(identity.rows.length!==1||typeof identity.rows[0]?.id!=='string')throw new Refusal('NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH',403);
-   resources=await prepareNativeResourceAttachment(boot.resources,identity.rows[0].id);
+   const extended=config as Installation&{remoteDevelopment?:{transport:{credentials:{path:string}[]};projects:{verifierKeyFile:string;tmpfsRoot:string}[]}};
+   const protectedPaths=[config.project.repo,...config.projects.map(project=>project.repo),boot.planning.signingKeyFile,boot.execution.signingKeyFile,boot.review.signingKeyFile,
+    boot.planning.accountRoot,boot.execution.accountRoot,...(config.accountHomesDirectory?[config.accountHomesDirectory]:[]),...(config.managerTransport?[config.managerTransport.tokenFile]:[]),
+    ...(config.contextVault?[config.contextVault.directory,config.contextVault.masterFile]:[]),...(config.remoteReturn?.credentials.map(item=>item.path)??[]),
+    ...(extended.remoteDevelopment?.transport.credentials.map(item=>item.path)??[]),...(extended.remoteDevelopment?.projects.flatMap(item=>[item.verifierKeyFile,item.tmpfsRoot])??[])];
+   resources=await prepareNativeResourceAttachment(boot.resources,identity.rows[0].id,{protectedPaths});
   }
   const realEnabled=accounts.rows.some(account=>String(account.mode)!=='synthetic'&&account.enabled===true);
   // Opt-in is not an activation permit. SQL 042 and Capacity stay in place; no account row is changed.

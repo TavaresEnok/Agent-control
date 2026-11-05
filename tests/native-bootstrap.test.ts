@@ -12,7 +12,7 @@ import {nativePlanningExecutorDigest} from '../src/native-planning-contract.ts';
 import {nativeExecutionExecutorDigest} from '../src/native-execution-contract.ts';
 import {nativeQaContractDigest,type NativeQaContract} from '../src/native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
-import {assertManagerTransportAllowed,NativeBootstrapRefusal,assertNativeBootstrapAttachment,composeBenchNativeBootstrap,disabledNativeBootstrapReport,nativeBootstrapRuntimeAttachment,prepareNativeBootstrap,releaseProvenUnstartedGrant,type BenchRuntime,type NativeBootstrapAttachment,type NativeBootstrapSession} from '../src/native-bootstrap.ts';
+import {nativeBootstrapSchemaError,assertManagerTransportAllowed,NativeBootstrapRefusal,assertNativeBootstrapAttachment,composeBenchNativeBootstrap,disabledNativeBootstrapReport,nativeBootstrapRuntimeAttachment,prepareNativeBootstrap,releaseProvenUnstartedGrant,type BenchRuntime,type NativeBootstrapAttachment,type NativeBootstrapSession} from '../src/native-bootstrap.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import type {Authority} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
@@ -465,5 +465,15 @@ test('configured resource attachment maps explicit database identity and keeps n
   actualIdentity=randomUUID();await assert.rejects(prepareNativeBootstrap(config,client),/NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH/);
   assert.equal(queries.filter(sql=>sql.includes('ac_installation_identity')).length,2);
   assert.throws(()=>configured(env,{resources:{...resources,roots:{...resources.roots,qa:env.dirs[1]}}}),/NATIVE_RESOURCE_ROOT_FORBIDDEN/);
+  for(const secret of ['credential','verifierKeyFile','tmpfsRoot']){
+   const remoteDevelopment={transport:{credentials:[{path:secret==='credential'?join(qaRoot,'transport.pem'):join(env.data,'remote-transport.pem')}]},projects:[{verifierKeyFile:secret==='verifierKeyFile'?join(qaRoot,'verify.key'):join(env.data,'remote-verifier.key'),tmpfsRoot:secret==='tmpfsRoot'?qaRoot:join(env.root,'remote-tmpfs')}]};
+   assert.equal(nativeBootstrapSchemaError({...config,remoteDevelopment}),'NATIVE_RESOURCE_ROOT_FORBIDDEN');
+  }
+  // Even an otherwise separate credential spelling cannot alias into a
+  // supervisor root through an existing ancestor symlink.
+  const alias=join(env.data,'remote-secret-alias');await symlink(qaRoot,alias);
+  const remoteDevelopment={transport:{credentials:[{path:join(alias,'future-key.pem')}]},projects:[{verifierKeyFile:join(env.data,'remote-verifier.key'),tmpfsRoot:join(env.root,'remote-tmpfs')}]};
+  actualIdentity=databaseInstallationId;const extendedConfig={...config,remoteDevelopment};await assert.rejects(prepareNativeBootstrap(extendedConfig,client),/NATIVE_RESOURCE_PROTECTED_PATH_UNSAFE/);
+
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
