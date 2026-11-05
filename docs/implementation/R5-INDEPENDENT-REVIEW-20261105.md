@@ -121,3 +121,7 @@ Inspeção da composição com T22/T30 confirma os guards de modelo e inventári
 ## Conversor histórico offline ab252251/f1e045df
 
 Aprovada a conversão delimitada do contrato sintético versionado: preserva proveniência e vínculos tipados sob validação de HistoricalSnapshot, recusa versões desconhecidas e referências inconsistentes, e declara as alegações não verificadas e o resultado não executável. O autor registrou 2/2 no conversor e 2/2 no consumo da fixture. Digests não são anonimização resistente a adivinhação. Não há leitor do formato operacional Paseo nem conversão de acervo real, e RF33 integral permanece aberto.
+
+## RF34 — composição de configuração 118d91d0
+
+Aprovada a correção de projeção de `recoveryInventory`: a prova PG do autor 1/1 usa o CLI real, preserva metadados e substitui diretório por binding; SHA256 da migration 088 conferido `3b58618dfd853fd5b584bdbba65aaa90fc5e7b98d43dd1413ee0afdc20eedb32`. A prova anterior usa políticas de capacidade/qualidade e template lidos em projeto sintético. Relatórios e recuperação R3 continuam evidências distintas. RF34 permanece parcial: o backup oferecido pelo caminho atual é restrito a laboratório descartável e não há restore operacional nesse CLI. A projeção declara `restorable:false`; não se exige import automático dela para interpretar o texto literal. Textos semânticos livres mantêm a pré-condição documentada de ausência de credenciais.
