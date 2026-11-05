@@ -31,3 +31,7 @@ Em desenvolvimento. A leitura de digest seguida de rename não constitui CAS at�
 ## Desenvolvimento remoto canônico: d0a6eac6 e scripts ancestrais
 
 Aprovada a prova delimitada do autor em `/tmp/ac-r5-canonical-result3.log`: settings/browser e registry reais, SSH/Docker, artefato inicialmente não revisado, QA/review/judge, aprovação humana UI, integração backend e devolução UI à origem SSH. O script exporta a fonte via `lab.remote.exportGit` após autorização UI assinada; estágios de verificação e integração são chamados pelo harness, não pelo browser; inferência é fixture determinística. O resultado anterior `/tmp/ac-r5-canonical-result2.log` é negativo com `NATIVE_EXECUTION_INSPECTION_MISMATCH` e não é convertido em sucesso. A prova citada é execução do autor, não reexecução independente.
+
+## Restore: dc7d0874
+
+Aprovada a mitigação limitada em `Admission.set`: não reabre nem substitui marcador de restore antes de reconciliação física. Busca de pontos de escrita encontrou este setter e o setter do laboratório de restauração. Teste PG 1/1 atribuído ao autor. A guarda não neutraliza workers vivos nem inventaria efeitos posteriores ao snapshot; T30 integral permanece aberto.
