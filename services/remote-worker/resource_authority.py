@@ -62,6 +62,63 @@ def ledger_path(config):
     return directory / (hashlib.sha256(value['authorityId'].encode()).hexdigest() + '.json')
 
 
+def installation_directory(config, create=False):
+    installation = config.get('installationId')
+    if not isinstance(installation, str) or not installation or len(installation) > 256:
+        raise ValueError('INVALID_RESOURCE_INSTALLATION')
+    directory = pathlib.Path('/var/tmp') / ('ac-resource-installation-' + hashlib.sha256(installation.encode()).hexdigest())
+    if create:
+        directory.mkdir(mode=0o700, exist_ok=True)
+    if directory.is_symlink(): raise ValueError('UNSAFE_RESOURCE_INSTALLATION_DIRECTORY')
+    try: info = directory.stat()
+    except FileNotFoundError: raise ValueError('RESOURCE_INSTALLATION_BINDING_MISSING')
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError('UNSAFE_RESOURCE_INSTALLATION_DIRECTORY')
+    return directory
+
+
+@contextlib.contextmanager
+def installation_lock(config, provision=False):
+    """One persistent lock per installation, independent of UID/state/authority IDs.
+
+    First provision owns a private directory; another UID cannot split the lock.
+    The binding is initialized by provisioning, never recreated by runtime.
+    """
+    identity = config.get('installationId')
+    if getattr(_HELD, 'installation', None) is not None:
+        if _HELD.installation != identity: raise ValueError('RESOURCE_NESTED_INSTALLATION_MISMATCH')
+        yield installation_directory(config)
+        return
+    directory = installation_directory(config, provision)
+    try: fd = os.open(directory / 'authority.lock', os.O_RDWR | os.O_NOFOLLOW | (os.O_CREAT if provision else 0), 0o600)
+    except FileNotFoundError: raise ValueError('RESOURCE_INSTALLATION_BINDING_MISSING')
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
+            raise ValueError('UNSAFE_RESOURCE_INSTALLATION_LOCK')
+        try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('RESOURCE_AUTHORITY_BUSY')
+        _HELD.installation = identity
+        try: yield directory
+        finally: _HELD.installation = None
+    finally: os.close(fd)
+
+
+def _verify_installation(config, value, parent):
+    directory = installation_directory(config)
+    path = directory / 'binding.json'
+    try: binding = _read_reservation(path)
+    except FileNotFoundError: raise ValueError('RESOURCE_INSTALLATION_BINDING_MISSING')
+    expected = {'installationId': config['installationId'], 'authorityId': value['authorityId'],
+                'anchorId': value['anchorId'], 'operationId': 'installation-binding'}
+    if binding != expected: raise ValueError('RESOURCE_INSTALLATION_AUTHORITY_CONFLICT')
+    identifiers = docker('ps', '-aq', '--no-trunc', '--filter', 'label=ac.resources.installation=' + config['installationId']).splitlines()
+    for observed in json.loads(docker('inspect', *identifiers)) if identifiers else []:
+        if observed['Config']['Labels'].get(LABEL) != value['authorityId'] or observed['HostConfig']['CgroupParent'] != parent:
+            raise ValueError('RESOURCE_INSTALLATION_AUTHORITY_CONFLICT')
+    return directory
+
+
 def _physical_member(root, inspected):
     # Read the real kernel hierarchy, not merely Docker's requested HostConfig.
     group = root / ('docker-' + inspected['Id'] + '.scope')
@@ -69,8 +126,9 @@ def _physical_member(root, inspected):
         raise ValueError('RESOURCE_PHYSICAL_GROUP_MISMATCH')
 
 
-def verify(config):
+def _verify(config):
     value, parent = settings(config)
+    installation = _verify_installation(config, value, parent)
     if docker('info', '--format', '{{.CgroupDriver}} {{.CgroupVersion}}') != 'systemd 2':
         raise ValueError('RESOURCE_BACKEND_UNSUPPORTED')
     anchor = json.loads(docker('inspect', value['anchorId']))[0]
@@ -80,7 +138,9 @@ def verify(config):
         raise ValueError('RESOURCE_CGROUP_ROOT_OVERRIDE_FORBIDDEN')
     labels = anchor['Config']['Labels']
     directory = ledger_path(config).parent.stat()
-    expected_labels = {'ac.resources.ledger-directory': str(directory.st_dev) + ':' + str(directory.st_ino),
+    installation_info = installation.stat()
+    expected_labels = {'ac.resources.installation-directory': str(installation_info.st_dev) + ':' + str(installation_info.st_ino),
+                       'ac.resources.ledger-directory': str(directory.st_dev) + ':' + str(directory.st_ino),
                        'ac.resources.uid': str(os.geteuid()), 'ac.resources.max-jobs': str(value['maxJobs']),
                        'ac.resources.installation': config.get('installationId'),
                        'ac.resources.policy': policy_digest(value)}
@@ -96,8 +156,13 @@ def verify(config):
     return value, parent
 
 
+def verify(config):
+    with installation_lock(config):
+        return _verify(config)
+
+
 @contextlib.contextmanager
-def authority(config):
+def _authority(config):
     """Host-wide epoch fence. Keep held through inspect/create/start/remove + journal.
 
     Reentrant within one thread; another process/thread fails busy rather than
@@ -160,6 +225,13 @@ def authority(config):
             _HELD.identity = None
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def authority(config):
+    with installation_lock(config):
+        with _authority(config):
+            yield
 
 
 def _reservation_paths(config):
@@ -226,6 +298,7 @@ def reservation(config, operation_id, epoch):
         except FileExistsError:
             raise ValueError('RESOURCE_RESERVATION_UNCERTAIN')
         options = ['--cgroup-parent', parent, '--label', LABEL + '=' + value['authorityId'],
+                   '--label', 'ac.resources.installation=' + config['installationId'],
                    '--label', 'ac.resources.operation=' + operation_id, '--label', 'ac.resources.epoch=' + str(epoch)]
         yield options
         # An exception/timeout leaves the already-durable unbound slot occupied.

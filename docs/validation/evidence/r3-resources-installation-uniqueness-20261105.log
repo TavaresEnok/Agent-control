@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "results": {
+    "concurrentProvisioning": {
+      "controllers": 2,
+      "differentAuthorities": true,
+      "createdBudgets": 1
+    },
+    "orphanBudget": {
+      "childRunningAfterAnchorLoss": true,
+      "physicalParentStillCapped": true,
+      "lostBindingBlocksRuntime": true,
+      "orphanLabelsBlockReprovision": true
+    },
+    "pendingProvisioningRetainedWithoutGroups": true,
+    "negativeCases": [
+      "second authority same installation",
+      "changed authority configuration",
+      "foreign installation-labeled group",
+      "binding missing with live orphan",
+      "normalized contention error",
+      "pending binding with no groups"
+    ]
+  }
+}

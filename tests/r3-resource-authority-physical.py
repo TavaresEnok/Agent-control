@@ -16,7 +16,7 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'services/remote-worker'))
-from resource_authority import docker, reservation, verify, validate_group, release, ledger_path, claim_operation, authority as fenced_authority
+from resource_authority import docker, reservation, verify, validate_group, release, ledger_path, installation_directory, claim_operation, authority as fenced_authority
 
 image = os.environ.get('R3_RESOURCE_IMAGE', 'agent-control-ssh-lab:0.1.0')
 authority = 'ac-r3-resources-' + uuid.uuid4().hex[:12]
@@ -78,7 +78,7 @@ for attempt in range(40):
    identifier=docker('create',*options,'--label','ac.r3.disposable=true','--entrypoint','sleep',sys.argv[4],'60')
   print(json.dumps({'id':identifier})); break
  except ValueError as error:
-  if str(error)=='RESOURCE_AUTHORITY_BUSY' and attempt<39: time.sleep(.05); continue
+  if str(error) in ('RESOURCE_AUTHORITY_BUSY','RESOURCE_INSTALLATION_BUSY') and attempt<39: time.sleep(.05); continue
   print(json.dumps({'error':str(error)})); break
 """
         paths = []
@@ -96,7 +96,7 @@ for attempt in range(40):
         winners = [row['id'] for row in attempts if 'id' in row]
         containers.extend(winners)
         assert len(winners) == 2, attempts
-        assert all(row.get('error') in ('RESOURCE_AUTHORITY_BUSY', 'RESOURCE_CAPACITY_EXHAUSTED') for row in attempts if 'error' in row), attempts
+        assert all(row.get('error') in ('RESOURCE_AUTHORITY_BUSY', 'RESOURCE_INSTALLATION_BUSY', 'RESOURCE_CAPACITY_EXHAUSTED') for row in attempts if 'error' in row), attempts
         # Fill remaining slot. Created containers survived their controller exits.
         while len(containers) < 2:
             create(config, 'pass', start=False)
@@ -224,3 +224,8 @@ finally:
         path.unlink()
     if anchor is not None:
         ledger_path(config).unlink(missing_ok=True)
+        install=installation_directory(config)
+        assert not docker('ps','-aq','--filter','label=ac.resources.installation='+config['installationId'])
+        (install/'binding.json').unlink()
+        (install/'authority.lock').unlink()
+        install.rmdir()

@@ -1,0 +1,48 @@
+{"authority": "ac-r3-resources-0731e03276bb", "anchorId": "9adb60d5986e13806533ae50da7625898d2aa507294b68f3b86bfbaecb8a17f6", "parent": "acr33316759ae28f317a9201162.slice"}
+{
+  "passed": true,
+  "results": {
+    "crossDirectoryControllers": {
+      "controllers": 8,
+      "admittedAtRace": 2,
+      "capacity": 2,
+      "orphanAndCreatedCounted": true
+    },
+    "cpu": {
+      "quota": "50000 100000",
+      "combinedUsageMicros": 1975411,
+      "throttledPeriods": 39
+    },
+    "memory": {
+      "maximum": "134217728",
+      "oomKills": 2,
+      "exitCodes": [
+        137,
+        137
+      ]
+    },
+    "pids": {
+      "maximum": "16",
+      "rejections": 1
+    },
+    "failureMatrix": [
+      "busy shared authority",
+      "cross-directory old authority fenced",
+      "durable operation same-root replay",
+      "cross-root operation conflict",
+      "operation epoch/digest conflict",
+      "nested authority admission",
+      "created/orphan capacity full",
+      "release while present",
+      "changed physical envelope",
+      "changed maxJobs policy",
+      "fake cgroup root",
+      "missing persistent epoch ledger",
+      "empty recreated ledger",
+      "pending create timeout retains capacity",
+      "real create lost ACK recovered binding",
+      "wrong physical parent",
+      "stopped anchor"
+    ]
+  }
+}
