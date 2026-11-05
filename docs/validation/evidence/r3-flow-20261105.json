@@ -3,10 +3,27 @@
   "inference": "deterministic-only",
   "substitutions": [
     "deterministic planning/model output",
-    "fixed tools HTTP endpoint",
     "private subnet allocator"
   ],
   "providerGuards": "intact",
+  "tools": {
+    "kind": "actual native-tools-worker with public Codex exec-server",
+    "version": "codex-cli 0.166.0",
+    "publicBinarySha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+    "transport": "authenticated WebSocket capability token",
+    "operations": [
+      "initialize",
+      "initialized",
+      "fs/createDirectory",
+      "fs/writeFile",
+      "fs/readFile"
+    ],
+    "inference": false,
+    "writeReadProofs": 3,
+    "readOnlyRefusals": 4,
+    "badCapabilityRefusals": 7,
+    "accountHomeAbsent": true
+  },
   "commandLatency": {
     "schemaVersion": 1,
     "scope": "synthetic-local-benchmark",
@@ -27,21 +44,21 @@
     "metrics": {
       "commandAcceptance": {
         "samples": 8,
-        "p50Ms": 38.53552599999966,
-        "p95Ms": 253.3194310000008,
-        "maxMs": 253.3194310000008
+        "p50Ms": 20.28034200000002,
+        "p95Ms": 155.6232830000008,
+        "maxMs": 155.6232830000008
       },
       "authentication": {
         "samples": 8,
-        "p50Ms": 15.161,
-        "p95Ms": 32.719,
-        "maxMs": 32.719
+        "p50Ms": 12.158,
+        "p95Ms": 21.505,
+        "maxMs": 21.505
       },
       "application": {
         "samples": 8,
-        "p50Ms": 24.533,
-        "p95Ms": 232.208,
-        "maxMs": 232.208
+        "p50Ms": 8.574,
+        "p95Ms": 139.298,
+        "maxMs": 139.298
       }
     },
     "transport": "production Hono handler → real Happier authentication → PostgreSQL",
@@ -74,15 +91,15 @@
     "metrics": {
       "committedEventUpdateUpperBound": {
         "samples": 10,
-        "p50Ms": 150.54277400000137,
-        "p95Ms": 611.842905999998,
-        "maxMs": 611.842905999998
+        "p50Ms": 115.37387899999885,
+        "p95Ms": 200.61470000000008,
+        "maxMs": 200.61470000000008
       },
       "eventReadAuthentication": {
         "samples": 10,
-        "p50Ms": 16.693,
-        "p95Ms": 63.441,
-        "maxMs": 63.441
+        "p50Ms": 11.942,
+        "p95Ms": 16.278,
+        "maxMs": 16.278
       }
     },
     "transport": "committed PostgreSQL projection → authenticated product events endpoint",
@@ -98,43 +115,43 @@
     "planningJobs": 1,
     "executionJobs": [
       {
-        "id": "ede942c2-3774-47aa-a5ec-2320463cbd9c",
+        "id": "7e218fcf-c77e-462f-8682-9c8126d962fa",
         "role": "reviewer",
         "state": "completed"
       },
       {
-        "id": "d3d7e79b-5cdc-48b2-aa90-dbaf3bdb50f5",
+        "id": "75f3df5c-4b8a-48bc-bce9-697cb451f396",
         "role": "reviewer",
         "state": "completed"
       },
       {
-        "id": "1794c6af-a43a-5866-aab6-a143fb137013",
+        "id": "14051944-eb35-53dd-abd4-fbdd321c5e2b",
         "role": "programmer",
         "state": "completed"
       },
       {
-        "id": "0cb68b4e-a679-56ca-ac3b-a58be9b011c1",
+        "id": "229d5b35-6978-51eb-acae-87b974cd8638",
         "role": "programmer",
         "state": "completed"
       },
       {
-        "id": "9861e198-c7d5-50a2-af7a-e07c6175f2e2",
+        "id": "d939a717-3b82-4be7-8ec7-6c2749e96928",
+        "role": "reviewer",
+        "state": "completed"
+      },
+      {
+        "id": "0dd9a2ff-1a20-4777-97ee-99b8bb18e461",
+        "role": "reviewer",
+        "state": "completed"
+      },
+      {
+        "id": "83f4059e-1942-5c90-aaae-4451ec2ba7e6",
         "role": "programmer",
-        "state": "completed"
-      },
-      {
-        "id": "f950d140-b93e-44d7-9bed-ed0acfbed5a5",
-        "role": "reviewer",
-        "state": "completed"
-      },
-      {
-        "id": "a4e5954d-3d6e-41f7-9044-59e4a6a3eee4",
-        "role": "reviewer",
         "state": "completed"
       }
     ],
     "qaJobs": 4,
-    "protectedCommit": "b4fc2f5390b7c7d41d687ab5955c51908c9f4232",
+    "protectedCommit": "ab1be63bf4a0f1c6143e3881d261e05ebd41af93",
     "capacity": "actual",
     "eligibility": "actual",
     "home": "actual",

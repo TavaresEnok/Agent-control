@@ -1,4 +1,5 @@
 // A deliberately narrow integration bench: real Happier light + disposable PG.
+import {buildFlowImage} from './r3-flow-build-image.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, symlink, rm, open, readFile } from 'node:fs/promises';
@@ -40,6 +41,7 @@ async function waitFor(fn, what, ms = 60000) {
 }
 try {
   if (Number(process.versions.node.split('.')[0]) !== 22 || process.versions.node.localeCompare('22.23.3', undefined, {numeric:true}) < 0) throw Error('Node >=22.23.3 <23 required');
+  if(!process.env.AC_R3_FLOW_PUBLIC_CODEX_BINARY||!/^[a-f0-9]{64}$/.test(process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256??''))throw Error('R3_FLOW_PINNED_PUBLIC_CODEX_REQUIRED');
   scratch = await mkdtemp(join(tmpdir(), 'ac-isolated-'));
   safeEnv = {HOME:scratch, PATH:process.env.PATH ?? '/usr/bin:/bin'};
   for (const name of ['LANG','TZ','TMPDIR']) if (process.env[name]) safeEnv[name] = process.env[name];
@@ -74,13 +76,12 @@ try {
   child.on('error', e => console.error('Happier spawn error:',e));
   await waitFor(async () => {if (!(await readFile(join(logs,'happier.log'),'utf8')).includes(`Server listening at http://127.0.0.1:${httpPort}`)) return false; const r=await fetch(`http://127.0.0.1:${httpPort}/v1/account/profile`); return r.status === 401;}, 'Happier HTTP');
   const label=project;
-  run('docker',['image','inspect','agent-control-lab:0.1.0']);
-  run('docker',['build','--pull=false','--network=none','--label',`agent-control.synthetic-fixture=${label}`,'-t',project,join(root,'tests/fixtures/r3-flow-worker')]);
-  image=run('docker',['image','inspect','--format','{{.Id}}',project]);
+  image=await buildFlowImage({root,scratch,project,run,publicBinary:process.env.AC_R3_FLOW_PUBLIC_CODEX_BINARY,expectedSha256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256});
+  const toolsVersion=run('docker',['run','--rm','--label',`agent-control.synthetic-fixture=${project}`,'--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/local/bin/codex',image,'--version']);
   network=run('docker',['network','create','--internal','--subnet','10.251.249.0/28','--label',`agent-control.synthetic-fixture=${label}`,project]);
   const testLog = await open(join(logs,'tests.log'),'w');
   const files=[join(root,'tests/r3-conversation-flow.test.ts')];
-  const result = spawnSync(process.execPath,['--import','tsx','--test','--test-concurrency=1',...files],{cwd:scratch,env:{...safeEnv,AC_TEST_DATABASE_URL:database,AC_TEST_HAPPIER_URL:`http://127.0.0.1:${httpPort}`,AC_R3_FLOW_IMAGE:image,AC_R3_FLOW_NETWORK:network,AC_R3_FLOW_LABEL:label,AC_R3_FLOW_EVIDENCE:join(logs,'r3-flow.json')},stdio:['ignore',testLog.fd,testLog.fd]});
+  const result = spawnSync(process.execPath,['--import','tsx','--test','--test-concurrency=1',...files],{cwd:scratch,env:{...safeEnv,AC_TEST_DATABASE_URL:database,AC_TEST_HAPPIER_URL:`http://127.0.0.1:${httpPort}`,AC_R3_FLOW_IMAGE:image,AC_R3_FLOW_NETWORK:network,AC_R3_FLOW_LABEL:label,AC_R3_FLOW_TOOLS_KIND:'codex-exec-server',AC_R3_FLOW_PUBLIC_CODEX_SHA256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256,AC_R3_FLOW_PUBLIC_CODEX_VERSION:toolsVersion,AC_R3_FLOW_EVIDENCE:join(logs,'r3-flow.json')},stdio:['ignore',testLog.fd,testLog.fd]});
   await testLog.close(); await serverLog.close();
   if (result.error || result.status !== 0) throw Error(`integration tests failed (${result.error?.message ?? result.status}); see ${join(logs,'tests.log')}`);
   const output = await readFile(join(logs,'tests.log'), 'utf8');
