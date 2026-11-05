@@ -51,3 +51,5 @@ O ensaio `c90bc930` do broker por socket público foi incluído na integração 
 ## Materialização de origem SSH `edac11e6`
 
 O teste conecta Control assinado, exportação por OpenSSH e ProjectAdmin, verificando replay após ACK descartado na camada de transporte, recusa de payload divergente, vínculos de provenance, HEAD/árvore/conteúdo, `git fsck`, `not_reviewed` e ausência de artefatos. Não reexecutei. As identidades de dois hosts são fornecidas pela fixture, mas a fonte não afirma explicitamente que commits ou árvores diferem entre si; solicitei asserção cruzada para sustentar essa afirmação documental. A prova não cobre navegador, fio de rede interrompido, revisão humana, adaptador operacional ou push-back.
+
+`4dfc8581` acrescenta asserções de commits e árvores distintos, bem como negativas com árvore do outro host e host divergente; o autor relata 1/1, não repetido nesta revisão. A ressalva anterior sobre ausência de comparação fica resolvida.
