@@ -4,6 +4,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 import uuid
@@ -20,17 +21,29 @@ class CatalogTest(unittest.TestCase):
             manifest = catalog.initialize(root, installation, [{'kind': 'native', 'id': 'fixture', 'identity': {'anchor': 'a' * 64}}])
             helper = pathlib.Path(catalog.__file__).with_name('catalog_lease.py')
             child = subprocess.Popen([sys.executable, str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            successor = None
             request = {'directory': root, 'installationId': installation, 'catalogId': manifest['catalogId'], 'epoch': 1,
                        'kind': 'native', 'authority': 'fixture', 'operation': 'effect', 'requestDigest': 'a' * 64}
             try:
                 child.stdin.write(json.dumps(request) + '\n')
                 child.stdin.flush()
                 self.assertEqual(json.loads(child.stdout.readline()), {'state': 'pending'})
+                code = '''import importlib.util,sys
+s=importlib.util.spec_from_file_location("cat",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+with m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]) as c: print(c.advance(1),flush=True)
+'''
+                successor = subprocess.Popen([sys.executable, '-c', code, str(pathlib.Path(catalog.__file__)), root, installation, manifest['catalogId']], stdout=subprocess.PIPE, text=True)
+                time.sleep(0.1)
+                self.assertIsNone(successor.poll())
                 child.stdin.close()
                 self.assertEqual(child.wait(timeout=5), 0)
+                self.assertEqual(successor.communicate(timeout=5)[0].strip(), '2')
                 with catalog.Catalog(root, installation, manifest['catalogId']) as recovered:
                     self.assertIn('effect', recovered.state()[1])
             finally:
+                if successor is not None and successor.poll() is None:
+                    successor.kill()
+                    successor.wait(timeout=5)
                 if child.poll() is None:
                     child.kill()
                     child.wait(timeout=5)
