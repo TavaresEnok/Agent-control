@@ -1,4 +1,4 @@
-import {spawn,execFile} from 'node:child_process';
+import {spawn,execFile,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {promisify} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {createInterface} from 'node:readline';
@@ -8,6 +8,7 @@ import {Ledger} from './ledger.ts';
 import {digest,Refusal} from './contracts.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
+import {nativeProtocolHostSupervisor} from './native-protocol-host-supervisor.ts';
 
 const run=promisify(execFile),Hash=z.string().regex(/^[a-f0-9]{64}$/),Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const Effort=z.enum(['low','medium','high']);
@@ -21,17 +22,30 @@ export type NativeProtocolSpec=z.infer<typeof Spec>;
 const protocol='codex-app-server-initialize-model-list-v1';
 const env={PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'};
 type Probe={id:string;executor_digest:string;worker_image:string;phase:'version'|'rpc';container_name:string;container_id:string|null;deadline_ms:string|number;retired:boolean};
-// Runs as PID1 independently from the verifier. Exiting this PID tears down the
-// entire PID namespace, including descendants that escaped into another session.
-const watchdog=`const {spawn}=require('node:child_process');
-const phase=process.argv[1],deadline=Number(process.argv[2]);
-if(!['version','rpc'].includes(phase)||!Number.isSafeInteger(deadline)||Date.now()>=deadline)process.exit(124);
-let child;const finish=code=>{try{if(child?.pid)process.kill(-child.pid,'SIGKILL');}catch{}process.exit(code);};
-const timer=setTimeout(()=>finish(124),Math.max(1,deadline-Date.now()));
-child=spawn('/usr/local/bin/codex',[phase==='version'?'--version':'app-server'],{stdio:'inherit',detached:true});
-child.on('error',()=>finish(127));child.on('exit',code=>{clearTimeout(timer);finish(code??125);});
-process.on('SIGTERM',()=>finish(143));process.on('SIGINT',()=>finish(130));`;
-const dockerArgs=(op:Probe)=>['run','--name',op.container_name,'--label','agent-control.protocol-check=true','--label','agent-control.protocol-image='+op.worker_image,'--label','agent-control.protocol-operation='+op.id,'--label','agent-control.protocol-deadline='+op.deadline_ms,'--network','none','--read-only','--user','65534:65534','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','32','--memory','128m','--cpus','0.5','--tmpfs','/tmp:rw,noexec,nosuid,size=16m','--env','HOME=/tmp','--entrypoint','/usr/local/bin/node',...(op.phase==='rpc'?['-i']:[]),op.worker_image,'-e',watchdog,op.phase,String(op.deadline_ms)];
+/** Create/start and expiry are owned by a detached trusted host process. The
+ * parent binds the immutable daemon ID durably before acknowledging any start. */
+async function launchProbe(ledger:Ledger,op:Probe){
+ const child=spawn('/proc/'+process.pid+'/exe',['-e',nativeProtocolHostSupervisor,JSON.stringify(op)],{env,detached:true,stdio:['pipe','pipe','pipe','ipc']}) as ChildProcessWithoutNullStreams;
+ let writes=Promise.resolve();let creationSettled=false;
+ const created=new Promise<void>((resolve,reject)=>{
+  child.on('error',()=>{creationSettled=true;reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED'));});
+  child.once('exit',()=>{if(!creationSettled)reject(new Refusal('NATIVE_PROTOCOL_PROCESS_EXITED'));});
+  child.on('message',(raw:unknown)=>{const message=raw as {type?:string;id?:string|null};
+   if(message.type==='created'){
+    if(!message.id||!/^[a-f0-9]{64}$/.test(message.id)){child.send?.({stop:true});reject(new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH'));return;}
+    writes=writes.then(async()=>{const row=(await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET container_id=$2 WHERE id=$1 AND (container_id IS NULL OR container_id=$2) RETURNING *',[op.id,message.id])).rows[0];if(!row)throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');op.container_id=message.id!;creationSettled=true;resolve();child.send?.({start:true,id:message.id});}).catch(error=>{creationSettled=true;child.send?.({stop:true});reject(error);});
+   }else if(message.type==='retired'){
+    if(message.id!==null&&op.container_id&&message.id!==op.container_id)return;
+    op.retired=true;writes=writes.then(async()=>{await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);});
+   }
+  });
+ });
+ // IPC and pipe failures request cleanup; killing this helper would remove the
+ // independent lifetime authority while candidate code might still run.
+ child.stdin.on('error',()=>{if(child.connected)child.send?.({stop:true});});
+ try{await created;}catch(error){if(child.connected)child.send?.({stop:true});await writes;throw error;}
+ return {child,flush:()=>writes};
+}
 async function inspectProbe(name:string){
  try{return JSON.parse((await run('docker',['inspect',name],{env,timeout:10000,maxBuffer:262144})).stdout)[0] as Record<string,any>;}
  catch(error){if(String((error as {stderr?:string}).stderr??'').includes('No such object'))return null;throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}
@@ -41,13 +55,13 @@ async function retireProbe(ledger:Ledger,op:Probe){
  if(!container){
   // Before the absolute deadline a delayed create remains possible. Keep the
   // operation uncertain. A late watchdog refuses any spawn after that deadline.
-  if(Date.now()<Number(op.deadline_ms))throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');
+  if(!op.retired&&Date.now()<Number(op.deadline_ms))throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');
   await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);return;
  }
  if(!/^[a-f0-9]{64}$/.test(container.Id)||container.Image!==op.worker_image||(op.container_id&&container.Id!==op.container_id)||
   container.Config?.Labels?.['agent-control.protocol-operation']!==op.id||container.Config?.Labels?.['agent-control.protocol-deadline']!==String(op.deadline_ms)||
   container.Config?.Labels?.['agent-control.protocol-image']!==op.worker_image||container.HostConfig?.NetworkMode!=='none'||container.HostConfig?.ReadonlyRootfs!==true||
-  container.Config?.User!=='65534:65534'||container.HostConfig?.Privileged!==false||container.HostConfig?.PidMode==='host'||digest(container.Config?.Entrypoint)!==digest(['/usr/local/bin/node'])||digest(container.Config?.Cmd)!==digest(['-e',watchdog,op.phase,String(op.deadline_ms)])||!Array.isArray(container.Mounts)||container.Mounts.some((mount:any)=>mount.Type!=='tmpfs'||mount.Destination!=='/tmp'))throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');
+  container.Config?.User!=='65534:65534'||container.HostConfig?.Privileged!==false||container.HostConfig?.PidMode==='host'||JSON.stringify(container.Config?.Entrypoint)!==JSON.stringify(['/usr/local/bin/codex'])||JSON.stringify(container.Config?.Cmd)!==JSON.stringify([op.phase==='version'?'--version':'app-server'])||!Array.isArray(container.Mounts)||container.Mounts.some((mount:any)=>mount.Type!=='tmpfs'||mount.Destination!=='/tmp'))throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');
  await ledger.tx(async c=>{const current=(await c.query('SELECT * FROM ac_native_protocol_probe_operations WHERE id=$1 FOR UPDATE',[op.id])).rows[0];if(!current||current.container_id&&current.container_id!==container.Id)throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');await c.query('UPDATE ac_native_protocol_probe_operations SET container_id=$2 WHERE id=$1',[op.id,container.Id]);});
  try{await run('docker',['rm','-f',container.Id],{env,timeout:10000,maxBuffer:65536});}catch{throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}
  if(await inspectProbe(container.Id))throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');
@@ -58,11 +72,12 @@ async function observe(spec:NativeProtocolSpec,ledger:Ledger){
  const begin=async(phase:'version'|'rpc'):Promise<Probe>=>{const id=randomUUID(),name='ac-protocol-'+phase+'-'+id,deadline=Date.now()+15000;return (await ledger.pool.query<Probe>('INSERT INTO ac_native_protocol_probe_operations(id,executor_digest,worker_image,phase,container_name,deadline_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[id,spec.executorDigest,spec.workerImage,phase,name,deadline])).rows[0];};
  const version=await begin('version');
  let cliVersion:string;
- try{const output=await run('docker',dockerArgs(version),{env,timeout:15000,maxBuffer:8192});
-  if(output.stderr.trim())throw new Refusal('NATIVE_PROTOCOL_VERSION_INVALID');cliVersion=z.string().regex(/^codex(?:-cli)? \d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/).parse(output.stdout.trim());
+ try{
+  const owned=await launchProbe(ledger,version),chunks:Buffer[]=[];let size=0,stderr=0;
+  const output=await new Promise<string>((resolve,reject)=>{owned.child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>8192){owned.child.send?.({stop:true});reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));}else chunks.push(chunk);});owned.child.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.length;});owned.child.stdout.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.stderr.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.on('close',()=>{if(stderr||!chunks.length)reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));else resolve(Buffer.concat(chunks).toString('utf8'));});});
+  await owned.flush();cliVersion=z.string().regex(/^codex(?:-cli)? \d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/).parse(output.trim());
  }catch(error){throw error instanceof Refusal?error:new Refusal('NATIVE_PROTOCOL_VERSION_INVALID');}finally{await retireProbe(ledger,version);}
- const rpc=await begin('rpc');
- const child=spawn('docker',dockerArgs(rpc),{env,stdio:['pipe','pipe','pipe']});
+ const rpc=await begin('rpc');const owned=await launchProbe(ledger,rpc),child=owned.child;
  const lines=createInterface({input:child.stdout});const transcript:unknown[]=[];
  let bytes=0,stderr=0,failure:Error|undefined;const pending=new Map<string,{resolve:(v:unknown)=>void;reject:(e:Error)=>void}>();
  const fail=(error:Error)=>{failure??=error;for(const item of pending.values())item.reject(error);pending.clear();};
@@ -91,7 +106,7 @@ async function observe(spec:NativeProtocolSpec,ledger:Ledger){
   }
   throw new Refusal('NATIVE_PROTOCOL_PAGE_LIMIT');
  }catch(error){throw error instanceof Refusal?error:new Refusal('NATIVE_PROTOCOL_OUTPUT_INVALID');}
- finally{clearTimeout(timer);lines.close();child.stdin.destroy();child.kill('SIGKILL');await retireProbe(ledger,rpc);}
+ finally{clearTimeout(timer);lines.close();if(child.connected)child.send?.({stop:true});await retireProbe(ledger,rpc);await owned.flush();child.stdin.destroy();}
 }
 async function admin(c:pg.PoolClient,principal:string){if(!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount)throw new Refusal('CONTROL_ADMIN_REQUIRED',403);}
 /** Host-local verifier only. The HTTP/control APIs cannot submit receipt bodies.

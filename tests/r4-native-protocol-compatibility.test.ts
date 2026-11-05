@@ -8,6 +8,7 @@ import {join} from 'node:path';
 import {once} from 'node:events';
 import {promisify} from 'node:util';
 import {Ledger} from '../src/ledger.ts';
+import {nativeProtocolHostSupervisor} from '../src/native-protocol-host-supervisor.ts';
 import {NativeProtocolCompatibility,pinNativeProtocolForNewAttempt} from '../src/native-protocol-compatibility.ts';
 import {nativeExecutionExecutorDigest} from '../src/native-execution-contract.ts';
 import {nativePlanningExecutorDigest} from '../src/native-planning-contract.ts';
@@ -16,11 +17,11 @@ const run=promisify(execFile);
 test('trusted Docker protocol confirmation gates new images and preserves exact pinned attempts after revocation',{timeout:180000},async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
  const isolated=await isolatedDatabase(url,'r4nativeprotocol'),db=new Ledger(isolated.url),label='ac-r4-protocol-'+randomUUID();
- const images=new Map<string,string>(),tags:string[]=[];const privateFolder=await mkdtemp(join(tmpdir(),'ac-r4-protocol-controller-'));let controller:ReturnType<typeof spawn>|undefined;
+ const images=new Map<string,string>(),tags:string[]=[];const privateFolder=await mkdtemp(join(tmpdir(),'ac-r4-protocol-controller-'));let controller:ReturnType<typeof spawn>|undefined;let primaryFailure:unknown;
  try{
   await db.migrate();const principal='protocol-admin-'+randomUUID();await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
   const service=new NativeProtocolCompatibility(db);
-  for(const mode of ['old','new','incompatible','auth','timeout','early-exit','hang-descendant']){
+  for(const mode of ['old','new','incompatible','auth','timeout','early-exit','hang-descendant','fake-node']){
    const tag=label+':'+mode;tags.push(tag);await run('docker',['build','--pull=false','--network=none','--label','agent-control.protocol-fixture='+label,'--build-arg','fixture_mode='+mode,'-t',tag,'tests/fixtures/r4-protocol'],{timeout:30000,maxBuffer:1024*1024});
    const result=await run('docker',['image','inspect','--format','{{.Id}}',tag]);images.set(mode,result.stdout.trim());
   }
@@ -54,32 +55,53 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   const marker=logs.split('\n').find(line=>line.startsWith('{"probeDetached"'));assert.ok(marker);const detached=JSON.parse(marker!);assert.equal(detached.pid,detached.sid,'fixture really started a separate session');
   assert.equal(physical.HostConfig.NetworkMode,'none');assert.ok(physical.Mounts.every((mount:any)=>mount.Type==='tmpfs'&&mount.Destination==='/tmp'));
   const controllerExit=once(controller,'exit');controller.kill('SIGKILL');assert.equal((await controllerExit)[1],'SIGKILL');controller=undefined;
-  while(Date.now()<Number(probe.deadline_ms)+1500){physical=JSON.parse((await run('docker',['inspect',physical.Id])).stdout)[0];if(!physical.State.Running)break;await new Promise(resolve=>setTimeout(resolve,100));}
-  assert.equal(physical.State.Running,false,'independent watchdog stops setsid descendants after controller death');
-  const stoppedLogs=(await run('docker',['logs',physical.Id])).stderr;await new Promise(resolve=>setTimeout(resolve,300));assert.equal((await run('docker',['logs',physical.Id])).stderr,stoppedLogs,'descendant stopped writing');
-  const stoppedCmd=physical.Config.Cmd; // command body came from the trusted verifier
-  await service.reconcile(principal);await assert.rejects(run('docker',['inspect',physical.Id]));
-  assert.equal((await db.pool.query('SELECT container_id,retired FROM ac_native_protocol_probe_operations WHERE id=$1',[probe.id])).rows[0].container_id,physical.Id);
+  const deadPhysicalId=physical.Id;while(Date.now()<Number(probe.deadline_ms)+1500){try{physical=JSON.parse((await run('docker',['inspect',deadPhysicalId])).stdout)[0];if(!physical.State.Running)break;}catch{physical=undefined;break;}await new Promise(resolve=>setTimeout(resolve,100));}
+  assert.ok(!physical||!physical.State.Running,'independent watchdog stops setsid descendants after controller death');
+  if(physical){const stoppedLogs=(await run('docker',['logs',deadPhysicalId])).stderr;await new Promise(resolve=>setTimeout(resolve,300));assert.equal((await run('docker',['logs',deadPhysicalId])).stderr,stoppedLogs,'descendant stopped writing');}else await assert.rejects(run('docker',['top',deadPhysicalId]));
+  await service.reconcile(principal);await assert.rejects(run('docker',['inspect',deadPhysicalId]));
+  assert.equal((await db.pool.query('SELECT container_id,retired FROM ac_native_protocol_probe_operations WHERE id=$1',[probe.id])).rows[0].container_id,deadPhysicalId);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts WHERE executor_digest=$1',[spec('hang-descendant').executorDigest])).rows[0].n,0);
   // A create delayed past an absent reconciliation cannot start the CLI, and
   // a later sweep still removes that stopped residue by its exact identity.
   const delayedId=randomUUID(),delayedName='ac-protocol-delayed-'+delayedId,deadline=Date.now()-100;
   await db.pool.query("INSERT INTO ac_native_protocol_probe_operations(id,executor_digest,worker_image,phase,container_name,deadline_ms) VALUES($1,$2,$3,'rpc',$4,$5)",[delayedId,spec('hang-descendant').executorDigest,images.get('hang-descendant'),delayedName,deadline]);
   await service.reconcile(principal);assert.equal((await db.pool.query('SELECT retired FROM ac_native_protocol_probe_operations WHERE id=$1',[delayedId])).rows[0].retired,true);
-  const lateCmd=[...stoppedCmd];lateCmd[lateCmd.length-1]=String(deadline);
-  await run('docker',['create','--name',delayedName,'--label','agent-control.protocol-operation='+delayedId,'--label','agent-control.protocol-deadline='+deadline,'--label','agent-control.protocol-image='+images.get('hang-descendant'),'--network','none','--read-only','--user','65534:65534','--tmpfs','/tmp:rw,noexec,nosuid,size=16m','--entrypoint','/usr/local/bin/node',images.get('hang-descendant')!,...lateCmd]);
-  await run('docker',['start','-a',delayedName]);const late=JSON.parse((await run('docker',['inspect',delayedName])).stdout)[0];assert.equal(late.State.Running,false);assert.equal(late.State.ExitCode,124);assert.equal((await run('docker',['logs',late.Id])).stderr,'');
+  const lateOperation=(await db.pool.query('SELECT * FROM ac_native_protocol_probe_operations WHERE id=$1',[delayedId])).rows[0];
+  const lateSupervisor=spawn('/proc/'+process.pid+'/exe',['-e',nativeProtocolHostSupervisor,JSON.stringify(lateOperation)],{env:{PATH:'/usr/bin:/bin',HOME:privateFolder},stdio:['ignore','ignore','ignore','ipc']});assert.equal((await once(lateSupervisor,'exit'))[0],0);await assert.rejects(run('docker',['inspect',delayedName]));
+  await run('docker',['create','--name',delayedName,'--label','agent-control.protocol-operation='+delayedId,'--label','agent-control.protocol-deadline='+deadline,'--label','agent-control.protocol-image='+images.get('hang-descendant'),'--network','none','--read-only','--user','65534:65534','--tmpfs','/tmp:rw,noexec,nosuid,size=16m','--entrypoint','/usr/local/bin/codex',images.get('hang-descendant')!,'app-server']);
+  const late=JSON.parse((await run('docker',['inspect',delayedName])).stdout)[0];assert.equal(late.State.Running,false);assert.equal(late.State.Status,'created');assert.equal((await run('docker',['logs',late.Id])).stderr,'');
   await service.reconcile(principal);await assert.rejects(run('docker',['inspect',late.Id]));
+  // A candidate can replace node and ignore our former in-image -e guard.
+  // The host supervisor owns lifetime even for this malicious interpreter.
+  await writeFile(descriptor,JSON.stringify({url:isolated.url,principal,spec:spec('fake-node')}),{mode:0o600});
+  controller=spawn(process.execPath,['--import','tsx','tests/fixtures/r4-protocol-controller.ts',descriptor],{cwd:process.cwd(),env:{HOME:privateFolder,PATH:'/tmp/node-v22.23.3-linux-x64/bin:/usr/bin:/bin',LANG:'C.UTF-8',TZ:'UTC'},stdio:'ignore'});
+  let fakeProbe:any,fakePhysical:any,fakeLogs='';const fakeReady=Date.now()+12000;
+  while(Date.now()<fakeReady){fakeProbe=(await db.pool.query("SELECT * FROM ac_native_protocol_probe_operations WHERE executor_digest=$1 AND phase='version' AND NOT retired ORDER BY created_at DESC LIMIT 1",[spec('fake-node').executorDigest])).rows[0];
+   if(fakeProbe){try{fakePhysical=JSON.parse((await run('docker',['inspect',fakeProbe.container_name])).stdout)[0];fakeLogs=(await run('docker',['logs',fakePhysical.Id])).stderr;if(fakeLogs.includes('SYNTHETIC_FAKE_NODE_PULSE'))break;}catch{}}
+   await new Promise(resolve=>setTimeout(resolve,100));}
+  assert.ok(fakeProbe&&fakePhysical&&fakeLogs.includes('SYNTHETIC_FAKE_NODE_PULSE'),'FAKE_NODE_DID_NOT_RUN');
+  const fakeExit=once(controller,'exit');controller.kill('SIGKILL');await fakeExit;controller=undefined;
+  while(Date.now()<Number(fakeProbe.deadline_ms)+1500){try{fakePhysical=JSON.parse((await run('docker',['inspect',fakePhysical.Id])).stdout)[0];if(!fakePhysical.State.Running)break;}catch{fakePhysical=undefined;break;}await new Promise(resolve=>setTimeout(resolve,100));}
+  assert.ok(!fakePhysical||!fakePhysical.State.Running,'candidate fake node cannot bypass host lifetime');
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts WHERE executor_digest=$1',[spec('fake-node').executorDigest])).rows[0].n,0);
   const planImage=images.get('new')!,planning={kind:'planning' as const,workerImage:planImage,executorDigest:nativePlanningExecutorDigest(planImage)};
   const planReceipt=await service.verify(principal,planning);await service.promote(principal,planReceipt.id,0);
   assert.equal((await db.tx(c=>pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:randomUUID(),executorDigest:planning.executorDigest,model:'fixed-worker-v2',effort:'medium'}))).receiptId,planReceipt.id);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts')).rows[0].n,3);
   for(const table of ['ac_native_execution_jobs','ac_native_planning_jobs'])assert.equal((await db.pool.query('SELECT count(*)::int n FROM '+table)).rows[0].n,0);
   for(const image of images.values()){const containers=await run('docker',['ps','-a','--filter','label=agent-control.protocol-image='+image,'--format','{{.Names}}']);assert.equal(containers.stdout.trim(),'');}
-  console.log(JSON.stringify({trustedVerifier:'fixed credentialless network-none Docker CLI version/initialize/model-list',images:7,protocolFailuresRejected:4,controllerSigkillWatchdog:true,setsidDescendantStopped:true,delayedCreateDenied:true,immutableReceipts:3,oldPinnedReceiptSurvivesRevocation:true,callerPassedRejected:true,inference:false,officialEligibility:false}));
- }finally{
-  controller?.kill('SIGKILL');await rm(privateFolder,{recursive:true,force:true});
-  for(const tag of tags){const found=await run('docker',['image','inspect','--format','{{index .Config.Labels "agent-control.protocol-fixture"}}',tag]).catch(()=>null);if(found?.stdout.trim()===label)await run('docker',['image','rm',tag],{timeout:15000,maxBuffer:65536});}
-  await db.close();await isolated.close();
+  console.log(JSON.stringify({trustedVerifier:'fixed credentialless network-none Docker CLI version/initialize/model-list',images:8,fakeCandidateInterpreterBounded:true,protocolFailuresRejected:4,controllerSigkillWatchdog:true,setsidDescendantStopped:true,delayedCreateDenied:true,immutableReceipts:3,oldPinnedReceiptSurvivesRevocation:true,callerPassedRejected:true,inference:false,officialEligibility:false}));
+ }catch(error){primaryFailure=error;throw error;}finally{
+  const cleanupErrors:unknown[]=[];
+  if(controller&&controller.exitCode===null&&controller.signalCode===null){try{const exited=once(controller,'exit');controller.kill('SIGKILL');await exited;}catch(error){cleanupErrors.push(error);}}
+  const operations=await db.pool.query('SELECT * FROM ac_native_protocol_probe_operations').catch(error=>{cleanupErrors.push(error);return {rows:[]};});
+  for(const op of operations.rows){try{
+   const found=await run('docker',['inspect',op.container_name]).catch(()=>null);if(!found)continue;
+   const physical=JSON.parse(found.stdout)[0];
+   if([...images.values()].includes(physical.Image)&&physical.Config?.Labels?.['agent-control.protocol-operation']===op.id&&(!op.container_id||physical.Id===op.container_id))await run('docker',['rm','-f',physical.Id],{timeout:15000,maxBuffer:65536});
+  }catch(error){cleanupErrors.push(error);}}
+  for(const tag of tags){try{const found=await run('docker',['image','inspect','--format','{{index .Config.Labels "agent-control.protocol-fixture"}}',tag]).catch(()=>null);if(found?.stdout.trim()===label)await run('docker',['image','rm',tag],{timeout:15000,maxBuffer:65536});}catch(error){cleanupErrors.push(error);}}
+  await rm(privateFolder,{recursive:true,force:true}).catch(error=>cleanupErrors.push(error));await db.close().catch(error=>cleanupErrors.push(error));await isolated.close().catch(error=>cleanupErrors.push(error));
+  if(cleanupErrors.length){if(primaryFailure)console.error('PROTOCOL_FIXTURE_CLEANUP_FAILURES',cleanupErrors.length);else throw new AggregateError(cleanupErrors,'PROTOCOL_FIXTURE_CLEANUP_FAILED');}
  }
 });

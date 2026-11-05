@@ -1,0 +1,6 @@
+#!/bin/sh
+# Deliberately ignores any supplied -e watchdog or CLI arguments.
+while true; do
+  echo SYNTHETIC_FAKE_NODE_PULSE >&2
+  sleep 0.1
+done
