@@ -13,9 +13,15 @@ export function initializeNativeWorkerEnvironment(proxyUrl?:'http://provider-egr
  if(proxyUrl)Object.assign(process.env,{HTTPS_PROXY:proxyUrl,HTTP_PROXY:proxyUrl,NO_PROXY:'127.0.0.1,localhost'});
 }
 export async function readPrivateWorkerFile(path:string,maxBytes:number){
+ if(!Number.isSafeInteger(maxBytes)||maxBytes<0)throw Error('INVALID_WORKER_PRIVATE_FILE');
  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
  try{const info=await file.stat();if(!info.isFile()||info.nlink!==1||(info.mode&0o077)!==0||info.uid!==process.getuid?.()||info.size>maxBytes)throw Error('INVALID_WORKER_PRIVATE_FILE');
-  const bytes=await file.readFile();if(bytes.length>maxBytes){bytes.fill(0);throw Error('INVALID_WORKER_PRIVATE_FILE');}return bytes;
+  // Enforce the limit during the read too: the file may grow after stat().
+  const bytes=Buffer.alloc(maxBytes+1);let length=0;
+  try{while(length<bytes.length){const result=await file.read(bytes,length,bytes.length-length,null);if(result.bytesRead===0)break;length+=result.bytesRead;}
+   if(length>maxBytes)throw Error('INVALID_WORKER_PRIVATE_FILE');
+   return Buffer.from(bytes.subarray(0,length));
+  }finally{bytes.fill(0);}
  }finally{await file.close();}
 }
 export async function readSignedWorkerLaunch<S extends z.ZodType>(schema:S,domain:string,inputPath='/input/launch.json',publicKeyPath='/runner/planning-public-key.pem'):Promise<z.output<S>>{

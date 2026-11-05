@@ -1,12 +1,26 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,chmod,symlink,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,chmod,symlink,link,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {z} from 'zod';
 import {canonical,digest} from '../src/contracts.ts';
-import {assertCodexSubscriptionIdentity,readSignedWorkerLaunch} from '../src/native-worker-security.ts';
+import {assertCodexSubscriptionIdentity,readPrivateWorkerFile,readSignedWorkerLaunch} from '../src/native-worker-security.ts';
+
+test('private worker input refuses links, non-regular files and oversized content',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ac-worker-hostile-'));
+ try{
+  const file=join(dir,'input'),alias=join(dir,'alias');
+  await writeFile(file,'synthetic',{mode:0o600});
+  assert.equal((await readPrivateWorkerFile(file,9)).toString(),'synthetic');
+  await assert.rejects(readPrivateWorkerFile(file,8),/INVALID_WORKER_PRIVATE_FILE/);
+  await symlink(file,alias);await assert.rejects(readPrivateWorkerFile(alias,100));await rm(alias);
+  await link(file,alias);await assert.rejects(readPrivateWorkerFile(file,100),/INVALID_WORKER_PRIVATE_FILE/);await rm(alias);
+  await assert.rejects(readPrivateWorkerFile(dir,100),/INVALID_WORKER_PRIVATE_FILE/);
+  await assert.rejects(readPrivateWorkerFile(file,-1),/INVALID_WORKER_PRIVATE_FILE/);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
 
 test('worker accepts only a signed scoped request and the matching private subscription identity',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ac-worker-security-'));
