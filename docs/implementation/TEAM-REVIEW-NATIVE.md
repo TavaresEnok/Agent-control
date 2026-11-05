@@ -33,3 +33,9 @@ A correção `356f0e77` endereça a ressalva de limpeza: restringe a identifica�
 ## Revisão do grafo físico intermediário — commit 9e961712
 
 A fixture chama o start real para programador e revisor, e verifica jobs terminais, posse neutralizada, conclusão do run e avanço da referência. Capacidade, elegibilidade/home e QA são adaptados ou simulados; não prova lançamento operacional, queda do controlador ou ciclo de vida de rede do produto. A divergência entre filtros de modo de capacidade e exigência do supervisor continua limite de ativação operacional. A limpeza no `finally` ignora exceções de inspeção e remoção, podendo ocultar resíduos; recomenda-se confirmar ausência e sinalizar falha como na correção da fixture T24. Revisão estática sem reexecução independente.
+
+## Revisão da retirada de rede — commit 157d1847
+
+A remoção de rede do escritor exige ID vinculado ao recibo físico cujo digest é assinado, recusa o ID do provedor, valida ID/nome/labels, rede interna e ausência de endpoints, e reinspeciona a ausência. O daemon também recusa remoção de rede com endpoints concorrentes. A retomada de `prepared` permite reinspecionar após ACK perdido. O teste focado é simulado, usa erro genérico e não demonstra a recuperação automática da implementação ou rede Docker física.
+
+Achado de recuperação: `NativeImplementation.retire` repete apenas `DOCKER_UNCERTAIN` e `DOCKER_REMOVE_UNCERTAIN`, mas a operação de rede pode lançar `DOCKER_NETWORK_UNCERTAIN`. Uma perda de resposta pode propagar falha no caminho de sucesso com diário `prepared` e posse `held`; corrigir o retry e provar o percurso integrado antes de aprovar recuperação completa. Não foi identificado outro defeito concreto na identidade da rede; revisão estática sem reexecução independente.
