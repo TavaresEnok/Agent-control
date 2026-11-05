@@ -29,3 +29,7 @@ node scripts/link-happier-test-deps.mjs remove /tmp/ac-happier-links-MEU-IDENTIF
 ```
 
 A origem precisa conter `node_modules`, `apps/server/node_modules` e `apps/server/generated/sqlite-client`. O helper cria apenas links ausentes no `node_modules` raiz (inclusive pacotes individuais `@happier-dev`) e os dois diretórios do servidor, preservando entradas já existentes. O manifesto exclusivo lista os links criados; a remoção recusa links alterados. A cópia deve corresponder às fontes e dependências fixadas do checkout; nenhum download é realizado pelo helper. Caso o workspace local esteja incompleto, instale e gere os artefatos pelo procedimento oficial do próprio workspace.
+
+O manifesto pode registrar links que ainda não foram criados se a instalação for interrompida. `remove` tolera essas entradas ausentes, valida todas as entradas existentes antes de apagar qualquer uma e rejeita destinos duplicados, não normalizados ou fora das posições permitidas. A contraprova reproduzível é `node --test scripts/fixtures/link-happier-test-deps.test.mjs`.
+
+Para executar apenas a prova real do exportador, use `AC_ISOLATED_EXPORT_ONLY=1 npm run test:isolated`. Em 2026-11-05 essa prova passou com 151 mensagens no servidor real, verificando paginação, ordem e preservação integral do arquivo quando o segundo export tenta sobrescrevê-lo; logs em `/tmp/ac-isolated-logs-oVCqBL/`. A seleção focal não substitui a execução completa do comando sem essa variável.

@@ -73,7 +73,8 @@ try {
   child.on('error', e => console.error('Happier spawn error:',e));
   await waitFor(async () => {if (!(await readFile(join(logs,'happier.log'),'utf8')).includes(`Server listening at http://127.0.0.1:${httpPort}`)) return false; const r=await fetch(`http://127.0.0.1:${httpPort}/v1/account/profile`); return r.status === 401;}, 'Happier HTTP');
   const testLog = await open(join(logs,'tests.log'),'w');
-  const result = spawnSync(process.execPath,['--import','tsx','--test','--test-concurrency=1',join(root,'tests/happier.test.ts'),join(root,'tests/import.test.ts'),join(root,'scripts/fixtures/export-context.test.ts')],{cwd:scratch,env:{...safeEnv,AC_TEST_DATABASE_URL:database,AC_TEST_HAPPIER_URL:`http://127.0.0.1:${httpPort}`},stdio:['ignore',testLog.fd,testLog.fd]});
+  const files = process.env.AC_ISOLATED_EXPORT_ONLY === '1' ? [join(root,'scripts/fixtures/export-context.test.ts')] : [join(root,'tests/happier.test.ts'),join(root,'tests/import.test.ts'),join(root,'scripts/fixtures/export-context.test.ts')];
+  const result = spawnSync(process.execPath,['--import','tsx','--test','--test-concurrency=1',...files],{cwd:scratch,env:{...safeEnv,AC_TEST_DATABASE_URL:database,AC_TEST_HAPPIER_URL:`http://127.0.0.1:${httpPort}`},stdio:['ignore',testLog.fd,testLog.fd]});
   await testLog.close(); await serverLog.close();
   if (result.error || result.status !== 0) throw Error(`integration tests failed (${result.error?.message ?? result.status}); see ${join(logs,'tests.log')}`);
   const output = await readFile(join(logs,'tests.log'), 'utf8');
