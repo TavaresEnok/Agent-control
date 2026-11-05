@@ -27,11 +27,16 @@ export const ManagedUnit=z.object({id:z.string(),kind:z.enum(['task','compositio
  qualityRevision:z.number().int().positive(),targetRef:z.string(),writePaths:z.array(z.string()),acceptanceRefs:z.array(z.string()),sources:z.array(z.string()),
  taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/).optional(),correctionRevision:z.number().int().min(0).max(5).optional(),requiresSpecialist:z.boolean().optional()}).strict();
 export type ManagedUnit=z.infer<typeof ManagedUnit>;
-export const ManagedRecipe=z.object({schemaVersion:z.union([z.literal(1),z.literal(2),z.literal(3)]),mode:z.enum(['synthetic-only','native']),parentIntentId:Id,
+export const ManagedRecipe=z.object({schemaVersion:z.union([z.literal(1),z.literal(2),z.literal(3),z.literal(4)]),mode:z.enum(['synthetic-only','native']),parentIntentId:Id,
  proposalRevision:z.number().int().positive(),proposalDigest:z.string(),workflow:workflowDefSchema,
  units:z.array(ManagedUnit),bindings:z.record(z.string(),z.object({unitId:z.string(),phase:Phase,launchId:z.string().optional()}).strict()),
- launches:z.record(z.string(),z.array(z.string())),targetRef:z.string()}).strict();
+ launches:z.record(z.string(),z.array(z.string())),targetRef:z.string()}).strict().superRefine((recipe,ctx)=>{
+ if(recipe.schemaVersion===4&&recipe.mode!=='native')ctx.addIssue({code:'custom',message:'Managed recipe v4 is native review-before-QA only'});
+});
 export type ManagedRecipe=z.infer<typeof ManagedRecipe>;
+/** Compatibility is checked by the actual loaded target package, separately
+ * from its WorkflowDef parser. Old packages must not approve an unknown recipe. */
+export function supportsManagedRecipeContract(raw:unknown):boolean{return ManagedRecipe.safeParse(raw).success;}
 export const ManagedExecutionInput=z.object({parentIntentId:Id,unitId:z.string(),kind:z.enum(['task','composition']),
  base:z.string().regex(/^[a-f0-9]{40}$/),writePaths:z.array(z.string()),acceptanceRefs:z.array(z.string()),sources:z.array(z.string()),
  correction:z.object({taskId:z.string(),revision:z.number().int().min(1).max(5),priorIntentId:Id,priorArtifactId:Id,
@@ -122,8 +127,13 @@ function boundedCorrectionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],pare
      const launchId=`${id}-launch`;nodes.push({id:launchId,type:'dispatch',name:id,prompt:`AC_MANAGED_UNIT:${id}`});launches[launchId]=[id];
      connect(failed,launchId);edges.push({from:launchId+'.failed',to:'failed'});entry=[launchId];
     }
-    const qa=stage(unit,'qa',entry,true),review=stage(unit,'review',[qa+'.pass'],true);failed=[qa+'.reject',review+'.reject'];
-    let ready=[review+'.pass'];if(policy.get(unit.qualityRevision)!.requireJudge)ready=[stage(unit,'judge',ready)];
+    // Recipe v4 is emitted only for new native admissions. Historical v2
+    // workflows stay frozen and keep their original QA-before-review edges.
+    let qa:string,review:string;
+    if(native){review=stage(unit,'review',entry,true);qa=stage(unit,'qa',[review+'.pass'],true);}
+    else{qa=stage(unit,'qa',entry,true);review=stage(unit,'review',[qa+'.pass'],true);}
+    failed=[qa+'.reject',review+'.reject'];
+    let ready=[(native?qa:review)+'.pass'];if(policy.get(unit.qualityRevision)!.requireJudge)ready=[stage(unit,'judge',ready)];
     const selected=stage(unit,'select',ready);ready=[selected];
     if(initial.length===1)ready=[stage(unit,'integrate',ready)];successful.push(...ready);
    }
@@ -133,14 +143,14 @@ function boundedCorrectionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],pare
    const id=`compose-${index}`,acceptance=native?[...new Set(initial.flatMap(unit=>unit.acceptanceRefs))]:['acceptance:synthetic-effect-v1'];
    const composed=make(id,'composition',initial[0]!.qualityRevision,[...new Set(initial.flatMap(unit=>unit.writePaths))],acceptance,initial.map(unit=>unit.id));
    const launchId=`${id}-launch`;nodes.push({id:launchId,type:'dispatch',name:id,prompt:`AC_MANAGED_UNIT:${id}`});launches[launchId]=[id];connect(frontier,launchId);edges.push({from:launchId+'.failed',to:'failed'});
-   const phases:ManagedRecipe['bindings'][string]['phase'][]=['qa','review',...(policy.get(composed.qualityRevision)!.requireJudge?['judge' as const]:[]),'integrate'];
+   const phases:ManagedRecipe['bindings'][string]['phase'][]=[...(native?['review','qa'] as const:['qa','review'] as const),...(policy.get(composed.qualityRevision)!.requireJudge?['judge' as const]:[]),'integrate'];
    let ready=[launchId];for(const phase of phases)ready=[stage(composed,phase,ready)];frontier=ready;
   }
  }
  nodes.push({id:'done',type:'end',status:'success'});connect(frontier,'done');const graph={nodes,edges};
  if(graphIssues(graph).length)throw new Refusal('MANAGED_NATIVE_GRAPH_INVALID');
- return ManagedRecipe.parse({schemaVersion:2,mode:native?'native':'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
-  workflow:{name:native?`${engineeringNativePlanWorkflowPrefix}${parentIntentId}`:`managed-synthetic-${parentIntentId}`,source:'built-in',steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
+ return ManagedRecipe.parse({schemaVersion:native?4:2,mode:native?'native':'synthetic-only',parentIntentId,proposalRevision,proposalDigest:digest(plan),
+  workflow:{name:native?`${engineeringNativePlanWorkflowPrefix}${parentIntentId}`:`managed-synthetic-${parentIntentId}`,source:'built-in',...(native?{description:'native-correction-review-before-qa-v1'}:{}),steps:graphToSteps(graph),graph},units,bindings,launches,targetRef});
 }
 export function correctionExecutionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
  return boundedCorrectionRecipe(plan,policies,parentIntentId,proposalRevision,false);

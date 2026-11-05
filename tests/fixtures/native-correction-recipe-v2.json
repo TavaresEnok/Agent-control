@@ -1,0 +1,337 @@
+{
+  "source": "pre-review-before-qa compiler dd02e9cc",
+  "digest": "03a23ebde28cd8eed92816b901fc11f28176900a45d78a93ed60aef76d404780",
+  "workflowDigest": "be74bdb80ec8c7b77e9ca050e66b503db6d2d83fba1301f3da2f106f46995b55",
+  "recipe": {
+    "schemaVersion": 2,
+    "mode": "native",
+    "parentIntentId": "10000000-0000-4000-8000-000000000002",
+    "proposalRevision": 1,
+    "proposalDigest": "1d06b47f5d9d5ab16a956645927b55f7c94a6e065354e9beb9640bd3e24720c5",
+    "workflow": {
+      "name": "engineering-native-plan-10000000-0000-4000-8000-000000000002",
+      "steps": [
+        {
+          "id": "task-sum-qa",
+          "name": "task-sum: qa",
+          "prompt": "Resolve frozen managed phase task-sum-qa."
+        },
+        {
+          "id": "task-sum-review",
+          "name": "task-sum: review",
+          "prompt": "Resolve frozen managed phase task-sum-review."
+        },
+        {
+          "id": "task-sum-select",
+          "name": "task-sum: select",
+          "prompt": "Resolve frozen managed phase task-sum-select."
+        },
+        {
+          "id": "correction-abe5602ce79255b3a228bc0efc87a7be-qa",
+          "name": "correction-abe5602ce79255b3a228bc0efc87a7be: qa",
+          "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-qa."
+        },
+        {
+          "id": "task-sum-integrate",
+          "name": "task-sum: integrate",
+          "prompt": "Resolve frozen managed phase task-sum-integrate."
+        },
+        {
+          "id": "correction-abe5602ce79255b3a228bc0efc87a7be-review",
+          "name": "correction-abe5602ce79255b3a228bc0efc87a7be: review",
+          "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-review."
+        },
+        {
+          "id": "correction-abe5602ce79255b3a228bc0efc87a7be-select",
+          "name": "correction-abe5602ce79255b3a228bc0efc87a7be: select",
+          "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-select."
+        },
+        {
+          "id": "correction-abe5602ce79255b3a228bc0efc87a7be-integrate",
+          "name": "correction-abe5602ce79255b3a228bc0efc87a7be: integrate",
+          "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-integrate."
+        }
+      ],
+      "graph": {
+        "nodes": [
+          {
+            "id": "start",
+            "type": "start"
+          },
+          {
+            "id": "failed",
+            "type": "end",
+            "status": "failed"
+          },
+          {
+            "id": "launch-0",
+            "name": "task-sum",
+            "type": "dispatch",
+            "prompt": "AC_MANAGED_UNIT:task-sum"
+          },
+          {
+            "id": "task-sum-qa",
+            "name": "task-sum: qa",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase task-sum-qa.",
+            "verdicts": [
+              "pass",
+              "reject"
+            ]
+          },
+          {
+            "id": "task-sum-review",
+            "name": "task-sum: review",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase task-sum-review.",
+            "verdicts": [
+              "pass",
+              "reject"
+            ]
+          },
+          {
+            "id": "task-sum-select",
+            "name": "task-sum: select",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase task-sum-select."
+          },
+          {
+            "id": "task-sum-integrate",
+            "name": "task-sum: integrate",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase task-sum-integrate."
+          },
+          {
+            "id": "correction-abe5602ce79255b3a228bc0efc87a7be-launch",
+            "name": "correction-abe5602ce79255b3a228bc0efc87a7be",
+            "type": "dispatch",
+            "prompt": "AC_MANAGED_UNIT:correction-abe5602ce79255b3a228bc0efc87a7be"
+          },
+          {
+            "id": "correction-abe5602ce79255b3a228bc0efc87a7be-qa",
+            "name": "correction-abe5602ce79255b3a228bc0efc87a7be: qa",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-qa.",
+            "verdicts": [
+              "pass",
+              "reject"
+            ]
+          },
+          {
+            "id": "correction-abe5602ce79255b3a228bc0efc87a7be-review",
+            "name": "correction-abe5602ce79255b3a228bc0efc87a7be: review",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-review.",
+            "verdicts": [
+              "pass",
+              "reject"
+            ]
+          },
+          {
+            "id": "correction-abe5602ce79255b3a228bc0efc87a7be-select",
+            "name": "correction-abe5602ce79255b3a228bc0efc87a7be: select",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-select."
+          },
+          {
+            "id": "correction-abe5602ce79255b3a228bc0efc87a7be-integrate",
+            "name": "correction-abe5602ce79255b3a228bc0efc87a7be: integrate",
+            "type": "agent",
+            "prompt": "Resolve frozen managed phase correction-abe5602ce79255b3a228bc0efc87a7be-integrate."
+          },
+          {
+            "id": "done",
+            "type": "end",
+            "status": "success"
+          }
+        ],
+        "edges": [
+          {
+            "from": "start",
+            "to": "launch-0"
+          },
+          {
+            "from": "launch-0.failed",
+            "to": "failed"
+          },
+          {
+            "from": "launch-0",
+            "to": "task-sum-qa"
+          },
+          {
+            "from": "task-sum-qa.failed",
+            "to": "failed"
+          },
+          {
+            "from": "task-sum-qa.pass",
+            "to": "task-sum-review"
+          },
+          {
+            "from": "task-sum-review.failed",
+            "to": "failed"
+          },
+          {
+            "from": "task-sum-review.pass",
+            "to": "task-sum-select"
+          },
+          {
+            "from": "task-sum-select.failed",
+            "to": "failed"
+          },
+          {
+            "from": "task-sum-select",
+            "to": "task-sum-integrate"
+          },
+          {
+            "from": "task-sum-integrate.failed",
+            "to": "failed"
+          },
+          {
+            "from": "task-sum-qa.reject",
+            "to": "correction-abe5602ce79255b3a228bc0efc87a7be-launch"
+          },
+          {
+            "from": "task-sum-review.reject",
+            "to": "correction-abe5602ce79255b3a228bc0efc87a7be-launch"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-launch.failed",
+            "to": "failed"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-launch",
+            "to": "correction-abe5602ce79255b3a228bc0efc87a7be-qa"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-qa.failed",
+            "to": "failed"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-qa.pass",
+            "to": "correction-abe5602ce79255b3a228bc0efc87a7be-review"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-review.failed",
+            "to": "failed"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-review.pass",
+            "to": "correction-abe5602ce79255b3a228bc0efc87a7be-select"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-select.failed",
+            "to": "failed"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-select",
+            "to": "correction-abe5602ce79255b3a228bc0efc87a7be-integrate"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-integrate.failed",
+            "to": "failed"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-qa.reject",
+            "to": "failed"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-review.reject",
+            "to": "failed"
+          },
+          {
+            "from": "task-sum-integrate",
+            "to": "done"
+          },
+          {
+            "from": "correction-abe5602ce79255b3a228bc0efc87a7be-integrate",
+            "to": "done"
+          }
+        ]
+      },
+      "source": "built-in"
+    },
+    "units": [
+      {
+        "id": "task-sum",
+        "kind": "task",
+        "intentId": "e7d1df84-a542-55b4-a3a7-a34a920cc878",
+        "runId": "b410cfc2-0c17-590a-ac8c-085cdfe299df",
+        "operationId": "9e7c10bd-f588-5044-ae1b-6cdd96de496a",
+        "attemptId": "adb28a78-af08-54f5-af49-ea793f5cf5a1",
+        "qualityRevision": 1,
+        "targetRef": "refs/heads/protected",
+        "writePaths": [
+          "src/sum.ts"
+        ],
+        "acceptanceRefs": [
+          "acceptance:sum"
+        ],
+        "sources": [],
+        "taskId": "sum",
+        "correctionRevision": 0
+      },
+      {
+        "id": "correction-abe5602ce79255b3a228bc0efc87a7be",
+        "kind": "task",
+        "intentId": "705e36f1-7f6e-5ed8-ac28-4c1214b70c91",
+        "runId": "bdb434d8-5677-50d5-aad3-4757f85db219",
+        "operationId": "256a097f-5091-53e0-a283-f3918f7b2dfd",
+        "attemptId": "94354010-49e7-5da6-a8ce-58e1b62c86af",
+        "qualityRevision": 1,
+        "targetRef": "refs/heads/protected",
+        "writePaths": [
+          "src/sum.ts"
+        ],
+        "acceptanceRefs": [
+          "acceptance:sum"
+        ],
+        "sources": [],
+        "taskId": "sum",
+        "correctionRevision": 1
+      }
+    ],
+    "bindings": {
+      "task-sum-qa": {
+        "unitId": "task-sum",
+        "phase": "qa"
+      },
+      "task-sum-review": {
+        "unitId": "task-sum",
+        "phase": "review"
+      },
+      "task-sum-select": {
+        "unitId": "task-sum",
+        "phase": "select"
+      },
+      "task-sum-integrate": {
+        "unitId": "task-sum",
+        "phase": "integrate"
+      },
+      "correction-abe5602ce79255b3a228bc0efc87a7be-qa": {
+        "unitId": "correction-abe5602ce79255b3a228bc0efc87a7be",
+        "phase": "qa"
+      },
+      "correction-abe5602ce79255b3a228bc0efc87a7be-review": {
+        "unitId": "correction-abe5602ce79255b3a228bc0efc87a7be",
+        "phase": "review"
+      },
+      "correction-abe5602ce79255b3a228bc0efc87a7be-select": {
+        "unitId": "correction-abe5602ce79255b3a228bc0efc87a7be",
+        "phase": "select"
+      },
+      "correction-abe5602ce79255b3a228bc0efc87a7be-integrate": {
+        "unitId": "correction-abe5602ce79255b3a228bc0efc87a7be",
+        "phase": "integrate"
+      }
+    },
+    "launches": {
+      "launch-0": [
+        "task-sum"
+      ],
+      "correction-abe5602ce79255b3a228bc0efc87a7be-launch": [
+        "correction-abe5602ce79255b3a228bc0efc87a7be"
+      ]
+    },
+    "targetRef": "refs/heads/protected"
+  }
+}

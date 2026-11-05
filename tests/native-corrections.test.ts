@@ -44,7 +44,7 @@ test('native correction recipe gives each rejection a new identity and stops at 
  assert.throws(()=>nativeCorrectionExecutionRecipe(plan(contextId,[task('alpha',1,['beta']),task('beta',0,['alpha'])]),policies,parent,1),/PLAN_DEPENDENCY_CYCLE/);
  assert.throws(()=>nativeCorrectionExecutionRecipe(plan(contextId,[task('alpha',1)]),[{qualityRevision:1,policy:{...policyBody,requireSpecialistBeforeImplementation:true,specialistVerifierDigest:'cd'.repeat(32)}}],parent,1),/NATIVE_PLAN_SPECIALIST_UNAVAILABLE/);
  const recipe=nativeCorrectionExecutionRecipe(plan(contextId,[task('alpha',1),task('beta',0),task('gamma',0,['alpha','beta'])]),policies,parent,1);
- assert.equal(recipe.mode,'native');assert.equal(recipe.schemaVersion,2);
+ assert.equal(recipe.mode,'native');assert.equal(recipe.schemaVersion,4);
  assert.equal(recipe.workflow.name,`${engineeringNativePlanWorkflowPrefix}${parent}`);
  const original=recipe.units.find(unit=>unit.taskId==='alpha'&&unit.correctionRevision===0);
  const corrected=recipe.units.find(unit=>unit.taskId==='alpha'&&unit.correctionRevision===1);
@@ -116,7 +116,7 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
   const keys=generateKeyPairSync('ed25519'),modelImage='sha256:'+'a'.repeat(64);
   const supervisor=new NativeExecutionSupervisor(db,{id:'fixture-model-native',workerImage:modelImage,toolsImage:modelImage,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'b'.repeat(64),accountSubjects:[{accountId:account,subjectDigest:'c'.repeat(64)}],workerEnv:[],toolsEnv:[]});
   const physical=new Map<string,{Id:string;Image:string;Config:{Labels:Record<string,string>};State:{Status:string;Running:boolean;ExitCode:number;FinishedAt:string}}>();
-  Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
+  Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async()=>null,removePrivateNetwork:async()=>{},stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
    remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);}}});
   let mode:'correct'|'limit'|'infra'='correct',openProgrammers=0,maxProgrammers=0,parallelArrivals=0;
   const show=(commit:string,path:string)=>{try{return execFileSync('git',['-C',repo,'show',`${commit}:${path}`],{encoding:'utf8'});}catch{return '';}};
