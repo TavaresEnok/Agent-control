@@ -191,11 +191,18 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "implementation_and_evidence_gap",
-    "missing": "Fairness requires progressing retries/release; general history loop unbounded at base; sustainable host-wide flow pending",
+    "classification": "integration_evidence_missing",
+    "missing": "Capacity aging source preserves eligible age under retry/release; general historical backlog now bounded by3ca18eae. Actual multi-context physical stage graph fairness and resource release integration still pending.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "RF-15",
@@ -661,11 +668,18 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "implementation_and_evidence_gap",
-    "missing": "General reconciliation historical sweep unbounded in base; R3 durable page cursor pending",
+    "classification": "integration_evidence_missing",
+    "missing": "Historical reconciliation now durable bounded/fenced per3ca18eae; full composed workflow dispatch/wait/cancel/completion proof through actual capacity and public control pending R3 flow.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "RF-23",
@@ -780,7 +794,14 @@
     "missing": "Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "RF-24",
@@ -894,7 +915,14 @@
     "missing": "Public signed control through graph with physical worker and reconnect evidence pending R3",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "RF-26",
@@ -1567,7 +1595,14 @@
     "missing": "All components intermediate launch/fallback/remote create windows not covered",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "RNF-02",
@@ -1612,7 +1647,14 @@
     "missing": "Cross-dir remote authority transfer and resource authority epoch not yet implemented at base",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "RNF-03",
@@ -1941,7 +1983,14 @@
     "missing": "Crash each intent/process/handle window and resend via UI/workflow/MCP; prove same process or uncertainty; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "T08",
@@ -1975,7 +2024,14 @@
     "missing": "Crash launch/fallback/cancel windows; no legacy bypass, relaunch or stale integration; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "T09",
@@ -2251,7 +2307,14 @@
     "missing": "Inaccessible executor + expired lease cancellation keeps uncertainty/grant/old effects until proof; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "3ca18eae",
+        "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
+        "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      }
+    ]
   },
   {
     "id": "T21",
