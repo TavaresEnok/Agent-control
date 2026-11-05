@@ -1,0 +1,17 @@
+BASH_BLOCK_1=syntax_ok
+BASH_BLOCK_2=syntax_ok
+BASH_BLOCK_3=syntax_ok
+BASH_BLOCK_4=syntax_ok
+BASH_BLOCK_5=syntax_ok
+JSON_BLOCK_6=schema_ok {"schemaVersion":1,"mode":"administration-only","nativeBootstrap":"disabled","quota":"disabled","privateFileValidated":true}
+BASH_BLOCK_7=syntax_ok
+BASH_BLOCK_8=syntax_ok
+BASH_BLOCK_9=syntax_ok
+BASH_BLOCK_10=syntax_ok
+SCRIPT_EXISTS=scripts/build-happier-boundary.mjs
+SCRIPT_EXISTS=scripts/link-happier-test-deps.mjs
+SCRIPT_EXISTS=scripts/serve-happier-web.mjs
+SCRIPT_EXISTS=scripts/r3-flow-isolated.mjs
+SCRIPT_EXISTS=scripts/r3-recovery-isolated.mjs
+SCRIPT_EXISTS=upstream/happier/apps/server/scripts/buildSharedDeps.mjs
+NO_SERVICE_OR_DATABASE_STARTED=true
