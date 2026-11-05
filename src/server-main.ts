@@ -49,8 +49,8 @@ async function main(){
   process.exitCode=result.exitCode;
   return;
  }
- const descriptorCommand=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read'].includes(command);
- if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
+ const descriptorCommand=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read','recovery'].includes(command);
+ if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read','recovery'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
  // Inventory dry-run. The installation path is not opened. No ledger and no vault.
  if(command==='context-key-rotate-plan'){
   const {executeContextKeyRotatePlan}=await import('./context-vault-cli.ts');
@@ -83,6 +83,10 @@ async function main(){
   }
   if(command==='initialize'){console.log(JSON.stringify(await initializeInstallation(config,ledger)));return;}
   if(command==='operator-bootstrap'){console.log(JSON.stringify(await prepareInstallationOperator(config,ledger)));return;}
+  if(command==='recovery'){
+   const {executeRecoveryCommand}=await import('./recovery-cli.ts');
+   console.log(JSON.stringify(await executeRecoveryCommand(config,ledger,extra[0]!)));return;
+  }
   if(command==='config-export'||command==='config-read'){
    const {executeConfigExport,executeConfigRead}=await import('./config-export-cli.ts');
    console.log(JSON.stringify(await (command==='config-export'?executeConfigExport(config,ledger,extra[0]!):executeConfigRead(config,ledger,extra[0]!))));return;
