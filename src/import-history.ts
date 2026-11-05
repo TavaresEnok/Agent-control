@@ -69,6 +69,18 @@ const Cursor=z.object({importId:Id,mac:Hash,offset:z.number().int().min(0).max(I
  * hashes of the stored redacted payload are independently checked locally. */
 export class ImportedHistory{
  constructor(readonly ledger:Ledger){}
+ /** Export the complete immutable archive as independently authenticated pages.
+  * A caller must consume until completion; every page rechecks owner access. */
+ async *exportPages(principal:string,projectId:string,importId:string,limit=20){
+  let cursor:string|undefined;let expected=0;
+  do{
+   const page=await this.page(principal,projectId,importId,cursor,limit);
+   if(page.offset!==expected||page.records.length===0&&page.nextCursor)throw new Refusal('IMPORT_HISTORY_EXPORT_INCOMPLETE');
+   expected+=page.records.length;yield page;
+   cursor=page.nextCursor??undefined;
+   if(!cursor&&expected!==page.total)throw new Refusal('IMPORT_HISTORY_EXPORT_INCOMPLETE');
+  }while(cursor);
+ }
  async page(principal:string,projectId:string,importId:string,rawCursor?:string,limit=20){Id.parse(projectId);Id.parse(importId);z.number().int().min(1).max(100).parse(limit);
   return this.ledger.tx(async c=>{await c.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');await c.query("SET LOCAL statement_timeout='5000ms'");
    const batch=(await c.query(`SELECT b.*,k.cursor_key FROM ac_import_batches b LEFT JOIN ac_import_v2_batches k ON k.batch_id=b.id JOIN ac_memberships m ON m.project_id=b.project_id WHERE b.id=$1 AND b.project_id=$2 AND b.principal_id=$3 AND m.principal_id=$3 AND m.role='owner'`,[importId,projectId,principal])).rows[0];if(!batch)throw new Refusal('IMPORT_FORBIDDEN',403);

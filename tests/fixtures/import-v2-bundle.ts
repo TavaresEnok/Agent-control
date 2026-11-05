@@ -17,5 +17,5 @@ export async function historicalBundle(projectId:string,sessionId:string,key:Uin
  const text='Synthetic historical conversation, kept encrypted.';
  return {schemaVersion:2 as const,importId:randomUUID(),projectId,sourceNamespace:'offline-paseo-'+randomUUID(),contexts:[{id:'context-original-1',sessionId,sourcePaused:false,keyVariant:'legacy' as const,keyFingerprint:keyFingerprint(key),
   messages:[{id:'message-original-1',ciphertext:boundary.encodeBase64(boundary.encrypt(key,'legacy',{role:'user',content:{type:'text',text}}))}],
-  runs:source.runs.map((run:any)=>({id:run.id,state:run.state,artifactRefDigest:digest(run.artifactRef)})),history:{redaction:'explicit_digest_tokens_v1',plans,evidence}}]};
+  runs:source.runs.map((run:any)=>({id:run.id,state:run.state,artifactRefDigest:digest(run.artifactRef)})),history:{redaction:'explicit_digest_tokens_v1' as const,plans,evidence}}]};
 }
