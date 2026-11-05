@@ -892,8 +892,16 @@ export class CezarRuntime {
         const intent=(await this.ledger.pool.query<Intent>('SELECT * FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
         if(!intent)return;
         const session=child.steps.find(step=>step.id==='task')?.sessionId;
-        const operation=(await this.ledger.pool.query('SELECT native_session_id FROM ac_operations WHERE id=$1 AND intent_id=$2',[unit.operationId,intent.id])).rows[0];
-        if(!session||!operation||operation.native_session_id!==session)throw new Refusal('MANAGED_RECOVERY_SESSION_MISMATCH');
+        const operation=(await this.ledger.pool.query('SELECT state,native_session_id FROM ac_operations WHERE id=$1 AND intent_id=$2',[unit.operationId,intent.id])).rows[0];
+        if(!session||!operation)throw new Refusal('MANAGED_RECOVERY_SESSION_MISMATCH');
+        if(operation.native_session_id!==session){
+          // An unstarted native operation has no native session yet. Only the
+          // subsequent fenced preparation can establish that no job or launch
+          // exists and adopt it; every other mismatch remains an error.
+          if(!native||unit.kind!=='task'||operation.state!=='registered'||operation.native_session_id!==null||
+             (await this.ledger.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE id=$1',[unit.operationId])).rowCount)
+            throw new Refusal('MANAGED_RECOVERY_SESSION_MISMATCH');
+        }
         if(unit.kind==='composition'){
           if(!await this.engineering.replayManagedComposition(intent,authority,unit))return;
         }else if(native){

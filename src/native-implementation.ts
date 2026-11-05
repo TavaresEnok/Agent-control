@@ -91,7 +91,12 @@ export class NativeImplementation{
   const owner=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;if(!owner)throw new Refusal('INTENT_MISSING');
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rows[0];
   if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);await this.refuseReusedCorrection(intent,artifact);await this.materializeManagedCommit(intent,artifact.commit_id);await this.retire(supervisor,owner,authority,intent.operation_id);return true;}
-  return this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,false,c);if(!this.hasSource(authority))return false;
+  // Managed tasks derive their request from the immutable proposal, so a
+  // restarted controller does not need a live chat source to start them.
+  const managed=await readManagedUnit(this.ledger,intent);
+  const frozenManaged=managed?.recipe.mode==='native'&&managed.unit.kind==='task';
+  if(frozenManaged){const payload=Command.parse(intent.command).payload;if(payload.workflow!=='engineering-native-v1')throw new Refusal('NATIVE_IMPLEMENTATION_INPUT_MISMATCH');await readManagedInput(this.ledger,intent.id);await this.frozenTaskText(intent,payload.messageDigest,payload.writePaths);}
+  return this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,false,c);if(!frozenManaged&&!this.hasSource(authority))return false;
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];if(op?.state!=='registered'||op.handle||op.native_session_id)return false;
    if((await c.query('SELECT 1 FROM ac_execution_launches WHERE operation_id=$1 UNION ALL SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount)return false;
    if(op.grant_id){const g=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[op.grant_id])).rows[0];if(!g||!['reserved','released'].includes(g.state))return false;
