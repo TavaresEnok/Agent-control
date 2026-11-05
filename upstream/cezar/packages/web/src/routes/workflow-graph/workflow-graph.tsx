@@ -36,7 +36,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { useParams } from 'react-router'
 
 import {
-  deleteWorkflow,
   parseWorkflow,
   postPlan,
 } from '@/api/client'
@@ -300,7 +299,7 @@ function WorkflowGraphEditor() {
   const nodesInitialized = useNodesInitialized()
   /** A pending confirmation: replace an existing file on save, or leave unsaved edits. */
   const [confirm, setConfirm] = useState<
-    { kind: 'overwrite' } | { kind: 'shadow' } | { kind: 'discard'; to: string } | { kind: 'delete'; name: string } | null
+    { kind: 'discard'; to: string } | null
   >(null)
 
   // Load once per route name — a background refetch must never clobber edits in progress.
@@ -616,17 +615,6 @@ function WorkflowGraphEditor() {
     onError: (err) => toast(err instanceof Error ? err.message : String(err), { tone: 'danger' }),
   })
 
-  const del = useMutation({
-    mutationFn: (workflowName: string) => deleteWorkflow(workflowName),
-    onSuccess: (_, workflowName) => {
-      toast(`Deleted “${workflowName}”.`)
-      setDirty(false)
-      void queryClient.invalidateQueries({ queryKey: queryKeys.workflows })
-      void navigate('/workflows')
-    },
-    onError: (err) => toast(err instanceof Error ? err.message : String(err), { tone: 'danger' }),
-  })
-
   // Export is the canvas as it stands — unsaved edits included — in the file the server would write.
   const exportYaml = () => {
     const url = URL.createObjectURL(new Blob([graphYaml(name, description, graph)], { type: 'application/yaml;charset=utf-8' }))
@@ -657,7 +645,6 @@ function WorkflowGraphEditor() {
   const canSave = !!projectId && (!routeName || (!managed.isPending && !managed.isError && loadedFor.current === routeName)) && name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
   // Re-saving the file this canvas was opened from overwrites silently; the confirm is only for
   // a name that collides with ANOTHER file (or a built-in-shadowing new one).
-  const opened = routeName ? workflows.data?.workflows.find((w) => w.name === routeName) : undefined
   // A file named like a built-in (`quick-task`) REPLACES it for every task in the repo.
 
   return (
@@ -1025,18 +1012,7 @@ function WorkflowGraphEditor() {
               <Button size="sm" variant="outline" disabled={!planText.trim() || autoPlan.isPending} onClick={() => autoPlan.mutate()}>
                 {autoPlan.isPending ? 'Building…' : 'Build workflow'}
               </Button>
-              {opened?.source === 'file' && (
-                <div className="border-t border-border pt-3">
-                  <Button
-                    size="sm"
-                    variant="danger-ghost"
-                    disabled={del.isPending}
-                    onClick={() => setConfirm({ kind: 'delete', name: opened.name })}
-                  >
-                    <Trash2Icon /> Delete workflow
-                  </Button>
-                </div>
-              )}
+
             </div>
           </FloatingPanel>
         ) : null}
@@ -1076,47 +1052,19 @@ function WorkflowGraphEditor() {
       <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent data-slot="wg-confirm-dialog">
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirm?.kind === 'overwrite'
-                ? `“${name.trim()}” already exists`
-                : confirm?.kind === 'shadow'
-                  ? `Replace the built-in “${name.trim()}”?`
-                  : confirm?.kind === 'delete'
-                    ? `Delete “${confirm.name}”?`
-                    : 'Discard unsaved changes?'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirm?.kind === 'overwrite'
-                ? 'Saving replaces the existing workflow file — including a v1 file of the same name. There is no undo.'
-                : confirm?.kind === 'shadow'
-                  ? 'A saved file with a built-in name takes its place for every task in this repository, including tasks that use the default. Rename it to keep the built-in; delete the file to bring it back.'
-                  : confirm?.kind === 'delete'
-                    ? 'This removes the workflow file from the repository. Tasks already started with it keep running; there is no undo.'
-                    : 'The edits on this canvas have not been saved.'}
-            </AlertDialogDescription>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>The edits on this canvas have not been saved.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep editing</AlertDialogCancel>
             <AlertDialogAction
               data-slot="wg-confirm-action"
               onClick={() => {
-                if (confirm?.kind === 'overwrite') save.mutate(true)
-                else if (confirm?.kind === 'shadow') save.mutate(false)
-                else if (confirm?.kind === 'delete') del.mutate(confirm.name)
-                else if (confirm?.kind === 'discard') {
-                  setDirty(false)
-                  void navigate(confirm.to)
-                }
+                if (confirm?.kind === 'discard') { setDirty(false); void navigate(confirm.to) }
                 setConfirm(null)
               }}
             >
-              {confirm?.kind === 'overwrite'
-                ? 'Overwrite'
-                : confirm?.kind === 'shadow'
-                  ? 'Replace built-in'
-                  : confirm?.kind === 'delete'
-                    ? 'Delete'
-                    : 'Discard'}
+              Discard
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
