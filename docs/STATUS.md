@@ -1,5 +1,9 @@
 # Agent Control — estado atual de implementação
 
+## Continuação vigente: controlador e finalizador vivo — 05/11/2026
+
+SIGKILL de um controlador sintético deixou o processo finalizador filho escrevendo numa cópia privada; o supervisor, em processo de teste já existente, preservou a concessão até o cancelamento parar o grupo. A prova usa finalizador e Docker substitutos e não equivale a reinicialização do runtime. Faltam a prova com o Ruby real e outro processo supervisor, lançamento real, grafo integral e revisão independente. Ver `implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.
+
 ## Continuação vigente: identidade do finalizador — 05/11/2026
 
 O finalizador registra o namespace PID e só confirma ausência do grupo no mesmo boot e namespace. Handle legado, remoto ou de outro boot fica incerto, sem sinalizar PID homônimo ou liberar concessão. Processo sintético real escrevendo, cancelamento e casos incompatíveis passaram com PostgreSQL; o ensaio de Docker integrado foi repetido. Faltam queda com finalizador vivo, retomada integral do grafo e revisão independente. Ver `implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.

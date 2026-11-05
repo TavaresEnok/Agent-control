@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: native finalizer remains conservative with controllercrash process identity
+ok 1 - native finalizer remains conservative with controllercrash process identity
+  ---
+  duration_ms: 1786.274407
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2887.198183

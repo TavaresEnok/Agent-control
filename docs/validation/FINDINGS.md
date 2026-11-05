@@ -1,6 +1,9 @@
 # Achados canônicos — implementação 0.1.0
 
 
+**Atualização posterior 05/11/2026:** SIGKILL de controlador sintético deixou o filho finalizador escrevendo; supervisor no processo de teste preexistente reteve a concessão até parada. Docker e finalizador são substitutos. Permanecem pendentes a queda do controlador de produto com Ruby real, reconciliação em novo processo e revisão independente. Ver `docs/implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.
+
+
 **Atualização 05/11/2026 — identidade do finalizador:** ausência de PGID noutro namespace ou boot não prova que o escritor parou. O handle novo vincula o namespace; handles antigos sem esse dado e identidades distintas ficam incertos. Processo sintético real e PostgreSQL cobriram contenção e cancelamento; prova entre hosts, queda com finalizador vivo e revisão independente permanecem pendentes. Ver `docs/implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.
 
 

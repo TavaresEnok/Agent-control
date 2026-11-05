@@ -2,6 +2,8 @@
 
 ## Continuação mais recente — prevalece sobre os resumos históricos abaixo
 
+- SIGKILL de controlador sintético deixou filho finalizador escrevendo; supervisor no processo de teste existente reteve concessão até parar o grupo. Docker e finalizador são substitutos; ainda testar Ruby real e novo processo supervisor, e depois lançamento nativo real e grafo completo. A primeira suíte ampliada teve corrida na leitura da fixture, corrigida; negativo preservado. Detalhes em `docs/implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.
+
 - O finalizador agora vincula o PGID ao boot e namespace PID de origem; identidade legada ou distinta permanece incerta e não é sinalizada. A prova com processo sintético real cobriu escrita ativa, cancelamento e casos divergentes; ainda falta matar o controlador com o finalizador vivo e reconciliar fisicamente outra autoridade. Detalhes e limitações em `docs/implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`. Próximo trabalho também inclui lançamento nativo real sintético e retomada integral do grafo.
 
 - Novas provas físicas mataram o controlador entre remoções durante falha e cancelamento e reconciliaram o diário em outro processo pelo runtime Cezar. O cancelamento só confirmou depois da retirada. Um segundo job falho também foi reconciliado pelo serviço de contexto com prova e logs próprios; a evidência negativa inicial foi preservada. Lançamento e parte do artefato continuam fixtures. Próximo: demonstrar finalizador ativo na queda, job não iniciado e retomada integral do grafo usando lançamento real sem inferência. Ver `docs/implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
