@@ -4,14 +4,13 @@ import {randomUUID,generateKeyPairSync,sign,createHash} from 'node:crypto';
 import {mkdtemp,mkdir,writeFile,readFile,rm,chmod} from 'node:fs/promises';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
-import vm from 'node:vm';
 import {Ledger} from '../src/ledger.ts';
 import {Capacity} from '../src/capacity.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
 import {NativeImplementation} from '../src/native-implementation.ts';
 import {NativeVerification,nativeReviewVerifierDigest} from '../src/native-verification.ts';
-import {NativeQa,NativeQaContract,nativeQaContractDigest} from '../src/native-qa.ts';
+import {NativeQa,NativeQaContract,nativeQaContractDigest,assertCompleteQaLogs} from '../src/native-qa.ts';
 import {authorizeNativeSyntheticFixture} from '../src/native-synthetic-fixture.ts';
 import {ProviderEligibility} from '../src/provider-eligibility.ts';
 import {AccountHomes} from '../src/account-homes.ts';
@@ -73,11 +72,11 @@ test('T21 physical QA reproduces defect after initial review, then normal correc
   const failed=evidence.find(e=>e.artifact_id===prior.id&&e.kind==='qa')!;assert.deepEqual(decision.failed_evidence_ids,[failed.id]);
   const fresh=evidence.filter(e=>e.artifact_id===corrected.id),old=evidence.filter(e=>e.artifact_id===prior.id);assert.equal(evidence.length,4);
   assert(fresh.every(e=>e.status==='passed'&&old.every(previous=>e.session_id!==previous.session_id&&e.grant_id!==previous.grant_id&&e.id!==previous.id)));
-  const qaLogs=[];for(const qa of evidence.filter(e=>e.kind==='qa')){const bytes=await readFile(join(qaRoot,qa.stage_id,'qa-logs.bin'));assert.equal(createHash('sha256').update(bytes).digest('hex'),qa.receipt.logSha256);const line=bytes.toString('utf8').split('\n').find(line=>line.startsWith('T21_REPRO '));assert.equal(line,qa.artifact_id===prior.id?'T21_REPRO sum(2,3)=-1 expected=5':'T21_REPRO sum(2,3)=5 expected=5');qaLogs.push({artifactId:qa.artifact_id,logSha256:qa.receipt.logSha256,reproduction:line});}
+  const qaLogs=[];for(const qa of evidence.filter(e=>e.kind==='qa')){const bytes=await readFile(join(qaRoot,qa.stage_id,'qa-logs.bin'));assert.equal(createHash('sha256').update(bytes).digest('hex'),qa.receipt.logSha256);assertCompleteQaLogs(bytes);const payloads:Buffer[]=[];for(let offset=0;offset<bytes.length;){const size=bytes.readUInt32BE(offset+4);payloads.push(bytes.subarray(offset+8,offset+8+size));offset+=8+size;}const line=Buffer.concat(payloads).toString('utf8').split('\n').find(line=>line.startsWith('T21_REPRO '));assert.equal(line,qa.artifact_id===prior.id?'T21_REPRO sum(2,3)=-1 expected=5':'T21_REPRO sum(2,3)=5 expected=5');qaLogs.push({artifactId:qa.artifact_id,logSha256:qa.receipt.logSha256,reproduction:line});}
   const correctedJob=(await db.pool.query("SELECT id FROM ac_native_execution_jobs WHERE intent_id=$1 AND role='programmer'",[corrected.intent_id])).rows[0];
   const correctedRequest=JSON.parse(await readFile(join(spool,correctedJob.id,'request.json'),'utf8')),correction=JSON.parse(correctedRequest.task).correction;assert.equal(correction.decisionDigest,decision.decision_digest);assert.deepEqual(correction.failedEvidenceIds,[failed.id]);assert.equal(correction.priorArtifactId,prior.id);
   console.log('T21_QA_REPRODUCTIONS '+JSON.stringify(qaLogs));
-  const box={module:{exports:undefined as unknown}};vm.runInNewContext(git('show',prior.commit_id+':src/sum.ts'),box);assert.equal((box.module.exports as (a:number,b:number)=>number)(2,3),-1,'original defect remains reproducible from immutable commit');
+  assert.equal(git('show',prior.commit_id+':src/sum.ts'),'module.exports = (a, b) => a - b;','rejected immutable source matches the physically reproduced defect');
   await assert.rejects(db.tx(c=>options.quality.assertReady(c,prior.id,authority)),/VERIFICATION_NOT_PASSED/);
   assert.equal(git('rev-parse','protected'),corrected.commit_id);const source=git('show','protected:src/sum.ts');assert(source.includes('a + b'));
   const jobs=(await db.pool.query('SELECT j.role,j.receipt FROM ac_native_execution_jobs j JOIN ac_intents i ON i.id=j.intent_id WHERE i.parent_intent_id=$1',[intent.id])).rows;assert.equal(jobs.filter(j=>j.role==='programmer').length,2);assert.equal(jobs.filter(j=>j.role==='reviewer').length,2);assert(jobs.every(j=>j.receipt?.synthetic===true));
