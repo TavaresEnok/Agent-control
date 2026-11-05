@@ -1204,7 +1204,7 @@ export class CezarRuntime {
               JOIN ac_quota_observations q ON q.account_id=a.id
               WHERE o.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
               AND a.enabled AND p.enabled AND a.eligibility='documented_supported'
-              AND q.status='available' AND q.expires_at>clock_timestamp() FOR UPDATE OF g`,
+              AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g`,
               [intent.operation_id,authority.contextId,authority.epoch]);
             if (!eligible.rowCount) throw new Refusal('GRANT_NOT_ELIGIBLE');
             await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[eligible.rows[0].id]);
