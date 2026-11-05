@@ -120,10 +120,12 @@ export class Capacity {
   }
   async renameAccount(principal:string,projectId:string,raw:z.input<typeof AccountRenameInput>){
     const input=AccountRenameInput.parse(raw);
-    await this.tx(async c=>{await this.owner(c,principal,projectId);
+    await this.tx(async c=>{
+      const membership=await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner' FOR SHARE",[projectId,principal]);
+      if(!membership.rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
       await c.query('SELECT id FROM ac_capacity_config WHERE id=1 FOR UPDATE');
       const row=(await c.query(`SELECT a.revision FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
-       WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a`,[input.id,principal,projectId])).rows[0];
+       WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a FOR SHARE OF x`,[input.id,principal,projectId])).rows[0];
       if(!row)throw new Refusal('ACCOUNT_FORBIDDEN',403);
       if(row.revision!==input.expectedRevision)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
       await c.query('UPDATE ac_accounts SET label=$2,revision=revision+1 WHERE id=$1',[input.id,input.label]);
@@ -131,9 +133,11 @@ export class Capacity {
   }
   async reviseProfile(principal:string,projectId:string,raw:z.input<typeof ProfileRevisionInput>){
     const input=ProfileRevisionInput.parse(raw);
-    await this.tx(async c=>{await this.owner(c,principal,projectId);
+    await this.tx(async c=>{
+      const membership=await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner' FOR SHARE",[projectId,principal]);
+      if(!membership.rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
       const source=(await c.query(`SELECT p.*,a.mode,a.enabled account_enabled FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
-       JOIN ac_account_access x ON x.account_id=a.id WHERE p.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a,p`,[input.sourceProfileId,principal,projectId])).rows[0];
+       JOIN ac_account_access x ON x.account_id=a.id WHERE p.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a,p FOR SHARE OF x`,[input.sourceProfileId,principal,projectId])).rows[0];
       if(!source)throw new Refusal('ACCOUNT_PROFILE_FORBIDDEN',403);
       if(profileConfigDigest(source)!==input.expectedDigest)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
       if(!source.account_enabled)throw new Refusal('ACCOUNT_DISABLED',409);

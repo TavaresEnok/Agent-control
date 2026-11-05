@@ -40,7 +40,22 @@ test('profile version and account rename are signed, conflict-safe and preserve 
   await assert.rejects(db.pool.query('DELETE FROM ac_profile_lineage WHERE new_profile_id=$1',[command.payload.newId]),/POLICY_REVISION_IMMUTABLE/);
   const rename={...base,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'account.rename' as const,payload:{id:source.account_id,label:'Renamed fixture',expectedRevision:1}};
   await control.execute(principal,rename,proof(rename));const stale={...rename,intentId:randomUUID(),deliveryAttemptId:randomUUID()};await assert.rejects(control.execute(principal,stale,proof(stale)),/ACCOUNT_PROFILE_REVISION_CONFLICT/);
-  await db.pool.query('DELETE FROM ac_account_access WHERE account_id=$1 AND project_id=$2',[source.account_id,project]);
-  const revoked={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,newId:randomUUID()}};await assert.rejects(control.execute(principal,revoked,proof(revoked)),/ACCOUNT_PROFILE_FORBIDDEN/);
+  const revoker=await db.pool.connect();await revoker.query('BEGIN');
+  try{
+   await revoker.query('DELETE FROM ac_account_access WHERE account_id=$1 AND project_id=$2',[source.account_id,project]);
+   const revoked={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,newId:randomUUID()}};
+   const blocked=control.execute(principal,revoked,proof(revoked));let waiting=false;
+   for(let i=0;i<100;i++){waiting=!!(await db.pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF a,p FOR SHARE OF x%'")).rowCount;if(waiting)break;await new Promise(resolve=>setTimeout(resolve,10));}
+   assert(waiting,'revision waits for concurrent revocation');await revoker.query('COMMIT');await assert.rejects(blocked,/ACCOUNT_PROFILE_FORBIDDEN/);
+  }finally{await revoker.query('ROLLBACK');revoker.release();}
+  await db.pool.query('INSERT INTO ac_account_access VALUES($1,$2)',[source.account_id,project]);
+  const memberRevoker=await db.pool.connect();await memberRevoker.query('BEGIN');
+  try{
+   await memberRevoker.query('DELETE FROM ac_memberships WHERE project_id=$1 AND principal_id=$2',[project,principal]);
+   const another={...rename,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...rename.payload,expectedRevision:2,label:'Must not apply'}};
+   const blocked=control.execute(principal,another,proof(another));let waiting=false;
+   for(let i=0;i<100;i++){waiting=!!(await db.pool.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%ac_memberships%FOR SHARE%'")).rowCount;if(waiting)break;await new Promise(resolve=>setTimeout(resolve,10));}
+   assert(waiting,'rename waits for concurrent membership revocation');await memberRevoker.query('COMMIT');await assert.rejects(blocked,/PROJECT_OWNER_REQUIRED/);
+  }finally{await memberRevoker.query('ROLLBACK');memberRevoker.release();}
  }finally{await db.pool.end();await rm(root,{recursive:true,force:true});}
 });

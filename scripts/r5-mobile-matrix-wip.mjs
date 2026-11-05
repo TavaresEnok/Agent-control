@@ -51,7 +51,7 @@ try{
  const makeRepo=async name=>{const repo=join(projectsRoot,name);await mkdir(repo,{mode:0o700});command('git',['init','-q','-b','main',repo]);command('git',['-C',repo,'config','user.email','fixture@example.invalid']);command('git',['-C',repo,'config','user.name','R3 synthetic lab']);await writeFile(join(repo,'README.md'),'Synthetic R3 UI lab only\n');command('git',['-C',repo,'add','.']);command('git',['-C',repo,'commit','-qm','synthetic base']);await mkdir(join(repo,'.ai/cezar'),{recursive:true});await writeFile(join(repo,'.ai/cezar/config.json'),JSON.stringify({baseBranch:'main',skillsRepos:[]}));return repo}
  const project={id:randomUUID(),label:'R3 synthetic mobile',repo:await makeRepo('first'),owner:profile.id};const bootProject={id:randomUUID(),label:'R4 boot project without this conversation',repo:await makeRepo('second'),owner:profile.id}
  const config={schemaVersion:1,mode:'administration-only',databaseUrl:database,dataDirectory:join(scratch,'private'),project:project,projects:[bootProject],projectRoots:[{id:'lab',label:'R3 disposable repositories',path:projectsRoot}],http:{listen:'127.0.0.1',port:gatewayPort,publicOrigin:origin},happier:{upstreamOrigin:hOrigin,webOrigin:hOrigin,publicServerOrigin:hOrigin},sessionMaxAgeSeconds:3600}
- db=new Ledger(database);await initializeInstallation(config,db);await provisionCapacity(db,profile.id,project.id);await new Capacity(db).registerModel('synthetic-capacity-administrator',{provider:'synthetic',model:'mobile-worker-v1',efforts:['medium','high'],roles:['programmer'],source:'synthetic://mobile-lab'})
+ db=new Ledger(database);await initializeInstallation(config,db);await provisionCapacity(db,profile.id,project.id);await new Capacity(db).registerModel('synthetic-capacity-administrator',{provider:'synthetic',model:'mobile-worker-v1',efforts:['medium','high'],roles:['programmer'],source:'synthetic://mobile-lab'});await new Capacity(db).registerModel('synthetic-capacity-administrator',{provider:'synthetic',model:'mobile-review-v2',efforts:['high'],roles:['reviewer'],source:'synthetic://mobile-lab'})
  for(const p of [project,bootProject]){const id=await projectRepositoryIdentity(p.repo);await db.pool.query('INSERT INTO ac_project_repository_identity VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[p.id,id.repoDev,id.repoIno,id.gitDev,id.gitIno,'lab',projectsRoot,p.repo.split('/').pop()]);}
 
  const domainId=randomUUID(),oldInstallationId=randomUUID(),newInstallationId=randomUUID();await new InstallationAuthority(db).initializeLaboratory(profile.id,{domainId,label:'R3 disposable UI authority',oldInstallationId,newInstallationId,mode:'synthetic-laboratory'})
@@ -140,8 +140,23 @@ try{
   await page.getByLabel('Programação — adicionar reserva',{exact:true}).locator(`option[value="${profileId}"]`).waitFor({state:'attached'});
   const record=(await db.pool.query('SELECT account_id,model,effort,role FROM ac_profiles WHERE id=$1',[profileId])).rows[0];
   assert.equal(record.account_id,accountId);assert.equal(record.model,'mobile-worker-v1');assert.equal(record.effort,width===360?'medium':'high');assert.equal(record.role,'programmer');
+  const accountRow=page.locator('li').filter({has:page.getByText(name,{exact:true})});
+  await accountRow.getByLabel(`Novo nome ${name}`,{exact:true}).fill(`${name} renamed`);
+  const renamed=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().postDataJSON()?.action==='account.rename');
+  await accountRow.getByRole('button',{name:'Renomear conta',exact:true}).click();assert.equal((await renamed).status(),200);
+  await page.locator('strong').filter({hasText:`${name} renamed`}).waitFor();
+  const profileRow=page.locator('li').filter({hasText:`mobile-worker-v1 · ${width===360?'medium':'high'} · programmer`});
+  await profileRow.getByRole('button',{name:'Criar nova versão do perfil',exact:true}).click();
+  if(width===360){await profileRow.getByLabel('Função da nova versão',{exact:true}).selectOption('reviewer');await profileRow.getByLabel('Modelo da nova versão',{exact:true}).selectOption('mobile-review-v2');}
+  else await profileRow.getByLabel('Esforço da nova versão',{exact:true}).selectOption('medium');
+  const changed=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().postDataJSON()?.action==='profile.revise');
+  await profileRow.getByRole('button',{name:'Salvar nova versão',exact:true}).click();const response=await changed;assert.equal(response.status(),200);
+  const revised=response.request().postDataJSON().payload;const version=(await db.pool.query('SELECT model,effort,role FROM ac_profiles WHERE id=$1',[revised.newId])).rows[0];
+  assert.equal(version.model,width===360?'mobile-review-v2':'mobile-worker-v1');assert.equal(version.role,width===360?'reviewer':'programmer');assert.equal(version.effort,width===360?'high':'medium');
+  assert.equal((await db.pool.query('SELECT source_profile_id FROM ac_profile_lineage WHERE new_profile_id=$1',[revised.newId])).rows[0].source_profile_id,profileId);
+
  }
- console.log('PASS signed synthetic account and profile creation at 360 and 390');
+ console.log('PASS signed account rename and immutable profile revision after creation at 360 and 390');
 
  for(const width of [360,390]){
   await page.setViewportSize({width,height:844});
