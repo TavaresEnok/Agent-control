@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {z} from 'zod';
 import {DockerDaemon} from './sandbox-broker.ts';
-import {Refusal} from './contracts.ts';
+import {digest,Refusal} from './contracts.ts';
 /** Trusted injection only. Provisioning is a separate disposable-lab action.
  * Every group shares the same kernel parent across controllers/state roots. */
 export const NativeResourceEnvelope=z.object({stateRoot:z.string().refine(p=>resolve(p)===p),
@@ -96,6 +96,7 @@ export async function admitNativeResources(input:{docker:DockerDaemon;ledger:imp
    if(!row)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
    let proof;try{proof=await docker.cancelAdmission(input.names,token);}catch{}
    await c.query("UPDATE ac_native_resource_admissions SET state=$2,reason=$2,proof=$3,updated_at=clock_timestamp() WHERE job_id=$1",[input.jobId,proof?'canceled':'uncertain',proof??null]);
+   if(proof)await recoverNeverCreatedManagedWriter(c,{jobId:input.jobId,grantId:input.grantId,authority:input.authority,admission:row,proof});
    await c.query("UPDATE ac_capacity_grants SET state=$2,physical_receipt=$3 WHERE id=$1",[input.grantId,proof?'released':'uncertain',proof??null]);
   });}catch{}
   throw error;
@@ -129,6 +130,7 @@ export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaem
    if(job)return true;
    if(!current.admission_id)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
    const proof=await docker.cancelAdmission(current.names,current.admission_id);
+   await recoverNeverCreatedManagedWriter(c,{jobId:row.job_id,grantId:row.grant_id,authority:input.authority,admission:current,proof});
    await c.query("UPDATE ac_native_resource_admissions SET state='canceled',reason='canceled',proof=$2,manager_epoch=$3,updated_at=clock_timestamp() WHERE job_id=$1",[row.job_id,proof,input.authority.epoch]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2,manager_epoch=$3 WHERE id=$1 AND state IN ('reserved','uncertain')",[row.grant_id,proof,input.authority.epoch]);
   });if(recoverJob&&input.recoverJob)await input.recoverJob(row.job_id);}catch(error){errors.push(error);}}
@@ -155,4 +157,38 @@ export async function proveUncreatedNativeResources(c:import('pg').PoolClient,do
  if(!row?.admission_id||Number(row.manager_epoch)>authority.epoch)return undefined;
  try{await cancelPreparedNativeResources(c,docker,jobId,grantId,authority);}catch{return undefined;}
  return {state:'not_started' as const,executionStarted:false,source:'native-resource-host-absence' as const,jobId,containerId:null,proof:'no_groups_no_create_claims'};
+}
+
+/** No native job/claim ever existed, so this managed writer never received the
+ * copy through a container. Host absence is still required; SQL alone cannot
+ * neutralize it. Healthy takeover delegates the exact original identity through
+ * an append-only continuation; it never rewrites the writer epoch. */
+async function recoverNeverCreatedManagedWriter(c:import('pg').PoolClient,input:{jobId:string;grantId:string;authority:import('./contracts.ts').Authority;admission:Record<string,any>;proof:unknown}){
+ const expected=['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId].sort();
+ if(!Array.isArray(input.admission.names)||JSON.stringify([...input.admission.names].sort())!==JSON.stringify(expected))return;
+ const held=(await c.query(`SELECT i.id,i.parent_intent_id,i.run_id,w.manager_epoch,(i.state IN ('failed','canceled','cancelled') OR EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN(i.id,i.parent_intent_id))) terminal FROM ac_intents i
+  JOIN ac_operations o ON o.id=i.operation_id AND o.id=$1 AND o.grant_id=$2 AND o.state='registered'
+  JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id AND w.holder_intent_id=i.id AND w.state='held'
+  WHERE i.context_id=$3 AND (w.manager_epoch=$4 OR EXISTS(SELECT 1 FROM ac_worktree_writer_continuations t WHERE t.parent_intent_id=w.parent_intent_id AND t.run_id=w.run_id AND t.holder_intent_id=w.holder_intent_id AND t.writer_epoch=w.manager_epoch AND t.manager_epoch=$4))
+   AND NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$2)
+   AND NOT EXISTS(SELECT 1 FROM ac_execution_launches WHERE operation_id=$1)
+   AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs WHERE id=$1)
+   AND NOT EXISTS(SELECT 1 FROM ac_remote_operations r WHERE r.intent_id=i.id)
+  FOR UPDATE OF i,o,w`,[input.jobId,input.grantId,input.authority.contextId,input.admission.manager_epoch])).rows[0];
+ if(!held)return;
+ const proof={schemaVersion:1,source:held.terminal?'native-resource-never-created-writer':'native-resource-never-created-continuation',jobId:input.jobId,grantId:input.grantId,admissionId:input.admission.admission_id,
+  contextId:input.authority.contextId,parentIntentId:held.parent_intent_id,runId:held.run_id,intentId:held.id,writerEpoch:Number(held.manager_epoch),reconcilerEpoch:input.authority.epoch,
+  authorityId:input.admission.authority_id,stateRoot:input.admission.state_root,hostProof:input.proof};
+ if(!held.terminal){
+  if(Number(held.manager_epoch)>=input.authority.epoch)return;
+  await c.query(`INSERT INTO ac_worktree_writer_continuations(parent_intent_id,run_id,holder_intent_id,writer_epoch,manager_epoch,job_id,grant_id,admission_id,proof_digest,proof)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(parent_intent_id,run_id,manager_epoch) DO NOTHING`,[held.parent_intent_id,held.run_id,held.id,held.manager_epoch,input.authority.epoch,input.jobId,input.grantId,input.admission.admission_id,digest(proof),proof]);
+  const saved=(await c.query('SELECT proof_digest FROM ac_worktree_writer_continuations WHERE parent_intent_id=$1 AND run_id=$2 AND manager_epoch=$3',[held.parent_intent_id,held.run_id,input.authority.epoch])).rows[0];
+  if(saved?.proof_digest!==digest(proof))throw new Refusal('WORKTREE_CONTINUATION_CONFLICT');
+  return;
+ }
+ await c.query(`UPDATE ac_worktree_writers SET state='neutralized',proof_digest=$4,revocation_job_id=$5,revocation_proof=$6
+  WHERE parent_intent_id=$1 AND run_id=$2 AND holder_intent_id=$3 AND state='held'`,[held.parent_intent_id,held.run_id,held.id,digest(proof),input.jobId,proof]);
+ await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered' AND grant_id=$3",[input.jobId,{cancellation:true,executionStarted:false,physical:proof},input.grantId]);
+ await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'worktree.native_never_created_revoked',$2)",[input.authority.contextId,{jobId:input.jobId,proofDigest:digest(proof)}]);
 }

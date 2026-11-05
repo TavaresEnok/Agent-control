@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import { z } from 'zod';
-import { Id, Refusal } from './contracts.ts';
+import { digest, Id, Refusal } from './contracts.ts';
 
 const Key=z.object({
   parentIntentId:Id,
@@ -21,6 +21,16 @@ export async function claimWorktreeWriter(c:pg.PoolClient,raw:z.input<typeof Key
   }
   if(current.state==='held'&&current.holder_intent_id===key.intentId&&Number(current.manager_epoch)===key.epoch)
     return {state:'held' as const,acquired:'same' as const};
+  if(current.state==='held'&&current.holder_intent_id===key.intentId&&Number(current.manager_epoch)<key.epoch){
+    const continuation=(await c.query(`SELECT * FROM ac_worktree_writer_continuations
+      WHERE parent_intent_id=$1 AND run_id=$2 AND holder_intent_id=$3 AND writer_epoch=$4 AND manager_epoch=$5`,
+      [key.parentIntentId,key.runId,key.intentId,current.manager_epoch,key.epoch])).rows[0];
+    const proof=continuation?.proof;
+    if(proof&&continuation.proof_digest===digest(proof)&&proof.source==='native-resource-never-created-continuation'&&
+      proof.parentIntentId===key.parentIntentId&&proof.runId===key.runId&&proof.intentId===key.intentId&&proof.writerEpoch===Number(current.manager_epoch)&&
+      proof.reconcilerEpoch===key.epoch&&proof.jobId===continuation.job_id&&proof.grantId===continuation.grant_id&&proof.admissionId===continuation.admission_id&&
+      proof.hostProof?.source==='native-resource-host-absence'&&proof.hostProof?.state==='not_started')return {state:'held' as const,acquired:'same' as const};
+  }
   throw new Refusal('WORKTREE_WRITER_BUSY');
 }
 
