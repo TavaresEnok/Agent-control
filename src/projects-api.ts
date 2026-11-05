@@ -36,7 +36,7 @@ export function createProjectGateway(options:ProjectGatewayOptions){
    }
    if(path==='/api/v1/ac/project-admin/environments' &&options.projectEnvironments)return options.projectEnvironments(request,principal);
    if(path==='/api/v1/ac/installation-authority'&&options.installationAuthority)return options.installationAuthority(request,principal);
-   if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source'||path==='/api/v1/ac/project-admin/remote-return')&&options.projectAdmin)return options.projectAdmin(request,principal);
+   if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source'||path==='/api/v1/ac/project-admin/remote-return'||path==='/api/v1/ac/project-admin/remote-development')&&options.projectAdmin)return options.projectAdmin(request,principal);
    const scoped=path.match(/^\/api\/v1\/p\/([^/]+)(?:\/|$)/);
    const header=request.headers.get('x-agent-control-project');
    const selected=header??(scoped&&scoped[1]!=='default'?scoped[1]:options.defaultProjectId);

@@ -59,8 +59,9 @@ async function readJsonBody(request:Request,limit:number,timeoutMs:number,noStor
 export function createProjectAdminApi(service:ProjectAdmin,options:{bodyTimeoutMs?:number}={}){
  return async(request:Request,principal:string):Promise<Response>=>{
   const path=new URL(request.url).pathname;
+  const developing=path==='/api/v1/ac/project-admin/remote-development';
   const returning=path==='/api/v1/ac/project-admin/remote-return';
-  const remote=path===REMOTE_SOURCE_PATH||returning;
+  const remote=path===REMOTE_SOURCE_PATH||returning||developing;
   const legacy=path===PROJECT_ADMIN_PATH;
   const fail=(status:number,error:string)=>jsonError(error,status,remote);
   try{
@@ -73,7 +74,8 @@ export function createProjectAdminApi(service:ProjectAdmin,options:{bodyTimeoutM
    const proof=OperatorProof.parse(JSON.parse(Buffer.from(proofHeader,'base64url').toString('utf8')));
    const parsed=await readJsonBody(request,remote?REMOTE_SOURCE_BODY_LIMIT:PROJECT_ADMIN_BODY_LIMIT,options.bodyTimeoutMs??10000,remote);
    if(parsed instanceof Response)return parsed;
-   if(remote&&(parsed===null||typeof parsed!=='object'||(parsed as {action?:unknown}).action!==(returning?'project.returnRemoteArtifact':'project.materializeRemoteSource')))return fail(400,'INVALID_CONTRACT');
+   const allowed=developing?['project.prepareRemoteDevelopment','project.launchRemoteDevelopment','project.registerRemoteArtifact']:[returning?'project.returnRemoteArtifact':'project.materializeRemoteSource'];
+   if(remote&&(parsed===null||typeof parsed!=='object'||!allowed.includes(String((parsed as {action?:unknown}).action))))return fail(400,'INVALID_CONTRACT');
    return Response.json(await service.execute(principal,parsed,proof),{headers:{'cache-control':'no-store'}});
   }catch(error){
    if(error instanceof Refusal)return fail(error.status,error.code);

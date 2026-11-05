@@ -7,6 +7,7 @@ import {Id,Refusal,digest} from './contracts.ts';
 import {Operators,type OperatorProof} from './operator.ts';
 import {Ledger} from './ledger.ts';
 import {projectRepositoryIdentity} from './project-repository.ts';
+import {RemoteDevelopmentAdminCommands,executeRemoteDevelopmentAdmin,remoteDevelopmentAdminView,type RemoteDevelopmentAdministration} from './remote-development-admin.ts';
 import type {RemoteTransport} from './remote.ts';
 import {returnRemoteArtifact,RemoteArtifactReturnPayload} from './remote-artifact-return.ts';
 import {materializeRemoteProjectSource,RemoteSourceMaterializationPayload} from './remote-source-materialization.ts';
@@ -17,11 +18,12 @@ const RelativePath=z.string().min(1).max(512).refine(path=>!path.startsWith('/')
  path.split('/').every(part=>part!==''&&part!=='.'&&part!=='..'&&part!=='.git'));
 const AdminBase={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id};
 export const ProjectAdminCommand=z.discriminatedUnion('action',[
+ ...RemoteDevelopmentAdminCommands,
  z.object({...AdminBase,action:z.literal('project.register'),payload:z.object({projectId:Id,label:z.string().min(1).max(200).refine(value=>value.trim().length>0),rootId:ProjectRoot.shape.id,relativePath:RelativePath}).strict()}).strict(),
  z.object({...AdminBase,action:z.literal('project.returnRemoteArtifact'),payload:RemoteArtifactReturnPayload}).strict(),
  z.object({...AdminBase,action:z.literal('project.materializeRemoteSource'),payload:RemoteSourceMaterializationPayload}).strict(),
 ]);
-export type ProjectAdminOptions={remoteReturnTransport?:RemoteTransport;remoteSourceTmpfs?:string;beforeRemoteSourceRegister?:()=>Promise<void>};
+export type ProjectAdminOptions={remoteDevelopment?:RemoteDevelopmentAdministration;remoteReturnTransport?:RemoteTransport;remoteSourceTmpfs?:string;beforeRemoteSourceRegister?:()=>Promise<void>};
 const ObjectId=/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 /** Closed projection. A candidate is not a revalidated authorization. */
 const RemoteSourceCandidate=z.object({
@@ -60,7 +62,8 @@ export class ProjectAdmin{
    JOIN ac_memberships mb ON mb.project_id=m.project_id AND mb.principal_id=$1 ORDER BY m.created_at DESC,m.id LIMIT 100`,[principal])).rows;
   const remoteReturns=(await this.ledger.pool.query(`SELECT r.receipt,r.host_id AS \"hostId\",r.context_id AS \"contextId\" FROM ac_remote_artifact_returns r JOIN ac_memberships m ON m.project_id=r.project_id AND m.principal_id=$1 ORDER BY r.created_at DESC,r.id LIMIT 100`,[principal])).rows.map(row=>({...row.receipt,hostId:row.hostId,contextId:row.contextId}));
   const remoteReturnCandidates=(await this.ledger.pool.query(`SELECT a.project_id AS \"projectId\",a.context_id AS \"contextId\",s.host_id AS \"hostId\",a.id AS \"artifactId\",a.commit_id AS commit,a.tree_id AS tree,t.target_ref AS \"destinationRef\",s.commit_id AS \"expectedCommit\" FROM ac_artifacts a JOIN ac_remote_source_materializations s ON s.project_id=a.project_id AND s.context_id=a.context_id JOIN ac_memberships m ON m.project_id=a.project_id AND m.principal_id=$1 AND m.role='owner' JOIN ac_integration_intents t ON t.artifact_id=a.id AND t.state='integrated' JOIN ac_integration_approvals ap ON ap.artifact_id=a.id AND ap.target_ref=t.target_ref AND ap.artifact_digest=a.identity_digest AND ap.policy_revision=a.policy_revision JOIN ac_remote_hosts h ON h.id=s.host_id AND h.enabled AND 'git-return'=ANY(h.allowed_tasks) WHERE t.receipt->>'commit'=a.commit_id AND t.receipt->>'tree'=a.tree_id ORDER BY a.id LIMIT 100`,[principal])).rows;
-  const base={remoteReturns,remoteReturnCandidates:admin?remoteReturnCandidates:[],principalId:principal,installationId:installation.id,operatorDeviceIds:devices,canRegister:admin,server:{kind:'local' as const,remoteManagement:false as const},roots:admin?this.roots.map(({id,label})=>({id,label})):[],remoteSources};
+  const remoteDevelopment=await remoteDevelopmentAdminView(this,principal,admin);
+  const base={remoteDevelopment,remoteReturns,remoteReturnCandidates:admin?remoteReturnCandidates:[],principalId:principal,installationId:installation.id,operatorDeviceIds:devices,canRegister:admin,server:{kind:'local' as const,remoteManagement:false as const},roots:admin?this.roots.map(({id,label})=>({id,label})):[],remoteSources};
   const response=base as typeof base & {remoteSourceCandidates?:z.infer<typeof RemoteSourceCandidate>[]};
   if(!admin)return response;
   const rows=(await this.ledger.pool.query(`SELECT p.id AS "projectId",p.label,x.id AS "contextId",o.id AS "operationId",h.id AS "hostId",
@@ -114,6 +117,7 @@ export class ProjectAdmin{
    return prior?.result;
   });
   if(replay)return replay;
+  if(command.action==='project.prepareRemoteDevelopment'||command.action==='project.launchRemoteDevelopment'||command.action==='project.registerRemoteArtifact')return executeRemoteDevelopmentAdmin(this,principal,command,hash,authorize,delivery);
   if(command.action==='project.returnRemoteArtifact')return returnRemoteArtifact(this,principal,command,hash,authorize,delivery);
   if(command.action==='project.materializeRemoteSource')return materializeRemoteProjectSource(this,principal,command,hash,authorize,delivery);
   const root=this.roots.find(item=>item.id===command.payload.rootId);
