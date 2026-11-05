@@ -107,6 +107,17 @@ describe('explicit QA waiver stage', { skip }, () => {
     const repeated={...command,deliveryAttemptId:randomUUID()};
     assert.deepEqual(await control.execute(env.owner,repeated,proof(repeated)),first);
     assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waiver_authorizations WHERE project_id=$1',[env.id])).rows[0].n,1);
+    const authorizationId=(first.result as {authorizationId:string}).authorizationId;
+    const revoke={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:env.context,action:'qa.waiver.revoke' as const,payload:{authorizationId}};
+    const revoked=await control.execute(env.owner,revoke,proof(revoke));
+    assert.deepEqual(revoked.result,{authorizationId,revoked:true});
+    assert.deepEqual(await control.execute(env.owner,revoke,proof(revoke)),revoked);
+    const revokeAgain={...revoke,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
+    assert.deepEqual((await control.execute(env.owner,revokeAgain,proof(revokeAgain))).result,revoked.result);
+    assert.deepEqual(await control.execute(env.owner,repeated,proof(repeated)),first);
+    const newAuthorization={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
+    await assert.rejects(control.execute(env.owner,newAuthorization,proof(newAuthorization)),(error:unknown)=>error instanceof Refusal&&error.code==='QA_WAIVER_AUTHORIZATION_REVOKED');
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waiver_revocations WHERE authorization_id=$1',[authorizationId])).rows[0].n,1);
     const viewer='signed-viewer-'+randomUUID();await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'viewer')",[env.id,viewer]);
     const viewerProof=await signer(viewer),forbidden={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
     await assert.rejects(control.execute(viewer,forbidden,viewerProof(forbidden)),(error:unknown)=>error instanceof Refusal&&error.code==='CONTEXT_FORBIDDEN');
@@ -155,5 +166,25 @@ describe('explicit QA waiver stage', { skip }, () => {
       assert.equal((await db.tx(c => settleExplicitQaWaiver(c, { contextId: env.context, artifactId: blocked, taskId: 'docs', correctionRevision: 0 }))).disposition, 'blocked');
       assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers WHERE artifact_id=$1', [blocked])).rows[0].n, 0);
     }
+    const authorizationId=first.receipt.qaWaiver.authorizationId;
+    const {revokeExplicitQaWaiver}=await import('../src/quality.ts');
+    const held=await db.pool.connect(), contender=await db.pool.connect();
+    try{
+      await held.query('BEGIN');
+      await quality.assertReady(held,artifactId,env.authority);
+      await contender.query('BEGIN');
+      await contender.query("SET LOCAL lock_timeout='100ms'");
+      await assert.rejects(revokeExplicitQaWaiver(contender,env.owner,env.context,{authorizationId}),(error:unknown)=>(error as {code?:string}).code==='55P03');
+      await contender.query('ROLLBACK');
+      await held.query('ROLLBACK');
+    }finally{held.release();contender.release();}
+    await db.tx(c=>revokeExplicitQaWaiver(c,env.owner,env.context,{authorizationId}));
+    assert.equal((await new Control(db).view(env.owner,env.context)).qaWaiver.authorizations[0].revoked,true);
+    assert.equal(await db.tx(c=>explicitQaWaiverStageReady(c,env.context,artifactId)),false);
+    await assert.rejects(db.tx(c=>quality.assertReady(c,artifactId,env.authority)),(error:unknown)=>error instanceof Refusal&&error.code==='QA_MISSING');
+    assert.equal((await db.tx(c=>settleExplicitQaWaiver(c,{contextId:env.context,artifactId,taskId:'docs',correctionRevision:0}))).disposition,'run');
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_qa_waivers WHERE artifact_id=$1',[artifactId])).rows[0].n,1);
+    assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_verification_evidence WHERE artifact_id=$1 AND kind='qa'",[artifactId])).rows[0].n,0);
+    await assert.rejects(db.pool.query('DELETE FROM ac_qa_waiver_revocations WHERE authorization_id=$1',[authorizationId]));
   });
 });

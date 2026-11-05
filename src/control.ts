@@ -8,7 +8,7 @@ import { Operators,type OperatorProof } from './operator.ts';
 import { Admission } from './admission.ts';
 import { Templates,Template } from './templates.ts';
 import { ProjectTemplateApply, ProjectTemplatePublish, ProjectTemplates, readProjectTemplates } from './project-templates.ts';
-import { authorizeExplicitQaWaiver, QaWaiverBinding } from './quality.ts';
+import { authorizeExplicitQaWaiver, revokeExplicitQaWaiver, QaWaiverBinding, QaWaiverRevocation } from './quality.ts';
 import { QualityPolicies,QualityPolicy } from './quality-policy.ts';
 import {ProviderCollectors,ProviderBinding,projectProviderSnapshot,type ProviderAdapter} from './providers.ts';
 import {IntegrationApproval,approveIntegration} from './approvals.ts';
@@ -29,6 +29,7 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('project-template.publish'),payload:ProjectTemplatePublish}).strict(),
  z.object({...base,action:z.literal('project-template.apply'),payload:ProjectTemplateApply}).strict(),
  z.object({...base,action:z.literal('qa.waiver.authorize'),payload:QaWaiverBinding}).strict(),
+ z.object({...base,action:z.literal('qa.waiver.revoke'),payload:QaWaiverRevocation}).strict(),
  z.object({...base,action:z.literal('device.enroll'),payload:z.object({deviceId:Id,publicKey:z.string().min(40).max(200)}).strict()}).strict(),
  z.object({...base,action:z.literal('device.revoke'),payload:z.object({deviceId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('admission.set'),payload:z.object({enabled:z.boolean(),expectedRevision:z.number().int().positive(),reason:z.string().min(1).max(200)}).strict()}).strict(),
@@ -64,7 +65,7 @@ export class Control {
    const admission=(await c.query(command.action==='admission.set'
     ?'SELECT enabled FROM ac_admission_control WHERE id=1 FOR UPDATE'
     :'SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
-   const allowedWhileClosed=command.action==='admission.set'||command.action==='device.revoke'||command.action==='plan.cancel'||
+   const allowedWhileClosed=command.action==='qa.waiver.revoke'||command.action==='admission.set'||command.action==='device.revoke'||command.action==='plan.cancel'||
     (command.action==='context.pause'&&command.payload.paused)||
     (command.action==='context.drain'&&command.payload.draining)||
     ((command.action==='account.state'||command.action==='profile.state')&&!command.payload.enabled);
@@ -90,6 +91,9 @@ export class Control {
      case 'qa.waiver.authorize':
       if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
       result=await authorizeExplicitQaWaiver(c,principal,command.contextId,command.payload);break;
+     case 'qa.waiver.revoke':
+      if(context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+      result=await revokeExplicitQaWaiver(c,principal,command.contextId,command.payload);break;
      case 'device.enroll':await new Operators(this.ledger).enrollFromDevice(c,principal,command.payload.deviceId,command.payload.publicKey);result={deviceId:command.payload.deviceId};break;
      case 'device.revoke':await new Operators(this.ledger).revokeFromDevice(c,principal,command.payload.deviceId);result={deviceId:command.payload.deviceId};break;
      case 'admission.set':result=await new Admission(this.ledger,c).set(principal,command.payload);break;
@@ -211,10 +215,10 @@ export class Control {
     digest(parsedQuality.data)===activeQuality?.digest&&parsedQuality.data.allowLowRiskQaWaiver
     ?{templateId:activeWaiverRow.template_id,templateRevision:Number(activeWaiverRow.revision),templateName:activeWaiverRow.name,
       templateDigest:activeWaiverRow.digest,policyRevision:Number(activeQuality.revision),policyDigest:activeQuality.digest}:null;
-   const waiverRows=context.role==='owner'?(await c.query(`SELECT id,policy_revision,template_id,template_revision,task_id
-    FROM ac_qa_waiver_authorizations WHERE project_id=$1 ORDER BY created_at DESC,id LIMIT 101`,[context.project_id])).rows:[];
+   const waiverRows=context.role==='owner'?(await c.query(`SELECT a.id,a.policy_revision,a.template_id,a.template_revision,a.task_id, (r.authorization_id IS NOT NULL) revoked
+    FROM ac_qa_waiver_authorizations a LEFT JOIN ac_qa_waiver_revocations r ON r.authorization_id=a.id WHERE a.project_id=$1 ORDER BY a.created_at DESC,a.id LIMIT 101`,[context.project_id])).rows:[];
    const qaWaiver={canAuthorize:context.role==='owner',active:activeQaWaiver,authorizations:waiverRows.slice(0,100).map(row=>({
-    authorizationId:row.id,policyRevision:Number(row.policy_revision),templateId:row.template_id,templateRevision:Number(row.template_revision),taskId:row.task_id})),truncated:waiverRows.length>100};
+    authorizationId:row.id,policyRevision:Number(row.policy_revision),templateId:row.template_id,templateRevision:Number(row.template_revision),taskId:row.task_id,revoked:row.revoked})),truncated:waiverRows.length>100};
    const remoteSourceHosts=(await c.query(`SELECT id,label FROM ac_remote_hosts WHERE project_id=$1 AND enabled
     AND 'git-export'=ANY(allowed_tasks) ORDER BY label,id LIMIT 100`,[context.project_id])).rows;
    const remoteSourceAuthorizations=(await c.query(`SELECT control_intent_id AS "authorizationId",intent_id AS "intentId",host_id AS "hostId",

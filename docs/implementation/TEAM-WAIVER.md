@@ -1,0 +1,7 @@
+# Revogação de autorização de dispensa QA
+
+O owner do projeto pode enviar, pelo controle assinado, `qa.waiver.revoke` com `payload: { authorizationId }`. A resposta em `result` contém `{ authorizationId, revoked: true }`. O comando pode ser repetido inclusive com outra intenção; a primeira revogação e seu autor permanecem no histórico imutável. O snapshot de controle inclui `revoked` em cada autorização visível ao owner. A mesma vinculação não pode ser autorizada novamente depois da revogação; uma repetição da intenção original devolve seu resultado histórico sem restaurar a autorização.
+
+Revogar invalida tanto a aplicação futura como os gates de dispensas já registradas. Uma verificação QA passada continua válida; revisão e demais gates continuam obrigatórios. Não se cria evidência QA e os registros anteriores não são removidos. A leitura do gate mantém bloqueio compartilhado sobre a autorização até o fim da transação; a revogação usa bloqueio exclusivo, inclusive durante o CAS de integração. Uma integração concluída anteriormente não é desfeita.
+
+A migração 065 é exclusiva para o histórico de revogações. Validação focada em banco descartável: `npm run typecheck` e `node --import tsx --test --test-concurrency=1 tests/qa-waiver-binding.test.ts tests/qa-waiver-stage.test.ts`, com `AC_TEST_DATABASE_URL` apontando para a bancada isolada. Os testes incluem comando assinado e repetição, histórico, gate após revogação e bloqueio concorrente. Não houve migração operacional nem teste físico de CAS nesta rodada.
