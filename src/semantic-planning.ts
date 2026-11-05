@@ -71,8 +71,8 @@ export class SemanticPlanning{
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'registered') RETURNING *`,[input.id,input.contextId,input.intentId,principal,requestedDigest,dispatcherId,dispatcherDigest,input.expectedRevision,randomUUID(),randomUUID()])).rows[0];
   });
   const inputDigest=String(call.input_digest);
-  if(call.state==='published'){await this.retirePublished(principal,input,authority,call);return call.result;}
-  if(call.state==='rejected')throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');
+  if(call.state==='published'){await this.retireTerminalResult(principal,input,authority,call);return call.result;}
+  if(call.state==='rejected'){await this.retireTerminalResult(principal,input,authority,call);throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');}
   if(call.state==='ready')return this.publish(principal,input,authority);
   let grantId:string=call.grant_id;
   if(!grantId){const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:call.attempt_id,intentId:input.intentId,contextId:input.contextId,role:'manager'},authority);grantId=grant.id;}
@@ -133,7 +133,7 @@ export class SemanticPlanning{
    if(saved.state!=='uncertain'||saved.grant_id!==grantId)throw new Refusal('PLANNING_CALL_FENCED');
    await c.query('UPDATE ac_semantic_planning_calls SET state=$2,proposal=$3,receipt=$4,failure_code=$5 WHERE id=$1',[input.id,failure?'rejected':'ready',proposal??null,receipt,failure??null]);
   });
-  if(failure)throw new Refusal(failure);
+  if(failure){const saved=(await this.ledger.pool.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1',[input.id])).rows[0];await this.retireTerminalResult(principal,input,authority,saved);throw new Refusal(failure);}
   return this.publish(principal,input,authority);
  }
  private async publish(principal:string,input:z.infer<typeof SemanticPlanningRequest>,authority:Authority){
@@ -147,9 +147,9 @@ export class SemanticPlanning{
   });
   // The proposal and signed result are durable before physical retirement. A
   // lost cleanup ACK is retried by the published replay, never by inference.
-  await this.retirePublished(principal,input,authority,published.call);return published.result;
+  await this.retireTerminalResult(principal,input,authority,published.call);return published.result;
  }
- private async retirePublished(principal:string,input:z.infer<typeof SemanticPlanningRequest>,authority:Authority,call:Record<string,any>){
+ private async retireTerminalResult(principal:string,input:z.infer<typeof SemanticPlanningRequest>,authority:Authority,call:Record<string,any>){
   const entry=this.entries.get(call.selected_executor_id+'@'+call.selected_executor_digest);
   if(entry?.executor.retire){if(entry.fingerprint!==call.selected_key_fingerprint)throw new Refusal('PLANNING_EXECUTOR_KEY_MISMATCH');await entry.executor.retire(principal,authority,input.id);}
  }

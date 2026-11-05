@@ -53,7 +53,7 @@ test('semantic planning journals uncertain generation, reconciles without infere
    },async reconcile(input){await input.assertAuthorized();reconciles++;return pending;},
    async retire(retirePrincipal,retireAuthority,callId){
     assert.equal(retirePrincipal,principal);assert.equal(retireAuthority.contextId,contextId);
-    assert.equal((await db.pool.query('SELECT state FROM ac_semantic_planning_calls WHERE id=$1',[callId])).rows[0].state,'published','retirement must observe the committed proposal through another connection');
+    assert(['published','rejected'].includes((await db.pool.query('SELECT state FROM ac_semantic_planning_calls WHERE id=$1',[callId])).rows[0].state),'retirement must observe the committed terminal result through another connection');
     if(++retirements===1)throw Error('SYNTHETIC_RETIRE_ACK_LOST');
    }};
   let service=new SemanticPlanning(db,executor);const request={id:randomUUID(),intentId:intent.id,contextId,expectedRevision:0,sourceMessageRef:'message:fixture-request',qualityRevision,
