@@ -15,6 +15,8 @@ import {createProjectAdminApi} from './project-admin-api.ts';
 import {InstallationAuthority} from './installation-authority.ts';
 import {createInstallationAuthorityApi} from './installation-authority-api.ts';
 import {remoteReturnTransport} from './remote-return-config.ts';
+import {Control} from './control.ts';
+import {nativeReviewVerifierDigest} from './native-verification.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
@@ -56,6 +58,7 @@ async function main(){
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
  const managerTransports=new Map<string,ManagerRegistry>();
+ const configurationControls=new Map<string,Control>();
  const closeManagers=async()=>{const results=await Promise.allSettled([...managerTransports.values()].map(registry=>registry.close()));managerTransports.clear();if(results.some(result=>result.status==='rejected'))throw Error('MANAGER_TRANSPORT_SHUTDOWN_FAILED');};
  let bootstrapSession:{shutdown():Promise<unknown>}|undefined;
  let bootstrapReport:{state:string;executionEnabled:false;inferenceEnabled:false}|undefined;
@@ -113,12 +116,17 @@ async function main(){
   runtimes=new ProjectRuntimes(async project=>{
    const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report):undefined;
    const runtime=new CezarRuntime(ledger,project.repo,project.id,undefined,undefined,undefined,nativeBootstrap?{nativeBootstrap}:undefined);
-   try{await runtime.start('administration-only');const registry=await startConfiguredManagerTransport(config,ledger,runtime);if(registry)managerTransports.set(project.id,registry);return runtime;}catch(error){await runtime.close();throw error;}
+   try{
+    await runtime.start('administration-only');
+    const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control);
+    configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
+   }catch(error){await runtime.close();throw error;}
   });
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),config.happier.webOrigin,access,sessions,relay,quotaRegistry.adapters,undefined,async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},undefined,quotaRegistry);
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),config.happier.webOrigin,access,sessions,relay,quotaRegistry.adapters,undefined,async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},undefined,quotaRegistry,configurationControls.get(runtime.projectId));
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
