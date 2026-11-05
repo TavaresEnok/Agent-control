@@ -1,0 +1,81 @@
+TAP version 13
+# Subtest: native correction recipe gives each rejection a new identity and stops at the configured limit
+ok 1 - native correction recipe gives each rejection a new identity and stops at the configured limit
+  ---
+  duration_ms: 349.582497
+  type: 'test'
+  ...
+# fatal: path 'src/solo/a.ts' does not exist in '0675dad50b73511da3d6722448342dc0c8577448'
+# fatal: path 'src/solo/a.ts' does not exist in 'e3bd1faad8910001e201ad320b7ee4353c7663ca'
+# fatal: path 'src/beta/a.ts' does not exist in 'e3bd1faad8910001e201ad320b7ee4353c7663ca'
+# fatal: path 'src/alpha/a.ts' does not exist in '8a61f02e412f67bccef1ce729fb38d1d371fe47a'
+# fatal: path 'src/solo/a.ts' does not exist in '8a61f02e412f67bccef1ce729fb38d1d371fe47a'
+# fatal: path 'src/alpha/a.ts' does not exist in '68808bf5aff7888ce6bd5c148781e2f177177158'
+# fatal: path 'src/solo/a.ts' does not exist in '68808bf5aff7888ce6bd5c148781e2f177177158'
+# fatal: path 'src/solo/a.ts' does not exist in '2f8e3d554799a0d4628f9e9398e311ff5840b53e'
+# fatal: path 'src/solo/a.ts' does not exist in '7b7953a64e0fb93cdd391d4f1b3a85411af6f8e7'
+# {"proof":"native-corrections","tasks":3,"corrections":2,"parallelProgrammers":2,"modelCalls":0,"qa":"injected substitute","review":"synthetic model substitute"}
+# Subtest: authenticated native rejection corrects once, an exhausted limit stops, and infrastructure does not consume an attempt
+ok 2 - authenticated native rejection corrects once, an exhausted limit stops, and infrastructure does not consume an attempt
+  ---
+  duration_ms: 24689.380562
+  type: 'test'
+  ...
+# Subtest: native execution retains uncertain capacity, fences takeover and replays only physical receipts
+ok 3 - native execution retains uncertain capacity, fences takeover and replays only physical receipts
+  ---
+  duration_ms: 3415.147874
+  type: 'test'
+  ...
+# Subtest: native execution recovery does not replay and keeps a grant without terminal proof
+ok 4 - native execution recovery does not replay and keeps a grant without terminal proof
+  ---
+  duration_ms: 2151.110939
+  type: 'test'
+  ...
+# Subtest: native execution recovery stops running tools after the worker exits and keeps the grant until both are terminal
+ok 5 - native execution recovery stops running tools after the worker exits and keeps the grant until both are terminal
+  ---
+  duration_ms: 24.133482
+  type: 'test'
+  ...
+# Subtest: native execution recovery interrupts an in-flight create or start and lets the successor read the same journal
+ok 6 - native execution recovery interrupts an in-flight create or start and lets the successor read the same journal
+  ---
+  duration_ms: 160.714623
+  type: 'test'
+  ...
+# Subtest: worktree writer lease
+    # Subtest: a copy is never reassigned, even after a legacy neutralization
+    ok 1 - a copy is never reassigned, even after a legacy neutralization
+      ---
+      duration_ms: 109.475944
+      type: 'test'
+      ...
+    # Subtest: a live old writer keeps the same copy blocked across epochs and neutralization attempts
+    ok 2 - a live old writer keeps the same copy blocked across epochs and neutralization attempts
+      ---
+      duration_ms: 160.491856
+      type: 'test'
+      ...
+    # Subtest: legacy neutralized rows survive additive migration without becoming reusable
+    ok 3 - legacy neutralized rows survive additive migration without becoming reusable
+      ---
+      duration_ms: 36.047135
+      type: 'test'
+      ...
+    1..3
+ok 7 - worktree writer lease
+  ---
+  duration_ms: 1821.920251
+  type: 'suite'
+  ...
+1..7
+# tests 9
+# suites 1
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 30084.549638

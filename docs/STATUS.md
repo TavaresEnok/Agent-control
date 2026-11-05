@@ -1,5 +1,9 @@
 # Agent Control — estado atual de implementação
 
+## Continuação vigente: falha, cancelamento e SIGKILL — 05/11/2026
+
+O caminho native managed reconcilia falha e cancelamento terminais com logs, remoção do par e prova assinada; cancelamento não confirma enquanto o escritor native permanece em posse `held`. A bancada matou o controlador entre remoções e outro processo retomou pelo método de preparação do Cezar. Executor ativo, identidade divergente e Docker inacessível bloquearam a retirada. O lançamento e o artefato ainda são fixtures; uma prova posterior cobriu acesso gravável à cópia privada do job; falta retomada integral do grafo e lançamento real. Revisão independente pendente; nenhum requisito aceito. Ver `implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
+
 ## Continuação vigente: retirada native managed — 04/11/2026
 
 O supervisor agora arquiva os logs e retira o par de contêineres de programador managed concluído após validar recibo e vínculos; diário preparado, prova Ed25519 e fencing preservam a confirmação. Uma prova com pares Docker sintéticos reais cobriu perda de ACK e troca de gerente, mas usa fixture para o lançamento e o artefato. Falha/cancelamento, morte do controlador entre remoções e agentes reais continuam pendentes. Revisão independente é condição de promoção. RF-54 e T34 seguem parciais e sem aceite. Detalhes em `implementation/NATIVE-WRITER-RETIREMENT-20261104.md`.

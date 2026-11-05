@@ -170,9 +170,9 @@ export class NativeImplementation{
    }
    if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
    for(;;){
-    if(canceled||!this.active){await supervisor.reconcileCancellation(owner,authority,intent.operation_id);throw new Refusal('STAGE_CANCELED');}
+    if(canceled||!this.active){const stopped=await supervisor.reconcileCancellation(owner,authority,intent.operation_id);if(stopped.state==='reconciled')await this.retire(supervisor,owner,authority,intent.operation_id);throw new Refusal('STAGE_CANCELED');}
     const observed=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);
-    if(observed.state==='failed')throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');
+    if(observed.state==='failed'){await this.retire(supervisor,owner,authority,intent.operation_id);throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');}
     if(observed.state==='completed'){
      const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);
      await this.refuseReusedCorrection(intent,artifact);

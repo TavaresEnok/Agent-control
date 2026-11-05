@@ -694,7 +694,8 @@ export class CezarRuntime {
         WHERE j.context_id=$1 AND (j.state IN ('uncertain','running') OR x.state='requested' OR
          (j.state='completed' AND j.role='programmer' AND j.receipt->'payload'->'artifact'->>'commit' IS NOT NULL AND
           NOT EXISTS(SELECT 1 FROM ac_artifacts a WHERE a.intent_id=j.intent_id AND a.commit_id=j.receipt->'payload'->'artifact'->>'commit')) OR
-         (j.state='completed' AND j.role IN ('reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state<>'completed')))
+         (j.state='completed' AND j.role IN ('reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state<>'completed')) OR
+         (j.state IN ('completed','failed') AND j.role='programmer' AND EXISTS(SELECT 1 FROM ac_intents i JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id JOIN ac_operations o ON o.id=j.id WHERE i.id=j.intent_id AND w.state='held' AND (j.state='failed' OR o.receipt->>'cancellation'='true'))))
         ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId])).rows;
       for(const job of jobs){
         const supervisor=this.nativeExecutions.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
@@ -710,6 +711,13 @@ export class CezarRuntime {
             const verifier=this.engineering?.options.nativeVerification;if(!verifier)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
             await verifier.record(principal,authority,job.id);
           }
+        }
+        if(job.role==='programmer'){
+          const terminal=(await this.ledger.pool.query(`SELECT 1 FROM ac_native_execution_jobs j JOIN ac_operations o ON o.id=j.id
+            JOIN ac_intents i ON i.id=j.intent_id JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id
+            WHERE j.id=$1 AND j.state IN ('completed','failed') AND o.state='completed' AND w.state='held'
+             AND (j.state='failed' OR o.receipt->>'cancellation'='true')`,[job.id])).rowCount;
+          if(terminal)await supervisor.retireManagedWriter(principal,authority,job.id);
         }
       }
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});

@@ -89,6 +89,8 @@ export class Cancellations{
      EXISTS(SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released') OR
      EXISTS(SELECT 1 FROM ac_semantic_planning_calls WHERE intent_id=$1 AND state IN ('registered','uncertain','ready')) OR
      EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE intent_id=$1 AND state NOT IN ('completed','failed')) OR
+     EXISTS(SELECT 1 FROM ac_intents i JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id
+       JOIN ac_native_execution_jobs j ON j.intent_id=i.id AND j.role='programmer' WHERE i.id=$1 AND w.state='held') OR
      EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE intent_id=$1 AND state NOT IN ('completed','failed')) OR
      EXISTS(SELECT 1 FROM ac_intents child LEFT JOIN ac_plan_cancellations cc ON cc.intent_id=child.id
        WHERE child.parent_intent_id=$1 AND (cc.intent_id IS NULL OR cc.state<>'confirmed')) OR

@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization valid
+not ok 1 - native plan runs independent tasks and dependent tasks; QA authorization valid
+  ---
+  duration_ms: 4350.264435
+  type: 'test'
+  location: '/home/app/projects/agent-control-implementation/tests/native-multitask.test.ts:1:6894'
+  failureType: 'testCodeFailure'
+  error: '{"error":"workflow ended at \\"failed\\"","steps":[{"id":"launch-0","status":"done"},{"id":"task-alpha-implement","status":"failed","error":"subtask ended failed"},{"id":"task-beta-implement","status":"done"},{"id":"task-alpha-qa","status":"pending"},{"id":"task-alpha-review","status":"pending"},{"id":"task-beta-qa","status":"pending"},{"id":"task-beta-review","status":"pending"},{"id":"compose-0-launch","status":"pending"},{"id":"compose-0-qa","status":"pending"},{"id":"compose-0-review","status":"pending"},{"id":"compose-0-integrate","status":"pending"},{"id":"launch-1","status":"pending"},{"id":"task-gamma-qa","status":"pending"},{"id":"task-gamma-review","status":"pending"},{"id":"task-gamma-integrate","status":"pending"}]}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/home/app/projects/agent-control-implementation/tests/native-multitask.test.ts:241:4)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7494.61695
+

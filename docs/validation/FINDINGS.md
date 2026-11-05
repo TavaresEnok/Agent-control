@@ -1,6 +1,9 @@
 # Achados canônicos — implementação 0.1.0
 
 
+**Atualização 05/11/2026:** falha/cancelamento native terminais retiram o par sob prova física; SIGKILL entre remoções foi seguido por reconciliação em outro processo usando a preparação do Cezar. Executor vivo, observação inacessível e identidade divergente mantiveram posse e diário sem recibo. Uma prova posterior cobriu escrita e cancelamento com tools vivo na cópia privada do job. Faltam runner real e retomada integral do grafo, além de revisão independente. RF-54/T34 seguem parciais e sem aceite. Ver `docs/implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
+
+
 **Atualização 04/11/2026:** a retirada native de programadores managed concluídos foi ligada e demonstrada com pares Docker sintéticos reais, perda de ACK e fencing. Lançamento e artefato são fixtures; morte do controlador entre remoções, falha/cancelamento e execução real permanecem abertos. A cópia não é reassumida. RF-54/T34 continuam parciais e sem aceite; revisão independente pendente. Ver `docs/implementation/NATIVE-WRITER-RETIREMENT-20261104.md`. Esta atualização prevalece sobre descrições históricas abaixo.
 
 ## Continuação de QA e contenção de escritor — 04/11/2026

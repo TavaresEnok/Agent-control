@@ -188,7 +188,7 @@ export class NativeExecutionSupervisor{
   try{return await this.reconcile(principal,authority,await this.registeredInput(principal,authority,jobId));}
   catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {state:'uncertain' as const};throw error;}
  }
- /** Retire only a completed managed programmer pair. Both physical containers
+ /** Retire a terminal managed programmer pair. Both physical containers
   * must be absent before the permanently bound copy is marked neutralized. */
  async retireManagedWriter(principal:string,authority:Authority,jobId:string){
   const input=await this.registeredInput(principal,authority,jobId);
@@ -197,7 +197,7 @@ export class NativeExecutionSupervisor{
   if(!parent)throw new Refusal('NATIVE_RETIREMENT_SCOPE_MISMATCH');
   if(!parent.parent_intent_id)return {state:'not_managed' as const};
   const outcome=await this.reconcile(principal,authority,input);
-  if(outcome.state!=='completed'||!('receipt' in outcome)||!outcome.artifact)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+  if((outcome.state!=='completed'&&outcome.state!=='failed')||!('receipt' in outcome))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   const p=this.paths(jobId);await this.directory(this.config.hostRoot);await this.directory(p.root);
   const logs=[join(p.root,'worker-terminal.log'),join(p.root,'tools-terminal.log')];
   const readLog=async(path:string)=>{
@@ -219,12 +219,13 @@ export class NativeExecutionSupervisor{
     o.state operation_state,o.receipt operation_receipt,o.grant_id operation_grant,o.execution_attempt_id,o.manager_epoch operation_epoch,
     j.*,g.state grant_state,g.physical_receipt,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.role grant_role,g.attempt_id grant_attempt,
     g.account_id grant_account,g.profile_id grant_profile,g.resource_kind grant_resource_kind,
-    w.holder_intent_id,w.manager_epoch writer_epoch,w.state writer_state,w.proof_digest,w.revocation_job_id,w.revocation_proof
+    w.holder_intent_id,w.manager_epoch writer_epoch,w.state writer_state,w.proof_digest,w.revocation_job_id,w.revocation_proof,
+    EXISTS(SELECT 1 FROM ac_plan_cancellations x WHERE x.intent_id=i.id AND x.context_id=i.context_id) cancellation_requested
     FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_operations o ON o.id=j.id AND o.intent_id=j.intent_id
     JOIN ac_intents i ON i.id=j.intent_id JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id
     WHERE j.id=$1 AND j.context_id=$2 AND j.grant_id=$3 FOR UPDATE OF j,g,o,w`,[jobId,authority.contextId,input.grantId])).rows[0];
    const receipt=row?.receipt,payload=receipt?.payload,physical=row?.physical_receipt;
-   if(!row||row.role!=='programmer'||row.state!=='completed'||row.grant_state!=='released'||row.operation_state!=='completed'||
+   if(!row||row.role!=='programmer'||!['completed','failed'].includes(row.state)||row.grant_state!=='released'||row.operation_state!=='completed'||
     row.intent_id!==input.intentId||row.intent_context!==authority.contextId||row.grant_context!==authority.contextId||row.grant_intent!==row.intent_id||
     row.grant_role!=='programmer'||row.grant_resource_kind!=='model'||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||
     row.operation_grant!==row.grant_id||row.grant_attempt!==row.execution_attempt_id||
@@ -233,13 +234,16 @@ export class NativeExecutionSupervisor{
     row.session_id!==input.sessionId||!payload||typeof receipt.signature!=='string'||!/^[a-f0-9]{128}$/.test(receipt.signature)||
     !verify(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(receipt.signature,'hex'))||
     payload.jobId!==jobId||payload.intentId!==row.intent_id||payload.contextId!==authority.contextId||payload.grantId!==row.grant_id||payload.sessionId!==row.session_id||
-    payload.epoch!==Number(row.manager_epoch)||payload.inputDigest!==row.input_digest||payload.executorDigest!==this.executorDigest||payload.exitCode!==0||
+    payload.epoch!==Number(row.manager_epoch)||payload.inputDigest!==row.input_digest||payload.executorDigest!==this.executorDigest||
+    ((payload.exitCode===0)!==(row.state==='completed'))||
     payload.accountId!==row.account_id||payload.profileId!==row.profile_id||payload.profileDigest!==row.profile_digest||
-    !physical||physical.exitCode!==0||physical.workerExitCode!==payload.workerExitCode||payload.physicalDigest!==digest(physical)||
+    !physical||physical.exitCode!==payload.exitCode||physical.workerExitCode!==payload.workerExitCode||payload.physicalDigest!==digest(physical)||
     !row.operation_receipt?.nativeExecution||digest(row.operation_receipt.nativeExecution)!==digest(receipt)||
     !/^[a-f0-9]{64}$/.test(String(row.worker_id??''))||!/^[a-f0-9]{64}$/.test(String(row.tools_id??''))||row.worker_id===row.tools_id||
-    physical.containerId!==row.worker_id||physical.toolsContainerId!==row.tools_id||!payload.artifact||
-    row.operation_receipt.commit!==payload.artifact.commit||row.operation_receipt.tree!==payload.artifact.tree||row.operation_receipt.base!==payload.artifact.base||payload.artifact.base!==input.base||
+    physical.containerId!==row.worker_id||physical.toolsContainerId!==row.tools_id||
+    (row.operation_receipt.cancellation===true?!row.cancellation_requested:
+     (row.operation_receipt.exitCode!==payload.exitCode||(row.state==='completed'&&(!payload.artifact||
+      row.operation_receipt.commit!==payload.artifact.commit||row.operation_receipt.tree!==payload.artifact.tree||row.operation_receipt.base!==payload.artifact.base||payload.artifact.base!==input.base))))||
     !Number.isFinite(Date.parse(physical.finishedAt))||!Number.isFinite(Date.parse(physical.toolsFinishedAt))||
     String(physical.finishedAt).startsWith('0001-')||String(physical.toolsFinishedAt).startsWith('0001-'))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    return row;
