@@ -16,7 +16,7 @@ export class ImportPreview {
   if(bundle.projectId!==this.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
   return {schemaVersion:1 as const,kind:'import' as const,projectId:bundle.projectId,
    inputSha256:createHash('sha256').update(bytes).digest('hex'),bundleDigest:digest(bundle),
-   counts:{contexts:bundle.contexts.length,messages:bundle.contexts.reduce((n,c)=>n+c.messages.length,0),runs:bundle.contexts.reduce((n,c)=>n+c.runs.length,0),sourcePaused:bundle.contexts.filter(c=>c.sourcePaused).length},
+   counts:{contexts:bundle.contexts.length,messages:bundle.contexts.reduce((n,c)=>n+c.messages.length,0),runs:bundle.contexts.reduce((n,c)=>n+c.runs.length,0),sourcePaused:bundle.contexts.filter(c=>c.sourcePaused).length,...(bundle.schemaVersion===2?{structuredPlans:bundle.contexts.reduce((n,c)=>n+c.history.plans.filter(p=>p.format==='structured-plan-v1').length,0),opaquePlans:bundle.contexts.reduce((n,c)=>n+c.history.plans.filter(p=>p.format==='opaque-redacted-json-v1').length,0),historicalEvidence:bundle.contexts.reduce((n,c)=>n+c.history.evidence.length,0)}:{})},
    checks:{schemaValid:true as const,projectOwner:true as const,sessionOwnershipVerified:false as const,keysVerified:false as const,ciphertextVerified:false as const},executionEnabled:false as const};
  }
 }

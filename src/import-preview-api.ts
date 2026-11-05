@@ -1,11 +1,13 @@
 import {Hono} from 'hono';
 import {Refusal} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
+import {ImportedHistory} from './import-history.ts';
 import {ImportPreview,IMPORT_PREVIEW_MAX_BYTES} from './import-preview.ts';
 
 /** Attach under /api/v1/ac after authentication, origin checks and error handling. */
 export function createImportPreviewApi(ledger:Ledger,projectId:string){
  const app=new Hono<{Variables:{principal:string}}>();
+ app.get('/import/:importId/history',async c=>{const principal=c.get('principal');if(!principal)throw new Refusal('AUTH_REQUIRED',401);c.header('Cache-Control','no-store');return c.json(await new ImportedHistory(ledger).page(principal,projectId,c.req.param('importId'),c.req.query('cursor')));});
  return app.post('/import/preview',async c=>{
   const principal=c.get('principal');if(!principal)throw new Refusal('AUTH_REQUIRED',401);
   c.header('Cache-Control','no-store');

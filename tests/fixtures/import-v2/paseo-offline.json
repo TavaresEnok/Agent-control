@@ -1,0 +1,17 @@
+{
+  "sourceSystem": "paseo",
+  "sourceVersion": "offline-archive-fixture-v1",
+  "capturedAt": "2026-11-05T00:00:00.000Z",
+  "plans": [{
+    "id": "plan-original-1", "revision": 2, "objectiveRef": "request:preserve-test-module", "sourceMessageRef": "message-original-1",
+    "constraintRefs": ["constraint:no-deploy"], "parallelism": 2,
+    "tasks": [
+      {"id":"write", "dependsOn":[], "objectiveRef":"task:write", "inputRefs":[], "outputRefs":["artifact:implementation"], "acceptanceRefs":["acceptance:build"], "writePaths":["src/example.ts"], "targetRef":"refs/heads/main", "qualityRevision":1, "maxCorrections":2, "requiresSpecialist":false},
+      {"id":"evaluate", "dependsOn":["write"], "objectiveRef":"task:evaluate", "inputRefs":["artifact:implementation"], "outputRefs":["artifact:evaluation"], "acceptanceRefs":["acceptance:independence"], "writePaths":["tests/example.ts"], "targetRef":"refs/heads/main", "qualityRevision":1, "maxCorrections":0, "requiresSpecialist":false}
+    ],
+    "graph": {"nodes":[{"id":"write","type":"agent","inputs":[],"outputs":["implementation"]},{"id":"evaluate","type":"agent","inputs":["implementation"],"outputs":["evaluation"]}],"edges":[{"from":{"node":"write","port":"implementation"},"to":{"node":"evaluate","port":"implementation"}}]},
+    "legacyExtra": {"notes":["preserve-extra-ordered-item-1","preserve-extra-ordered-item-2"],"timeBudget":300}
+  }],
+  "evidence": [{"id":"evidence-original-1", "revision":1, "plan":"plan-original-1", "planRevision":2, "run":"run-original-1", "kind":"qa", "status":"passed", "receipt":{"command":"synthetic-only-check","exitCode":0,"findings":["historical assertion only"]}}],
+  "runs": [{"id":"run-original-1","state":"completed","artifactRef":"git:original-offline-artifact"}]
+}

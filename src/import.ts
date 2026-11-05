@@ -1,21 +1,26 @@
-import { createHash,randomUUID } from 'node:crypto';
+import { createHash,randomUUID,randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { Id,Refusal,digest } from './contracts.ts';
+import {HistoricalSnapshot,checkHistoricalRuns,stageHistoricalRecords,IMPORT_HISTORY_MAX_RECORDS} from './import-history.ts';
 import { Ledger } from './ledger.ts';
 import type pg from 'pg';
 const External=z.string().min(1).max(200).regex(/^[A-Za-z0-9._:-]+$/);
 const Message=z.object({id:External,ciphertext:z.string().min(1).max(1024*1024).regex(/^[A-Za-z0-9+/=_-]+$/)}).strict();
 const Run=z.object({id:External,state:z.enum(['completed','failed','paused','unknown']),artifactRef:z.string().max(300).optional()}).strict();
-const Context=z.object({id:External,sessionId:z.string().min(1).max(200),sourcePaused:z.boolean(),
+const ContextBase=z.object({id:External,sessionId:z.string().min(1).max(200),sourcePaused:z.boolean(),
  keyVariant:z.enum(['legacy','dataKey']),keyFingerprint:z.string().regex(/^[a-f0-9]{64}$/),
- messages:z.array(Message).max(1000),runs:z.array(Run).max(10000)}).strict().superRefine((v,c)=>{
- for(const [key,values] of [['messages',v.messages],['runs',v.runs]] as const)
-  if(new Set(values.map(x=>x.id)).size!==values.length)c.addIssue({code:'custom',path:[key],message:'DUPLICATE_EXTERNAL_ID'});
-});
-export const ImportBundle=z.object({schemaVersion:z.literal(1),importId:Id,projectId:Id,sourceNamespace:External,
- contexts:z.array(Context).min(1).max(100)}).strict().superRefine((v,c)=>{
- if(new Set(v.contexts.map(x=>x.id)).size!==v.contexts.length||new Set(v.contexts.map(x=>x.sessionId)).size!==v.contexts.length)
-  c.addIssue({code:'custom',path:['contexts'],message:'DUPLICATE_CONTEXT_OR_SESSION'});
+ messages:z.array(Message).max(1000),runs:z.array(Run).max(10000)}).strict();
+function uniqueContext(v:{messages:{id:string}[];runs:{id:string}[]},c:z.RefinementCtx){for(const [key,values] of [['messages',v.messages],['runs',v.runs]] as const)if(new Set(values.map(x=>x.id)).size!==values.length)c.addIssue({code:'custom',path:[key],message:'DUPLICATE_EXTERNAL_ID'});}
+const Context=ContextBase.superRefine(uniqueContext);
+const RunV2=z.object({id:External,state:Run.shape.state,artifactRefDigest:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict();
+const ContextV2=ContextBase.extend({runs:z.array(RunV2).max(10000),history:HistoricalSnapshot}).superRefine((v,c)=>{uniqueContext(v,c);checkHistoricalRuns(v.history,v.runs,c);});
+const fields={importId:Id,projectId:Id,sourceNamespace:External};
+export const ImportBundleV1=z.object({schemaVersion:z.literal(1),...fields,contexts:z.array(Context).min(1).max(100)}).strict();
+export const ImportBundleV2=z.object({schemaVersion:z.literal(2),...fields,contexts:z.array(ContextV2).min(1).max(100)}).strict();
+export const ImportBundle=z.discriminatedUnion('schemaVersion',[ImportBundleV1,ImportBundleV2]).superRefine((v,c)=>{
+ if(new Set(v.contexts.map(x=>x.id)).size!==v.contexts.length||new Set(v.contexts.map(x=>x.sessionId)).size!==v.contexts.length)c.addIssue({code:'custom',path:['contexts'],message:'DUPLICATE_CONTEXT_OR_SESSION'});
+ if(v.schemaVersion===2&&v.contexts.reduce((total,item)=>total+item.history.plans.length+item.history.evidence.length+item.runs.length,0)>IMPORT_HISTORY_MAX_RECORDS)c.addIssue({code:'custom',message:'IMPORT_HISTORY_RECORD_LIMIT'});
+ if(v.schemaVersion===2&&v.contexts.reduce((total,item)=>total+item.messages.length,0)>10000)c.addIssue({code:'custom',message:'IMPORT_MESSAGE_LIMIT'});
 });
 export interface ImportTransport{
  verifySession(principal:string,sessionId:string):Promise<boolean>;
@@ -34,7 +39,8 @@ export class IsolatedImport{
    throw new Refusal('PROJECT_OWNER_REQUIRED',403);
  }
  async stage(principal:string,raw:z.input<typeof ImportBundle>){
-  if(Buffer.byteLength(JSON.stringify(raw))>32*1024*1024)throw new Refusal('IMPORT_BUNDLE_TOO_LARGE',400);
+  let serialized:string;try{serialized=JSON.stringify(raw);}catch{throw new Refusal('IMPORT_BUNDLE_INVALID',400);}
+  if(Buffer.byteLength(serialized)>32*1024*1024)throw new Refusal('IMPORT_BUNDLE_TOO_LARGE',400);
   const bundle=ImportBundle.parse(raw),hash=digest(bundle);
   await this.ledger.tx(c=>this.owner(c,principal,bundle.projectId));
   for(const context of bundle.contexts){
@@ -50,15 +56,24 @@ export class IsolatedImport{
    if(prior){if(prior.input_digest!==hash||prior.principal_id!==principal)throw new Refusal('IMPORT_ID_CONFLICT');return {importId:prior.id,state:prior.state};}
    await c.query("INSERT INTO ac_import_batches(id,project_id,source_namespace,input_digest,principal_id,state) VALUES($1,$2,$3,$4,$5,'staging')",
     [bundle.importId,bundle.projectId,bundle.sourceNamespace,hash,principal]);
-   for(const item of bundle.contexts){
+   if(bundle.schemaVersion===2)await c.query('INSERT INTO ac_import_v2_batches(batch_id,cursor_key) VALUES($1,$2)',[bundle.importId,randomBytes(32)]);
+   for(const [sourcePosition,item] of bundle.contexts.entries()){
+    if('history' in item){
+     await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,87))',[JSON.stringify([bundle.sourceNamespace,item.id])]);
+     const existing=(await c.query(`SELECT e.*,h.context_digest,b.principal_id,b.project_id,b.state batch_state FROM ac_import_entries e JOIN ac_import_batches b ON b.id=e.batch_id LEFT JOIN ac_imported_history_contexts h ON h.entry_id=e.id WHERE e.source_namespace=$1 AND e.external_context_id=$2 FOR UPDATE OF e`,[bundle.sourceNamespace,item.id])).rows[0];
+     if(existing){if(existing.project_id!==bundle.projectId||existing.principal_id!==principal||existing.context_digest!==digest(item))throw new Refusal('IMPORT_SOURCE_CONTEXT_CONFLICT');
+      if(!['completed','reverted'].includes(existing.batch_state)||!existing.context_id)throw new Refusal('IMPORT_SOURCE_PENDING');
+      await c.query('INSERT INTO ac_import_v2_entry_aliases(batch_id,entry_id,position) VALUES($1,$2,$3)',[bundle.importId,existing.id,sourcePosition]);continue;}
+    }
     if((await c.query('SELECT 1 FROM ac_session_links WHERE session_id=$1',[item.sessionId])).rowCount)throw new Refusal('SESSION_ALREADY_LINKED');
     const entry=randomUUID();
     await c.query('INSERT INTO ac_import_entries(id,batch_id,source_namespace,external_context_id,session_id,source_paused,key_variant,key_fingerprint,message_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
      [entry,bundle.importId,bundle.sourceNamespace,item.id,item.sessionId,item.sourcePaused,item.keyVariant,item.keyFingerprint,item.messages.length]);
     for(const [position,message] of item.messages.entries())await c.query('INSERT INTO ac_import_messages(entry_id,local_id,position,ciphertext) VALUES($1,$2,$3,$4)',
      [entry,localId(bundle.sourceNamespace,item.id,message.id),position,message.ciphertext]);
+    if('history' in item)await stageHistoricalRecords(c,entry,sourcePosition,item,item.history,item.runs);
     for(const run of item.runs)await c.query('INSERT INTO ac_imported_runs(entry_id,external_run_id,state,artifact_ref) VALUES($1,$2,$3,$4)',
-     [entry,run.id,run.state,run.artifactRef??null]);
+     [entry,run.id,run.state,'artifactRefDigest' in run&&run.artifactRefDigest?'sha256:'+run.artifactRefDigest:'artifactRef' in run?run.artifactRef??null:null]);
    }
    return {importId:bundle.importId,state:'staging'};
   });
@@ -105,7 +120,8 @@ export class IsolatedImport{
    }
    // Ciphertext was only a temporary outbox. Happier remains the single transcript authority.
    await c.query('DELETE FROM ac_import_messages WHERE entry_id IN (SELECT id FROM ac_import_entries WHERE batch_id=$1)',[id]);
-   await c.query("UPDATE ac_import_batches SET state='completed',receipt=$2 WHERE id=$1",[id,{contexts:rows.length,messages:rows.reduce((total,row)=>total+row.message_count,0),sourceDigest:locked.input_digest}]);
+   const aliases=(await c.query('SELECT e.message_count FROM ac_import_v2_entry_aliases a JOIN ac_import_entries e ON e.id=a.entry_id WHERE a.batch_id=$1',[id])).rows;
+   await c.query("UPDATE ac_import_batches SET state='completed',receipt=$2 WHERE id=$1",[id,{contexts:rows.length+aliases.length,messages:rows.reduce((total,row)=>total+row.message_count,0),...(aliases.length?{reusedContexts:aliases.length,reusedMessages:aliases.reduce((total,row)=>total+row.message_count,0)}:{}),sourceDigest:locked.input_digest}]);
    return {importId:id,state:'completed'};
   });
  }
@@ -114,7 +130,7 @@ export class IsolatedImport{
    const batch=(await c.query('SELECT * FROM ac_import_batches WHERE id=$1 AND principal_id=$2 FOR UPDATE',[Id.parse(importId),principal])).rows[0];
    if(!batch||batch.state!=='completed')throw new Refusal('IMPORT_NOT_COMPLETED');
    await this.owner(c,principal,batch.project_id);
-   const entries=(await c.query('SELECT context_id FROM ac_import_entries WHERE batch_id=$1',[importId])).rows;
+   const entries=(await c.query('SELECT context_id FROM ac_import_entries WHERE batch_id=$1 UNION SELECT e.context_id FROM ac_import_v2_entry_aliases a JOIN ac_import_entries e ON e.id=a.entry_id WHERE a.batch_id=$1',[importId])).rows;
    for(const entry of entries){
     const context=await this.ledger.authorize(c,principal,entry.context_id);
     if(!context.paused||(await c.query('SELECT 1 FROM ac_intents WHERE context_id=$1 LIMIT 1',[entry.context_id])).rowCount||

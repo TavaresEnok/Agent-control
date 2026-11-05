@@ -68,7 +68,7 @@ export async function executeImport(command:'import-stage'|'import-deliver'|'imp
   }
   const batch=(await ledger.pool.query('SELECT project_id FROM ac_import_batches WHERE id=$1 AND principal_id=$2',[descriptor.importId,config.project.owner])).rows[0];
   if(batch?.project_id!==config.project.id)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-  const sessions=(await ledger.pool.query('SELECT session_id FROM ac_import_entries WHERE batch_id=$1',[descriptor.importId])).rows;
+  const sessions=(await ledger.pool.query('SELECT session_id FROM ac_import_entries WHERE batch_id=$1 UNION SELECT e.session_id FROM ac_import_v2_entry_aliases a JOIN ac_import_entries e ON e.id=a.entry_id WHERE a.batch_id=$1',[descriptor.importId])).rows;
   if(sessions.length!==keys.size||sessions.some(row=>!keys.has(row.session_id)))throw new Refusal('IMPORT_SESSION_KEY_SCOPE_MISMATCH',403);
   return await importer.deliver(config.project.owner,descriptor.importId);
  }finally{bytes.fill(0);tokenBytes?.fill(0);bundleBytes?.fill(0);for(const value of keys.values())value.key.fill(0);keys.clear();}
