@@ -46,13 +46,16 @@ export async function beginRestoredPhysicalRecovery(ledger:Ledger,raw:Config,rec
  const config=Config.parse(raw);z.uuid().parse(recoveryId);await configureRecoveryInventory(ledger,config);
  const row=await ledger.tx(async c=>{
   const state=(await c.query(`SELECT r.*,a.enabled,a.reason FROM ac_recovery_inventory_restores r CROSS JOIN ac_installation_identity i CROSS JOIN ac_admission_control a
-   WHERE r.installation_id=i.id AND a.id=1`)).rows[0];
+   WHERE r.installation_id=i.id AND a.id=1 FOR UPDATE OF r`)).rows[0];
   if(!state||state.enabled!==false||state.reason!=='r3-restored-awaiting-reconciliation'||state.state!=='physical-reconciliation-required'||state.source_installation_id!==config.installationId)throw new Refusal('RESTORE_PHYSICAL_RECONCILIATION_REQUIRED');
+  if(state.recovery_id&&(state.recovery_id!==recoveryId||state.source_epoch!==config.epoch))throw new Refusal('CATALOG_RECOVERY_CONFLICT');
+  if(!state.recovery_id)await c.query('UPDATE ac_recovery_inventory_restores SET recovery_id=$2,source_epoch=$3 WHERE installation_id=$1',[state.installation_id,recoveryId,config.epoch]);
   return RecoveryCatalogCheckpoint.parse(state.checkpoint);
  });
  const result=z.object({epoch:z.number().int().positive(),checkpoint:RecoveryCatalogCheckpoint}).strict().parse(await runCatalog('catalog_advance.py',{
   directory:config.directory,installationId:config.installationId,catalogId:config.catalogId,manifestHash:config.manifestHash,
   checkpoint:row,expectedEpoch:config.epoch,recoveryId}));
+ await ledger.tx(async c=>{const saved=await c.query(`UPDATE ac_recovery_inventory_restores SET recovery_epoch=$2 WHERE installation_id=(SELECT id FROM ac_installation_identity) AND recovery_id=$1 AND source_epoch=$3 AND (recovery_epoch IS NULL OR recovery_epoch=$2)`,[recoveryId,result.epoch,config.epoch]);if(saved.rowCount!==1)throw new Refusal('CATALOG_RECOVERY_CONFLICT');});
  return result;
 }
 /** Must be called within the effect's existing transaction. The row lock

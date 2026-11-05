@@ -2,6 +2,16 @@ import { z } from 'zod';
 import { Ledger } from './ledger.ts';
 import { Refusal } from './contracts.ts';
 import type pg from 'pg';
+export async function assertAdmissionReconciled(c:Pick<pg.PoolClient,'query'>){
+ const blockers=(await c.query(`SELECT
+      (SELECT count(*) FROM ac_operations WHERE state IN ('running','uncertain'))+
+      (SELECT count(*) FROM ac_stage_operations WHERE state IN ('running','uncertain'))+
+      (SELECT count(*) FROM ac_sandbox_jobs WHERE state IN ('running','uncertain'))+
+      (SELECT count(*) FROM ac_capacity_grants WHERE state<>'released')+
+      (SELECT count(*) FROM ac_remote_operations WHERE state IN ('running','uncertain'))+
+      (SELECT count(*) FROM ac_integration_intents WHERE state='uncertain') AS total`)).rows[0];
+ if(Number(blockers.total)>0)throw new Refusal('RECONCILIATION_REQUIRED');
+}
 export class Admission{
  constructor(readonly ledger:Ledger,private readonly client?:pg.PoolClient){}
  async set(principal:string,input:{enabled:boolean;expectedRevision:number;reason:string}){
@@ -14,14 +24,7 @@ export class Admission{
    // Keep the marker intact until a trusted physical inventory can clear it.
    if(['r3-restored-awaiting-reconciliation','r3-restored-legacy-no-catalog'].includes(state.reason))throw new Refusal('RESTORE_PHYSICAL_RECONCILIATION_REQUIRED');
    if(value.enabled){
-    const blockers=(await c.query(`SELECT
-      (SELECT count(*) FROM ac_operations WHERE state IN ('running','uncertain'))+
-      (SELECT count(*) FROM ac_stage_operations WHERE state IN ('running','uncertain'))+
-      (SELECT count(*) FROM ac_sandbox_jobs WHERE state IN ('running','uncertain'))+
-      (SELECT count(*) FROM ac_capacity_grants WHERE state<>'released')+
-      (SELECT count(*) FROM ac_remote_operations WHERE state IN ('running','uncertain'))+
-      (SELECT count(*) FROM ac_integration_intents WHERE state='uncertain') AS total`)).rows[0];
-    if(Number(blockers.total)>0)throw new Refusal('RECONCILIATION_REQUIRED');
+    await assertAdmissionReconciled(c);
    }
    await c.query('UPDATE ac_admission_control SET enabled=$1,revision=revision+1,reason=$2,updated_at=now() WHERE id=1',[value.enabled,value.reason]);
    return {enabled:value.enabled,revision:state.revision+1};

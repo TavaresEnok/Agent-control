@@ -13,6 +13,10 @@ CREATE TABLE ac_recovery_inventory_restores (
  installation_id uuid PRIMARY KEY,
  source_installation_id uuid NOT NULL,
  checkpoint jsonb,
- state text NOT NULL CHECK(state IN ('legacy-blocked','physical-reconciliation-required')),
+ state text NOT NULL CHECK(state IN ('legacy-blocked','physical-reconciliation-required','reconciled')),
+ recovery_id uuid,
+ source_epoch integer CHECK(source_epoch IS NULL OR source_epoch>0),
+ recovery_epoch integer CHECK(recovery_epoch IS NULL OR recovery_epoch>0),
+ proof_digest text CHECK(proof_digest IS NULL OR proof_digest ~ '^[a-f0-9]{64}$'),
  CHECK ((state='legacy-blocked') = (checkpoint IS NULL))
 );

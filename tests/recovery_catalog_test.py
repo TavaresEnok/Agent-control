@@ -114,6 +114,29 @@ c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","post
                 with self.assertRaisesRegex(ValueError, 'CATALOG_EPOCH_FENCED'):
                     c.advance(1, str(uuid.uuid4()))
 
+    def test_reconcile_helper_refuses_incomplete_scope(self):
+        with tempfile.TemporaryDirectory(prefix='ac-t30-reconcile-') as root:
+            installation, recovery = str(uuid.uuid4()), str(uuid.uuid4())
+            manifest = catalog.initialize(root, installation, [{'kind': 'ssh', 'id': 'fixture', 'identity': {'hostKey': 'fixture'}}])
+            with catalog.Catalog(root, installation, manifest['catalogId']) as c:
+                checkpoint = c.checkpoint()
+                c.begin(1, 'ssh', 'fixture', 'postcut', 'a' * 64, {'hostKey': 'fixture'})
+            helper = pathlib.Path(catalog.__file__).with_name('catalog_reconcile.py')
+            request = {'directory': root, 'installationId': installation, 'catalogId': manifest['catalogId'],
+                       'manifestHash': checkpoint['manifestHash'], 'checkpoint': checkpoint, 'expectedEpoch': 1, 'recoveryId': recovery}
+            child = subprocess.Popen([sys.executable, str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            try:
+                child.stdin.write(json.dumps(request) + '\n'); child.stdin.flush()
+                self.assertIn('postcut', json.loads(child.stdout.readline())['pending'])
+                child.stdin.write(json.dumps({'proofs': []}) + '\n'); child.stdin.flush()
+                self.assertEqual(json.loads(child.stdout.readline())['error'], 'CATALOG_PROOF_INCOMPLETE')
+                child.stdin.close(); self.assertNotEqual(child.wait(timeout=5), 0)
+            finally:
+                if child.poll() is None: child.kill(); child.wait(timeout=5)
+                child.stdout.close()
+            with catalog.Catalog(root, installation, manifest['catalogId']) as c:
+                self.assertIn('postcut', c.state()[1])
+
 
 if __name__ == '__main__':
     unittest.main()

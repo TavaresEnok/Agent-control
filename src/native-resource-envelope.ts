@@ -23,6 +23,8 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
  private inventoryLedger?:import('./ledger.ts').Ledger;
  get stateRoot(){return this.envelope.stateRoot;}
  get authorityId(){return this.envelope.resourceAuthority.authorityId;}
+ get recoveryIdentity(){return {installationId:this.envelope.installationId,authorityId:this.envelope.resourceAuthority.authorityId,anchorId:this.envelope.resourceAuthority.anchorId,stateRoot:this.envelope.stateRoot};}
+ get recoveryEpoch(){return this.envelope.authorityEpoch;}
  constructor(raw:NativeResourceEnvelope){super();this.envelope=NativeResourceEnvelope.parse(raw);}
  bindRecoveryInventory(inventory:RecoveryInventoryCapability){if(this.envelope.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');this.inventory=inventory;}
  bindRecoveryLedger(ledger:import('./ledger.ts').Ledger){if(this.inventoryLedger&&this.inventoryLedger!==ledger)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');this.inventoryLedger=ledger;}

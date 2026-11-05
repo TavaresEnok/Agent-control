@@ -154,9 +154,12 @@ class Catalog:
                     fail('CATALOG_EVENT_INVALID')
                 pending[event['operation']] = event
             elif event.get('type') == 'resolved':
-                if event.get('operation') not in pending or event.get('epoch') != epoch:
+                if event.get('operation') not in pending or event.get('epoch') != epoch or not isinstance(event.get('proofDigest'), str) or len(event['proofDigest']) != 64:
                     fail('CATALOG_EVENT_INVALID')
                 del pending[event['operation']]
+            elif event.get('type') == 'authority-sweep':
+                if event.get('epoch') != epoch or (event.get('kind'), event.get('authority')) not in scope or not isinstance(event.get('proofDigest'), str) or len(event['proofDigest']) != 64:
+                    fail('CATALOG_EVENT_INVALID')
             else:
                 fail('CATALOG_EVENT_INVALID')
         return epoch, pending
