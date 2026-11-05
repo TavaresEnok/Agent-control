@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "kind": "r3_version_specific_audit_supplement",
+  "baseAudit": "R3-REQUIREMENT-AUDIT-111.json",
+  "purpose": "Append version-specific reassessment; never reinterpret base evidence as final tests.",
+  "updates": [
+    {
+      "id": "RF-10",
+      "reviewed_commit": "a9f4876d",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-quota-final.log",
+      "result": "1/1 dedicated physical test passed; no skips",
+      "implemented_delta": "Configurable inactive registry and explicitly synthetic networkless Docker probe; persisted per-account uncertainty, immutable container group retirement after controller SIGKILL, live lease preserved, identity-bound read-only protocol integrated with authenticated API and real PG quota observations.",
+      "remaining": "Official CLI protocol/account quota homologation absent. This is sufficient evidence of the stated fixture behavior, not all provider recovery/UI/admission combinations.",
+      "recommendation": "approve_scoped_implementation_not_full_original_homologation"
+    },
+    {
+      "id": "RF-30",
+      "reviewed_commit": "a9f4876d",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-quota-final.log",
+      "result": "1/1 dedicated physical test passed; no skips",
+      "implemented_delta": "Configurable inactive registry and explicitly synthetic networkless Docker probe; persisted per-account uncertainty, immutable container group retirement after controller SIGKILL, live lease preserved, identity-bound read-only protocol integrated with authenticated API and real PG quota observations.",
+      "remaining": "Official CLI protocol/account quota homologation absent. This is sufficient evidence of the stated fixture behavior, not all provider recovery/UI/admission combinations.",
+      "recommendation": "approve_scoped_implementation_not_full_original_homologation"
+    },
+    {
+      "id": "RNF-14",
+      "reviewed_commit": "a9f4876d",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-quota-final.log",
+      "result": "1/1 dedicated physical test passed; no skips",
+      "implemented_delta": "Configurable inactive registry and explicitly synthetic networkless Docker probe; persisted per-account uncertainty, immutable container group retirement after controller SIGKILL, live lease preserved, identity-bound read-only protocol integrated with authenticated API and real PG quota observations.",
+      "remaining": "Official CLI protocol/account quota homologation absent. This is sufficient evidence of the stated fixture behavior, not all provider recovery/UI/admission combinations.",
+      "recommendation": "approve_scoped_implementation_not_full_original_homologation"
+    },
+    {
+      "id": "T13",
+      "reviewed_commit": "a9f4876d",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-quota-final.log",
+      "result": "1/1 dedicated physical test passed; no skips",
+      "implemented_delta": "Configurable inactive registry and explicitly synthetic networkless Docker probe; persisted per-account uncertainty, immutable container group retirement after controller SIGKILL, live lease preserved, identity-bound read-only protocol integrated with authenticated API and real PG quota observations.",
+      "remaining": "Official CLI protocol/account quota homologation absent. This is sufficient evidence of the stated fixture behavior, not all provider recovery/UI/admission combinations.",
+      "recommendation": "approve_scoped_implementation_not_full_original_homologation"
+    },
+    {
+      "id": "T31",
+      "reviewed_commit": "a9f4876d",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-quota-final.log",
+      "result": "1/1 dedicated physical test passed; no skips",
+      "implemented_delta": "Configurable inactive registry and explicitly synthetic networkless Docker probe; persisted per-account uncertainty, immutable container group retirement after controller SIGKILL, live lease preserved, identity-bound read-only protocol integrated with authenticated API and real PG quota observations.",
+      "remaining": "Official CLI protocol/account quota homologation absent. This is sufficient evidence of the stated fixture behavior, not all provider recovery/UI/admission combinations.",
+      "recommendation": "approve_scoped_implementation_not_full_original_homologation"
+    },
+    {
+      "id": "RF-46",
+      "reviewed_commits": [
+        "cbcc506a",
+        "6bb083d1"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-migration-final.log",
+      "result": "2/2 dedicated tests passed; no skips",
+      "implemented_delta": "Signed synthetic shared authority transfer/rollback, epoch-fenced Ledger/Capacity, no TTL absence shortcut, physical child identity/release, globally excluded per-account synthetic credential-refresh callback and uncertain claims; explicit context lock anchor and heartbeat/acquire overlaps.",
+      "remaining": "Real legacy installation must use the same authority/refresh bridge; operational overlap and rollback with real credential adapter not authorized or executed. Synthetic callback does not renew an official credential.",
+      "recommendation": "reclassify_missing_capability_to_implemented_synthetic_integration_slice_do_not_accept_operational_scenario"
+    },
+    {
+      "id": "T28",
+      "reviewed_commits": [
+        "cbcc506a",
+        "6bb083d1"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-migration-final.log",
+      "result": "2/2 dedicated tests passed; no skips",
+      "implemented_delta": "Signed synthetic shared authority transfer/rollback, epoch-fenced Ledger/Capacity, no TTL absence shortcut, physical child identity/release, globally excluded per-account synthetic credential-refresh callback and uncertain claims; explicit context lock anchor and heartbeat/acquire overlaps.",
+      "remaining": "Real legacy installation must use the same authority/refresh bridge; operational overlap and rollback with real credential adapter not authorized or executed. Synthetic callback does not renew an official credential.",
+      "recommendation": "reclassify_missing_capability_to_implemented_synthetic_integration_slice_do_not_accept_operational_scenario"
+    }
+  ]
+}
