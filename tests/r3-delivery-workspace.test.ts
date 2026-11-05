@@ -104,3 +104,32 @@ test('R3 emission marker survives transport ACK loss and fences no-effect releas
   console.log(JSON.stringify({proof:'r3-remote-emission-lost-ack',phase:'emitting-durable',startCalls:starts,duplicateWriter:false,artifactRegistered:true}));
  }finally{await lab.close();}
 });
+
+test('R3 durable emission uses a bounded dedicated connection while all shared pool slots are occupied', {timeout:120000},async()=>{
+ const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const lab=await remoteDevelopmentLab(base),pg=(await import('pg')).default,original=pg.Client.prototype.query;
+ try{
+  const workspaceId=randomUUID();let saturated=false,starts=0;
+  await lab.development.prepare(lab.principal,{workspaceId,contextId:lab.contextId,intentId:lab.intent.id,hostId:lab.hostId,sourceOperationId:lab.sourceOperationId},lab.authority);
+  pg.Client.prototype.query=function(this:import('pg').Client,...args:unknown[]){
+   const first=args[0],sql=typeof first==='string'?first:typeof first==='object'&&first!==null?(first as {text?:string}).text:'';
+   if(sql?.startsWith("UPDATE ac_remote_implementation_emissions SET phase='emitting'"))return (async()=>{
+    const held:import('pg').PoolClient[]=[];
+    try{
+     for(let i=0;i<(lab.db.pool.options.max??8)-1;i++)held.push(await lab.db.pool.connect());
+     assert.equal(lab.db.pool.idleCount,0);assert.equal(lab.db.pool.totalCount,lab.db.pool.options.max??8);saturated=true;
+     return await (original as (...values:unknown[])=>Promise<unknown>).apply(this,args);
+    }finally{for(const client of held)client.release();}
+   })();
+   return (original as (...values:unknown[])=>unknown).apply(this,args);
+  } as typeof original;
+  const {RemoteDevelopment}=await import('../src/remote-development.ts');
+  const service=new RemoteDevelopment(lab.db,{async exchange(host,request){if((request as {action?:string}).action==='start'){starts++;throw Error('SYNTHETIC_FAILURE_BEFORE_ACTUAL_SSH');}return lab.ssh.exchange(host,request);}},lab.development.options);
+  await assert.rejects(service.launchImplementation(lab.principal,{workspaceId,taskId:'implement',sessionId:randomUUID()},lab.authority),/SYNTHETIC_FAILURE_BEFORE_ACTUAL_SSH/);
+  pg.Client.prototype.query=original;
+  assert(saturated);assert.equal(starts,1);
+  assert.equal((await lab.db.pool.query('SELECT phase FROM ac_remote_implementation_emissions WHERE operation_id=$1',[lab.intent.operation_id])).rows[0].phase,'emitting');
+  await assert.rejects(access(join(lab.workspaceRoot,workspaceId,'execution.json')),/ENOENT/);
+  console.log(JSON.stringify({proof:'r3-emission-pool-saturation',occupiedSharedSlots:lab.db.pool.options.max??8,dedicatedConnection:true,physicalSshStarts:0,phase:'emitting-conservative'}));
+ }finally{pg.Client.prototype.query=original;await lab.close();}
+});

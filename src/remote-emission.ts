@@ -1,4 +1,4 @@
-import type pg from 'pg';
+import pg from 'pg';
 import {Authority,Refusal,digest} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Capacity} from './capacity.ts';
@@ -43,8 +43,13 @@ export async function beginRemoteImplementationEmission(c:pg.PoolClient,ledger:L
  // The outer transaction still holds authority, intent and physical-account
  // locks. An error after this point is uncertain, including a controller crash
  // before the SSH call; a retry may reconcile, never blindly start again.
- const entered=await ledger.pool.query(`UPDATE ac_remote_implementation_emissions SET phase='emitting',entered_at=clock_timestamp()
-  WHERE operation_id=$1 AND workspace_id=$2 AND manager_epoch=$3 AND phase='pending' RETURNING grant_id`,[input.operationId,input.workspaceId,authority.epoch]);
+ const marker=new pg.Client({...ledger.pool.options,connectionTimeoutMillis:3000,query_timeout:5000,statement_timeout:5000,application_name:'ac-remote-emission'});
+ let entered:pg.QueryResult;
+ try{
+  await marker.connect();
+  entered=await marker.query(`UPDATE ac_remote_implementation_emissions SET phase='emitting',entered_at=clock_timestamp()
+   WHERE operation_id=$1 AND workspace_id=$2 AND manager_epoch=$3 AND phase='pending' RETURNING grant_id`,[input.operationId,input.workspaceId,authority.epoch]);
+ }finally{await marker.end();}
  if(entered.rowCount!==1)throw new Refusal('REMOTE_IMPLEMENTATION_EMISSION_UNCERTAIN');
  await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='reserved'",[eligible.rows[0].id]);
  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'remote.implementation.emitting',$2)",[input.contextId,{operationId:input.operationId,workspaceId:input.workspaceId,grantId:eligible.rows[0].id,requestIdentity:digest(input)}]);
