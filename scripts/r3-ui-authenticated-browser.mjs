@@ -1,7 +1,7 @@
 // Disposable lab only: canonical Happier light, real server-main, PostgreSQL and built product SPA.
 import {chromium} from '../upstream/cezar/node_modules/playwright-core/index.mjs'
 import {spawn,execFileSync} from 'node:child_process'
-import {mkdtemp,mkdir,writeFile,rm,open} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,rm,open} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
 import {tmpdir} from 'node:os'
 import net from 'node:net'
@@ -32,7 +32,7 @@ try{
  const database=`postgresql://ac_test:synthetic-test-only@127.0.0.1:${pgPort}/ac_implementation_test`
  await wait(async()=>{const c=new pg.Client({connectionString:database,connectionTimeoutMillis:250});try{await c.connect();return true}finally{await c.end().catch(()=>{})}},'PG_READY')
  stage='Happier light';const data=join(scratch,'happier');await mkdir(data)
- const hEnv={...safe,PORT:String(hPort),METRICS_ENABLED:'false',AUTH_ANONYMOUS_SIGNUP_ENABLED:'true',HAPPIER_FILES_BACKEND:'local',HAPPIER_DB_PROVIDER:'sqlite',HAPPY_DB_PROVIDER:'sqlite',HAPPIER_SERVER_LIGHT_DATA_DIR:data,HAPPIER_SERVER_HOST:'127.0.0.1',HAPPY_SERVER_HOST:'127.0.0.1',DATABASE_URL:`file:${data}/server.sqlite?socket_timeout=30&connection_limit=1`,HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY:'required_e2ee'}
+ const hEnv={...safe,HAPPIER_ACCOUNT_PROFILE_RATE_LIMIT_MAX:'10000',PORT:String(hPort),METRICS_ENABLED:'false',AUTH_ANONYMOUS_SIGNUP_ENABLED:'true',HAPPIER_FILES_BACKEND:'local',HAPPIER_DB_PROVIDER:'sqlite',HAPPY_DB_PROVIDER:'sqlite',HAPPIER_SERVER_LIGHT_DATA_DIR:data,HAPPIER_SERVER_HOST:'127.0.0.1',HAPPY_SERVER_HOST:'127.0.0.1',DATABASE_URL:`file:${data}/server.sqlite?socket_timeout=30&connection_limit=1`,HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY:'required_e2ee'}
  const server=join(root,'upstream/happier/apps/server');command('yarn',['-s','migrate:sqlite:deploy'],{cwd:server,env:hEnv})
  happier=await child([join(root,'upstream/happier/node_modules/tsx/dist/cli.mjs'),'--tsconfig','./tsconfig.json','./sources/main.light.ts'],{cwd:server,env:hEnv})
  await wait(async()=>{if(happier.exitCode!==null)throw Error('HAPPIER_EXIT');return (await fetch(hOrigin+'/v1/account/profile')).status===401},'HAPPIER_READY')
@@ -51,13 +51,24 @@ try{
  const file=join(scratch,'installation.json');await writeFile(file,JSON.stringify(config),{mode:0o600})
  async function startGateway(){gateway=await child(['--import','tsx','src/server-main.ts','serve',file],{cwd:root});await wait(async()=>{if(gateway.exitCode!==null)throw Error('GATEWAY_EXIT');return (await fetch(origin+'/api/v1/ac/auth/config')).ok},'GATEWAY_READY')}
  await startGateway();browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',args:['--no-sandbox','--disable-dev-shm-usage']})
- for(const width of [360,390]){
+ if(process.env.AC_R3_UI_RESTART_LINK_ONLY==='1'){
+  for(let attempt=1;attempt<=4;attempt++){
+   stage=`isolated restart/link ${attempt}`;await stop(gateway);await startGateway()
+   const client=await browser.newContext({viewport:{width:attempt%2?360:390,height:844},isMobile:true,hasTouch:true});client.setDefaultTimeout(10000);const page=await client.newPage();activePage=page
+   await page.goto(`${origin}/p/${project.id}/settings/agent-control`);await page.getByRole('button',{name:'Entrar pelo Happier',exact:true}).waitFor()
+   assert.equal((await client.request.post(origin+'/api/v1/ac/auth/session',{headers:{authorization,origin}})).status(),200);assert.equal((await client.request.get(origin+'/api/v1/ac/auth/status')).status(),200)
+   await page.reload();await page.getByLabel('Identificador da sessão Happier',{exact:true}).fill(session.id)
+   const linked=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/contexts')&&r.request().method()==='POST');await page.getByRole('button',{name:'Vincular conversa',exact:true}).click();assert.equal((await linked).status(),201);await page.getByRole('button',{name:/Pausar novas etapas|Retomar etapas/}).waitFor()
+   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_contexts')).rows[0].n,1);await client.close();console.log(`PASS isolated fresh browser authentication/link after real gateway restart ${attempt}/4`)
+  }
+ }else for(const width of [360,390]){
   stage=`authenticated product ${width}`
-  const client=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true}),page=await client.newPage();activePage=page
-  for(const path of ['/api/v1/ac/contexts','/api/v1/ac/project-admin'])assert.equal((await client.request.get(origin+path)).status(),401)
+  const client=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true}),page=await client.newPage();client.setDefaultTimeout(10000);activePage=page;page.on('response',async response=>{const url=new URL(response.url());if(url.origin===origin&&url.pathname.startsWith('/api/')&&response.status()>=400){const value=await response.json().catch(()=>null);const error=typeof value?.error==='string'&&/^[A-Z_0-9]{1,100}$/.test(value.error)?value.error:'redacted';console.log(`HTTP_REFUSAL ${response.status()} ${url.pathname} ${error}`)}})
+  for(const path of ['/api/v1/ac/contexts','/api/v1/ac/project-admin','/api/v1/ac/quota-registry','/api/v1/ac/installation-authority?domainId='+domainId])assert.equal((await client.request.get(origin+path)).status(),401)
   stage='open product';await page.goto(`${origin}/p/${project.id}/settings/agent-control`);await page.getByText('Entrar pelo Happier',{exact:true}).waitFor()
   assert.equal((await client.request.post(origin+'/api/v1/ac/auth/session',{headers:{authorization,origin}})).status(),200)
-  stage='link conversation';await page.reload();await page.getByLabel('Identificador da sessão Happier',{exact:true}).fill(session.id);await page.getByRole('button',{name:'Vincular conversa',exact:true}).click();await page.getByRole('button',{name:/Pausar novas etapas|Retomar etapas/}).waitFor()
+  stage=`verify issued session ${width}`;assert.equal((await client.request.get(origin+'/api/v1/ac/auth/status')).status(),200)
+  stage=`load authenticated settings ${width}`;await page.reload();await page.getByLabel('Identificador da sessão Happier',{exact:true}).waitFor();stage=`fill existing conversation ${width}`;await page.getByLabel('Identificador da sessão Happier',{exact:true}).fill(session.id);stage=`link existing conversation ${width}`;const linked=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/contexts')&&r.request().method()==='POST');await page.getByRole('button',{name:'Vincular conversa',exact:true}).click();assert.equal((await linked).status(),201);stage=`show linked conversation ${width}`;await page.getByRole('button',{name:/Pausar novas etapas|Retomar etapas/}).waitFor()
   const contexts=await (await client.request.get(origin+'/api/v1/ac/contexts',{headers:{'X-Agent-Control-Project':project.id}})).json();assert.equal(contexts.contexts.length,1);const contextId=contexts.contexts[0].id
   if(width===360){
    stage='refuse unregistered operator';let response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await page.getByRole('button',{name:'Pausar novas etapas',exact:true}).click();assert.equal((await response).status(),403)
@@ -81,25 +92,31 @@ try{
    stage='concurrent signed policy edits';const stale=await client.newPage();await stale.goto(`${origin}/p/${project.id}/settings/agent-control`)
    for(const tab of [page,stale]){await tab.getByLabel('Revisão para editar',{exact:true}).selectOption('1');await tab.getByRole('button',{name:'Carregar revisão',exact:true}).click()}
    await page.getByLabel('Programadores por conversa',{exact:true}).fill('2');await stale.getByLabel('Programadores por conversa',{exact:true}).fill('3')
-   response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await page.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();assert.equal((await response).status(),200)
-   response=stale.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await stale.getByRole('button',{name:'Publicar nova revisão',exact:true}).click();assert.equal((await response).status(),409);await stale.getByRole('alert').filter({hasText:'POLICY_CONFLICT'}).waitFor();await stale.close()
+   const firstPolicy=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST'),secondPolicy=stale.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST')
+   await Promise.all([page.getByRole('button',{name:'Publicar nova revisão',exact:true}).click(),stale.getByRole('button',{name:'Publicar nova revisão',exact:true}).click()])
+   const policyResponses=await Promise.all([firstPolicy,secondPolicy]);assert.deepEqual(policyResponses.map(value=>value.status()).sort(),[200,409]);const winner=policyResponses[0].status()===200?2:3
+   await (policyResponses[0].status()===409?page:stale).getByRole('alert').filter({hasText:'POLICY_CONFLICT'}).waitFor();await stale.close();await page.getByLabel('Revisão para editar',{exact:true}).locator('option[value="2"]').waitFor({state:'attached'})
    stage='browser policy rollback';await page.getByLabel('Revisão para editar',{exact:true}).selectOption('1');await page.getByRole('button',{name:'Preparar reversão desta revisão',exact:true}).click()
    response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await page.getByRole('button',{name:'Publicar reversão como nova revisão',exact:true}).click();assert.equal((await response).status(),200)
-   const versions=(await db.pool.query('SELECT revision,snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[project.id])).rows;assert.deepEqual(versions.map(v=>v.snapshot.maxProgrammersPerContext),[10,2,10]);assert.deepEqual(versions[0].snapshot,versions[2].snapshot)
+   const versions=(await db.pool.query('SELECT revision,snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[project.id])).rows;assert.deepEqual(versions.map(v=>v.snapshot.maxProgrammersPerContext),[10,winner,10]);assert.deepEqual(versions[0].snapshot,versions[2].snapshot)
    stage='signed pause';const started=performance.now();response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await page.getByRole('button',{name:'Pausar novas etapas',exact:true}).click();assert.equal((await response).status(),200);const acceptMs=Math.round(performance.now()-started);await page.getByRole('button',{name:'Retomar etapas',exact:true}).waitFor();console.log(`LOCAL_METRIC signed pause acceptance_ms=${acceptMs} projection_ms=${Math.round(performance.now()-started)}; loopback synthetic sample only`)
    if(process.env.AC_R3_UI_LATENCY==='1'){const {measureBrowserLatency}=await import('./r3-ui-latency.mjs');await measureBrowserLatency({page,contextId,client,origin,projectId:project.id,output:join(root,'docs/validation/evidence/r3-ui-latency.json')})}
    assert.equal((await db.pool.query('SELECT paused FROM ac_contexts WHERE id=$1',[contextId])).rows[0].paused,true)
    stage='restart pause';await stop(gateway);await startGateway();await page.reload();await page.getByRole('button',{name:'Retomar etapas',exact:true}).waitFor()
-   stage='register project';await page.getByLabel('Nome do projeto',{exact:true}).fill('R3 registered in mobile browser');await page.getByLabel('Raiz autorizada',{exact:true}).selectOption('lab');await page.getByLabel('Caminho relativo do repositório',{exact:true}).fill('second');response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/project-admin')&&r.request().method()==='POST');await page.getByRole('button',{name:'Cadastrar projeto',exact:true}).click();assert.equal((await response).status(),200);await page.getByText('Projeto cadastrado.',{exact:true}).waitFor()
+   stage='register project';const adminCheck=await client.request.get(origin+'/api/v1/ac/project-admin',{headers:{'X-Agent-Control-Project':project.id}});const adminValue=await adminCheck.json();console.log(`ADMIN_CHECK status=${adminCheck.status()} canRegister=${adminValue.canRegister} roots=${adminValue.roots?.length} error=${adminValue.error??'none'}`);await page.getByLabel('Nome do projeto',{exact:true}).fill('R3 registered in mobile browser');await page.getByLabel('Raiz autorizada',{exact:true}).selectOption('lab');await page.getByLabel('Caminho relativo do repositório',{exact:true}).fill('second');response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/project-admin')&&r.request().method()==='POST');await page.getByRole('button',{name:'Cadastrar projeto',exact:true}).click();assert.equal((await response).status(),200);await page.getByText('Projeto cadastrado.',{exact:true}).waitFor()
    stage='restart project';await stop(gateway);await startGateway();await page.reload();await page.getByRole('button',{name:'Retomar etapas',exact:true}).waitFor();const list=await (await client.request.get(origin+'/api/v1/projects')).json();assert(list.projects.some(p=>p.name==='R3 registered in mobile browser'))
   }
+  stage=`usage report ${width}`
+  const usageResponse=page.waitForResponse(r=>r.url().includes(`/api/v1/ac/contexts/${contextId}/usage/report?`)&&r.request().method()==='GET');await page.getByRole('button',{name:'Consultar relatório de uso',exact:true}).click();assert.equal((await usageResponse).status(),200);await page.getByRole('status').filter({hasText:'Esta página contém 0 tentativas.'}).waitFor()
+  const csvResponse=page.waitForResponse(r=>r.url().includes('/usage/report.csv?')),downloadEvent=page.waitForEvent('download');await page.getByRole('button',{name:'Baixar CSV desta página',exact:true}).click();const [csv,download]=await Promise.all([csvResponse,downloadEvent]);assert.equal(csv.status(),200);assert.equal(await download.failure(),null);assert((await readFile(await download.path(),'utf8')).includes('page_complete'))
+  await page.getByRole('status').filter({hasText:'Desabilitada; fontes registradas: 0.'}).waitFor()
   stage=`viewport ${width}`;const geometry=await page.evaluate(()=>({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}));assert(geometry.scroll<=geometry.width+1);await page.getByRole('heading',{name:'Diagnóstico da conversa',exact:true}).waitFor();assert.equal(await page.getByRole('heading',{name:'Diagnóstico da conversa',exact:true}).count(),1);await page.screenshot({path:join(root,`docs/validation/evidence/r3-ui-mobile-${width}.png`)})
   stage='logout';await page.getByRole('button',{name:'Sair deste navegador',exact:true}).click();await page.getByText('Entrar pelo Happier',{exact:true}).waitFor();assert.equal((await client.request.get(origin+'/api/v1/ac/contexts')).status(),401);await client.close()
-  console.log(`PASS ${width}: canonical Happier token, production cookie/auth routes, conversation access, mobile settings and logout${width===360?', signed refusal/bootstrap/policy conflict/rollback/pause/register and persistence after two server restarts':''}`)
+  console.log(`PASS ${width}: canonical Happier token, production cookie/auth routes, conversation access, real usage JSON/CSV, disabled quota registry, mobile settings and logout${width===360?', signed refusal/bootstrap/authority/template/policy conflict/rollback/pause/register and persistence after two server restarts':''}`)
  }
  for(const table of ['ac_intents','ac_operations','ac_outbox','ac_capacity_grants'])assert.equal((await db.pool.query(`SELECT count(*)::int n FROM ${table}`)).rows[0].n,0)
  console.log('PASS no execution or inference; disposable synthetic lab only; physical Android not exercised')
-}catch(error){if(activePage)console.error('R3_UI_ALERTS '+JSON.stringify(await activePage.locator('[role=alert]').allTextContents().catch(()=>[])));console.error(`R3_UI_FAILED stage=${stage} type=${error?.name??'Error'} code=${error?.code??'assertion_or_timeout'}`);process.exitCode=1}
+}catch(error){if(scratch){const upstreamLog=await readFile(join(scratch,'0.log'),'utf8').catch(()=>'');console.error('R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES '+(upstreamLog.match(/\"statusCode\": 429/g)||[]).length)}if(activePage)console.error('R3_UI_ALERTS '+JSON.stringify(await activePage.locator('[role=alert]').allTextContents().catch(()=>[])));console.error(`R3_UI_FAILED stage=${stage} type=${error?.name??'Error'} code=${error?.code??'assertion_or_timeout'}`);process.exitCode=1}
 finally{
  const cleanupErrors=[]
  async function attempt(operation){try{await operation()}catch(error){cleanupErrors.push(error)}}

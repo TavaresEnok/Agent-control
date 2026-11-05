@@ -16,3 +16,10 @@ it('keeps unknown counters distinct from zero and continues with original filter
 it('encodes page filters explicitly for both JSON and CSV routes',()=>{
  expect(new URLSearchParams(usageReportParams({from:'2026-11-01T00:00:00Z',to:'2026-11-02T00:00:00Z',profileId,rework:'exclude'},'cursor+/=')).get('cursor')).toBe('cursor+/=')
 })
+
+it('hides a previous context report and its download actions after switching context',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>Response.json({schemaVersion:1,scope:'reported_attempt_usage_deltas',subscriptionBalance:'unknown',monetaryCost:'unknown',overlappingCounters:true,profileMetadata:'current',reworkDefinition:'recorded_correction_decision',contextId,periods:{current:{from:'2026-11-01T00:00:00Z',to:'2026-11-02T00:00:00Z'},previous:{from:'2026-10-31T00:00:00Z',to:'2026-11-01T00:00:00Z'}},attempts:[],comparison:[],nextCursor:null,page:{limit:100,complete:true}})))
+ const cache=new QueryClient({defaultOptions:{mutations:{retry:false}}}),view=render(<QueryClientProvider client={cache}><AgentControlUsageReport contextId={contextId} profiles={[]}/></QueryClientProvider>)
+ fireEvent.click(screen.getByRole('button',{name:'Consultar relatório de uso'}));expect(await screen.findByRole('button',{name:'Baixar CSV desta página'})).toBeTruthy()
+ view.rerender(<QueryClientProvider client={cache}><AgentControlUsageReport contextId={profileId} profiles={[]}/></QueryClientProvider>);expect(screen.queryByRole('button',{name:'Baixar CSV desta página'})).toBeNull();expect(screen.queryByText(/Esta página contém/)).toBeNull()
+})

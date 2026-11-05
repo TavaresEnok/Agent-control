@@ -1,0 +1,5 @@
+PASS isolated fresh browser authentication/link after real gateway restart 1/4
+PASS isolated fresh browser authentication/link after real gateway restart 2/4
+PASS isolated fresh browser authentication/link after real gateway restart 3/4
+PASS isolated fresh browser authentication/link after real gateway restart 4/4
+PASS no execution or inference; disposable synthetic lab only; physical Android not exercised

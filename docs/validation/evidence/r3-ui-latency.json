@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "scope": "synthetic-local-benchmark",
+  "homologated": false,
+  "clock": "monotonic performance.now",
+  "environment": {
+    "node": "v22.23.3",
+    "platform": "linux",
+    "kernel": "7.0.0-38-generic",
+    "logicalCpus": 10,
+    "memoryBytes": 16761257984
+  },
+  "externalProvider": {
+    "exercised": false,
+    "latencyMs": null,
+    "reason": "deterministic synthetic fixtures; no external inference"
+  },
+  "metrics": {
+    "signedControlAcceptance": {
+      "samples": 12,
+      "p50Ms": 75.44921500000055,
+      "p95Ms": 95.82874699999957,
+      "maxMs": 95.82874699999957
+    },
+    "browserProjection": {
+      "samples": 12,
+      "p50Ms": 180.87256799999886,
+      "p95Ms": 208.20888000000195,
+      "maxMs": 208.20888000000195
+    },
+    "authentication": {
+      "samples": 12,
+      "p50Ms": 13.062,
+      "p95Ms": 17.573,
+      "maxMs": 17.573
+    },
+    "application": {
+      "samples": 12,
+      "p50Ms": 9.5,
+      "p95Ms": 14.359,
+      "maxMs": 14.359
+    },
+    "httpTotal": {
+      "samples": 12,
+      "p50Ms": 20.66,
+      "p95Ms": 31.155,
+      "maxMs": 31.155
+    }
+  },
+  "transport": "real Chromium → loopback HTTP → production authenticated API → PostgreSQL",
+  "thresholds": {
+    "signedControlAcceptanceMs": 2000,
+    "browserProjectionMs": 5000
+  },
+  "eventScope": "DOM refresh after real signed command; separate committed-event probe required for event-channel latency"
+}
