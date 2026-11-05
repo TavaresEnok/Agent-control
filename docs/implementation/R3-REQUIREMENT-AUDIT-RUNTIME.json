@@ -54,7 +54,8 @@
     "missing": "Registry lifecycle, stale manager route rejection and concurrent Ledger claim tests require independent rerun; provider exhaustion belongs to T19, not this exact-one-manager criterion.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "acceptance_candidate_after_integrated_proof": "Manager singleton source + manager lifecycle/fencing test across two clients; provider handoff not part of criterion."
   },
   {
     "id": "RF-11",
@@ -155,7 +156,8 @@
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
       }
-    ]
+    ],
+    "acceptance_candidate_after_integrated_proof": "PG atomic global/local grants and unique account resource identity with finite concurrent clients."
   },
   {
     "id": "RF-14",
@@ -243,7 +245,8 @@
     "missing": "Source compiler inspected; complete plan propose/publish native execution evidence not independently rerun",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "acceptance_candidate_after_integrated_proof": "Validated versioned DAG/input-output/acceptance compiler and immutable proposal persisted in integrated flow."
   },
   {
     "id": "RF-16",
@@ -286,7 +289,8 @@
     "missing": "Pure parallel compiler test rerun, physical graph source/evidence pending R3 independent review",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "acceptance_candidate_after_integrated_proof": "Pure parallel compiler/write overlap + actualflow two independent workers and dependent gamma/integration."
   },
   {
     "id": "RF-17",
@@ -691,7 +695,8 @@
         "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
         "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
       }
-    ]
+    ],
+    "acceptance_candidate_after_integrated_proof": "Integrated persisted graph dispatch/wait/cancel/completion plus independent history checkpoint/replay fixture."
   },
   {
     "id": "RF-23",
@@ -823,7 +828,8 @@
         "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
         "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
-    ]
+    ],
+    "acceptance_candidate_after_integrated_proof": "Integrated graph SIGKILL plus independent SSH supervisor/orphan/ACK recovery; finite representative matrix suffices."
   },
   {
     "id": "RF-24",
@@ -1013,7 +1019,7 @@
     "id": "RF-27",
     "normative_row": "RF-27\tP0\tPreservar identidade e resultado de uma operação SSH após desconexão\tI5",
     "criterion": "Preservar identidade e resultado de uma operação SSH após desconexão",
-    "source_version": "ae2e141b",
+    "source_version": "6553ce5c + 46fc57af + 5add3b71",
     "implementation": "worker.py operation digest/journal and inspect after lost ACK avoid blind repeat",
     "source_files": [
       "src/remote.ts",
@@ -1059,10 +1065,10 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "complete_slice_verification_pending",
-    "missing": "Independent real SSH primitive scenarios passed including supervisor death and uncertain delayed create; exact requirement acceptance awaits final integrated remote schema/worker version and delivery workspace-hook review.",
+    "classification": "implemented_verified_supported_scope",
+    "missing": null,
     "external_dependency": null,
-    "acceptance_recommendation": "not_accepted",
+    "acceptance_recommendation": "accepted_supported_runtime_contract",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
     "review_deltas": [
       {
@@ -1075,7 +1081,9 @@
         "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
         "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
-    ]
+    ],
+    "acceptance_rationale": "Literal criterion preserves operation identity/result after SSH disconnection. Independently rerun public real SSH lab discards start/removal ACK, reconnects with same operation, kills supervisor with surviving setsid descendant, successor confirms same immutable group/result and stable log hash without second start; ambiguous absence stays uncertain. No official provider account is needed for this SSH persistence property.",
+    "acceptance_limits": "Opt-in Docker backend on trusted supported systemd cgroupv2 host; operational deployment and remote worktree Git adapter acceptance are separate requirements. This accepts a finite tested protocol contract, not every possible failure interleaving."
   },
   {
     "id": "RF-28",
@@ -1521,7 +1529,8 @@
     "missing": "Two live contexts restart/disabled account state not independently rerun",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "acceptance_candidate_after_integrated_proof": "Persisted per-context selections independent from attempts/global capacity; finite two-context restart/disable test."
   },
   {
     "id": "RF-57",
@@ -1605,7 +1614,8 @@
     "missing": "Seven pure waiver cases rerun; integrated waiver revocation versus physical retirement race not rerun",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "acceptance_candidate_after_integrated_proof": "Pure waiver negatives already rerun; PG binding/revocation stage fixture required to close contract."
   },
   {
     "id": "RNF-01",
@@ -1855,8 +1865,8 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "integration_evidence_missing",
-    "missing": "Aggregate CPU/memory/PIDs and host-shared admission physically proved in5add3b71; full application flow combining disk admission, model/account capacity, resource authority and fair wait still requires integration verification.",
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Remote aggregate CPU/memory/PIDs and admission physically proved in5add3b71. Central native supervisors still use per-job fixed limits; admission-to-central aggregate CPU/RAM authority wiring must be verified/implemented alongside disk, slots and account capacity before full RNF11 acceptance.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
