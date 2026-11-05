@@ -108,6 +108,11 @@ test('R3 shared authority fences real Capacity and credential refresh across res
   old=new Ledger(database.url,token);const realCapacity=new Capacity(old);
   const authority=await old.acquire(principal,context,randomUUID(),'fixture',60);
   const intent=await old.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
+  for(let overlap=0;overlap<3;overlap++){
+   const contention=await Promise.allSettled([old.heartbeat(authority),old.acquire(principal,context,randomUUID(),'fixture',60)]);
+   assert.equal(contention[0]!.status,'fulfilled');assert.equal(contention[1]!.status,'rejected');
+   if(contention[1]!.status==='rejected')assert.match(String(contention[1]!.reason),/MANAGER_ACTIVE/);
+  }
   const request={attemptId:randomUUID(),intentId:intent.id,contextId:context,role:'programmer' as const};
   let admitted!:()=>void,commitAdmission!:()=>void;const admissionReady=new Promise<void>(resolve=>{admitted=resolve;}),admissionRelease=new Promise<void>(resolve=>{commitAdmission=resolve;});
   const admission=old.tx(async c=>{const grant=await new Capacity(old!,c).reserve(principal,request,authority);admitted();await admissionRelease;return grant;});await admissionReady;

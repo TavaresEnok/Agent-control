@@ -72,6 +72,8 @@ export class Ledger {
   }
   async fence(c: pg.PoolClient, authority: Authority, allowPaused = false) {
     const a = Authority.parse(authority);
+    // Context anchor precedes manager/domain locks in acquire and fence alike.
+    await c.query('SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE',[a.contextId]);
     const r = await c.query(`SELECT x.paused,m.epoch FROM ac_contexts x JOIN ac_managers m ON m.context_id=x.id
       WHERE x.id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until>clock_timestamp() FOR UPDATE OF x,m`,
     [a.contextId, a.instanceId, a.epoch]);
