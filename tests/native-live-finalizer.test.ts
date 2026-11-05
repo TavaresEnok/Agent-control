@@ -12,7 +12,7 @@ import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-ex
 import {digest} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
-for(const namespace of ['same','different','legacy','otherboot','controllercrash'] as const)test(`native finalizer remains conservative with ${namespace} process identity`, {timeout:30000},async()=>{
+for(const namespace of ['same','different','legacy','otherboot','controllercrash','rubycrash'] as const)test(`native finalizer remains conservative with ${namespace} process identity`, {timeout:30000},async()=>{
  const baseUrl=process.env.AC_TEST_DATABASE_URL;if(!baseUrl)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(baseUrl,'livefinalizer'),db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-finalizer-live-'));
  let child:ChildProcess|undefined,orphanPid:number|undefined,orphanStart:string|undefined;
@@ -46,34 +46,44 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
   Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>name===worker||name.startsWith('ac-native-worker-')?physical(worker):physical(tools),stop:async()=>{}}});
   const finalizerCode="const fs=require('fs');setInterval(()=>fs.writeFileSync(process.argv[1],'active synthetic finalizer\\n'),20)";
   const pidFile=join(root,'fixture-finalizer-pid');
-  if(namespace==='controllercrash'){
+  if(namespace==='rubycrash'){
+   await writeFile(join(work,'src/a.ts'),'real Ruby finalizer input\n');
+   const configFile=join(area,'controller.json');
+   const binding={jobId:input.jobId,intentId:input.intentId,grantId:input.grantId,inputDigest:digest(input),base:input.base,writePaths:input.writePaths};
+   await writeFile(configFile,JSON.stringify({url:fixture.url,root:spool,principal,authority,binding}),{mode:0o600,flag:'wx'});
+   child=spawn(process.execPath,['--import','tsx',new URL('./fixtures/native-live-finalizer-controller.ts',import.meta.url).pathname,configFile],{stdio:'ignore'});
+  }else if(namespace==='controllercrash'){
    const controllerCode="const {spawn}=require('child_process'),fs=require('fs');const c=spawn(process.execPath,['-e',process.argv[1],process.argv[2]],{detached:true,stdio:'ignore'});fs.writeFileSync(process.argv[3],String(c.pid));setInterval(()=>{},1000)";
    child=spawn(process.execPath,['-e',controllerCode,finalizerCode,join(work,'src/a.ts'),pidFile],{stdio:'ignore'});
   }else child=spawn(process.execPath,['-e',finalizerCode,join(work,'src/a.ts')],{detached:true,stdio:'ignore'});
   const closed=new Promise<void>((resolve,reject)=>{child!.once('exit',()=>resolve());child!.once('error',reject);});
   if(!child.pid)throw Error('SYNTHETIC_FINALIZER_NOT_STARTED');
-  if(namespace==='controllercrash'){
+  if(namespace==='rubycrash'){
+   for(let i=0;i<200;i++){const row=(await db.pool.query('SELECT process_handle FROM ac_native_artifact_finalizations WHERE job_id=$1',[input.jobId])).rows[0];if(row?.process_handle){orphanPid=row.process_handle.pid;break;}await new Promise(r=>setTimeout(r,20));}
+   if(!orphanPid)throw Error('RUBY_FINALIZER_HANDLE_MISSING');
+  }else if(namespace==='controllercrash'){
    for(let i=0;i<100;i++){try{orphanPid=Number(await readFile(pidFile,'utf8'));if(orphanPid>1)break;}catch{}await new Promise(r=>setTimeout(r,20));}
    if(!orphanPid)throw Error('SYNTHETIC_FINALIZER_PID_MISSING');
   }
   const finalizerPid=orphanPid??child.pid;
-  let observed='';for(let i=0;i<100;i++){observed=await readFile(join(work,'src/a.ts'),'utf8');if(observed==='active synthetic finalizer\n')break;await new Promise(r=>setTimeout(r,20));}
-  assert.equal(observed,'active synthetic finalizer\n');
+  if(namespace!=='rubycrash'){let observed='';for(let i=0;i<100;i++){observed=await readFile(join(work,'src/a.ts'),'utf8');if(observed==='active synthetic finalizer\n')break;await new Promise(r=>setTimeout(r,20));}
+  assert.equal(observed,'active synthetic finalizer\n');}else assert.match(await readFile(`/proc/${finalizerPid}/cmdline`,'utf8'),/native_finalize\.rb/);
   const proc=await readFile(`/proc/${finalizerPid}/stat`,'utf8'),startTime=proc.slice(proc.lastIndexOf(')')+2).split(' ')[19];
   if(orphanPid)orphanStart=startTime;
   const actualNamespace=await readlink('/proc/self/ns/pid');
   const handle={pid:finalizerPid,startTime,bootId:namespace==='otherboot'?'unverified-other-host':(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim(),
    ...(namespace==='legacy'?{}:{pidNamespace:namespace==='different'?'pid:[999999999]':actualNamespace})};
-  await db.pool.query(`INSERT INTO ac_native_artifact_finalizations(job_id,context_id,manager_epoch,input_digest,scope_digest,base_id,state,process_handle)
+  if(namespace!=='rubycrash')await db.pool.query(`INSERT INTO ac_native_artifact_finalizations(job_id,context_id,manager_epoch,input_digest,scope_digest,base_id,state,process_handle)
    VALUES($1,$2,$3,$4,$5,$6,'running',$7)`,[input.jobId,context,authority.epoch,digest(input),digest(input.writePaths),base,handle]);
-  if(namespace==='controllercrash'){
+  if(namespace==='controllercrash'||namespace==='rubycrash'){
    child.kill('SIGKILL');await closed;assert.equal(child.signalCode,'SIGKILL');process.kill(-finalizerPid,0);
+   if(namespace==='rubycrash')assert.equal((await readFile(`/proc/${finalizerPid}/stat`,'utf8')).split(') ')[1].split(' ')[0],'T');
   }
   assert.equal((await supervisor.reconcile(principal,authority,input)).state,'uncertain');
   const live=(await db.pool.query('SELECT j.state,j.receipt,g.state grant_state,o.state operation_state FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_operations o ON o.id=j.id WHERE j.id=$1',[input.jobId])).rows[0];
   assert.equal(live.state,'running');assert.equal(live.receipt,null);assert.equal(live.grant_state,'running');assert.equal(live.operation_state,'uncertain');
   await db.pool.query('INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,$4)',[intent.id,context,principal,intent.plan_revision]);
-  if(namespace!=='same'&&namespace!=='controllercrash'){
+  if(namespace!=='same'&&namespace!=='controllercrash'&&namespace!=='rubycrash'){
    assert.equal((await supervisor.reconcileCancellation(principal,authority,input.jobId)).state,'uncertain');
    assert.equal(child.exitCode,null);assert.equal(child.signalCode,null);
    process.kill(-child.pid,'SIGKILL');await closed;
@@ -83,7 +93,7 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
    return;
   }
   let settled=false;
-  if(namespace==='controllercrash'){
+  if(namespace==='controllercrash'||namespace==='rubycrash'){
    await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
    const successor=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
    await assert.rejects(supervisor.reconcileCancellation(principal,authority,input.jobId),/STALE_MANAGER/);process.kill(-finalizerPid,0);
@@ -96,14 +106,14 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
    const result=await supervisor.reconcileCancellation(principal,authority,input.jobId);
    if(result.state==='reconciled'){settled=true;break;}await new Promise(r=>setTimeout(r,20));
   }
-  assert(settled);if(namespace!=='controllercrash')await closed;else orphanPid=undefined;
+  assert(settled);if(namespace!=='controllercrash'&&namespace!=='rubycrash')await closed;else orphanPid=undefined;
   const final=(await db.pool.query('SELECT j.state,j.receipt,g.state grant_state,o.receipt operation_receipt,f.state finalizer_state,f.receipt finalizer_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_operations o ON o.id=j.id JOIN ac_native_artifact_finalizations f ON f.job_id=j.id WHERE j.id=$1',[input.jobId])).rows[0];
   assert.equal(final.state,'failed');assert.equal(final.grant_state,'released');assert.equal(final.operation_receipt.cancellation,true);
   assert.equal(final.finalizer_state,'failed');assert.equal(final.finalizer_receipt.failureCode,'FINALIZER_EXITED_WITHOUT_RESULT');assert.equal(final.finalizer_receipt.process.groupAbsent,true);
   assert.equal(final.receipt.payload.artifact,null);assert.notEqual(final.receipt.payload.exitCode,0);
  }finally{
   if(orphanPid&&orphanStart)try{const stat=await readFile(`/proc/${orphanPid}/stat`,'utf8');if(stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]===orphanStart)process.kill(-orphanPid,'SIGKILL');}catch{}
-  if(child?.pid&&child.exitCode===null&&child.signalCode===null)try{if(namespace==='controllercrash')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch{}
+  if(child?.pid&&child.exitCode===null&&child.signalCode===null)try{if(namespace==='controllercrash'||namespace==='rubycrash')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch{}
   await db.close();await fixture.close();await rm(area,{recursive:true,force:true});
  }
 });
