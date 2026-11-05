@@ -35,3 +35,7 @@ Integráveis por revisão estática como fonte injetável sem registro no bootst
 ## Persistência UI `5bcc09b8` + `380eba75`
 
 Integráveis por revisão estática. A prova usa rotas e armazenamento Cezar reais em repositório temporário, lê YAML e reabre após reinícios; o delta assegura tentativa independente de parada dos dois servidores. O autor informou três viewports aprovados antes do ajuste de cleanup e `node --check` depois; esta revisão não repetiu os comandos. Não demonstra autenticação, execução de fluxo ou aparelho físico.
+
+## Ambiente da bancada e recuperação de links `58497703` + `994f884c`
+
+Integráveis por revisão estática. O ambiente dos subprocessos é restrito; o helper corrigido admite instalação parcial, valida destinos e verifica todos os links existentes antes de removê-los. O autor informou contraprova 1/1 para o helper. A fixture de exportação foi ampliada para 151 mensagens e recusa de sobrescrita; a execução anterior 3/3 precede essa ampliação, e esta revisão não a reexecutou. As pendências de snapshot comum e concorrência de mesmo UID permanecem.
