@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: configured CLI exports and reads private usable configuration without initialization or execution
+ok 1 - configured CLI exports and reads private usable configuration without initialization or execution
+  ---
+  duration_ms: 5741.021279
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6364.25616
