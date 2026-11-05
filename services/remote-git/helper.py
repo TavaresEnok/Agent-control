@@ -28,7 +28,7 @@ def git(root, args, **kwargs):
     text = kwargs.pop('text', False)
     if capture:
         kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    child = subprocess.Popen(['/usr/bin/git', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', '-C', str(root), *args], env=ENV,
+    child = subprocess.Popen(['/usr/bin/git', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', '-c', 'pack.threads=1', '-c', 'pack.windowMemory=16m', '-C', str(root), *args], env=ENV,
                              start_new_session=True, preexec_fn=limits,
                              stdin=subprocess.PIPE if value is not None else subprocess.DEVNULL,
                              text=text, **kwargs)

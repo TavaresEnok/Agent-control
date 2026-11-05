@@ -26,7 +26,7 @@ export function createProjectGateway(options:ProjectGatewayOptions){
    const principal=await options.authenticate(request);if(!principal)return Response.json({error:'AUTH_REQUIRED'},{status:401});
    const path=new URL(request.url).pathname;
    if(path==='/api/v1/ac/installation-authority'&&options.installationAuthority)return options.installationAuthority(request,principal);
-   if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source')&&options.projectAdmin)return options.projectAdmin(request,principal);
+   if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source'||path==='/api/v1/ac/project-admin/remote-return')&&options.projectAdmin)return options.projectAdmin(request,principal);
    const scoped=path.match(/^\/api\/v1\/p\/([^/]+)(?:\/|$)/);
    const header=request.headers.get('x-agent-control-project');
    const selected=header??(scoped&&scoped[1]!=='default'?scoped[1]:options.defaultProjectId);
