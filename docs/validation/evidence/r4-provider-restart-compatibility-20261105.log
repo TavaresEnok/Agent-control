@@ -1,0 +1,30 @@
+TAP version 13
+# {"scope":"collector-only","restarts":15,"transportFailureEffects":4,"timeoutEffects":1,"afterQuarantineEffects":0,"inferenceEffects":0,"workPreserved":true,"unboundedLifetimeBudgetClaim":false}
+# Subtest: RF21 finite effect count persists across collector process restarts under failure and uncertain teardown
+ok 1 - RF21 finite effect count persists across collector process restarts under failure and uncertain teardown
+  ---
+  duration_ms: 56406.056282
+  type: 'test'
+  ...
+# Subtest: RF21 crashed collector with expired lease cannot restart a second effect
+ok 2 - RF21 crashed collector with expired lease cannot restart a second effect
+  ---
+  duration_ms: 35840.174341
+  type: 'test'
+  ...
+# {"scope":"synthetic-collector-registry-and-real-capacity","oldVersion":"v1","newVersion":"v2","incompatible":"unknown","authExpired":"auth_required","inferenceEffects":0,"workPreserved":true,"officialCliProtocolPromotionProven":false}
+# Subtest: RNF13 T26 synthetic registry old/new incompatible and expired-auth transitions preserve pending work
+ok 3 - RNF13 T26 synthetic registry old/new incompatible and expired-auth transitions preserve pending work
+  ---
+  duration_ms: 32848.52023
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 128634.02997

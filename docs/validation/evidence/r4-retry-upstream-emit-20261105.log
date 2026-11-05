@@ -1,0 +1,1 @@
+upstream/cezar/packages/cezar/src/webhooks/transport.ts(115,7): error TS2353: Object literal may only specify known properties, and 'maxRedirections' does not exist in type '{ dispatcher?: Dispatcher | undefined; } & Omit<RequestOptions<null>, "method" | "origin" | "path"> & Partial<Pick<RequestOptions<null>, "method">>'.
