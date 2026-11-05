@@ -79,3 +79,5 @@ Aprovado o escopo 9c1b60d7/f419d425: owner, acesso e fonte são verificados sob 
 A prova física do autor 4134196e (`/tmp/ac-r5-native-log-physical-3.log`) passa 1/1 em reviewer sintético: capability em duas escritas é removida do arquivo, hash vinculado ao recibo e replay da retirada é estável. Aprovação restrita a esse cenário; não usa o worker Codex real nem cobre composição, rotação ou provedores.
 
 924acab0/900eec29: aprovada a projeção opcional de grafos no escopo da migration 088 SHA256 `3b58618dfd853fd5b584bdbba65aaa90fc5e7b98d43dd1413ee0afdc20eedb32`. O teste PG do autor 1/1 cobre presença/ausência/schema parcial; secrets e webhook tornam-se bindings, e digest de arquivo é explicitamente não verificado. A pré-condição de textos sem credenciais continua aplicável; conferir o hash na integração.
+
+665de0e3: aprovado o escopo do autor para start autenticado com ACK perdido e reload em 360/390: um intent persistido, duas deliveries e segunda proposta/intent distinto. A prova estabelece zero native_execution_jobs; não demonstra unicidade de lançamento físico. Avaliar T27 junto das demais ações e montagem final, sem ampliar a evidência.
