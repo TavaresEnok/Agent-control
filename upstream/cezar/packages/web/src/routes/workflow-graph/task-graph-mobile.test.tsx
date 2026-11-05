@@ -9,7 +9,8 @@ vi.mock('@xyflow/react', () => ({
  EdgeLabelRenderer: ({children}: {children: React.ReactNode}) => children,
 }))
 vi.mock('@/lib/project-router', () => ({ Link: ({to, children}: {to:string,children:React.ReactNode}) => <a href={to}>{children}</a> }))
-vi.mock('@/api/queries', () => ({ useRun: () => ({ dataUpdatedAt: 0 }) }))
+const receipt = vi.hoisted(() => ({ at: 0 }))
+vi.mock('@/api/queries', () => ({ useRun: () => ({ dataUpdatedAt: receipt.at }) }))
 vi.mock('../task-thread/run-header', () => ({RunHeader: () => null}))
 vi.mock('./workflow-graph', () => ({FloatingPanel: ({children}: {children:React.ReactNode}) => <div>{children}</div>}))
 import { TaskGraphView } from './task-graph'
@@ -32,4 +33,18 @@ it('keeps node identity and state aligned between graph details and cards across
  expect(within(list).getByText('Estado: done')).toBeTruthy()
  fireEvent.click(screen.getByRole('button',{name:'Grafo'}))
  expect(screen.getByText('done')).toBeTruthy()
+})
+
+it('reports the age of the client receipt rather than a server latency', () => {
+ const now = vi.spyOn(Date, 'now').mockReturnValue(100_000)
+ receipt.at = 97_000
+ const run = {id:'run', steps:[], workflowDef:{name:'test', source:'file', steps:[{id:'implement', prompt:'test'}]}} as unknown as ApiRun
+ const {rerender} = render(<TaskGraphView run={run} embedded />)
+ expect(screen.getByText(/Última atualização recebida há 3 s/)).toBeTruthy()
+ receipt.at = 100_000
+ rerender(<TaskGraphView run={run} embedded />)
+ expect(screen.getByText(/Última atualização recebida há 0 s/)).toBeTruthy()
+ expect(screen.getByText(/Não mede a latência de projeção no servidor/)).toBeTruthy()
+ receipt.at = 0
+ now.mockRestore()
 })
