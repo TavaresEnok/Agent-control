@@ -21,8 +21,8 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
  try{
   await db.migrate();const principal='protocol-admin-'+randomUUID();await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
   const service=new NativeProtocolCompatibility(db);
-  for(const mode of ['old','new','incompatible','auth','timeout','early-exit','hang-descendant','fake-node','version-failed','version-flood']){
-   const tag=label+':'+mode;tags.push(tag);await run('docker',['build','--pull=false','--network=none','--label','agent-control.protocol-fixture='+label,'--build-arg','fixture_mode='+mode,'-t',tag,'tests/fixtures/r4-protocol'],{timeout:30000,maxBuffer:1024*1024});
+  for(const mode of ['old','new','incompatible','auth','timeout','early-exit','hang-descendant','fake-node','version-failed','version-flood','volume']){
+   const tag=label+':'+mode;tags.push(tag);await run('docker',['build','--target',mode==='volume'?'volume':'base','--pull=false','--network=none','--label','agent-control.protocol-fixture='+label,'--build-arg','fixture_mode='+mode,'-t',tag,'tests/fixtures/r4-protocol'],{timeout:30000,maxBuffer:1024*1024});
    const result=await run('docker',['image','inspect','--format','{{.Id}}',tag]);images.set(mode,result.stdout.trim());
   }
   const spec=(mode:string)=>{const workerImage=images.get(mode)!,toolsImage=images.get('old')!;return {kind:'execution' as const,workerImage,toolsImage,executorDigest:nativeExecutionExecutorDigest(workerImage,toolsImage)};};
@@ -37,7 +37,7 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   await assert.rejects(pin('new'),/NATIVE_PROTOCOL_UNCONFIRMED/);
   await assert.rejects(pin('old',randomUUID(),'fixed-worker-v2'),/NATIVE_PROTOCOL_UNCONFIRMED/);
   await assert.rejects(db.tx(c=>pinNativeProtocolForNewAttempt(c,{kind:'execution',jobId:oldJob,executorDigest:spec('old').executorDigest,model:'fixed-worker-v1',effort:'high'})),/NATIVE_PROTOCOL_PIN_CONFLICT/);
-  for(const mode of ['incompatible','auth','timeout','early-exit','version-failed','version-flood']){await assert.rejects(service.verify(principal,spec(mode)),/NATIVE_PROTOCOL_(?:OUTPUT_INVALID|REJECTED|TIMEOUT|PROCESS_EXITED|PROCESS_FAILED|VERSION_INVALID)/);await assert.rejects(pin(mode),/NATIVE_PROTOCOL_UNCONFIRMED/);}
+  for(const mode of ['incompatible','auth','timeout','early-exit','version-failed','version-flood','volume']){await assert.rejects(service.verify(principal,spec(mode)),/NATIVE_PROTOCOL_(?:OUTPUT_INVALID|REJECTED|TIMEOUT|PROCESS_EXITED|PROCESS_FAILED|VERSION_INVALID)/);await assert.rejects(pin(mode),/NATIVE_PROTOCOL_UNCONFIRMED/);}
   const newer=await service.verify(principal,spec('new'));assert.equal(newer.cliVersion,'codex-cli 2.0.0');await service.promote(principal,newer.id,0);assert.equal((await pin('new')).receiptId,newer.id);
   await service.revoke(principal,spec('old').executorDigest,1);await assert.rejects(pin('old'),/NATIVE_PROTOCOL_UNCONFIRMED/);assert.deepEqual(await pin('old',oldJob),oldPin);
   await assert.rejects(db.pool.query("UPDATE ac_native_protocol_receipts SET cli_version='forged' WHERE id=$1",[old.id]),/NATIVE_PROTOCOL_RECEIPT_IMMUTABLE/);
@@ -54,6 +54,7 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   assert.ok(probe&&physical&&logs.includes('SYNTHETIC_PULSE'),'DETACHED_PROBE_DID_NOT_START');
   const marker=logs.split('\n').find(line=>line.startsWith('{"probeDetached"'));assert.ok(marker);const detached=JSON.parse(marker!);assert.equal(detached.pid,detached.sid,'fixture really started a separate session');
   assert.equal(physical.HostConfig.NetworkMode,'none');assert.ok(physical.Mounts.every((mount:any)=>mount.Type==='tmpfs'&&mount.Destination==='/tmp'));
+  await assert.rejects(service.verify(principal,spec('new')),/NATIVE_PROTOCOL_PROBE_BUSY/);
   const controllerExit=once(controller,'exit');controller.kill('SIGKILL');assert.equal((await controllerExit)[1],'SIGKILL');controller=undefined;
   const deadPhysicalId=physical.Id;while(Date.now()<Number(probe.deadline_ms)+1500){try{physical=JSON.parse((await run('docker',['inspect',deadPhysicalId])).stdout)[0];if(!physical.State.Running)break;}catch{physical=undefined;break;}await new Promise(resolve=>setTimeout(resolve,100));}
   assert.ok(!physical||!physical.State.Running,'independent watchdog stops setsid descendants after controller death');
@@ -86,13 +87,15 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   while(Date.now()<Number(fakeProbe.deadline_ms)+1500){try{fakePhysical=JSON.parse((await run('docker',['inspect',fakePhysical.Id])).stdout)[0];if(!fakePhysical.State.Running)break;}catch{fakePhysical=undefined;break;}await new Promise(resolve=>setTimeout(resolve,100));}
   assert.ok(!fakePhysical||!fakePhysical.State.Running,'candidate fake node cannot bypass host lifetime');
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts WHERE executor_digest=$1',[spec('fake-node').executorDigest])).rows[0].n,0);
+  while(Date.now()<=Number(fakeProbe.deadline_ms))await new Promise(resolve=>setTimeout(resolve,Math.min(100,Number(fakeProbe.deadline_ms)-Date.now()+1)));
+  await service.reconcile(principal);
   const planImage=images.get('new')!,planning={kind:'planning' as const,workerImage:planImage,executorDigest:nativePlanningExecutorDigest(planImage)};
   const planReceipt=await service.verify(principal,planning);await service.promote(principal,planReceipt.id,0);
   assert.equal((await db.tx(c=>pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:randomUUID(),executorDigest:planning.executorDigest,model:'fixed-worker-v2',effort:'medium'}))).receiptId,planReceipt.id);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts')).rows[0].n,3);
   for(const table of ['ac_native_execution_jobs','ac_native_planning_jobs'])assert.equal((await db.pool.query('SELECT count(*)::int n FROM '+table)).rows[0].n,0);
   for(const image of images.values()){const containers=await run('docker',['ps','-a','--filter','label=agent-control.protocol-image='+image,'--format','{{.Names}}']);assert.equal(containers.stdout.trim(),'');}
-  console.log(JSON.stringify({trustedVerifier:'fixed credentialless network-none Docker CLI version/initialize/model-list',images:10,fakeCandidateInterpreterBounded:true,protocolFailuresRejected:6,controllerSigkillWatchdog:true,setsidDescendantStopped:true,delayedCreateDenied:true,immutableReceipts:3,oldPinnedReceiptSurvivesRevocation:true,callerPassedRejected:true,inference:false,officialEligibility:false}));
+  console.log(JSON.stringify({trustedVerifier:'fixed credentialless network-none Docker CLI version/initialize/model-list',images:11,unexpectedImageVolumeRejected:true,globalProbeAdmissionSerialized:true,fakeCandidateInterpreterBounded:true,protocolFailuresRejected:7,controllerSigkillWatchdog:true,setsidDescendantStopped:true,delayedCreateDenied:true,immutableReceipts:3,oldPinnedReceiptSurvivesRevocation:true,callerPassedRejected:true,inference:false,officialEligibility:false}));
  }catch(error){primaryFailure=error;throw error;}finally{
   const cleanupErrors:unknown[]=[];
   if(controller&&controller.exitCode===null&&controller.signalCode===null){try{const exited=once(controller,'exit');controller.kill('SIGKILL');await exited;}catch(error){cleanupErrors.push(error);}}
@@ -100,7 +103,7 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   for(const op of operations.rows){try{
    const found=await run('docker',['inspect',op.container_name]).catch(()=>null);if(!found)continue;
    const physical=JSON.parse(found.stdout)[0];
-   if([...images.values()].includes(physical.Image)&&physical.Config?.Labels?.['agent-control.protocol-operation']===op.id&&(!op.container_id||physical.Id===op.container_id))await run('docker',['rm','-f',physical.Id],{timeout:15000,maxBuffer:65536});
+   if([...images.values()].includes(physical.Image)&&physical.Config?.Labels?.['agent-control.protocol-operation']===op.id&&(!op.container_id||physical.Id===op.container_id))await run('docker',['rm','-f','-v',physical.Id],{timeout:15000,maxBuffer:65536});
   }catch(error){cleanupErrors.push(error);}}
   for(const tag of tags){try{const found=await run('docker',['image','inspect','--format','{{index .Config.Labels "agent-control.protocol-fixture"}}',tag]).catch(()=>null);if(found?.stdout.trim()===label)await run('docker',['image','rm',tag],{timeout:15000,maxBuffer:65536});}catch(error){cleanupErrors.push(error);}}
   await rm(privateFolder,{recursive:true,force:true}).catch(error=>cleanupErrors.push(error));await db.close().catch(error=>cleanupErrors.push(error));await isolated.close().catch(error=>cleanupErrors.push(error));

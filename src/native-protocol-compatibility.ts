@@ -64,13 +64,13 @@ async function retireProbe(ledger:Ledger,op:Probe){
   container.Config?.Labels?.['agent-control.protocol-image']!==op.worker_image||container.HostConfig?.NetworkMode!=='none'||container.HostConfig?.ReadonlyRootfs!==true||
   container.Config?.User!=='65534:65534'||container.HostConfig?.Privileged!==false||container.HostConfig?.PidMode==='host'||JSON.stringify(container.Config?.Entrypoint)!==JSON.stringify(['/usr/local/bin/codex'])||JSON.stringify(container.Config?.Cmd)!==JSON.stringify([op.phase==='version'?'--version':'app-server'])||!Array.isArray(container.Mounts)||container.Mounts.some((mount:any)=>mount.Type!=='tmpfs'||mount.Destination!=='/tmp'))throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');
  await ledger.tx(async c=>{const current=(await c.query('SELECT * FROM ac_native_protocol_probe_operations WHERE id=$1 FOR UPDATE',[op.id])).rows[0];if(!current||current.container_id&&current.container_id!==container.Id)throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');await c.query('UPDATE ac_native_protocol_probe_operations SET container_id=$2 WHERE id=$1',[op.id,container.Id]);});
- try{await run('docker',['rm','-f',container.Id],{env,timeout:10000,maxBuffer:65536});}catch{throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}
+ try{await run('docker',['rm','-f','-v',container.Id],{env,timeout:10000,maxBuffer:65536});}catch{throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}
  if(await inspectProbe(container.Id))throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');
  await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);
 }
 async function observe(spec:NativeProtocolSpec,ledger:Ledger){
  // No caller-provided runner, path, command, environment, transcript or success flag.
- const begin=async(phase:'version'|'rpc'):Promise<Probe>=>{const id=randomUUID(),name='ac-protocol-'+phase+'-'+id,deadline=Date.now()+15000;return (await ledger.pool.query<Probe>('INSERT INTO ac_native_protocol_probe_operations(id,executor_digest,worker_image,phase,container_name,deadline_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[id,spec.executorDigest,spec.workerImage,phase,name,deadline])).rows[0];};
+ const begin=async(phase:'version'|'rpc'):Promise<Probe>=>ledger.tx(async c=>{await c.query('SELECT pg_advisory_xact_lock(189234,85)');if((await c.query('SELECT 1 FROM ac_native_protocol_probe_operations WHERE NOT retired LIMIT 1')).rowCount)throw new Refusal('NATIVE_PROTOCOL_PROBE_BUSY');const id=randomUUID(),name='ac-protocol-'+phase+'-'+id,deadline=Date.now()+15000;return (await c.query<Probe>('INSERT INTO ac_native_protocol_probe_operations(id,executor_digest,worker_image,phase,container_name,deadline_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[id,spec.executorDigest,spec.workerImage,phase,name,deadline])).rows[0];});
  const version=await begin('version');
  let cliVersion:string,versionOwned:Awaited<ReturnType<typeof launchProbe>>|undefined;
  try{
