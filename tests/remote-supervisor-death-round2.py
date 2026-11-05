@@ -22,6 +22,18 @@ for p in pathlib.Path('/proc').iterdir():
 assert len(supervisors)==1,supervisors
 os.kill(supervisors[0],signal.SIGKILL)
 time.sleep(.1)
+# Corrupt origin evidence in the private fixture journal: neither mismatch may
+# authorize signaling the live child or a fabricated terminal receipt.
+record=pathlib.Path(c['stateDirectory'])/(op+'.json')
+original=json.loads(record.read_text()); assert original['origin']['pidNamespace']==original['pidNamespace']
+for change in ({'pidNamespace':'pid:[999999999]'}, {'startTime':'0'}):
+    record.write_text(json.dumps({**original,**change}))
+    mismatch=rpc(dict(schemaVersion=1,action='inspect',operationId=op))
+    assert mismatch['state']=='uncertain',mismatch
+    mismatch=rpc(dict(schemaVersion=1,action='cancel',operationId=op,projectId=project,taskId='slow',epoch=1))
+    assert mismatch['state']!='canceled_confirmed'
+    os.kill(original['pid'],0)
+record.write_text(json.dumps(original))
 res=rpc(dict(schemaVersion=1,action='cancel',operationId=op,projectId=project,taskId='slow',epoch=1))
 assert res['state']!='canceled_confirmed'
 time.sleep(2.2)

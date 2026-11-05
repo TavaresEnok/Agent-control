@@ -78,11 +78,19 @@ def execute(config_path, operation):
         def limits():
             resource.setrlimit(resource.RLIMIT_FSIZE, (max_log, max_log))
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        # Bind origin before any task is allowed to execute. The gated child exits
+        # on EOF if the supervisor dies before publishing its identity.
+        origin = {'bootId': pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                  'pidNamespace': os.readlink('/proc/self/ns/pid'),
+                  'supervisorPid': os.getpid(), 'supervisorStartTime': start_time(os.getpid())}
+        item['origin'] = origin
+        atomic(record, item)
         log_path = root / (operation + '.log')
         # One writer lock stays held until the physical process has actually exited.
         with open(log_path, 'xb') as log:
             os.chmod(log_path, 0o600)
-            child = subprocess.Popen(command, cwd=directory, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            child = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), '--gate', *command],
+                                     cwd=directory, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
                                      env={'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(directory)},
                                      start_new_session=True, preexec_fn=limits)
             try:
@@ -91,9 +99,13 @@ def execute(config_path, operation):
                 if child.poll() is None:
                     raise
                 observed_start = None
+            if observed_start is None or os.getpgid(child.pid) != child.pid:
+                raise ValueError('CHILD_IDENTITY_UNAVAILABLE')
             item.update(state='running', pid=child.pid, startTime=observed_start,
-                        bootId=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+                        bootId=origin['bootId'], pidNamespace=origin['pidNamespace'], pgid=child.pid)
             atomic(record, item)
+            child.stdin.write(b'1')
+            child.stdin.close()
             timed_out, canceled = False, False
             deadline = time.monotonic() + max_seconds
             while True:
@@ -118,6 +130,23 @@ def execute(config_path, operation):
         item.update(state='canceled_confirmed' if canceled else 'completed' if code == 0 else 'failed', exitCode=code, timedOut=timed_out,
                     logSha256=hashlib.sha256(log_path.read_bytes()).hexdigest(), finishedAt=time.time())
         atomic(record, item)
+
+
+def observed(item):
+    # Legacy or mismatched identities never justify reporting a live supervisor.
+    item = dict(item)
+    if item['state'] == 'running':
+        try:
+            origin = item['origin']
+            if (not item.get('pidNamespace') or item['pidNamespace'] != os.readlink('/proc/self/ns/pid')
+                    or origin['pidNamespace'] != item['pidNamespace'] or origin['bootId'] != item['bootId']
+                    or origin['supervisorStartTime'] != start_time(origin['supervisorPid'])
+                    or item['bootId'] != pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+                    or item['startTime'] != start_time(item['pid'])):
+                item['state'] = 'uncertain'
+        except (OSError, ValueError, KeyError, TypeError):
+            item['state'] = 'uncertain'
+    return item
 
 
 def rpc(config_path):
@@ -151,22 +180,15 @@ def rpc(config_path):
             if item['state'] in ('completed', 'failed', 'canceled_confirmed'):
                 return item
             atomic(root / (operation + '.cancel.json'), {'operationId': operation, 'requestedAt': time.time()})
-            return {**item, 'cancellationRequested': True}
+            return {**observed(item), 'cancellationRequested': True}
     if action == 'inspect':
         if set(request) != {'schemaVersion', 'operationId', 'action'}:
             raise ValueError('INVALID_REQUEST')
         if not record.exists():
             return {'schemaVersion': 1, 'operationId': operation, 'state': 'unknown'}
         item = json.loads(record.read_text())
-        # An absent/reused PID is uncertainty, never proof of successful completion.
-        if item['state'] == 'running':
-            try:
-                if (item['bootId'] != pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
-                        or item['startTime'] != start_time(item['pid'])):
-                    item['state'] = 'uncertain'
-            except (OSError, ValueError):
-                item['state'] = 'uncertain'
-        return item
+        # Missing or reused identities are uncertainty, never proof of completion.
+        return observed(item)
     if action != 'start' or set(request) != {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'root', 'epoch'}:
         raise ValueError('INVALID_REQUEST')
     project, task = request['projectId'], request['taskId']
@@ -196,6 +218,12 @@ def rpc(config_path):
 
 
 def main():
+    # The task must not start until the supervisor has durably recorded both
+    # process identities. No command is retried when this handshake is lost.
+    if len(sys.argv) > 2 and sys.argv[1] == '--gate':
+        if sys.stdin.buffer.read(1) != b'1':
+            raise SystemExit(125)
+        os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', required=True)
     parser.add_argument('--execute')
