@@ -72,12 +72,12 @@ async function observe(spec:NativeProtocolSpec,ledger:Ledger){
  // No caller-provided runner, path, command, environment, transcript or success flag.
  const begin=async(phase:'version'|'rpc'):Promise<Probe>=>{const id=randomUUID(),name='ac-protocol-'+phase+'-'+id,deadline=Date.now()+15000;return (await ledger.pool.query<Probe>('INSERT INTO ac_native_protocol_probe_operations(id,executor_digest,worker_image,phase,container_name,deadline_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[id,spec.executorDigest,spec.workerImage,phase,name,deadline])).rows[0];};
  const version=await begin('version');
- let cliVersion:string;
+ let cliVersion:string,versionOwned:Awaited<ReturnType<typeof launchProbe>>|undefined;
  try{
-  const owned=await launchProbe(ledger,version),chunks:Buffer[]=[];let size=0,stderr=0;
+  const owned=versionOwned=await launchProbe(ledger,version),chunks:Buffer[]=[];let size=0,stderr=0;
   const output=await new Promise<string>((resolve,reject)=>{owned.child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>8192){owned.child.send?.({stop:true});reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));}else chunks.push(chunk);});owned.child.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.length;});owned.child.stdout.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.stderr.on('error',()=>reject(new Refusal('NATIVE_PROTOCOL_PROCESS_FAILED')));owned.child.on('close',()=>{if(stderr||!chunks.length||owned.exitCode()!==0)reject(new Refusal('NATIVE_PROTOCOL_VERSION_INVALID'));else resolve(Buffer.concat(chunks).toString('utf8'));});});
   await owned.flush();cliVersion=z.string().regex(/^codex(?:-cli)? \d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/).parse(output.trim());
- }catch(error){throw error instanceof Refusal?error:new Refusal('NATIVE_PROTOCOL_VERSION_INVALID');}finally{await retireProbe(ledger,version);}
+ }catch(error){throw error instanceof Refusal?error:new Refusal('NATIVE_PROTOCOL_VERSION_INVALID');}finally{if(versionOwned)await versionOwned.stopAndWait();await retireProbe(ledger,version);}
  const rpc=await begin('rpc');const owned=await launchProbe(ledger,rpc),child=owned.child;
  const lines=createInterface({input:child.stdout});const transcript:unknown[]=[];
  let bytes=0,stderr=0,failure:Error|undefined;const pending=new Map<string,{resolve:(v:unknown)=>void;reject:(e:Error)=>void}>();

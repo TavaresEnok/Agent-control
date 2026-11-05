@@ -21,7 +21,7 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
  try{
   await db.migrate();const principal='protocol-admin-'+randomUUID();await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
   const service=new NativeProtocolCompatibility(db);
-  for(const mode of ['old','new','incompatible','auth','timeout','early-exit','hang-descendant','fake-node','version-failed']){
+  for(const mode of ['old','new','incompatible','auth','timeout','early-exit','hang-descendant','fake-node','version-failed','version-flood']){
    const tag=label+':'+mode;tags.push(tag);await run('docker',['build','--pull=false','--network=none','--label','agent-control.protocol-fixture='+label,'--build-arg','fixture_mode='+mode,'-t',tag,'tests/fixtures/r4-protocol'],{timeout:30000,maxBuffer:1024*1024});
    const result=await run('docker',['image','inspect','--format','{{.Id}}',tag]);images.set(mode,result.stdout.trim());
   }
@@ -37,7 +37,7 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   await assert.rejects(pin('new'),/NATIVE_PROTOCOL_UNCONFIRMED/);
   await assert.rejects(pin('old',randomUUID(),'fixed-worker-v2'),/NATIVE_PROTOCOL_UNCONFIRMED/);
   await assert.rejects(db.tx(c=>pinNativeProtocolForNewAttempt(c,{kind:'execution',jobId:oldJob,executorDigest:spec('old').executorDigest,model:'fixed-worker-v1',effort:'high'})),/NATIVE_PROTOCOL_PIN_CONFLICT/);
-  for(const mode of ['incompatible','auth','timeout','early-exit','version-failed']){await assert.rejects(service.verify(principal,spec(mode)),/NATIVE_PROTOCOL_(?:OUTPUT_INVALID|REJECTED|TIMEOUT|PROCESS_EXITED|PROCESS_FAILED|VERSION_INVALID)/);await assert.rejects(pin(mode),/NATIVE_PROTOCOL_UNCONFIRMED/);}
+  for(const mode of ['incompatible','auth','timeout','early-exit','version-failed','version-flood']){await assert.rejects(service.verify(principal,spec(mode)),/NATIVE_PROTOCOL_(?:OUTPUT_INVALID|REJECTED|TIMEOUT|PROCESS_EXITED|PROCESS_FAILED|VERSION_INVALID)/);await assert.rejects(pin(mode),/NATIVE_PROTOCOL_UNCONFIRMED/);}
   const newer=await service.verify(principal,spec('new'));assert.equal(newer.cliVersion,'codex-cli 2.0.0');await service.promote(principal,newer.id,0);assert.equal((await pin('new')).receiptId,newer.id);
   await service.revoke(principal,spec('old').executorDigest,1);await assert.rejects(pin('old'),/NATIVE_PROTOCOL_UNCONFIRMED/);assert.deepEqual(await pin('old',oldJob),oldPin);
   await assert.rejects(db.pool.query("UPDATE ac_native_protocol_receipts SET cli_version='forged' WHERE id=$1",[old.id]),/NATIVE_PROTOCOL_RECEIPT_IMMUTABLE/);
@@ -92,7 +92,7 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts')).rows[0].n,3);
   for(const table of ['ac_native_execution_jobs','ac_native_planning_jobs'])assert.equal((await db.pool.query('SELECT count(*)::int n FROM '+table)).rows[0].n,0);
   for(const image of images.values()){const containers=await run('docker',['ps','-a','--filter','label=agent-control.protocol-image='+image,'--format','{{.Names}}']);assert.equal(containers.stdout.trim(),'');}
-  console.log(JSON.stringify({trustedVerifier:'fixed credentialless network-none Docker CLI version/initialize/model-list',images:9,fakeCandidateInterpreterBounded:true,protocolFailuresRejected:5,controllerSigkillWatchdog:true,setsidDescendantStopped:true,delayedCreateDenied:true,immutableReceipts:3,oldPinnedReceiptSurvivesRevocation:true,callerPassedRejected:true,inference:false,officialEligibility:false}));
+  console.log(JSON.stringify({trustedVerifier:'fixed credentialless network-none Docker CLI version/initialize/model-list',images:10,fakeCandidateInterpreterBounded:true,protocolFailuresRejected:6,controllerSigkillWatchdog:true,setsidDescendantStopped:true,delayedCreateDenied:true,immutableReceipts:3,oldPinnedReceiptSurvivesRevocation:true,callerPassedRejected:true,inference:false,officialEligibility:false}));
  }catch(error){primaryFailure=error;throw error;}finally{
   const cleanupErrors:unknown[]=[];
   if(controller&&controller.exitCode===null&&controller.signalCode===null){try{const exited=once(controller,'exit');controller.kill('SIGKILL');await exited;}catch(error){cleanupErrors.push(error);}}
