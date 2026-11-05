@@ -10,6 +10,11 @@ export const CAPACITY_EXCLUSION_REASONS = [
   'ineligible',
   'quota_exhausted',
   'quota_unknown',
+  'quota_rate_limited',
+  'authentication_required',
+  'provider_unreachable',
+  'provider_configuration_error',
+  'quota_disabled',
 ] as const
 export type CapacityExclusionReason = (typeof CAPACITY_EXCLUSION_REASONS)[number]
 
@@ -19,7 +24,7 @@ const exclusionSchema = z.object({
 }).strict()
 export type CapacityWaitExclusion = z.infer<typeof exclusionSchema>
 
-const EXCLUSION_TEXT: Record<CapacityExclusionReason, string> = {
+export const EXCLUSION_TEXT: Record<CapacityExclusionReason, string> = {
   profile_missing: 'Perfil removido',
   access_removed: 'Acesso ao projeto removido',
   account_disabled: 'Conta desativada',
@@ -28,6 +33,11 @@ const EXCLUSION_TEXT: Record<CapacityExclusionReason, string> = {
   ineligible: 'Inelegível para o plano ou modo',
   quota_exhausted: 'Cota esgotada',
   quota_unknown: 'Cota desconhecida',
+  quota_rate_limited: 'Limite temporário de requisições',
+  authentication_required: 'Autenticação necessária',
+  provider_unreachable: 'Provedor indisponível ou sem conexão',
+  provider_configuration_error: 'Configuração do provedor inválida',
+  quota_disabled: 'Fonte de cota desabilitada',
 }
 
 /** A missing or invalid list is omitted. It is not turned into a reason. */

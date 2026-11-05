@@ -21,3 +21,12 @@ it('rejects selection evidence that does not match the grant',()=>{
  const {container}=render(<AgentControlGrantSelection selection={grantSelectionSchema.parse(base)} accountId={profileId} profileId={profileId} accounts={[{id:accountId,label:'Não exibir'}]} profiles={[]}/>)
  expect(container.textContent).toContain('Detalhes da seleção não disponíveis');expect(container.textContent).not.toContain('Não exibir')
 })
+
+it('keeps provider failure reasons distinct and hides unavailable skipped profile identities',()=>{
+ const skipped='00000000-0000-4000-8000-000000000003'
+ const selection=grantSelectionSchema.parse({...base,preferredProfileId:skipped,skippedCandidates:[{profileId:skipped,reason:'authentication_required'}]})
+ expect(selection).not.toBeNull()
+ const {container}=render(<AgentControlGrantSelection selection={selection} accountId={accountId} profileId={profileId} accounts={[]} profiles={[]}/>)
+ expect(screen.getByText(/Autenticação necessária/)).toBeTruthy();expect(container.textContent).not.toContain(skipped);expect(container.textContent).not.toContain('Cota esgotada')
+ expect(grantSelectionSchema.parse({...base,preferredProfileId:skipped,skippedCandidates:[]})).toBeNull()
+})

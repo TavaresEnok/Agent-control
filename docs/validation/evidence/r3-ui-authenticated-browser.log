@@ -1,0 +1,4 @@
+LOCAL_METRIC signed pause acceptance_ms=410 projection_ms=812; loopback synthetic sample only
+PASS 360: canonical Happier token, production cookie/auth routes, conversation access, mobile settings and logout, signed refusal/bootstrap/policy conflict/rollback/pause/register and persistence after two server restarts
+PASS 390: canonical Happier token, production cookie/auth routes, conversation access, mobile settings and logout
+PASS no execution or inference; disposable synthetic lab only; physical Android not exercised

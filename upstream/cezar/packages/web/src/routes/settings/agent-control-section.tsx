@@ -1,3 +1,6 @@
+import {AgentControlUsageReport} from './agent-control-usage-report'
+import {AgentControlInstallationAuthority} from './agent-control-installation-authority'
+import {AgentControlQuotaRegistry} from './agent-control-quota-registry'
 import {AgentControlGrantSelection,grantSelectionSchema} from './agent-control-grant-selection'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -51,8 +54,8 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  providerEligibility:providerEligibilityViewSchema,
  administrative:administrativeViewSchema,
  providerBindings:z.array(agentControlProviderBindingSchema),providerAdapters:z.array(agentControlProviderAdapterSchema),
- accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),mode:z.string(),quota_status:z.string(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
- profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
+ accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),mode:z.string(),quota_status:z.string(),quota_scope_mode:z.enum(['account','model']).optional(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
+ profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),quota_status:z.string().optional(),quota_scope_mode:z.enum(['account','model']).optional(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
  catalog:z.array(catalogEntrySchema),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
  qualityPolicies:z.array(z.object({revision:z.number(),snapshot:z.object({requireSpecialistBeforeImplementation:z.boolean().optional()}).passthrough().optional()})),
@@ -150,16 +153,18 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </label>
    {selectedContext&&<div className="flex flex-wrap items-center gap-2">
     <span>{selectedContext.paused?'Pausada':'Ativa'}</span>
-    <Button disabled={busy} onClick={()=>mutate.mutate({action:'context.pause',payload:{paused:!selectedContext.paused,expectedRevision:selectedContext.pause_revision}})}>
+    <Button disabled={busy||!data} onClick={()=>mutate.mutate({action:'context.pause',payload:{paused:!selectedContext.paused,expectedRevision:selectedContext.pause_revision}})}>
      {selectedContext.paused?'Retomar etapas':'Pausar novas etapas'}
     </Button>
-    <Button disabled={busy} onClick={()=>mutate.mutate({action:'context.drain',payload:{draining:!selectedContext.draining,expectedRevision:selectedContext.drain_revision}})}>
+    <Button disabled={busy||!data} onClick={()=>mutate.mutate({action:'context.drain',payload:{draining:!selectedContext.draining,expectedRevision:selectedContext.drain_revision}})}>
      {selectedContext.draining?'Permitir novos planos':'Concluir planos aceitos e aguardar'}
     </Button>
     <p className="w-full text-xs text-muted-foreground">{selectedContext.draining?'Drenagem ativa: os planos já aceitos podem concluir; novos planos são recusados.':'Novos planos permitidos, sujeitos à pausa, às políticas e à capacidade.'} A pausa impede novas etapas; não confirma cancelamento de processos.</p>
    </div>}
   </SettingsField>
   <Button variant="outline" disabled={busy} onClick={()=>{void request('/api/v1/ac/auth/logout',{}).then(()=>window.location.reload())}}>Sair deste navegador</Button>
+  <AgentControlQuotaRegistry/>
+  <AgentControlInstallationAuthority/>
   <AgentControlImportPreview/>
   <AgentControlProjectAdmin/>
   {(contexts.error||resources.error||usage.error)&&<p role="alert">{(contexts.error||resources.error||usage.error)?.message}</p>}
@@ -169,6 +174,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   {data?.qaWaiver&&<AgentControlQaWaiver key={`qa-waiver-${contextId}`} view={data.qaWaiver} busy={busy} onAuthorize={payload=>mutate.mutate({action:'qa.waiver.authorize',payload})} onRevoke={authorizationId=>mutate.mutate({action:'qa.waiver.revoke',payload:{authorizationId}})}/>}
   {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
   {data&&<AgentControlManagerStatus key={`manager-status-${contextId}`} contextId={contextId}/>}
+  {data&&<AgentControlUsageReport key={`usage-report-${contextId}`} contextId={contextId} profiles={data.profiles}/>}
   {data&&<AgentControlPortableExport key={`portable-export-${contextId}`} contextId={contextId} canExport={data.canApproveIntegration}/>}
   {data&&<SettingsField title="Planos desta conversa" hint="Cancelar bloqueia novas etapas. A confirmação de parada depende da reconciliação física e preserva os artefatos existentes.">
    {data.plans.length===0&&<p>Nenhum plano aceito nesta conversa.</p>}
@@ -247,6 +253,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </SettingsField>
    <SettingsField title="Perfis" hint="Modelo, esforço e função pertencem a um perfil de uma conta específica.">
     <ul className="flex flex-col gap-2">{data.profiles.map(p=>{const account=data.accounts.find(a=>a.id===p.account_id);return <li key={p.id} className="break-words rounded-md border p-3">{p.model} · {p.effort} · {p.role} · {p.enabled?'Habilitado':'Desabilitado'}<br/>
+     Cota efetiva deste perfil: {p.quota_status??'desconhecida'}{p.quota_scope_mode==='model'?' · por modelo':''}<br/>
      {account&&account.mode!=='synthetic'&&<p className="text-sm">Perfil configurado; execução não ativada.</p>}
      {p.can_manage?<Button type="button" disabled={busy||(!p.enabled&&account?.mode!=='synthetic')} onClick={()=>mutate.mutate({action:'profile.state',payload:{id:p.id,enabled:!p.enabled,expectedRevision:p.revision}})}>
       {p.enabled?'Desabilitar perfil':'Habilitar perfil'}

@@ -7,6 +7,7 @@ import {SettingsField} from './settings-field'
 import {signControl} from './agent-control-operator'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
+import {AgentControlRemoteReturn,remoteReturnCandidateSchema,remoteReturnReceiptSchema} from './agent-control-remote-return'
 import {AgentControlRemoteSourceImport} from './agent-control-remote-source-import'
 
 const RemoteSource=z.object({projectId:z.string().uuid(),hostId:z.string().uuid(),commit:z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
@@ -16,6 +17,7 @@ const RemoteCandidate=z.object({projectId:z.string().uuid(),contextId:z.string()
  sha256:z.string().regex(/^[a-f0-9]{64}$/),state:z.literal('exported'),reviewStatus:z.literal('not_reviewed')}).refine(value=>value.commit.length===value.tree.length)
 const View=z.object({principalId:z.string(),installationId:z.string().uuid(),operatorDeviceIds:z.array(z.string().uuid()),canRegister:z.boolean(),
  server:z.object({kind:z.literal('local'),remoteManagement:z.literal(false)}),roots:z.array(z.object({id:z.string(),label:z.string()})),
+ remoteReturnCandidates:z.array(remoteReturnCandidateSchema).max(100).optional(),remoteReturns:z.array(remoteReturnReceiptSchema).max(100).optional(),
  remoteSources:z.array(RemoteSource).max(100).optional(),remoteSourceCandidates:z.array(RemoteCandidate).max(100).optional()})
 const Result=z.object({state:z.literal('applied'),projectId:z.string().uuid()})
 async function json(response:Response){
@@ -57,6 +59,7 @@ export function AgentControlProjectAdmin(){
    {sources.map(source=><p key={`${source.projectId}:${source.commit}`}>Host {source.hostId}; commit {source.commit}; tree {source.tree}; estado materializado; revisão não revisada.</p>)}
   </div>}
   {view.data?.remoteSourceCandidates&&<AgentControlRemoteSourceImport principalId={view.data.principalId} installationId={view.data.installationId} candidates={candidates}/>}
+  {view.data?.remoteReturnCandidates&&<AgentControlRemoteReturn principalId={view.data.principalId} installationId={view.data.installationId} candidates={view.data.remoteReturnCandidates.filter(candidate=>!projectId||candidate.projectId===projectId)} receipts={(view.data.remoteReturns??[]).filter(receipt=>!projectId||receipt.projectId===projectId)}/>}
   {view.isPending&&<p role="status">Carregando permissões…</p>}
   {view.error&&<p role="alert">Não foi possível carregar a administração de projetos.</p>}
   {view.data&&!view.data.canRegister&&<p>O cadastro de projetos exige administrador global.</p>}

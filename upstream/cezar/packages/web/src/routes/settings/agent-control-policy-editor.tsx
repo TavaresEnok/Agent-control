@@ -20,28 +20,29 @@ type Props={profiles:{id:string;account_id:string;model:string;effort:string;rol
 /** Edits the existing capacity contract; publication and assignment remain distinct. */
 export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPublish}:Props){
  const [roles,setRoles]=useState<Draft>(empty),[programmers,setProgrammers]=useState(10),[evaluators,setEvaluators]=useState(2)
- const [loaded,setLoaded]=useState(''),[error,setError]=useState('')
+ const [loaded,setLoaded]=useState(''),[rollback,setRollback]=useState<string|null>(null),[error,setError]=useState('')
  const [baseRevision,setBaseRevision]=useState(policies.at(-1)?.revision??0)
  const describe=(id:string)=>{const profile=profiles.find(p=>p.id===id);return profile
   ?`${accounts.find(a=>a.id===profile.account_id)?.label??'Conta'} · ${profile.model} · ${profile.effort}`:id}
  const add=(role:Role,kind:'regular'|'emergency',id:string)=>{
   if(!id)return
+  setRollback(null)
   setRoles(current=>{
    if([...current[role].regular,...current[role].emergency].includes(id))return current
    return {...current,[role]:{...current[role],[kind]:[...current[role][kind],id]}}
   })
  }
- const edit=(role:Role,kind:'regular'|'emergency',index:number,action:'remove'|'up'|'down')=>setRoles(current=>{
+ const edit=(role:Role,kind:'regular'|'emergency',index:number,action:'remove'|'up'|'down')=>{setRollback(null);setRoles(current=>{
   const list=[...current[role][kind]]
   if(action==='remove')list.splice(index,1)
   else{const target=index+(action==='up'?-1:1);if(target<0||target>=list.length)return current;[list[index],list[target]]=[list[target]!,list[index]!]}
   return {...current,[role]:{...current[role],[kind]:list}}
- })
- const load=()=>{
+ })}
+ const load=(restore=false)=>{
   const parsed=policyEditorSchema.safeParse(policies.find(p=>String(p.revision)===loaded)?.snapshot)
   if(!parsed.success){setError('Não foi possível carregar essa revisão.');return}
   const next=empty();for(const role of roleSchema.options){const chain=parsed.data.roles[role];if(chain)next[role]={regular:[...chain.regular],emergency:[...chain.emergency]}}
-  setRoles(next);setProgrammers(parsed.data.maxProgrammersPerContext);setEvaluators(parsed.data.maxEvaluatorsPerContext);setBaseRevision(policies.at(-1)?.revision??0);setError('')
+  setRollback(restore?loaded:null);setRoles(next);setProgrammers(parsed.data.maxProgrammersPerContext);setEvaluators(parsed.data.maxEvaluatorsPerContext);setBaseRevision(policies.at(-1)?.revision??0);setError('')
  }
  return <form className="flex min-w-0 flex-col gap-4" onSubmit={event=>{
   event.preventDefault();setError('')
@@ -60,11 +61,13 @@ export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPubl
      <option value="">Nova política</option>{policies.map(p=><option key={p.revision} value={p.revision}>Revisão {p.revision}</option>)}
     </select>
    </label>
-   <Button type="button" disabled={busy||!loaded} onClick={load}>Carregar revisão</Button>
+   <Button type="button" disabled={busy||!loaded} onClick={()=>load()}>Carregar revisão</Button>
+   <Button type="button" variant="outline" disabled={busy||!loaded} onClick={()=>load(true)}>Preparar reversão desta revisão</Button>
   </div>
+  {rollback&&<p role="status">Reversão preparada da revisão {rollback}. Publique para criar uma nova revisão com este conteúdo; tentativas existentes preservam sua política original.</p>}
   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-   <label>Programadores por conversa<Input aria-label="Programadores por conversa" type="number" min={1} max={10} value={programmers} onChange={e=>setProgrammers(Number(e.target.value))}/></label>
-   <label>Avaliações por conversa<Input aria-label="Avaliações por conversa" type="number" min={1} max={10} value={evaluators} onChange={e=>setEvaluators(Number(e.target.value))}/></label>
+   <label>Programadores por conversa<Input aria-label="Programadores por conversa" type="number" min={1} max={10} value={programmers} onChange={e=>{setRollback(null);setProgrammers(Number(e.target.value))}}/></label>
+   <label>Avaliações por conversa<Input aria-label="Avaliações por conversa" type="number" min={1} max={10} value={evaluators} onChange={e=>{setRollback(null);setEvaluators(Number(e.target.value))}}/></label>
   </div>
   <p className="text-xs text-muted-foreground">A ordem regular define a seleção inicial. Um trabalhador regular saudável permanece; a reserva recebe novas tarefas somente enquanto os regulares estão indisponíveis. As vagas globais continuam limitando esta conversa.</p>
   {baseRevision!==(policies.at(-1)?.revision??0)&&<p role="status">Uma nova revisão foi publicada. Carregue a revisão desejada antes de publicar outra alteração.</p>}
@@ -85,6 +88,6 @@ export function AgentControlPolicyEditor({profiles,accounts,policies,busy,onPubl
    </div>)}
   </fieldset>)}
   {error&&<p role="alert">{error}</p>}
-  <Button type="submit" disabled={busy||baseRevision!==(policies.at(-1)?.revision??0)}>Publicar nova revisão</Button>
+  <Button type="submit" disabled={busy||baseRevision!==(policies.at(-1)?.revision??0)}>{rollback?'Publicar reversão como nova revisão':'Publicar nova revisão'}</Button>
  </form>
 }

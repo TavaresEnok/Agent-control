@@ -36,3 +36,12 @@ it('refuses a role with only emergency profiles instead of silently dropping it'
  fireEvent.click(screen.getByText('Publicar nova revisão'))
  expect(publish).not.toHaveBeenCalled();expect(screen.getByRole('alert').textContent).toContain('Cada função configurada precisa de um perfil regular')
 })
+
+it('captures the restored revision rather than an unloaded dropdown choice and clears rollback on edits',()=>{
+ const publish=vi.fn(),original={schemaVersion:1,maxProgrammersPerContext:10,maxEvaluatorsPerContext:2,roles:{programmer:{regular:[id(2)],emergency:[]}}},later={...original,maxProgrammersPerContext:2}
+ render(<AgentControlPolicyEditor profiles={profiles} accounts={accounts} policies={[{revision:1,snapshot:original},{revision:2,snapshot:later}]} busy={false} onPublish={publish}/>)
+ fireEvent.change(screen.getByLabelText('Revisão para editar'),{target:{value:'1'}});fireEvent.click(screen.getByText('Preparar reversão desta revisão'));fireEvent.change(screen.getByLabelText('Revisão para editar'),{target:{value:'2'}})
+ expect(screen.getByRole('status').textContent).toContain('Reversão preparada da revisão 1.')
+ fireEvent.click(screen.getByText('Publicar reversão como nova revisão'));expect(publish).toHaveBeenLastCalledWith({expectedRevision:2,policy:original})
+ fireEvent.change(screen.getByLabelText('Programadores por conversa'),{target:{value:'3'}});expect(screen.queryByText('Publicar reversão como nova revisão')).toBeNull();expect(screen.getByText('Publicar nova revisão')).toBeTruthy()
+})
