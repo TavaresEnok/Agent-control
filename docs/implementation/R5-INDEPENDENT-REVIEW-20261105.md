@@ -103,3 +103,7 @@ A prova sustenta o cenário físico delimitado, não autoriza sozinho aceite glo
 ## Gateway de grafos 5e512853
 
 Aprovada a montagem delimitada por inspeção: o gateway despacha somente os dois caminhos exatos após autenticação; a configuração de produção verifica Origin nas sessões, e a API aplica autorização de projeto e prova assinada no save. O teste de gateway 1/1 e o typecheck registrados são do autor. O teste injeta autenticação simulada e não demonstra a jornada real server-main/browser nem amplia o aceite móvel existente.
+
+## Bootstrap de inventário de recuperação 102414b9
+
+Aprovada por inspeção a montagem delimitada: consulta policy PG, verifica identidade, hash, epoch e estado do catálogo físico antes de anexar a capability e iniciar runtime; configuração ausente quando exigida falha fechada. O teste sintético 1/1 é do autor, não demonstra server-main com PG físico, provisionamento, adapters nem reconciliação. Após avanço de epoch, o reinício exige configuração atualizada; epoch antigo falha fechado. O aceite integral T30 mantém os limites anteriores.
