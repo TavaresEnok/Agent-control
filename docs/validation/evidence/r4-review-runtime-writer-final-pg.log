@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: unstarted managed native task adopts the successor only with intact frozen input and no launch
+ok 1 - unstarted managed native task adopts the successor only with intact frozen input and no launch
+  ---
+  duration_ms: 2033.44897
+  type: 'test'
+  ...
+# Subtest: retirement retries a lost network removal acknowledgement once
+ok 2 - retirement retries a lost network removal acknowledgement once
+  ---
+  duration_ms: 1.47579
+  type: 'test'
+  ...
+# Subtest: prejournal managed writer continuation preserves original identity and unknown host proof blocks takeover
+ok 3 - prejournal managed writer continuation preserves original identity and unknown host proof blocks takeover
+  ---
+  duration_ms: 3985.752655
+  type: 'test'
+  ...
+# Subtest: review regression: second successor retains original writer after prior no-effect continuation
+ok 4 - review regression: second successor retains original writer after prior no-effect continuation
+  ---
+  duration_ms: 2308.853201
+  type: 'test'
+  ...
+# Subtest: semantic planning journals uncertain generation, reconciles without inference replay, preserves pause and atomically publishes one proposal
+ok 5 - semantic planning journals uncertain generation, reconciles without inference replay, preserves pause and atomically publishes one proposal
+  ---
+  duration_ms: 3518.646462
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15372.065256

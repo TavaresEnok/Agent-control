@@ -1,0 +1,71 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID,generateKeyPairSync} from 'node:crypto';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {Ledger} from '../src/ledger.ts';
+import {Capacity} from '../src/capacity.ts';
+import {Templates} from '../src/templates.ts';
+import {ManagerPlans} from '../src/planning.ts';
+import {readManagedRecipe} from '../src/managed-plan.ts';
+import {NativeImplementation} from '../src/native-implementation.ts';
+import {claimWorktreeWriter} from '../src/worktree-lease.ts';
+import {admitNativeResources,reconcileNativeResourceAdmissions,NativeResourceDockerDaemon} from '../src/native-resource-envelope.ts';
+import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
+import {digest,Refusal} from '../src/contracts.ts';
+import {isolatedDatabase} from './fixtures/isolated-database.ts';
+import {provisionEngineering} from './fixtures/provision-engineering.ts';
+
+test('review regression: second successor retains original writer after prior no-effect continuation',{timeout:90000},async()=>{
+ const url=process.env.AC_TEST_DATABASE_URL;if(!url)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const fixture=await isolatedDatabase(url,'nativeunstarted'),db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-unstarted-'));
+ try{
+  await db.migrate();const repo=join(area,'repo');execFileSync('git',['init','-q','-b','main',repo]);
+  const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
+  git('config','user.name','fixture');git('config','user.email','fixture@invalid');await writeFile(join(repo,'README'),'fixture');git('add','.');git('commit','-qm','base');git('branch','protected');const base=git('rev-parse','HEAD');
+  const project=randomUUID(),principal='unstarted-'+randomUUID();await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'unstarted']);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
+  const {revision,options}=await provisionEngineering(db,principal,project,repo);const context=await db.createContext(principal,project,randomUUID());await new Capacity(db).assignPolicy(principal,context,revision);
+  await new Templates(db).publish(principal,context,0,{workflow:'engineering-native-v1',qualityRevision:1,targetRef:'refs/heads/protected',writePaths:['src'],execution:'plan'});
+  const authority=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
+  const task={id:'one',objectiveRef:'message:one',acceptanceRefs:['acceptance:one'],inputRefs:[],outputRefs:['output:one'],dependsOn:[],writePaths:['src/one'],qualityRevision:1,targetRef:'refs/heads/protected',maxCorrections:0};
+  const plan={schemaVersion:1 as const,contextId:context,objectiveRef:'message:objective',sourceMessageRef:'message:request',constraintRefs:[],tasks:[task]};const proposal=await new ManagerPlans(db).publish(principal,authority,0,plan);
+  const parent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'encrypted:fixture',proposalRevision:proposal.revision,proposalDigest:proposal.digest,native:true}},authority,'api');
+  const recipe=await readManagedRecipe(db,parent.id),unit=recipe.units.find(u=>u.kind==='task')!;const intent=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[unit.intentId])).rows[0];
+  const input={parentIntentId:parent.id,unitId:unit.id,kind:unit.kind,base,writePaths:unit.writePaths,acceptanceRefs:unit.acceptanceRefs,sources:unit.sources};await db.pool.query('INSERT INTO ac_managed_delivery_inputs VALUES($1,$2,$3,$4)',[intent.id,base,input,digest(input)]);
+  const account=(await db.pool.query('SELECT account_id FROM ac_account_access WHERE project_id=$1',[project])).rows[0].account_id;
+  const spool=join(area,'spool'),accounts=join(area,'accounts');await mkdir(spool);await mkdir(accounts);const keys=generateKeyPairSync('ed25519');
+  const supervisor=new NativeExecutionSupervisor(db,{id:'fixture-native',workerImage:'sha256:'+'a'.repeat(64),toolsImage:'sha256:'+'a'.repeat(64),hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'b'.repeat(64),accountSubjects:[{accountId:account,subjectDigest:'c'.repeat(64)}],workerEnv:[],toolsEnv:[]});
+
+  const native=new NativeImplementation(db,repo,options.quality,[supervisor]),capacity=new Capacity(db);
+  const writerKey={parentIntentId:parent.id,runId:unit.runId,intentId:intent.id,epoch:authority.epoch};
+  await db.tx(async c=>{await db.fence(c,authority);await claimWorktreeWriter(c,writerKey);});
+  const oldGrant=await capacity.reserve(principal,{attemptId:randomUUID(),contextId:context,intentId:intent.id,role:'programmer'},authority);
+  await db.pool.query('UPDATE ac_operations SET grant_id=$2,execution_attempt_id=$3 WHERE id=$1',[intent.operation_id,oldGrant.id,oldGrant.attempt_id]);
+  const docker=new NativeResourceDockerDaemon({stateRoot:spool,installationId:'continuation-fixture',authorityEpoch:1,resourceAuthority:{authorityId:'ac-r3-resources-continuation',anchorId:'a'.repeat(64),cpuQuotaMicros:50000,cpuPeriodMicros:100000,memoryBytes:16777216,pidsLimit:16,maxJobs:2}});
+  // Host receipt is injected for this PostgreSQL/state-machine proof; the
+  // separate native-resource-envelope suite proves the physical absence RPC.
+  let unknown=false,admissions=0;
+  docker.callResource=async(action)=>{if(action==='admit'){admissions++;return {};}if(action==='cancel_admission'){if(unknown)throw new Refusal('NATIVE_RESOURCE_UNCERTAIN');return {proof:'no_groups_no_create_claims'};}throw Error('UNEXPECTED_PHYSICAL_EFFECT');};
+  const names=['ac-native-tools-'+intent.operation_id,'ac-native-worker-'+intent.operation_id];
+  await admitNativeResources({docker,ledger:db,principal,authority,intentId:intent.id,grantId:oldGrant.id,jobId:intent.operation_id,names});
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);const successor=await db.acquire(principal,context,randomUUID(),'continuation-successor',60);
+  const claim=()=>db.tx(async c=>{await db.fence(c,successor);return claimWorktreeWriter(c,{...writerKey,epoch:successor.epoch});});
+  await assert.rejects(claim(),/WORKTREE_WRITER_BUSY/);unknown=true;
+  await assert.rejects(reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor}),/NATIVE_RESOURCE_RECONCILIATION_UNCERTAIN/);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations')).rows[0].n,0);
+  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[oldGrant.id])).rows[0].state,'reserved');
+  await assert.rejects(native.prepareRecovery(intent,authority),/STALE_MANAGER/);
+  unknown=false;await reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:successor});
+  assert.deepEqual(await claim(),{state:'held',acquired:'same'});assert.deepEqual(await claim(),{state:'held',acquired:'same'});
+  assert.equal((await db.pool.query('SELECT manager_epoch FROM ac_worktree_writers WHERE holder_intent_id=$1',[intent.id])).rows[0].manager_epoch,String(authority.epoch));
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations')).rows[0].n,1);
+  await assert.rejects(db.pool.query('DELETE FROM ac_worktree_writer_continuations'),/WORKTREE_CONTINUATION_IMMUTABLE/);
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+  const third=await db.acquire(principal,context,randomUUID(),'continuation-third',60);
+  await reconcileNativeResourceAdmissions({docker,ledger:db,principal,authority:third});
+  assert.deepEqual(await db.tx(async c=>{await db.fence(c,third);return claimWorktreeWriter(c,{...writerKey,epoch:third.epoch});}),{state:'held',acquired:'same'});
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_worktree_writer_continuations WHERE manager_epoch=$1',[third.epoch])).rows[0].n,1);
+ }finally{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
+});
