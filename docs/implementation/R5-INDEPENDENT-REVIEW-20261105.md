@@ -65,3 +65,5 @@ Follow-up df89c41d: aprovado o escopo de resolução do projeto padrão e da pro
 56151f70: aprovada a fatia móvel do autor para criação assinada de contas e perfis sintéticos de programmer medium/high e inclusão em fallback com snapshots PG 360/390. Não prova edição de conta/perfil nem demais papéis; RF07 integral continua aberto. Gateway e dispositivo de teste mantêm os limites descritos.
 
 A aprovação dinâmica de snapshot em 48b0bcb6 também foi inspecionada: resolver local, validação de receita/parent e registro de digest vinculados à instância e `source_intent_id`. Aceite limitado ao mecanismo; 11/11 da suíte são do autor, sem inferência de T32 integral.
+
+11c6a918: aprovada a fatia do autor que acrescenta regular/reserva e reordena nos dois sentidos, com snapshots PG em 360/390. Não demonstra atualização de conta/perfil nem RF07 integral; limites de fixture e gateway temporário seguem aplicáveis.
