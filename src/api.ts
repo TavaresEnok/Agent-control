@@ -11,6 +11,7 @@ import { Control, ControlCommand } from './control.ts';
 import { OperatorProof,Operators } from './operator.ts';
 import type { BrowserSessions } from './sessions.ts';
 import {Usage} from './usage.ts';
+import {createUsageReportApi} from './usage-report-api.ts';
 import {GitArtifacts} from './git.ts';
 import type {HappierAuthRelay} from './auth-relay.ts';
 import {ProviderCollectors,type ProviderAdapter} from './providers.ts';
@@ -101,6 +102,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   app.route('/api/v1/ac',createImportPreviewApi(ledger,runtime.projectId));
   app.route('/api/v1/ac',createDiagnosticsApi(ledger,runtime.projectId));
   app.route('/api/v1/ac',createPortableExportApi(ledger,runtime.projectId));
+  app.route('/api/v1/ac',createUsageReportApi(ledger,runtime.projectId));
   const family = app
     .get('/api/v1/ac/contexts/:id/manager',async c=>{
       const id=Id.parse(c.req.param('id'));await ledger.tx(async db=>{const scope=await ledger.authorize(db,c.get('principal'),id,false);

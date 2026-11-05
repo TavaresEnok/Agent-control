@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {UsageReports,type UsageReportQuery} from './usage-report.ts';
 import {Ledger} from './ledger.ts';
 import {Authority,Id,digest,Refusal} from './contracts.ts';
 
@@ -26,6 +27,9 @@ export class Usage {
    await c.query('INSERT INTO ac_usage_observations(grant_id,event_id,seq,counters,digest) VALUES($1,$2,$3,$4,$5)',[value.grantId,value.eventId,value.seq,value.counters,hash]);
    return {duplicate:false};
   });
+ }
+ async report(principal:string,projectId:string,contextId:string,query:UsageReportQuery){
+  return new UsageReports(this.ledger).report(principal,projectId,contextId,query);
  }
  async context(principal:string,contextId:string){
   Id.parse(contextId);
