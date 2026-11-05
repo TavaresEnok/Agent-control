@@ -14,6 +14,7 @@ import {ProjectAdmin} from './project-admin.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
 import {InstallationAuthority} from './installation-authority.ts';
 import {createInstallationAuthorityApi} from './installation-authority-api.ts';
+import {remoteReturnTransport} from './remote-return-config.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
@@ -122,7 +123,7 @@ async function main(){
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
-   projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory)),
+   projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn)})),
    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),
    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
     const bearer=request.headers.get('authorization');

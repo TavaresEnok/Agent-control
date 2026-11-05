@@ -11,6 +11,7 @@ import {ProjectRoot} from './project-admin.ts';
 import {CodexQuotaRegistryConfig} from './codex-quota-registry.ts';
 import {NativeBootstrapConfig,nativeBootstrapSchemaError} from './native-bootstrap.ts';
 import {InstallationToken} from './installation-authority.ts';
+import {RemoteReturnConfig} from './remote-return-config.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -26,6 +27,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
  installationAuthority:z.object({mode:z.literal('synthetic-laboratory'),token:InstallationToken}).strict().optional(),
+ remoteReturn:RemoteReturnConfig.optional(),
  nativeBootstrap:NativeBootstrapConfig.optional(),
  codexQuota:CodexQuotaRegistryConfig.optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
@@ -40,6 +42,10 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  .refine(value=>!value.accountHomesDirectory||resolve(value.accountHomesDirectory)===value.accountHomesDirectory&&value.accountHomesDirectory.startsWith(value.dataDirectory+sep)&&
   (!value.contextVault||![value.contextVault.directory,value.contextVault.masterFile].some(path=>path===value.accountHomesDirectory||path.startsWith(value.accountHomesDirectory+sep)||value.accountHomesDirectory!.startsWith(path+sep))),
  'Account homes must be isolated inside private data directory and outside the context vault')
+ .refine(value=>!value.remoteReturn||value.remoteReturn.credentials.every(credential=>
+  [value.project.repo,...value.projects.map(project=>project.repo),...value.projectRoots.map(root=>root.path)].every(path=>
+   credential.path!==resolve(path)&&!credential.path.startsWith(resolve(path)+sep)&&!resolve(path).startsWith(credential.path+sep))),
+ 'SSH credentials must be outside repositories and authorized project roots')
  .superRefine((value,ctx)=>{const code=nativeBootstrapSchemaError(value);if(code)ctx.addIssue({code:'custom',message:code});});
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */

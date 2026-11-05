@@ -1,7 +1,9 @@
 import {ReconciliationHistory} from './reconciliation-history.ts';
 import { z } from 'zod';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, lstat, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile, open } from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {tmpdir} from 'node:os';
 import { resolve, join } from 'node:path';
 import { Authority, Id, Refusal, digest } from './contracts.ts';
 import { Ledger } from './ledger.ts';
@@ -35,11 +37,22 @@ export class OpenSshTransport implements RemoteTransport{
  constructor(private readonly credentialPath:(id:string)=>Promise<string>,private readonly allowedHosts:ReadonlySet<string>){}
  async exchange(host:RemoteHost,request:object){
   if(!this.allowedHosts.has(host.hostname))throw new Refusal('REMOTE_TARGET_NOT_ENABLED',403);
-  const original=await this.credentialPath(host.credential_ref),key=await realpath(original),info=await lstat(original);
-  if(!info.isFile()||info.isSymbolicLink()||(info.mode&0o077)!==0)throw new Refusal('SSH_CREDENTIAL_UNSAFE',403);
-  const parent=resolve('.state/ssh-control');await mkdir(parent,{recursive:true,mode:0o700});
-  const temporary=await mkdtemp(join(parent,'transport-'));
+  const original=await this.credentialPath(host.credential_ref);
+  if(resolve(original)!==original||await realpath(original)!==original)throw new Refusal('SSH_CREDENTIAL_UNSAFE',403);
+  const descriptor=await open(original,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  let credential:Buffer;
   try{
+   const info=await descriptor.stat();
+   if(!info.isFile()||info.nlink!==1||info.uid!==process.getuid?.()||(info.mode&0o077)!==0||info.size>65536)throw new Refusal('SSH_CREDENTIAL_UNSAFE',403);
+   credential=await descriptor.readFile();
+   if(credential.length>65536){credential.fill(0);throw new Refusal('SSH_CREDENTIAL_UNSAFE',403);}
+  }finally{await descriptor.close();}
+  let temporary:string|undefined;
+  try{
+   // SSH reads only this private snapshot, never a mutable caller pathname.
+   // Keep it outside repository working directories and remove it on every exit.
+   temporary=await mkdtemp(join(tmpdir(),'ac-ssh-control-'));
+   const key=join(temporary,'identity');await writeFile(key,credential,{mode:0o600,flag:'wx'});credential.fill(0);
    const publicPath=join(temporary,'host.pub');await writeFile(publicPath,host.public_key+'\n',{mode:0o600});
    const printed=await run('/usr/bin/ssh-keygen',['-lf',publicPath,'-E','sha256'],'',3000);
    if(printed.trim().split(/\s+/)[1]!==host.fingerprint)throw new Refusal('SSH_FINGERPRINT_MISMATCH',403);
@@ -51,7 +64,7 @@ export class OpenSshTransport implements RemoteTransport{
     '-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2',`${host.username}@${host.hostname}`,
     'python3','/usr/local/lib/agent-control/worker.py','--config','/etc/agent-control/worker.json'];
    return JSON.parse(await run('/usr/bin/ssh',options,JSON.stringify(request),20000)) as unknown;
-  }finally{await rm(temporary,{recursive:true,force:true});}
+  }finally{credential.fill(0);if(temporary)await rm(temporary,{recursive:true,force:true});}
  }
 }
 export class RemoteOperations{

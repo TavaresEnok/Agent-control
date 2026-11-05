@@ -1,10 +1,10 @@
-import {isAbsolute} from 'node:path';
+import {isAbsolute,resolve} from 'node:path';
 import {z} from 'zod';
 import {Id,Refusal} from './contracts.ts';
 import {OpenSshTransport} from './remote.ts';
 /** Explicit opt-in only; private key paths remain installation configuration. */
 export const RemoteReturnConfig=z.object({allowedHosts:z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/)).min(1).max(32),
- credentials:z.array(z.object({id:Id,path:z.string().refine(isAbsolute)}).strict()).min(1).max(32)}).strict()
+ credentials:z.array(z.object({id:Id,path:z.string().refine(path=>isAbsolute(path)&&resolve(path)===path&&!/[\x00\r\n]/.test(path))}).strict()).min(1).max(32)}).strict()
  .refine(value=>new Set(value.credentials.map(item=>item.id)).size===value.credentials.length);
 export function remoteReturnTransport(config:z.infer<typeof RemoteReturnConfig>|undefined){
  if(!config)return undefined;
