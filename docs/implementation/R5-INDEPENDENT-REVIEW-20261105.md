@@ -17,3 +17,13 @@ Follow-up 1963fbc7: aprovado o escopo de importação histórica redigida após 
 A prova de recuperação 1b53cd1f acrescenta teste composto Happier/PG/vault para bundle sintético; não foi executada por este revisor. Seu fallback aponta a um container R3 antigo: a execução autorizada deve fornecer explicitamente `AC_R3_MIGRATION_CONTAINER_ID` de laboratório descartável conferido, com testes físicos serializados. Não representa conversão de acervo real.
 
 Follow-up 48b0bcb6: aprovado o escopo local do replay. O corte após release é reaberto após validação durável e aquisição do lock; a barreira volta a proteger a quiescência. O teste do autor usa objeto preparado novo e verifica que competidor não perturba sucessor vivo; focal 1/1 e typecheck são atribuídos ao autor, não reexecutados aqui. A aprovação não fecha T32 integral ou o fluxo físico integrado.
+
+O autor informa ter executado a prova de recuperação Happier/PG/vault sintética em Node 22.23.3, com teste 1b53cd1f+bfe8d257 e import 863395f2; stdout não foi salvo como log versionado. A saída é evidência atribuída ao autor e não uma reexecução deste revisor. A correção bfe8d257 ajusta contagem de mensagens herdada de outra fixture.
+
+## Exportação de configuração: febe3722 + d2e7d256
+
+Projeção cifrada limitada, ainda sem ponto de entrada montado; `restorable:false`, referências de repositório/branch/modelo/caminhos por digest e ausência de configuração global significam que ela não reconstitui uma instalação. RF34 permanece aberto. Teste de autor não é reexecução independente; não se aprova a funcionalidade integral.
+
+## Grafo móvel: 22dd70de e checkpoints seguintes
+
+Em desenvolvimento. A leitura de digest seguida de rename não constitui CAS atômico contra edição externa concorrente; o autor confirmou a lacuna. Também foi identificada ambiguidade de adoção de arquivo legado preexistente idêntico no primeiro intent. Pais existentes com modo 0755 são recusados pelo contrato de diretórios privados; o percurso precisa apresentar essa condição. Não há aprovação enquanto gateway, navegador e correções estiverem pendentes.
