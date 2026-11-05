@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {projectRepositoryIdentity} from '../src/project-repository.ts';
 import {reconcileWorkflowFile} from '../src/workflow-graph-files.ts';
 const hash=(v:Buffer)=>createHash('sha256').update(v).digest('hex');
-test('journal reconciliation accepts old or desired file and refuses foreign and symlink',async()=>{
+test('immutable publication accepts identical replay and refuses foreign and symlink',async()=>{
  const root=await mkdtemp('/tmp/ac-workflow-files-');
  try{
   const repo=join(root,'repo');await mkdir(repo,{mode:0o700});execFileSync('git',['init',repo],{stdio:'ignore'});await chmod(join(repo,'.git'),0o700);
