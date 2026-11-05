@@ -17,3 +17,7 @@ Artefatos, operações e decisões de composição dessa fixture são registros 
 Revisão em andamento. Foi identificado no WIP de ambientes que uma recusa definitiva inicial409 seguida de reload perde a opção de descarte e prende o editor. A autora confirmou e prepara persistência dessa recusa. Uma resposta desconhecida seguida de falha de autorização não é prova de não aplicação e deve continuar recuperável.
 
 RF-36 permanece suspenso até prova do menu canônico acessível→painel→alteração humana assinada e persistida. O contrato backend previamente aprovado continua válido em seu escopo. Não foi usado provedor oficial, conta real, API paga, deploy ou migração operacional nesta revisão.
+
+## Montagem gateway: `a16d20fa` + `fcb1d48b`
+
+**Aprovada na fatia estática e de contrato de dispatch.** A rota exata de ambientes é montada depois de autenticação e antes de selecionar runtime; não cai na whitelist pública. O caminho cookie passa por checkOrigin para mutações, e o serviço usa raízes/diretório privado da instalação. Reexecutei `tests/r4-environment-gateway.test.ts`: **1/1 passe, zero skips**, log `r4-review-product-environment-gateway.log`. O teste injeta o autenticador para provar sua posição e impede criação de runtime; não é prova HTTP real do autenticador nem substitui o browser final.
