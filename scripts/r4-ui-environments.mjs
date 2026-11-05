@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict'
 import {join} from 'node:path'
 export async function proveProjectEnvironments({page,client,origin,projectId,db,outputDirectory,restart}){
+ const selectedContext=await page.getByLabel('Conversa',{exact:true}).inputValue()
  const path='/api/v1/ac/project-admin/environments',url=origin+path,commands=[]
  const published=()=>page.getByRole('status').filter({hasText:'Ambientes e destinos publicados e persistidos.'})
  async function load(tab){await tab.getByRole('button',{name:'Carregar configuração de ambientes',exact:true}).click();await tab.getByLabel('Diretórios autorizados 1',{exact:true}).fill('src')}
@@ -34,7 +35,7 @@ export async function proveProjectEnvironments({page,client,origin,projectId,db,
  await stale.getByRole('button',{name:'Publicar ambientes e destinos',exact:true}).click();assert.equal((await conflict).status(),409)
  await stale.getByRole('alert').filter({hasText:'PROJECT_ENVIRONMENT_REVISION_CONFLICT'}).waitFor()
  await stale.reload();await stale.getByRole('button',{name:'Descartar publicação recusada',exact:true}).click();await stale.close()
- await restart();await page.reload();await load(page)
+ await restart();await page.reload();await page.getByLabel('Conversa',{exact:true}).selectOption(selectedContext);await load(page)
  assert.equal(await page.getByLabel('Nome do ambiente 1',{exact:true}).inputValue(),'R4 mobile published')
  assert.equal(await page.getByLabel('Diretórios autorizados 1',{exact:true}).inputValue(),'src')
  const state=await (await client.request.get(url+'?projectId='+projectId)).json();assert.equal(state.revision,2);assert.equal(state.config.environments[0].label,'R4 mobile published')

@@ -26,3 +26,13 @@ it('preserves a definitive first refusal across reload and permits discarding it
  const first=panel();fireEvent.click(await screen.findByRole('button',{name:'Carregar configuração de ambientes'}));fireEvent.change(screen.getByLabelText('Diretórios autorizados 1'),{target:{value:'src'}});fireEvent.click(screen.getByRole('button',{name:'Publicar ambientes e destinos'}));await screen.findByText('PROJECT_ENVIRONMENT_REVISION_CONFLICT');first.unmount()
  panel();fireEvent.click(await screen.findByRole('button',{name:'Descartar publicação recusada'}));await waitFor(()=>expect(sessionStorage.length).toBe(0));await waitFor(()=>expect((screen.getByRole('button',{name:'Carregar configuração de ambientes'}) as HTMLButtonElement).disabled).toBe(false))
 })
+it('clears an earlier refusal before retry can become uncertain and reconciles the same intent',async()=>{
+ const commands:Record<string,unknown>[]=[]
+ vi.stubGlobal('fetch',vi.fn(async(_url:string,init:RequestInit={})=>{
+  if(init.method!=='POST')return Response.json({projectId,revision:0,config:null,canConfigure:true,pathScope:'existing_repository_relative_directories',remoteHosts:[]})
+  commands.push(JSON.parse(String(init.body)));return commands.length===1?Response.json({error:'HUMAN_CONTROL_AUTH_REQUIRED'},{status:403}):commands.length===2?Response.json({error:'ACK_UNCERTAIN'},{status:503}):Response.json({state:'applied',projectId,revision:1})
+ }))
+ const first=panel();fireEvent.click(await screen.findByRole('button',{name:'Carregar configuração de ambientes'}));fireEvent.change(screen.getByLabelText('Diretórios autorizados 1'),{target:{value:'src'}});fireEvent.click(screen.getByRole('button',{name:'Publicar ambientes e destinos'}));await screen.findByText('HUMAN_CONTROL_AUTH_REQUIRED');expect(screen.getByRole('button',{name:'Descartar publicação recusada'})).toBeTruthy()
+ fireEvent.click(screen.getByRole('button',{name:'Confirmar configuração de ambientes pendente'}));await screen.findByText('ACK_UNCERTAIN');expect(screen.queryByRole('button',{name:'Descartar publicação recusada'})).toBeNull();first.unmount()
+ panel();const resume=await screen.findByRole('button',{name:'Confirmar configuração de ambientes pendente'});expect(screen.queryByRole('button',{name:'Descartar publicação recusada'})).toBeNull();await waitFor(()=>expect((resume as HTMLButtonElement).disabled).toBe(false));fireEvent.click(resume);await screen.findByText('Ambientes e destinos publicados e persistidos.');expect(new Set(commands.map(command=>command.intentId)).size).toBe(1);expect(commands[2]!.payload).toEqual(commands[0]!.payload)
+})
