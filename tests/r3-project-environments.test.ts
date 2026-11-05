@@ -61,7 +61,7 @@ test('signed immutable project environments enforce real Git source, directories
   const traversalIntent=await intent(['src/../../private/a']);await assert.rejects(contract(traversalIntent),/PROJECT_ENVIRONMENT_DIRECTORY_FORBIDDEN/);
   const wrongTarget=await intent(['src/a.txt']);await assert.rejects(contract(wrongTarget,'refs/heads/main'),/PROJECT_ENVIRONMENT_TARGET_FORBIDDEN/);
   const synthetic=await intent([],undefined,true);await assert.rejects(contract(synthetic),/PROJECT_ENVIRONMENT_WRITE_SCOPE_REQUIRED/);
-  const fixedScope={schemaVersion:1,source:'remote-fixed-task',hostId:hostIds[0],taskId:'fixed-task',writePaths:['src/a.txt']};
+  const fixedScope={schemaVersion:1,source:'remote-fixed-task',hostId:hostIds[0],taskId:'fixed-task',writePaths:['src/']};
   await db.pool.query('INSERT INTO ac_project_environment_write_scopes VALUES($1,$2,$3)',[synthetic,fixedScope,digest(fixedScope)]);await contract(synthetic);
   await assert.rejects(db.pool.query('UPDATE ac_project_environment_write_scopes SET snapshot=$2 WHERE intent_id=$1',[synthetic,{...fixedScope,writePaths:['outside']}]),/POLICY_REVISION_IMMUTABLE/);
   const parent=await intent([]),child=await intent(['src/a.txt'],parent);await contract(child);

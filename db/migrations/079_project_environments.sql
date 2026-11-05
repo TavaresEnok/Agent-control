@@ -48,7 +48,7 @@ CREATE TRIGGER ac_project_environment_write_scopes_immutable BEFORE UPDATE OR DE
  FOR EACH ROW EXECUTE FUNCTION ac_reject_policy_mutation();
 
 CREATE FUNCTION ac_environment_contract_binding() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE head integer; conf jsonb; env jsonb; paths jsonb; path text; unit jsonb;
+DECLARE head integer; conf jsonb; env jsonb; paths jsonb; path text; unit jsonb; fixed_scope boolean=false;
 BEGIN
  PERFORM id FROM ac_projects WHERE id=NEW.project_id FOR SHARE;
  SELECT revision INTO head FROM ac_project_environment_heads WHERE project_id=NEW.project_id FOR SHARE;
@@ -64,9 +64,12 @@ BEGIN
  END IF;
  IF paths IS NULL AND EXISTS(SELECT 1 FROM ac_intents WHERE id=NEW.intent_id AND command->'payload'->>'workflow'='engineering-synthetic-v1') THEN
   SELECT snapshot->'writePaths' INTO paths FROM ac_project_environment_write_scopes WHERE intent_id=NEW.intent_id;
+  fixed_scope=paths IS NOT NULL;
  END IF;
  IF paths IS NULL OR jsonb_typeof(paths)<>'array' THEN RAISE EXCEPTION 'PROJECT_ENVIRONMENT_WRITE_SCOPE_REQUIRED'; END IF;
  FOR path IN SELECT jsonb_array_elements_text(paths) LOOP
+  -- Fixed task profiles use one final slash to authorize a directory tree.
+  IF fixed_scope AND right(path,1)='/' AND path NOT LIKE '%//%' THEN path=left(path,length(path)-1); END IF;
   IF path ~ '(^|/)(\.|\.\.|\.git|\.ai)(/|$)' OR path LIKE '/%' OR position(chr(92) in path)>0 OR path LIKE '%//%' OR path LIKE '%/' OR path ~ '[[:cntrl:]]' THEN
    RAISE EXCEPTION 'PROJECT_ENVIRONMENT_DIRECTORY_FORBIDDEN';
   END IF;
