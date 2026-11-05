@@ -11,12 +11,13 @@ import nacl from 'tweetnacl'
 import pg from 'pg'
 import {Ledger} from '../src/ledger.ts'
 import {InstallationAuthority} from '../src/installation-authority.ts'
+import {loadHappier} from '../src/happier.ts'
 import {Operators} from '../src/operator.ts'
 import {provisionCapacity} from '../tests/fixtures/provision-capacity.ts'
 import {initializeInstallation} from '../src/installation.ts'
 process.umask(0o077)
 const root=resolve(import.meta.dirname,'..'),lab=`ac-r3-ui-${randomUUID().slice(0,8)}`
-let scratch,browser,gateway,happier,db,container=false,stage='setup',activePage
+let scratch,browser,gateway,happier,db,container=false,stage='setup',activePage,diagnosticRows=0
 const safe={PATH:process.env.PATH,CI:'1',DO_NOT_TRACK:'1',EXPO_NO_TELEMETRY:'1'}
 const children=[]
 async function port(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p}
@@ -40,7 +41,9 @@ try{
  const auth=await fetch(hOrigin+'/v1/auth',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({publicKey:b64(pair.publicKey),challenge:b64(challenge),signature:b64(nacl.sign.detached(challenge,pair.secretKey))})});assert.equal(auth.status,200)
  const {token}=await auth.json(),authorization='Bearer '+token
  const profile=await (await fetch(hOrigin+'/v1/account/profile',{headers:{authorization}})).json();assert.equal(typeof profile.id,'string')
- const sessionResponse=await fetch(hOrigin+'/v1/sessions',{method:'POST',headers:{authorization,'content-type':'application/json'},body:JSON.stringify({tag:lab,encryptionMode:'e2ee',metadata:b64(randomBytes(64)),agentState:b64(randomBytes(64))})});assert.equal(sessionResponse.status,200)
+ const encryptionKey=pair.secretKey.subarray(0,32),native=await loadHappier(),seal=value=>native.encodeBase64(native.encrypt(encryptionKey,'legacy',value)),machineId=randomUUID()
+ const machineResponse=await fetch(hOrigin+'/v1/machines',{method:'POST',headers:{authorization,'content-type':'application/json'},body:JSON.stringify({id:machineId,metadata:seal({host:'ac-r3-ui-disposable',platform:'linux',happyCliVersion:'0.2.18',homeDir:'/tmp/ac-r3-synthetic'}),daemonState:seal({status:'running',startedAt:Date.now()})})});assert.equal(machineResponse.status,200)
+ const sessionResponse=await fetch(hOrigin+'/v1/sessions',{method:'POST',headers:{authorization,'content-type':'application/json'},body:JSON.stringify({tag:lab,encryptionMode:'e2ee',metadata:seal({machineId,path:'/tmp/ac-r3-synthetic/repository',host:'ac-r3-ui-disposable',homeDir:'/tmp/ac-r3-synthetic',version:'0.2.18',name:'R3 synthetic browser conversation',flavor:'codex',startedBy:'terminal',startedFromDaemon:false}),agentState:seal({controlledByUser:false,requests:{},completedRequests:{}})})});assert.equal(sessionResponse.status,200)
  const {session}=await sessionResponse.json();assert.equal(typeof session.id,'string')
  stage='installation';const projectsRoot=join(scratch,'projects');await mkdir(projectsRoot,{mode:0o700})
  const makeRepo=async name=>{const repo=join(projectsRoot,name);await mkdir(repo,{mode:0o700});command('git',['init','-q','-b','main',repo]);command('git',['-C',repo,'config','user.email','fixture@example.invalid']);command('git',['-C',repo,'config','user.name','R3 synthetic lab']);await writeFile(join(repo,'README.md'),'Synthetic R3 UI lab only\n');command('git',['-C',repo,'add','.']);command('git',['-C',repo,'commit','-qm','synthetic base']);await mkdir(join(repo,'.ai/cezar'),{recursive:true});await writeFile(join(repo,'.ai/cezar/config.json'),JSON.stringify({baseBranch:'main',skillsRepos:[]}));return repo}
@@ -71,8 +74,16 @@ try{
   stage=`load authenticated settings ${width}`;await page.reload();await page.getByLabel('Identificador da sessão Happier',{exact:true}).waitFor();stage=`fill existing conversation ${width}`;await page.getByLabel('Identificador da sessão Happier',{exact:true}).fill(session.id);stage=`link existing conversation ${width}`;const linked=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/contexts')&&r.request().method()==='POST');await page.getByRole('button',{name:'Vincular conversa',exact:true}).click();assert.equal((await linked).status(),201);stage=`show linked conversation ${width}`;await page.getByRole('button',{name:/Pausar novas etapas|Retomar etapas/}).waitFor()
   const contexts=await (await client.request.get(origin+'/api/v1/ac/contexts',{headers:{'X-Agent-Control-Project':project.id}})).json();assert.equal(contexts.contexts.length,1);const contextId=contexts.contexts[0].id
   if(width===360){
+   if(process.env.AC_R3_UI_DIAGNOSTIC_CATALOG==='1'){
+    stage='diagnostic task catalog';const taskIds=Array.from({length:101},()=>randomUUID());diagnosticRows=taskIds.length
+    for(const [index,id] of taskIds.entries())await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,state,created_at) VALUES($1,$2,$3,$4,'{}',$5,$6,1,$7,'failed',$8)`,[id,contextId,profile.id,'a'.repeat(64),randomUUID(),randomUUID(),index+1,index===0?'2000-01-01T00:00:00Z':'2001-01-01T00:00:00Z'])
+    const defaultReport=await (await client.request.get(`${origin}/api/v1/ac/contexts/${contextId}/diagnostics`,{headers:{'X-Agent-Control-Project':project.id}})).json();assert(defaultReport.truncated);assert(!defaultReport.findings.some(finding=>finding.evidence.some(evidence=>evidence.id===taskIds[0])))
+    await page.reload();const selector=page.getByLabel('Tarefa registrada para diagnóstico',{exact:true});await selector.locator(`option[value="${taskIds[0]}"]`).waitFor({state:'attached'})
+    const targeted=page.waitForResponse(r=>r.url().includes('/diagnostics?intentId='+taskIds[0]));await selector.selectOption(taskIds[0]);const response=await targeted;assert.equal(response.status(),200);const report=await response.json();assert.equal(report.intentId,taskIds[0]);assert(report.findings.some(finding=>finding.evidence.some(evidence=>evidence.id===taskIds[0])));await page.getByRole('status').filter({hasText:'Diagnóstico direcionado à tarefa '+taskIds[0]}).waitFor();await page.getByRole('button',{name:'Voltar ao diagnóstico da conversa',exact:true}).click();console.log('PASS actual authorized task catalog selection reaches stopped task beyond default diagnostic page; 101 synthetic failed rows, zero execution workers')
+   }
    stage='refuse unregistered operator';let response=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await page.getByRole('button',{name:'Pausar novas etapas',exact:true}).click();assert.equal((await response).status(),403)
    stage='operator bootstrap';const bootstrap=randomBytes(32).toString('hex');await new Operators(db).prepareBootstrap(profile.id,profile.id,bootstrap);await page.getByLabel('Código de ativação',{exact:true}).fill(bootstrap);await page.getByRole('button',{name:'Ativar este dispositivo',exact:true}).click();await page.getByText('Dispositivo autorizado.',{exact:true}).waitFor()
+   if(process.env.AC_R3_UI_CONVERSATION_MENU==='1'){const {proveConversationMenu}=await import('./r3-ui-conversation-menu.mjs');const {popup}=await proveConversationMenu({browserContext:client,panelOrigin:origin,happierOrigin:hOrigin,sessionId:session.id,token,secret32base64:b64(encryptionKey),contextId,scratchDirectory:scratch});for(const name of ['Pausar novas etapas','Retomar etapas']){const response=popup.waitForResponse(r=>r.url().endsWith('/api/v1/ac/control')&&r.request().method()==='POST');await popup.getByRole('button',{name,exact:true}).click();assert.equal((await response).status(),200)}await popup.close();await page.reload();console.log('PASS canonical Happier conversation menu opens matching context and signs pause/resume through production panel')}
    stage='signed laboratory authority'
    await page.getByLabel('Domínio de laboratório',{exact:true}).fill(domainId);await page.getByRole('button',{name:'Consultar autoridade',exact:true}).click();await page.getByRole('button',{name:'Retomar autoridade de laboratório',exact:true}).waitFor()
    await page.getByLabel('Instalação de destino',{exact:true}).selectOption(newInstallationId)
@@ -114,7 +125,7 @@ try{
   stage='logout';await page.getByRole('button',{name:'Sair deste navegador',exact:true}).click();await page.getByText('Entrar pelo Happier',{exact:true}).waitFor();assert.equal((await client.request.get(origin+'/api/v1/ac/contexts')).status(),401);await client.close()
   console.log(`PASS ${width}: canonical Happier token, production cookie/auth routes, conversation access, real usage JSON/CSV, disabled quota registry, mobile settings and logout${width===360?', signed refusal/bootstrap/authority/template/policy conflict/rollback/pause/register and persistence after two server restarts':''}`)
  }
- for(const table of ['ac_intents','ac_operations','ac_outbox','ac_capacity_grants'])assert.equal((await db.pool.query(`SELECT count(*)::int n FROM ${table}`)).rows[0].n,0)
+ for(const table of ['ac_intents','ac_operations','ac_outbox','ac_capacity_grants'])assert.equal((await db.pool.query(`SELECT count(*)::int n FROM ${table}`)).rows[0].n,table==='ac_intents'?diagnosticRows:0)
  console.log('PASS no execution or inference; disposable synthetic lab only; physical Android not exercised')
 }catch(error){if(scratch){const upstreamLog=await readFile(join(scratch,'0.log'),'utf8').catch(()=>'');console.error('R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES '+(upstreamLog.match(/\"statusCode\": 429/g)||[]).length)}if(activePage)console.error('R3_UI_ALERTS '+JSON.stringify(await activePage.locator('[role=alert]').allTextContents().catch(()=>[])));console.error(`R3_UI_FAILED stage=${stage} type=${error?.name??'Error'} code=${error?.code??'assertion_or_timeout'}`);process.exitCode=1}
 finally{
