@@ -67,3 +67,7 @@ Follow-up df89c41d: aprovado o escopo de resolução do projeto padrão e da pro
 A aprovação dinâmica de snapshot em 48b0bcb6 também foi inspecionada: resolver local, validação de receita/parent e registro de digest vinculados à instância e `source_intent_id`. Aceite limitado ao mecanismo; 11/11 da suíte são do autor, sem inferência de T32 integral.
 
 11c6a918: aprovada a fatia do autor que acrescenta regular/reserva e reordena nos dois sentidos, com snapshots PG em 360/390. Não demonstra atualização de conta/perfil nem RF07 integral; limites de fixture e gateway temporário seguem aplicáveis.
+
+## CLI de configuração: 7b387f7f
+
+Aprovado o entrypoint `config-export`/`config-read` por inspeção independente do código e do teste processual do autor 1/1. A instalação privada e descriptor são carregados, com owner+admin, e a execução retorna antes de initialize/serve/registry. O teste confirma 0600, cifragem, recusa de sobrescrita, leitura, recusa após revogação e ausência de efeitos de runtime. A pré-condição dos campos semânticos segue válida; cobertura de grafo 088 ainda requer projeção e prova próprias. O DTO é de inspeção, e recuperação demonstrada R3 deve ser avaliada separadamente.
