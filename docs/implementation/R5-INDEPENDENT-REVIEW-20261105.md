@@ -117,3 +117,7 @@ Inspeção da composição com T22/T30 confirma os guards de modelo e inventári
 6e07eee6: aprovado por inspeção o comando local delimitado, com descriptor privado, admin para sweep/release, escopo e epoch de authorities; backup é restrito pelo helper a PG de laboratório descartável identificado. Teste mock é do autor; prova PG e integração final são avaliações separadas, sem afirmar restauração operacional.
 
 24644ec7/a7fe548e: aprovado o componente de cartões por inspeção, preservando identidade e estado da projeção; responsável de etapa não é inventado, perfil é identificado e a idade exibida refere-se à recepção local, não à latência do servidor. O teste de componente é do autor; browser móvel e T35 integral seguem pendentes.
+
+## Conversor histórico offline ab252251/f1e045df
+
+Aprovada a conversão delimitada do contrato sintético versionado: preserva proveniência e vínculos tipados sob validação de HistoricalSnapshot, recusa versões desconhecidas e referências inconsistentes, e declara as alegações não verificadas e o resultado não executável. O autor registrou 2/2 no conversor e 2/2 no consumo da fixture. Digests não são anonimização resistente a adivinhação. Não há leitor do formato operacional Paseo nem conversão de acervo real, e RF33 integral permanece aberto.
