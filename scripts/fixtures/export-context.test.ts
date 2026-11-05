@@ -10,6 +10,7 @@ import {Ledger} from '../../src/ledger.ts';
 import {loadHappier} from '../../src/happier.ts';
 
 test('export-context CLI exports encrypted canonical history from the isolated Happier server', {timeout:60000}, async()=>{
+ assert.equal(process.env.OPENAI_API_KEY,undefined);assert.equal(process.env.ANTHROPIC_API_KEY,undefined);assert.equal(process.env.NODE_OPTIONS,undefined);
  const url=process.env.AC_TEST_DATABASE_URL,base=process.env.AC_TEST_HAPPIER_URL;
  if(!url || !base || new URL(base).hostname!=='127.0.0.1') throw Error('ISOLATED_FIXTURE_REQUIRED');
  const root=await mkdtemp(join(tmpdir(),'ac-export-cli-')),db=new Ledger(url);

@@ -15,3 +15,17 @@
 ## Resultado nesta cópia
 
 Em 2026-11-05, Node 22.23.3, dependências locais do workspace e imagem PostgreSQL 16, `npm run test:isolated` saiu 0: três testes passaram, zero falhas e zero skips. Logs: `/tmp/ac-isolated-logs-WH8IgU/`. O servidor Happier light usou SQLite próprio, autenticação sintética e porta própria; o PostgreSQL pertencia ao projeto descartável `ac-r2-90938f3417914265`, removido depois. A tentativa anterior foi interrompida por remoção prematura do próprio container durante diagnóstico e não constitui falha do produto; o teste CLI nela passou, enquanto os outros dois perderam a conexão. A primeira execução das duas suítes originais também passou (`/tmp/ac-isolated-logs-lchBBr/`). Essas evidências pertencem ao snapshot da execução, não demonstram suites fora do escopo.
+
+## Ambiente e dependências locais
+
+O runner constrói o ambiente dos processos a partir de `PATH`, `LANG`, `TZ`, `TMPDIR` e `HOME` temporário, além das variáveis sintéticas necessárias. Não repassa chaves, proxies ou `NODE_OPTIONS` do processo pai. Na rodada posterior, executada com valores canário sintéticos em `OPENAI_API_KEY` e `ANTHROPIC_API_KEY`, a fixture confirmou que ambos e `NODE_OPTIONS` estavam ausentes nos testes; servidor e testes recebem a mesma base de ambiente restrita. Os três testes passaram com os controles finais de bind e logs: `/tmp/ac-isolated-logs-rXlKW4/`.
+
+Para um checkout que já contém `upstream/happier/node_modules` parcial, pode-se usar uma cópia local completa sem sobrescrever os arquivos existentes. Com Node 22, a partir do checkout desejado:
+
+```sh
+node scripts/link-happier-test-deps.mjs install /tmp/ac-close-base/upstream/happier /tmp/ac-happier-links-MEU-IDENTIFICADOR.json
+# executar a bancada
+node scripts/link-happier-test-deps.mjs remove /tmp/ac-happier-links-MEU-IDENTIFICADOR.json
+```
+
+A origem precisa conter `node_modules`, `apps/server/node_modules` e `apps/server/generated/sqlite-client`. O helper cria apenas links ausentes no `node_modules` raiz (inclusive pacotes individuais `@happier-dev`) e os dois diretórios do servidor, preservando entradas já existentes. O manifesto exclusivo lista os links criados; a remoção recusa links alterados. A cópia deve corresponder às fontes e dependências fixadas do checkout; nenhum download é realizado pelo helper. Caso o workspace local esteja incompleto, instale e gere os artefatos pelo procedimento oficial do próprio workspace.
