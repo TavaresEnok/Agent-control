@@ -29,3 +29,9 @@ A mudança acrescenta chamada de retirada standalone e tenta processar jobs nati
 `28e0542a` introduz gate de processo remoto antes de executar tarefa e persiste identidades; EOF antes da liberação impede exec. Identidade ausente/divergente é tratada como incerta, inclusive operações legadas em execução. O schema aceita os campos adicionais. Não encontrei defeito concreto na revisão estática delimitada; não reexecutei os ensaios. A morte do supervisor continua incerta e não há prova de recuperação segura do grupo.
 
 Sandbox `c90bc930` acrescenta ensaio relatado por API pública/socket e reinício de processo broker após remoção, com falha/cancelamento e sucessor. O controlador permanece harness com registros sintéticos; o grafo Cezar não é exercitado por esse teste. Fonte e limites documentais inspecionados; execução não repetida pelo revisor.
+
+## Grafo físico `28c7451b`
+
+A frente relata prova com supervisor nativo e QA Docker reais, três tarefas, quatro reviewers e retomada após SIGKILL logo depois da retirada de um programador. Foram verificadas assinaturas e ausência física dos recursos de reviewers. Capacidade, home, elegibilidade e alocador de rede são substituídos; trabalhadores são fixos sem inferência. Não reexecutei; isto não demonstra queda durante efeito, falha ou cancelamento físicos do grafo completo. O relatório da frente explicita falhas anteriores e limites.
+
+`aa2b6ec9` impede estaticamente `verifier.record` para estado de cancelamento existente, inclusive `confirmed`, antes da retirada. Solicitei teste específico que confirme ausência de record e ocorrência da retirada; não havia teste correspondente no commit.
