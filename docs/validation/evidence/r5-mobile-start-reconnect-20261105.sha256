@@ -1,0 +1,7 @@
+9b41619d2236a68f1d7f62a336f21395882e67d5f7ba4ea908c106c0579528f4  scripts/r5-mobile-start-wip.mjs
+d051d25db87b65edadd1244273fec93785c09eb5fa42fc910b07605d000d29e4  src/manager-transport.ts
+8aa748da36dc789de018032b9e318abfcf8d2f4c18ec874dacdeb25c615dc0bf  src/managers.ts
+12dbe8f588a6afbcfe5956100dbce3fbe57fe58ad920c7792f2d8452729eb4c4  src/ledger.ts
+28be319ec50148f801d52bd814ffd4e75ac913df212e478b48c493472412e79c  upstream/cezar/packages/web/src/routes/settings/agent-control-manager-plans.tsx
+f85925688798885cf280b3dae0032986370675b027a10c6165e91117a2111d3f  docs/validation/evidence/r5-mobile-graph-gateway-20261105.diff
+234db757249ae5e4f48a584ee0bec7425da9b10b19704cd2ca54349c46834f66  docs/validation/evidence/r5-mobile-start-reconnect-20261105.log
