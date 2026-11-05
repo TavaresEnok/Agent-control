@@ -92,7 +92,7 @@ import { WorkflowsLoading } from '../workflows/workflows-loading'
 import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
 import { writeClipboard } from '@/lib/clipboard'
 import { useProjectScope } from '@/api/project-scope-context'
-import { managedWorkflow, managedWorkflows, saveManagedWorkflow, validateManagedWorkflow, defaultProject } from './managed-workflow'
+import { managedWorkflow, managedWorkflows, saveManagedWorkflow, validateManagedWorkflow, defaultProject, hasPendingManagedWorkflow, resumeManagedWorkflow } from './managed-workflow'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -242,6 +242,7 @@ function WorkflowGraphEditor() {
   const projectId = scopeProjectId ?? defaultScope.data ?? null
   const managed = useQuery({queryKey:['managed-workflow',projectId,routeName],enabled:!!projectId&&!!routeName,
     retry:false,queryFn:()=>managedWorkflow(projectId!,routeName!)})
+  const pending = useQuery({queryKey:['pending-managed-workflow',projectId],enabled:!!projectId,retry:false,queryFn:()=>hasPendingManagedWorkflow(projectId!)})
   const managedList = useQuery({queryKey:['managed-workflows',projectId],enabled:!!projectId,retry:false,queryFn:()=>managedWorkflows(projectId!)})
   const loadedRevision = useRef<{name:string;revision:number}|null>(null)
   const navigate = useNavigate()
@@ -564,6 +565,18 @@ function WorkflowGraphEditor() {
     return () => window.removeEventListener('keydown', onKey)
   }, [confirm, selectedId, workflowPanel])
 
+  const saved = (res:{name:string;revision:number;path:string},fromResume=false) => {
+    loadedRevision.current={name:res.name,revision:res.revision}
+    setDirty(false)
+    toast(`Saved ${res.path.split('/').pop() ?? res.path}`)
+    void queryClient.invalidateQueries({queryKey:queryKeys.workflows})
+    void queryClient.invalidateQueries({queryKey:['managed-workflows',projectId]})
+    void queryClient.invalidateQueries({queryKey:['pending-managed-workflow',projectId]})
+    if(fromResume){loadedFor.current=null;void queryClient.invalidateQueries({queryKey:['managed-workflow',projectId,res.name]})}
+    if(res.name!==routeName){if(!fromResume)loadedFor.current=res.name;void navigate(`/workflows/${encodeURIComponent(res.name)}`)}
+  }
+  const resume = useMutation({mutationFn:()=>{if(!projectId)throw Error('PROJECT_REQUIRED');return resumeManagedWorkflow(projectId)},
+    onSuccess:res=>saved(res,true),onError:err=>toast(err instanceof Error?err.message:String(err),{tone:'danger'})})
   const save = useMutation({
     mutationFn: (_overwrite: boolean) => {
       if (!projectId) throw Error('PROJECT_REQUIRED')
@@ -573,18 +586,9 @@ function WorkflowGraphEditor() {
       if (workflows.data?.workflows.some(w=>w.name===target) && base?.name!==target) throw Error('SAVE_COPY_WITH_NEW_NAME')
       return saveManagedWorkflow(projectId,target,description.trim(),graph,base?.name===target ? base.revision : 0)
     },
-    onSuccess: (res) => {
-      loadedRevision.current={name:res.name,revision:res.revision}
-      setDirty(false)
-      toast(`Saved ${res.path.split('/').pop() ?? res.path}`)
-      void queryClient.invalidateQueries({ queryKey: queryKeys.workflows })
-      void queryClient.invalidateQueries({ queryKey: ['managed-workflows',projectId] })
-      if (res.name !== routeName) {
-        loadedFor.current = res.name
-        void navigate(`/workflows/${encodeURIComponent(res.name)}`)
-      }
-    },
+    onSuccess: (res) => saved(res),
     onError: (err) => {
+      void queryClient.invalidateQueries({queryKey:['pending-managed-workflow',projectId]})
       toast(err instanceof Error ? err.message : String(err), { tone: 'danger' })
     },
   })
@@ -645,7 +649,7 @@ function WorkflowGraphEditor() {
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null
   const cursorNode = sim?.cursor ? graph.nodes.find((n) => n.id === sim.cursor) : undefined
   const unwired = unwiredPorts(graph)
-  const canSave = !!projectId && (!routeName || (!managed.isPending && !managed.isError && loadedFor.current === routeName)) && name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
+  const canSave = !!projectId && pending.data===false && !pending.isError && !resume.isPending && (!routeName || (!managed.isPending && !managed.isError && loadedFor.current === routeName)) && name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
   // Re-saving the file this canvas was opened from overwrites silently; the confirm is only for
   // a name that collides with ANOTHER file (or a built-in-shadowing new one).
   // A file named like a built-in (`quick-task`) REPLACES it for every task in the repo.
@@ -653,6 +657,8 @@ function WorkflowGraphEditor() {
   return (
     <div data-route="workflows" className="flex h-full min-h-0 min-w-0 flex-col">
       <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
+        {pending.data&&<Button size="sm" disabled={resume.isPending} onClick={()=>resume.mutate()}>Retomar salvamento pendente</Button>}
+        {pending.isError&&<span role="alert">Não foi possível verificar o salvamento pendente.</span>}
         <select
           aria-label="Open workflow"
           className="h-8 max-w-44 rounded-md border border-transparent bg-transparent px-1.5 text-ui font-medium outline-none hover:border-border focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"

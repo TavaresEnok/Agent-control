@@ -87,10 +87,17 @@ try{
   await page.getByLabel('agent failed destination').selectOption('end');
   const save=page.getByRole('button',{name:'Save',exact:true});await save.waitFor();await page.waitForFunction(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Save');return !!button&&!button.disabled},null,{timeout:15000}).catch(()=>{});
   if(!(await save.isEnabled()))throw Error('SAVE_DISABLED '+await page.locator('body').innerText());
+  const attempts=[];const observe=req=>{if(req.url().endsWith('/api/v1/ac/workflow-graphs')&&req.method()==='POST')attempts.push(req.postDataJSON())};page.on('request',observe);
+  let dropped=false;await page.route('**/api/v1/ac/workflow-graphs',async route=>{if(route.request().method()==='POST'&&!dropped){dropped=true;const result=await route.fetch();if(result.status()!==200){await route.fulfill({response:result});return}await route.abort('failed')}else await route.continue()});
+  await save.click();await page.getByRole('button',{name:'Retomar salvamento pendente',exact:true}).waitFor();
+  await page.reload();await page.getByRole('button',{name:'Retomar salvamento pendente',exact:true}).waitFor();
   const submitted=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/workflow-graphs')&&r.request().method()==='POST');
-  await save.click();
+  await page.getByRole('button',{name:'Retomar salvamento pendente',exact:true}).click();
   const response=await submitted;assert.equal(response.status(),200);assert(response.request().headers()['x-ac-operator-proof']);
-  assert.equal((await response.json()).revision,1);
+  assert.equal((await response.json()).revision,1);await page.unroute('**/api/v1/ac/workflow-graphs');page.off('request',observe);
+  assert.equal(attempts.length,2);assert.equal(attempts[0].intentId,attempts[1].intentId);assert.notEqual(attempts[0].deliveryAttemptId,attempts[1].deliveryAttemptId);assert.deepEqual(attempts[0].payload,attempts[1].payload);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_workflow_graph_intents WHERE id=$1',[attempts[0].intentId])).rows[0].n,1);
+  await page.waitForURL(`**/workflows/mobile-${width}`);
   await page.reload();await page.getByLabel('Workflow name').waitFor();
   assert.equal(await page.getByLabel('Workflow name').inputValue(),`mobile-${width}`);
   await page.getByRole('button',{name:'Edit agent',exact:true}).click();
@@ -111,7 +118,7 @@ try{
   assert.equal(await page.getByRole('button',{name:'Edit agent',exact:true}).count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
  }
- console.log('PASS actual product editor signed create, edit, link and removal with three revisions at 360 and 390, synthetic Happier account, real BrowserSessions origin/cookie');
+ console.log('PASS actual product editor ACK-loss/reload/resume and create, edit, link, removal with three revisions at 360 and 390, synthetic Happier account, real BrowserSessions origin/cookie');
  await client.close();
 
 }catch(error){if(scratch){const upstreamLog=await readFile(join(scratch,'0.log'),'utf8').catch(()=>'');console.error('R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES '+(upstreamLog.match(/\"statusCode\": 429/g)||[]).length)}if(activePage){await activePage.screenshot({path:join(scratch,'failure.png'),fullPage:true}).catch(()=>{});console.error('R4_UI_BODY '+(await activePage.locator('body').innerText().catch(()=>'')).slice(0,1200))}if(activePage)console.error('R3_UI_ALERTS '+JSON.stringify(await activePage.locator('[role=alert]').allTextContents().catch(()=>[])));console.error(`R3_UI_FAILED stage=${stage} type=${error?.name??'Error'} code=${error?.code??'assertion_or_timeout'}`,error);process.exitCode=1}
