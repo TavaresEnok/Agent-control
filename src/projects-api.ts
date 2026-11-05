@@ -9,6 +9,7 @@ type ProjectGatewayOptions={projects:Projects;runtimes:ProjectRuntimes;defaultPr
  publicFetch:(request:Request)=>Promise<Response>;
  appFor:(runtime:CezarRuntime)=>{fetch:(request:Request)=>Response|Promise<Response>};
  projectAdmin?:(request:Request,principal:string)=>Promise<Response>;
+ projectEnvironments?:(request:Request,principal:string)=>Promise<Response>;
  installationAuthority?:(request:Request,principal:string)=>Promise<Response>;
 };
 const id=z.uuid();
@@ -25,6 +26,7 @@ export function createProjectGateway(options:ProjectGatewayOptions){
    if(publicRequest(request))return options.publicFetch(request);
    const principal=await options.authenticate(request);if(!principal)return Response.json({error:'AUTH_REQUIRED'},{status:401});
    const path=new URL(request.url).pathname;
+   if(path==='/api/v1/ac/project-admin/environments'&&options.projectEnvironments)return options.projectEnvironments(request,principal);
    if(path==='/api/v1/ac/installation-authority'&&options.installationAuthority)return options.installationAuthority(request,principal);
    if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source'||path==='/api/v1/ac/project-admin/remote-return')&&options.projectAdmin)return options.projectAdmin(request,principal);
    const scoped=path.match(/^\/api\/v1\/p\/([^/]+)(?:\/|$)/);

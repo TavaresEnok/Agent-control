@@ -1,3 +1,9 @@
+# R4 em execução — retomada autorizada
+
+O usuário solicitou continuar após a pausa. Dez subagentes nativos Sol 6.1/Médio foram confirmados; estado e contratos em [CONTINUACAO-R4-20261105.md](implementation/CONTINUACAO-R4-20261105.md). Preserve AGENTS.md e test.txt. Esta entrada prevalece sobre os checkpoints históricos abaixo.
+
+---
+
 # R3 parado para retomada
 
 Parada solicitada pelo usuário. Consulte [o checkpoint de encerramento](implementation/R3-STOP-20261105.md). Build principal, typecheck web e 4 checks focados passaram. Matriz: 1 requisito aceito (RF-27), 110 sem aceite; WIPs técnicos explicitamente preservados, sem declaração de conclusão integral.

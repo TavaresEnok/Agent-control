@@ -1,3 +1,9 @@
+# R4 em execução — retomada autorizada
+
+O usuário solicitou continuar após a pausa. Dez subagentes nativos Sol 6.1/Médio foram confirmados; estado e contratos em [CONTINUACAO-R4-20261105.md](implementation/CONTINUACAO-R4-20261105.md). Preserve AGENTS.md e test.txt. Esta entrada prevalece sobre os checkpoints históricos abaixo.
+
+---
+
 # Parado por solicitação do usuário — checkpoint R3
 
 Estado para desligamento e retomada: [R3-STOP-20261105.md](implementation/R3-STOP-20261105.md). Todos os dez subagentes encerrados; código validado integrado, WIPs preservados em branches, recursos próprios retirados. A missão não está concluída. Preserve AGENTS.md local e test.txt. Esta entrada prevalece sobre o histórico abaixo.
