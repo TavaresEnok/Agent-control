@@ -11,3 +11,7 @@ Limitações mantidas: o ensaio do controlador morto com finalizador vivo usa pr
 ## Revisão da prova do Ruby — commit 4ec10f13
 
 O ensaio executa o Ruby real pelo finalizador de produção, congela-o antes de consumir a entrada, mata o controlador e reconcilia cancelamento em outro processo com autoridade sucessora. A prova é adequada para esse recorte parcial; inspeção Docker é simulada e não demonstra interrupção durante escrita ou commit Git. Revisão estática, sem reexecução independente. A fixture tem fragilidade de limpeza: uma falha após descobrir `orphanPid` e antes de registrar `orphanStart` deixa de matar o Ruby suspenso no `finally`, que exige ambos. Registrar a identidade de início antes das asserções ou garantir limpeza segura equivalente; isso limita a robustez do teste, não é achado de liberação do produto.
+
+## Revisão do fallback do grafo — commit 8bf7b6a7
+
+A revisão estática não identificou falha concreta no fallback de tarefa native managed ainda não iniciada. A origem é reconstruída da proposta conferida por digest, identidade da tarefa e writePaths; a adoção ocorre sob autorização e fencing, com operação travada e somente em `registered`, sem handle/sessão ou lançamento/sandbox registrado. O registro do job native e a transição da operação são atômicos sob a trava da operação. A contraprova adicionada usa boundary simulado para retomar o filho, não demonstra retomada integral do grafo ou lançamento físico. Não houve reexecução independente nesta revisão.
