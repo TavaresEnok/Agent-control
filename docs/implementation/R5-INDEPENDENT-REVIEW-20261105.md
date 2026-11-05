@@ -35,3 +35,7 @@ Aprovada a prova delimitada do autor em `/tmp/ac-r5-canonical-result3.log`: sett
 ## Restore: dc7d0874
 
 Aprovada a mitigação limitada em `Admission.set`: não reabre nem substitui marcador de restore antes de reconciliação física. Busca de pontos de escrita encontrou este setter e o setter do laboratório de restauração. Teste PG 1/1 atribuído ao autor. A guarda não neutraliza workers vivos nem inventaria efeitos posteriores ao snapshot; T30 integral permanece aberto.
+
+## T21 — cenário físico de correção
+
+Recomenda-se aceite do cenário literal T21 na versão de teste 60a59273/5344816f/4d99e72f/61ebe55f sobre produto 0643b62a. Inspeção do script e do log do autor `/tmp/ac-r5-t21-third.log`: 1/1, QA físico reproduz soma errada, evidência falha é vinculada à decisão, novo commit/árvore recebem revisão e QA novos, artefato anterior é recusado e apenas corrigido é integrado. O log foi produzido pelo autor, com inferência determinística e sem conta oficial; não é execução independente. As duas falhas anteriores registradas em aad6b9db continuam negativas. Preservar log final versionado na integração.
