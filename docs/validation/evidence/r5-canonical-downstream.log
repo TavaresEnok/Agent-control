@@ -1,0 +1,20 @@
+R3_HAPPIER_SOURCE_PROVENANCE {"tree":"415b5303b2714abf60525361532264d7104d3bf3","files":1164,"sourceSha256":"6084780b8c5211f3477f3783fbe06334de863158476ce022cc42331fa797b6a5","cacheMatchesVendored":true}
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+{"proof":"r4-canonical-remote-caller","server":"actual server-main","route":"full settings","auth":"actual Happier+BrowserSessions","managerRegistryEpoch":2,"deviceActivationUi":true,"sourceAuthorizationUi":true,"prepareLostAckRecovered":true,"physicalLaunch":true,"registeredArtifact":"99f8b295-28a9-5c9c-a87c-37bb4eeb3cec","commit":"9164f9a0b5689f4b1966301eae7412116441213e","unreviewedAtRegistration":true,"fixtureAuthoritySubstitution":false}
+CANONICAL_QA_RECEIPT {"schemaVersion":1,"id":"8f9a406a-52ba-5d54-a8e4-2083e934abdc","artifactId":"99f8b295-28a9-5c9c-a87c-37bb4eeb3cec","kind":"qa","sessionId":"a247ca55-bcb4-4e29-8e51-2e23153b7fc4","grantId":"d6150891-3560-4ea1-877e-15d5b47dd901","policyRevision":1,"commit":"9164f9a0b5689f4b1966301eae7412116441213e","tree":"3ac503e9b614e57f3ea0237aa7e18159cc30f8d3","base":"1d816f94881fc9951bcb07232cdc48e8ba65eade","status":"passed","exitCode":0,"verifierDigest":"7e3e6c7599d3f48f0ae1cdff3c580b1b67bcb979000238360a808daa836160a6","logSha256":"3a1d4e4b3c13f654c05d1227cd288bd30c8217803e168d800b2dd06ae5d4f627","commandDigest":"5ccccf7fab65022494b0aaa106e3c6af313249382ac5eb0b0c4b9ae62a609aa7","verifierVersion":"native-qa-v1"}
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+{"proof":"r4-canonical-remote-development","route":"/p/3b7efdcc-f29e-4c14-805a-7f8e819ce0ea/settings/agent-control","server":"actual server-main","auth":"actual Happier+BrowserSessions","manager":"actual configured ManagerRegistry+ContextVault+Happier transport","epoch":2,"operatorEnrollment":"actual device activation UI","source":"browser-signed current-epoch exact export; immutable materialization unchanged","lostPrepareAckRecovered":true,"sshDocker":true,"artifact":"99f8b295-28a9-5c9c-a87c-37bb4eeb3cec","commit":"9164f9a0b5689f4b1966301eae7412116441213e","downstreamQaReviewJudgeHumanApprovalIntegrationReturn":true,"inference":"deterministic fixture only","viewport":360,"fixtureAuthoritySubstitution":false}

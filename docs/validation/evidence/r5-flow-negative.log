@@ -1,0 +1,36 @@
+TAP version 13
+# R4_FLOW_FAILURE {"primary":{"name":"AssertionError","code":"ERR_ASSERTION","expected":null},"runtimeCodes":[],"nativeJobs":[{"backend":"execution","id":"2ee6466b-e330-5348-a5ad-7b47edf19c3f","role":"programmer","state":"completed"},{"backend":"execution","id":"7289ccfb-f535-59e4-a8ef-00fbc09ff67d","role":"programmer","state":"completed"},{"backend":"execution","id":"75e6d2e9-ae3e-4bcf-a54c-1a25c95e1b36","role":"reviewer","state":"completed"},{"backend":"execution","id":"7a94c276-fb7f-472e-81c3-b04b5902c1ce","role":"reviewer","state":"completed"},{"backend":"execution","id":"8b66a6d5-abd7-509a-af57-0434c1c5e255","role":"programmer","state":"completed"},{"backend":"execution","id":"b3611fa4-28fc-45af-a058-58e0ccf82dbf","role":"reviewer","state":"completed"},{"backend":"execution","id":"fc654101-8e21-4c8b-88d1-70d572f639ec","role":"reviewer","state":"completed"},{"backend":"planning","id":"73c22a46-90e0-5e83-a807-23a2c3686521","role":"manager","state":"completed"},{"backend":"qa","id":"6c7128b7-2105-4b30-89b9-f023e11a91e0","role":"qa","state":"completed"},{"backend":"qa","id":"6cc0b723-b344-4a7f-af43-5c74aaff147f","role":"qa","state":"completed"},{"backend":"qa","id":"a66f6477-7c2a-49e8-8dd7-26d4b3c3eec2","role":"qa","state":"completed"},{"backend":"qa","id":"e6026f98-a7c9-41f2-a769-9f9cb3314689","role":"qa","state":"completed"}],"intentRuns":[{"id":"2cd1ac88-8b97-5c27-ae9a-4020bbd44af5","run_id":"088a4cf8-edf5-532d-ac3b-7a1affb54c25","workflow":"engineering-native-v1"},{"id":"64a92a88-6a78-5ffe-a328-e3ba02243d6f","run_id":"f59efd98-4f52-5aee-a205-05e79b4c3b64","workflow":"engineering-native-v1"},{"id":"770571b5-5307-5b73-abf1-66c2c7612314","run_id":"63512dca-0c86-4178-b6e7-6adc91622618","workflow":"semantic-proposal-v1"},{"id":"8088e339-b0cd-461a-bd40-3f44e2a6c319","run_id":"8ede078e-60e7-40c7-9eb4-ec37faf61b5e","workflow":"managed-synthetic-v1"},{"id":"ad9882e7-a85a-56cd-a0e6-2eb1e84eeb0b","run_id":"19ac9f1f-fa02-50ed-ac0e-d7f8f1763c4b","workflow":"engineering-synthetic-v1"},{"id":"e35bbbcf-7499-5901-a1a3-de13fb2f240d","run_id":"e6004c9f-5717-55dc-a3b9-439ba93e732c","workflow":"engineering-native-v1"}],"resourceAdmissions":[{"job_id":"2ee6466b-e330-5348-a5ad-7b47edf19c3f","state":"admitted","reason":"admitted"},{"job_id":"6c7128b7-2105-4b30-89b9-f023e11a91e0","state":"admitted","reason":"admitted"},{"job_id":"6cc0b723-b344-4a7f-af43-5c74aaff147f","state":"admitted","reason":"admitted"},{"job_id":"7289ccfb-f535-59e4-a8ef-00fbc09ff67d","state":"admitted","reason":"admitted"},{"job_id":"73c22a46-90e0-5e83-a807-23a2c3686521","state":"admitted","reason":"admitted"},{"job_id":"75e6d2e9-ae3e-4bcf-a54c-1a25c95e1b36","state":"admitted","reason":"admitted"},{"job_id":"7a94c276-fb7f-472e-81c3-b04b5902c1ce","state":"admitted","reason":"admitted"},{"job_id":"8b66a6d5-abd7-509a-af57-0434c1c5e255","state":"admitted","reason":"admitted"},{"job_id":"a66f6477-7c2a-49e8-8dd7-26d4b3c3eec2","state":"admitted","reason":"admitted"},{"job_id":"b3611fa4-28fc-45af-a058-58e0ccf82dbf","state":"admitted","reason":"admitted"},{"job_id":"e6026f98-a7c9-41f2-a769-9f9cb3314689","state":"admitted","reason":"admitted"},{"job_id":"fc654101-8e21-4c8b-88d1-70d572f639ec","state":"admitted","reason":"admitted"}],"beforeCleanup":{"containers":[{"id":"53a54b9841b43cdb34efc8547c4fea9f55957961bbe1f52e62edeaf0c495d5f8","name":"acrfe1871f07e30a76e25a29dd2-anchor","status":"running","running":true}],"pendingHostReservations":0},"cleanup":[]}
+# Subtest: R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+not ok 1 - R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+  ---
+  duration_ms: 140037.151214
+  type: 'test'
+  location: '/tmp/ac-r5-integrated-proof/tests/r3-conversation-flow.test.ts:1:3824'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'EVENT_SAMPLE_WINDOW_INCOMPLETE'
+    - null
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: ~
+  actual: 'EVENT_SAMPLE_WINDOW_INCOMPLETE'
+  operator: 'strictEqual'
+  stack: |-
+    assertEventReport (/tmp/ac-r5-integrated-proof/tests/fixtures/r3-latency-probe.ts:66:9)
+    TestContext.<anonymous> (/tmp/ac-r5-integrated-proof/tests/r3-conversation-flow.test.ts:143:25)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 146304.162336

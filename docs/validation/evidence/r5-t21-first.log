@@ -1,0 +1,33 @@
+TAP version 13
+# Subtest: T21 physical QA reproduces defect after initial review, then normal correction needs new review and QA
+not ok 1 - T21 physical QA reproduces defect after initial review, then normal correction needs new review and QA
+  ---
+  duration_ms: 66897.370705
+  type: 'test'
+  location: '/tmp/ac-r5-integrated-proof/tests/r4-native-qa-correction.test.ts:1:1686'
+  failureType: 'testCodeFailure'
+  error: |-
+    The expression evaluated to a falsy value:
+    
+      assert(review.finished_at&&qa.started_at)
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: ~
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/ac-r5-integrated-proof/tests/r4-native-qa-correction.test.ts:71:241)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 68346.650245
