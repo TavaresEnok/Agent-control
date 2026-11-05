@@ -9,6 +9,8 @@ import {Operators,operatorMessage} from '../src/operator.ts';
 import {Projects} from '../src/projects.ts';
 import {projectRepositoryIdentity} from '../src/project-repository.ts';
 import {WorkflowGraphs} from '../src/workflow-graph-service.ts';
+import {createProjectGateway} from '../src/projects-api.ts';
+import {createWorkflowGraphApi} from '../src/workflow-graph-api.ts';
 import {parseWorkflowGraphCommand} from '../src/workflow-graph-contract.ts';
 test('signed graph saves and replays immutable revisions',async()=>{
  const url=process.env.AC_R5_GRAPH_DATABASE_URL;if(!url?.endsWith('/ac_r5_mobile_graph'))throw Error('DISPOSABLE_DATABASE_REQUIRED');
@@ -24,7 +26,12 @@ test('signed graph saves and replays immutable revisions',async()=>{
   const cmd={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'workflow.graph.save' as const,payload:{projectId,name:'test',expectedRevision:0,graph:{nodes:[{id:'start',type:'start'},{id:'work',type:'agent',prompt:'do it'},{id:'end',type:'end'}],edges:[{from:'start',to:'work'},{from:'work.done',to:'end'}]}}};
   const proof=(command:typeof cmd)=>{const p={deviceId,expiresAt:Date.now()+120000};return {...p,signature:sign(null,Buffer.from(operatorMessage(principal,command,p,installation)),key.privateKey).toString('hex')};};
   const service=new WorkflowGraphs(db,[{id:'lab',path:root}],join(root,'private'));
-  const result=await service.save(principal,cmd,proof(cmd));assert.equal(result.revision,1);
+  const gateway=createProjectGateway({projects:new Projects(db),runtimes:{} as never,defaultProjectId:projectId,appFor:()=>{throw Error('UNEXPECTED_RUNTIME')},publicFetch:async()=>new Response(null,{status:404}),authenticate:async request=>request.headers.get('x-fixture-principal'),workflowGraphs:createWorkflowGraphApi(service)});
+  const post=(command:typeof cmd,auth:string|null=principal)=>gateway(new Request('http://lab/api/v1/ac/workflow-graphs',{method:'POST',headers:{'content-type':'application/json',...(auth?{'x-fixture-principal':auth}:{}),'x-ac-operator-proof':Buffer.from(JSON.stringify(proof(command))).toString('base64url')},body:JSON.stringify(command)}));
+  assert.equal((await post(cmd,null)).status,401);assert.equal((await post(cmd,'stranger')).status,403);
+  const response=await post(cmd);assert.equal(response.status,200);const result=await response.json();assert.equal(result.revision,1);
+  const catalog=await gateway(new Request(`http://lab/api/v1/ac/workflow-graphs?projectId=${projectId}`,{headers:{'x-fixture-principal':principal}}));
+  assert.equal(catalog.status,200);assert.equal((await catalog.json()).workflows[0].definition.name,'test');
   const replay={...cmd,deliveryAttemptId:randomUUID()};assert.deepEqual(await service.save(principal,replay,proof(replay)),result);
   assert.equal((await service.view(principal,projectId,'test')).revision,1);
   assert.equal(JSON.parse(await readFile(join(repo,result.path),'utf8')).version,2);
