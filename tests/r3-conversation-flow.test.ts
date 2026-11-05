@@ -161,7 +161,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   // and cancel through the authenticated signed product endpoint.
   await endpoint.close();endpoint=undefined;
   const previousPlan=(await db.pool.query('SELECT snapshot FROM ac_manager_plans WHERE context_id=$1 AND revision=$2',[context,proposal.revision])).rows[0].snapshot;
-  const heldPlan={...previousPlan,tasks:previousPlan.tasks.map((task:any)=>({...task,dependsOn:[],writePaths:['src/hold-'+task.id+'/a.ts']}))};
+  const heldPlan={...previousPlan,parallelism:3,tasks:previousPlan.tasks.map((task:any)=>({...task,dependsOn:[],writePaths:['src/hold-'+task.id+'/a.ts']}))};
   const publishedHeld=await request('/api/v1/ac/contexts/'+context+'/manager-plans',{expectedRevision:proposal.revision,plan:heldPlan});assert.equal(publishedHeld.status,201,await publishedHeld.clone().text());const heldProposal=await publishedHeld.json() as {revision:number;digest:string};
   const cancelCommand={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,proposalRevision:heldProposal.revision,proposalDigest:heldProposal.digest}};const cancellationResponse=await request('/api/v1/ac/commands',cancelCommand);assert.equal(cancellationResponse.status,202);const canceled=await cancellationResponse.json() as {intentId:string;runId:string};
   // Dispatch explicitly so the original same manager owns the graph while the
