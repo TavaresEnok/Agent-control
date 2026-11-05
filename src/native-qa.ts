@@ -235,9 +235,11 @@ export class NativeQa{
      if(byId.State.Running||byId.State.Status!=='exited'||byId.State.ExitCode!==verified.job.receipt.exitCode||byId.State.FinishedAt!==verified.job.receipt.finishedAt)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');await this.docker.remove(byId.Id);}
    }
    if(await this.docker.inspect(verified.job.container_id)||await this.docker.inspect('ac-native-qa-'+id))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   // Restore traversal only after physical absence is confirmed, and before
+   // committing retirement so a crash retries this idempotent step.
+   await setQaSnapshotPermissions(this.paths(id).work,false);
    if(saved.state==='prepared')await c.query("UPDATE ac_native_qa_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[id,{identity:verified.identity,signature:signature.toString('hex')}]);
   });
-  await setQaSnapshotPermissions(this.paths(id).work,false);
  }
  async reconcileContext(principal:string,authority:Authority){
   await this.reconcileResourceAdmissions(principal,authority);
