@@ -458,7 +458,7 @@
         "docs/implementation/R3-REVIEW-PRODUCT.md",
         "docs/implementation/R3-USAGE.md"
       ],
-      "evidence_method": "R3 own API/PG1/1 and UI25/25; report/browser evidence attributed; later open-unreported attempt delta reviewed statically.",
+      "evidence_method": "R3 product reviewer independently reran API/PG1/1 and UI25/25 according to its versioned report (historical evidence, not this R4 instance); report/browser evidence attributed; open-unreported attempt delta reviewed statically.",
       "not_reexecution_implied": true,
       "reviewer": "r4_review_product"
     },
@@ -898,7 +898,7 @@
         "docs/implementation/R3-REVIEW-PRODUCT.md",
         "docs/implementation/R3-USAGE.md"
       ],
-      "evidence_method": "R3 own API/PG1/1 and UI25/25; report/browser evidence attributed; later open-unreported attempt delta reviewed statically.",
+      "evidence_method": "R3 product reviewer independently reran API/PG1/1 and UI25/25 according to its versioned report (historical evidence, not this R4 instance); report/browser evidence attributed; open-unreported attempt delta reviewed statically.",
       "not_reexecution_implied": true,
       "reviewer": "r4_review_product"
     },
