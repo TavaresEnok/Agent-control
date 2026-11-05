@@ -16,14 +16,16 @@ test('concurrent synthetic CLIs cannot read the other container credential throu
  const image=docker('image','inspect','node:22-alpine','--format','{{.Id}}');assert.match(image,/^sha256:[a-f0-9]{64}$/);
  const root=await mkdtemp(join(tmpdir(),'ac-credential-physical-')),id=randomUUID(),names=[`ac-credential-${id}-a`,`ac-credential-${id}-b`];
  const secrets=[`SYNTHETIC_A_${randomUUID()}`,`SYNTHETIC_B_${randomUUID()}`];
+ let originalError:unknown;
  try{
   for(let i=0;i<2;i++){
    const account=join(root,`account-${i}`);await mkdir(join(account,'.codex'),{recursive:true,mode:0o700});
    await writeFile(join(account,'.codex','auth.json'),secrets[i],{mode:0o600});
-   docker('run','-d','--name',names[i],'--label',`agent-control.test=${id}`,'--network','none','--user',`${uid}:${gid}`,
+   const containerId=docker('run','-d','--name',names[i],'--label',`agent-control.test=${id}`,'--network','none','--user',`${uid}:${gid}`,
     '--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--pids-limit','96','--memory','512m','--cpus','1',
     '--tmpfs','/tmp:rw,nosuid,nodev,size=64m','--mount',`type=bind,src=${account},dst=/account`,
     '--env','HOME=/account','--env','CODEX_HOME=/account/.codex','--entrypoint','/bin/sh',image,'-c','exec sleep 90');
+   assert.equal(docker('ps','-aq','--no-trunc','--filter',`name=^/${names[i]}$`,'--filter',`label=agent-control.test=${id}`),containerId);
   }
   const pids=names.map(name=>Number(docker('inspect','--format','{{.State.Pid}}',name)));assert.ok(pids.every(pid=>Number.isSafeInteger(pid)&&pid>1));assert.notEqual(pids[0],pids[1]);
   const namespaces=names.map(name=>docker('exec',name,'readlink','/proc/1/ns/pid'));assert.notEqual(namespaces[0],namespaces[1]);
@@ -40,8 +42,19 @@ for path in /proc/[0-9]*/root/account/.codex/auth.json; do cat "$path" 2>/dev/nu
    assert.ok(output.includes(`CONTROL:${secrets[i]}`),'own credential must be readable');
    assert.equal(output.includes(secrets[1-i]),false,'foreign credential leaked');
   }
- }finally{
-  for(const name of names){try{docker('rm','-f',name);}catch{/* May not have been created. */}}
-  await rm(root,{recursive:true,force:true});
+ }catch(error){originalError=error;}
+ finally{
+  const cleanupErrors:unknown[]=[];
+  for(const name of names){
+   try{
+    const find=()=>docker('ps','-aq','--filter',`name=^/${name}$`,'--filter',`label=agent-control.test=${id}`);
+    const ids=find().split('\n').filter(Boolean);
+    for(const containerId of ids)docker('rm','-f',containerId);
+    if(find())throw Error(`TEST_CONTAINER_CLEANUP_INCOMPLETE: ${name}`);
+   }catch(error){cleanupErrors.push(error);}
+  }
+  try{await rm(root,{recursive:true,force:true});}catch(error){cleanupErrors.push(error);}
+  if(cleanupErrors.length)throw new AggregateError(originalError===undefined?cleanupErrors:[originalError,...cleanupErrors],'TEST_CLEANUP_FAILED');
  }
+ if(originalError!==undefined)throw originalError;
 });
