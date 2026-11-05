@@ -1,0 +1,2 @@
+touch: cannot touch '/work/src/forbidden': Read-only file system
+{"proof":"UID10001_READONLY_OK","outer":448,"work":365,"file":292,"executable":365}
