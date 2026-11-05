@@ -1,0 +1,10 @@
+Recorded excerpt from the initial broader R3 model-scope run (before migration078 allowlist fix).
+Command: Node22 --import tsx --test --test-concurrency=1 tests/r3-model-quota-scopes.test.ts tests/r3-provider-chain.test.ts tests/providers.test.ts tests/capacity-aging.test.ts tests/capacity-liveness.test.ts tests/capacity-prelaunch-refusals.test.ts tests/capacity-wait-resources.test.ts
+Result: 16 tests, 15 passed, 1 failed, zero skips.
+Failure: provider probes serialize per account, feed actual capacity and preserve unknown/redacted state
+Expected /NO_ELIGIBLE_CAPACITY/; actual:
+error: new row for relation "ac_capacity_waits" violates check constraint "ac_capacity_waits_exclusions_check"
+Stack: src/capacity.ts:238; tests/providers.test.ts:65.
+Cause: TypeScript RF10 reason expansion was not yet reflected in migration056's ac_valid_capacity_exclusions closed allowlist.
+Correction: additive migration078 replaces the validator with the expanded closed reason contract; new all-ineligible tests persist and read each fresh unavailable reason.
+This file preserves the observed failure excerpt; it is not the original full runner log.

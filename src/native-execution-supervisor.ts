@@ -93,10 +93,11 @@ export class NativeExecutionSupervisor{
   const provider=this.config.syntheticFixture?.provider??'codex',mode=this.config.syntheticFixture?'synthetic':'subscription_cli';
   const registered=(await c.query('SELECT repo FROM ac_project_repositories WHERE project_id=$1',[context.project_id])).rows[0];
   if(registered?.repo!==this.config.repository)throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');
+  await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
   const g=(await c.query(`SELECT g.*,a.provider,a.mode,a.enabled account_enabled,a.eligibility,a.resource_identity,p.enabled profile_enabled,p.model,p.effort,p.role profile_role
    FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id AND p.account_id=a.id
    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=g.project_id JOIN ac_quota_observations q ON q.account_id=a.id
-   WHERE g.id=$1 AND q.status='available' AND q.expires_at>clock_timestamp() FOR UPDATE OF g FOR SHARE OF a,p,x`,[input.grantId])).rows[0];
+   WHERE g.id=$1 AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p,x`,[input.grantId])).rows[0];
   if(!g||g.state!=='reserved'||g.resource_kind!=='model'||g.context_id!==authority.contextId||g.project_id!==context.project_id||g.intent_id!==input.intentId||Number(g.manager_epoch)!==authority.epoch||g.role!==input.role||g.profile_role!==input.role||g.provider!==provider||g.mode!==mode||g.eligibility!=='documented_supported'||!g.account_enabled||!g.profile_enabled||!this.subjects.has(g.account_id)||g.resource_identity!==provider+':'+this.subjects.get(g.account_id))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   const quality=(await c.query(`SELECT p.snapshot,p.digest FROM ac_execution_contracts x JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision WHERE x.intent_id=$1 AND x.project_id=$2`,[input.intentId,context.project_id])).rows[0];
   if(!quality)throw new Refusal('NATIVE_EXECUTION_POLICY_REQUIRED');
@@ -133,11 +134,12 @@ export class NativeExecutionSupervisor{
   await this.scope(c,principal,authority,input);
   const job=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];
   if(!job||job.state!=='uncertain'||Number(job.manager_epoch)!==authority.epoch)throw new Refusal('NATIVE_EXECUTION_RECONCILE_REQUIRED');
+  await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
   const grant=(await c.query(`SELECT g.*,p.model,p.effort FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
    JOIN ac_profiles p ON p.id=g.profile_id AND p.account_id=a.id JOIN ac_quota_observations q ON q.account_id=a.id
    JOIN ac_provider_eligibility_assessments e ON e.account_id=a.id AND e.revision=$2
    WHERE g.id=$1 AND g.state='uncertain' AND a.enabled AND p.enabled AND p.role=g.role AND a.provider=$5 AND a.mode=$6
-    AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp()
+    AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available'
     AND e.status='documented_supported' AND e.expires_at>clock_timestamp() AND e.adapter_id=$3 AND e.adapter_version=$4
     AND e.revision=(SELECT max(revision) FROM ac_provider_eligibility_assessments WHERE account_id=a.id)
    FOR UPDATE OF g FOR SHARE OF a,p,q,e`,[input.grantId,job.eligibility_revision,this.config.id,this.executorDigest,this.config.syntheticFixture?.provider??'codex',this.config.syntheticFixture?'synthetic':'subscription_cli'])).rows[0];

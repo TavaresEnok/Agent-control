@@ -127,12 +127,27 @@ export class Capacity {
   async observeQuota(principal: string, accountId: string, raw: z.input<typeof QuotaInput>) {
     const q = QuotaInput.parse(raw);
     await this.tx(async c => {
-      if (!(await c.query('SELECT 1 FROM ac_accounts WHERE id=$1 AND owner_id=$2', [Id.parse(accountId), principal])).rowCount)
+      if (!(await c.query('SELECT 1 FROM ac_accounts WHERE id=$1 AND owner_id=$2 FOR UPDATE', [Id.parse(accountId), principal])).rowCount)
         throw new Refusal('ACCOUNT_FORBIDDEN', 403);
       // No process is made eligible merely because an observation expired.
       await c.query(`INSERT INTO ac_quota_observations VALUES($1,$2,$3,clock_timestamp(),clock_timestamp()+$4*interval '1 second')
         ON CONFLICT(account_id) DO UPDATE SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`,
         [accountId, q.status, q.source, q.ttlSeconds]);
+      // New account observations invalidate prior model evidence unless this capture also reports it.
+      await c.query('UPDATE ac_model_quota_observations SET expires_at=greatest(observed_at+interval \'1 microsecond\',clock_timestamp()) WHERE account_id=$1',[accountId]);
+    });
+  }
+  /** Exact model observation. This promotes the account to scoped mode permanently;
+   * an account-only result cannot silently restore availability for other models. */
+  async observeModelQuota(principal:string,accountId:string,model:string,raw:z.input<typeof QuotaInput>){
+    const q=QuotaInput.parse(raw);z.string().min(1).max(100).parse(model);
+    await this.tx(async c=>{
+      const account=(await c.query('SELECT id FROM ac_accounts WHERE id=$1 AND owner_id=$2 FOR UPDATE',[Id.parse(accountId),principal])).rowCount;
+      if(!account)throw new Refusal('ACCOUNT_FORBIDDEN',403);
+      await c.query("UPDATE ac_accounts SET quota_scope_mode='model' WHERE id=$1",[accountId]);
+      await c.query(`INSERT INTO ac_model_quota_observations(account_id,model,status,source,observed_at,expires_at)
+       VALUES($1,$2,$3,$4,clock_timestamp(),clock_timestamp()+$5*interval '1 second')
+       ON CONFLICT(account_id,model) DO UPDATE SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`,[accountId,model,q.status,q.source,q.ttlSeconds]);
     });
   }
   async publish(principal: string, projectId: string, expectedRevision: number, raw: CapacityPolicy) {
@@ -167,7 +182,7 @@ export class Capacity {
     const found = await c.query<{profile_id:string;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number}>(
       `SELECT p.id profile_id,a.mode,a.enabled account_enabled,p.enabled profile_enabled,a.eligibility,
         EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=$2) project_access,
-        CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE NULL END fresh_quota,
+        ac_profile_quota_status(a.id,p.model) fresh_quota,
         a.id account_id,a.max_concurrent
         FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
         LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[])`, [ids, projectId]);
@@ -247,7 +262,7 @@ export class Capacity {
           WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled AND a.mode='synthetic'
           AND (($2='programmer' AND p.role='programmer') OR ($2<>'programmer' AND p.role IN ('reviewer','qa','specialist','judge')))
           AND a.eligibility='documented_supported'
-          AND q.status='available' AND q.expires_at>clock_timestamp() LIMIT 1`,[selected.account_id,request.role])).rowCount;
+          AND ac_profile_quota_status(a.id,p.model)='available' LIMIT 1`,[selected.account_id,request.role])).rowCount;
         if(other&&request.role==='programmer'){
           await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='ORIGINAL_RESERVE_NOT_NEEDED' WHERE attempt_id=$1",[request.attemptId]);
           return {blockedCode:'ORIGINAL_RESERVE_NOT_NEEDED'};
@@ -271,9 +286,9 @@ export class Capacity {
           JOIN ac_quota_observations oq ON oq.account_id=oa.id
           WHERE NOT ox.paused AND om.lease_until>clock_timestamp() AND oa.id<>a.id AND oa.enabled AND op.enabled AND oa.mode='synthetic'
           AND ((w.role='programmer' AND op.role='programmer') OR (w.role<>'programmer' AND op.role IN ('reviewer','qa','specialist','judge')))
-          AND oa.eligibility='documented_supported' AND oq.status='available' AND oq.expires_at>clock_timestamp()) AS available) alternative
+          AND oa.eligibility='documented_supported' AND ac_profile_quota_status(oa.id,op.model)='available') AS available) alternative
         WHERE w.resource_kind='model'  AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
-        AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp()
+        AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available'
         AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
         AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
         AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))

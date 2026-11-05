@@ -235,9 +235,10 @@ export class SandboxBroker{
   if(!principal)throw new Refusal('GRANT_FORBIDDEN',403);
   const admission=await this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,value.authority.contextId);await this.ledger.fence(c,value.authority,value.action!=='start');
-   const grant=(await c.query(`SELECT g.*,a.enabled account_enabled,a.eligibility,p.enabled profile_enabled,q.status quota_status,q.expires_at>clock_timestamp() quota_fresh
+   await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[value.grantId]);
+   const grant=(await c.query(`SELECT g.*,a.enabled account_enabled,a.eligibility,p.enabled profile_enabled,ac_profile_quota_status(a.id,p.model) quota_status,q.expires_at>clock_timestamp() quota_fresh
     FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
-    LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 FOR UPDATE OF g`,[value.grantId,value.authority.contextId])).rows[0];
+    LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 FOR UPDATE OF g FOR SHARE OF a,p`,[value.grantId,value.authority.contextId])).rows[0];
    if(!grant)throw new Refusal('GRANT_FORBIDDEN',403);
    if(value.action==='start')await this.ledger.assertIntentActive(c,value.authority.contextId,grant.intent_id);
    if(value.action==='start'&&value.profile==='synthetic-implementation-v1')await this.requireSpecialist(c,value,grant.intent_id);

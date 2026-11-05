@@ -172,7 +172,7 @@ export class Control {
   return this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,Id.parse(contextId),false);
    if(this.projectScope&&context.project_id!==this.projectScope)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-   const accounts=(await c.query(`SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.revision,a.max_concurrent,
+   const accounts=(await c.query(`SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.revision,a.max_concurrent,a.quota_scope_mode,
     (a.mode='synthetic') can_activate,
     (a.owner_id=$2 AND $3::boolean) can_manage,
     CASE WHEN q.expires_at>clock_timestamp() THEN q.status ELSE 'unknown' END quota_status,
@@ -188,7 +188,7 @@ export class Control {
      ORDER BY completed_at DESC LIMIT 1) o ON true WHERE x.project_id=$1 ORDER BY b.account_id`,[context.project_id])).rows.map(row=>{const {digest:storedDigest,...binding}=row;return {...binding,
      snapshot:row.snapshot?projectProviderSnapshot(row.snapshot,storedDigest,row.fresh===true):null};});
    const providerAdapters=this.providerAdapters.map(adapter=>({id:adapter.manifest.id,version:adapter.manifest.version,provider:adapter.manifest.provider,mode:adapter.manifest.mode,source:adapter.manifest.source}));
-   const profiles=(await c.query(`SELECT p.*,(a.mode='synthetic') can_activate,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
+   const profiles=(await c.query(`SELECT p.*,ac_profile_quota_status(a.id,p.model) quota_status,a.quota_scope_mode,(a.mode='synthetic') can_activate,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
     JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows;
    const catalog=(await c.query(`SELECT m.provider,m.model,m.efforts,m.roles,m.source FROM ac_model_catalog m
     WHERE EXISTS(SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.provider=m.provider AND x.project_id=$1)

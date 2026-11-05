@@ -8,8 +8,10 @@ import {Ledger} from './ledger.ts';
 export const ProviderAdapterId=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/);
 const Text=ProviderAdapterId;
 export const ProviderBinding=z.object({accountId:Id,adapterId:Text,expectedRevision:z.number().int().nonnegative(),minimumIntervalSeconds:z.number().int().min(1).max(3600)}).strict();
+export const ProviderModelQuota=z.object({model:z.string().min(1).max(100),status:QuotaInput.shape.status,remainingPercent:z.number().min(0).max(100).nullable(),resetAt:z.iso.datetime().nullable()}).strict();
+const ModelQuotas=z.array(ProviderModelQuota).max(100).refine(rows=>new Set(rows.map(row=>row.model)).size===rows.length,'DUPLICATE_MODEL_SCOPE');
 const ProbeResult=z.object({status:QuotaInput.shape.status,ttlSeconds:z.number().int().min(1).max(3600),
- remainingPercent:z.number().min(0).max(100).nullable(),resetAt:z.iso.datetime().nullable()}).strict();
+ remainingPercent:z.number().min(0).max(100).nullable(),resetAt:z.iso.datetime().nullable(),modelQuotas:ModelQuotas.optional()}).strict();
 export type ProviderProbeResult=z.infer<typeof ProbeResult>;
 const AdapterManifest=z.object({id:Text,version:Text,provider:Text,mode:z.literal('synthetic'),
  eligibility:z.literal('documented_supported'),source:z.string().regex(/^synthetic:\/\/[a-zA-Z0-9/._:-]+$/).max(300),
@@ -20,13 +22,13 @@ export type ProviderAdapter={manifest:z.input<typeof AdapterManifest>;
  probe:(input:{accountId:string;signal:AbortSignal})=>Promise<ProviderProbeResult>};
 const Stored=z.object({schemaVersion:z.literal(1),status:QuotaInput.shape.status,source:z.string().regex(/^synthetic:\/\/[a-zA-Z0-9/._:-]+$/).max(300),
  remainingPercent:z.number().min(0).max(100).nullable(),resetAt:z.iso.datetime().nullable(),
- failure:z.enum(['none','transport','invalid_response']),subscriptionBalance:z.enum(['reported','unknown'])}).strict();
+ modelQuotas:ModelQuotas.optional(),failure:z.enum(['none','transport','invalid_response']),subscriptionBalance:z.enum(['reported','unknown'])}).strict();
 type Stored=z.infer<typeof Stored>;
 /** A receipt proves a past observation, not current subscription availability. */
 export function projectProviderSnapshot(raw:unknown,expectedDigest:string,fresh:boolean):Stored{
  const parsed=Stored.safeParse(raw);
  if(!parsed.success||digest(parsed.data)!==expectedDigest)throw new Refusal('PROVIDER_OBSERVATION_CORRUPT');
- return fresh?parsed.data:{...parsed.data,status:'unknown',remainingPercent:null,subscriptionBalance:'unknown'};
+ return fresh?parsed.data:{...parsed.data,status:'unknown',remainingPercent:null,resetAt:null,subscriptionBalance:'unknown',...(parsed.data.modelQuotas?{modelQuotas:parsed.data.modelQuotas.map(q=>({...q,status:'unknown' as const,remainingPercent:null,resetAt:null}))}:{})};
 }
 
 /** Read-only collector frontier. Capacity remains the only admission authority,
@@ -61,6 +63,7 @@ export class ProviderCollectors{
     VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(account_id) DO UPDATE SET adapter_id=$2,adapter_version=$3,
     adapter_digest=$4,revision=$5,minimum_interval_seconds=$6`,
     [input.accountId,adapter.manifest.id,adapter.manifest.version,adapter.hash,revision,input.minimumIntervalSeconds]);
+   await c.query('UPDATE ac_model_quota_observations SET expires_at=greatest(observed_at+interval \'1 microsecond\',clock_timestamp()) WHERE account_id=$1',[input.accountId]);
    // A changed collector never inherits a previous collector's optimistic quota.
    await new Capacity(this.ledger,c).observeQuota(principal,input.accountId,{status:'unknown',source:'collector:binding_changed',ttlSeconds:1});
    return {revision};
@@ -108,13 +111,15 @@ export class ProviderCollectors{
   // Unavailable/unknown results do not display a stale reported percentage.
   const remainingPercent=['available','exhausted','rate_limited'].includes(outcome.status)?outcome.remainingPercent:null;
   const snapshot:Stored={schemaVersion:1,status:outcome.status,source:admitted.adapter.manifest.source,
-   remainingPercent,resetAt:outcome.resetAt,failure,subscriptionBalance:remainingPercent===null?'unknown':'reported'};
+   remainingPercent,resetAt:outcome.resetAt,...(outcome.modelQuotas?{modelQuotas:outcome.modelQuotas.map(q=>({...q,remainingPercent:['available','exhausted','rate_limited'].includes(q.status)?q.remainingPercent:null,resetAt:['available','exhausted','rate_limited'].includes(q.status)?q.resetAt:null}))}:{}),failure,subscriptionBalance:remainingPercent===null?'unknown':'reported'};
   return this.tx(async c=>{
    const account=await this.owner(c,principal,projectId,accountId);
    const binding=(await c.query('SELECT *,lease_until>clock_timestamp() live FROM ac_provider_bindings WHERE account_id=$1 FOR UPDATE',[accountId])).rows[0];
    if(!binding||binding.lease_id!==admitted.leaseId||binding.revision!==admitted.revision||!binding.live)throw new Refusal('PROVIDER_PROBE_SUPERSEDED');
    if(!account.enabled||account.eligibility!=='documented_supported')throw new Refusal('PROVIDER_MODE_INELIGIBLE');
    await new Capacity(this.ledger,c).observeQuota(principal,accountId,{status:outcome.status,source:`collector:${admitted.adapter.manifest.id}`,ttlSeconds:outcome.ttlSeconds});
+   if(outcome.modelQuotas!==undefined)await c.query("UPDATE ac_accounts SET quota_scope_mode='model' WHERE id=$1",[accountId]);
+   for(const scope of outcome.modelQuotas??[])await new Capacity(this.ledger,c).observeModelQuota(principal,accountId,scope.model,{status:scope.status,source:`collector:${admitted.adapter.manifest.id}:model`,ttlSeconds:outcome.ttlSeconds});
    const row=(await c.query(`UPDATE ac_provider_observations SET state='completed',snapshot=$2,digest=$3,
     completed_at=clock_timestamp(),expires_at=clock_timestamp()+$4*interval '1 second' WHERE id=$1 AND state='collecting' RETURNING expires_at`,
     [observationId,snapshot,digest(snapshot),outcome.ttlSeconds])).rows[0];

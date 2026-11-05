@@ -1,0 +1,120 @@
+TAP version 13
+# Subtest: database queue preserves initial priority then bounds overtaking across contexts and clients
+ok 1 - database queue preserves initial priority then bounds overtaking across contexts and clients
+  ---
+  duration_ms: 2353.409752
+  type: 'test'
+  ...
+# Subtest: programming saturation and explicit stage releases permit evaluation, with original reserve draining on recovery
+ok 2 - programming saturation and explicit stage releases permit evaluation, with original reserve draining on recovery
+  ---
+  duration_ms: 1992.145185
+  type: 'test'
+  ...
+# Subtest: running regular and emergency grants survive recovery and policy revision without preemption
+ok 3 - running regular and emergency grants survive recovery and policy revision without preemption
+  ---
+  duration_ms: 1398.021665
+  type: 'test'
+  ...
+# Subtest: capacity prelaunch refusals
+    # Subtest: publish of a profile that is not shared is POLICY_PROFILE_FORBIDDEN
+    ok 1 - publish of a profile that is not shared is POLICY_PROFILE_FORBIDDEN
+      ---
+      duration_ms: 32.087731
+      type: 'test'
+      ...
+    # Subtest: addProfile rejects an effort outside the catalog
+    ok 2 - addProfile rejects an effort outside the catalog
+      ---
+      duration_ms: 8.733542
+      type: 'test'
+      ...
+    # Subtest: setEnabled of another owner profile is ACCOUNT_PROFILE_FORBIDDEN
+    ok 3 - setEnabled of another owner profile is ACCOUNT_PROFILE_FORBIDDEN
+      ---
+      duration_ms: 13.850175
+      type: 'test'
+      ...
+    # Subtest: a chain with no eligible profile records one ordered reason and does not touch quota or grants
+    ok 4 - a chain with no eligible profile records one ordered reason and does not touch quota or grants
+      ---
+      duration_ms: 471.310755
+      type: 'test'
+      ...
+    # Subtest: saturation stays CAPACITY_BUSY and does not record exclusions
+    ok 5 - saturation stays CAPACITY_BUSY and does not record exclusions
+      ---
+      duration_ms: 249.43457
+      type: 'test'
+      ...
+    # Subtest: historical waits without exclusions remain readable
+    ok 6 - historical waits without exclusions remain readable
+      ---
+      duration_ms: 101.494513
+      type: 'test'
+      ...
+    # Subtest: a grant keeps its policy revision after a later publication, and the next reserve uses the reassigned revision
+    ok 7 - a grant keeps its policy revision after a later publication, and the next reserve uses the reassigned revision
+      ---
+      duration_ms: 260.643177
+      type: 'test'
+      ...
+    # Subtest: a stored snapshot whose digest does not match is POLICY_DIGEST_MISMATCH and creates no grant
+    ok 8 - a stored snapshot whose digest does not match is POLICY_DIGEST_MISMATCH and creates no grant
+      ---
+      duration_ms: 108.809146
+      type: 'test'
+      ...
+    1..8
+ok 4 - capacity prelaunch refusals
+  ---
+  duration_ms: 3033.472373
+  type: 'suite'
+  ...
+# Subtest: capacity wait resources
+    # Subtest: Control.view publishes ordered exclusions inside the authorized project read
+    ok 1 - Control.view publishes ordered exclusions inside the authorized project read
+      ---
+      duration_ms: 252.783066
+      type: 'test'
+      ...
+    # Subtest: legacy, invalid, busy, queued and local waits keep their stored reason
+    ok 2 - legacy, invalid, busy, queued and local waits keep their stored reason
+      ---
+      duration_ms: 185.655158
+      type: 'test'
+      ...
+    1..2
+ok 5 - capacity wait resources
+  ---
+  duration_ms: 2335.348173
+  type: 'suite'
+  ...
+# Subtest: provider probes serialize per account, feed actual capacity and preserve unknown/redacted state
+ok 6 - provider probes serialize per account, feed actual capacity and preserve unknown/redacted state
+  ---
+  duration_ms: 1997.985986
+  type: 'test'
+  ...
+# Subtest: R3 shared physical account enforces exact model quota scopes and one physical capacity cap
+ok 7 - R3 shared physical account enforces exact model quota scopes and one physical capacity cap
+  ---
+  duration_ms: 2600.847079
+  type: 'test'
+  ...
+# Subtest: R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+ok 8 - R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+  ---
+  duration_ms: 3744.037147
+  type: 'test'
+  ...
+1..8
+# tests 16
+# suites 2
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 24306.089933

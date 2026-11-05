@@ -673,9 +673,10 @@ export class EngineeringStages{
      await this.ledger.tx(async c=>{
       await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
+      await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[grant.id]);
       const eligible=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
        JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
-       AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp() FOR UPDATE OF g`,
+       AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p`,
        [grant.id,authority.contextId,authority.epoch]);
       if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');
       child=spawn(process.execPath,[verifierPath,snapshot.snapshot,intent.operation_id,node],

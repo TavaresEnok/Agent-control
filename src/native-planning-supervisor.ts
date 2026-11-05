@@ -86,7 +86,8 @@ export class NativePlanningSupervisor{
   await input.assertAuthorized();
   const id=await this.serialEffect(input.callId,()=>this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
-   const active=(await c.query(`SELECT g.state,a.enabled account_enabled,p.enabled profile_enabled,q.status,q.expires_at>clock_timestamp() fresh
+   await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
+   const active=(await c.query(`SELECT g.state,a.enabled account_enabled,p.enabled profile_enabled,ac_profile_quota_status(a.id,p.model) status,q.expires_at>clock_timestamp() fresh
     FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
     LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.manager_epoch=$2 FOR UPDATE OF g FOR SHARE OF a,p`,[input.grantId,input.executionEpoch])).rows[0];
    if(!active||active.state!=='reserved'||!active.account_enabled||!active.profile_enabled||active.status!=='available'||!active.fresh)throw new Refusal('NATIVE_PLANNING_NOT_ELIGIBLE');
