@@ -101,6 +101,7 @@ export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
   const overlay = useMemo(() => (graph ? runOverlay(graph, run) : null), [graph, run])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [view, setView] = useState<'graph' | 'cards'>('graph')
   const selected = graph?.nodes.find((n) => n.id === selectedId)
 
   const nodes: Node<LiveNodeData>[] = useMemo(
@@ -168,7 +169,27 @@ export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded
           subtitle="This task has no stored workflow definition to draw."
         />
       ) : (
-        <div className="relative min-h-[420px] flex-1">
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div role="group" aria-label="Visualização do workflow" className="flex gap-2 p-2">
+            <button className="rounded-md border px-3 py-2 aria-pressed:bg-muted focus-visible:outline" type="button" aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Grafo</button>
+            <button className="rounded-md border px-3 py-2 aria-pressed:bg-muted focus-visible:outline" type="button" aria-pressed={view === 'cards'} onClick={() => setView('cards')}>Cartões</button>
+          </div>
+          <p className="px-2 text-meta text-muted-foreground">Atraso de projeção: indisponível (o registro não informa quando o estado foi projetado).</p>
+          {view === 'cards' && overlay ? (
+            <ol aria-label="Etapas do workflow" className="space-y-2 p-2">
+              {graph.nodes.map((node) => {
+                const step = run.steps.find((item) => item.id === node.id)
+                const childRunId = childOf(run, node.id).childRunId
+                return <li key={node.id} className="rounded-md border p-3" data-node-id={node.id}>
+                  <strong>{node.name ?? node.id}</strong><p>Identificador: {node.id}</p>
+                  <p>Estado: {overlay.nodes.get(node.id)?.status ?? 'pending'}</p>
+                  <p>Responsável: não informado</p>
+                  {step?.profileId && <p>Perfil da sessão: {step.profileId}</p>}
+                  {childRunId && <Link to={`/tasks/${childRunId}`}>Abrir subtarefa</Link>}
+                </li>
+              })}
+            </ol>
+          ) : <div className="relative min-h-[420px]">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -192,12 +213,15 @@ export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded
             <FloatingPanel side="right" label="Node details" title={selected.name ?? selected.id} onClose={() => setSelectedId(null)}>
               <NodeDetails
                 state={overlay.nodes.get(selected.id) ?? { status: 'pending' }}
+                nodeId={selected.id}
+                profileId={run.steps.find((item) => item.id === selected.id)?.profileId}
                 outputs={run.graphState?.outputs?.[selected.id]}
                 childRunId={childOf(run, selected.id).childRunId}
                 loopMax={selected.type === 'loop' ? selected.max : undefined}
               />
             </FloatingPanel>
           ) : null}
+          </div>}
         </div>
       )}
     </div>
@@ -213,16 +237,21 @@ function childOf(run: ApiRun, nodeId: string): { childRunId?: string } {
 /** What one node did in this run: its state, and every `{{nodes.<id>.<field>}}` it produced. */
 function NodeDetails({
   state,
+  nodeId,
+  profileId,
   outputs,
   loopMax,
   childRunId,
 }: {
   state: NodeRunState
+  nodeId: string
+  profileId?: string
   outputs: Record<string, string | number> | undefined
   loopMax?: number
   childRunId?: string
 }) {
-  const rows: [string, string][] = [['status', state.status === 'reached' ? 'passed through' : state.status]]
+  const rows: [string, string][] = [['Identificador', nodeId], ['Estado', state.status], ['Responsável', 'não informado'], ['Atraso de projeção', 'indisponível']]
+  if (profileId) rows.push(['Perfil da sessão', profileId])
   if (state.iterations) rows.push(['runs', String(state.iterations)])
   if (state.costUsd) rows.push(['cost', `$${state.costUsd.toFixed(2)}`])
   if (state.loopCount !== undefined) rows.push(['iterations', `${state.loopCount}${loopMax ? ` / ${loopMax}` : ''}`])
