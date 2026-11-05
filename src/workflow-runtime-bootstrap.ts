@@ -20,7 +20,11 @@ export async function startWorkflowRuntimeRegistration(ledger:Ledger,capability:
  const owned=new Map<string,string>();let stopped=false,timer:ReturnType<typeof setTimeout>|undefined;
  let pending:Promise<void>=Promise.resolve();
  const announce=async()=>{for(const [id,owner] of owned)await service.announce(owner,id,capability,30);};
- const schedule=()=>{if(stopped)return;timer=setTimeout(()=>{pending=announce().catch(()=>{onFailure();}).finally(schedule);},10000);timer.unref();};
+ // A revoked project must not starve leases for unrelated authorized projects.
+ // Startup remains atomic/fail-closed; recurring renewals isolate each failure.
+ const renew=async()=>{let failed=false;for(const [id,owner] of owned){try{await service.announce(owner,id,capability,30);}catch{failed=true;}}
+  if(failed){try{onFailure();}catch{/* Reporting cannot abort future renewals. */}}};
+ const schedule=()=>{if(stopped)return;timer=setTimeout(()=>{pending=renew().finally(schedule);},10000);timer.unref();};
  try{
   for(const project of projects){if(owned.has(project.id))throw Error('DUPLICATE_RUNTIME_PROJECT');owned.set(project.id,project.owner);}
   await announce();schedule();

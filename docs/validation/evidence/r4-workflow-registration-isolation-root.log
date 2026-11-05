@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: configured runtime registration measures local bytes, renews only registration and expires its own leases on close
+ok 1 - configured runtime registration measures local bytes, renews only registration and expires its own leases on close
+  ---
+  duration_ms: 2332.727543
+  type: 'test'
+  ...
+# Subtest: recurring registration isolates revoked project ownership and failing diagnostics
+ok 2 - recurring registration isolates revoked project ownership and failing diagnostics
+  ---
+  duration_ms: 12158.181425
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15201.222467

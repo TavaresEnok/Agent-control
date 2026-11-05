@@ -26,3 +26,19 @@ test('configured runtime registration measures local bytes, renews only registra
   assert.equal((await ledger.pool.query('SELECT 1 FROM ac_workflow_runtime_instances WHERE instance_id=$1 AND lease_until>clock_timestamp()',[local.identity.instanceId])).rowCount,0);
  }finally{await registration?.close();await ledger.close();await db.close();}
 });
+
+test('recurring registration isolates revoked project ownership and failing diagnostics',async()=>{
+ const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('AC_TEST_DATABASE_URL_REQUIRED');
+ const db=await isolatedDatabase(base,'r4renew');const local=await prepareWorkflowRuntimeRegistration({state:'registered-inactive'});assert(local);
+ const ledger=new Ledger(db.url,undefined,local.identity);let registration:Awaited<ReturnType<typeof startWorkflowRuntimeRegistration>>|undefined;
+ try{
+  await ledger.migrate();const a=randomUUID(),b=randomUUID();
+  for(const id of [a,b]){await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[id,'synthetic']);await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,'owner','owner')",[id]);}
+  let errors=0;registration=await startWorkflowRuntimeRegistration(ledger,local,[{id:a,owner:'owner'},{id:b,owner:'owner'}],()=>{errors++;throw Error('synthetic diagnostic failure');});
+  const before=(await ledger.pool.query('SELECT lease_until FROM ac_workflow_runtime_instances WHERE project_id=$1',[b])).rows[0].lease_until as Date;
+  await ledger.pool.query('DELETE FROM ac_memberships WHERE project_id=$1',[a]);
+  const until=Date.now()+14000;let renewed=false;
+  while(Date.now()<until){await new Promise(resolve=>setTimeout(resolve,250));const row=(await ledger.pool.query('SELECT lease_until FROM ac_workflow_runtime_instances WHERE project_id=$1',[b])).rows[0];if(row.lease_until.getTime()>before.getTime()){renewed=true;break;}}
+  assert(renewed,'authorized project still renews after an earlier project loses its owner');assert.equal(errors,1);
+ }finally{await registration?.close();await ledger.close();await db.close();}
+});
