@@ -12,7 +12,7 @@ import type { BrowserSessions } from './sessions.ts';
 import {Usage} from './usage.ts';
 import {GitArtifacts} from './git.ts';
 import type {HappierAuthRelay} from './auth-relay.ts';
-import type {ProviderAdapter} from './providers.ts';
+import {ProviderCollectors,type ProviderAdapter} from './providers.ts';
 import {createPlanningApi} from './planning-api.ts';
 import type {SemanticPlanning} from './semantic-planning.ts';
 import {createObservabilityApi} from './observability-api.ts';
@@ -48,7 +48,7 @@ export type Authenticator = (request: Request) => Promise<string | null>;
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning) {
+  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning,quotaRegistry?:{configurationDigest:string;reconcile(accountId?:string):Promise<number>;report:{state:string;realActivation:'blocked';inferenceEnabled:false;registered:number}}) {
   const app = new Hono<{ Variables: { principal: string } }>();
   const control = new Control(ledger,providerAdapters,runtime.projectId,administrative,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
   app.use('*', async (c, next) => {
@@ -70,6 +70,21 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (e instanceof z.ZodError || e instanceof SyntaxError) return c.json({ error: 'INVALID_CONTRACT' }, 400);
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
+  });
+  app.get('/api/v1/ac/quota-registry',async c=>{
+    const owner=(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[runtime.projectId,c.get('principal')])).rowCount;
+    if(!owner)throw new Refusal('PROJECT_FORBIDDEN',403);
+    const registered=quotaRegistry?(await ledger.pool.query('SELECT count(*)::int n FROM ac_readonly_quota_registrations r JOIN ac_account_access x ON x.account_id=r.account_id JOIN ac_accounts a ON a.id=r.account_id WHERE x.project_id=$1 AND a.owner_id=$2 AND r.configuration_digest=$3',[runtime.projectId,c.get('principal'),quotaRegistry.configurationDigest])).rows[0].n:0;
+    c.header('Cache-Control','no-store');return c.json({...quotaRegistry?.report??{state:'disabled',realActivation:'blocked',inferenceEnabled:false},registered});
+  });
+  app.post('/api/v1/ac/quota/:accountId/collect',async c=>{
+    const accountId=Id.parse(c.req.param('accountId'));
+    const input=z.object({observationId:z.uuid()}).strict().parse(await c.req.json());
+    const permitted=(await ledger.pool.query("SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id JOIN ac_memberships m ON m.project_id=x.project_id WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 AND m.principal_id=$2 AND m.role='owner'",[c.req.param('accountId'),c.get('principal'),runtime.projectId])).rowCount;
+    if(!permitted)throw new Refusal('ACCOUNT_FORBIDDEN',403);
+    // Recovery is bounded and never retires another collector's live lease.
+    await quotaRegistry?.reconcile(accountId);
+    c.header('Cache-Control','no-store');return c.json(await new ProviderCollectors(ledger,providerAdapters).collect(c.get('principal'),runtime.projectId,c.req.param('accountId'),input.observationId));
   });
   app.route('/api/v1/ac',createPlanningApi(ledger,runtime.projectId,manager,semanticPlanning));
   app.route('/api/v1/ac',createObservabilityApi(new OperationalObservability(ledger,{diskPolicy:diskPolicyFromEnvironment()})));

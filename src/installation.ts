@@ -8,6 +8,7 @@ import {Operators} from './operator.ts';
 import {Refusal,digest} from './contracts.ts';
 import {Projects} from './projects.ts';
 import {ProjectRoot} from './project-admin.ts';
+import {CodexQuotaRegistryConfig} from './codex-quota-registry.ts';
 import {NativeBootstrapConfig,nativeBootstrapSchemaError} from './native-bootstrap.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
@@ -24,6 +25,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
  nativeBootstrap:NativeBootstrapConfig.optional(),
+ codexQuota:CodexQuotaRegistryConfig.optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
   contexts:z.array(z.object({projectId:z.uuid(),contextId:z.uuid(),sessionId:z.string().min(1).max(200),profileId:z.string().min(1).max(100),
    keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey'])}).strict()).min(1).max(100)}).strict().optional(),

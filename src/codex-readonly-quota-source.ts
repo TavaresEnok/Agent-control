@@ -1,4 +1,4 @@
-import {spawn} from 'node:child_process';
+import {spawn,type ChildProcess} from 'node:child_process';
 import {constants} from 'node:fs';
 import {lstat,open,realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -7,6 +7,7 @@ import {z} from 'zod';
 
 /** Explicit trusted binding: no path, executable, or identity is accepted from a request. */
 export type CodexReadonlyBinding={accountId:string;home:string;device:string;inode:string;uid:string;subjectDigest:string};
+export type CodexReadonlySupervisor={launch(input:{home:string;homeFd:number}):Promise<ChildProcess>;stop():Promise<boolean>};
 export type CodexReadonlyResult={kind:'stdout';stdout:string}|{kind:'auth'|'unknown'};
 const uuid=z.uuid(),hash=z.string().regex(/^[a-f0-9]{64}$/);
 // Multiple injected instances must not bypass an in-flight or quarantined account.
@@ -21,13 +22,14 @@ export function codexReadonlyIdentity(value:unknown):string|null{
  * Unconfirmed teardown quarantines the account in this process until restart/reconciliation. */
 export class CodexReadonlyQuotaSource{
  private readonly binding:CodexReadonlyBinding;private quarantined=false;
- constructor(private readonly executable:string,binding:CodexReadonlyBinding,private readonly timeoutMs=4000){
+ constructor(private readonly executable:string,binding:CodexReadonlyBinding,private readonly timeoutMs=4000,private readonly supervisor?:CodexReadonlySupervisor){
   uuid.parse(binding.accountId);hash.parse(binding.subjectDigest);
   if(!isAbsolute(executable)||resolve(executable)!==executable||!isAbsolute(binding.home)||resolve(binding.home)!==binding.home||!/^\d+$/.test(binding.device)||!/^\d+$/.test(binding.inode)||!/^\d+$/.test(binding.uid)||!Number.isInteger(timeoutMs)||timeoutMs<10||timeoutMs>30000)throw new TypeError('CODEX_READONLY_CONFIGURATION_INVALID');
   this.binding=Object.freeze({...binding});
  }
  async read(input:{accountId:string;signal:AbortSignal}):Promise<CodexReadonlyResult>{
-  if(input.accountId!==this.binding.accountId||input.signal.aborted||activeAccounts.has(this.binding.accountId)||quarantinedAccounts.has(this.binding.accountId)||this.quarantined)return {kind:'unknown'};
+  if(input.accountId!==this.binding.accountId||input.signal.aborted||activeAccounts.has(this.binding.accountId)||!this.supervisor&&(quarantinedAccounts.has(this.binding.accountId)||this.quarantined))return {kind:'unknown'};
+  if(this.supervisor)this.quarantined=false;
   activeAccounts.add(this.binding.accountId);
   try{return await this.run(input.signal);}catch{return {kind:'unknown'};}finally{if(this.quarantined)quarantinedAccounts.add(this.binding.accountId);activeAccounts.delete(this.binding.accountId);}
  }
@@ -40,7 +42,7 @@ export class CodexReadonlyQuotaSource{
    // Inherit the verified directory as fd 3; neither cwd nor the child's HOME
    // resolve the mutable pathname after verification. Linux /proc is required.
    const anchored='/proc/self/fd/3';
-   const child=spawn(this.executable,['app-server'],{cwd:`/proc/self/fd/${home.fd}`,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',HOME:anchored,CODEX_HOME:anchored},detached:true,stdio:['pipe','pipe','pipe',home.fd]});
+   const child=this.supervisor?await this.supervisor.launch({home:b.home,homeFd:home.fd}):spawn(this.executable,['app-server'],{cwd:`/proc/self/fd/${home.fd}`,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',HOME:anchored,CODEX_HOME:anchored},detached:true,stdio:['pipe','pipe','pipe',home.fd]});
    let rejectCurrent:(e:Error)=>void=()=>{},resolveCurrent:(v:any)=>void=()=>{},expected=0,buffer='',bytes=0,finished=false,failed=false;
    const pendingError=()=>{failed=true;rejectCurrent(new Error('READONLY_PROTOCOL_FAILED'));};
    const closed=new Promise<void>(resolve=>{child.once('close',()=>{finished=true;if(expected!==0)pendingError();resolve();});child.once('error',()=>{pendingError();});});
@@ -73,10 +75,11 @@ export class CodexReadonlyQuotaSource{
    }catch{answer={kind:'unknown'};}
    finally{
     clearTimeout(timer);signal.removeEventListener('abort',abort);child.stdin!.destroy();
-    if(child.pid){try{process.kill(-child.pid,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')this.quarantined=true;}}
+    if(this.supervisor){if(!await this.supervisor.stop())this.quarantined=true;}
+    else if(child.pid){try{process.kill(-child.pid,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')this.quarantined=true;}}
     const stopped=await Promise.race([closed.then(()=>true),new Promise<false>(r=>setTimeout(()=>r(false),1000))]);
     if(!stopped)this.quarantined=true;
-    if(child.pid){try{process.kill(-child.pid,0);this.quarantined=true;}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')this.quarantined=true;}}
+    if(!this.supervisor&&child.pid){try{process.kill(-child.pid,0);this.quarantined=true;}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')this.quarantined=true;}}
    }
    return this.quarantined||signal.aborted||failed?{kind:'unknown'}:answer;
   }finally{await home.close();}

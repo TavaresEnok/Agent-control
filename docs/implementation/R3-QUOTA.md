@@ -1,0 +1,23 @@
+# R3 — registro configurável e supervisão de quota somente leitura
+
+`Installation.codexQuota` aceita `disabled`, `configured-inactive` e `lab-synthetic`. O primeiro não registra adaptador; o segundo valida a identidade Codex da conta e persiste metadados de configuração, mas não constrói um executor. O terceiro exige o contrato `ac-r3-quota-disposable-v1`, conta de modo sintético com elegibilidade documentada, HOME privado vinculado por UID/dispositivo/inode e imagem Docker por digest. Contas `subscription_cli` e `api` continuam desabilitadas por SQL 042; o registro nunca atualiza `enabled`, modo ou elegibilidade.
+
+O servidor compõe o registro, reconcilia antes de servir e entrega seus adaptadores ao Control/API existentes. O proprietário consulta `GET /api/v1/ac/quota-registry` e solicita uma observação por `POST /api/v1/ac/quota/:accountId/collect` com `observationId`. Autenticação, projeto, propriedade de conta, binding, throttle, lease e snapshot existentes continuam obrigatórios. A configuração não permite inferência. O relatório omite HOME, identidade, imagem e segredos; a contagem usa projeto/proprietário e digest da configuração atual. As linhas de registro persistidas são histórico da última configuração por conta, não prova de ativação atual.
+
+O único executor registrado é deliberadamente de bancada: contêiner sem rede, filesystem raiz somente leitura, sem capabilities, sem socket, com limites de PID/memória/CPU. Um preflight dentro do mount confere o UID/dispositivo/inode/modo do HOME aberto antes de importar `/fixture.mjs`. O protocolo da fonte continua restrito a `initialize`, `initialized`, `account/read` sem refresh e `account/rateLimits/read`. Nenhum caminho de login, conversa, inferência ou chave de API foi adicionado.
+
+A migração 072 persiste intenção antes de criar o contêiner e permite apenas um run incerto por conta. Lock advisory serializa criação/reconciliação. Nome UUID, ID imutável, conta e labels precisam concordar antes de remover o grupo Docker inteiro. A migração 073 registra configuração inativa/sintética. Reinício não apaga quarentena. Lease ainda vivo impede um segundo controlador de retirar uma coleta saudável; o proprietário da fonte pode parar seu próprio run. Após expiração, a reconciliação confirma a retirada física antes de limpar o lease. Recuperação ocorre no startup e, de forma limitada à conta autorizada, antes da coleta solicitada pela API.
+
+Se `create` perdeu o ACK e não há ID persistido nem recurso encontrado, a ausência não comprova que o daemon terminou de criar: o run permanece incerto, bloqueando sobreposição. Divergência de identidade física, indisponibilidade de Docker e falhas de retirada também preservam incerteza. Timeout/erro de protocolo não viram saldo esgotado ou logout; identidade de conta ausente/divergente produz observação `auth_required`, sem revogar credencial nem alterar conta.
+
+## Evidência
+
+Node 22.23.3, PostgreSQL novo `ac-r3-quota-pg` e imagem nova `ac-r3-quota-fixture:20261105`, ambos rotulados descartáveis. O teste `r3-quota.test.ts` usa banco exclusivo criado/removido pelo helper existente. A fixture foi a única imagem de provedor executada; nenhuma credencial, conta real ou assinatura foi lida.
+
+O ensaio verifica API autenticada, RPCs exatos, capacidade recebendo a observação, registro real inativo e recusa de ativação sintética de conta real, timeout/auth/dado inválido, controller separado morto com SIGKILL enquanto o contêiner e descendente detached continuam físicos, novo supervisor recusando lease vivo e retirando o grupo depois da expiração, nova coleta e ACK incerto conservador. Os testes existentes da fonte e de ProviderCollectors acrescentam exclusão, abort, limite de saída, parsing, replay, throttle, snapshots e admissão Capacity. Log: `docs/validation/evidence/r3-quota-20261105.log`.
+
+O typecheck local não tem erros nos módulos novos; o comando completo encontra quatro incompatibilidades Zod nas declarações Cezar copiadas da instalação principal para preparar a bancada. Isso não foi ocultado com `skipLibCheck`; a compilação integrada cabe ao principal com suas dependências preparadas.
+
+## Limites
+
+O caminho real permanece explicitamente bloqueado. Não se afirma quota oficial, protocolo compatível com um Codex real instalado, HOME com credenciais reais, rede de provedor ou homologação de inferência. Docker e seu daemon local são a autoridade confiável do grupo; a fixture por digest é dependência confiável, não execução de imagem hostil. ACK de criação sem prova física pode exigir intervenção externa e não é liberado automaticamente. Os limites físicos são por contêiner desta fonte, não orçamento agregado de toda a instalação. Não houve migração operacional.

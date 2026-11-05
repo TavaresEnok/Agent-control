@@ -1,0 +1,10 @@
+import {open} from 'node:fs/promises';
+import {Ledger} from '../../src/ledger.ts';
+import {CodexQuotaDockerSupervisor} from '../../src/codex-quota-supervisor.ts';
+const [url,home,accountId,subjectDigest,image]=process.argv.slice(2);
+const db=new Ledger(url),fd=await open(home,'r');
+const supervisor=new CodexQuotaDockerSupervisor(db,{accountId,subjectDigest},image);
+const child=await supervisor.launch({home,homeFd:fd.fd});
+child.stdin!.on('error',()=>{});child.stdout!.resume();child.stderr!.resume();
+process.stdout.write('READY\n');
+setInterval(()=>{},1000);

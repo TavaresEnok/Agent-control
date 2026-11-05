@@ -260,3 +260,6 @@ export async function composeBenchNativeBootstrap(input:{config:Installation;led
  session.track({name:'runtime',phase:'constructed',close:()=>runtime.close()});
  return {runtime,report,session};
 }
+
+/** Quota registration is independently configurable; this does not activate native inference. */
+export {CodexQuotaRegistryConfig,configureCodexQuotaRegistry} from './codex-quota-registry.ts';

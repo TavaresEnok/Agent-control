@@ -89,6 +89,9 @@ async function main(){
   const prepared=await prepareNativeBootstrap(config,{query:(sql,params)=>ledger.pool.query(sql,params as never[])});
   bootstrapSession=prepared.session;bootstrapReport=prepared.report;
   if(prepared.report.executionEnabled||prepared.report.inferenceEnabled||prepared.report.realAccountsEnabled)throw Error('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+  const {configureCodexQuotaRegistry}=await import('./codex-quota-registry.ts');
+  const quotaRegistry=await configureCodexQuotaRegistry(ledger,config.codexQuota??{state:'disabled'});
+  await quotaRegistry.reconcile();
   const nativeHome=join(config.dataDirectory,'cezar');await privateDirectory(nativeHome);
   process.env.CEZ_HOME=nativeHome;
   for(const name of ['CEZ_AUTONAME','CEZ_AUTOMATIONS','CEZ_SKILLS_AUTO_UPDATE','CEZ_TELEMETRY'])process.env[name]='0';
@@ -112,7 +115,7 @@ async function main(){
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),config.happier.webOrigin,access,sessions,relay,[],undefined,async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;});
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),config.happier.webOrigin,access,sessions,relay,quotaRegistry.adapters,undefined,async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},undefined,quotaRegistry);
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
