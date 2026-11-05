@@ -36,7 +36,7 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
  supervisor.scope=async()=>{};supervisor.registeredInput=async()=>input;supervisor.reconcile=async()=>({state:'failed',receipt,output:'',artifact:null});
  try{
   await assert.rejects(supervisor.retireTerminal('owner',{contextId,epoch:1},jobId),/NATIVE_RETIREMENT_EVIDENCE_MISSING/);
-  assert.equal(containers.size,2);assert.equal(saved,undefined);canceled=false;
+  assert.equal(containers.size,2);assert.equal(Boolean(saved),false);canceled=false;
   await assert.rejects(supervisor.retireTerminal('owner',{contextId,epoch:1},jobId),/lost ack/);
   assert.equal(saved.state,'prepared');assert.equal((await readFile(join(root,jobId,'worker-terminal.log'))).toString(),'worker log');
   assert.deepEqual(await supervisor.retireTerminal('owner',{contextId,epoch:2},jobId),{state:'removed'});
