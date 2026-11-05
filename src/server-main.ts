@@ -12,6 +12,8 @@ import {BrowserSessions} from './sessions.ts';
 import {HappierAuthRelay} from './auth-relay.ts';
 import {ProjectAdmin} from './project-admin.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
+import {InstallationAuthority} from './installation-authority.ts';
+import {createInstallationAuthorityApi} from './installation-authority-api.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
@@ -51,7 +53,7 @@ async function main(){
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
- const ledger=new Ledger(config.databaseUrl);
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
  const managerTransports=new Map<string,ManagerRegistry>();
  const closeManagers=async()=>{const results=await Promise.allSettled([...managerTransports.values()].map(registry=>registry.close()));managerTransports.clear();if(results.some(result=>result.status==='rejected'))throw Error('MANAGER_TRANSPORT_SHUTDOWN_FAILED');};
  let bootstrapSession:{shutdown():Promise<unknown>}|undefined;
@@ -121,6 +123,7 @@ async function main(){
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
    projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory)),
+   installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),
    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
     const bearer=request.headers.get('authorization');
     const principal=bearer?await verify(request):await sessions.authenticate(request)??await verify(request);

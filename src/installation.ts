@@ -10,6 +10,7 @@ import {Projects} from './projects.ts';
 import {ProjectRoot} from './project-admin.ts';
 import {CodexQuotaRegistryConfig} from './codex-quota-registry.ts';
 import {NativeBootstrapConfig,nativeBootstrapSchemaError} from './native-bootstrap.ts';
+import {InstallationToken} from './installation-authority.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -24,6 +25,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
+ installationAuthority:z.object({mode:z.literal('synthetic-laboratory'),token:InstallationToken}).strict().optional(),
  nativeBootstrap:NativeBootstrapConfig.optional(),
  codexQuota:CodexQuotaRegistryConfig.optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
