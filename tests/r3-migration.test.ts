@@ -109,7 +109,7 @@ test('R3 shared authority fences real Capacity and credential refresh across res
   const authority=await old.acquire(principal,context,randomUUID(),'fixture',60);
   const intent=await old.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
   for(let overlap=0;overlap<3;overlap++){
-   const contention=await Promise.allSettled([old.heartbeat(authority),old.acquire(principal,context,randomUUID(),'fixture',60)]);
+   const contention:PromiseSettledResult<unknown>[]=await Promise.allSettled([old.heartbeat(authority),old.acquire(principal,context,randomUUID(),'fixture',60)]);
    assert.equal(contention[0]!.status,'fulfilled');assert.equal(contention[1]!.status,'rejected');
    if(contention[1]!.status==='rejected')assert.match(String(contention[1]!.reason),/MANAGER_ACTIVE/);
   }
