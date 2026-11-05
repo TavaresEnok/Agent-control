@@ -92,3 +92,9 @@ A prova usa socket/Happier reais, afirma propriedade de runtime, agrupa duas con
 ## Auditoria final dos48 critérios de produto
 
 `R4-REQUIREMENT-AUDIT-PRODUCT.json` e `.md` reavaliam os48 textos normativos com fonte atual e provas versionadas, distinguindo método próprio e execução do autor. **21 recomendações de aceite local;27 ainda sem aceite integral.** São recomendações para o integrador, sem editar a matriz111. Essa seção supersede os checkpoints anteriores desta revisão: RF-02 agora tem recomendação de aceite administrativo explícita; RF-36, RF-35 e RNF-15 foram atualizados após as provas finais. Critérios de autenticação oficial, Android, migração real e percursos ainda ausentes permanecem com suas condições executáveis específicas, sem contaminar os critérios puramente locais.
+
+## Correção da auditoria RF-33
+
+A revisão literal adicional de `src/import.ts` encontrou que `ImportBundle` v1 preserva mensagens cifradas e runs com id/state/artifactRef, mas **não contém estruturas completas de planos ou evidências**. A recomendação de aceite RF-33 em `6361ed7a` extrapolou a prova de dedupe/restore e fica supersedida: **RF-33 permanece parcial** até importar essas duas capacidades nomeadas com proveniência e reenvio seguros. O integrador foi avisado antes de promoção da matriz. A recomendação T18 é distinta e continua restrita ao critério demonstrado de histórico/política/restauração/reimportação sem duplicar trabalho arquivado; não se usa esse cenário para declarar todas as capacidades de importação implementadas.
+
+Os arquivos de auditoria48 agora têm **20 recomendações de aceite local e28 sem aceite integral**. Essa correção substitui a contagem21/27 da seção anterior, preservada como histórico.

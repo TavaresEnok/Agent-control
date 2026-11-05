@@ -6,7 +6,7 @@
   "recommendationsOnly": true,
   "traceabilityMatrixChanged": false,
   "date": "2026-11-05",
-  "acceptedRecommendations": 21,
+  "acceptedRecommendations": 20,
   "method": "Literal current criteria with selected current source and versioned independent/author evidence; does not infer official authentication, Android, operational deployment or fresh execution from historical logs. Canonical caller independently passed with a new lab/account/context using a verified immutable normal export; no second Expo build.",
   "requirements": [
     {
@@ -306,11 +306,11 @@
     {
       "id": "RF-33",
       "original_criterion": "Importar histórico, planos e evidências dos Paseos sem duplicar trabalho concluído",
-      "implementation_status": "implemented",
-      "validation_status": "accepted_for_scope",
-      "acceptance_recommendation": "accept_for_scope",
-      "current_conclusion": "Import/reimport versionados preservam identidade/contexto/plano/evidência e deduplicam trabalho concluído após restore. R3 demonstrou PG restaurado e recuperação canônica/vault em bancada quiescente; não se exige snapshot online no texto.",
-      "executable_closure": "",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Histórico cifrado e registros de runs com estado/artifactRef são importados e deduplicados; ImportBundle v1 não contém contratos completos de planos nem evidências de verificação. Restore/reimport não fecha essas capacidades nomeadas.",
+      "executable_closure": "Versionar o bundle e importar planos/evidências legadas identificadas com proveniência, pausa e dedupe de trabalho concluído; provar falha/reenvio/restore sem criar execução indevida. Não requer abrir Paseo operacional sem autorização.",
       "reviewed_versions": [
         "e0f9bc9c",
         "c135cd59",
