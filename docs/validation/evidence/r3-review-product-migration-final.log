@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: R3 laboratory old/new authority, durable execution, pause, renewal, rollback and signed route
+ok 1 - R3 laboratory old/new authority, durable execution, pause, renewal, rollback and signed route
+  ---
+  duration_ms: 1712.753713
+  type: 'test'
+  ...
+# Subtest: R3 shared authority fences real Capacity and credential refresh across restart/transfer/rollback
+ok 2 - R3 shared authority fences real Capacity and credential refresh across restart/transfer/rollback
+  ---
+  duration_ms: 2128.723198
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4554.39246
