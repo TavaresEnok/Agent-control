@@ -16,6 +16,8 @@ import {isolatedDatabase} from './fixtures/isolated-database.ts';
 test('signed source authorization, SSH export and project materialization preserve provenance on both hosts', {timeout:60000,skip:!process.env.AC_REMOTE_GIT_IDENTITIES},async()=>{
  const root=process.env.AC_SSH_FIXTURE_ROOT!,base=process.env.AC_TEST_DATABASE_URL!;
  const identities=JSON.parse(process.env.AC_REMOTE_GIT_IDENTITIES!) as {commit:string;tree:string}[];assert.equal(identities.length,2);
+ assert.notEqual(identities[0].commit,identities[1].commit,'fixture commits must differ');
+ assert.notEqual(identities[0].tree,identities[1].tree,'fixture trees must differ');
  const metadata=JSON.parse(await readFile(root+'/metadata.json','utf8'));assert.equal(metadata.scope,'isolated-ssh-fixture');
  for(let i=0;i<2;i++){
   const name=i===0?'a':'b',project=metadata.projectId,principal='source-flow-'+randomUUID();
@@ -36,17 +38,18 @@ test('signed source authorization, SSH export and project materialization preser
    const transport:RemoteTransport={async exchange(host,request){const value=await ssh.exchange(host,request);if(lose){lose=false;throw Error('SYNTHETIC_EXPORT_ACK_LOST');}return value;}};
    const remote=new RemoteOperations(db,transport);
    await remote.registerHost(principal,project,{id:hostId,label:`synthetic host ${name}`,hostname:`ssh-host-${name}`,port:2222,username:'node',publicKey:(await readFile(publicPath,'utf8')).trim(),fingerprint,credentialRef,remoteRoot:'/projects/repo',allowedTasks:['git-export'],maxConcurrent:1});
-   const {commit,tree}=identities[i];const control=new Control(db),authorized={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,action:'remote.source.authorize' as const,payload:{schemaVersion:1 as const,intentId:intent.id,hostId,commit,tree}};
+   const {commit,tree}=identities[i],otherTree=identities[1-i].tree;const control=new Control(db),authorized={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,action:'remote.source.authorize' as const,payload:{schemaVersion:1 as const,intentId:intent.id,hostId,commit,tree}};
    const auth=await control.execute(principal,authorized,proof(authorized));assert.deepEqual(await control.execute(principal,{...authorized,deliveryAttemptId:randomUUID()},proof(authorized)),auth);
    const changedAuth={...authorized,payload:{...authorized.payload,tree:'0'.repeat(40)}};await assert.rejects(control.execute(principal,changedAuth,proof(changedAuth)),/CONTROL_INTENT_CONFLICT/);
    const request={operationId:randomUUID(),intentId:intent.id,contextId,hostId,commit,tree};
    await assert.rejects(remote.exportGit(principal,request,authority),/SYNTHETIC_EXPORT_ACK_LOST/);
    const output=await remote.exportGit(principal,request,authority),replay=await remote.exportGit(principal,request,authority);
    assert.equal(output.sha256,replay.sha256);assert.equal(output.snapshot.sourceAuthorizationId,authorized.intentId);assert.equal(output.snapshot.reviewStatus,'not_reviewed');
-   await assert.rejects(remote.exportGit(principal,{...request,tree:'0'.repeat(40)},authority),/REMOTE_SOURCE_AUTHORIZATION_REQUIRED/);
+   await assert.rejects(remote.exportGit(principal,{...request,tree:otherTree},authority),/REMOTE_SOURCE_AUTHORIZATION_REQUIRED/);
    const serviceRoots=[{id:'fixture',label:'Fixture',path:destination}],service=new ProjectAdmin(db,serviceRoots,join(destination,'private'),{remoteSourceTmpfs:tmpfs});
    const command={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'project.materializeRemoteSource' as const,payload:{projectId:project,contextId,operationId:request.operationId,hostId,commit,tree,bundle:output.bundle.toString('base64')}};
-   const divergent={...command,intentId:randomUUID(),payload:{...command.payload,tree:'0'.repeat(40)}};await assert.rejects(service.execute(principal,divergent,proof(divergent)),/REMOTE_SOURCE_IDENTITY_MISMATCH/);
+   const divergent={...command,intentId:randomUUID(),payload:{...command.payload,tree:otherTree}};await assert.rejects(service.execute(principal,divergent,proof(divergent)),/REMOTE_SOURCE_IDENTITY_MISMATCH/);
+   const wrongHost={...command,intentId:randomUUID(),payload:{...command.payload,hostId:randomUUID()}};await assert.rejects(service.execute(principal,wrongHost,proof(wrongHost)),/REMOTE_SOURCE_IDENTITY_MISMATCH/);
    const result=await service.execute(principal,command,proof(command));assert.equal(result.reviewStatus,'not_reviewed');
    assert.deepEqual(await service.execute(principal,{...command,deliveryAttemptId:randomUUID()},proof(command)),result);
    const changed={...command,payload:{...command.payload,bundle:Buffer.from('different').toString('base64')}};await assert.rejects(service.execute(principal,changed,proof(changed)),/PROJECT_ADMIN_INTENT_CONFLICT/);
