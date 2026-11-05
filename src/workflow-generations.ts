@@ -1,3 +1,4 @@
+import {resolveFrozenWorkflow} from './workflow-versions.ts';
 import {verifyLocalWorkflowRuntime,assertLoadedRuntime,registeredProcessAlive,GENERATION_COMPATIBILITY,type LocalWorkflowRuntime} from './local-workflow-runtime.ts';
 import {z} from 'zod';
 import type {PoolClient} from 'pg';
@@ -28,6 +29,18 @@ export class WorkflowGenerations{
    if(previous&&(previous.build_id!==input.identity.buildId||previous.executable_digest!==input.executableDigest||previous.runtime_digest!==input.runtimeDigest||previous.process_id!==input.processId||previous.process_start!==input.processStart||digest(previous.workflow_digests)!==digest(input.workflowDigests)))throw new Refusal('RUNTIME_INSTANCE_IDENTITY_CONFLICT');
    await c.query(`INSERT INTO ac_workflow_runtime_instances VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,clock_timestamp()+$10*interval '1 second')
     ON CONFLICT(project_id,instance_id) DO UPDATE SET lease_until=excluded.lease_until`,[projectId,input.identity.instanceId,input.identity.buildId,input.executableDigest,input.runtimeDigest,input.processId,input.processStart,input.protocol,JSON.stringify(input.workflowDigests),leaseSeconds]);
+  });
+ }
+ /** Prepare a retained/new local package for an already frozen dynamic
+ * plan. Capability and resolver belong to this loaded package; plain digests
+ * and foreign declarations cannot extend the catalog. */
+ async approveFrozen(principal:string,projectId:string,capability:LocalWorkflowRuntime,intentId:string){
+  const evidence=await verifyLocalWorkflowRuntime(capability);
+  await this.ledger.tx(async c=>{await this.owner(c,principal,projectId);
+   const row=(await c.query(`SELECT i.id,i.manager_epoch,i.command,f.snapshot,f.digest,x.project_id
+    FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id JOIN ac_frozen_plans f ON f.intent_id=i.id WHERE i.id=$1 AND x.project_id=$2`,[intentId,projectId])).rows[0];
+   if(!row)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+   await approveSnapshot(c,row,evidence.identity);
   });
  }
  async selectForNew(principal:string,projectId:string,buildId:string){
@@ -145,16 +158,17 @@ export class WorkflowGenerations{
 function receipt(contextId:string,row:Record<string,any>){return {intentId:String(row.intent_id),generation:Number(row.generation),state:String(row.state),authority:Authority.parse({contextId,instanceId:row.successor_instance,epoch:Number(row.successor_epoch)}),continuation:row.continuation};}
 async function requireRuntime(c:PoolClient,projectId:string,buildId:string,workflowDigest?:string){
  const live=(await c.query(`SELECT process_id,process_start FROM ac_workflow_runtime_instances WHERE project_id=$1 AND build_id=$2 AND lease_until>clock_timestamp()
-  AND ($3::text IS NULL OR workflow_digests ? $3) AND protocol='cezar-frozen-graph-generation-v1' FOR SHARE`,[projectId,buildId,workflowDigest??null])).rows;
+  AND ($3::text IS NULL OR workflow_digests ? $3 OR EXISTS(SELECT 1 FROM ac_workflow_runtime_snapshots s WHERE s.project_id=ac_workflow_runtime_instances.project_id AND s.instance_id=ac_workflow_runtime_instances.instance_id AND s.workflow_digest=$3)) AND protocol='cezar-frozen-graph-generation-v1' FOR SHARE`,[projectId,buildId,workflowDigest??null])).rows;
  for(const candidate of live)if(await registeredProcessAlive(candidate.process_id,candidate.process_start))return;
  throw new Refusal(workflowDigest?'WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE':'WORKFLOW_RUNTIME_UNAVAILABLE');
 }
 /** Admission routes only new runs; existing generations never follow a changed default. */
-export async function enrollWorkflowAdmission(c:PoolClient,intentId:string){
+export async function enrollWorkflowAdmission(c:PoolClient,intentId:string,identity?:RuntimeIdentity){
  await c.query('SELECT p.id FROM ac_projects p JOIN ac_contexts x ON x.project_id=p.id JOIN ac_intents i ON i.context_id=x.id WHERE i.id=$1 FOR SHARE OF p',[intentId]);
- const row=(await c.query(`SELECT d.build_id,x.project_id,f.digest FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
+ const row=(await c.query(`SELECT d.build_id,x.project_id,i.id,i.manager_epoch,i.command,f.digest,f.snapshot FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
   JOIN ac_frozen_plans f ON f.intent_id=i.id JOIN ac_workflow_runtime_defaults d ON d.project_id=x.project_id WHERE i.id=$1`,[intentId])).rows[0];
  if(!row)return;
+ if(identity?.buildId===row.build_id)await approveSnapshot(c,row,identity);
  await requireRuntime(c,row.project_id,row.build_id,row.digest);
  await c.query(`INSERT INTO ac_workflow_generations(intent_id,generation,build_id,state,workflow_digest,continuation)
   VALUES($1,0,$2,'active',$3,$4)`,[intentId,row.build_id,row.digest,{schemaVersion:1,historyAfterSeq:0}]);
@@ -169,7 +183,7 @@ export async function assertGenerationIntent(c:PoolClient,intentId:string,identi
  if(!row)return;
  if(!identity||identity.buildId!==row.build_id)throw new Refusal('WORKFLOW_RUNTIME_ROUTE_MISMATCH');
  const live=(await c.query(`SELECT process_id,process_start FROM ac_workflow_runtime_instances WHERE project_id=$1 AND instance_id=$2 AND build_id=$3
-  AND lease_until>clock_timestamp() AND workflow_digests ? $4 AND protocol=$5`,[row.project_id,identity.instanceId,row.build_id,row.workflow_digest,GENERATION_COMPATIBILITY])).rows[0];
+  AND lease_until>clock_timestamp() AND (workflow_digests ? $4 OR EXISTS(SELECT 1 FROM ac_workflow_runtime_snapshots s WHERE s.project_id=ac_workflow_runtime_instances.project_id AND s.instance_id=ac_workflow_runtime_instances.instance_id AND s.workflow_digest=$4)) AND protocol=$5`,[row.project_id,identity.instanceId,row.build_id,row.workflow_digest,GENERATION_COMPATIBILITY])).rows[0];
  if(!live)throw new Refusal('WORKFLOW_RUNTIME_UNAVAILABLE');
  await assertLoadedRuntime(identity.buildId,live.process_id,live.process_start);
 }
@@ -230,4 +244,13 @@ const runtimeParkingReasons=new Set(['WORKFLOW_GENERATION_RECONCILIATION_REQUIRE
 export function workflowRuntimeParkingReason(error:unknown):string|undefined{
  if(!error||typeof error!=='object'||!('code' in error)||typeof error.code!=='string')return;
  return runtimeParkingReasons.has(error.code)?error.code:undefined;
+}
+
+async function approveSnapshot(c:PoolClient,row:Record<string,any>,identity:RuntimeIdentity){
+ const live=(await c.query(`SELECT process_id,process_start FROM ac_workflow_runtime_instances WHERE project_id=$1 AND instance_id=$2 AND build_id=$3 AND lease_until>clock_timestamp() AND protocol=$4 FOR SHARE`,[row.project_id,identity.instanceId,identity.buildId,GENERATION_COMPATIBILITY])).rows[0];
+ if(!live)throw new Refusal('WORKFLOW_RUNTIME_UNAVAILABLE');
+ await assertLoadedRuntime(identity.buildId,live.process_id,live.process_start);
+ const decision=resolveFrozenWorkflow({commandWorkflow:row.command.payload.workflow,snapshot:row.snapshot,storedDigest:row.digest,pin:null,intentEpoch:Number(row.manager_epoch)});
+ if(!decision.ok)throw new Refusal('RUNTIME_SNAPSHOT_INCOMPATIBLE');
+ await c.query(`INSERT INTO ac_workflow_runtime_snapshots(project_id,instance_id,workflow_digest,source_intent_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[row.project_id,identity.instanceId,decision.digest,row.id]);
 }

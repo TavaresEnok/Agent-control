@@ -55,3 +55,15 @@ BEGIN
 END $$;
 CREATE TRIGGER ac_workflow_runtime_instance_guard BEFORE UPDATE ON ac_workflow_runtime_instances
  FOR EACH ROW EXECUTE FUNCTION ac_guard_workflow_runtime_instance();
+-- Future managed plans are validated by the loaded local resolver after freeze,
+-- without rewriting an installed instance's immutable initial catalog.
+CREATE TABLE ac_workflow_runtime_snapshots(
+ project_id uuid NOT NULL,
+ instance_id uuid NOT NULL,
+ workflow_digest text NOT NULL CHECK(workflow_digest ~ '^[a-f0-9]{64}$'),
+ source_intent_id uuid NOT NULL REFERENCES ac_intents,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(project_id,instance_id,workflow_digest),
+ FOREIGN KEY(project_id,instance_id) REFERENCES ac_workflow_runtime_instances(project_id,instance_id));
+CREATE TRIGGER ac_workflow_runtime_snapshot_immutable BEFORE UPDATE OR DELETE ON ac_workflow_runtime_snapshots
+ FOR EACH ROW EXECUTE FUNCTION ac_reject_workflow_version_mutation();

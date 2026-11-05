@@ -184,7 +184,7 @@ export class Ledger {
           ?await freezeManagedExecution(this,c,intent,principal,a,command.payload.proposalRevision,command.payload.proposalDigest)
           :workflowFor(command.payload.workflow);
         await c.query('INSERT INTO ac_frozen_plans VALUES($1,$2,$3,$4,$5)',[command.contextId,revision,intent.id,digest(workflow),workflow]);
-        await enrollWorkflowAdmission(c,intent.id);
+        await enrollWorkflowAdmission(c,intent.id,this.runtimeIdentity);
         await c.query('INSERT INTO ac_operations(id,intent_id,state,manager_epoch) VALUES($1,$2,\'registered\',$3)', [intent.operation_id, intent.id, a.epoch]);
         await c.query('INSERT INTO ac_outbox(id,intent_id) VALUES($1,$2)', [randomUUID(), intent.id]);
         if (checkpoint) await c.query('UPDATE ac_checkpoints SET epoch=$2,snapshot=$3,updated_at=now() WHERE context_id=$1',

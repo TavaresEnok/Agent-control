@@ -14,6 +14,7 @@ import {promisify} from 'node:util';
 import {Ledger} from '../src/ledger.ts';
 import {digest,Refusal} from '../src/contracts.ts';
 import {HappierEndpoint} from '../src/happier.ts';
+import {ManagerPlans,type ManagerPlan} from '../src/planning.ts';
 import {provisionCapacity} from './fixtures/provision-capacity.ts';
 import {WorkflowGenerations} from '../src/workflow-generations.ts';
 import {workflowVersionRegistry} from '../src/workflow-versions.ts';
@@ -41,7 +42,7 @@ async function setup(incompatible=false){
  await generations.selectForNew(principal,project,oldIdentity.buildId);
  const accept=async(ledger=old)=>ledger.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:synthetic-generation'}},authority,'api');
  const intent=await accept();
- return {nextCezar,project,session,context,authority,intent,old,next,generations,newGenerations,oldIdentity,nextIdentity,accept,close:async()=>{await old.close();await next.close();await rm(installed,{recursive:true,force:true});}};
+ return {oldCapability,nextCapability,nextCezar,project,session,context,authority,intent,old,next,generations,newGenerations,oldIdentity,nextIdentity,accept,close:async()=>{await old.close();await next.close();await rm(installed,{recursive:true,force:true});}};
 }
 const code=(wanted:string)=>(error:unknown)=>{assert.equal((error as {code?:string}).code,wanted);return true;};
 test('two live installed runtime identities preserve old routing and route only new admissions to selected build',async()=>{
@@ -216,5 +217,27 @@ test('Happier tick parks absent old build per intent while new build admissions 
    receivePending:async()=>{},flushNotifications:async()=>{flushed=true;},deliverQueuedMessages:async()=>{delivered=true;}});
   await endpoint.tick();assert.deepEqual(seen,[newer.id]);assert.ok(waits.some(row=>row.entityId===s.intent.run_id&&row.reason==='RUNTIME_UNAVAILABLE'));assert.equal(flushed,true);assert.equal(delivered,true);
   const before=(await s.old.pool.query('SELECT state FROM ac_operations WHERE id=$1',[s.intent.operation_id])).rows[0].state;assert.equal(before,'registered');
+ }finally{await runtime?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
+});
+
+test('future managed plan is locally resolver-approved atomically without rewriting installed catalog, and target approves frozen compatibility',async()=>{
+ const s=await setup();let folder:string|undefined,runtime:CezarRuntime|undefined;
+ try{
+  const catalogBefore=(await s.old.pool.query('SELECT workflow_digests FROM ac_workflow_runtime_instances WHERE instance_id=$1',[s.oldIdentity.instanceId])).rows[0].workflow_digests;
+  const policy={schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireJudge:true,requireHumanIntegration:true,verifierDigest:hash};
+  await s.old.pool.query('INSERT INTO ac_quality_policies VALUES($1,1,$2,$3)',[s.project,policy,digest(policy)]);
+  const plan:ManagerPlan={schemaVersion:1,contextId:s.context,objectiveRef:'message:synthetic-objective',sourceMessageRef:'message:synthetic-request',constraintRefs:[],tasks:[{id:'one',objectiveRef:'message:synthetic-task',acceptanceRefs:['acceptance:synthetic-effect-v1'],inputRefs:[],outputRefs:['output:one'],dependsOn:[],writePaths:['src/one'],qualityRevision:1,targetRef:'refs/heads/main',maxCorrections:0}]};
+  const proposal=await new ManagerPlans(s.old).publish(principal,s.authority,0,plan);
+  const dynamic=await s.old.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:s.context,policyRevision:1,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'message:synthetic-request',proposalRevision:proposal.revision,proposalDigest:proposal.digest}},s.authority,'api');
+  const frozen=(await s.old.pool.query('SELECT digest,snapshot FROM ac_frozen_plans WHERE intent_id=$1',[dynamic.id])).rows[0];
+  assert.equal(catalogBefore.includes(frozen.digest),false);
+  assert.equal((await s.old.pool.query('SELECT count(*) FROM ac_workflow_runtime_snapshots WHERE instance_id=$1 AND workflow_digest=$2',[s.oldIdentity.instanceId,frozen.digest])).rows[0].count,'1');
+  assert.deepEqual((await s.old.pool.query('SELECT workflow_digests FROM ac_workflow_runtime_instances WHERE instance_id=$1',[s.oldIdentity.instanceId])).rows[0].workflow_digests,catalogBefore);
+  await assert.rejects(s.generations.rollover(principal,s.authority,{intentId:dynamic.id,expectedGeneration:0,requestId:randomUUID(),targetBuild:s.nextIdentity.buildId,successorManagerInstance:randomUUID()}),code('WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE'));
+  await s.newGenerations.approveFrozen(principal,s.project,s.nextCapability,dynamic.id);
+  const next=await s.generations.rollover(principal,s.authority,{intentId:dynamic.id,expectedGeneration:0,requestId:randomUUID(),targetBuild:s.nextIdentity.buildId,successorManagerInstance:randomUUID()});await s.newGenerations.reconciled(principal,next.authority,dynamic.id);
+  folder=await mkdtemp(join(tmpdir(),'ac-r4-dynamic-runtime-'));runtime=new s.nextCezar.CezarRuntime(s.next,folder,s.project);
+  assert.equal((await runtime!.reconcileWorkflowVersion(dynamic,next.authority)).state,'dynamic');
+  await assert.rejects(s.old.pool.query('DELETE FROM ac_workflow_runtime_snapshots WHERE instance_id=$1',[s.oldIdentity.instanceId]),/WORKFLOW_VERSION_PIN_IMMUTABLE/);
  }finally{await runtime?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
 });
