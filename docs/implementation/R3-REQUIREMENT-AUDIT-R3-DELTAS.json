@@ -311,6 +311,86 @@
       "implemented_delta": "Backend signed typed RPC and shared Control behavior remain independently verified.",
       "remaining": "User-accessible trusted conversation entry/signing path and actual product journey proof.",
       "acceptance_recommendation": "hold_full_RF36_acceptance_backend_contract_only_until_shipped_conversation_client_proof"
+    },
+    {
+      "id": "RF-25",
+      "reviewed_commit": "b8358172",
+      "frozen_dependencies": [
+        "a9a159ad",
+        "1f24f89b",
+        "cddbe8a4",
+        "efb46b9f"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-remote-quality-final.log",
+      "result": "1/1 final real SSH/Docker/QA/review/judge/GitCAS/return test independently passed; zero skips",
+      "implemented_delta": "Exact remote artifact passes real trusted QA/reviewer/judge executors then signed human approval and CAS integration+return; no seeded approved/passed gate, actual read-only artifact/tools and positive HOMEcanary boundary.",
+      "supersedes_prior_gap": "Quality/integration approval was previously seeded in return-only fixture; this combined path now executes those gates.",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation.",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof"
+    },
+    {
+      "id": "RF-39",
+      "reviewed_commit": "b8358172",
+      "frozen_dependencies": [
+        "a9a159ad",
+        "1f24f89b",
+        "cddbe8a4",
+        "efb46b9f"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-remote-quality-final.log",
+      "result": "1/1 final real SSH/Docker/QA/review/judge/GitCAS/return test independently passed; zero skips",
+      "implemented_delta": "Exact remote artifact passes real trusted QA/reviewer/judge executors then signed human approval and CAS integration+return; no seeded approved/passed gate, actual read-only artifact/tools and positive HOMEcanary boundary.",
+      "supersedes_prior_gap": "Quality/integration approval was previously seeded in return-only fixture; this combined path now executes those gates.",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation.",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof"
+    },
+    {
+      "id": "RF-41",
+      "reviewed_commit": "b8358172",
+      "frozen_dependencies": [
+        "a9a159ad",
+        "1f24f89b",
+        "cddbe8a4",
+        "efb46b9f"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-remote-quality-final.log",
+      "result": "1/1 final real SSH/Docker/QA/review/judge/GitCAS/return test independently passed; zero skips",
+      "implemented_delta": "Exact remote artifact passes real trusted QA/reviewer/judge executors then signed human approval and CAS integration+return; no seeded approved/passed gate, actual read-only artifact/tools and positive HOMEcanary boundary.",
+      "supersedes_prior_gap": "Quality/integration approval was previously seeded in return-only fixture; this combined path now executes those gates.",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation.",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof"
+    },
+    {
+      "id": "RF-51",
+      "reviewed_commit": "b8358172",
+      "frozen_dependencies": [
+        "a9a159ad",
+        "1f24f89b",
+        "cddbe8a4",
+        "efb46b9f"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-remote-quality-final.log",
+      "result": "1/1 final real SSH/Docker/QA/review/judge/GitCAS/return test independently passed; zero skips",
+      "implemented_delta": "Exact remote artifact passes real trusted QA/reviewer/judge executors then signed human approval and CAS integration+return; no seeded approved/passed gate, actual read-only artifact/tools and positive HOMEcanary boundary.",
+      "supersedes_prior_gap": "Quality/integration approval was previously seeded in return-only fixture; this combined path now executes those gates.",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation.",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof"
+    },
+    {
+      "id": "T25",
+      "reviewed_commit": "b8358172",
+      "frozen_dependencies": [
+        "a9a159ad",
+        "1f24f89b",
+        "cddbe8a4",
+        "efb46b9f"
+      ],
+      "independent_evidence": "docs/validation/evidence/r3-review-product-remote-quality-final.log",
+      "result": "1/1 final real SSH/Docker/QA/review/judge/GitCAS/return test independently passed; zero skips",
+      "implemented_delta": "Exact remote artifact passes real trusted QA/reviewer/judge executors then signed human approval and CAS integration+return; no seeded approved/passed gate, actual read-only artifact/tools and positive HOMEcanary boundary.",
+      "supersedes_prior_gap": "Quality/integration approval was previously seeded in return-only fixture; this combined path now executes those gates.",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation.",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof"
     }
   ],
   "interpretation": "updates is an append-only review history; latest_by_id selects the effective last reassessment and supersedes earlier conflicting recommendations. Base audit remains historical.",
@@ -364,16 +444,16 @@
       "remaining": "Real legacy installation must use the same authority/refresh bridge; operational overlap and rollback with real credential adapter not authorized or executed. Synthetic callback does not renew an official credential."
     },
     "RF-51": {
-      "update_index": 7,
-      "reviewed_version": "c1257b42",
-      "acceptance_recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions",
-      "remaining": "Quality/integration approval rows seeded fixture; no actual QA graph. First return baseline only. Server bootstrap and installed worker dispatch await combined proof; direct worktree adapter distinct."
+      "update_index": 35,
+      "reviewed_version": "b8358172",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
     },
     "T25": {
-      "update_index": 8,
-      "reviewed_version": "c1257b42",
-      "acceptance_recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions",
-      "remaining": "Quality/integration approval rows seeded fixture; no actual QA graph. First return baseline only. Server bootstrap and installed worker dispatch await combined proof; direct worktree adapter distinct."
+      "update_index": 36,
+      "reviewed_version": "b8358172",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
     },
     "RF-33": {
       "update_index": 27,
@@ -450,6 +530,24 @@
       ],
       "acceptance_recommendation": "hold_full_RF36_acceptance_backend_contract_only_until_shipped_conversation_client_proof",
       "remaining": "User-accessible trusted conversation entry/signing path and actual product journey proof."
+    },
+    "RF-25": {
+      "update_index": 32,
+      "reviewed_version": "b8358172",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
+    },
+    "RF-39": {
+      "update_index": 33,
+      "reviewed_version": "b8358172",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
+    },
+    "RF-41": {
+      "update_index": 34,
+      "reviewed_version": "b8358172",
+      "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+      "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
     }
   }
 }
