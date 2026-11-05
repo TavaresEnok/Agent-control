@@ -1,6 +1,7 @@
 import * as React from 'react';
+import { agentControlConfigurationLink, AGENT_CONTROL_CONFIGURATION_ACTION } from './agentControlConfigurationLink';
 import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
-import { Pressable, View } from 'react-native';
+import { Linking, Pressable, View } from 'react-native';
 import { listActionSpecs } from '@happier-dev/protocol';
 import { useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -304,6 +305,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     [props.sessionId, voice],
   );
   const showTeleportAction = teleportAvailability.ok && hasGlobalVoiceAgentConversation;
+  const configurationUrl = agentControlConfigurationLink(process.env.EXPO_PUBLIC_AGENT_CONTROL_ORIGIN, props.sessionId);
   const actions = React.useMemo(() => {
     const actionItems: DropdownMenuItem[] = listActionSpecs()
       .filter((spec) => spec.surfaces.ui_button === true)
@@ -318,6 +320,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
       }));
 
     const out: DropdownMenuItem[] = [];
+    if (configurationUrl) {
+      out.push({ id: AGENT_CONTROL_CONFIGURATION_ACTION, title: t('settingsProviders.configuration') });
+    }
 
     if (Array.isArray(props.extraItems) && props.extraItems.length > 0) {
       out.push(...props.extraItems);
@@ -374,6 +379,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     }
     return out;
   }, [
+    configurationUrl,
     props.extraItems,
     props.sessionId,
     open,
@@ -402,6 +408,14 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
       onOpenChange={setOpen}
       items={actions}
       onSelect={(actionId) => {
+        if (actionId === AGENT_CONTROL_CONFIGURATION_ACTION && configurationUrl) {
+          setOpen(false);
+          fireAndForget(Linking.openURL(configurationUrl), {
+            tag: 'SessionHeaderActionMenu.agentControlConfiguration',
+            onError: () => Modal.alert(t('common.error'), t('errors.unknownError')),
+          });
+          return;
+        }
         if (actionId.startsWith(`${SESSION_ACTION_SET_APPEARANCE_COLOR_ID}:`)) {
           // Custom color… keeps the menu open while the picker loads; the choice closes it when ready.
           fireAndForget((async () => {

@@ -1,6 +1,7 @@
 import {AgentControlUsageReport} from './agent-control-usage-report'
 import {AgentControlInstallationAuthority} from './agent-control-installation-authority'
 import {AgentControlQuotaRegistry} from './agent-control-quota-registry'
+import {conversationConfigurationEntry,conversationConfigurationContext} from './agent-control-conversation-entry'
 import {AgentControlGrantSelection,grantSelectionSchema} from './agent-control-grant-selection'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -31,7 +32,7 @@ import {AgentControlQaWaiver,qaWaiverViewSchema} from './agent-control-qa-waiver
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
 
-const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),policy_revision:z.number().int().positive().nullable().optional(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
+const contextsSchema=z.object({contexts:z.array(z.object({id:z.string().uuid(),session_id:z.string().optional(),policy_revision:z.number().int().positive().nullable().optional(),paused:z.boolean(),pause_revision:z.number().int().nonnegative(),draining:z.boolean(),drain_revision:z.number().int().nonnegative()}))})
 const usageBase={grant_id:z.string().uuid(),role:z.string(),state:z.string()}
 const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlappingCounters:z.literal(true),attempts:z.array(z.discriminatedUnion('resource_kind',[
  z.object({...usageBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),model:z.string(),effort:z.string(),
@@ -82,7 +83,8 @@ export function AgentControlSection(){
 }
 function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const cache=useQueryClient()
- const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[sessionId,setSessionId]=useState('')
+ const [conversationEntry]=useState(()=>conversationConfigurationEntry(window.location.search))
+ const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[sessionId,setSessionId]=useState(conversationEntry.sessionId)
  const [accountMode,setAccountMode]=useState<'synthetic'|'subscription_cli'|'api'>('synthetic')
  const [accountProvider,setAccountProvider]=useState('synthetic'),[resourceIdentity,setResourceIdentity]=useState(''),[accountId,setAccountId]=useState<string|null>(null)
  const [eligibility,setEligibility]=useState<'documented_supported'|'requires_clarification'|'unsupported_for_mode'|'not_assessed'>('not_assessed')
@@ -92,7 +94,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const [templateWorkflow,setTemplateWorkflow]=useState('baseline-synthetic-v1'),[qualityRevision,setQualityRevision]=useState(''),[targetRef,setTargetRef]=useState('refs/heads/protected')
  const [bootstrapToken,setBootstrapToken]=useState(''),[newDevice,setNewDevice]=useState(''),[newPublicKey,setNewPublicKey]=useState('')
  const contexts=useQuery({queryKey:['ac-contexts',projectId],refetchInterval:5000,queryFn:async()=>contextsSchema.parse(await request('/api/v1/ac/contexts'))})
- const contextId=selected||contexts.data?.contexts[0]?.id||''
+ const contextId=conversationConfigurationContext(contexts.data?.contexts??[],selected,conversationEntry)
  const managerAvailability=useAgentControlManagerStatus(contextId,projectId)
  const semanticAvailable=managerAvailability.data?.state==='running'&&managerAvailability.data.executionEnabled===true&&managerAvailability.data.semanticManagerEnabled===true
  const resources=useQuery({queryKey:['ac-resources',contextId,projectId],enabled:!!contextId,refetchInterval:5000,
@@ -137,17 +139,19 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const busy=mutate.isPending||bootstrap.isPending
  const selectStyle='h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm'
  return <div className="flex min-w-0 flex-col gap-6 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+  {conversationEntry.requested&&<p role="status">Configuração da conversa: {conversationEntry.sessionId||'identificador inválido'}. {contextId?'Revise e assine as alterações abaixo.':'Vincule esta conversa para configurar; nenhum outro contexto foi selecionado.'}</p>}
   <SettingsField title="Agent Control" hint="Contas de laboratório, políticas publicadas e capacidade confirmada.">
    <form className="flex flex-col gap-2" onSubmit={event=>{event.preventDefault();linkContext.mutate()}}>
     <label className="flex flex-col gap-1">Vincular conversa existente do Happier
-     <Input aria-label="Identificador da sessão Happier" value={sessionId} onChange={event=>setSessionId(event.target.value)} maxLength={200} required/>
+     <Input aria-label="Identificador da sessão Happier" readOnly={conversationEntry.requested} value={sessionId} onChange={event=>setSessionId(event.target.value)} maxLength={200} required/>
     </label>
     <Button type="submit" disabled={!operator.data||!sessionId||linkContext.isPending}>Vincular conversa</Button>
     <p className="text-xs text-muted-foreground">O acesso é verificado no Happier. Vincular não inicia gerente ou trabalhadores.</p>
     {linkContext.error&&<p role="alert">{linkContext.error.message}</p>}
    </form>
    <label className="flex flex-col gap-1">Conversa
-    <select aria-label="Conversa" className={selectStyle} value={contextId} onChange={e=>setSelected(e.target.value)}>
+    <select aria-label="Conversa" disabled={conversationEntry.requested} className={selectStyle} value={contextId} onChange={e=>setSelected(e.target.value)}>
+     {conversationEntry.requested&&!contextId&&<option value="">Vincule esta conversa para configurar</option>}
      {contexts.data?.contexts.map(c=><option key={c.id} value={c.id}>{c.id}{c.paused?' — pausada':''}</option>)}
     </select>
    </label>

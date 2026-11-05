@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: conversation action opens only configured control origin and pins exact session across panel selection
+ok 1 - conversation action opens only configured control origin and pins exact session across panel selection
+  ---
+  duration_ms: 1.424992
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 239.294884
