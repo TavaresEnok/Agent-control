@@ -1,0 +1,38 @@
+diff --git a/src/projects-api.ts b/src/projects-api.ts
+index 9abba927..b5e7c9e3 100644
+--- a/src/projects-api.ts
++++ b/src/projects-api.ts
+@@ -11,6 +11,7 @@ type ProjectGatewayOptions={projects:Projects;runtimes:ProjectRuntimes;defaultPr
+  projectAdmin?:(request:Request,principal:string)=>Promise<Response>;
+  verifyConversationAccess?:(request:Request,principal:string,sessionId:string)=>Promise<boolean>;
+  projectEnvironments?:(request:Request,principal:string)=>Promise<Response>;
++ workflowGraphs?:(request:Request,principal:string)=>Promise<Response>;
+  installationAuthority?:(request:Request,principal:string)=>Promise<Response>;
+ };
+ const id=z.uuid();
+@@ -34,6 +35,7 @@ export function createProjectGateway(options:ProjectGatewayOptions){
+     const matches=await options.verifyConversationAccess?.(request,principal,parsed.data)?await options.projects.conversationEntry(principal,parsed.data):[];
+     return Response.json({matches},{headers:{'cache-control':'no-store'}});
+    }
++   if((path==='/api/v1/ac/workflow-graphs'||path==='/api/v1/ac/workflow-graphs/validate')&&options.workflowGraphs)return options.workflowGraphs(request,principal);
+    if(path==='/api/v1/ac/project-admin/environments' &&options.projectEnvironments)return options.projectEnvironments(request,principal);
+    if(path==='/api/v1/ac/installation-authority'&&options.installationAuthority)return options.installationAuthority(request,principal);
+    if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source'||path==='/api/v1/ac/project-admin/remote-return'||path==='/api/v1/ac/project-admin/remote-development')&&options.projectAdmin)return options.projectAdmin(request,principal);
+diff --git a/src/server-main.ts b/src/server-main.ts
+index a1fca5e7..1e7eda06 100644
+--- a/src/server-main.ts
++++ b/src/server-main.ts
+@@ -1,3 +1,5 @@
++import {WorkflowGraphs} from './workflow-graph-service.ts';
++import {createWorkflowGraphApi} from './workflow-graph-api.ts';
+ // Configured administration gateway. Native adapters stay disabled unless a
+ // discriminated opt-in is valid. Configured opt-in does not activate accounts
+ // or inference. Bench mode is refused here because it requires injected substitutes.
+@@ -140,6 +142,7 @@ async function main(){
+   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
+    projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn),remoteDevelopment:configuredRemoteDevelopment(ledger,config.remoteDevelopment,(projectId,contextId)=>managerTransports.get(projectId)?.authority(contextId))})),
+    verifyConversationAccess:(request,principal,sessionId)=>sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin),
++   workflowGraphs:createWorkflowGraphApi(new WorkflowGraphs(ledger,config.projectRoots,config.dataDirectory)),
+    projectEnvironments:createProjectEnvironmentApi(new ProjectEnvironments(ledger,config.projectRoots,config.dataDirectory)),
+    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),
+    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
