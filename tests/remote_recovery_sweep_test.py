@@ -26,6 +26,12 @@ class RemoteRecoverySweepTest(unittest.TestCase):
             with mock.patch.object(sys, 'stdin', type('Input', (), {'buffer': io.BytesIO(json.dumps(request).encode())})()):
                 with self.assertRaisesRegex(ValueError, 'RECOVERY_REMOTE_EPOCH_FENCED'):
                     worker.dispatch('/unused', config, pathlib.Path(tmp))
+            request['recoveryEpoch'] = 2
+            request['recoveryBinding'] = {'authorityId':'wrong'}
+            config.update(installationId='fixture',resourceAuthority={'authorityId':'actual','anchorId':'a'*64})
+            with mock.patch.object(sys, 'stdin', type('Input', (), {'buffer': io.BytesIO(json.dumps(request).encode())})()):
+                with self.assertRaisesRegex(ValueError, 'RECOVERY_PHYSICAL_IDENTITY_MISMATCH'):
+                    worker.dispatch('/unused', config, pathlib.Path(tmp))
 
     def test_unfinished_journal_and_unknown_group_fail_closed(self):
         with tempfile.TemporaryDirectory(prefix='ac-t30-ssh-') as tmp:

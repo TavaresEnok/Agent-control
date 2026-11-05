@@ -43,6 +43,13 @@ def load(config_path):
     return config, root
 
 
+def recovery_binding(config, root):
+    value = config.get('resourceAuthority')
+    if not isinstance(value, dict): raise ValueError('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED')
+    return {'authorityId':value.get('authorityId'),'anchorId':value.get('anchorId'),
+            'installationId':config.get('installationId'),'stateRoot':str(root)}
+
+
 def operation_path(root, operation):
     return root / (str(uuid.UUID(operation)) + '.json')
 
@@ -83,7 +90,7 @@ def execute(config_path, operation):
         guard = remote_supervisor.authority(config, root, atomic) if config.get('executionBackend') == 'docker' else contextlib.nullcontext()
         with guard:
             item = json.loads(record.read_text())
-            if config.get('recoveryInventoryRequired') is True and item.get('recoveryEpoch') != config.get('authorityEpoch'):
+            if config.get('recoveryInventoryRequired') is True and (item.get('recoveryEpoch') != config.get('authorityEpoch') or item.get('recoveryBinding') != recovery_binding(config,root)):
                 raise ValueError('RECOVERY_REMOTE_EPOCH_FENCED')
             if item['state'] != 'uncertain':
                 return
@@ -287,9 +294,10 @@ def dispatch(config_path, config, root, request=None):
         return remote_supervisor.recover(config, root, item, atomic) if (item.get('stableGroup') or item.get('groupIntent')) else observed(item)
     start_keys = {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'root', 'epoch'}
     if config.get('recoveryInventoryRequired') is True:
-        start_keys = start_keys | {'recoveryEpoch'}
+        start_keys = start_keys | {'recoveryEpoch','recoveryBinding'}
         if request.get('recoveryEpoch') != config.get('authorityEpoch') or type(request.get('recoveryEpoch')) is not int:
             raise ValueError('RECOVERY_REMOTE_EPOCH_FENCED')
+        if request.get('recoveryBinding') != recovery_binding(config,root): raise ValueError('RECOVERY_PHYSICAL_IDENTITY_MISMATCH')
     if action != 'start' or set(request) not in (start_keys, start_keys | {'workspaceId'}):
         raise ValueError('INVALID_REQUEST')
     project, task = request['projectId'], request['taskId']
@@ -353,6 +361,7 @@ def dispatch(config_path, config, root, request=None):
                     'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
             if 'recoveryEpoch' in request:
                 item['recoveryEpoch'] = request['recoveryEpoch']
+                item['recoveryBinding'] = request['recoveryBinding']
             if 'workspaceId' in request:
                 item['workspaceId'] = str(uuid.UUID(request['workspaceId']))
             # Persist before launching. A crash in this gap remains uncertain and is not blindly retried.

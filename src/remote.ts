@@ -155,18 +155,19 @@ export class RemoteOperations{
     if(emission.blocked)return {blocked:emission.blocked} as const;
    }
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
-   let lease:Awaited<ReturnType<NonNullable<typeof inventory>['lease']>>|undefined;
+   let lease:Awaited<ReturnType<NonNullable<typeof inventory>['lease']>>|undefined,recoveryBinding:{authorityId:string;anchorId:string;installationId:string;stateRoot:string}|undefined;
    if(inventory){
     assertIssuedOpenSshTransport(this.transport);
     if(Object.getPrototypeOf(this.transport)!==OpenSshTransport.prototype)throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');
     const physical=z.object({schemaVersion:z.literal(1),operationId:Id,authorityId:z.string(),anchorId:z.string().regex(/^[a-f0-9]{64}$/),installationId:z.string(),stateRoot:z.string(),authorityEpoch:z.number().int().positive(),recoveryRequired:z.literal(true)}).strict().parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'authority-status',operationId:input.operationId}));
     if(physical.operationId!==input.operationId||physical.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');
     const identity={hostId:input.hostId,hostFingerprint:admitted.host.fingerprint,authorityId:physical.authorityId,anchorId:physical.anchorId,installationId:physical.installationId,stateRoot:physical.stateRoot};
+    recoveryBinding={authorityId:physical.authorityId,anchorId:physical.anchorId,installationId:physical.installationId,stateRoot:physical.stateRoot};
     lease=await inventory.lease('ssh',input.hostId,identity,digest({input,projectId:admitted.projectId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch}));
    }
    let response:z.infer<typeof Reply>;
    try{response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,
-    projectId:admitted.projectId,taskId:input.taskId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch,...(inventory?{recoveryEpoch:inventory.config.epoch}:{}),...(input.workspaceId?{workspaceId:input.workspaceId}:{})}));
+    projectId:admitted.projectId,taskId:input.taskId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch,...(inventory?{recoveryEpoch:inventory.config.epoch,recoveryBinding}:{}),...(input.workspaceId?{workspaceId:input.workspaceId}:{})}));
    }finally{await lease?.release();}
    if(response.operationId!==input.operationId)throw new Refusal('REMOTE_RECEIPT_ID_MISMATCH');
    if(input.workspaceId&&(response.workspaceId!==input.workspaceId||response.root!==admitted.workspaceRoot))throw new Refusal('REMOTE_WORKSPACE_RECEIPT_MISMATCH');
