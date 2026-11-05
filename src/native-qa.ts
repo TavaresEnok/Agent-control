@@ -236,7 +236,7 @@ export class NativeQa{
     await this.ledger.heartbeat(authority);
     try{
      if(job.contract_digest!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
-     if(job.cancellation_state==='requested')await this.stop(principal,authority,job.id,'canceled');
+     if(['requested','confirmed'].includes(job.cancellation_state))await this.stop(principal,authority,job.id,'canceled');
      const result=await this.reconcile(principal,authority,job.id);
      if(result.state==='completed'||result.state==='failed'){
       if(['requested','confirmed'].includes(job.cancellation_state)||job.stage_receipt?.cancellation===true){
