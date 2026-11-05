@@ -1,0 +1,18 @@
+T30_RECOVERY_RUNNER {"label":"ac-r5-t30-recovery-e874901b","disposable":true,"node":"22.23.3"}
+TAP version 13
+# T30_PHYSICAL {"scope":"ac-r5-t30-0173ebff-e0e6-4105-a26f-3e9c1efcf607","sourceInstallation":"177bae30-fb04-447f-8633-7f149bb1c92d","recoveryInstallation":"7fcb4571-873e-4c6f-8a29-ccdb22b75b34","nativeId":"62f5b489d60f152828576c752b2b84a2687be8341d1a8721b5e731c9b647912d","sshId":"1db657e1f0b3912d9bc5f3eb7e18065c215470eac6941df579530dffe5e85b57","epoch":2,"paused":true,"admission":"open","postCutLedgerRows":0}
+# Subtest: T30 post-backup physical native and SSH writers are fenced and retired before reopening
+ok 1 - T30 post-backup physical native and SSH writers are fenced and retired before reopening
+  ---
+  duration_ms: 45969.504088
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 47115.08365

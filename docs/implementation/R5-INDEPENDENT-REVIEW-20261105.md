@@ -85,3 +85,9 @@ A prova física do autor 4134196e (`/tmp/ac-r5-native-log-physical-3.log`) passa
 caa5781b: após ACK perdido e reload, pausa/retomada e política refletem estado/revisão autoritativos em 360/390; start é reenviado após reload com mesmo intent. As ações pausa/política após reload não são reenviadas nesse trecho, mas seu retry sem reload foi provado em df89c41d. Nenhum worker físico é iniciado nessa bancada.
 
 091 c40d7c99 acrescenta controles negativos de catálogo, colisão e digest obsoleto, além de segundo descendente válido; inspecionados script e log PG 1/1 do autor. Aprovação delimitada mantida.
+
+## T30 — prova física independente 20906934
+
+Em bancada descartável própria, executei `scripts/r5-recovery-isolated.mjs` em Node 22.23.3 sobre HEAD congelado 20906934: 1/1, exit 0, teardown concluído. Workers nativo e SSH criados após o backup estavam vivos; restore preservou pausa, neutralizou ambos e recusou epoch antigo antes da nova admissão. O roteiro também exerceu ausência de authority, morte do helper antes e depois do CAS, hold e retry de release parcial. As 11 contraprovas Python de catálogo/host/SSH passaram; contraprova adicional própria rejeitou manifesto alterado pelo checkpoint. Logs `r5-t30-independent-20906934.log`, `r5-t30-independent-unit-20906934.log` e `r5-t30-independent-metadata-20906934.log` foram preservados.
+
+A prova sustenta o cenário físico delimitado, não autoriza sozinho aceite global: todas as fontes devem estar em composição enforced antes do primeiro efeito/backup; binaries legados fora das authorities não são cercados retroativamente. A cadeia e checkpoint não detectam remoção do sufixo pós-backup até o próprio checkpoint sem custódia/testemunha adicional. Entrada operacional, abrangência completa de efeitos e integração final requerem revisão separada. A evidência anterior do autor é excerpt de árvore anterior e permanece atribuída ao autor.
