@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {CAPACITY_EXCLUSION_REASONS} from './capacity-exclusions.ts';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Capacity, CapacityPolicy, AccountInput, ProfileInput, QuotaInput } from './capacity.ts';
@@ -19,7 +20,8 @@ import {capacityWaitExclusions} from './observability.ts';
 import {readWorkflowVersionSnapshot} from './workflow-versions.ts';
 const SelectionEvidence=z.object({accountId:Id,profileId:Id,policyRevision:z.number().int().positive(),
  configRevision:z.number().int().positive(),chain:z.enum(['regular','emergency']),position:z.number().int().min(1).max(40),
- reason:z.enum(['sticky','first_eligible','fallback'])}).strict();
+ reason:z.enum(['sticky','first_eligible','fallback']),preferredProfileId:Id.nullable().optional(),
+ skippedCandidates:z.array(z.object({profileId:Id,reason:z.enum(CAPACITY_EXCLUSION_REASONS)}).strict()).max(39).optional()}).strict();
 export function projectCapacitySelection(row:{selection:unknown;resource_kind:string;account_id:string|null;profile_id:string|null;policy_revision:number;config_revision:number;emergency:boolean}) {
  const parsed=SelectionEvidence.safeParse(row.selection);
  if(!parsed.success||row.resource_kind!=='model')return null;
@@ -27,6 +29,10 @@ export function projectCapacitySelection(row:{selection:unknown;resource_kind:st
  if(value.accountId!==row.account_id||value.profileId!==row.profile_id||value.policyRevision!==row.policy_revision||
   value.configRevision!==row.config_revision||(value.chain==='emergency')!==row.emergency||
   (value.reason==='sticky'&&value.chain!=='regular')||(value.reason==='first_eligible'&&value.position!==1))return null;
+ if(value.skippedCandidates&&(value.skippedCandidates.length!==value.position-1||
+  new Set(value.skippedCandidates.map(item=>item.profileId)).size!==value.skippedCandidates.length||
+  value.skippedCandidates.some(item=>item.profileId===value.profileId)))return null;
+ if(value.preferredProfileId!==undefined&&value.reason==='sticky'&&value.preferredProfileId!==value.profileId)return null;
  return value;
 }
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};

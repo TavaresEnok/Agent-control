@@ -20,6 +20,7 @@ test('closed reasons stay the documented set', () => {
   assert.deepEqual(CAPACITY_EXCLUSION_REASONS, [
     'profile_missing', 'access_removed', 'account_disabled', 'profile_disabled',
     'not_synthetic', 'ineligible', 'quota_exhausted', 'quota_unknown',
+    'quota_rate_limited','authentication_required','provider_unreachable','provider_configuration_error','quota_disabled',
   ]);
 });
 
@@ -35,8 +36,8 @@ test('each gate maps to one reason and earlier gates win', () => {
   assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: 'exhausted' })), 'quota_exhausted');
   assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: null })), 'quota_unknown');
   assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: 'unknown' })), 'quota_unknown');
-  assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: 'rate_limited' })), 'quota_unknown');
-  assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: 'disabled' })), 'quota_unknown');
+  assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: 'rate_limited' })), 'quota_rate_limited');
+  assert.equal(classifyProfileExclusion(facts({ freshQuotaStatus: 'disabled' })), 'quota_disabled');
 });
 
 test('expired quota is unknown, never exhausted, and an eligible profile is not listed', () => {

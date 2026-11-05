@@ -42,7 +42,7 @@ test('database queue preserves initial priority then bounds overtaking across co
   await assert.rejects(other.reserve(principal,newer,authorities[2]!),/CAPACITY_QUEUED/);
   const winner=await capacity.reserve(principal,low,authorities[1]!);
   const decision=(await db.pool.query('SELECT selection FROM ac_capacity_grants WHERE id=$1',[winner.id])).rows[0].selection;
-  assert.deepEqual(decision,{accountId:account,profileId:programmer,policyRevision:revision,configRevision:1,chain:'regular',position:1,reason:'first_eligible'});
+  assert.deepEqual(decision,{accountId:account,profileId:programmer,policyRevision:revision,configRevision:1,chain:'regular',position:1,reason:'first_eligible',preferredProfileId:null,skippedCandidates:[]});
   const paused=req(1,'programmer');
   await assert.rejects(capacity.reserve(principal,paused,authorities[1]!),/CAPACITY_QUEUED|CAPACITY_BUSY/);
   await db.pool.query("UPDATE ac_capacity_waits SET created_at=clock_timestamp()-interval '6 minutes' WHERE attempt_id=$1",[paused.attemptId]);

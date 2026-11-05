@@ -9,6 +9,11 @@ export const CAPACITY_EXCLUSION_REASONS = [
   'ineligible',
   'quota_exhausted',
   'quota_unknown',
+  'quota_rate_limited',
+  'authentication_required',
+  'provider_unreachable',
+  'provider_configuration_error',
+  'quota_disabled',
 ] as const;
 export type CapacityExclusionReason = (typeof CAPACITY_EXCLUSION_REASONS)[number];
 export type ProfileExclusion = { profileId: string; reason: CapacityExclusionReason };
@@ -39,6 +44,11 @@ export function classifyProfileExclusion(facts: ChainProfileFacts): CapacityExcl
   if (facts.eligibility !== 'documented_supported') return 'ineligible';
   if (facts.freshQuotaStatus === 'available') return null;
   if (facts.freshQuotaStatus === 'exhausted') return 'quota_exhausted';
+  if (facts.freshQuotaStatus === 'rate_limited') return 'quota_rate_limited';
+  if (facts.freshQuotaStatus === 'auth_required') return 'authentication_required';
+  if (facts.freshQuotaStatus === 'unreachable') return 'provider_unreachable';
+  if (facts.freshQuotaStatus === 'configuration_error') return 'provider_configuration_error';
+  if (facts.freshQuotaStatus === 'disabled') return 'quota_disabled';
   return 'quota_unknown';
 }
 

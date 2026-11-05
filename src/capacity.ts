@@ -303,7 +303,8 @@ export class Capacity {
           context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify({
             accountId:selected.account_id,profileId:selected.id,policyRevision:context.capacity_policy_revision,configRevision:config.revision,
             chain:emergency?'emergency':'regular',position:ids.indexOf(selected.id)+1,
-            reason:preferred===selected.id?'sticky':ids.indexOf(selected.id)===0?'first_eligible':'fallback'
+            reason:preferred===selected.id?'sticky':ids.indexOf(selected.id)===0?'first_eligible':'fallback',
+            preferredProfileId:preferred??null,skippedCandidates:orderedProfileExclusions(loaded.slice(0,ids.indexOf(selected.id)))
           })])).rows[0];
       if (!emergency) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,

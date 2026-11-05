@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: database queue preserves initial priority then bounds overtaking across contexts and clients
+ok 1 - database queue preserves initial priority then bounds overtaking across contexts and clients
+  ---
+  duration_ms: 2113.063729
+  type: 'test'
+  ...
+# Subtest: selectable synthetic profile has no exclusion
+ok 2 - selectable synthetic profile has no exclusion
+  ---
+  duration_ms: 1.249595
+  type: 'test'
+  ...
+# Subtest: closed reasons stay the documented set
+ok 3 - closed reasons stay the documented set
+  ---
+  duration_ms: 1.075443
+  type: 'test'
+  ...
+# Subtest: each gate maps to one reason and earlier gates win
+ok 4 - each gate maps to one reason and earlier gates win
+  ---
+  duration_ms: 0.324171
+  type: 'test'
+  ...
+# Subtest: expired quota is unknown, never exhausted, and an eligible profile is not listed
+ok 5 - expired quota is unknown, never exhausted, and an eligible profile is not listed
+  ---
+  duration_ms: 0.43429
+  type: 'test'
+  ...
+# Subtest: programming saturation and explicit stage releases permit evaluation, with original reserve draining on recovery
+ok 6 - programming saturation and explicit stage releases permit evaluation, with original reserve draining on recovery
+  ---
+  duration_ms: 2015.623696
+  type: 'test'
+  ...
+# Subtest: running regular and emergency grants survive recovery and policy revision without preemption
+ok 7 - running regular and emergency grants survive recovery and policy revision without preemption
+  ---
+  duration_ms: 1584.554517
+  type: 'test'
+  ...
+# Subtest: R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+ok 8 - R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+  ---
+  duration_ms: 2363.304611
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4397.862895
