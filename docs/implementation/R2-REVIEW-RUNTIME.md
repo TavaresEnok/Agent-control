@@ -37,3 +37,13 @@ A frente relata prova com supervisor nativo e QA Docker reais, três tarefas, qu
 `aa2b6ec9` impede estaticamente `verifier.record` para estado de cancelamento existente, inclusive `confirmed`, antes da retirada. Solicitei teste específico que confirme ausência de record e ocorrência da retirada; não havia teste correspondente no commit.
 
 `035111db` cobre a ramificação confirmada com substitutos para banco e supervisor: exige reconcile e retire e ausência de record. O autor relata 2/2 focados; não reexecutei. O teste verifica o fluxo do controlador, não seleção SQL real nem retirada Docker.
+
+## Deltas posteriores: isolamento de fases, worker ativo e admissão remota
+
+`a799a303` envolve as fases de cancelamento em tratamento de erro e preserva causas em `AggregateError`; planejamento também passa a tentar cada job sem o limite anterior. Revisão estática não encontrou defeito concreto no escopo; os efeitos ainda dependem de fencing próprio. As fases são sequenciais e um efeito que não retorna, ou backlog grande, pode atrasar os seguintes. O autor relata testes com substitutos; não reexecutei.
+
+`303429d2` e `a783a7c5` acrescentam provas relatadas com worker Docker `Running` antes e após SIGKILL do controlador, sucessor e mesmo job sem relançamento, separadamente cancelado e falho com exit 17. O sucessor usa runtime `administration-only` e o pedido de cancelamento é inserido diretamente em banco sintético; isso não prova assinatura do controle nem resultado do grafo inteiro. A limpeza usa manifesto da fixture e propaga erros. Não reexecutei essas provas.
+
+`2d4de754`, `71d44f5a` e `824f183d` serializam contagem, registro e lançamento remoto sob lock global do mesmo diretório de estado; diários incertos e terminais sem código/hash completos ocupam vaga, e replay não lança novo processo. Revisão estática não encontrou defeito concreto nesse escopo. O teste relatado usa dois aliases para o mesmo estado, com limite 1 e morte do supervisor; não o reexecutei. Configurações divergentes ou diretórios distintos, export Git e limites agregados de CPU/memória/processos não são cobertos; o lock controla admissões, não isolamento físico de recursos.
+
+O ensaio `c90bc930` do broker por socket público foi incluído na integração informada pelo gerente. Sua prova usa controlador sintético; não amplia a conclusão para recuperação do grafo completo.
