@@ -71,3 +71,7 @@ A aprovação dinâmica de snapshot em 48b0bcb6 também foi inspecionada: resolv
 ## CLI de configuração: 7b387f7f
 
 Aprovado o entrypoint `config-export`/`config-read` por inspeção independente do código e do teste processual do autor 1/1. A instalação privada e descriptor são carregados, com owner+admin, e a execução retorna antes de initialize/serve/registry. O teste confirma 0600, cifragem, recusa de sobrescrita, leitura, recusa após revogação e ausência de efeitos de runtime. A pré-condição dos campos semânticos segue válida; cobertura de grafo 088 ainda requer projeção e prova próprias. O DTO é de inspeção, e recuperação demonstrada R3 deve ser avaliada separadamente.
+
+## Edição de conta e versão de perfil: 091
+
+Aprovado o escopo 9c1b60d7/f419d425: owner, acesso e fonte são verificados sob locks na transação; digest e CAS impedem uso de estado obsoleto, nova versão preserva perfil anterior, grants e políticas, e lineage é imutável. O autor testou em PG revogação concorrente de acesso/membership, conflito e replay; browser 360/390 usou dispositivo inscrito por fixture e gateway temporário. A montagem integrada e o conjunto literal de RF07 são avaliações separadas.
