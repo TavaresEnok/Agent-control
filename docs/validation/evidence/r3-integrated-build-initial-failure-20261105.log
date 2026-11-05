@@ -1,0 +1,9 @@
+
+> agent-control@0.1.0 prebuild
+> node scripts/prepare-build.mjs --before
+
+
+> agent-control@0.1.0 build
+> tsc -p tsconfig.json && node scripts/prepare-build.mjs
+
+tests/r3-migration.test.ts(112,10): error TS7022: 'contention' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.

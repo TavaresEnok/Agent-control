@@ -36,3 +36,24 @@ Entrega remota inicial do autor `46fc57af` passou reexecução SSH independente 
 Backlog adicional da auditoria já distribuído: configuração assinada pelo chat ao agente remote; exportação/comparação de uso ao history; restauração conjunta histórico/políticas ao migration; publicação/reconexão Happier ao flow; rollback e edição concorrente no browser ao UI; worktree remota gravável ao delivery (migração 076 reservada).
 
 Houve uma escrita acidental da frente delivery no checkout principal por omissão de workdir. O autor copiou e comparou seus quatro arquivos para sua worktree e restaurou somente suas alterações no principal. A gerência verificou que restaram apenas o AGENTS.md local preexistente e test.txt. Nenhum trabalho preexistente foi descartado.
+
+## Integração progressiva (não é fechamento)
+
+| Entrega | Origem → integrado | Validação/revisão até aqui |
+| --- | --- | --- |
+| Cotas supervisionadas/registro configurável | a9f4876d → 522868d3 | Autor 3/3, revisor físico 1/1; real inativo |
+| Autoridade/refresh lab e locks | cbcc506a/6bb083d1/413d366d → 1dc245f8/37378dff/6cc21170 | Revisor 2/2; gateway root 468d001d |
+| Histórico durável/indexado | 3ca18eae → 9719091e | Revisor 3/3; 20k inativos, índice; ordenação corrigida |
+| Recursos físicos agregados | 5add3b71 → 14593da8 | Revisor 17 grupos físicos; autoridade de laboratório limpa por dono |
+| Supervisão SSH combinada | 46fc57af/6553ce5c → 93ecbbf9/473840a3 | Revisor 5 grupos SSH+recursos; hooks workspace dependem da frente delivery |
+| Retorno de artefato aprovado | c1257b42 → a09b0aaa | Revisor físico 1/1; gate downstream semeado na prova inicial |
+| Custódia SSH e bootstrap retorno | 0fd1d2c4 (root) | Dois testes de configuração/credencial e revisão independente; prova SSH posterior verificará transporte alterado |
+| Causas de fallback e cadeia sintética | a61c728d → 57e9e643 | Revisor 1/1; nova allowlist SQL exige correção em 078, já em implementação, não implantada |
+| Recovery criptografado inicial | e0f9bc9c → c56dd0d1 | Revisor 1/1; Happier real/rewrap na próxima entrega, sem tratar fixture como produção |
+| Capability e fluxo nativo | ac2e838e/508de1bd → 46159abb/c67907c8 | Autor fluxo físico 1/1; revisão estática; assertivas finais/latência aguardam run conjunto |
+| Timing e probes finitos | 603f50d9 → 7b940459 | Telemetria sem callback de Ledger; execução no browser/fluxo ainda pendente |
+| UI autenticada mobile | 4766e6b3 → 557f3833 | Autor browser 360/390 e revisor 24 testes focados; não Android físico |
+
+Compilação principal inicial encontrou TS7022 no teste de disputa de migração; corrigido com anotação explícita, preservado log negativo. A compilação normal seguinte passou, sem skipLibCheck (snapshot de quota/migração/histórico, antes das entregas seguintes). Os logs `r3-integrated-build-initial-failure-20261105.log` e `r3-integrated-build-progress-20261105.log` não são uma afirmação de build final.
+
+Worktree principal preserva AGENTS.md local e test.txt. A matriz global ainda não foi promovida: os pareceres/JSON R3 são suplementos versionados em atualização. Permanecem implementações reais em andamento e nenhum relatório declara fim da missão.

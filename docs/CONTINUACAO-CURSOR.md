@@ -1,3 +1,9 @@
+# Missão R3 em execução — Sol 6.1 Médio
+
+Continuação ativa a partir de ae2e141b, com dez subagentes nativos Sol/Médio confirmados e dois revisores independentes. Preserve AGENTS.md local e test.txt. Estado, ownership, commits, provas e backlog executável: [CONTINUACAO-R3-20261105.md](implementation/CONTINUACAO-R3-20261105.md). A missão ainda não está concluída; esta entrada prevalece sobre fechamentos históricos R2. Não repetir provas válidas sem mudança relevante nem tratar integrações ainda executáveis como bloqueios externos.
+
+---
+
 # Continuação vigente — R2 (05/11/2026)
 
 Retomada em `4aa57f06` na mesma branch, preservando todo o histórico e `test.txt`. Nove novos subagentes nativos Terra 6.1/Médio foram efetivamente iniciados em worktrees separadas, com dois revisores independentes. Os agentes anteriores não foram apresentados como ativos. Não se usou Paseo; o modelo do principal continua sem mecanismo de alteração/confirmação na sessão.
