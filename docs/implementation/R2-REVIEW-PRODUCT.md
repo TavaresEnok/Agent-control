@@ -11,3 +11,7 @@ Base `4aa57f06`. Revisão independente de diffs; implementadores não aprovam su
 
 - A revogação de dispensa já tem teste sequencial de gate após revogação e de revogador bloqueado pelo gate. Falta a ordem concorrente inversa, com transação revogadora ainda aberta e posterior commit/rollback, e eventual CAS físico; ensaio PG/Git sintético pode reduzir essa lacuna.
 - `IMPORT-CLI-20261102.md` registra ausência de ensaio ponta a ponta de `export-context`. É possível testar autorização, paginação, permissões do arquivo e não sobrescrita com PG, Happier e identidades descartáveis. Não resolveria snapshot transacional comum ou ataque pelo mesmo UID.
+
+## Harness `947d2513`
+
+Integrável no escopo de revisão estática. O diretório exclusivo de logs corrige a sobrescrita identificada; o runner verifica estado e log do próprio container antes de conectar e documenta que a escolha da porta não é uma reserva atômica. O log `/tmp/ac-isolated-logs-WH8IgU/tests.log` mostra três testes, três passes e zero skips, em snapshot anterior às pequenas mudanças finais; esta revisão não reexecutou o commit final. O ensaio de exportação cobre uma mensagem cifrada, ausência de texto claro/chave e modo 0600, não paginação, recusa de sobrescrita ou restauração. Não é suíte geral nem prova operacional.
