@@ -540,7 +540,7 @@
       ],
       "recommendation": "do_not_accept_full_requirement",
       "conclusion": "Editor livre e etapas móveis compartilham save/validação; cobertura de operações touch ainda incompleta.",
-      "next_evidence": "Provar criação/ligação/remoção/edição das operações de grafo e equivalência nas etapas móveis, sem hover obrigatório.",
+      "next_evidence": "Resolver colisão de nome com catálogo legado no backend, revisar gateway integrado e equivalência por etapas.",
       "r5_versioned_delta": "df89c41d/f8dc8f90: browser autor cria/edita/liga/remove em 360/390 sob gateway temporário; confirmar montagem integrada e equivalência por etapas."
     },
     {
@@ -1345,9 +1345,10 @@
         "4766e6b3",
         "70385609"
       ],
-      "recommendation": "do_not_accept_full_requirement",
+      "recommendation": "accept_literal_scenario_pending_integrated_gateway",
       "conclusion": "Validações genéricas existem; o cenário exato Astra/esforço proibido/conta removida com razão na entrada assinada não foi demonstrado.",
-      "next_evidence": "Enviar essas três políticas pelo caller entregue e provar recusa legível antes de qualquer lançamento."
+      "next_evidence": "Confirmar integração e gateway final da versão revisada; não inferir provider oficial.",
+      "r5_versioned_delta": "13738f3b/71cb3949/adfcc6d4 e 092aa259/462762ca: rejeições Astra, esforço não homologado e conta removida, motivo legível e sem novo job/quota alterada em browser autor; guard nativo repetido 2/2 com mocks."
     },
     {
       "id": "T23",
