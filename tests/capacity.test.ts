@@ -57,6 +57,32 @@ test('concurrent reservations across two PG clients share one account slot; same
  await release(success.value.id);
  await service.cancelWait(principal,requests[1-index].attemptId,authority);
 });
+test('a waiter whose project lost account access cannot block another project',async()=>{
+ const blocker=await service.reserve(principal,request(),authority);
+ const stale=request();
+ await assert.rejects(service.reserve(principal,stale,authority),/CAPACITY_BUSY/);
+ const project2=randomUUID();
+ await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project2,'Queue access fixture']);
+ await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project2,principal]);
+ await service.shareAccount(principal,blocker.account_id,project2);
+ const revision=await service.publish(principal,project2,0,{...policy,roles:{programmer:{regular:[blocker.profile_id],emergency:[]}}});
+ const context2=await db.createContext(principal,project2,randomUUID());
+ const authority2=await db.acquire(principal,context2,randomUUID(),'fixture-manager',60);
+ await service.assignPolicy(principal,context2,revision);
+ const cmd:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context2,policyRevision:1,
+  action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:queue-access'}};
+ const intent2=(await db.accept(principal,cmd,authority2,'api')).id;
+ try {
+  await db.pool.query('DELETE FROM ac_account_access WHERE account_id=$1 AND project_id=$2',[blocker.account_id,project]);
+  await release(blocker.id);
+  const grant=await second.reserve(principal,{attemptId:randomUUID(),intentId:intent2,contextId:context2,role:'programmer'},authority2);
+  assert.equal(grant.account_id,blocker.account_id);
+  await second.transition(principal,grant.id,authority2,'released',{processId:'not-started',state:'not_started'});
+ } finally {
+  await db.pool.query('INSERT INTO ac_account_access(account_id,project_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[blocker.account_id,project]);
+  await service.cancelWait(principal,stale.attemptId,authority);
+ }
+});
 test('unknown quota is not availability; fallback stays regular after the earlier account recovers',async()=>{
  await service.observeQuota(principal,accounts[0],{status:'exhausted',source:'synthetic-fixture',ttlSeconds:3600});
  const fallback=await service.reserve(principal,request(),authority);assert.equal(fallback.account_id,accounts[1]);await release(fallback.id);
@@ -126,9 +152,12 @@ test('published revisions remain immutable and an in-flight grant keeps its orig
  await release(grant.id);
 });
 test('old manager cannot reserve; successor cannot release an unreconciled old grant',async()=>{
- const grant=await service.reserve(principal,request(),authority);
+ const attempt=request();
+ const grant=await service.reserve(principal,attempt,authority);
  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
  const successor=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
  await assert.rejects(service.reserve(principal,request(),authority),/STALE_MANAGER/);
+ await assert.rejects(service.reserve(principal,attempt,successor),/GRANT_RECONCILIATION_REQUIRED/);
  await assert.rejects(service.transition(principal,grant.id,successor,'released',{processId:'fixture',state:'exited'}),/GRANT_RECONCILIATION_REQUIRED/);
+ assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant.id])).rows[0].state,'reserved');
 });

@@ -192,6 +192,7 @@ export class Capacity {
       const old = (await c.query<Grant>('SELECT * FROM ac_capacity_grants WHERE attempt_id=$1', [request.attemptId])).rows[0];
       if (old) {
         if (old.resource_kind!=='model'||old.request_digest !== hash) throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
+        if (Number(old.manager_epoch)!==authority.epoch) throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
         if(!(await c.query("SELECT 1 FROM ac_accounts WHERE id=$1 AND mode='synthetic'",[old.account_id])).rowCount)
           throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
         return old;
@@ -225,11 +226,16 @@ export class Capacity {
       const selected = { id: choice.profileId, account_id: choice.accountId, max_concurrent: choice.maxConcurrent };
       await c.query('UPDATE ac_capacity_waits SET desired_profile=$2,exclusions=NULL WHERE attempt_id=$1',[request.attemptId,selected.id]);
       const first=(await c.query(`SELECT w.attempt_id FROM ac_capacity_waits w JOIN ac_profiles p ON p.id=w.desired_profile
+        JOIN ac_accounts a ON a.id=p.account_id
+        JOIN ac_quota_observations q ON q.account_id=a.id
         JOIN ac_contexts x ON x.id=w.context_id JOIN ac_managers m ON m.context_id=x.id
         JOIN ac_intents i ON i.id=w.intent_id
         JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
-        WHERE w.resource_kind='model' AND p.account_id=$1 AND p.enabled AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused
-        AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id)
+        WHERE w.resource_kind='model' AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
+        AND a.eligibility='documented_supported' AND q.status='available' AND q.expires_at>clock_timestamp()
+        AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
+        AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
+        AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))
         AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
         ORDER BY w.priority DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
       if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
