@@ -664,6 +664,13 @@ export class CezarRuntime {
     if(!this.running||!this.lock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
     const service=new Cancellations(this.ledger),history=new ReconciliationHistory(this.ledger),reconciliationErrors:unknown[]=[];
     const phase=async(name:string,work:()=>Promise<unknown>)=>{try{await work();}catch(error){reconciliationErrors.push(new Error(name,{cause:error}));}};
+    // Pre-journal resource waits must be neutralized before cancellation can
+    // return their grants. Each supervisor fences and pages its own state root.
+    const resourceSupervisors=[...this.nativePlanning,...this.nativeExecutions,...(this.engineering?.options.nativeQa?[this.engineering.options.nativeQa]:[])];
+    for(const supervisor of resourceSupervisors)await phase('NATIVE_RESOURCE_RECONCILIATION_FAILED',async()=>{
+      if(!principal)throw new Refusal('NATIVE_RESOURCE_PRINCIPAL_REQUIRED');
+      await supervisor.reconcileResourceAdmissions(principal,authority);
+    });
     await phase('CANCELLATION_STATE_RECONCILIATION_FAILED',()=>service.reconcile(authority,runId=>{this.manager.cancel(runId);}));
     if(this.engineering)await phase('INTEGRATION_RECONCILIATION_FAILED',()=>history.run(authority,'integration','ac_intents',async (ids,retain)=>{
       const canceled=(await this.ledger.pool.query<Intent>(`SELECT i.* FROM ac_intents i JOIN ac_plan_cancellations k ON k.intent_id=i.id
