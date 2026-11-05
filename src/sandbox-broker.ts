@@ -726,13 +726,19 @@ export async function brokerMain(config:SandboxBrokerConfig){
    .catch(error=>{if(!(error instanceof Refusal))console.error('sandbox broker failure',String((error as NodeJS.ErrnoException)?.code??'UNKNOWN'));res.writeHead(error instanceof Refusal?error.status:400,{'content-type':'application/json'}).end(JSON.stringify({error:error instanceof Refusal?error.code:'INVALID_REQUEST'}));});});
  });
  await new Promise<void>((ok,fail)=>{server.once('error',fail);server.listen(config.socketPath,()=>ok());});await chmod(config.socketPath,0o660);await chown(config.socketPath,0,1000);
- let stopping:Promise<void>|undefined;
- const stop=()=>stopping??=(async()=>{
+ let stopping:Promise<void>|undefined,expectedShutdown=false;
+ const stop=()=>{
+  // Mark before releasing/destroying the advisory-lock connection: its normal
+  // end event must not be mistaken for involuntary authority loss.
+  expectedShutdown=true;
+  return stopping??=(async()=>{
   await new Promise<void>(resolve=>server.close(()=>resolve()));
   try{await lock.query('SELECT pg_advisory_unlock(189234,19)');}catch{}
   lock.release(true);await broker.close();
- })();
- lock.once('error',()=>{void stop().finally(()=>{process.exitCode=1;});});
- lock.once('end',()=>{void stop().finally(()=>{process.exitCode=1;});});
+  })();
+ };
+ const lostLock=()=>{if(expectedShutdown)return;void stop().finally(()=>{process.exitCode=1;});};
+ lock.once('error',lostLock);
+ lock.once('end',lostLock);
  return {server,broker,stop};
 }
