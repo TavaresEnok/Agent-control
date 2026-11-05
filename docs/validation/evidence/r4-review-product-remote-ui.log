@@ -1,0 +1,13 @@
+
+> @open-mercato/cezar-web@0.19.0 test
+> vitest run src/routes/settings/agent-control-remote-development.test.tsx src/routes/settings/agent-control-project-admin.test.tsx src/routes/settings/agent-control-remote-return.test.tsx
+
+
+ RUN  v4.1.10 /home/app/srv_projetos/workspace/r4-review-product/upstream/cezar/packages/web
+
+
+ Test Files  3 passed (3)
+      Tests  14 passed (14)
+   Start at  16:12:33
+   Duration  4.03s (transform 3.71s, setup 158ms, import 6.35s, tests 1.33s, environment 3.21s)
+
