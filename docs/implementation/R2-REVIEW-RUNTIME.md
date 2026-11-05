@@ -47,3 +47,7 @@ A frente relata prova com supervisor nativo e QA Docker reais, três tarefas, qu
 `2d4de754`, `71d44f5a` e `824f183d` serializam contagem, registro e lançamento remoto sob lock global do mesmo diretório de estado; diários incertos e terminais sem código/hash completos ocupam vaga, e replay não lança novo processo. Revisão estática não encontrou defeito concreto nesse escopo. O teste relatado usa dois aliases para o mesmo estado, com limite 1 e morte do supervisor; não o reexecutei. Configurações divergentes ou diretórios distintos, export Git e limites agregados de CPU/memória/processos não são cobertos; o lock controla admissões, não isolamento físico de recursos.
 
 O ensaio `c90bc930` do broker por socket público foi incluído na integração informada pelo gerente. Sua prova usa controlador sintético; não amplia a conclusão para recuperação do grafo completo.
+
+## Materialização de origem SSH `edac11e6`
+
+O teste conecta Control assinado, exportação por OpenSSH e ProjectAdmin, verificando replay após ACK descartado na camada de transporte, recusa de payload divergente, vínculos de provenance, HEAD/árvore/conteúdo, `git fsck`, `not_reviewed` e ausência de artefatos. Não reexecutei. As identidades de dois hosts são fornecidas pela fixture, mas a fonte não afirma explicitamente que commits ou árvores diferem entre si; solicitei asserção cruzada para sustentar essa afirmação documental. A prova não cobre navegador, fio de rede interrompido, revisão humana, adaptador operacional ou push-back.
