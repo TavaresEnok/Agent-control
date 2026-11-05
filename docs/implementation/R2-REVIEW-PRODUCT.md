@@ -31,3 +31,7 @@ Integráveis por revisão estática. Os deltas filtram candidatos bloqueados por
 ## Quota experimental `e641be67` + `969efbd2`
 
 Integráveis por revisão estática como fonte injetável sem registro no bootstrap ou ativação real. A leitura vincula identidade antes da quota, ancora HOME no descritor verificado e recusa resultado em erro; testes adicionais cobrem falha de spawn, abort ativo e encerramento do PID da fixture. O autor informou testes e typecheck verdes, não repetidos por esta revisão. A documentação corretamente limita o encerramento ao grupo, exige executável confiável e supervisão durável, e não afirma compatibilidade com CLI ou conta real.
+
+## Persistência UI `5bcc09b8` + `380eba75`
+
+Integráveis por revisão estática. A prova usa rotas e armazenamento Cezar reais em repositório temporário, lê YAML e reabre após reinícios; o delta assegura tentativa independente de parada dos dois servidores. O autor informou três viewports aprovados antes do ajuste de cleanup e `node --check` depois; esta revisão não repetiu os comandos. Não demonstra autenticação, execução de fluxo ou aparelho físico.
