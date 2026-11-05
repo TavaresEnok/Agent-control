@@ -448,13 +448,15 @@
       "id": "RF-01",
       "checkpoint": "user_requested_finish_current_then_stop",
       "remaining": "env079 backend draft not independently rerun; signed UI/config+execution admission integration pending",
-      "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof"
+      "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+      "frozen_unreviewed_commit": "03d25ed3"
     },
     {
       "id": "RF-02",
       "checkpoint": "user_requested_finish_current_then_stop",
       "remaining": "env079 multi-project/destination draft integration and actual browser pending",
-      "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof"
+      "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+      "frozen_unreviewed_commit": "03d25ed3"
     },
     {
       "id": "RF-36",
@@ -472,7 +474,9 @@
       "id": "RNF-08",
       "checkpoint": "user_requested_finish_current_then_stop",
       "remaining": "New broad secret-probe slice pending independent review; earlier limited vault/tool-home evidence does not close every output channel",
-      "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof"
+      "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+      "frozen_unreviewed_commit": "0bbfeac1",
+      "author_result_not_independent": "1/1 author test,19 surfaces; reviewer did not run or inspect complete source at shutdown"
     },
     {
       "id": "RF-40",
@@ -684,6 +688,11 @@
     "requested_by_user": true,
     "new_fronts_started": false,
     "current_tests_finished": true,
-    "full_mission_complete": false
+    "full_mission_complete": false,
+    "frozen_unreviewed": {
+      "environment079": "03d25ed3",
+      "secret_surfaces_RNF08": "0bbfeac1",
+      "remote_product_API": "8be0c4d1"
+    }
   }
 }
