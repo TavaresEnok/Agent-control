@@ -43,3 +43,7 @@ Uma mensagem comum do Happier é admitida pelo template sintético fixado. Isso 
 ### Transporte administrativo do gerente
 
 O gateway aceita configuração privada opcional `managerTransport` para conectar sessões existentes usando o vault, sem ativar inferência/execução. Planejamento recebe a autoridade do registry, e Settings mostra o estado real da conexão. O gerente semântico e os adaptadores de CLIs reais continuam pendentes; não confundir conexão do transporte com desenvolvimento autônomo habilitado. Consulte `docs/implementation/CONFIGURED-MANAGER-TRANSPORT-20261102.md`.
+
+## Bancada focal isolada
+
+`npm run test:isolated` exercita Happier light real, importação e exportação de contexto usando PostgreSQL/SQLite e portas loopback próprios. Não substitui a suíte inteira. Pré-requisitos, dependências reversíveis, limites e limpeza estão em [R2-HARNESS](docs/implementation/R2-HARNESS.md); resultados e impedimentos atuais em [continuidade R2](docs/implementation/CONTINUACAO-R2-20261105.md). Nenhuma conta de provedor ou inferência real é ativada.

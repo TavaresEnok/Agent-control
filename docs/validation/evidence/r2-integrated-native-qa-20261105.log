@@ -1,0 +1,32 @@
+Node22.23.3; synthetic fixture image sha256:bda5b714c89e6e4ff560abd72a615d43ded268e5fb869c0960f58246a9f39ad3; private network 9414a2aff5394b0f2d7acedd8a7909791367cfbcbec1f6ffbcda691ad7534e4c; disposable PG only.
+TAP version 13
+# {"proof":"native-qa-real-docker","functionalCommands":2,"outcomes":["passed","failed"],"untrustedStdoutIgnored":true,"network":"none","credentialsMounted":false,"modelCalls":0,"protectedBranchUnchanged":true}
+# Subtest: real isolated QA uses Docker exit code, preserves the commit and rejects forged stdout approval
+ok 1 - real isolated QA uses Docker exit code, preserves the commit and rejects forged stdout approval
+  ---
+  duration_ms: 6294.15639
+  type: 'test'
+  ...
+# {"controller":"SIGKILL","pausePreserved":true,"programmerJob":"d00e2791-4e98-5b70-ac76-e07ab49beff8","programmerJobs":3,"reviewJobs":4,"modelCalls":0,"capacity":"substituted","qa":"native-docker"}
+# Subtest: synthetic native graph resumes after controller SIGKILL at retired programmer boundary
+ok 2 - synthetic native graph resumes after controller SIGKILL at retired programmer boundary
+  ---
+  duration_ms: 56469.785292
+  type: 'test'
+  ...
+# {"proof":"native-qa-real-docker","functionalCommands":2,"outcomes":["passed","failed"],"untrustedStdoutIgnored":true,"network":"none","credentialsMounted":false,"modelCalls":0,"protectedBranchUnchanged":true}
+# Subtest: real isolated QA uses Docker exit code, preserves the commit and rejects forged stdout approval
+ok 3 - real isolated QA uses Docker exit code, preserves the commit and rejects forged stdout approval
+  ---
+  duration_ms: 6607.857496
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 72556.662601

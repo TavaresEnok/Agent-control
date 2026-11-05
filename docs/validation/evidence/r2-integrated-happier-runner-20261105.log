@@ -1,0 +1,10 @@
+
+> agent-control@0.1.0 test:isolated
+> node scripts/test-isolated.mjs
+
+project=ac-r2-3f94803ee47d4211 scratch=/tmp/ac-isolated-ssa9xP logs=/tmp/ac-r2-main-integration-logs/ac-isolated-logs-FgGUrb
+Happier + import integration passed; see tests.log
+ Container ac-r2-3f94803ee47d4211-db-1  Stopping
+ Container ac-r2-3f94803ee47d4211-db-1  Stopped
+ Container ac-r2-3f94803ee47d4211-db-1  Removing
+ Container ac-r2-3f94803ee47d4211-db-1  Removed

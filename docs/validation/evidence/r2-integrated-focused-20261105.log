@@ -1,0 +1,174 @@
+TAP version 13
+# Subtest: database queue preserves initial priority then bounds overtaking across contexts and clients
+ok 1 - database queue preserves initial priority then bounds overtaking across contexts and clients
+  ---
+  duration_ms: 2520.620828
+  type: 'test'
+  ...
+# Subtest: same subscription cannot be registered under another account alias; read-only members cannot change it
+ok 2 - same subscription cannot be registered under another account alias; read-only members cannot change it
+  ---
+  duration_ms: 1445.44737
+  type: 'test'
+  ...
+# Subtest: concurrent reservations across two PG clients share one account slot; same attempt deduplicates
+ok 3 - concurrent reservations across two PG clients share one account slot; same attempt deduplicates
+  ---
+  duration_ms: 90.136258
+  type: 'test'
+  ...
+# Subtest: a waiter whose project lost account access cannot block another project
+ok 4 - a waiter whose project lost account access cannot block another project
+  ---
+  duration_ms: 157.6201
+  type: 'test'
+  ...
+# Subtest: unknown quota is not availability; fallback stays regular after the earlier account recovers
+ok 5 - unknown quota is not availability; fallback stays regular after the earlier account recovers
+  ---
+  duration_ms: 108.668004
+  type: 'test'
+  ...
+# Subtest: emergency yields future attempts when a regular account recovers, without disturbing an existing grant
+ok 6 - emergency yields future attempts when a regular account recovers, without disturbing an existing grant
+  ---
+  duration_ms: 72.491322
+  type: 'test'
+  ...
+# Subtest: original Codex programming reserve is admitted only after other active programmer accounts are unavailable
+ok 7 - original Codex programming reserve is admitted only after other active programmer accounts are unavailable
+  ---
+  duration_ms: 107.897899
+  type: 'test'
+  ...
+# Subtest: uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt
+ok 8 - uncertain processes hold their capacity, cannot be released on timeout, and require a trusted exit receipt
+  ---
+  duration_ms: 54.70411
+  type: 'test'
+  ...
+# Subtest: published revisions remain immutable and an in-flight grant keeps its original policy
+ok 9 - published revisions remain immutable and an in-flight grant keeps its original policy
+  ---
+  duration_ms: 67.149198
+  type: 'test'
+  ...
+# Subtest: old manager cannot reserve; successor cannot release an unreconciled old grant
+ok 10 - old manager cannot reserve; successor cannot release an unreconciled old grant
+  ---
+  duration_ms: 47.482789
+  type: 'test'
+  ...
+# Subtest: control intent, mutation and delivery are atomic across retries and conflicts
+ok 11 - control intent, mutation and delivery are atomic across retries and conflicts
+  ---
+  duration_ms: 307.209647
+  type: 'test'
+  ...
+# Subtest: signed pause is deduplicated and stale commands cannot undo a newer decision
+ok 12 - signed pause is deduplicated and stale commands cannot undo a newer decision
+  ---
+  duration_ms: 223.386018
+  type: 'test'
+  ...
+# Subtest: terminal retirement journals logs before deletion and recovers a lost Docker acknowledgement
+ok 13 - terminal retirement journals logs before deletion and recovers a lost Docker acknowledgement
+  ---
+  duration_ms: 46.376687
+  type: 'test'
+  ...
+# Subtest: explicit QA waiver stage
+    # Subtest: signed control authorizes only an owner and deduplicates delivery
+    ok 1 - signed control authorizes only an owner and deduplicates delivery
+      ---
+      duration_ms: 235.096929
+      type: 'test'
+      ...
+    # Subtest: the QA settlement records not_required for one artifact and blocks failed evidence
+    ok 2 - the QA settlement records not_required for one artifact and blocks failed evidence
+      ---
+      duration_ms: 727.774109
+      type: 'test'
+      ...
+    1..2
+ok 14 - explicit QA waiver stage
+  ---
+  duration_ms: 2492.973625
+  type: 'suite'
+  ...
+# Subtest: quality gate integrity
+    # Subtest: owner waiver on a low-risk artifact is explicit, idempotent and does not travel to another commit
+    ok 1 - owner waiver on a low-risk artifact is explicit, idempotent and does not travel to another commit
+      ---
+      duration_ms: 303.915242
+      type: 'test'
+      ...
+    # Subtest: protected gate paths are refused before native execution and again at assertReady
+    ok 2 - protected gate paths are refused before native execution and again at assertReady
+      ---
+      duration_ms: 389.788387
+      type: 'test'
+      ...
+    # Subtest: actual Git changes cannot weaken protected gates even without a native input
+    ok 3 - actual Git changes cannot weaken protected gates even without a native input
+      ---
+      duration_ms: 1433.832781
+      type: 'test'
+      ...
+    # Subtest: managed freeze refuses a protected write path before the native input is accepted
+    ok 4 - managed freeze refuses a protected write path before the native input is accepted
+      ---
+      duration_ms: 1263.115886
+      type: 'test'
+      ...
+    1..4
+ok 15 - quality gate integrity
+  ---
+  duration_ms: 4845.949448
+  type: 'suite'
+  ...
+# Subtest: one uncertain native job does not block another job or remote cancellation
+ok 16 - one uncertain native job does not block another job or remote cancellation
+  ---
+  duration_ms: 3.763089
+  type: 'test'
+  ...
+# Subtest: confirmed reviewer cancellation retires without recording verification
+ok 17 - confirmed reviewer cancellation retires without recording verification
+  ---
+  duration_ms: 0.679603
+  type: 'test'
+  ...
+# Subtest: sandbox, QA and planning failures do not prevent remote reconciliation
+ok 18 - sandbox, QA and planning failures do not prevent remote reconciliation
+  ---
+  duration_ms: 0.988984
+  type: 'test'
+  ...
+# Subtest: completed reviewer without stored verification records before retirement
+ok 19 - completed reviewer without stored verification records before retirement
+  ---
+  duration_ms: 0.530807
+  type: 'test'
+  ...
+# Subtest: revocation held before gate serializes commit and rollback; killed controller leaves CAS uncertain
+ok 20 - revocation held before gate serializes commit and rollback; killed controller leaves CAS uncertain
+  ---
+  duration_ms: 3140.680007
+  type: 'test'
+  ...
+# Subtest: managed retirement requires a consistent physical terminal and durable discard decision
+ok 21 - managed retirement requires a consistent physical terminal and durable discard decision
+  ---
+  duration_ms: 4.14964
+  type: 'test'
+  ...
+1..21
+# tests 25
+# suites 2
+# pass 25
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21988.621515

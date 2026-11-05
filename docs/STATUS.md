@@ -1,3 +1,13 @@
+# Continuação vigente — R2
+
+A implementação e as provas desta rodada estão em [CONTINUACAO-R2-20261105.md](implementation/CONTINUACAO-R2-20261105.md), incluindo nove subagentes Terra 6.1/Médio reais, revisões independentes e commits. Foram completadas frentes locais de retirada terminal/QA/sandbox, reconciliação, aging e seleção explicável, editor móvel persistido pelo Cezar real, protocolo SSH conservador e bancada Happier reproduzível. O coletor Codex somente leitura permanece experimental, sem ativação.
+
+Compilação e checks finais focados passaram no checkout integrado com Node 22.23.3. O grafo com três tarefas usou QA Docker real e retomou após SIGKILL; outros ensaios trataram programador ativo cancelado ou falho. Isto mantém os limites declarados dos substitutos e não representa uso real de provedor.
+
+**104 itens parciais, sete não implementados, nenhum dos 111 aceito.** A arquitetura Cezar + Happier + PostgreSQL e todos os recursos operacionais preexistentes foram preservados. Autenticação/inferência real, aparelho físico, SSH operacional, piloto/migração e homologação continuam sem autorização/ambiente/evidência; os limites técnicos adicionais não foram ocultados.
+
+---
+
 # Continuação vigente — equipe nativa
 
 Nove subagentes Terra/Médio foram efetivamente iniciados em worktrees separadas e houve revisão por agentes distintos. O principal não pode alterar ou confirmar seu modelo nesta sessão. O registro completo, commits e limitações estão em [NATIVE-TEAM-CONTINUATION-20261105.md](implementation/NATIVE-TEAM-CONTINUATION-20261105.md) e na [continuidade](CONTINUACAO-CURSOR.md).

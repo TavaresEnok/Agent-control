@@ -1,3 +1,19 @@
+# Continuação vigente — R2 (05/11/2026)
+
+Retomada em `4aa57f06` na mesma branch, preservando todo o histórico e `test.txt`. Nove novos subagentes nativos Terra 6.1/Médio foram efetivamente iniciados em worktrees separadas, com dois revisores independentes. Os agentes anteriores não foram apresentados como ativos. Não se usou Paseo; o modelo do principal continua sem mecanismo de alteração/confirmação na sessão.
+
+Registro completo de agentes, modelos solicitados, commits, provas e impedimentos: [CONTINUACAO-R2-20261105.md](implementation/CONTINUACAO-R2-20261105.md). Esta nota prevalece sobre os resumos históricos abaixo.
+
+Foram integrados: retirada terminal de pares readonly/standalone e QA; retirada sandbox failed/canceled pelo socket público; reconciliação por job/fase com erros preservados; aging de capacidade e decisão de seleção explicável; quota Codex experimental somente leitura, não ativada; editor móvel com backend real e YAML após reinício; limite de admissões SSH compartilhado, origem de processo e incerteza conservadora; fluxo conjunto assinado de SSH/export/materialização; bancada Happier real com exportação paginada e ambiente restrito.
+
+O grafo físico exercitou três tarefas, composição e QA Docker real após SIGKILL; ensaios separados observaram programador ainda Running após queda e reconciliaram cancelamento ou falha exit17 sem relançamento. Os substitutos e a inserção de cancelamento pela fixture continuam declarados. Não se habilitou autenticação/inferência real.
+
+No checkout integrado passaram: compilação TypeScript normal e build web managed/typecheck web; 25 checks focados; três casos Happier/import/export, com 151 mensagens e recusa de sobrescrita; três casos QA físico/retirada/grafo; dois casos de quota fixture/helper; e contraprova Python de recibo remoto incompleto. A suíte geral npm test não foi declarada integralmente verde. Logs da rodada têm prefixo `r2-` em `docs/validation/evidence/`.
+
+A matriz continua com 111 itens, 104 parciais, sete não implementados e nenhum aceito. Contas/provedores reais, Android físico, SSH operacional, autoridade de migração e medição homologada continuam impedidos; também permanecem limites técnicos de supervisão de grupo remoto, recursos agregados e custo do backlog geral, explicitados no registro. Os recursos e serviços preexistentes permanecem preservados.
+
+---
+
 # Continuação vigente — equipe nativa (04/11/2026 em Fortaleza)
 
 Esta rodada prevalece sobre as restrições históricas de delegação abaixo. O usuário autorizou o principal e até nove subagentes nativos, sem Paseo. Nove `spawn_agent` foram confirmados com Terra/Médio e worktrees separadas; o principal não dispõe de ferramenta para confirmar ou trocar seu próprio modelo. Agentes, modelos solicitados, ownership, commits, revisões, recursos e limites estão em [NATIVE-TEAM-CONTINUATION-20261105.md](implementation/NATIVE-TEAM-CONTINUATION-20261105.md).
