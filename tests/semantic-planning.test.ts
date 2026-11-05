@@ -36,7 +36,7 @@ test('semantic planning journals uncertain generation, reconciles without infere
   await capacity.assignPolicy(principal,contextId,revision);
   const qualityRevision=await new QualityPolicies(db).publish(principal,project,0,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:true,verifierDigest:'a'.repeat(64)});
   const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:revision,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
-  const pair=generateKeyPairSync('ed25519');let calls=0,reconciles=0;let mutateProposal:(plan:any)=>void=()=>{};let pending:Awaited<ReturnType<PlanningExecutor['execute']>>|null=null;
+  const pair=generateKeyPairSync('ed25519');let calls=0,reconciles=0,retirements=0;let mutateProposal:(plan:any)=>void=()=>{};let pending:Awaited<ReturnType<PlanningExecutor['execute']>>|null=null;
   const executor:PlanningExecutor={id:'fixture-planner',digest:'b'.repeat(64),publicKey:pair.publicKey.export({type:'spki',format:'der'}).toString('base64'),provider:'semantic-fixture',mode:'synthetic',
    async execute(input){
     await input.assertAuthorized();calls++;assert.equal(input.profile.effort,'high');assert(Object.isFrozen(input.profile));
@@ -50,7 +50,12 @@ test('semantic planning journals uncertain generation, reconciles without infere
      executorDigest:this.digest,inputDigest:input.inputDigest,profileDigest:digest(input.profile),outputDigest:createHash('sha256').update(output).digest('hex'),physicalDigest:digest(physical),exitCode:0};
     pending={output,receipt:{payload,signature:sign(null,planningReceiptMessage(payload),pair.privateKey).toString('hex')}};
     throw Error('SYNTHETIC_ACK_LOST');
-   },async reconcile(input){await input.assertAuthorized();reconciles++;return pending;}};
+   },async reconcile(input){await input.assertAuthorized();reconciles++;return pending;},
+   async retire(retirePrincipal,retireAuthority,callId){
+    assert.equal(retirePrincipal,principal);assert.equal(retireAuthority.contextId,contextId);
+    assert.equal((await db.pool.query('SELECT state FROM ac_semantic_planning_calls WHERE id=$1',[callId])).rows[0].state,'published','retirement must observe the committed proposal through another connection');
+    if(++retirements===1)throw Error('SYNTHETIC_RETIRE_ACK_LOST');
+   }};
   let service=new SemanticPlanning(db,executor);const request={id:randomUUID(),intentId:intent.id,contextId,expectedRevision:0,sourceMessageRef:'message:fixture-request',qualityRevision,
    targetRef:'refs/heads/protected',knownReferences:['acceptance:synthetic-effect-v1'],text:'Private synthetic request that must not be persisted as plaintext'};
   await assert.rejects(service.plan(principal,request,authority),/PLANNING_RESULT_UNCERTAIN/);assert.equal(calls,1);
@@ -64,7 +69,8 @@ test('semantic planning journals uncertain generation, reconciles without infere
   await assert.rejects(service.plan(principal,request,authority),/HUMAN_PAUSED/);assert.equal(calls,1);assert.equal(reconciles,1);
   assert.equal((await db.pool.query('SELECT state FROM ac_semantic_planning_calls WHERE id=$1',[request.id])).rows[0].state,'ready');
   await db.pause(principal,contextId,false);
-  const result=await service.plan(principal,request,authority);assert.equal(result.revision,1);
+  assert.equal(retirements,0);await assert.rejects(service.plan(principal,request,authority),/SYNTHETIC_RETIRE_ACK_LOST/);
+  const result=await service.plan(principal,request,authority);assert.equal(result.revision,1);assert.equal(retirements,2);
   assert.deepEqual(await service.plan(principal,request,authority),result);assert.equal(calls,1);assert.equal(reconciles,1);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_manager_plans WHERE context_id=$1',[contextId])).rows[0].n,1);
   const saved=(await db.pool.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1',[request.id])).rows[0];

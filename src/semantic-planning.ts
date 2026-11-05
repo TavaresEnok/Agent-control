@@ -23,7 +23,8 @@ export type PlanningInvocation={callId:string;intentId:string;contextId:string;g
  * reconcile observes the SAME operation and never launches a replacement. */
 export type PlanningExecutor={id:string;digest:string;publicKey:string;provider:string;mode:'synthetic'|'subscription_cli';active?:boolean;
  execute(input:PlanningInvocation):Promise<{output:string;receipt:unknown}>;
- reconcile(input:PlanningInvocation):Promise<{output:string;receipt:unknown}|null>};
+ reconcile(input:PlanningInvocation):Promise<{output:string;receipt:unknown}|null>;
+ retire?(principal:string,authority:Authority,callId:string):Promise<unknown>};
 type ExecutorEntry={executor:Readonly<PlanningExecutor>;key:ReturnType<typeof createPublicKey>;fingerprint:string;identity:string};
 const dispatcherId='semantic-planning-v1',dispatcherDigest=digest({contract:dispatcherId});
 export class SemanticPlanning{
@@ -70,7 +71,7 @@ export class SemanticPlanning{
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'registered') RETURNING *`,[input.id,input.contextId,input.intentId,principal,requestedDigest,dispatcherId,dispatcherDigest,input.expectedRevision,randomUUID(),randomUUID()])).rows[0];
   });
   const inputDigest=String(call.input_digest);
-  if(call.state==='published')return call.result;
+  if(call.state==='published'){await this.retirePublished(principal,input,authority,call);return call.result;}
   if(call.state==='rejected')throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');
   if(call.state==='ready')return this.publish(principal,input,authority);
   let grantId:string=call.grant_id;
@@ -135,14 +136,21 @@ export class SemanticPlanning{
   if(failure)throw new Refusal(failure);
   return this.publish(principal,input,authority);
  }
- private publish(principal:string,input:z.infer<typeof SemanticPlanningRequest>,authority:Authority){
-  return this.ledger.tx(async c=>{
+ private async publish(principal:string,input:z.infer<typeof SemanticPlanningRequest>,authority:Authority){
+  const published=await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,input.intentId);
    const call=(await c.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1 FOR UPDATE',[input.id])).rows[0];
-   if(call?.state==='published')return call.result;
+   if(call?.state==='published')return {result:call.result,call};
    if(call?.state!=='ready')throw new Refusal('PLANNING_RESULT_UNCERTAIN');
    const result=await new ManagerPlans(this.ledger,c).publish(principal,authority,call.expected_revision,call.proposal);
-   await c.query("UPDATE ac_semantic_planning_calls SET state='published',result=$2 WHERE id=$1",[input.id,result]);return result;
+   await c.query("UPDATE ac_semantic_planning_calls SET state='published',result=$2 WHERE id=$1",[input.id,result]);return {result,call};
   });
+  // The proposal and signed result are durable before physical retirement. A
+  // lost cleanup ACK is retried by the published replay, never by inference.
+  await this.retirePublished(principal,input,authority,published.call);return published.result;
+ }
+ private async retirePublished(principal:string,input:z.infer<typeof SemanticPlanningRequest>,authority:Authority,call:Record<string,any>){
+  const entry=this.entries.get(call.selected_executor_id+'@'+call.selected_executor_digest);
+  if(entry?.executor.retire){if(entry.fingerprint!==call.selected_key_fingerprint)throw new Refusal('PLANNING_EXECUTOR_KEY_MISMATCH');await entry.executor.retire(principal,authority,input.id);}
  }
 }

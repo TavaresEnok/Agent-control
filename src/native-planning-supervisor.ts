@@ -46,7 +46,7 @@ export class NativePlanningSupervisor{
   this.keyFingerprint=createHash('sha256').update(createPublicKey(this.key).export({format:'der',type:'spki'})).digest('hex');
   this.docker=nativeDockerDaemon(config.socketPath,config.resourceEnvelope);
   this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:config.syntheticFixture?.provider??'codex',mode:config.syntheticFixture?'synthetic':'subscription_cli',
-   execute:(input:PlanningInvocation)=>this.execute(input),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
+   execute:(input:PlanningInvocation)=>this.execute(input),retire:(principal:string,authority:Authority,callId:string)=>this.cleanup(principal,authority,callId),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
  }
  private async privateDirectory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o7777)!==0o700||s.uid!==process.getuid?.()||await realpath(path)!==path)throw new Refusal('NATIVE_PLANNING_DIRECTORY_UNSAFE');}
  async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority,recoverSource:'ac_native_planning_jobs',recoverJob:id=>this.recover(principal,authority,id)});}
@@ -285,7 +285,8 @@ export class NativePlanningSupervisor{
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[callId,authority.contextId])).rows[0];
    if(!job||!['completed','failed'].includes(job.state)||job.grant_state!=='released'||!job.receipt||job.receipt.payload?.physicalDigest!==digest(job.physical_receipt))throw new Refusal('PLANNING_RESULT_UNCERTAIN');
    const signed=PlanningPhysicalReceipt.parse(job.receipt);if(!verify(null,planningReceiptMessage(signed.payload),createPublicKey(this.key),Buffer.from(signed.signature,'hex')))throw new Refusal('PLANNING_RECEIPT_INVALID');
-   const physical=await this.docker.inspect(job.container_name);if(physical){this.inspectExpected(physical,job,job.account_id);if(physical.State.Running||physical.State.Status!=='exited'||physical.Id!==job.physical_receipt.containerId)throw new Refusal('PLANNING_RESULT_UNCERTAIN');await this.docker.remove(physical.Id);}
+   const physical=await this.docker.inspect(job.container_name);if(physical){this.inspectExpected(physical,job,job.account_id);if(physical.State.Running||physical.State.Status!=='exited'||physical.Id!==job.physical_receipt.containerId||physical.State.ExitCode!==job.physical_receipt.exitCode||physical.State.FinishedAt!==job.physical_receipt.finishedAt)throw new Refusal('PLANNING_RESULT_UNCERTAIN');await this.docker.remove(physical.Id);}
+   if(await this.docker.inspect(job.container_name)||(job.container_id&&await this.docker.inspect(job.container_id)))throw new Refusal('PLANNING_RETIREMENT_UNCONFIRMED');
    // Retain private input/output until encrypted archival and retention policy
    // are configured. Deleting here would break idempotent reconcile after ACK loss.
    return {state:'container_removed',privateFilesRetained:true};
