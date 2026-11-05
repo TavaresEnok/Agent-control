@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: trusted Docker protocol confirmation gates new images and preserves exact pinned attempts after revocation
+not ok 1 - trusted Docker protocol confirmation gates new images and preserves exact pinned attempts after revocation
+  ---
+  duration_ms: 8000.935646
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/r4-retry-compat/tests/r4-native-protocol-compatibility.test.ts:1:916'
+  failureType: 'testCodeFailure'
+  error: 'NATIVE_PROTOCOL_CLEANUP_UNCERTAIN'
+  code: 'NATIVE_PROTOCOL_CLEANUP_UNCERTAIN'
+  stack: |-
+    inspectProbe (/home/app/srv_projetos/workspace/r4-retry-compat/src/native-protocol-compatibility.ts:52:110)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async retireProbe (/home/app/srv_projetos/workspace/r4-retry-compat/src/native-protocol-compatibility.ts:55:18)
+    async observe (/home/app/srv_projetos/workspace/r4-retry-compat/src/native-protocol-compatibility.ts:80:158)
+    async NativeProtocolCompatibility.verify (/home/app/srv_projetos/workspace/r4-retry-compat/src/native-protocol-compatibility.ts:119:62)
+    async TestContext.<anonymous> (/home/app/srv_projetos/workspace/r4-retry-compat/tests/r4-native-protocol-compatibility.test.ts:34:13)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8778.126277

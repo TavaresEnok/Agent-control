@@ -49,7 +49,7 @@ async function launchProbe(ledger:Ledger,op:Probe){
 }
 async function inspectProbe(name:string){
  try{return JSON.parse((await run('docker',['inspect',name],{env,timeout:10000,maxBuffer:262144})).stdout)[0] as Record<string,any>;}
- catch(error){if(String((error as {stderr?:string}).stderr??'').includes('No such object'))return null;throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}
+ catch(error){if(/(?:no such object|no such container)/i.test(String((error as {stderr?:string}).stderr??'')))return null;throw new Refusal('NATIVE_PROTOCOL_CLEANUP_UNCERTAIN');}
 }
 async function retireProbe(ledger:Ledger,op:Probe){
  const container=await inspectProbe(op.container_name);
