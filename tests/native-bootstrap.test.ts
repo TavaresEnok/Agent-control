@@ -465,14 +465,16 @@ test('configured resource attachment maps explicit database identity and keeps n
   actualIdentity=randomUUID();await assert.rejects(prepareNativeBootstrap(config,client),/NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH/);
   assert.equal(queries.filter(sql=>sql.includes('ac_installation_identity')).length,2);
   assert.throws(()=>configured(env,{resources:{...resources,roots:{...resources.roots,qa:env.dirs[1]}}}),/NATIVE_RESOURCE_ROOT_FORBIDDEN/);
+  const mode:'synthetic-fixed-task-v1'='synthetic-fixed-task-v1';
+  const remoteConfiguration=(credentialPath:string,verifierKeyFile:string,tmpfsRoot:string)=>({mode,transport:{allowedHosts:['127.0.0.1'],credentials:[{id:randomUUID(),path:credentialPath}]},projects:[{projectId:env.projectId,verifierKeyFile,tmpfsRoot,profiles:[{profileId:randomUUID(),hostId:randomUUID(),taskId:'fixture',writePaths:['src']}]}]});
   for(const secret of ['credential','verifierKeyFile','tmpfsRoot']){
-   const remoteDevelopment={transport:{credentials:[{path:secret==='credential'?join(qaRoot,'transport.pem'):join(env.data,'remote-transport.pem')}]},projects:[{verifierKeyFile:secret==='verifierKeyFile'?join(qaRoot,'verify.key'):join(env.data,'remote-verifier.key'),tmpfsRoot:secret==='tmpfsRoot'?qaRoot:join(env.root,'remote-tmpfs')}]};
+   const remoteDevelopment=remoteConfiguration(secret==='credential'?join(qaRoot,'transport.pem'):join(env.data,'remote-transport.pem'),secret==='verifierKeyFile'?join(qaRoot,'verify.key'):join(env.data,'remote-verifier.key'),secret==='tmpfsRoot'?qaRoot:join(env.root,'remote-tmpfs'));
    assert.equal(nativeBootstrapSchemaError({...config,remoteDevelopment}),'NATIVE_RESOURCE_ROOT_FORBIDDEN');
   }
   // Even an otherwise separate credential spelling cannot alias into a
   // supervisor root through an existing ancestor symlink.
   const alias=join(env.data,'remote-secret-alias');await symlink(qaRoot,alias);
-  const remoteDevelopment={transport:{credentials:[{path:join(alias,'future-key.pem')}]},projects:[{verifierKeyFile:join(env.data,'remote-verifier.key'),tmpfsRoot:join(env.root,'remote-tmpfs')}]};
+  const remoteDevelopment=remoteConfiguration(join(alias,'future-key.pem'),join(env.data,'remote-verifier.key'),join(env.root,'remote-tmpfs'));
   actualIdentity=databaseInstallationId;const extendedConfig={...config,remoteDevelopment};await assert.rejects(prepareNativeBootstrap(extendedConfig,client),/NATIVE_RESOURCE_PROTECTED_PATH_UNSAFE/);
 
  }finally{await rm(env.root,{recursive:true,force:true});}
