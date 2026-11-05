@@ -1,0 +1,17 @@
+TAP version 13
+# {"proof":"r3-delivery-ssh","source":"7487bc41ca26e4119afb93b248e089187e7b91b3","commit":"b3d6747868a39c4700e6b1f8b8624fe53de3a565","tree":"0fef0b4be9bb7ccb6b0a92b541bbab6f44fb5d0d","concurrent":"45ca38efeaede0fc29f24a3cceda256668bb5046","sshCalls":3,"returnReceipts":1,"scope":"disposable synthetic artifact; real Git/SSH/PG and signatures"}
+# Subtest: R3 signed approved artifact returns over pinned real SSH with CAS and durable lost-ACK replay
+ok 1 - R3 signed approved artifact returns over pinned real SSH with CAS and durable lost-ACK replay
+  ---
+  duration_ms: 6762.499325
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7466.239011
