@@ -461,7 +461,14 @@
       "missing": "Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "RF-14",
@@ -514,6 +521,11 @@
           "version": "3ca18eae",
           "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
           "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+        },
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
         }
       ]
     },
@@ -1113,6 +1125,11 @@
           "version": "3ca18eae",
           "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
           "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+        },
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
         }
       ]
     },
@@ -1407,7 +1424,14 @@
       "missing": "Supervisor-death stable group proof pending R3; delayed Docker create timeout must stay uncertain",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "RF-28",
@@ -1990,7 +2014,14 @@
       "missing": "Saturated programmer to evaluator progress with actual provider capacity graph pending R3",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "RF-48",
@@ -2570,6 +2601,11 @@
           "version": "3ca18eae",
           "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
           "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+        },
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
         }
       ]
     },
@@ -2828,11 +2864,18 @@
           "scope": "existing source inspected by filename/reference; historical success not independently rerun"
         }
       ],
-      "classification": "implementation_and_evidence_gap",
-      "missing": "Host aggregate CPU/memory/pids enforcement across state dirs absent at base; R3 resource authority pending review",
+      "classification": "integration_evidence_missing",
+      "missing": "Aggregate CPU/memory/PIDs and host-shared admission physically proved in5add3b71; full application flow combining disk admission, model/account capacity, resource authority and fair wait still requires integration verification.",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "RNF-12",
@@ -3140,6 +3183,11 @@
           "version": "3ca18eae",
           "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
           "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+        },
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
         }
       ]
     },
@@ -3263,7 +3311,14 @@
       "missing": "Concurrent chats and hosts contest global limit; no invalid grant and aged eligible queue progresses; Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "T12",
@@ -3370,7 +3425,14 @@
       "missing": "Independent SSH disconnect/lost-ACK recovery test pending, including supervisor death and no blind uncertain-operation repeat; two authorized disposable hosts suffice.",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "T15",
@@ -3555,6 +3617,11 @@
           "version": "3ca18eae",
           "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
           "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+        },
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
         }
       ]
     },
@@ -3816,7 +3883,14 @@
       "missing": "Fill programmer ceiling then demand QA/reviewer/specialist; physical stage retirement frees exact slots; Saturated programmer to evaluator progress with actual provider capacity graph pending R3",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "T30",
@@ -4020,7 +4094,14 @@
       "missing": "Prepare successor while old writer lives; no shared writable copy before access/physical retirement; Remote escaped descendant neutralization and successor shared-worktree physical matrix pending R3",
       "external_dependency": null,
       "acceptance_recommendation": "not_accepted",
-      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+      "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+      "review_deltas": [
+        {
+          "version": "5add3b71",
+          "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
+          "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+        }
+      ]
     },
     {
       "id": "T35",
