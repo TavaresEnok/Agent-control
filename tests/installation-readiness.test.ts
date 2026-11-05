@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,chmod,rm,readFile,readdir,symlink} from 'node:fs
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawnSync} from 'node:child_process';
 import {Installation,initializeInstallation} from '../src/installation.ts';
 import {inspectInstallationReadiness} from '../src/installation-readiness.ts';
 import {digest} from '../src/contracts.ts';
@@ -84,9 +84,22 @@ test('readiness and CLI inspect a newly initialized isolated PostgreSQL database
   for(const code of ['database','migrations','registered_projects'])assert.equal(report.checks.find(check=>check.code===code)?.status,'ok',code);
   assert.deepEqual(await counts(),before);
   const configFile=join(root,'installation.json');await writeFile(configFile,JSON.stringify(config),{mode:0o600});
-  const output=execFileSync(process.execPath,['--import','tsx','src/server-main.ts','inspect',configFile],{encoding:'utf8',timeout:15000});
-  const cli=JSON.parse(output) as typeof report;assert.deepEqual(cli,report);
-  for(const sensitive of [root,repo,privateDir,database.url,config.project.owner,config.project.id])assert(!output.includes(sensitive));
+  const inspectCli=(expected:typeof report)=>{
+   const result=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','inspect',configFile],{encoding:'utf8',timeout:15000});
+   assert.ifError(result.error);assert.equal(result.signal,null);
+   assert.equal(result.status,expected.checks.every(check=>check.status==='ok')?0:2);
+   assert.equal(result.stderr,'');assert.deepEqual(JSON.parse(result.stdout),expected);
+   for(const sensitive of [root,repo,privateDir,database.url,config.project.owner,config.project.id]){
+    assert(!result.stdout.includes(sensitive));assert(!result.stderr.includes(sensitive));
+   }
+  };
+  inspectCli(report);
+  // A readable report with a blocked check is a diagnostic outcome (exit 2),
+  // not a command failure; force one regardless of the checkout's web assets.
+  await chmod(join(privateDir,'browser-session.key'),0o644);
+  const blocked=await inspectInstallationReadiness(ledger,config);
+  assert.equal(blocked.checks.find(check=>check.code==='browser_session_key')?.status,'blocked');
+  inspectCli(blocked);
   assert.deepEqual(await counts(),before);
  }finally{await ledger.close();await database.close();await rm(root,{recursive:true,force:true});}
 });
