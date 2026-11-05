@@ -1,0 +1,5 @@
+PASS actual timer heartbeat renews two configured projects with distinct owners; no synthetic clock
+PASS registration and heartbeat do not select runtime or dispatch any execution
+{"revokedProjectLeaseChanged":false,"authorizedSecondProjectLeaseChanged":true,"reportedFailures":1}
+PASS idempotent close expires its own registration while preserving a different issued instance
+CLEANUP new child PG database dropped; root database/service preserved
