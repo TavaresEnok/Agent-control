@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: shared native resource root dispatches only owned pending jobs and drops released terminal history
+ok 1 - shared native resource root dispatches only owned pending jobs and drops released terminal history
+  ---
+  duration_ms: 3876.386277
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6479.849648

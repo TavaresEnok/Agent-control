@@ -1,0 +1,63 @@
+TAP version 13
+# Subtest: unstarted managed native task adopts the successor only with intact frozen input and no launch
+ok 1 - unstarted managed native task adopts the successor only with intact frozen input and no launch
+  ---
+  duration_ms: 15449.475162
+  type: 'test'
+  ...
+# Subtest: retirement retries a lost network removal acknowledgement once
+ok 2 - retirement retries a lost network removal acknowledgement once
+  ---
+  duration_ms: 3.43458
+  type: 'test'
+  ...
+# Subtest: worker gate and process evidence reject partial launches and unproven starts
+ok 3 - worker gate and process evidence reject partial launches and unproven starts
+  ---
+  duration_ms: 124.383971
+  type: 'test'
+  ...
+# Subtest: native planning recovery preserves uncertain grants and releases only a proven-unstarted container
+ok 4 - native planning recovery preserves uncertain grants and releases only a proven-unstarted container
+  ---
+  duration_ms: 5778.079881
+  type: 'test'
+  ...
+# Subtest: native Cezar graph resumes after SIGKILL at implementation, preserving pause
+ok 5 - native Cezar graph resumes after SIGKILL at implementation, preserving pause # SKIP
+  ---
+  duration_ms: 0.383441
+  type: 'test'
+  ...
+# Subtest: native Cezar graph resumes after SIGKILL at qa-physical, preserving pause
+ok 6 - native Cezar graph resumes after SIGKILL at qa-physical, preserving pause # SKIP
+  ---
+  duration_ms: 0.188183
+  type: 'test'
+  ...
+# Subtest: native planning recovery interrupts an in-flight create or start and lets the successor read the same journal
+not ok 7 - native planning recovery interrupts an in-flight create or start and lets the successor read the same journal
+  ---
+  duration_ms: 34.892345
+  type: 'test'
+  location: '/tmp/ac-r4-20261105-resources/tests/native-recovery.test.ts:3:14116'
+  failureType: 'unhandledRejection'
+  error: 'UNHANDLED_SQL SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    PlanningRecoveryMemory.query (/tmp/ac-r4-20261105-resources/tests/native-recovery.test.ts:148:9)
+    Object.query (/tmp/ac-r4-20261105-resources/tests/native-recovery.test.ts:153:61)
+    Ledger.fence (/tmp/ac-r4-20261105-resources/src/ledger.ts:76:13)
+    <anonymous> (/tmp/ac-r4-20261105-resources/src/native-planning-supervisor.ts:85:52)
+    Ledger.tx (/tmp/ac-r4-20261105-resources/src/ledger.ts:17:51)
+    async NativePlanningSupervisor.execute (/tmp/ac-r4-20261105-resources/src/native-planning-supervisor.ts:85:3)
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 4
+# fail 1
+# cancelled 0
+# skipped 2
+# todo 0
+# duration_ms 48539.371656

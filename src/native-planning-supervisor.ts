@@ -1,4 +1,4 @@
-import {reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
+import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {constants} from 'node:fs';
 import {open,lstat,realpath,mkdir,writeFile} from 'node:fs/promises';
@@ -49,7 +49,7 @@ export class NativePlanningSupervisor{
    execute:(input:PlanningInvocation)=>this.execute(input),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
  }
  private async privateDirectory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o7777)!==0o700||s.uid!==process.getuid?.()||await realpath(path)!==path)throw new Refusal('NATIVE_PLANNING_DIRECTORY_UNSAFE');}
- async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority});}
+ async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority,recoverSource:'ac_native_planning_jobs',recoverJob:id=>this.recover(principal,authority,id)});}
  private paths(id:string){z.uuid().parse(id);const root=join(this.config.hostRoot,id);return {root,input:join(root,'input'),output:join(root,'output'),planning:join(root,'planning'),key:join(root,'public-key.pem')};}
  private async execute(input:PlanningInvocation){
   await input.assertAuthorized();
@@ -223,6 +223,12 @@ export class NativePlanningSupervisor{
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[callId,authority.contextId])).rows[0];
    if(!job)throw new Refusal('PLANNING_JOB_NOT_FOUND',404);
    const receiptUnstarted=job.grant_state==='released'&&job.physical_receipt?.executionStarted===false;
+   if(!job.container_id&&job.state==='uncertain'){
+    const proof=await proveUncreatedNativeResources(c,this.docker,callId,job.grant_id,authority);
+    if(proof){await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[job.grant_id,proof]);
+     return {kind:'recovery' as const,recovery:{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed:[],replayed:false as const}};}
+   }
+
    let physical;try{physical=await this.docker.inspect(job.container_name);}catch(error){if(dockerUncertain(error))return {kind:'recovery' as const,recovery:preserved('docker_response_lost')};throw error;}
    if(!physical){
     await this.ledger.fence(c,authority,true);

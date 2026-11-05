@@ -70,10 +70,11 @@ export async function admitNativeResources(input:{docker:DockerDaemon;ledger:imp
  const token=await input.ledger.tx(async c=>{
   await validate(c,false);
   const prior=(await c.query('SELECT * FROM ac_native_resource_admissions WHERE job_id=$1 FOR UPDATE',[input.jobId])).rows[0];
-  if(prior&&(prior.grant_id!==input.grantId||prior.context_id!==input.authority.contextId||Number(prior.manager_epoch)!==input.authority.epoch||JSON.stringify(prior.names)!==JSON.stringify(input.names)||prior.authority_id!==docker.authorityId||prior.state_root!==docker.stateRoot||!['waiting','admitted'].includes(prior.state)))throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
-  if(prior)return prior.admission_id as string;
+  const reusable=prior?.state==='canceled'&&prior.proof?.source==='native-resource-host-absence'&&Boolean((await c.query("SELECT 1 FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 AND intent_id=$3 AND state='released'",[prior.grant_id,input.authority.contextId,input.intentId])).rowCount);
+  if(prior&&(prior.context_id!==input.authority.contextId||JSON.stringify(prior.names)!==JSON.stringify(input.names)||prior.authority_id!==docker.authorityId||prior.state_root!==docker.stateRoot||(!reusable&&(prior.grant_id!==input.grantId||Number(prior.manager_epoch)!==input.authority.epoch||!['waiting','admitted'].includes(prior.state)))))throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
+  if(prior&&!reusable)return prior.admission_id as string;
   const nonce=randomUUID();
-  await c.query(`INSERT INTO ac_native_resource_admissions(job_id,grant_id,context_id,manager_epoch,authority_id,names,state_root,admission_id,state,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'waiting','physical_capacity')`,[input.jobId,input.grantId,input.authority.contextId,input.authority.epoch,docker.authorityId,JSON.stringify(input.names),docker.stateRoot,nonce]);
+  await c.query(`INSERT INTO ac_native_resource_admissions(job_id,grant_id,context_id,manager_epoch,authority_id,names,state_root,admission_id,state,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'waiting','physical_capacity') ON CONFLICT(job_id) DO UPDATE SET grant_id=$2,manager_epoch=$4,admission_id=$8,state='waiting',reason='physical_capacity',proof=NULL,updated_at=clock_timestamp()`,[input.jobId,input.grantId,input.authority.contextId,input.authority.epoch,docker.authorityId,JSON.stringify(input.names),docker.stateRoot,nonce]);
   return nonce;
  });
  try{
@@ -104,30 +105,33 @@ export async function admitNativeResources(input:{docker:DockerDaemon;ledger:imp
 /** One finite history page per tick. A successor neutralizes an abandoned
  * pre-journal batch only with host absence proof; normal operation replay then
  * reserves a new attempt. Healthy current-epoch waits remain active. */
-export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaemon;ledger:import('./ledger.ts').Ledger;principal:string;authority:import('./contracts.ts').Authority}){
+export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaemon;ledger:import('./ledger.ts').Ledger;principal:string;authority:import('./contracts.ts').Authority;recoverJob?:(jobId:string)=>Promise<unknown>;recoverSource?:'ac_native_planning_jobs'|'ac_native_execution_jobs'|'ac_native_qa_jobs'}){
  if(!(input.docker instanceof NativeResourceDockerDaemon))return;
  const docker=input.docker,errors:unknown[]=[];
- await new ReconciliationHistory(input.ledger).run(input.authority,'native-resource:'+docker.authorityId+':'+docker.stateRoot,'ac_native_resource_admissions',async(ids,retain)=>{
+ await new ReconciliationHistory(input.ledger).run(input.authority,'native-resource:'+docker.authorityId+':'+docker.stateRoot+':'+(input.recoverSource??'prejournal'),'ac_native_resource_admissions',async(ids,retain)=>{
   const rows=await input.ledger.tx(async c=>{await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);return (await c.query(`SELECT r.*,g.intent_id FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id
-   WHERE r.context_id=$1 AND r.authority_id=$2 AND r.state_root=$3 AND r.state<>'canceled' AND r.job_id=ANY($4::uuid[])
-    AND NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=g.id)
+   WHERE r.context_id=$1 AND r.authority_id=$2 AND r.state_root=$3 AND r.state<>'canceled' AND g.state<>'released' AND r.job_id=ANY($4::uuid[])
+    AND ((NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=g.id)
     AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=g.id)
-    AND NOT EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=g.id) ORDER BY r.created_at,r.job_id`,[input.authority.contextId,docker.authorityId,docker.stateRoot,ids])).rows;});
+    AND NOT EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=g.id))
+    OR ($5='ac_native_execution_jobs' AND EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.worker_id IS NULL AND j.tools_id IS NULL))
+    OR ($5='ac_native_planning_jobs' AND EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.container_id IS NULL))
+    OR ($5='ac_native_qa_jobs' AND EXISTS(SELECT 1 FROM ac_native_qa_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.container_id IS NULL))) ORDER BY r.created_at,r.job_id`,[input.authority.contextId,docker.authorityId,docker.stateRoot,ids,input.recoverJob?(input.recoverSource??null):null])).rows;});
   retain(rows.map(row=>row.job_id));
-  for(const row of rows){try{await input.ledger.tx(async c=>{
+  for(const row of rows){try{const recoverJob=await input.ledger.tx(async c=>{
    await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);
    const current=(await c.query(`SELECT r.*,g.intent_id FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id
     WHERE r.job_id=$1 AND r.admission_id=$2 AND r.context_id=$3 AND r.authority_id=$4 AND r.state_root=$5 AND r.state<>'canceled' FOR UPDATE OF g,r`,[row.job_id,row.admission_id,input.authority.contextId,docker.authorityId,docker.stateRoot])).rows[0];
    if(!current)return;
    const job=(await c.query('SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1 UNION ALL SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=$1 UNION ALL SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=$1',[row.grant_id])).rowCount;
-   if(job)return;
    const terminal=(await c.query(`SELECT 1 FROM ac_intents i WHERE i.id=$1 AND (i.state IN ('failed','canceled','cancelled') OR EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN(i.id,i.parent_intent_id)))`,[current.intent_id])).rowCount;
    if(Number(current.manager_epoch)===input.authority.epoch&&!terminal)return;
+   if(job)return true;
    if(!current.admission_id)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
    const proof=await docker.cancelAdmission(current.names,current.admission_id);
    await c.query("UPDATE ac_native_resource_admissions SET state='canceled',reason='canceled',proof=$2,manager_epoch=$3,updated_at=clock_timestamp() WHERE job_id=$1",[row.job_id,proof,input.authority.epoch]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2,manager_epoch=$3 WHERE id=$1 AND state IN ('reserved','uncertain')",[row.grant_id,proof,input.authority.epoch]);
-  });}catch(error){errors.push(error);}}
+  });if(recoverJob&&input.recoverJob)await input.recoverJob(row.job_id);}catch(error){errors.push(error);}}
  });
  if(errors.length)throw new AggregateError(errors,'NATIVE_RESOURCE_RECONCILIATION_UNCERTAIN');
 }
@@ -138,7 +142,17 @@ export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaem
 export async function cancelPreparedNativeResources(c:import('pg').PoolClient,docker:DockerDaemon,jobId:string,grantId:string,authority:import('./contracts.ts').Authority){
  if(!(docker instanceof NativeResourceDockerDaemon))return;
  const row=(await c.query('SELECT * FROM ac_native_resource_admissions WHERE job_id=$1 AND grant_id=$2 AND context_id=$3 AND authority_id=$4 AND state_root=$5 FOR UPDATE',[jobId,grantId,authority.contextId,docker.authorityId,docker.stateRoot])).rows[0];
- if(!row?.admission_id||Number(row.manager_epoch)!==authority.epoch)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
+ if(!row?.admission_id||Number(row.manager_epoch)>authority.epoch)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
  const proof=await docker.cancelAdmission(row.names,row.admission_id);
  await c.query("UPDATE ac_native_resource_admissions SET state='canceled',reason='canceled',proof=$2,updated_at=clock_timestamp() WHERE job_id=$1",[jobId,proof]);
+}
+
+/** Return proof only for this durable admission. Existing groups/claims are
+ * normal uncertainty and remain in the established job-recovery path. */
+export async function proveUncreatedNativeResources(c:import('pg').PoolClient,docker:DockerDaemon,jobId:string,grantId:string,authority:import('./contracts.ts').Authority){
+ if(!(docker instanceof NativeResourceDockerDaemon))return undefined;
+ const row=(await c.query('SELECT * FROM ac_native_resource_admissions WHERE job_id=$1 AND grant_id=$2 AND context_id=$3 AND authority_id=$4 AND state_root=$5 FOR UPDATE',[jobId,grantId,authority.contextId,docker.authorityId,docker.stateRoot])).rows[0];
+ if(!row?.admission_id||Number(row.manager_epoch)>authority.epoch)return undefined;
+ try{await cancelPreparedNativeResources(c,docker,jobId,grantId,authority);}catch{return undefined;}
+ return {state:'not_started' as const,executionStarted:false,source:'native-resource-host-absence' as const,jobId,containerId:null,proof:'no_groups_no_create_claims'};
 }

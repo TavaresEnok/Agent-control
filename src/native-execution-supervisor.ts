@@ -1,5 +1,5 @@
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
-import {reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
+import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {mkdir,lstat,realpath,writeFile,open,rename} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
@@ -81,7 +81,7 @@ export class NativeExecutionSupervisor{
   const pub=createPublicKey(this.key);this.publicKey=pub.export({format:'pem',type:'spki'}).toString();this.fingerprint=createHash('sha256').update(pub.export({format:'der',type:'spki'})).digest('hex');
   this.executorDigest=nativeExecutionExecutorDigest(config.workerImage,config.toolsImage);this.docker=nativeDockerDaemon(config.socketPath,config.resourceEnvelope);
  }
- async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority});}
+ async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority,recoverSource:'ac_native_execution_jobs',recoverJob:id=>this.recover(principal,authority,id)});}
  private paths(id:string){Id.parse(id);const root=join(this.config.hostRoot,id);return {root,input:join(root,'input'),output:join(root,'output'),planning:join(root,'planning'),work:join(root,'work'),key:join(root,'public.pem'),workerToken:join(root,'worker-token'),toolsToken:join(root,'tools-token')};}
  private async directory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid?.()||(s.mode&0o7777)!==0o700||await realpath(path)!==path)throw new Refusal('NATIVE_EXECUTION_DIRECTORY_UNSAFE');}
  private async scope(c:pg.PoolClient,principal:string,authority:Authority,input:Input,paused=false){
@@ -594,6 +594,17 @@ export class NativeExecutionSupervisor{
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
    if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
    const receiptUnstarted=job.grant_state==='released'&&job.physical_receipt?.executionStarted===false;
+   // A no-create host proof retires pending aggregate slots even if the
+   // independent network journal remains uncertain. Network proof below still
+   // controls grant release; absence of a container name alone never does.
+   let noCreateProof;
+   if(!job.worker_id&&!job.tools_id&&job.state==='uncertain'&&!await this.launchPublished(jobId))noCreateProof=await proveUncreatedNativeResources(c,this.docker,jobId,job.grant_id,authority);
+   if(noCreateProof&&job.network_id){
+    await retireNativePrivateNetwork(this.docker,{networkId:job.network_id,providerNetworkId:this.config.providerNetworkId,jobId,inputDigest:job.input_digest});
+    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[job.grant_id,{...noCreateProof,networkId:job.network_id}]);
+    return {kind:'recovery' as const,recovery:{state:'released_unstarted' as const,interval:'proven_not_started' as const,grant:'released' as const,removed:[],replayed:false as const}};
+   }
+
    const read=async()=>{
     const worker=await this.docker.inspect(workerName),tools=await this.docker.inspect(toolsName);
     const network=job.network_id?await this.docker.inspectPrivateNetwork(job.network_id):null;
