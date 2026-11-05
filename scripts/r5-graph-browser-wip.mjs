@@ -95,17 +95,23 @@ try{
   assert.equal(await page.getByLabel('Workflow name').inputValue(),`mobile-${width}`);
   await page.getByRole('button',{name:'Edit agent',exact:true}).click();
   await page.getByLabel('name',{selector:'input',exact:true}).fill('Edited review');
-  await page.getByRole('button',{name:'Delete node',exact:true}).click();
-  await page.getByLabel('work done destination').selectOption('end');
+  await page.getByRole('button',{name:'Close inspector'}).click();
   const saveAgain=page.getByRole('button',{name:'Save',exact:true});
   await page.waitForFunction(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Save');return !!button&&!button.disabled},null,{timeout:15000});
   const second=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/workflow-graphs')&&r.request().method()==='POST');await saveAgain.click();
   const savedAgain=await second;assert.equal(savedAgain.status(),200);assert.equal((await savedAgain.json()).revision,2);
+  await page.reload();await page.getByRole('button',{name:'Edit agent',exact:true}).click();
+  assert.equal(await page.getByLabel('name',{selector:'input',exact:true}).inputValue(),'Edited review');
+  await page.getByRole('button',{name:'Delete node',exact:true}).click();
+  await page.getByLabel('work done destination').selectOption('end');
+  await page.waitForFunction(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Save');return !!button&&!button.disabled},null,{timeout:15000});
+  const third=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/workflow-graphs')&&r.request().method()==='POST');await saveAgain.click();
+  const savedThird=await third;assert.equal(savedThird.status(),200);assert.equal((await savedThird.json()).revision,3);
   await page.reload();await page.getByLabel('Workflow name').waitFor();
   assert.equal(await page.getByRole('button',{name:'Edit agent',exact:true}).count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
  }
- console.log('PASS actual product editor signed create, edit, link and removal with two revisions at 360 and 390, synthetic Happier account, real BrowserSessions origin/cookie');
+ console.log('PASS actual product editor signed create, edit, link and removal with three revisions at 360 and 390, synthetic Happier account, real BrowserSessions origin/cookie');
  await client.close();
 
 }catch(error){if(scratch){const upstreamLog=await readFile(join(scratch,'0.log'),'utf8').catch(()=>'');console.error('R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES '+(upstreamLog.match(/\"statusCode\": 429/g)||[]).length)}if(activePage){await activePage.screenshot({path:join(scratch,'failure.png'),fullPage:true}).catch(()=>{});console.error('R4_UI_BODY '+(await activePage.locator('body').innerText().catch(()=>'')).slice(0,1200))}if(activePage)console.error('R3_UI_ALERTS '+JSON.stringify(await activePage.locator('[role=alert]').allTextContents().catch(()=>[])));console.error(`R3_UI_FAILED stage=${stage} type=${error?.name??'Error'} code=${error?.code??'assertion_or_timeout'}`,error);process.exitCode=1}
