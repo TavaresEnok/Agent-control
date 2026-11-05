@@ -63,6 +63,7 @@ export class IsolatedImport{
      const existing=(await c.query(`SELECT e.*,h.context_digest,b.principal_id,b.project_id,b.state batch_state FROM ac_import_entries e JOIN ac_import_batches b ON b.id=e.batch_id LEFT JOIN ac_imported_history_contexts h ON h.entry_id=e.id WHERE e.source_namespace=$1 AND e.external_context_id=$2 FOR UPDATE OF e,b`,[bundle.sourceNamespace,item.id])).rows[0];
      if(existing){if(existing.project_id!==bundle.projectId||existing.principal_id!==principal||existing.context_digest!==digest(item))throw new Refusal('IMPORT_SOURCE_CONTEXT_CONFLICT');
       if(existing.batch_state!=='completed'||!existing.context_id)throw new Refusal('IMPORT_SOURCE_PENDING');
+      if(!(await c.query('SELECT 1 FROM ac_contexts WHERE id=$1 AND NOT archived FOR SHARE',[existing.context_id])).rowCount)throw new Refusal('IMPORT_SOURCE_PENDING');
       await c.query('INSERT INTO ac_import_v2_entry_aliases(batch_id,entry_id,position) VALUES($1,$2,$3)',[bundle.importId,existing.id,sourcePosition]);continue;}
     }
     if((await c.query('SELECT 1 FROM ac_session_links WHERE session_id=$1',[item.sessionId])).rowCount)throw new Refusal('SESSION_ALREADY_LINKED');
