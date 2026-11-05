@@ -1,0 +1,4 @@
+Removed 998 manifest-owned Happier links.
+Removed 3 exact-target owned Cezar cache links.
+Preserved preexisting root node_modules link and all cache sources.
+No org.agent-control.purpose=ac-r3-ui-disposable containers or /tmp/ac-r3-ui-* scratch remained after completed tests.

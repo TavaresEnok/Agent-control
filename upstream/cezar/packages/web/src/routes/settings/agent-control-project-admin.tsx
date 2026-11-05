@@ -7,6 +7,7 @@ import {SettingsField} from './settings-field'
 import {signControl} from './agent-control-operator'
 import {agentControlFetch} from './agent-control-fetch'
 import {useProjectScope} from '@/api/project-scope-context'
+import {AgentControlProjectEnvironments} from './agent-control-project-environments'
 import {AgentControlRemoteReturn,remoteReturnCandidateSchema,remoteReturnReceiptSchema} from './agent-control-remote-return'
 import {AgentControlRemoteSourceImport} from './agent-control-remote-source-import'
 
@@ -60,6 +61,7 @@ export function AgentControlProjectAdmin(){
   </div>}
   {view.data?.remoteSourceCandidates&&<AgentControlRemoteSourceImport principalId={view.data.principalId} installationId={view.data.installationId} candidates={candidates}/>}
   {view.data?.remoteReturnCandidates&&<AgentControlRemoteReturn principalId={view.data.principalId} installationId={view.data.installationId} candidates={view.data.remoteReturnCandidates.filter(candidate=>!projectId||candidate.projectId===projectId)} receipts={(view.data.remoteReturns??[]).filter(receipt=>!projectId||receipt.projectId===projectId)}/>}
+  {view.data&&projectId&&<AgentControlProjectEnvironments key={projectId} projectId={projectId} principalId={view.data.principalId} installationId={view.data.installationId}/>}
   {view.isPending&&<p role="status">Carregando permissões…</p>}
   {view.error&&<p role="alert">Não foi possível carregar a administração de projetos.</p>}
   {view.data&&!view.data.canRegister&&<p>O cadastro de projetos exige administrador global.</p>}

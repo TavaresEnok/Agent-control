@@ -1,0 +1,13 @@
+
+> @open-mercato/cezar-web@0.19.0 test
+> vitest run src/routes/settings/agent-control-project-environments.test.tsx src/routes/settings/agent-control-diagnostics.test.tsx src/routes/settings/agent-control-native-failure-diagnostics.test.tsx src/routes/settings/agent-control-project-admin.test.tsx src/routes/settings/agent-control-installation-authority.test.tsx src/routes/settings/agent-control-remote-return.test.tsx src/routes/settings/agent-control-policy-editor.test.tsx src/routes/settings/agent-control-grant-selection.test.tsx src/routes/settings/agent-control-capacity-waits.test.tsx src/routes/settings/agent-control-usage-report.test.tsx
+
+
+ RUN  v4.1.10 /tmp/ac-r3-20261105/ui/upstream/cezar/packages/web
+
+
+ Test Files  10 passed (10)
+      Tests  30 passed (30)
+   Start at  12:35:10
+   Duration  8.85s (transform 10.05s, setup 882ms, import 26.15s, tests 9.54s, environment 22.37s)
+
