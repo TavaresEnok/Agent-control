@@ -1,0 +1,8 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+upstream/cezar/packages/cezar/dist/automations/types.d.ts(283,50): error TS2707: Generic type 'ZodPreprocess<B>' requires between 0 and 1 type arguments.
+upstream/cezar/packages/cezar/dist/server/forge/github.d.ts(51,21): error TS2707: Generic type 'ZodPreprocess<B>' requires between 0 and 1 type arguments.
+upstream/cezar/packages/cezar/dist/server/forge/github.d.ts(77,21): error TS2707: Generic type 'ZodPreprocess<B>' requires between 0 and 1 type arguments.
+upstream/cezar/packages/cezar/dist/server/server.d.ts(237,13): error TS2724: '"/home/app/srv_projetos/workspace/agent-control-implementation/node_modules/zod/v4/classic/external"' has no exported member named 'ZodInstanceOf'. Did you mean 'instanceof'?

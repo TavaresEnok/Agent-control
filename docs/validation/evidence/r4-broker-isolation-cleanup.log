@@ -1,0 +1,3 @@
+Final serialized physical test exit0; owned workers, PostgreSQL, heartbeat, lock-loss child and random scratch removed by test cleanup.
+Readback found no container with ac-r4-broker-isolation prefix or process referencing its scratch.
+Removed three worktree-only dependency symlinks after matching exact targets; shared source caches untouched.
