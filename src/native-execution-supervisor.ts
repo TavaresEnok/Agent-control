@@ -1,3 +1,4 @@
+import {assertModelAllowed} from './model-policy.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
@@ -150,12 +151,12 @@ export class NativeExecutionSupervisor{
    FOR UPDATE OF g FOR SHARE OF a,p,q,e`,[input.grantId,job.eligibility_revision,this.config.id,this.executorDigest,this.config.syntheticFixture?.provider??'codex',this.config.syntheticFixture?'synthetic':'subscription_cli'])).rows[0];
   if(!grant||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==input.role||grant.context_id!==authority.contextId||
    grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||this.profileDigest(grant)!==job.profile_digest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
-  return fn();
+  assertModelAllowed(grant.model);return fn();
  });}
  async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
-  const g=await this.ledger.tx(async c=>{const grant=await this.identity(c,principal,authority,input);
+  const g=await this.ledger.tx(async c=>{const grant=await this.identity(c,principal,authority,input);assertModelAllowed(grant.model);
    // identity/scope validates an issued WeakSet synthetic capability. A JSON
    // flag cannot reach this bypass. Real attempts pin compatibility before any
    // aggregate slot, file preparation, Docker network or group is created.
@@ -169,7 +170,7 @@ export class NativeExecutionSupervisor{
   await this.directory(this.config.hostRoot);
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
   // Commit the uncertainty before files, Docker networks or processes exist.
-  await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);
+  await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);assertModelAllowed(current.model);
    if(!this.config.syntheticFixture)await pinNativeProtocolForNewAttempt(c,{kind:'execution',jobId:input.jobId,executorDigest:this.executorDigest,model:current.model,effort:current.effort});
    if(input.role==='programmer')await requireProjectEnvironmentLaunch(c,{intentId:input.intentId,base:input.base});
    await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,executor_digest,key_fingerprint,input_digest,base_id,role,account_id,profile_id,profile_digest,eligibility_revision,state)

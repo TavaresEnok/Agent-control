@@ -1,3 +1,4 @@
+import {assertModelAllowed} from './model-policy.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
@@ -67,6 +68,7 @@ export class NativePlanningSupervisor{
    return {principal:g.principal_id,subjectDigest:this.subjects.get(g.account_id)!,projectId:g.project_id,exists:Boolean(previous)};
   });
   if(identity.exists){const result=await this.reconcile(input);if(!result)throw new Refusal('PLANNING_RESULT_UNCERTAIN');return result;}
+  assertModelAllowed(input.profile.model);
   const assessment=(await new ProviderEligibility(this.ledger).view(identity.principal,identity.projectId,input.profile.accountId,1)).latest;
   if(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.provider!==provider||assessment.authenticationMode!==(this.config.syntheticFixture?'synthetic':'subscription_oauth')||assessment.executionMode!==(this.config.syntheticFixture?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.config.executorDigest)throw new Refusal('NATIVE_PLANNING_NOT_ELIGIBLE');
   const authority={contextId:input.contextId,epoch:input.executionEpoch,instanceId:''};
@@ -81,14 +83,14 @@ export class NativePlanningSupervisor{
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
   await this.ledger.tx(async c=>{
-   await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
+   await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);assertModelAllowed(input.profile.model);
    if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,{workerImage:this.config.imageId,toolsImage:this.config.imageId,providerNetworkId:this.config.providerNetwork},{projectId:identity.projectId,contextId:input.contextId});
    else await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
   });
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal:identity.principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.callId,names:[name]});
   // Journal uncertainty BEFORE touching Docker. If any acknowledgement is lost,
   // reconcile observes this same name; it never starts or creates a substitute.
-  await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
+  await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);assertModelAllowed(input.profile.model);
    if(!this.config.syntheticFixture)await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
    await c.query("INSERT INTO ac_native_planning_jobs(id,grant_id,context_id,input_digest,launch_digest,container_name,state) VALUES($1,$2,$3,$4,$5,$6,'uncertain')",[input.callId,input.grantId,input.contextId,input.inputDigest,launchDigest,name]);});
   await mkdir(paths.root,{mode:0o700});for(const path of [paths.input,paths.output,paths.planning])await mkdir(path,{mode:0o700});
