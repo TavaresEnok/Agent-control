@@ -19,7 +19,7 @@ Versão-base `ae2e141b60e6ea90125dd43babb97e9a0abc0f16`. O JSON associado conté
 | RF-11 | integration_evidence_missing | not_accepted |
 | RF-12 | integration_evidence_missing | not_accepted |
 | RF-13 | integration_evidence_missing | not_accepted |
-| RF-14 | implementation_and_evidence_gap | not_accepted |
+| RF-14 | integration_evidence_missing | not_accepted |
 | RF-15 | complete_slice_verification_pending | not_accepted |
 | RF-16 | integration_evidence_missing | not_accepted |
 | RF-17 | integration_evidence_missing | not_accepted |
@@ -27,7 +27,7 @@ Versão-base `ae2e141b60e6ea90125dd43babb97e9a0abc0f16`. O JSON associado conté
 | RF-19 | complete_slice_verification_pending | not_accepted |
 | RF-20 | integration_evidence_missing | not_accepted |
 | RF-21 | implementation_and_evidence_gap | not_accepted |
-| RF-22 | implementation_and_evidence_gap | not_accepted |
+| RF-22 | integration_evidence_missing | not_accepted |
 | RF-23 | implementation_and_evidence_gap | not_accepted |
 | RF-24 | integration_evidence_missing | not_accepted |
 | RF-25 | implemented_slice_missing_integration | do_not_accept_full_requirement |
