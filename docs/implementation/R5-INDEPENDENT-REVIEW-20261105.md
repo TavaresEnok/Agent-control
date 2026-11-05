@@ -93,3 +93,7 @@ Em bancada descartável própria, executei `scripts/r5-recovery-isolated.mjs` em
 A prova sustenta o cenário físico delimitado, não autoriza sozinho aceite global: todas as fontes devem estar em composição enforced antes do primeiro efeito/backup; binaries legados fora das authorities não são cercados retroativamente. A cadeia e checkpoint não detectam remoção do sufixo pós-backup até o próprio checkpoint sem custódia/testemunha adicional. Entrada operacional, abrangência completa de efeitos e integração final requerem revisão separada. A evidência anterior do autor é excerpt de árvore anterior e permanece atribuída ao autor.
 
 26d4fcc9 teve contraprova independente de token dividido stderr→stdout: os fragmentos eram retidos por concatenação em ordem fixa. 55e30ae2 usa ordem original e fronteiras, com recusa de logs quando token conhecido cruza canais. Testes repetidos independentemente 6/6, cobrindo ambas ordens e quatro alternâncias. Aprovação limitada a valores literais conhecidos; codificações arbitrárias e composição integral não são provadas.
+
+## T22 — recusa de política
+
+13738f3b/71cb3949/adfcc6d4 e guard nativo 092aa259/462762ca: recomendação de aceite do cenário literal após integração/gateway final. Script e log do autor mostram política assinada com Astra, esforço fora do catálogo e conta removida recusados com razão legível, sem novo job ou alteração de quota, em 360/390. Os perfis legados são preparados pela fixture e o dispositivo é sintético. Guard de supervisores foi repetido independentemente 2/2 com mocks, não como PG físico.
