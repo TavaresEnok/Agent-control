@@ -104,6 +104,16 @@ c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","post
             with self.assertRaisesRegex(ValueError, 'CATALOG_JOURNAL_TRUNCATED'):
                 catalog.Catalog(root, installation, manifest['catalogId'])
 
+    def test_recovery_epoch_replays_only_same_request(self):
+        with tempfile.TemporaryDirectory(prefix='ac-t30-advance-') as root:
+            installation, recovery = str(uuid.uuid4()), str(uuid.uuid4())
+            manifest = catalog.initialize(root, installation, [{'kind': 'ssh', 'id': 'fixture', 'identity': {'hostKey': 'fixture'}}])
+            with catalog.Catalog(root, installation, manifest['catalogId']) as c:
+                self.assertEqual(c.advance(1, recovery), 2)
+                self.assertEqual(c.advance(1, recovery), 2)
+                with self.assertRaisesRegex(ValueError, 'CATALOG_EPOCH_FENCED'):
+                    c.advance(1, str(uuid.uuid4()))
+
 
 if __name__ == '__main__':
     unittest.main()

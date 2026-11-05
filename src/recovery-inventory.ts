@@ -26,15 +26,34 @@ export async function configureRecoveryInventory(ledger:Ledger,raw:Config):Promi
  attached.set(ledger,{config:frozen,lease:(kind,authority,identity,requestDigest)=>acquireRecoveryCatalogLease({...frozen,kind,authority,identity,requestDigest,operation:randomUUID()}),checkpoint:()=>catalogCheckpoint(frozen)});
 }
 async function catalogCheckpoint(config:Readonly<Config>){
- const child=spawn('/usr/bin/python3',[fileURLToPath(new URL('../services/recovery/catalog_checkpoint.py',import.meta.url))],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'},stdio:['pipe','pipe','ignore']});
+ const value=await runCatalog('catalog_checkpoint.py',{directory:config.directory,installationId:config.installationId,catalogId:config.catalogId,manifestHash:config.manifestHash});
+ try{return RecoveryCatalogCheckpoint.parse(value);}catch{throw new Refusal('CATALOG_UNCERTAIN');}
+}
+async function runCatalog(helper:string,request:object){
+ const child=spawn('/usr/bin/python3',[fileURLToPath(new URL('../services/recovery/'+helper,import.meta.url))],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'},stdio:['pipe','pipe','ignore']});
  const output=await new Promise<string>((resolve,reject)=>{let bytes='',settled=false;
   const timer=setTimeout(()=>{settled=true;child.kill('SIGKILL');reject(new Refusal('CATALOG_UNCERTAIN'));},10000);
   child.stdout.on('data',chunk=>{bytes+=String(chunk);if(bytes.length>16384){settled=true;clearTimeout(timer);child.kill('SIGKILL');reject(new Refusal('CATALOG_UNCERTAIN'));}});
   child.once('error',()=>{if(!settled){settled=true;clearTimeout(timer);reject(new Refusal('CATALOG_UNCERTAIN'));}});
   child.once('close',code=>{if(!settled){settled=true;clearTimeout(timer);if(code!==0)reject(new Refusal('CATALOG_UNCERTAIN'));else resolve(bytes);}});
-  child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({directory:config.directory,installationId:config.installationId,catalogId:config.catalogId,manifestHash:config.manifestHash})+'\n');
+  child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify(request)+'\n');
  });
- try{return RecoveryCatalogCheckpoint.parse(JSON.parse(output));}catch{throw new Refusal('CATALOG_UNCERTAIN');}
+ try{return JSON.parse(output) as unknown;}catch{throw new Refusal('CATALOG_UNCERTAIN');}
+}
+/** Advance only after the restored installation's durable closed marker has
+ * been checked. No PG row lock is held while waiting on the catalog lock. */
+export async function beginRestoredPhysicalRecovery(ledger:Ledger,raw:Config,recoveryId:string){
+ const config=Config.parse(raw);z.uuid().parse(recoveryId);await configureRecoveryInventory(ledger,config);
+ const row=await ledger.tx(async c=>{
+  const state=(await c.query(`SELECT r.*,a.enabled,a.reason FROM ac_recovery_inventory_restores r CROSS JOIN ac_installation_identity i CROSS JOIN ac_admission_control a
+   WHERE r.installation_id=i.id AND a.id=1`)).rows[0];
+  if(!state||state.enabled!==false||state.reason!=='r3-restored-awaiting-reconciliation'||state.state!=='physical-reconciliation-required'||state.source_installation_id!==config.installationId)throw new Refusal('RESTORE_PHYSICAL_RECONCILIATION_REQUIRED');
+  return RecoveryCatalogCheckpoint.parse(state.checkpoint);
+ });
+ const result=z.object({epoch:z.number().int().positive(),checkpoint:RecoveryCatalogCheckpoint}).strict().parse(await runCatalog('catalog_advance.py',{
+  directory:config.directory,installationId:config.installationId,catalogId:config.catalogId,manifestHash:config.manifestHash,
+  checkpoint:row,expectedEpoch:config.epoch,recoveryId}));
+ return result;
 }
 /** Must be called within the effect's existing transaction. The row lock
  * serializes any policy transition with the authorized transport effect. */

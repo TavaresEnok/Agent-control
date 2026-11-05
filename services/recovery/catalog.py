@@ -178,11 +178,20 @@ class Catalog:
             fail('CATALOG_ROLLBACK_DETECTED')
         self.state()
 
-    def advance(self, expected_epoch):
+    def advance(self, expected_epoch, recovery_id=None):
         epoch, _ = self.state()
+        if recovery_id is not None:
+            recovery_id = str(uuid.UUID(recovery_id))
+            prior = [r['entry'] for r in self.entries if r['entry'].get('type') == 'epoch' and r['entry'].get('recoveryId') == recovery_id]
+            if prior:
+                if len(prior) != 1 or prior[0]['epoch'] != expected_epoch + 1 or epoch != expected_epoch + 1:
+                    fail('CATALOG_RECOVERY_CONFLICT')
+                return epoch
         if epoch != expected_epoch:
             fail('CATALOG_EPOCH_FENCED')
-        self._append({'type': 'epoch', 'epoch': epoch + 1})
+        event = {'type': 'epoch', 'epoch': epoch + 1}
+        if recovery_id is not None: event['recoveryId'] = recovery_id
+        self._append(event)
         return epoch + 1
 
     def begin(self, epoch, kind, authority, operation, request_digest, identity):
