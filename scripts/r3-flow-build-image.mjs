@@ -24,7 +24,7 @@ export async function buildFlowImage({root,scratch,project,run,publicBinary,expe
  if(r6PlanningFixture){
   const source=join(root,'tests/fixtures/r6-planning-worker');await copyFile(join(source,'app-server.mjs'),join(context,'r6-app-server.mjs'));
   run(esbuild,[join(source,'planning.ts'),'--bundle','--platform=node','--target=node22','--format=esm',banner,'--external:/opt/fixture/*','--outfile='+join(context,'planning.mjs')]);
-  await writeFile(join(context,'Dockerfile'),(await readFile(join(context,'Dockerfile'),'utf8'))+'\nCOPY --chmod=755 r6-app-server.mjs /opt/fixture/r6-app-server.mjs\nRUN printf 1 > /opt/fixture/r6-version\n');
+  await writeFile(join(context,'Dockerfile'),(await readFile(join(context,'Dockerfile'),'utf8'))+'\nCOPY r6-app-server.mjs /opt/fixture/r6-app-server.mjs\nRUN chmod 755 /opt/fixture/r6-app-server.mjs && printf 1 > /opt/fixture/r6-version\n');
  }
  run('docker',['image','inspect','agent-control-lab:0.1.0']);run('docker',['build','--pull=false','--network=none','--label',`agent-control.synthetic-fixture=${project}`,'-t',project,context]);
  return run('docker',['image','inspect','--format','{{.Id}}',project]);
