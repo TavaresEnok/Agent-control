@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict';
+import {randomBytes,randomUUID} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {mkdtemp,mkdir,writeFile,readFile,rm,readdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createServer} from 'node:http';
+import {once} from 'node:events';
+import {Ledger} from '../../src/ledger.ts';
+import {CezarRuntime} from '../../src/cezar.ts';
+import {RunStore} from '../../upstream/cezar/packages/cezar/dist/runs/store.js';
+import {createApi} from '../../src/api.ts';
+import {PortableExport} from '../../src/portable-export.ts';
+import {exportContext} from '../../src/context-export-cli.ts';
+import {Installation} from '../../src/installation.ts';
+import {ContextVault} from '../../src/context-vault.ts';
+import {ContextKeys,keyFingerprint} from '../../src/context-keys.ts';
+import {loadHappier} from '../../src/happier.ts';
+import {managedWorkspaceStream} from '../../src/workspace-stream.ts';
+import {CodexExecutionAdapter} from '../../src/codex-execution-adapter.ts';
+import type {AgentRunner,AgentRunSpec} from '../../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
+import {isolatedDatabase} from './isolated-database.ts';
+
+const base=process.env.AC_TEST_DATABASE_URL!;if(Object.keys(process.env).some(name=>/^(?:OPENAI|ANTHROPIC|AWS|AZURE|GITHUB|GOOGLE|SSH_AUTH|NODE_OPTIONS)/.test(name)))throw Error('NON_SYNTHETIC_ENVIRONMENT_REFUSED');
+const fixture=await isolatedDatabase(base,'r3secrets'),db=new Ledger(fixture.url),folder=await mkdtemp(join(tmpdir(),'ac-r3-secret-surfaces-')),repo=join(folder,'repo'),privateRoot=join(folder,'private');
+const host=process.env.AC_R3_SECRET_TOKEN!,literal='synthetic-run-'+randomBytes(24).toString('hex'),pattern='ghp_'+randomBytes(24).toString('hex'),transportToken='synthetic-happier-'+randomBytes(24).toString('hex'),capability='synthetic-tools-'+randomBytes(24).toString('hex'),key=randomBytes(32),master=randomBytes(32);
+const secrets=[host,literal,pattern,transportToken,capability,key.toString('hex'),key.toString('base64'),master.toString('hex'),master.toString('base64')];
+const surfaces:string[]=[];
+const noSecrets=(name:string,value:unknown)=>{const bytes=Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value));for(const secret of secrets)assert.equal(bytes.includes(Buffer.from(secret)),false,'PRIVATE_CANARY_LEAK_'+name);assert.equal(bytes.includes(key),false,'RAW_KEY_LEAK_'+name);assert.equal(bytes.includes(master),false,'RAW_MASTER_LEAK_'+name);surfaces.push(name);};
+const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+let runtime:CezarRuntime|undefined,reader:ReadableStreamDefaultReader<Uint8Array>|undefined;const abort=new AbortController();let source:ReturnType<typeof createServer>|undefined;
+try{
+ await mkdir(privateRoot,{mode:0o700});execFileSync('git',['init','-q','-b','main',repo]);await mkdir(join(repo,'src'));await writeFile(join(repo,'src/safe.ts'),'export const safe = true;\n');git('add','src/safe.ts');git('-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','safe baseline');
+ await db.migrate();const project=randomUUID(),principal='secret-fixture-'+randomUUID(),session=randomUUID();await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'RNF08 synthetic']);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
+ const context=await db.createContext(principal,project,session),authority=await db.acquire(principal,context,randomUUID(),'fixture',60);await new ContextKeys(db).authorize(principal,context,1,'legacy',keyFingerprint(key));
+ // Authorizing a key expires manager custody; reacquire the actual authority normally.
+ const current=await db.acquire(principal,context,randomUUID(),'fixture',60);
+ const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:rnf08'}},current,'api');
+ const vaultRoot=join(privateRoot,'vault'),masterFile=join(vaultRoot,'master');await mkdir(vaultRoot,{mode:0o700});await writeFile(masterFile,master,{mode:0o600});await writeFile(join(privateRoot,'transport.token'),transportToken,{mode:0o600});
+ const installationId=(await db.pool.query('SELECT id FROM ac_installation_identity')).rows[0].id,vault=new ContextVault(db,installationId,vaultRoot,masterFile,[]),keyRequest={principal,contextId:context,sessionId:session,profileId:'fixture',keyVersion:1,encryptionVariant:'legacy' as const};await vault.importKey(keyRequest,key);
+ assert.deepEqual(Buffer.from(await vault.load(keyRequest)),key);const vaultEnvelope=JSON.parse(await readFile(join(vaultRoot,context+'-1.vault'),'utf8'));assert.equal(vaultEnvelope.header.fingerprint,keyFingerprint(key));assert.equal(JSON.stringify(vaultEnvelope).includes(key.toString('hex')),false);
+ runtime=new CezarRuntime(db,repo,project);const store=runtime.store;
+ const run=store.createRun({id:intent.run_id,title:'Canary history',task:'Intent '+intent.id,workflow:'baseline-synthetic-v1',steps:[{id:'fixture',name:'Fixture',kind:'agent'}]});
+ store.registerRunSecrets(run.id,[literal,capability]);const live:unknown[]=[];store.on('event',event=>live.push(event));
+ store.appendEvent(run.id,{type:'tool-result',stepId:'fixture',result:{stdout:host+' '+literal,stderr:pattern,headers:{authorization:'Bearer '+capability}}});
+ store.appendEvent(run.id,{type:'item.started',stepId:'fixture',item:{id:'fragmented',kind:'assistant',text:''}});
+ store.appendEvent(run.id,{type:'item.delta',stepId:'fixture',itemId:'fragmented',field:'text',delta:literal.slice(0,14)});store.appendEvent(run.id,{type:'item.delta',stepId:'fixture',itemId:'fragmented',field:'text',delta:literal.slice(14)});store.appendEvent(run.id,{type:'turn.completed',stepId:'fixture'});
+ store.emitEphemeral(run.id,{type:'note',message:literal+' '+host});store.updateRun(run.id,{titleSummary:literal,error:host});store.updateStep(run.id,'fixture',{error:pattern});store.flush();
+ noSecrets('native-events-live',live);noSecrets('native-history-readEvents',store.readEvents(run.id));noSecrets('native-runs-json',await readFile(join(repo,'.ai/cezar/runs.json')));noSecrets('native-event-ndjson',await readFile(join(repo,'.ai/cezar/runs',run.id+'.ndjson')));
+ const stream=await managedWorkspaceStream(db,runtime,principal,new Request('http://localhost/api/v1/workspace/events',{signal:abort.signal}),async()=>principal,{flushMs:5,heartbeatMs:30});reader=stream.body!.getReader();await reader.read();store.updateRun(run.id,{error:literal});let framed='';for(let attempt=0;attempt<8&&!framed.includes(run.id);attempt++){const frame=await Promise.race([reader.read(),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('SECRET_STREAM_TIMEOUT')),1000))]);framed+=new TextDecoder().decode(frame.value);}assert.ok(framed.includes(run.id));noSecrets('managed-SSE-native-frame',framed);abort.abort();await reader.cancel();reader=undefined;
+ const app=createApi(db,runtime,async()=>principal,()=>current);
+ for(const path of ['/api/v1/runs','/api/v1/runs/'+run.id,'/api/v1/runs/'+run.id+'/history']){const response=await app.request('http://127.0.0.1'+path,{headers:{host:'127.0.0.1'}});const body=await response.text();assert.equal(response.status,200,path+' '+body);noSecrets('managed-api-'+path,body);}
+ for(const path of ['/api/v1/runs/'+run.id+'/logs','/api/v1/ac/private/vault/master','/api/v1/workspace/secrets']){const response=await app.request('http://127.0.0.1'+path,{headers:{host:'127.0.0.1'}});assert.equal(response.status,403,path);noSecrets('private-route-denied-'+path,await response.text());}
+ const failing=createApi(db,runtime,async()=>{throw Error(host+' '+transportToken);},()=>current),failure=await failing.request('/api/v1/runs');assert.equal(failure.status,500);assert.equal((await failure.json() as {error:string}).error,'INTERNAL_ERROR');
+ // Legacy opaque DB payload is an explicit hostile fixture: safe projections must not copy it.
+ await db.pool.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'private.legacy.payload',$2)",[context,{message:host,headers:{authorization:transportToken},path:masterFile}]);
+ noSecrets('portable-metadata',await new PortableExport(db).export(principal,project,context));const metadata=await app.request('/api/v1/ac/contexts/'+context+'/export/metadata');assert.equal(metadata.status,200);noSecrets('metadata-download-API',await metadata.text());
+ const boundary=await loadHappier(),userText='Ordinary user request whose transcript remains end-to-end encrypted.',ciphertext=boundary.encodeBase64(boundary.encrypt(key,'legacy',{role:'user',content:{type:'text',text:userText}}));let authorizationObserved=false;
+ source=createServer((request,response)=>{authorizationObserved ||= request.headers.authorization==='Bearer '+transportToken;if(request.headers.authorization!=='Bearer '+transportToken){response.writeHead(401).end();return;}response.setHeader('content-type','application/json');if(request.url==='/v1/account/profile')response.end(JSON.stringify({id:principal}));else if(request.url==='/v2/sessions/'+session)response.end(JSON.stringify({session:{id:session}}));else if(request.url?.startsWith('/v1/sessions/'+session+'/messages'))response.end(JSON.stringify({messages:[{seq:1,localId:'safe-user-message',content:{t:'encrypted',c:ciphertext}}],hasMore:false,nextBeforeSeq:null}));else response.writeHead(404).end();});source.listen(0,'127.0.0.1');await once(source,'listening');const origin='http://127.0.0.1:'+(source.address() as {port:number}).port;
+ const config=Installation.parse({schemaVersion:1,mode:'administration-only',databaseUrl:fixture.url,dataDirectory:privateRoot,project:{id:project,label:'fixture',repo,owner:principal},http:{listen:'127.0.0.1',port:12080,publicOrigin:'http://127.0.0.1:12080'},happier:{upstreamOrigin:origin,webOrigin:origin,publicServerOrigin:origin}}),descriptor=join(privateRoot,'export-descriptor.json'),output=join(privateRoot,'export.json');await writeFile(descriptor,JSON.stringify({contextId:context,tokenFile:join(privateRoot,'transport.token'),outputFile:output}),{mode:0o600});
+ await exportContext(config,db,descriptor);assert.equal(authorizationObserved,true);const exportedBytes=await readFile(output),exported=JSON.parse(exportedBytes.toString('utf8'));assert.equal(exported.encrypted,true);assert.equal(exported.keysIncluded,false);assert.equal(exported.messages[0].ciphertext,ciphertext);assert.equal(exportedBytes.includes(Buffer.from(userText)),false);assert.deepEqual(boundary.decrypt(key,'legacy',boundary.decodeBase64(exported.messages[0].ciphertext)),{role:'user',content:{type:'text',text:userText}});noSecrets('encrypted-conversation-export',exportedBytes);
+ let captured:AgentRunSpec|undefined;const runner:AgentRunner={backend:'codex',run:async()=>{throw Error('UNUSED');},interrupt:async()=>{},startSession(spec,onEvent){captured=spec;const result=Promise.resolve().then(()=>{onEvent?.({type:'error',message:host+' '+literal});onEvent?.({type:'turn-end'});return {text:'failed',tokensUsed:0,toolCalls:[]};});return {result,open:false,sendMessage:()=>false,end:()=>{},interrupt:()=>{},hardStop:()=>{}};}};
+ await assert.rejects(new CodexExecutionAdapter(runner).run({sessionId:randomUUID(),model:'fixture',effort:'medium',role:'programmer',task:'Change src/safe.ts only.',writePaths:['src/safe.ts'],environment:{id:'private-job-tools',url:'ws://127.0.0.1:19493',authBearerToken:capability,cwd:'/work'},timeoutMs:1000},async()=>{}),error=>{assert.equal((error as {code?:string}).code,'EXECUTION_NATIVE_TURN_FAILED');noSecrets('provider-failure-public-code',String(error));return true;});assert.equal(captured?.executionEnvironment?.authBearerToken,capability);noSecrets('execution-user-and-system-prompts',{userPrompt:captured?.userPrompt,systemPrompt:captured?.systemPrompt});
+ // Commit only the admitted source; verify private custody and untracked history do not enter Git bundles.
+ await writeFile(join(repo,'src/safe.ts'),'export const safe = 2;\n');git('add','--update','src/safe.ts');git('-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','safe artifact');const bundle=join(privateRoot,'artifact.bundle');git('bundle','create',bundle,'--all');noSecrets('git-artifact-bundle',await readFile(bundle));assert.deepEqual(git('ls-tree','-r','--name-only','HEAD').split('\n'),['src/safe.ts']);
+ await runtime.close();runtime=undefined;const reopened=RunStore.open(join(repo,'.ai/cezar'));noSecrets('durable-history-after-reopen',reopened.readEvents(run.id));noSecrets('durable-run-after-reopen',reopened.getRun(run.id));reopened.flush();
+ assert.ok((await readdir(vaultRoot)).includes(context+'-1.vault'));console.log(JSON.stringify({passed:true,secretSource:'synthetic-only-allowlisted-child',surfaces,registeredSecretFragmentsRedacted:true,legacyPayloadProjection:'omitted',ciphertextPreserved:true,keysIncluded:false,providerInference:false,executionDispatched:false,canonicalSource:'authenticated HTTP fixture only; prior real Happier recovery proof reused',artifactScope:'fixed admitted source commit; prior physical native canary proof reused'}));
+}finally{abort.abort();await reader?.cancel();if(source)await new Promise<void>(resolve=>source!.close(()=>resolve()));await runtime?.close();key.fill(0);master.fill(0);await db.close();await fixture.close();await rm(folder,{recursive:true,force:true});}
