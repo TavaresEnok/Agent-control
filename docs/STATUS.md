@@ -1,5 +1,9 @@
 # Agent Control — estado atual de implementação
 
+## Continuação vigente: identidade do finalizador — 05/11/2026
+
+O finalizador registra o namespace PID e só confirma ausência do grupo no mesmo boot e namespace. Handle legado, remoto ou de outro boot fica incerto, sem sinalizar PID homônimo ou liberar concessão. Processo sintético real escrevendo, cancelamento e casos incompatíveis passaram com PostgreSQL; o ensaio de Docker integrado foi repetido. Faltam queda com finalizador vivo, retomada integral do grafo e revisão independente. Ver `implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.
+
 ## Continuação vigente: retomada de falha e cancelamento — 05/11/2026
 
 Quedas reais entre as duas remoções durante falha e cancelamento foram reconciliadas em outro processo pelo runtime Cezar. O cancelamento aguardou a retirada, e cada trabalho processado pelo reconciliador de contexto teve seu próprio diário e recibo. O lançamento e parte do artefato seguem fixtures; não há prova integral do grafo nem revisão independente final. Detalhes em `implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.

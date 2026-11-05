@@ -1,6 +1,9 @@
 # Achados canônicos — implementação 0.1.0
 
 
+**Atualização 05/11/2026 — identidade do finalizador:** ausência de PGID noutro namespace ou boot não prova que o escritor parou. O handle novo vincula o namespace; handles antigos sem esse dado e identidades distintas ficam incertos. Processo sintético real e PostgreSQL cobriram contenção e cancelamento; prova entre hosts, queda com finalizador vivo e revisão independente permanecem pendentes. Ver `docs/implementation/NATIVE-FINALIZER-IDENTITY-20261105.md`.
+
+
 **Atualização posterior 05/11/2026:** SIGKILL entre remoções durante falha e cancelamento foi seguido de reconciliação em outro processo pelo runtime Cezar. O reconciliador de contexto pode processar outros jobs terminais somente com seus próprios diários, logs e recibos; um ensaio negativo e sua análise foram preservados. Ainda faltam finalizador ativo na queda, lançamento real, retomada integral do grafo e revisão independente. Ver `docs/implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
 
 

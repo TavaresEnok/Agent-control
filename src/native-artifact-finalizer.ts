@@ -1,5 +1,5 @@
 import {spawn,type ChildProcess} from 'node:child_process';
-import {readFile,lstat,realpath} from 'node:fs/promises';
+import {readFile,lstat,realpath,readlink} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {z} from 'zod';
 import {Ledger} from './ledger.ts';
@@ -8,7 +8,7 @@ import {readPrivateWorkerFile} from './native-worker-security.ts';
 const GitId=z.string().regex(/^[a-f0-9]{40}$/),Hash=z.string().regex(/^[a-f0-9]{64}$/);
 export const NativeArtifactIdentity=z.object({commit:GitId,base:GitId,tree:GitId,legacyDigest:Hash,source:z.literal('AcSafeGit+AcArtifactIdentity')}).strict();
 const Outcome=z.object({schemaVersion:z.literal(1),jobId:z.uuid(),inputDigest:Hash,scopeDigest:Hash,status:z.enum(['ready','failed']),identity:NativeArtifactIdentity.nullable(),failureCode:z.string().nullable()}).strict();
-const Handle=z.object({pid:z.number().int().min(2),startTime:z.string().regex(/^\d+$/),bootId:z.string().min(1)}).strict();
+const Handle=z.object({pid:z.number().int().min(2),startTime:z.string().regex(/^\d+$/),bootId:z.string().min(1),pidNamespace:z.string().regex(/^pid:\[\d+\]$/).optional()}).strict();
 type Input={jobId:string;intentId:string;grantId:string;inputDigest:string;base:string;writePaths:readonly string[]};
 export class NativeArtifactFinalizer{
  constructor(readonly ledger:Ledger,private readonly root:string){if(resolve(root)!==root)throw new Refusal('NATIVE_FINALIZER_ROOT_INVALID');}
@@ -26,7 +26,11 @@ export class NativeArtifactFinalizer{
   if(!source||source.base_id!==input.base||digest(source.snapshot)!==source.digest||digest(source.snapshot.writePaths)!==digest(input.writePaths))throw new Refusal('NATIVE_FINALIZER_SCOPE_MISMATCH');
  }
  private async groupAbsent(raw:unknown){
-  const h=Handle.parse(raw),boot=(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim();if(h.bootId!==boot)return true;
+  const h=Handle.parse(raw),boot=(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim();
+  // A PID/PGID is meaningful only in the namespace where the handle was
+  // recorded. An inaccessible old namespace or a different boot is not proof
+  // that a writer on another host or namespace has stopped.
+  if(h.bootId!==boot||!h.pidNamespace||h.pidNamespace!==await readlink('/proc/self/ns/pid'))return false;
   try{process.kill(-h.pid,0);return false;}catch(error){if((error as NodeJS.ErrnoException).code==='ESRCH')return true;return false;}
  }
  private async outcome(input:Input,scopeDigest:string){
@@ -66,7 +70,7 @@ export class NativeArtifactFinalizer{
     await new Promise<void>((ok,fail)=>{child.once('spawn',ok);child.once('error',fail);});
     if(!child.pid)throw new Refusal('NATIVE_FINALIZER_PROCESS_UNAVAILABLE');
     const proc=await readFile(`/proc/${child.pid}/stat`,'utf8'),startTime=proc.slice(proc.lastIndexOf(')')+2).split(' ')[19];
-    const handle=Handle.parse({pid:child.pid,startTime,bootId:(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim()});
+    const handle=Handle.parse({pid:child.pid,startTime,bootId:(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim(),pidNamespace:await readlink('/proc/self/ns/pid')});
     await this.ledger.tx(async c=>{
      await this.authorize(principal,authority,input,false,c);await assertPhysical();
      const updated=await c.query("UPDATE ac_native_artifact_finalizations SET state='running',process_handle=$2 WHERE job_id=$1 AND state='uncertain' AND process_handle IS NULL AND manager_epoch=$3",[input.jobId,handle,authority.epoch]);
@@ -102,6 +106,7 @@ export class NativeArtifactFinalizer{
    if(!row||['ready','failed'].includes(row.state))return;
    if(!row.process_handle||await this.groupAbsent(row.process_handle))return;
    const h=Handle.parse(row.process_handle);
+   if(!h.pidNamespace||h.pidNamespace!==await readlink('/proc/self/ns/pid')||h.bootId!==(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim())return;
    let proc:string;try{proc=await readFile(`/proc/${h.pid}/stat`,'utf8');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
    if(proc.slice(proc.lastIndexOf(')')+2).split(' ')[19]!==h.startTime)throw new Refusal('NATIVE_FINALIZER_PROCESS_MISMATCH');
    try{process.kill(-h.pid,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}
