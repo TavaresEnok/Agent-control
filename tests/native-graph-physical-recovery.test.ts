@@ -46,11 +46,20 @@ function plan(contextId:string,tasks:ReturnType<typeof task>[]):ManagerPlan{
 for(const waiverMode of ['disabled'] as const) test(`synthetic physical native graph ${waiverMode}`,{timeout:180000,skip:labSkip},async()=>{
  const waiverEnabled=waiverMode!=='disabled';
  const baseUrl=labDatabase;if(!baseUrl)throw Error('ISOLATED_DATABASE_REQUIRED');
- const fixture=await isolatedDatabase(baseUrl,'nativemulti'),db=new Ledger(fixture.url);
+ const initialManifest=process.env.AC_TEAM_GRAPH_INITIAL_MANIFEST;
+ const allocatedArea=initialManifest?join(dirname(initialManifest),'native-multi-fixture'):undefined;
+ const fixture=await isolatedDatabase(baseUrl,'nativemulti',initialManifest?async url=>{
+  await writeFile(initialManifest,JSON.stringify({url,area:allocatedArea,context:null}),{mode:0o600,flag:'wx'});
+  if(process.env.AC_TEAM_GRAPH_HOLD_INITIAL==='1')await new Promise(()=>{});
+ }:undefined),db=new Ledger(fixture.url);
  const physicalMode=process.env.AC_NATIVE_RETIREMENT_PHYSICAL==='1';
  const physicalRoot=process.env.AC_NATIVE_RETIREMENT_ROOT;
  if(physicalMode&&(!physicalRoot||!physicalRoot.endsWith('/.state/native-dispatch-physical')))throw Error('ISOLATED_NATIVE_RETIREMENT_ROOT_REQUIRED');
- const area=await mkdtemp(join(physicalMode?physicalRoot!:tmpdir(),'native-multi-'));
+ const area=allocatedArea??await mkdtemp(join(physicalMode?physicalRoot!:tmpdir(),'native-multi-'));
+ if(allocatedArea)await mkdir(allocatedArea,{mode:0o700});
+ if(process.env.AC_TEAM_GRAPH_HOLD_INITIAL==='after-area'){
+  await writeFile(join(area,'early-ready'),'ready',{mode:0o600,flag:'wx'});await new Promise(()=>{setInterval(()=>{},1000);});
+ }
  let runtime:CezarRuntime|undefined,heartbeat:ReturnType<typeof setInterval>|undefined,primary:unknown;
  try{
   await db.migrate();

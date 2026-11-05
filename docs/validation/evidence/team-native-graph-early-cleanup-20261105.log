@@ -1,0 +1,17 @@
+TAP version 13
+# {"controller":"SIGKILL","boundary":"database created before migration","manifest":"private validated","database":"absent","area":"absent"}
+# Subtest: initial private manifest permits cleanup before migration and final marker
+ok 1 - initial private manifest permits cleanup before migration and final marker
+  ---
+  duration_ms: 1569.427007
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2652.084323

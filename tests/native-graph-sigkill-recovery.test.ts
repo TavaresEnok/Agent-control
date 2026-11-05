@@ -1,8 +1,8 @@
-import {cleanupGraphResources} from './fixtures/native-graph-cleanup.ts';
+import {cleanupGraphFixture,readGraphManifest} from './fixtures/native-graph-cleanup.ts';
 import {test,mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash,createHmac} from 'node:crypto';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {lstat,mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
@@ -21,12 +21,13 @@ import {CezarRuntime} from '../src/cezar.ts';
 import {canonical,digest,Refusal} from '../src/contracts.ts';
 
 test('synthetic native graph resumes after controller SIGKILL at retired programmer boundary', {timeout:120000,skip:!(process.env.AC_TEST_DATABASE_URL&&process.env.AC_TEAM_GRAPH_IMAGE&&process.env.AC_TEAM_GRAPH_NETWORK)},async()=>{
- const root=await mkdtemp(join(tmpdir(),'ac-graph-kill-')),marker=join(root,'marker.json');let info:any,db:Ledger|undefined,runtime:CezarRuntime|undefined,primary:unknown;
- const child=spawn(process.execPath,['--import','tsx','tests/native-graph-physical-recovery.test.ts'],{env:{...process.env,AC_TEAM_GRAPH_CRASH_MARKER:marker},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',x=>output+=String(x));child.stderr.on('data',x=>output+=String(x));
+ const root=await mkdtemp(join(tmpdir(),'ac-graph-kill-')),marker=join(root,'marker.json'),initial=join(root,'initial.json');let info:any,db:Ledger|undefined,runtime:CezarRuntime|undefined,primary:unknown;
+ const childEnv:NodeJS.ProcessEnv={...process.env,AC_TEAM_GRAPH_CRASH_MARKER:marker,AC_TEAM_GRAPH_INITIAL_MANIFEST:initial};delete childEnv.NODE_TEST_CONTEXT;
+ const child=spawn(process.execPath,['--import','tsx','tests/native-graph-physical-recovery.test.ts'],{env:childEnv,stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',x=>output+=String(x));child.stderr.on('data',x=>output+=String(x));
  const closed=new Promise<void>(resolve=>child.once('close',()=>resolve()));
  try{
   for(let i=0;i<400;i++){try{info=JSON.parse(await readFile(marker,'utf8'));break;}catch{}if(child.exitCode!==null)throw Error('CHILD_FAILED '+output);await new Promise(r=>setTimeout(r,100));}
-  assert(info,'SIGKILL marker missing '+output);child.kill('SIGKILL');await closed;assert.equal(child.signalCode,'SIGKILL');
+  assert(info,'SIGKILL marker missing '+output);const manifest=await readGraphManifest(initial,root);assert.equal(info.url,manifest.url);assert.equal(info.area,manifest.area);child.kill('SIGKILL');await closed;assert.equal(child.signalCode,'SIGKILL');
   db=new Ledger(info.url);await db.pause(info.principal,info.context,true);await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[info.context]);
   const next=await db.acquire(info.principal,info.context,randomUUID(),'fixture-manager',60);await assert.rejects(db.tx(c=>db!.fence(c,info.authority)),/STALE_MANAGER/);
   const supervisor=new NativeExecutionSupervisor(db,info.supervisorConfig),quality=new Quality(db,Buffer.from(info.verifierKey,'base64'),new GitArtifacts(info.repo));
@@ -45,9 +46,24 @@ test('synthetic native graph resumes after controller SIGKILL at retired program
  }catch(error){primary=error;}finally{
   const errors:unknown[]=[];
   try{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await closed;}mock.restoreAll();await runtime?.close();}catch(error){errors.push(error);}
-  if(db){try{await cleanupGraphResources(db,process.env.AC_TEAM_GRAPH_IMAGE!);}catch(error){errors.push(error);}try{await db.close();}catch(error){errors.push(error);}}
-  if(info){try{const admin=new pg.Pool({connectionString:process.env.AC_TEST_DATABASE_URL});const name=new URL(info.url).pathname.slice(1);assert(/^ac_implementation_test_nativemulti_[a-f0-9]{20}$/.test(name));try{await admin.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()',[name]);await admin.query(`DROP DATABASE "${name}"`);}finally{await admin.end();}await rm(info.area,{recursive:true,force:true});}catch(error){errors.push(error);}}
-  try{await rm(root,{recursive:true,force:true});}catch(error){errors.push(error);}
+  let manifest:{url:string;area:string}|undefined;
+  try{manifest=await readGraphManifest(initial,root);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')errors.push(error);}
+  if(manifest){try{await cleanupGraphFixture(manifest,process.env.AC_TEAM_GRAPH_IMAGE!,db);db=undefined;}catch(error){errors.push(error);db=undefined;}}
+  if(db)try{await db.close();}catch(error){errors.push(error);}
+  if(!errors.length)try{await rm(root,{recursive:true,force:true});}catch(error){errors.push(error);}
   if(errors.length)throw new AggregateError(primary?[primary,...errors]:errors,'NATIVE_GRAPH_CLEANUP_FAILED');
  }if(primary)throw primary;
+});
+
+test('initial private manifest permits cleanup before migration and final marker', {timeout:30000,skip:!(process.env.AC_TEST_DATABASE_URL&&process.env.AC_TEAM_GRAPH_IMAGE&&process.env.AC_TEAM_GRAPH_NETWORK)},async()=>{
+ const root=await mkdtemp(join(tmpdir(),'ac-graph-early-')),initial=join(root,'initial.json');
+ const env:NodeJS.ProcessEnv={...process.env,AC_TEAM_GRAPH_INITIAL_MANIFEST:initial,AC_TEAM_GRAPH_HOLD_INITIAL:'after-area'};delete env.NODE_TEST_CONTEXT;
+ const child=spawn(process.execPath,['--import','tsx','tests/native-graph-physical-recovery.test.ts'],{env,stdio:['ignore','pipe','pipe']});let output='';child.stderr.on('data',x=>output+=String(x));const closed=new Promise<void>(resolve=>child.once('close',()=>resolve()));let primary:unknown,manifest:Awaited<ReturnType<typeof readGraphManifest>>|undefined;
+ try{
+  for(let i=0;i<200;i++){try{manifest=await readGraphManifest(initial,root);break;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}if(child.exitCode!==null)throw Error('CHILD_FAILED '+output);await new Promise(r=>setTimeout(r,50));}
+  assert(manifest,'initial manifest missing');for(let i=0;i<200;i++){try{await readFile(join(manifest.area,'early-ready'));break;}catch{if(child.exitCode!==null)throw Error('CHILD_FAILED '+output);if(i===199)throw Error('EARLY_READY_MISSING');await new Promise(r=>setTimeout(r,50));}}child.kill('SIGKILL');await closed;assert.equal(child.signalCode,'SIGKILL');
+  const admin=new pg.Pool({connectionString:process.env.AC_TEST_DATABASE_URL});try{assert.equal((await admin.query('SELECT 1 FROM pg_database WHERE datname=$1',[new URL(manifest.url).pathname.slice(1)])).rowCount,1);await cleanupGraphFixture(manifest,process.env.AC_TEAM_GRAPH_IMAGE!);assert.equal((await admin.query('SELECT 1 FROM pg_database WHERE datname=$1',[new URL(manifest.url).pathname.slice(1)])).rowCount,0);}finally{await admin.end();}
+  await assert.rejects(lstat(manifest.area),/ENOENT/);
+  console.log(JSON.stringify({controller:'SIGKILL',boundary:'database created before migration',manifest:'private validated',database:'absent',area:'absent'}));
+ }catch(error){primary=error;}finally{const errors:unknown[]=[];try{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await closed;}}catch(error){errors.push(error);}try{if(manifest)await cleanupGraphFixture(manifest,process.env.AC_TEAM_GRAPH_IMAGE!);}catch(error){errors.push(error);}if(!errors.length)try{await rm(root,{recursive:true,force:true});}catch(error){errors.push(error);}if(errors.length)throw new AggregateError(primary?[primary,...errors]:errors,'NATIVE_GRAPH_CLEANUP_FAILED');}if(primary)throw primary;
 });

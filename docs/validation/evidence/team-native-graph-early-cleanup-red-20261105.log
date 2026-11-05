@@ -1,0 +1,32 @@
+TAP version 13
+# Subtest: initial private manifest permits cleanup when controller dies before database creation
+not ok 1 - initial private manifest permits cleanup when controller dies before database creation
+  ---
+  duration_ms: 1761.767002
+  type: 'test'
+  location: '/tmp/ac-native-team-20261105/graph/tests/native-graph-sigkill-recovery.test.ts:1:7676'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    null !== 'SIGKILL'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'SIGKILL'
+  actual: ~
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/ac-native-team-20261105/graph/tests/native-graph-sigkill-recovery.test.ts:64:327)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3027.882845
