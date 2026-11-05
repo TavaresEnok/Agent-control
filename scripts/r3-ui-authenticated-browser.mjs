@@ -72,7 +72,7 @@ try{
   assert.equal((await client.request.post(origin+'/api/v1/ac/auth/session',{headers:{authorization,origin}})).status(),200)
   stage=`verify issued session ${width}`;assert.equal((await client.request.get(origin+'/api/v1/ac/auth/status')).status(),200)
   stage=`load authenticated settings ${width}`;await page.reload();await page.getByLabel('Identificador da sessão Happier',{exact:true}).waitFor();stage=`fill existing conversation ${width}`;await page.getByLabel('Identificador da sessão Happier',{exact:true}).fill(session.id);stage=`link existing conversation ${width}`;const linked=page.waitForResponse(r=>r.url().endsWith('/api/v1/ac/contexts')&&r.request().method()==='POST');await page.getByRole('button',{name:'Vincular conversa',exact:true}).click();assert.equal((await linked).status(),201);stage=`show linked conversation ${width}`;await page.getByRole('button',{name:/Pausar novas etapas|Retomar etapas/}).waitFor()
-  const contexts=await (await client.request.get(origin+'/api/v1/ac/contexts',{headers:{'X-Agent-Control-Project':project.id}})).json();assert.equal(contexts.contexts.length,1);const contextId=contexts.contexts[0].id
+  const contexts=await (await client.request.get(origin+'/api/v1/ac/contexts',{headers:{'X-Agent-Control-Project':project.id}})).json();assert.equal(contexts.contexts.length,width===390&&process.env.AC_R3_UI_DIAGNOSTIC_CATALOG==='1'?2:1);const contextId=contexts.contexts.find(context=>context.session_id===session.id).id
   if(width===360){
    if(process.env.AC_R3_UI_DIAGNOSTIC_CATALOG==='1'){
     stage='diagnostic task catalog';const taskIds=Array.from({length:101},()=>randomUUID());diagnosticRows=taskIds.length
