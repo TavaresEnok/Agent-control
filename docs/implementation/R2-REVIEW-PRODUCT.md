@@ -15,3 +15,7 @@ Base `4aa57f06`. Revisão independente de diffs; implementadores não aprovam su
 ## Harness `947d2513`
 
 Integrável no escopo de revisão estática. O diretório exclusivo de logs corrige a sobrescrita identificada; o runner verifica estado e log do próprio container antes de conectar e documenta que a escolha da porta não é uma reserva atômica. O log `/tmp/ac-isolated-logs-WH8IgU/tests.log` mostra três testes, três passes e zero skips, em snapshot anterior às pequenas mudanças finais; esta revisão não reexecutou o commit final. O ensaio de exportação cobre uma mensagem cifrada, ausência de texto claro/chave e modo 0600, não paginação, recusa de sobrescrita ou restauração. Não é suíte geral nem prova operacional.
+
+## Corrida QA `aa2a726d` + `5724a97e`
+
+Integráveis por revisão estática. O teste observa bloqueio PostgreSQL com `pg_blocking_pids`, commit e rollback da revogação e a referência Git real; também verifica incerteza após SIGKILL antes do helper de identidade. A correção encerra o processo filho também em timeout ou erro. O autor informou reexecução final 1/1, sem skips; esta revisão não a repetiu. Não cobre queda durante helper ou CAS já iniciado nem todas as interleavings.
