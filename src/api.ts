@@ -1,3 +1,4 @@
+import {serverTiming} from './request-timing.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {AdministrativeOperations} from './administrative-operations.ts';
 import { Hono } from 'hono';
@@ -49,8 +50,14 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
   verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
   sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning,quotaRegistry?:{configurationDigest:string;reconcile(accountId?:string):Promise<number>;report:{state:string;realActivation:'blocked';inferenceEnabled:false;registered:number}}) {
-  const app = new Hono<{ Variables: { principal: string } }>();
+  const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
   const control = new Control(ledger,providerAdapters,runtime.projectId,administrative,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
+  app.use('/api/v1/ac/*',async(c,next)=>{
+    c.set('timingStarted',performance.now());c.set('authenticationMs',0);
+    try{await next();}finally{
+      c.header('Server-Timing',serverTiming(c.get('timingStarted'),c.get('authenticationMs')));
+    }
+  });
   app.use('*', async (c, next) => {
     if(sessions&&c.req.method==='GET'){
       const ui=await publicUi(c.req.path);if(ui)return ui;
@@ -58,8 +65,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(c.req.path==='/api/v1/ac/auth/config'&&c.req.method==='GET'){c.header('Cache-Control','no-store');return c.json(authRelay?.config??{enabled:false});}
     if(authRelay&&c.req.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim'].includes(c.req.path))return next();
     if(c.req.path==='/api/v1/ac/auth/session'&&c.req.method==='POST'&&sessions)return next();
+    const authenticationStarted=performance.now();
     const bearer=c.req.raw.headers.get('authorization');
-    const principal = bearer?await authenticate(c.req.raw):await sessions?.authenticate(c.req.raw)??await authenticate(c.req.raw);
+    let principal:string|null|undefined;
+    try{principal=bearer?await authenticate(c.req.raw):await sessions?.authenticate(c.req.raw)??await authenticate(c.req.raw);}
+    finally{c.set('authenticationMs',performance.now()-authenticationStarted);}
     if(principal&&!bearer&&sessions)sessions.checkOrigin(c.req.raw);
     if (!principal) return c.json({ error: 'AUTH_REQUIRED' }, 401);
     c.set('principal', principal); await next();
@@ -109,7 +119,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     })
     .post('/api/v1/ac/auth/pair',async c=>{if(!authRelay)throw new Refusal('INGRESS_DISABLED',403);return authRelay.forward(c.req.raw,'begin');})
     .post('/api/v1/ac/auth/pair/claim',async c=>{if(!authRelay)throw new Refusal('INGRESS_DISABLED',403);return authRelay.forward(c.req.raw,'claim');})
-    .post('/api/v1/ac/auth/session',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.issue(c.req.raw);})
+    .post('/api/v1/ac/auth/session',async c=>{
+      if(!sessions)throw new Refusal('INGRESS_DISABLED',403);const started=performance.now();
+      try{return await sessions.issue(c.req.raw);}finally{c.set('authenticationMs',performance.now()-started);}
+    })
     .post('/api/v1/ac/auth/logout',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.revoke(c.req.raw);})
     .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: runtime.executionMode }))
     .get('/api/v1/ac/projects',async c=>{
@@ -234,7 +247,8 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
     }
     if(path==='/api/v1/workspace/events')return managedWorkspaceStream(ledger,runtime,c.get('principal'),c.req.raw,async()=>{
-      const bearer=c.req.raw.headers.get('authorization');
+      const authenticationStarted=performance.now();
+    const bearer=c.req.raw.headers.get('authorization');
       return bearer?authenticate(c.req.raw):await sessions?.authenticate(c.req.raw)??await authenticate(c.req.raw);
     });
     if(runtime.executionMode==='administration-only'&&/^\/api\/v1\/(?:providers(?:\/status)?|models)$/.test(path))
