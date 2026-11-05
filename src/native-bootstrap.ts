@@ -1,3 +1,4 @@
+import {NativeResourceConfiguration,nativeResourceConfigurationError,prepareNativeResourceAttachment,assertNativeResourceAttachment,type NativeResourceAttachment,type NativeResourceConfigurationReport} from './native-resource-config.ts';
 import {lstat,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 import {createHash,createPrivateKey,createPublicKey} from 'node:crypto';
@@ -29,7 +30,7 @@ export const NativeBootstrapBench=z.object({
  accounts:z.array(AccountBinding).min(1).max(8),planningDigest:Hash,executionDigest:Hash,
 }).strict();
 export const NativeBootstrapConfigured=z.object({
- state:z.literal('configured'),contract:z.literal('native-bootstrap-configured-v1'),projectId:z.uuid(),contextId:z.uuid(),
+ state:z.literal('configured'),contract:z.literal('native-bootstrap-configured-v1'),resources:NativeResourceConfiguration.optional(),projectId:z.uuid(),contextId:z.uuid(),
  epoch:z.number().int().positive(),instanceId:z.uuid(),source:z.literal('authorized-endpoint'),
  accounts:z.array(AccountBinding).min(1).max(8),
  planning:z.object({id:Name,imageId:Image,executorDigest:Hash,signingKeyFile:privatePath,keyFingerprint:Hash,hostRoot:privatePath,accountRoot:privatePath}).strict(),
@@ -42,18 +43,19 @@ export type NativeBootstrapConfig=z.infer<typeof NativeBootstrapConfig>;
 
 export type NativeBootstrapReport={
  schemaVersion:1;state:'disabled'|'bench-ready'|'activation-blocked';executionEnabled:false;inferenceEnabled:false;
- realAccountsEnabled:false;adaptersComposed:boolean;ready:false;dormantGuard:'sql-042';capacityGuard:'intact';
+ realAccountsEnabled:false;adaptersComposed:boolean;ready:false;dormantGuard:'sql-042';capacityGuard:'intact';resources?:NativeResourceConfigurationReport;
  reason?:'PROVIDER_RUNTIME_NOT_ACTIVATED'|'NATIVE_ACTIVATION_NOT_PERMITTED'|'BENCH_SUBSTITUTE_ONLY';
 };
 export type NativeBootstrapAttachment={
  projectId:string;state:'bench-ready'|'activation-blocked';executionEnabled:boolean;inferenceEnabled:boolean;
- report:NativeBootstrapReport;readSource?:(authority:Authority)=>Promise<string>;
+ report:NativeBootstrapReport;resources?:NativeResourceAttachment;readSource?:(authority:Authority)=>Promise<string>;
  /** Present only for an injected bench. The runtime must not call these adapters. */
  benchAdapters?:{planning:CodexPlanningAdapter;execution:CodexExecutionAdapter};
 };
 /** Shared refusal used by the runtime. Opt-in never turns execution or inference on. */
 export function assertNativeBootstrapAttachment(projectId:string,attachment:NativeBootstrapAttachment,linked:{implementation?:boolean;executions?:number;planning?:number}={}){
  if(attachment.projectId!==projectId)throw new Refusal('NATIVE_BOOTSTRAP_PROJECT_MISMATCH',403);
+ if(attachment.resources){assertNativeResourceAttachment(attachment.resources);if(attachment.report.resources!==attachment.resources.report)throw new Refusal('NATIVE_RESOURCE_ATTACHMENT_INVALID',403);}
  if(attachment.executionEnabled!==false||attachment.inferenceEnabled!==false)throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
  if(attachment.state==='activation-blocked'&&(linked.implementation||(linked.executions??0)>0||(linked.planning??0)>0))throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
 }
@@ -69,18 +71,19 @@ type Component={name:string;phase:'constructed'|'proven-not-started'|'uncertain'
 const guards={dormantGuard:'sql-042' as const,capacityGuard:'intact' as const,executionEnabled:false as const,inferenceEnabled:false as const,realAccountsEnabled:false as const,ready:false as const,schemaVersion:1 as const};
 export function disabledNativeBootstrapReport():NativeBootstrapReport{return {...guards,state:'disabled',adaptersComposed:false};}
 /** Disabled stays unwired. A configured report is attached as activation-blocked and cannot opt the runtime into execution. Bench stays on the injection path. */
-export function nativeBootstrapRuntimeAttachment(projectId:string,report:NativeBootstrapReport):NativeBootstrapAttachment|undefined{
+export function nativeBootstrapRuntimeAttachment(projectId:string,report:NativeBootstrapReport,resources?:NativeResourceAttachment):NativeBootstrapAttachment|undefined{
  if(report.state==='disabled')return undefined;
  if(report.state!=='activation-blocked'||report.executionEnabled||report.inferenceEnabled||report.realAccountsEnabled||report.ready||report.adaptersComposed)
   throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
- const attachment:NativeBootstrapAttachment={projectId,state:'activation-blocked',executionEnabled:false,inferenceEnabled:false,report};
+ if(Boolean(report.resources)!==Boolean(resources))throw new Refusal('NATIVE_BOOTSTRAP_RESOURCES_UNAVAILABLE',403);
+ const attachment:NativeBootstrapAttachment={projectId,state:'activation-blocked',executionEnabled:false,inferenceEnabled:false,report,...(resources?{resources}:{})};
  assertNativeBootstrapAttachment(projectId,attachment);
  return attachment;
 }
 
 /** Synchronous binding checks. A returned code means the configuration is refused before files, database writes, Docker or models. */
 export function nativeBootstrapSchemaError(value:{project:{id:string;repo:string};projects:{repo:string}[];dataDirectory:string;
- contextVault?:{directory:string;masterFile:string};managerTransport?:{contexts:{projectId:string;contextId:string}[]};nativeBootstrap?:NativeBootstrapConfig}):string|undefined{
+ contextVault?:{directory:string;masterFile:string};accountHomesDirectory?:string;remoteReturn?:{credentials:{path:string}[]};managerTransport?:{tokenFile?:string;contexts:{projectId:string;contextId:string}[]};nativeBootstrap?:NativeBootstrapConfig}):string|undefined{
  const boot=value.nativeBootstrap;if(!boot||boot.state==='disabled')return;
  if(boot.projectId!==value.project.id)return 'NATIVE_BOOTSTRAP_PROJECT_MISMATCH';
  if(new Set(boot.accounts.map(account=>account.accountId)).size!==boot.accounts.length)return 'NATIVE_BOOTSTRAP_ACCOUNT_DUPLICATE';
@@ -102,6 +105,7 @@ export function nativeBootstrapSchemaError(value:{project:{id:string;repo:string
  const keys=[boot.planning.signingKeyFile,boot.execution.signingKeyFile,boot.review.signingKeyFile];
  if(new Set(keys).size!==keys.length||keys.some(key=>roots.some(root=>overlaps(key,root))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
  if(value.contextVault&&[value.contextVault.directory,value.contextVault.masterFile].some(vault=>paths.some(path=>overlaps(path,vault))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
+ if(boot.resources){const error=nativeResourceConfigurationError(boot.resources,{dataDirectory:value.dataDirectory,planningRoot:boot.planning.hostRoot,executionRoot:boot.execution.hostRoot,protectedPaths:[...repos,...keys,boot.planning.accountRoot,boot.execution.accountRoot,...(value.accountHomesDirectory?[value.accountHomesDirectory]:[]),...(value.managerTransport?.tokenFile?[value.managerTransport.tokenFile]:[]),...(value.remoteReturn?.credentials.map(item=>item.path)??[]),...(value.contextVault?[value.contextVault.directory,value.contextVault.masterFile]:[])]});if(error)return error;}
  return;
 }
 
@@ -166,7 +170,7 @@ export function assertManagerTransportAllowed(config:{nativeBootstrap?:{state?:s
  if(config.nativeBootstrap?.state==='bench')throw new Refusal('NATIVE_BOOTSTRAP_BENCH_REQUIRES_INJECTION');
 }
 
-export async function prepareNativeBootstrap(config:Installation,client?:BootstrapQuery):Promise<{report:NativeBootstrapReport;session:NativeBootstrapSession}>{
+export async function prepareNativeBootstrap(config:Installation,client?:BootstrapQuery):Promise<{report:NativeBootstrapReport;session:NativeBootstrapSession;resources?:NativeResourceAttachment}>{
  const session=new NativeBootstrapSession();
  const boot=config.nativeBootstrap;
  if(!boot||boot.state==='disabled')return {report:disabledNativeBootstrapReport(),session};
@@ -207,9 +211,15 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
    WHERE a.id = ANY($1::uuid[])`,[boot.accounts.map(account=>account.accountId),boot.projectId]);
   const bound=boot.accounts.every(account=>accounts.rows.some(row=>String(row.id)===account.accountId&&String(row.provider)==='codex'&&String(row.resource_identity)==='codex:'+account.subjectDigest));
   if(accounts.rows.length!==boot.accounts.length||!bound)throw new Refusal('NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND',403);
+  let resources:NativeResourceAttachment|undefined;
+  if(boot.resources){
+   const identity=await client.query('SELECT id FROM ac_installation_identity WHERE singleton=true');
+   if(identity.rows.length!==1||typeof identity.rows[0]?.id!=='string')throw new Refusal('NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH',403);
+   resources=await prepareNativeResourceAttachment(boot.resources,identity.rows[0].id);
+  }
   const realEnabled=accounts.rows.some(account=>String(account.mode)!=='synthetic'&&account.enabled===true);
   // Opt-in is not an activation permit. SQL 042 and Capacity stay in place; no account row is changed.
-  return {session,report:{...guards,state:'activation-blocked',adaptersComposed:false,reason:realEnabled?'PROVIDER_RUNTIME_NOT_ACTIVATED':'NATIVE_ACTIVATION_NOT_PERMITTED'}};
+  return {session,...(resources?{resources}:{}),report:{...guards,state:'activation-blocked',adaptersComposed:false,...(resources?{resources:resources.report}:{}),reason:realEnabled?'PROVIDER_RUNTIME_NOT_ACTIVATED':'NATIVE_ACTIVATION_NOT_PERMITTED'}};
  }catch(error){await session.shutdown();throw error;}
  finally{for(const bytes of buffers)bytes.fill(0);}
 }

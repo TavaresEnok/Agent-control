@@ -443,3 +443,27 @@ test('manager transport and registry do not start for bench bootstrap or an unbo
   assert.throws(()=>assertNativeBootstrapAttachment(env.projectId,{projectId:env.projectId,state:'activation-blocked',executionEnabled:false,inferenceEnabled:false,report:{...disabledNativeBootstrapReport(),state:'activation-blocked',reason:'NATIVE_ACTIVATION_NOT_PERMITTED'}},{executions:1}),/NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED/);
  }finally{globalThis.fetch=original;await rm(env.root,{recursive:true,force:true});}
 });
+
+test('configured resource attachment maps explicit database identity and keeps native activation blocked without host effects',async()=>{
+ const env=await layout(),databaseInstallationId=randomUUID(),qaRoot=join(env.data,'qa-host');await mkdir(qaRoot,{mode:0o700});
+ try{
+  const resources={state:'configured-inactive' as const,contract:'native-resource-authority-configured-v1' as const,databaseInstallationId,authority:{installationId:'explicit-lab-installation',authorityEpoch:1,resourceAuthority:{authorityId:'ac-r3-resources-bootstrap-fixture',anchorId:'a'.repeat(64),cpuQuotaMicros:50000,cpuPeriodMicros:100000,memoryBytes:67108864,pidsLimit:32,maxJobs:3}},roots:{planning:env.dirs[0],execution:env.dirs[2],qa:qaRoot}};
+  const config=configured(env,{resources});let actualIdentity=databaseInstallationId;const queries:string[]=[];
+  const client={async query(sql:string){queries.push(sql);assert.match(sql,/^SELECT/);
+   if(sql.includes('ac_managers'))return {rows:[{instance_id:env.instanceId,epoch:3,project_id:env.projectId}],rowCount:1};
+   if(sql.includes('ac_accounts'))return {rows:[{id:env.accountId,mode:'subscription_cli',enabled:false,provider:'codex',resource_identity:'codex:'+hash('subject')}],rowCount:1};
+   if(sql.includes('ac_installation_identity'))return {rows:[{id:actualIdentity}],rowCount:1};throw Error('UNEXPECTED_QUERY');
+  }};
+  const prepared=await prepareNativeBootstrap(config,client);assert(prepared.resources);
+  assert.equal(prepared.report.resources?.state,'configured-inactive');assert.equal(prepared.report.resources?.physicalVerification,'not-requested');
+  for(const flag of ['executionEnabled','inferenceEnabled','realAccountsEnabled','adaptersComposed','ready'] as const)assert.equal(prepared.report[flag],false);
+  assert.throws(()=>nativeBootstrapRuntimeAttachment(env.projectId,prepared.report),/NATIVE_BOOTSTRAP_RESOURCES_UNAVAILABLE/);
+  const attachment=nativeBootstrapRuntimeAttachment(env.projectId,prepared.report,prepared.resources);assert(attachment);assertNativeBootstrapAttachment(env.projectId,attachment);
+  assert.throws(()=>assertNativeBootstrapAttachment(env.projectId,attachment,{executions:1}),/NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED/);
+  const serialization=JSON.stringify(attachment);for(const value of [databaseInstallationId,resources.authority.installationId,resources.authority.resourceAuthority.authorityId,resources.authority.resourceAuthority.anchorId,...Object.values(resources.roots),...Object.values(env.keys)])assert(!serialization.includes(value));
+  const envelope=await attachment.resources!.envelopeForRoot('qa');assert.equal(envelope.stateRoot,qaRoot);assert.equal(envelope.installationId,resources.authority.installationId);assert.notEqual(envelope.installationId,databaseInstallationId);
+  actualIdentity=randomUUID();await assert.rejects(prepareNativeBootstrap(config,client),/NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH/);
+  assert.equal(queries.filter(sql=>sql.includes('ac_installation_identity')).length,2);
+  assert.throws(()=>configured(env,{resources:{...resources,roots:{...resources.roots,qa:env.dirs[1]}}}),/NATIVE_RESOURCE_ROOT_FORBIDDEN/);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
