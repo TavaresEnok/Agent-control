@@ -13,6 +13,7 @@ import {projectRepositoryIdentity} from './project-repository.ts';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {Template} from './templates.ts';
+import {requireProjectEnvironment,requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {remoteImplementationWritePaths} from './remote-write-paths.ts';
 import {RemoteOperations,type RemoteTransport} from './remote.ts';
 
@@ -43,6 +44,7 @@ export class RemoteDevelopment{
    if(!source)throw new Refusal('REMOTE_WORKSPACE_SOURCE_REQUIRED');
    const {commit,tree}=source.remote_receipt??{};GitObjectId.parse(commit);GitObjectId.parse(tree);
    if(source.request_digest!==digest({action:'git-export',operationId:source.id,intentId:source.intent_id,contextId:input.contextId,hostId:input.hostId,commit,tree}))throw new Refusal('REMOTE_WORKSPACE_SOURCE_MISMATCH');
+   await requireProjectEnvironment(c,{projectId:context.project_id,contextId:input.contextId,hostId:input.hostId,purpose:'remote-development'});
    const authorization=await requireRemoteSource(c,{contextId:input.contextId,projectId:context.project_id,intentId:input.intentId,hostId:input.hostId,commit,tree});
    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,76))',[input.workspaceId]);
    const prior=(await c.query('SELECT request_digest FROM ac_remote_development_workspaces WHERE id=$1',[input.workspaceId])).rows[0];
@@ -59,6 +61,7 @@ export class RemoteDevelopment{
    if(!host)throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
    await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[input.contextId]);
+   await requireProjectEnvironment(c,{projectId:workspace.project_id,contextId:input.contextId,hostId:input.hostId,purpose:'remote-development'});
    const reply=Prepared.parse(await this.transport.exchange(host,{schemaVersion:1,action:'git-workspace-prepare',operationId:input.workspaceId,projectId:workspace.project_id,commit:workspace.source_commit,tree:workspace.source_tree}));
    if(reply.operationId!==input.workspaceId||reply.projectId!==workspace.project_id||reply.commit!==workspace.source_commit||reply.tree!==workspace.source_tree)throw new Refusal('REMOTE_WORKSPACE_RECEIPT_MISMATCH');
    await c.query("UPDATE ac_remote_development_workspaces SET state='prepared',remote_receipt=$2,manager_epoch=$3 WHERE id=$1",[input.workspaceId,reply,authority.epoch]);
@@ -84,6 +87,15 @@ export class RemoteDevelopment{
    const payload=Command.parse(intent.command).payload;
    if(!['engineering-native-v1','engineering-synthetic-v1'].includes(payload.workflow)||intent.principal_id!==principal||!operation||Number(operation.manager_epoch)!==authority.epoch)throw new Refusal('REMOTE_IMPLEMENTATION_SCOPE_MISMATCH');
    if(payload.workflow!=='engineering-native-v1'&&payload.workflow!=='engineering-synthetic-v1')throw new Refusal('REMOTE_IMPLEMENTATION_SCOPE_MISMATCH');
+   if(payload.workflow==='engineering-synthetic-v1'){
+    const candidates=[...this.options.implementationProfiles?.values()??[]].filter(profile=>profile.hostId===workspace.host_id&&profile.taskId===value.taskId);
+    const scopes=candidates.map(profile=>remoteImplementationWritePaths(profile.writePaths??[],profile.writePaths).sort());
+    if(!scopes.length||new Set(scopes.map(paths=>digest(paths))).size!==1)throw new Refusal('REMOTE_IMPLEMENTATION_PROFILE_AMBIGUOUS');
+    const snapshot={schemaVersion:1,source:'remote-fixed-task',hostId:workspace.host_id,taskId:value.taskId,writePaths:scopes[0]},hash=digest(snapshot);
+    const prior=(await c.query('SELECT snapshot,digest FROM ac_project_environment_write_scopes WHERE intent_id=$1',[intent.id])).rows[0];
+    if(prior&&(digest(prior.snapshot)!==prior.digest||prior.digest!==hash))throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_CONFLICT');
+    if(!prior)await c.query('INSERT INTO ac_project_environment_write_scopes VALUES($1,$2,$3)',[intent.id,snapshot,hash]);
+   }
    let contract=(await c.query('SELECT * FROM ac_execution_contracts WHERE intent_id=$1',[intent.id])).rows[0];
    if(!contract&&payload.workflow==='engineering-synthetic-v1'){
     const selected=(await c.query('SELECT snapshot,digest FROM ac_intent_templates WHERE intent_id=$1',[intent.id])).rows[0];
@@ -94,6 +106,8 @@ export class RemoteDevelopment{
     contract=(await c.query('SELECT * FROM ac_execution_contracts WHERE intent_id=$1',[intent.id])).rows[0];
    }
    if(!contract||contract.digest!==digest({qualityRevision:Number(contract.quality_revision),targetRef:contract.target_ref})||(payload.workflow==='engineering-native-v1'&&(Number(contract.quality_revision)!==payload.qualityRevision||contract.target_ref!==payload.targetRef)))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
+   await requireProjectEnvironment(c,{projectId:workspace.project_id,contextId:authority.contextId,intentId:intent.id,hostId:workspace.host_id,destinationRef:contract.target_ref,purpose:'remote-development'});
+   await requireProjectEnvironmentLaunch(c,{intentId:intent.id,base:workspace.source_commit,targetRef:contract.target_ref});
    return {workspace,intent,operation,payload,contract};
   });
   const capacity=new Capacity(this.ledger),grant=await capacity.reserve(principal,{attemptId:bound.operation.execution_attempt_id,intentId:bound.intent.id,contextId:authority.contextId,role:'programmer'},authority);
@@ -114,7 +128,7 @@ export class RemoteDevelopment{
    await this.context(c,principal,authority.contextId,authority);await this.ledger.assertIntentActive(c,authority.contextId,bound.intent.id);
    await refuseCurrentProtectedGate(c,bound.workspace.project_id,writePaths);
    const prior=(await c.query('SELECT * FROM ac_remote_development_implementations WHERE workspace_id=$1',[value.workspaceId])).rows[0];
-   const frozen={workspaceId:value.workspaceId,taskId:value.taskId,sourceCommit:bound.workspace.source_commit,writePaths,targetRef:bound.contract.target_ref,qualityRevision:Number(bound.contract.quality_revision),messageDigest:bound.payload.workflow==='engineering-native-v1'?bound.payload.messageDigest:digest({fixedTask:value.taskId,writePaths})};
+   const frozen={workspaceId:value.workspaceId,taskId:value.taskId,sourceCommit:bound.workspace.source_commit,writePaths,...(configured.writePaths?{profileWritePaths:remoteImplementationWritePaths(configured.writePaths,undefined),profileId:grant.profile_id}:{}),targetRef:bound.contract.target_ref,qualityRevision:Number(bound.contract.quality_revision),messageDigest:bound.payload.workflow==='engineering-native-v1'?bound.payload.messageDigest:digest({fixedTask:value.taskId,writePaths})};
    if(prior){if(prior.operation_id!==bound.operation.id||prior.grant_id!==grant.id||prior.session_id!==value.sessionId||prior.input_digest!==digest(frozen))throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_CONFLICT');return;}
    const operation=(await c.query('SELECT * FROM ac_operations WHERE id=$1 FOR UPDATE',[bound.operation.id])).rows[0];
    if(operation.state!=='registered'||operation.handle||operation.native_session_id||operation.grant_id&&operation.grant_id!==grant.id)throw new Refusal('REMOTE_IMPLEMENTATION_ALREADY_STARTED');
@@ -180,6 +194,7 @@ export class RemoteDevelopment{
    if(!execution||execution.remote_receipt?.workspaceId!==value.workspaceId||execution.remote_receipt?.root!==workspace.remote_receipt.repository||execution.remote_receipt?.exitCode!==0)throw new Refusal('REMOTE_WORKSPACE_EXECUTION_UNPROVEN');
    const host=(await c.query("SELECT * FROM ac_remote_hosts WHERE id=$1 AND enabled AND 'git-workspace'=ANY(allowed_tasks) FOR SHARE",[workspace.host_id])).rows[0];
    if(!host)throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
+   await requireProjectEnvironment(c,{projectId:workspace.project_id,contextId:value.contextId,intentId:workspace.intent_id,hostId:workspace.host_id,purpose:'remote-development'});
    const reply=Snapshot.parse(await this.transport.exchange(host,{schemaVersion:1,action:'git-workspace-snapshot',operationId:value.workspaceId,projectId:workspace.project_id,executionOperationId:value.executionOperationId}));
    if(reply.workspaceId!==value.workspaceId||reply.operationId!==value.workspaceId||reply.executionOperationId!==value.executionOperationId||reply.base!==workspace.source_commit)throw new Refusal('REMOTE_WORKSPACE_SNAPSHOT_MISMATCH');
    const exported=verifyGitExport({schemaVersion:reply.schemaVersion,operationId:reply.operationId,projectId:reply.projectId,commit:reply.commit,tree:reply.tree,bundle:reply.bundle,bundleSha256:reply.bundleSha256},

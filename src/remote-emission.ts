@@ -2,6 +2,8 @@ import pg from 'pg';
 import {Authority,Refusal,digest} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Capacity} from './capacity.ts';
+import {requireProjectEnvironment,requireProjectEnvironmentLaunch} from './project-environments.ts';
+import {remoteImplementationWritePaths} from './remote-write-paths.ts';
 
 type Input={workspaceId:string;operationId:string;contextId:string;intentId:string;taskId:string};
 /** A no-effect receipt is local controller evidence, never a remote terminal log.
@@ -38,6 +40,23 @@ export async function beginRemoteImplementationEmission(c:pg.PoolClient,ledger:L
    AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available' FOR SHARE OF p`,
   [input.workspaceId,input.operationId,input.taskId,input.contextId,input.intentId,authority.epoch]);
  if(!eligible.rowCount)return rejectBeforeEmission(c,ledger,principal,input,authority,'REMOTE_IMPLEMENTATION_START_NOT_ELIGIBLE');
+ // Recheck environment/source/path authority at the final emission fence, not
+ // only at reservation. Any deterministic preflight refusal remains no-effect.
+ try{
+  const bound=(await c.query(`SELECT w.*,i.input_snapshot,i.input_digest,g.profile_id FROM ac_remote_development_workspaces w
+   JOIN ac_remote_development_implementations i ON i.workspace_id=w.id JOIN ac_capacity_grants g ON g.id=i.grant_id
+   WHERE w.id=$1 AND i.operation_id=$2`,[input.workspaceId,input.operationId])).rows[0];
+  if(!bound||digest(bound.input_snapshot)!==bound.input_digest)throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_REQUIRED');
+  if(bound.input_snapshot.profileId&&bound.input_snapshot.profileId!==bound.profile_id)throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_CONFLICT');
+  const paths=remoteImplementationWritePaths(bound.input_snapshot.writePaths,bound.input_snapshot.profileWritePaths);
+  const scope=(await c.query('SELECT snapshot,digest FROM ac_project_environment_write_scopes WHERE intent_id=$1',[input.intentId])).rows[0];
+  if(scope){
+   if(digest(scope.snapshot)!==scope.digest||scope.snapshot.source!=='remote-fixed-task'||scope.snapshot.hostId!==bound.host_id||scope.snapshot.taskId!==input.taskId)throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_CONFLICT');
+   remoteImplementationWritePaths(paths,scope.snapshot.writePaths);
+  }
+  await requireProjectEnvironment(c,{projectId:bound.project_id,contextId:input.contextId,intentId:input.intentId,hostId:bound.host_id,destinationRef:bound.input_snapshot.targetRef,purpose:'remote-development'});
+  await requireProjectEnvironmentLaunch(c,{intentId:input.intentId,base:bound.source_commit,targetRef:bound.input_snapshot.targetRef});
+ }catch(error){if(error instanceof Refusal)return rejectBeforeEmission(c,ledger,principal,input,authority,error.code);throw error;}
  // The row and its FK parents were committed during implementation binding;
  // this independent autocommit does not depend on uncommitted outer writes.
  // The outer transaction still holds authority, intent and physical-account

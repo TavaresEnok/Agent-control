@@ -9,6 +9,8 @@ import {Ledger} from '../src/ledger.ts';
 import {Operators,operatorMessage} from '../src/operator.ts';
 import {Control} from '../src/control.ts';
 import {RemoteOperations,OpenSshTransport,type RemoteTransport} from '../src/remote.ts';
+import {ProjectEnvironments} from '../src/project-environments.ts';
+import {Templates} from '../src/templates.ts';
 import {ProjectAdmin} from '../src/project-admin.ts';
 import {createProjectAdminApi} from '../src/project-admin-api.ts';
 import {createProjectGateway} from '../src/projects-api.ts';
@@ -27,7 +29,7 @@ test('R3 signed approved artifact returns over pinned real SSH with CAS and dura
   command('sudo',['-n','mount','-t','tmpfs','-o',`size=64m,mode=0700,uid=${process.getuid?.()},gid=${process.getgid?.()}`,'ac-r3-delivery',scratch]);mounted=true;
   await chmod(root,0o755);
   const repo=join(root,'original'),bare=join(root,'destination.git'),config=join(root,'worker.json');
-  command('git',['init','-q','-b','agent-control-export',repo]);await writeFile(join(repo,'file.txt'),'source\n');
+  command('git',['init','-q','-b','agent-control-export',repo]);await mkdir(join(repo,'src'));await writeFile(join(repo,'src/file.txt'),'source\n');
   git(repo,'add','.');git(repo,'-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','source');
   const source=git(repo,'rev-parse','HEAD'),sourceTree=git(repo,'rev-parse','HEAD^{tree}');
   command('git',['clone','--bare','-q',repo,bare]);
@@ -51,7 +53,10 @@ test('R3 signed approved artifact returns over pinned real SSH with CAS and dura
   const installation=(await db.pool.query('SELECT id FROM ac_installation_identity')).rows[0].id;
   const proof=(value:Record<string,unknown>)=>{const info={deviceId,expiresAt:Date.now()+120000};return {...info,signature:sign(null,Buffer.from(operatorMessage(principal,value,info,installation)),keys.privateKey).toString('hex')};};
   const contextId=await db.createContext(principal,projectId,randomUUID()),authority=await db.acquire(principal,contextId,randomUUID(),'fixture',60);
-  const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:r3-delivery'}},authority,'api');
+  const quality={schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireJudge:false,requireHumanIntegration:true,verifierDigest:'a'.repeat(64)};
+  await db.pool.query('INSERT INTO ac_quality_policies VALUES($1,1,$2,$3)',[projectId,quality,digest(quality)]);
+  await new Templates(db).publish(principal,contextId,0,{workflow:'engineering-synthetic-v1',qualityRevision:1,targetRef:'refs/heads/agent-control-export'});
+  const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',payload:{workflow:'engineering-synthetic-v1',messageRef:'encrypted:r3-delivery'}},authority,'api');
   const ssh=new OpenSshTransport(async id=>{assert.equal(id,credentialId);return join(root,'controller');},new Set(['127.0.0.1']));
   const remote=new RemoteOperations(db,ssh);
   await remote.registerHost(principal,projectId,{id:hostId,label:'Disposable return host',hostname:'127.0.0.1',port,username:'node',publicKey:(await readFile(join(root,'host.pub'),'utf8')).trim(),fingerprint,credentialRef:credentialId,remoteRoot:bare,allowedTasks:['git-export','git-return'],maxConcurrent:2});
@@ -63,12 +68,17 @@ test('R3 signed approved artifact returns over pinned real SSH with CAS and dura
   const service=new ProjectAdmin(db,[{id:'fixture',label:'Disposable root',path:root}],join(root,'private'),{remoteSourceTmpfs:scratch,remoteReturnTransport:transport});
   const materialize={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'project.materializeRemoteSource',payload:{projectId,contextId,hostId,operationId,commit:source,tree:sourceTree,bundle:exported.bundle.toString('base64')}};
   await service.execute(principal,materialize,proof(materialize));
-  const local=join(root,'remote-sources',projectId);await writeFile(join(local,'file.txt'),'approved change\n');git(local,'add','.');git(local,'-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','approved');
+  const environments=new ProjectEnvironments(db,[{id:'fixture',path:root}],join(root,'private'));
+  const environmentCommand={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'project.environments.configure',payload:{projectId,expectedRevision:0,config:{sourceBranch:'refs/heads/agent-control-export',environments:[{id:'lab',label:'Disposable lab',targetRef:'refs/heads/agent-control-export',authorizedDirectories:['src'],destinations:[{id:'local',label:'Local repository',kind:'local_repository'},{id:'remote',label:'Disposable return',kind:'remote',hostId,allowedPurposes:['remote-return']}]}]}}};
+  await environments.configure(principal,environmentCommand,proof(environmentCommand));
+  const fixedScope={schemaVersion:1,source:'remote-fixed-task',hostId,taskId:'fixture',writePaths:['src/file.txt']};
+  await db.pool.query('INSERT INTO ac_project_environment_write_scopes VALUES($1,$2,$3)',[intent.id,fixedScope,digest(fixedScope)]);
+  await db.pool.query('INSERT INTO ac_execution_contracts VALUES($1,$2,1,$3,$4)',[intent.id,projectId,'refs/heads/agent-control-export',digest({qualityRevision:1,targetRef:'refs/heads/agent-control-export'})]);
+  const local=join(root,'remote-sources',projectId);await writeFile(join(local,'src/file.txt'),'approved change\n');git(local,'add','.');git(local,'-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','approved');
   const commit=git(local,'rev-parse','HEAD'),tree=git(local,'rev-parse','HEAD^{tree}'),artifactId=randomUUID(),account=randomUUID(),profile=randomUUID(),grant=randomUUID();
   // Durable synthetic artifact/review/integration fixture. No model call or QA
   // execution is claimed: this test exercises the downstream authorization gate.
-  const quality={schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireJudge:false,requireHumanIntegration:true,verifierDigest:'a'.repeat(64)};
-  await db.pool.query('INSERT INTO ac_quality_policies VALUES($1,1,$2,$3)',[projectId,quality,digest(quality)]);
+
   await db.pool.query('INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,$3,$4)',[projectId,digest({schemaVersion:1}),{schemaVersion:1},principal]);
   await db.pool.query(`INSERT INTO ac_accounts(id,owner_id,provider,label,resource_identity,mode,eligibility,eligibility_source,max_concurrent) VALUES($1,$2,'fixture','fixture',$3,'synthetic','documented_supported','synthetic://r3-delivery',1)`,[account,principal,account]);
   await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role) VALUES($1,$2,'fixture','medium','programmer')",[profile,account]);
@@ -107,7 +117,7 @@ test('R3 signed approved artifact returns over pinned real SSH with CAS and dura
   }
   await assert.rejects(db.pool.query('UPDATE ac_remote_artifact_returns SET principal_id=$1',[principal+'-changed']),/IMMUTABLE|immutable/);
   git(bare,'fsck','--strict');assert.equal(git(bare,'rev-parse',commit+'^{tree}'),tree);
-  assert.equal(git(bare,'show',commit+':file.txt'),'approved change');assert.equal(git(bare,'show',source+':file.txt'),'source');
+  assert.equal(git(bare,'show',commit+':src/file.txt'),'approved change');assert.equal(git(bare,'show',source+':src/file.txt'),'source');
   console.log(JSON.stringify({proof:'r3-delivery-ssh',source,commit,tree,concurrent,sshCalls:calls,returnReceipts:1,scope:'disposable synthetic artifact; real Git/SSH/PG and signatures'}));
  }finally{
   const failures:unknown[]=[];

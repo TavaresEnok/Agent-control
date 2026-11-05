@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {access,readFile,writeFile} from 'node:fs/promises';
+import {access,readFile,writeFile,rename,mkdir,symlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {Capacity} from '../src/capacity.ts';
 import {labGit,remoteDevelopmentLab} from './fixtures/r3-delivery-lab.ts';
@@ -132,4 +132,26 @@ test('R3 durable emission uses a bounded dedicated connection while all shared p
   await assert.rejects(access(join(lab.workspaceRoot,workspaceId,'execution.json')),/ENOENT/);
   console.log(JSON.stringify({proof:'r3-emission-pool-saturation',occupiedSharedSlots:lab.db.pool.options.max??8,dedicatedConnection:true,physicalSshStarts:0,phase:'emitting-conservative'}));
  }finally{pg.Client.prototype.query=original;await lab.close();}
+});
+
+
+test('R4 final remote emission refuses a replaced configured directory and settles no-effect', {timeout:120000},async()=>{
+ const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const lab=await remoteDevelopmentLab(base);
+ try{
+  const workspaceId=randomUUID();
+  await lab.development.prepare(lab.principal,{workspaceId,contextId:lab.contextId,intentId:lab.intent.id,hostId:lab.hostId,sourceOperationId:lab.sourceOperationId},lab.authority);
+  const start=lab.development.start.bind(lab.development);
+  lab.development.start=async(...args)=>{
+   await rename(join(lab.local,'src'),join(lab.local,'src-original'));
+   await mkdir(join(lab.root,'outside'),{mode:0o700});await symlink(join(lab.root,'outside'),join(lab.local,'src'));
+   return start(...args);
+  };
+  await assert.rejects(lab.development.launchImplementation(lab.principal,{workspaceId,taskId:'implement',sessionId:randomUUID()},lab.authority),/PROJECT_ENVIRONMENT_FILESYSTEM_CHANGED/);
+  const emission=(await lab.db.pool.query('SELECT phase,reason,grant_id FROM ac_remote_implementation_emissions WHERE operation_id=$1',[lab.intent.operation_id])).rows[0];
+  assert.equal(emission.phase,'no_effect');assert.equal(emission.reason,'PROJECT_ENVIRONMENT_FILESYSTEM_CHANGED');
+  assert.equal((await lab.db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[emission.grant_id])).rows[0].state,'released');
+  await assert.rejects(access(join(lab.workspaceRoot,workspaceId,'execution.json')),/ENOENT/);
+  console.log(JSON.stringify({proof:'r4-emission-environment-symlink',phase:emission.phase,reason:emission.reason,physicalClaim:false,reservation:'released-not-started'}));
+ }finally{await lab.close();}
 });

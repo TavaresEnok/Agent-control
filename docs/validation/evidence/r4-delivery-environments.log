@@ -1,0 +1,66 @@
+TAP version 13
+# {"proof":"r4-api-pool-counterproof","simultaneousAuthorityTransactions":8,"sharedPoolMax":8,"barrierReleased":true,"httpStatuses":[409,409,409,409,409,409,409,409],"sharedPoolWaiters":0}
+# {"proof":"r3-remote-development-product-api","entry":"signed authenticated gateway","mode":"synthetic-fixed-task-v1","liveManagerRequired":true,"sourcePreparation":true,"physicalLaunch":true,"qualityRegistration":true,"arbitraryTaskAccepted":false,"approval":"not_reviewed"}
+# Subtest: R3 configured signed product API prepares, launches and registers exact remote output under live manager authority
+ok 1 - R3 configured signed product API prepares, launches and registers exact remote output under live manager authority
+  ---
+  duration_ms: 16600.133788
+  type: 'test'
+  ...
+# Subtest: configured remote write paths constrain canonical native intent paths before emission
+ok 2 - configured remote write paths constrain canonical native intent paths before emission
+  ---
+  duration_ms: 10.684903
+  type: 'test'
+  ...
+# {"proof":"r3-delivery-ssh","source":"9cc01e8c8814b799ded5e478465b75251bf3ae03","commit":"48cf034ed8b2604c148d72071b3caacfb2e6985a","tree":"699af056c3e5d0be4a2f849142166da735138b9a","concurrent":"770687dd8f07f70244dc3baaf4230e760c05e5b2","sshCalls":3,"returnReceipts":1,"scope":"disposable synthetic artifact; real Git/SSH/PG and signatures"}
+# Subtest: R3 signed approved artifact returns over pinned real SSH with CAS and durable lost-ACK replay
+ok 3 - R3 signed approved artifact returns over pinned real SSH with CAS and durable lost-ACK replay
+  ---
+  duration_ms: 16348.454648
+  type: 'test'
+  ...
+# {"proof":"r3-direct-remote-development","workspaceId":"bc6063c4-e91f-4759-8e70-968f2d8fb660","commit":"3a63aa34b9d45777e6ba7989424c4518300e5ebb","tree":"3ac503e9b614e57f3ea0237aa7e18159cc30f8d3","source":"3cd1a7502c0840b1778db7ab66765e8131f60ec9","writer":"real SSH Docker fixed executable","artifactRegistration":"Capacity+Quality APIs","untrackedExported":false,"sealedReplay":true,"qualityStatus":"not_reviewed"}
+# Subtest: R3 direct remote workspace uses one Docker writer, seals exact output, registers through real Capacity and Quality
+ok 4 - R3 direct remote workspace uses one Docker writer, seals exact output, registers through real Capacity and Quality
+  ---
+  duration_ms: 16787.831398
+  type: 'test'
+  ...
+# {"proof":"r3-remote-no-effect","operationId":"2536dc41-81cd-4664-9ecd-d4dfe45f0d9e","phase":"no_effect","physicalClaim":false,"reservation":"released-not-started","reusedAttempt":false}
+# Subtest: R3 late quota refusal commits local no-effect, releases only the reserved grant, and requires a new attempt
+ok 5 - R3 late quota refusal commits local no-effect, releases only the reserved grant, and requires a new attempt
+  ---
+  duration_ms: 5090.678893
+  type: 'test'
+  ...
+# {"proof":"r3-remote-emission-lost-ack","phase":"emitting-durable","startCalls":1,"duplicateWriter":false,"artifactRegistered":true}
+# Subtest: R3 emission marker survives transport ACK loss and fences no-effect release
+ok 6 - R3 emission marker survives transport ACK loss and fences no-effect release
+  ---
+  duration_ms: 7798.207382
+  type: 'test'
+  ...
+# {"proof":"r3-emission-pool-saturation","occupiedSharedSlots":8,"dedicatedConnection":true,"physicalSshStarts":0,"phase":"emitting-conservative"}
+# Subtest: R3 durable emission uses a bounded dedicated connection while all shared pool slots are occupied
+ok 7 - R3 durable emission uses a bounded dedicated connection while all shared pool slots are occupied
+  ---
+  duration_ms: 5458.591731
+  type: 'test'
+  ...
+# {"proof":"r4-emission-environment-symlink","phase":"no_effect","reason":"PROJECT_ENVIRONMENT_FILESYSTEM_CHANGED","physicalClaim":false,"reservation":"released-not-started"}
+# Subtest: R4 final remote emission refuses a replaced configured directory and settles no-effect
+ok 8 - R4 final remote emission refuses a replaced configured directory and settles no-effect
+  ---
+  duration_ms: 6046.855477
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 44138.294869

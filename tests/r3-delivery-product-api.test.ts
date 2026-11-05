@@ -13,7 +13,7 @@ import {remoteDevelopmentLab} from './fixtures/r3-delivery-lab.ts';
 
 test('R3 configured signed product API prepares, launches and registers exact remote output under live manager authority', {timeout:120000},async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
- const lab=await remoteDevelopmentLab(base);
+ const lab=await remoteDevelopmentLab(base,{configureEnvironment:false});
  try{
   const privateDirectory=join(lab.root,'private');await mkdir(privateDirectory,{mode:0o700});const verifierKeyFile=join(privateDirectory,'verifier.key');await writeFile(verifierKeyFile,lab.verifierKey,{mode:0o600});
   const host=(await lab.db.pool.query('SELECT * FROM ac_remote_hosts WHERE id=$1',[lab.hostId])).rows[0];
@@ -49,6 +49,9 @@ test('R3 configured signed product API prepares, launches and registers exact re
   assert.equal(lab.db.pool.waitingCount,0);
   console.log(JSON.stringify({proof:'r4-api-pool-counterproof',simultaneousAuthorityTransactions:entrants,sharedPoolMax:8,barrierReleased:true,httpStatuses:concurrent.map(response=>response.status),sharedPoolWaiters:lab.db.pool.waitingCount}));
   provider!.resolve=resolve;
+  const noEnvironment=await gateway(post(prepare));assert.equal(noEnvironment.status,403);assert.equal((await noEnvironment.json()).error,'PROJECT_ENVIRONMENT_REQUIRED');
+  assert.equal((await lab.db.pool.query('SELECT count(*)::int n FROM ac_remote_development_workspaces')).rows[0].n,0);
+  await lab.configureEnvironment();
   const preparedReplies=await Promise.all([gateway(post(prepare)),gateway(post({...prepare,deliveryAttemptId:randomUUID()}))]);
   const preparedResults=await Promise.all(preparedReplies.map(async reply=>{assert.equal(reply.status,200);return reply.json();}));
   assert.equal(preparedResults[0].state,'prepared');assert.deepEqual(preparedResults[0],preparedResults[1]);

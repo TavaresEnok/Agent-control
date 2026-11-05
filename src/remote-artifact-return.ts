@@ -7,6 +7,7 @@ import {Id,Refusal,digest} from './contracts.ts';
 import {GitObjectId} from './remote-git.ts';
 import {projectRepositoryIdentity} from './project-repository.ts';
 import type {RemoteHost} from './remote.ts';
+import {requireProjectEnvironment} from './project-environments.ts';
 import type {ProjectAdmin} from './project-admin.ts';
 
 export const RemoteArtifactReturnPayload=z.object({projectId:Id,contextId:Id,hostId:Id,artifactId:Id,
@@ -61,6 +62,7 @@ export async function returnRemoteArtifact(admin:ProjectAdmin,principal:string,c
   await c.query('SELECT project_id FROM ac_project_repository_identity WHERE project_id=$1 FOR SHARE',[p.projectId]);
   const current=await authorized(c,principal,p);
   if(current.repo!==row.repo||current.source_id!==row.source_id)throw new Refusal('REMOTE_RETURN_PROVENANCE_MISMATCH');
+  await requireProjectEnvironment(c,{projectId:p.projectId,contextId:p.contextId,intentId:row.intent_id,hostId:p.hostId,destinationRef:p.destinationRef,purpose:'remote-return'});
   const identity=await projectRepositoryIdentity(row.repo);
   if(identity.repoDev!==row.repo_dev||identity.repoIno!==row.repo_ino||identity.gitDev!==row.git_dev||identity.gitIno!==row.git_ino)throw new Refusal('PROJECT_REPOSITORY_IDENTITY_CHANGED');
   {

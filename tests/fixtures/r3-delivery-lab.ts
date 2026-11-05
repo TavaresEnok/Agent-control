@@ -16,13 +16,14 @@ import {Quality} from '../../src/quality.ts';
 import {NativeQaContract,nativeQaContractDigest} from '../../src/native-qa.ts';
 import {nativeReviewVerifierDigest} from '../../src/native-verification.ts';
 import {digest} from '../../src/contracts.ts';
+import {ProjectEnvironments} from '../../src/project-environments.ts';
 import {Templates} from '../../src/templates.ts';
 import {isolatedDatabase} from './isolated-database.ts';
 
 const command=(binary:string,args:string[])=>execFileSync(binary,args,{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 export const labGit=(repo:string,...args:string[])=>command('git',['-C',repo,...args]);
 /** New disposable resources only; no inherited accounts, credentials or daemon changes. */
-export async function remoteDevelopmentLab(base:string,options:{requireJudge?:boolean}={}){
+export async function remoteDevelopmentLab(base:string,options:{requireJudge?:boolean;configureEnvironment?:boolean}={}){
  const isolated=await isolatedDatabase(base,'r3dev'),db=new Ledger(isolated.url),root=await mkdtemp(join(tmpdir(),'ac-r3-dev-')),scratch=await mkdtemp('/dev/shm/ac-r3-dev-');
  const name='ac-r3-delivery-dev-'+randomUUID().slice(0,8),installationId='ac-r3-delivery-dev-'+randomUUID();let container=false,mounted=false;
  const close=async()=>{
@@ -81,7 +82,11 @@ export async function remoteDevelopmentLab(base:string,options:{requireJudge?:bo
   const operationId=randomUUID(),exported=await remote.exportGit(principal,{operationId,intentId:intent.id,contextId,hostId,commit:source,tree:sourceTree},authority);
   const admin=new ProjectAdmin(db,[{id:'fixture',label:'Disposable root',path:root}],join(root,'private'),{remoteSourceTmpfs:scratch,remoteReturnTransport:ssh});
   const materialize={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'project.materializeRemoteSource',payload:{projectId,contextId,hostId,operationId,commit:source,tree:sourceTree,bundle:exported.bundle.toString('base64')}};await admin.execute(principal,materialize,proof(materialize));
+  const environments=new ProjectEnvironments(db,[{id:'fixture',path:root}],join(root,'private'));
+  const environmentCommand={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'project.environments.configure',payload:{projectId,expectedRevision:0,config:{sourceBranch:'refs/heads/agent-control-export',environments:[{id:'lab',label:'Disposable lab',targetRef:'refs/heads/agent-control-export',authorizedDirectories:['src'],destinations:[{id:'local',label:'Local repository',kind:'local_repository'},{id:'remote',label:'Disposable remote',kind:'remote',hostId,allowedPurposes:['remote-development','remote-return']}]}]}}};
+  const configureEnvironment=()=>environments.configure(principal,environmentCommand,proof(environmentCommand));
+  if(options.configureEnvironment!==false)await configureEnvironment();
   const development=new RemoteDevelopment(db,ssh,{implementationProfiles:new Map([[profiles.programmer,{hostId,taskId:'implement',writePaths:['src/example.ts']}]])});
-  return {db,root,scratch,source,sourceTree,original,bare,local,workspaceRoot,state,config,projectId,hostId,principal,profiles,contextId,authority,intent,sourceOperationId:operationId,development,remote,ssh,admin,quality,git,verifierKey,qaContract,proof,close};
+  return {db,root,scratch,source,sourceTree,original,bare,local,workspaceRoot,state,config,projectId,hostId,principal,profiles,contextId,authority,intent,sourceOperationId:operationId,development,remote,ssh,admin,quality,git,verifierKey,qaContract,proof,configureEnvironment,close};
  }catch(error){await close();throw error;}
 }
