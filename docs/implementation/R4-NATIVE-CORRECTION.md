@@ -11,3 +11,17 @@ Historical ManagedRecipe1/2/3 remain parseable and their stored frozen graphs/di
 Author validation: normal TypeScript typecheck passed. `tests/native-correction-order.test.ts` plus `tests/native-corrections.test.ts` passed **3/3, zero skips** on Node22.23.3 with a random child of the author's disposable PostgreSQL. This retains the existing synthetic supervisor/QA regression's explicit limitations; it is not the physical T21 proof. The earlier regression initially failed because its fake Docker adapter lacked the current private-network inspection/retirement methods, before implementation reached any quality stage. The fixture now explicitly reports its fake networks absent and supplies the no-op removal method. No product cleanup guard was weakened. Evidence `r4-native-correction-product.log`.
 
 The separate physical proof is being prepared with real NativeQa/Docker, actual readonly reviewer/tool containers and deterministic worker output, then a normal correction/review/QA cycle. It must wait for the resource bridge race fix and the manager's serialized physical slot. This document does not claim that proof or independent acceptance.
+
+## Separate physical fixture checkpoint (prepared; not yet executed)
+
+`node scripts/r4-correction-isolated.mjs` builds an explicitly selected trusted worker variant through the existing offline public-ELF builder, then creates its own named/labeled PostgreSQL, internal provider network, image tag and private scratch. It starts no Happier, planner or extra cancellation scenario. The default R3 worker behavior remains unchanged; the optional fixture directory is confined to canonical tracked test-fixture paths and may replace only the model worker. Shared actual native tools/launch signature verification remain in place.
+
+The new test uses one task with one allowed correction. The deterministic programmer first writes subtraction instead of addition through the actual Codex exec-server FS RPCs. An independent readonly reviewer reads that immutable source and passes the structural review; real NativeQa then executes an assertion on sum(2,3). On normal correction the worker checks the frozen failure-decision fields and emits addition. The graph must produce a second independent review and physical QA, distinct commit/tree/grant/session/evidence IDs, and integrate only the corrected artifact. The original artifact must remain blocked. Both actual QA log files are SHA256-bound to their receipts; bounded synthetic reproduction lines are retained before private scratch removal. The corrected worker's actual request is compared with the persisted decision digest and failed evidence IDs.
+
+The fixture has180s test timeout and210s outer child timeout. Cleanup independently attempts runtime, actual graph containers/networks, resource authority, mocks, ledger, random child database and private directory; failures are aggregated without suppressing subsequent cleanup. The runner separately checks its own Docker IDs/labels before removal. Initial preparation/typechecking and ELF-builder refusal test passed; **no physical result is claimed at this checkpoint**. Wait for the root's serialized physical slot and current resource-bridge pins.
+
+```sh
+AC_R3_FLOW_PUBLIC_CODEX_BINARY=/CAMINHO/ABSOLUTO/codex \
+AC_R3_FLOW_PUBLIC_CODEX_SHA256=b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8 \
+node scripts/r4-correction-isolated.mjs
+```

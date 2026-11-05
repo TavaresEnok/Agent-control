@@ -2,15 +2,21 @@ import WebSocket from 'ws';
 import {readFile} from 'node:fs/promises';
 import {posix} from 'node:path';
 /** Deterministic inference drives actual local Codex exec-server FS RPCs. */
-export async function writeThroughExecServer(address,paths){
+export async function writeThroughExecServer(address,paths,contentFor=(path)=>'// synthetic '+path+'\n'){
  await withServer(address,async rpc=>{
   for(const path of paths){
    if(!/^src\/[a-z0-9/_-]+\.ts$/.test(path))throw Error('FIXTURE_WRITE_SCOPE_INVALID');
    await rpc('fs/createDirectory',{path:'file:///work/'+posix.dirname(path),recursive:true});
-   const text='// synthetic '+path+'\n';await rpc('fs/writeFile',{path:'file:///work/'+path,dataBase64:Buffer.from(text).toString('base64')});
+   const text=contentFor(path);if(typeof text!=='string'||Buffer.byteLength(text)>262144)throw Error('FIXTURE_WRITE_CONTENT_INVALID');await rpc('fs/writeFile',{path:'file:///work/'+path,dataBase64:Buffer.from(text).toString('base64')});
    const observed=await rpc('fs/readFile',{path:'file:///work/'+path});if(Buffer.from(observed.dataBase64,'base64').toString()!==text)throw Error('EXEC_SERVER_WRITE_NOT_OBSERVED');
   }
  });console.log('R3_REAL_EXEC_SERVER_WRITE_READ_OK');
+}
+export async function readThroughExecServer(address,paths){
+ const contents={};await withServer(address,async rpc=>{for(const path of paths){
+  if(!/^src\/[a-z0-9/_-]+\.ts$/.test(path))throw Error('FIXTURE_READ_SCOPE_INVALID');
+  const result=await rpc('fs/readFile',{path:'file:///work/'+path});contents[path]=Buffer.from(result.dataBase64,'base64').toString();
+ }});console.log('R4_REAL_EXEC_SERVER_REVIEW_READ_OK');return contents;
 }
 export async function verifyReadOnlyExecServer(address){
  await withServer(address,async rpc=>{try{await rpc('fs/writeFile',{path:'file:///work/.r3-evaluator-write',dataBase64:'bm90IGFsbG93ZWQ='});throw Error('EVALUATOR_WRITE_ACCEPTED');}catch(error){if(!/Read-only file system/i.test(error.message))throw error;}});
