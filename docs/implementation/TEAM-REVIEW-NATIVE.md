@@ -19,3 +19,7 @@ A revisão estática não identificou falha concreta no fallback de tarefa nativ
 ## Revisão da contraprova de injeção — commit a122f500
 
 As quatro variantes de saída sintética assinada verificam rejeição de campo administrativo, branch, referência desconhecida e revisão de qualidade; contagens de propostas e intenções e controle legítimo sustentam o recorte declarado. O texto apenas simula origem em arquivo/SSH. A prova não observa credenciais, rede, arquivos ou ferramentas de exfiltração e não demonstra ausência geral de vazamento; o relatório da equipe explicita esses limites. Revisão estática sem reexecução independente; T23 não é aceito por esta prova.
+
+## Revisão da prova com Git ativo — commits 2cc1f728 e cbd47ac1
+
+A identidade do órfão é capturada antes das asserções que motivaram o apontamento anterior. A nova variante observa o `git add --all` filho, `index.lock` e objeto temporário não vazio, congela o grupo e mata o controlador; uma autoridade sucessora em outro processo reconcilia o cancelamento. Aprovação estática desse recorte, sem reexecução independente. Docker é simulado; escrita iniciada não equivale a commit concluído, recuperação do grafo ou operação em produção.
