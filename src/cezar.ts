@@ -1199,6 +1199,10 @@ export class CezarRuntime {
           await runtime.ledger.tx(async c => {
             await runtime.ledger.fence(c, authority);await runtime.ledger.assertIntentActive(c,authority.contextId,intent.id);
             if (!runtime.running || canceled) throw new Refusal('RUNTIME_NOT_AUTHORIZED');
+            // Serialize with account/model quota writers before evaluating the
+            // status in a fresh READ COMMITTED statement snapshot.
+            await c.query(`SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id
+              JOIN ac_operations o ON o.grant_id=g.id WHERE o.id=$1 FOR SHARE OF a`,[intent.operation_id]);
             const eligible=await c.query(`SELECT g.id FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id
               JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
               JOIN ac_quota_observations q ON q.account_id=a.id
