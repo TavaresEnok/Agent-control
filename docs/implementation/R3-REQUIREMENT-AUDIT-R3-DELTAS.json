@@ -298,6 +298,19 @@
       "supersedes_prior_gap": "Actual canonical service restore and fresh target vault activation are now demonstrated; prior fixture-only records remain historical.",
       "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO.",
       "recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately"
+    },
+    {
+      "id": "RF-36",
+      "reviewed_commits": [
+        "9736198f",
+        "25b6450b",
+        "a9a159ad"
+      ],
+      "new_evidence": "Root practical-client audit: no conversation-visible shipped caller; signed RPC currently reachable only through developer/test path.",
+      "supersedes_prior_recommendation": "Earlier recommend_accept_supported_signed_chat_configuration_contract assumed an accessible shipped signed chat caller; that assumption is false.",
+      "implemented_delta": "Backend signed typed RPC and shared Control behavior remain independently verified.",
+      "remaining": "User-accessible trusted conversation entry/signing path and actual product journey proof.",
+      "acceptance_recommendation": "hold_full_RF36_acceptance_backend_contract_only_until_shipped_conversation_client_proof"
     }
   ]
 }
