@@ -5,7 +5,7 @@ import {CezarRuntime} from '../src/cezar.ts';
 import {Cancellations} from '../src/cancellation.ts';
 
 test('one uncertain native job does not block another job or remote cancellation',async()=>{
- const ids=[randomUUID(),randomUUID()],seen:string[]=[];
+ const ids=Array.from({length:33},()=>randomUUID()),seen:string[]=[];
  mock.method(Cancellations.prototype,'reconcile',async()=>{});
  const supervisor={supportsAccount:()=>true,executorDigest:'digest',keyFingerprint:'key',async reconcileCancellation(_p:string,_a:unknown,id:string){seen.push(id);if(id===ids[0])throw Error('UNCERTAIN');},async retireTerminal(){seen.push('retire');}};
  const ledger={heartbeat:async()=>{},pool:{query:async(sql:string)=>sql.includes('SELECT j.id,j.role')?{rows:ids.map(id=>({id,role:'reviewer',account_id:'a',executor_digest:'digest',key_fingerprint:'key',cancellation_state:'requested'}))}:{rows:[],rowCount:0}}};
