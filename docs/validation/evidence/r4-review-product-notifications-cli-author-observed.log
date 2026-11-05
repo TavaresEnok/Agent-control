@@ -1,0 +1,18 @@
+TAP version 13
+# R3_HAPPIER_SOURCE_PROVENANCE {"tree":"7b8ace4cfc8e1c24b03529a8015951adf09f1f7b","files":1164,"sourceSha256":"6084780b8c5211f3477f3783fbe06334de863158476ce022cc42331fa797b6a5","cacheMatchesVendored":true}
+# R4_NOTICE_CLI_PROOF {"canonicalMessages":153,"historyPages":2,"groupedCompletions":2,"canonicalCompletionMessages":1,"realAckLoss":true,"reconnected":true,"stableLocalId":true,"metadataVersion":2,"oversizedMetadataRecord":true,"fullFallbackPolicy":true,"outputPrivate":true,"keysIncluded":false,"snapshotsRemaining":0,"inference":false}
+# Subtest: R4 actual Happier groups notifications and resumes ACK loss; CLI v2 exports complete encrypted paginated history
+ok 1 - R4 actual Happier groups notifications and resumes ACK loss; CLI v2 exports complete encrypted paginated history
+  ---
+  duration_ms: 16790.958498
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 20001.174388

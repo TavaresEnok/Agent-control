@@ -1,0 +1,1086 @@
+{
+  "schemaVersion": 1,
+  "kind": "independent_product_requirement_review_48",
+  "normative": "docs/normative/DIRETRIZ_MESTRE_V1.md §10-13",
+  "count": 48,
+  "recommendationsOnly": true,
+  "traceabilityMatrixChanged": false,
+  "date": "2026-11-05",
+  "acceptedRecommendations": 21,
+  "method": "Literal current criteria with selected current source and versioned independent/author evidence; does not infer official authentication, Android, operational deployment or fresh execution from historical logs. Canonical caller independently passed with a new lab/account/context using a verified immutable normal export; no second Expo build.",
+  "requirements": [
+    {
+      "id": "RF-01",
+      "original_criterion": "Cadastrar projeto, repositório, branch, ambientes e diretórios autorizados pelo painel",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Cadastro assinado de projeto/repositório e079 de branches existentes/ambientes/diretórios pelo painel, com CAS e validação de filesystem.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "3d83c205",
+        "11bbcc4e",
+        "fc8d8970",
+        "3a146e86",
+        "21dc9f3d",
+        "a16d20fa",
+        "fcb1d48b",
+        "3e267710"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-ENVIRONMENTS.md"
+      ],
+      "evidence_method": "Own PG/Git1/1; gateway1/1; UI10/10; focused real browser passed; author final079/wholebrowser attributed.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-02",
+      "original_criterion": "Administrar vários projetos e destinos em uma única central",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Uma central administra dois projetos e destinos autorizados distintos;079/registry/gateway compartilham autoridade. O texto exige administração, não execução em dois hosts.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "3d83c205",
+        "11bbcc4e",
+        "fc8d8970",
+        "3a146e86",
+        "21dc9f3d",
+        "a16d20fa",
+        "fcb1d48b",
+        "3e267710"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-ENVIRONMENTS.md"
+      ],
+      "evidence_method": "Own PG/Git1/1; gateway1/1; UI10/10; focused real browser passed; author final079/wholebrowser attributed.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-03",
+      "original_criterion": "Criar contextos com histórico estável, preservado ao trocar conta, modelo e CLI",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Histórico canônico e vault/restart existem; falta percurso integrado de troca entre conta/modelo/CLI preservando a mesma conversa em adapters suportados.",
+      "executable_closure": "Executar troca concreta de executor/CLI com identidade/contexto estáveis e comparar mensagens/seq/chave antes/depois, sem criar segundo histórico.",
+      "reviewed_versions": [
+        "1f24f89b",
+        "b8358172",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-FLOW.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical versioned durable flow/quality/audit evidence plus current selected source; no new inference.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-05",
+      "original_criterion": "Representar duas contas do mesmo provedor sem usuários/empresas artificiais",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Modelo global de contas/resourceIdentity representa duas contas do mesmo provedor sob o mesmo principal, sem criar empresas ou usuários artificiais. Credencial/uso físicos pertencem a T01.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "c24cefb1",
+        "c5c6ef46",
+        "4766e6b3",
+        "70385609"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-RUNTIME.md"
+      ],
+      "evidence_method": "Current selected source and historical versioned capacity/UI evidence; no new test for status.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-06",
+      "original_criterion": "Autenticar por mecanismos oficiais de assinatura, sem API paga silenciosa",
+      "implementation_status": "partial",
+      "validation_status": "partially_examined",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Ativação não sintética continua fechada; recusa segura não implementa login oficial de assinatura.",
+      "executable_closure": "Implementar/verificar lifecycle oficial de autenticação para um provedor/plano/titular explicitamente autorizado.",
+      "reviewed_versions": [
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REQUIREMENT-AUDIT-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Guard/metadata source examined; no official account, paid API or eligibility certification used.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-07",
+      "original_criterion": "Configurar papel, perfil, esforço, conta, prioridade e substituições visualmente",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Editores tipados existem; falta evidência conjunta de todos os campos de conta/papel/perfil/esforço/ordem/fallback pela UI assinada.",
+      "executable_closure": "Percurso browser local cria/edita perfis, publica ordem regular/reserva e demonstra erro/conflito legível. Conta oficial não é necessária para esse critério visual.",
+      "reviewed_versions": [
+        "c24cefb1",
+        "c5c6ef46",
+        "4766e6b3",
+        "70385609"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-RUNTIME.md"
+      ],
+      "evidence_method": "Current selected source and historical versioned capacity/UI evidence; no new test for status.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-08",
+      "original_criterion": "Validar catálogo e combinações antes de publicar uma política; rejeitar modelo/esforço inexistente",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Catálogo configurado e combinações modelo/esforço/papel são validados na criação dos perfis; publicação aceita somente perfis do projeto/papel. Descoberta oficial automática não consta no critério.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "c24cefb1",
+        "c5c6ef46",
+        "4766e6b3",
+        "70385609"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-RUNTIME.md"
+      ],
+      "evidence_method": "Current selected source and historical versioned capacity/UI evidence; no new test for status.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-09",
+      "original_criterion": "Exibir versão aplicada e explicar por que um perfil foi escolhido ou recusado",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Seleção persistida contém revisões e razão de escolha/exclusão; DTO/UI sincronizados apresentam a versão e motivos. Não é necessário trabalhador de provedor oficial para provar apresentação do contrato.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "c24cefb1",
+        "c5c6ef46",
+        "4766e6b3",
+        "70385609"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-RUNTIME.md"
+      ],
+      "evidence_method": "Current selected source and historical versioned capacity/UI evidence; no new test for status.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-10",
+      "original_criterion": "Distinguir cota esgotada, limite temporário, autenticação inválida, falha de rede e estado desconhecido",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Contratos de coleta, parsers e projeção distinguem exhausted/rate_limited/auth_required/unreachable/unknown; ausência ou expiração não inventa esgotamento. Aceite dos adaptadores/formats suportados; formato desconhecido permanece unknown.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "c5c6ef46",
+        "70385609",
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-QUOTA.md",
+        "docs/implementation/R3-UI.md"
+      ],
+      "evidence_method": "Historical independently reviewed projection/parser/collector scopes and current source; runtime reviewer confirms no new blocker.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-25",
+      "original_criterion": "Integrar somente artefato aprovado, com proteção contra tentativa antiga e mudança da base",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Quality, evidências exatas, aprovação e CAS Git impedem integrar artefato/base/tentativa incompatíveis.079/080 e entrada remota foram revistos com efeitos físicos; UI registra saída como não revisada.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "b8358172",
+        "a852fdde",
+        "83ac3ac7",
+        "a9f196fd",
+        "751f2c38",
+        "8535ef77",
+        "8853dfa6"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-RUNTIME.md",
+        "docs/implementation/R3-DELIVERY.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Runtime independent API/079/0808/8 and bootstrap; own remote components14/14; author standalone browser attributed, canonical proof pending.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-30",
+      "original_criterion": "Exibir uso, cota e renovação por conta quando observáveis; indicar desconhecido quando não observáveis",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Uso relatado, quota/renovação observadas e estados desconhecidos são separados pela API/UI; stale/missing não viram saldo disponível. Não promete observabilidade que o provedor não oferece.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "c5c6ef46",
+        "70385609",
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-QUOTA.md",
+        "docs/implementation/R3-UI.md"
+      ],
+      "evidence_method": "Historical independently reviewed projection/parser/collector scopes and current source; runtime reviewer confirms no new blocker.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-31",
+      "original_criterion": "Produzir auditoria de decisões, trocas, tentativas, revisão, integração e intervenção humana",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Ledger/audit estruturados registram decisões/seleções, tentativas, verificações, integrações e intervenção assinada; metadata v2 exporta o corte completo de auditoria do contexto. Retenção operacional extra não consta no RF.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "1f24f89b",
+        "b8358172",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-FLOW.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical versioned durable flow/quality/audit evidence plus current selected source; no new inference.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-32",
+      "original_criterion": "Permitir os percursos essenciais de configuração e operação pelo celular",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Percursos móveis selecionados são verdes, mas não toda operação essencial.",
+      "executable_closure": "Completar a jornada conta/equipe/fallback/plano/pausa/retomada/entrega em360/390 e reconexão/suspensão, usando entradas efetivamente entregues.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-33",
+      "original_criterion": "Importar histórico, planos e evidências dos Paseos sem duplicar trabalho concluído",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Import/reimport versionados preservam identidade/contexto/plano/evidência e deduplicam trabalho concluído após restore. R3 demonstrou PG restaurado e recuperação canônica/vault em bancada quiescente; não se exige snapshot online no texto.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "e0f9bc9c",
+        "c135cd59",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-MIGRATION.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "R3 independent physical recovery/reimport and canonical Happier/vault restore; own metadata2/2; controlled quiescence.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-34",
+      "original_criterion": "Exportar configuração e relatórios sem credenciais; oferecer backup e restauração",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Backup/restauração R3 e relatórios exportáveis existem; metadata v2 não exporta toda configuração da instalação.",
+      "executable_closure": "Inventariar/exportar parâmetros de projeto/ambiente/templates/perfis/adapters necessários sem credenciais e provar leitura/uso do artefato; preservar recuperação já demonstrada.",
+      "reviewed_versions": [
+        "e0f9bc9c",
+        "c135cd59",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-MIGRATION.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "R3 independent physical recovery/reimport and canonical Happier/vault restore; own metadata2/2; controlled quiescence.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-35",
+      "original_criterion": "Notificar conclusão agrupada e bloqueio relevante, com deduplicação e histórico",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Observações deduplicadas geram conclusão agrupada/bloqueio relevante e histórico cifrado canônico; novo socket após ACK perdido recebe o mesmo id/seq/localId sem duplicata. SQL do caller observa somente intenções raiz.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "6f031066",
+        "95c326d0"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-NOTIFICATIONS-CLI.md",
+        "docs/implementation/R4-PORTABLE-EXPORT.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own metadata2/2; author actual Happier/CLI1/1 raw log and source independently reviewed, not reexecuted by reviewer.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-36",
+      "original_criterion": "Alterar configuração pelo chat usando a mesma API validada do painel, sem edição livre de arquivos internos",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Comando tipado humano assinado usa o mesmo Control validado; caller visível agora foi provado por browser canônico independente: menu da conversa abre painel de contexto/projeto exatos, publica política assinada e persiste PG. O percurso suportado é iniciado pela conversa e concluído no painel, sem texto livre ou edição interna.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "9736198f",
+        "25b6450b",
+        "a9a159ad",
+        "48c54963",
+        "be1aa0ad",
+        "e3f5cdaf",
+        "6c19a486",
+        "8be2518e"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-CHAT-CONFIG.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical independent backend RPC proof; own resolver PG1/1+UI3/3 and actual canonical browser exit0 in a new lab/account/context using SHA-verified919-file export; final WS guard reviewed statically.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-37",
+      "original_criterion": "Oferecer editor livre de grafos e editor móvel equivalente por etapas",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Editor livre e etapas móveis compartilham save/validação; cobertura de operações touch ainda incompleta.",
+      "executable_closure": "Provar criação/ligação/remoção/edição das operações de grafo e equivalência nas etapas móveis, sem hover obrigatório.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-39",
+      "original_criterion": "Operar diretamente em worktree remota via adaptador homologado, com consistência de artefatos",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Adaptador direto SSH/backend e caller standalone estão comprovados; percurso canônico de settings/bootstrap e homologação final do adaptador ainda pendem.",
+      "executable_closure": "Fechar página entregue→registro/factory real→workspace SSH→artefato exato, com revisão de consistência e versão homologada.",
+      "reviewed_versions": [
+        "b8358172",
+        "a852fdde",
+        "83ac3ac7",
+        "a9f196fd",
+        "751f2c38",
+        "8535ef77",
+        "8853dfa6"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-RUNTIME.md",
+        "docs/implementation/R3-DELIVERY.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Runtime independent API/079/0808/8 and bootstrap; own remote components14/14; author standalone browser attributed, canonical proof pending.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-40",
+      "original_criterion": "Coletar e exportar uso, perfil, tentativas, tempo e retrabalho corretamente; oferecer comparação simples com limitações explícitas. Análises estatísticas/painéis avançados ficam em P1",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Relatório/API/CSV expõem uso relatado, perfil, tentativas, tempo de ciclo e correção registrada, com comparação período atual/anterior e desconhecidos explícitos. Custo, tempo ativo e estatística avançada não são inventados.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "5d1d2a73",
+        "70385609",
+        "c1d8b8ce"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-USAGE.md"
+      ],
+      "evidence_method": "R3 own API/PG1/1 and UI25/25; report/browser evidence attributed; later open-unreported attempt delta reviewed statically.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-41",
+      "original_criterion": "Separar aprovação da entrega, integração, publicação e deploy em permissões diferentes",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Aprovação humana/integrar estão vinculadas; publicação/deploy não oferecem ainda superfícies e permissões separadas completas.",
+      "executable_closure": "Implementar/mostrar matriz de permissões delivery/integration/publication/deploy e recusas cruzadas antes dos efeitos.",
+      "reviewed_versions": [
+        "b8358172",
+        "a852fdde",
+        "83ac3ac7",
+        "a9f196fd",
+        "751f2c38",
+        "8535ef77",
+        "8853dfa6"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-RUNTIME.md",
+        "docs/implementation/R3-DELIVERY.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Runtime independent API/079/0808/8 and bootstrap; own remote components14/14; author standalone browser attributed, canonical proof pending.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-42",
+      "original_criterion": "Validar edição concorrente de políticas e disponibilizar reversão para uma versão anterior",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Políticas imutáveis/CAS, conflito concorrente e reversão como nova revisão foram demonstrados em PG e browser autenticado; não dependem de conta de IA oficial. O timeout posterior do meu harness R4 permanece descrito sem ser declarado suite verde.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "4766e6b3",
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical independent component/CAS review and attributed authenticated browser; own later full R4 harness timeout is preserved.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-43",
+      "original_criterion": "Cadastrar templates reutilizáveis por projeto sem duplicar os dados de contas globais",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Templates versionados por projeto referenciam recursos globais e são reutilizados/congelados sem duplicar contas. Prova autenticada R3/R4 da autora e componentes independentes sustentam o critério local.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "4766e6b3",
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical independent component/CAS review and attributed authenticated browser; own later full R4 harness timeout is preserved.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-46",
+      "original_criterion": "Compartilhar autoridade de admissão e renovação de credenciais entre antigo/novo durante migração e reversão, ou impedir sobreposição de contas",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Autoridade sintética única entre instalações foi comprovada; não há bridge de ingresso/refresh do legado real nem neutralização verificada do antigo nesse percurso.",
+      "executable_closure": "Conectar o legado ao mesmo fence/reservas/refresh, ou demonstrar tecnicamente bloqueio de sobreposição no handoff/rollback autorizado.",
+      "reviewed_versions": [
+        "e0f9bc9c",
+        "c135cd59",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-MIGRATION.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "R3 independent physical recovery/reimport and canonical Happier/vault restore; own metadata2/2; controlled quiescence.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-50",
+      "original_criterion": "Exibir grafo de execução somente de leitura com estado, dependências, agentes, falhas e correções no desktop e celular",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Grafo/cartões de leitura existem; correção/reconexão com responsável e atraso de projeção compartilhados falta.",
+      "executable_closure": "Suspender/reconectar durante correção real e comparar grafo/cartões por mesma identidade/estado/owner/atraso sem perder navegação.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-51",
+      "original_criterion": "Materializar com segurança um projeto Git inicialmente acessível somente por SSH, sem exigir GitHub ou login de IA no destino",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Materialização Git inicialmente SSH usa snapshot/hash/árvore/recibo, autorização assinada e custódia de filesystem; API/hook/bootstrap corrigidos e provas SSH reais não exigem GitHub/login IA no destino.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "b8358172",
+        "a852fdde",
+        "83ac3ac7",
+        "a9f196fd",
+        "751f2c38",
+        "8535ef77",
+        "8853dfa6"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-RUNTIME.md",
+        "docs/implementation/R3-DELIVERY.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Runtime independent API/079/0808/8 and bootstrap; own remote components14/14; author standalone browser attributed, canonical proof pending.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-53",
+      "original_criterion": "Deduplicar comandos móveis e reconexões pela identidade da intenção, independentemente da entrega HTTP/WebSocket",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Primitivas de intenção/delivery são duráveis e novos retries focais passaram; cobertura móvel/WS/MCP das ações essenciais ainda não é completa.",
+      "executable_closure": "Mesmo teste representativo cruza start/pause/resume/policy após timeout/reconnect em seus ingressos entregues e distingue novas intenções.",
+      "reviewed_versions": [
+        "9736198f",
+        "25b6450b",
+        "a9a159ad",
+        "48c54963",
+        "be1aa0ad",
+        "e3f5cdaf",
+        "6c19a486",
+        "8be2518e"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-CHAT-CONFIG.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical independent backend RPC proof; own resolver PG1/1+UI3/3 and actual canonical browser exit0 in a new lab/account/context using SHA-verified919-file export; final WS guard reviewed statically.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RF-55",
+      "original_criterion": "Verificar para cada provedor, plano, titular, CLI/adaptador, autenticação e modo de uso a elegibilidade oficial; login ou resposta técnica não são prova suficiente.",
+      "implementation_status": "partial",
+      "validation_status": "partially_examined",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Registro de avaliação e guard fail-closed existem; declaração de owner ou resposta técnica não prova elegibilidade oficial.",
+      "executable_closure": "Obter verificação documental independente por provedor/plano/titular/CLI/modo antes de ativação de conta real.",
+      "reviewed_versions": [
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REQUIREMENT-AUDIT-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Guard/metadata source examined; no official account, paid API or eligibility certification used.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-04",
+      "original_criterion": "Fluxos essenciais utilizáveis em telas de 360 e 390 px de largura, além do desktop; sem dependência de hover",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "360/390 e desktop cobrem fatias; conjunto de fluxos essenciais e touch/reconnect ainda incompleto.",
+      "executable_closure": "Fechar o conjunto de RF32 em todos viewports, sem hover e com erros/recuperação acessíveis. Android físico só para T16.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-05",
+      "original_criterion": "Toda tarefa parada informa motivo, evidência, responsável pela recuperação e próxima condição de avanço",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Diagnóstico backend + seletor por tarefa exibem motivo comprovado ou unknown explícito, referências, responsável e próxima condição; browser próprio alcançou tarefa fora da página padrão e isolou mudança de contexto.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "3d83c205",
+        "11bbcc4e",
+        "fc8d8970",
+        "3a146e86",
+        "21dc9f3d",
+        "a16d20fa",
+        "fcb1d48b",
+        "3e267710"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-ENVIRONMENTS.md"
+      ],
+      "evidence_method": "Own PG/Git1/1; gateway1/1; UI10/10; focused real browser passed; author final079/wholebrowser attributed.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-08",
+      "original_criterion": "Segredos não aparecem em histórico Temporal, conversa, log exportável, prompt ou artefato",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Oráculos corrigidos cobrem23 superfícies/objetos Git, mas não a composição inteira de segredo em execução.",
+      "executable_closure": "Conversa→planejamento→prompt→runner bem-sucedido→deltas SSE/logs→artefato/export, com canário e controles negativos; testar configuração hostil e backup composto.",
+      "reviewed_versions": [
+        "b451ae1e",
+        "3917379b"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-SECURITY-REVIEW-20261105.md"
+      ],
+      "evidence_method": "Independent security reviewer5/5 plus mutation counterproof; finite23 surface scope, not composition.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-10",
+      "original_criterion": "Backup com restauração demonstrada; meta inicial de desastre RPO até 24 h e RTO até 2 h, a confirmar no piloto",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Restore físico demonstrado; trace pequena não confirma meta quantitativa de desastre no piloto.",
+      "executable_closure": "Definir workload/ponto de corte de piloto e medir RPO≤24h/RTO≤2h em recuperação representativa, mantendo escritores quiescentes ou estratégia explicitamente suportada.",
+      "reviewed_versions": [
+        "e0f9bc9c",
+        "c135cd59",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-MIGRATION.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "R3 independent physical recovery/reimport and canonical Happier/vault restore; own metadata2/2; controlled quiescence.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-12",
+      "original_criterion": "Meta inicial: aceite de comando em até 2 s e atualização de evento em até 5 s no ambiente homologado; autenticação/provedor externos medidos separadamente",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Amostras de comando/projeção DOM existem; meta de evento e ambiente homologado não foram medidos conjuntamente.",
+      "executable_closure": "Probe finita de aceite≤2s e evento≤5s sob workload/ambiente definidos, separando autenticação/provedor.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-14",
+      "original_criterion": "Cota não observada nunca é apresentada como disponível ou percentual estimado sem identificação",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Projeções de quota global/modelo vencidas ou ausentes retornam unknown; UI distingue observação identificada e uso de tentativa. Fonte oficial não observável não é pré-requisito para provar a recusa de inferência.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "c5c6ef46",
+        "70385609",
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-QUOTA.md",
+        "docs/implementation/R3-UI.md"
+      ],
+      "evidence_method": "Historical independently reviewed projection/parser/collector scopes and current source; runtime reviewer confirms no new blocker.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "RNF-15",
+      "original_criterion": "Planos, políticas, histórico e evidências exportáveis; credenciais tratadas em procedimento separado",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Metadata v2 completo/continuado exporta planos, políticas e evidências; CLI v2 foi composto com153 mensagens cifradas reais em duas páginas, sem chaves/token/plaintext. Custódia/credenciais seguem procedimento separado; não é backup restaurável.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "6f031066",
+        "95c326d0"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-NOTIFICATIONS-CLI.md",
+        "docs/implementation/R4-PORTABLE-EXPORT.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own metadata2/2; author actual Happier/CLI1/1 raw log and source independently reviewed, not reexecuted by reviewer.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T01",
+      "original_criterion": "Identidade, credencial e uso separados; nenhuma troca silenciosa",
+      "implementation_status": "partial",
+      "validation_status": "partially_examined",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Representação de duas contas existe; cenário literal de duas contas Codex com credenciais/uso separados não foi executado.",
+      "executable_closure": "Executar apenas com duas assinaturas autorizadas e verificar fronteira física/identidade/uso sem troca silenciosa.",
+      "reviewed_versions": [
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REQUIREMENT-AUDIT-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Guard/metadata source examined; no official account, paid API or eligibility certification used.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T02",
+      "original_criterion": "Ordem, elegibilidade, handoff e motivos corretos; nenhuma API paga",
+      "implementation_status": "partial",
+      "validation_status": "partially_examined",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Cadeia sintética verifica ordem/motivos; o cenário nominal Grok→Codex→Gemini→Sonnet Antigravity não está homologado.",
+      "executable_closure": "Verificar protocolos/modos elegíveis e executar a cadeia nominal autorizada, sem API paga ou substituição silenciosa.",
+      "reviewed_versions": [
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REQUIREMENT-AUDIT-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Guard/metadata source examined; no official account, paid API or eligibility certification used.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T13",
+      "original_criterion": "Estados distintos, recuperação apropriada; nenhuma falsa marca de esgotamento",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Estados distintos foram provados em contratos; recuperação do cenário completo auth expirada/rede/modelo inválido não está composta no executor.",
+      "executable_closure": "Ensaio local de adapter/executor registra as três falhas, recuperação apropriada e ausência de falsa cota esgotada.",
+      "reviewed_versions": [
+        "c5c6ef46",
+        "70385609",
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-QUOTA.md",
+        "docs/implementation/R3-UI.md"
+      ],
+      "evidence_method": "Historical independently reviewed projection/parser/collector scopes and current source; runtime reviewer confirms no new blocker.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T16",
+      "original_criterion": "Conta, equipe, fallback, plano, pausa, retomada e entrega administráveis",
+      "implementation_status": "partial",
+      "validation_status": "partially_examined",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Viewports Chrome não são operação completa em Android físico.",
+      "executable_closure": "Android autorizado: conta/equipe/fallback/plano/pausa/retomada/entrega e suspensão/reconexão.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T17",
+      "original_criterion": "Contadores sem dupla soma; saldo desconhecido permanece desconhecido",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Deltas cumulativos repetidos, campos sobrepostos/cache/raciocínio e baselines desconhecidos não são somados indevidamente; relatório/UI mantêm saldo desconhecido. A duração ativa do modelo é explicitamente desconhecida.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "5d1d2a73",
+        "70385609",
+        "c1d8b8ce"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-USAGE.md"
+      ],
+      "evidence_method": "R3 own API/PG1/1 and UI25/25; report/browser evidence attributed; later open-unreported attempt delta reviewed statically.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T18",
+      "original_criterion": "Histórico e política íntegros; tarefas integradas não duplicadas",
+      "implementation_status": "implemented",
+      "validation_status": "accepted_for_scope",
+      "acceptance_recommendation": "accept_for_scope",
+      "current_conclusion": "Backup/restore PG e reimport idempotente demonstram políticas/histórico e trabalho concluído sem duplicar; recuperação canônica real/vault novo complementa a prova. Quiescência controlada é precondição declarada, não defeito nem snapshot online prometido.",
+      "executable_closure": "",
+      "reviewed_versions": [
+        "e0f9bc9c",
+        "c135cd59",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-MIGRATION.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "R3 independent physical recovery/reimport and canonical Happier/vault restore; own metadata2/2; controlled quiescence.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T22",
+      "original_criterion": "Rejeição antes do lançamento e motivo legível",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Validações genéricas existem; o cenário exato Astra/esforço proibido/conta removida com razão na entrada assinada não foi demonstrado.",
+      "executable_closure": "Enviar essas três políticas pelo caller entregue e provar recusa legível antes de qualquer lançamento.",
+      "reviewed_versions": [
+        "c24cefb1",
+        "c5c6ef46",
+        "4766e6b3",
+        "70385609"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-RUNTIME.md"
+      ],
+      "evidence_method": "Current selected source and historical versioned capacity/UI evidence; no new test for status.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T25",
+      "original_criterion": "Materialização versionada, teste do artefato e devolução controlada; nenhuma CLI/login de IA no destino",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Materialização, Quality e retorno foram provados em backend; caminho canônico composto final ainda pendente.",
+      "executable_closure": "Concluir prova página/factory/manager reais→origem só SSH→verificação real do artefato→devolução controlada, sem login IA no destino.",
+      "reviewed_versions": [
+        "b8358172",
+        "a852fdde",
+        "83ac3ac7",
+        "a9f196fd",
+        "751f2c38",
+        "8535ef77",
+        "8853dfa6"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-REVIEW-RUNTIME.md",
+        "docs/implementation/R3-DELIVERY.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Runtime independent API/079/0808/8 and bootstrap; own remote components14/14; author standalone browser attributed, canonical proof pending.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T27",
+      "original_criterion": "Mesma intenção tem um único efeito; comandos diferentes continuam distintos",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Retries focais estão demonstrados, mas não as quatro ações do cenário móvel inteiro.",
+      "executable_closure": "Timeout/reconnect mobile para início/pausa/retomada/política com efeito único por intenção e intenção nova distinta.",
+      "reviewed_versions": [
+        "9736198f",
+        "25b6450b",
+        "a9a159ad",
+        "48c54963",
+        "be1aa0ad",
+        "e3f5cdaf",
+        "6c19a486",
+        "8be2518e"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-CHAT-CONFIG.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Historical independent backend RPC proof; own resolver PG1/1+UI3/3 and actual canonical browser exit0 in a new lab/account/context using SHA-verified919-file export; final WS guard reviewed statically.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T28",
+      "original_criterion": "Uma autoridade de reservas/refresh; soma global dentro do teto; sem conceder vaga por snapshot divergente",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Laboratório de autoridade/cotas entre instalações existe; cenário legado/novo com conta compartilhada em piloto/rollback não foi composto.",
+      "executable_closure": "Demonstrar bridge ou prevenção técnica de sobreposição entre ingressos antigos/novos e refresh/reservas sob falha/reversão.",
+      "reviewed_versions": [
+        "e0f9bc9c",
+        "c135cd59",
+        "6f031066"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-MIGRATION.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "R3 independent physical recovery/reimport and canonical Happier/vault restore; own metadata2/2; controlled quiescence.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T31",
+      "original_criterion": "Estados distintos; probe serializado e limitado; sem tempestade, falsa cota ou emergência indevida",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Unknown/balance/probe são conservadores nos testes; cenário combinado de probes concorrentes e admissão/recuperação ainda carece prova específica.",
+      "executable_closure": "Compor capacidade desconhecida, sucesso recente sem saldo e probes concorrentes, verificando serialização/limites e nenhuma emergência indevida.",
+      "reviewed_versions": [
+        "c5c6ef46",
+        "70385609",
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REVIEW-PRODUCT.md",
+        "docs/implementation/R3-QUOTA.md",
+        "docs/implementation/R3-UI.md"
+      ],
+      "evidence_method": "Historical independently reviewed projection/parser/collector scopes and current source; runtime reviewer confirms no new blocker.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T35",
+      "original_criterion": "Grafo de leitura e cartões mostram mesmo estado real, responsáveis e atraso de projeção, sem perder navegação",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Diagnóstico e mudança de contexto avançaram; suspensão/correção/reconexão no grafo/cartões ainda ausente.",
+      "executable_closure": "Comparar mesmas identidades/estados/responsáveis/atraso após correção durante suspensão e retorno da UI.",
+      "reviewed_versions": [
+        "70385609",
+        "3e267710",
+        "6083ab18"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R4-UI.md",
+        "docs/implementation/R4-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Own selected360 browser and component proof; attributed360/390 full author proof; no physical Android.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    },
+    {
+      "id": "T39",
+      "original_criterion": "Recusa prévia e legível, sem marcar cota falsamente nem habilitar API paga ou transporte alternativo",
+      "implementation_status": "partial",
+      "validation_status": "tested_integrated",
+      "acceptance_recommendation": "do_not_accept_full_requirement",
+      "current_conclusion": "Guards recusam inelegibilidade; falta cenário integrado de adapter tecnicamente funcional porém inelegível e motivo na UI.",
+      "executable_closure": "Após provar funcionalidade técnica em laboratório, marcar modo inelegível e demonstrar recusa pré-spawn sem alterar quota ou habilitar transporte/API alternativos.",
+      "reviewed_versions": [
+        "c24cefb1"
+      ],
+      "evidence_documents": [
+        "docs/implementation/R3-REQUIREMENT-AUDIT-PRODUCT.md",
+        "docs/implementation/R3-REVIEW-PRODUCT.md"
+      ],
+      "evidence_method": "Guard/metadata source examined; no official account, paid API or eligibility certification used.",
+      "not_reexecution_implied": true,
+      "reviewer": "r4_review_product"
+    }
+  ]
+}

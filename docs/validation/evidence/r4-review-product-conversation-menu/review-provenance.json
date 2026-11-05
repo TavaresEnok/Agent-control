@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "result": "independent_browser_exit_0",
+  "artifactManifestSha256": "49d722683eea84548c3783aedf920c390966075d2894a972a8b95dd0e887b748",
+  "sourcePin": "8be2518e70442da304aba8c292cdeb5c70422ec3",
+  "happierTree": "415b5303b2714abf60525361532264d7104d3bf3",
+  "filesVerifiedByRunner": 919,
+  "newDisposablePostgresAccountSessionContextAndBrowser": true,
+  "newExpoBuild": false,
+  "nonDefaultProjectAssertedInRunner": true,
+  "signedPolicyRevision": 2,
+  "maxProgrammersPerContext": 2,
+  "unsignedRefusalCodeAssertedInRunner": "HUMAN_CONTROL_AUTH_REQUIRED",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "networkRestrictionInterpretation": "Raw fixture externalNetworkBlocked means HTTP origins restricted in this independent run; WebSocket origin guard was added in final6c19a486 and reviewed statically, not reexecuted. Configured WebSocket server remained loopback.",
+  "cleanup": "Runner exited0 after own process/socket/PostgreSQL container cleanup."
+}
