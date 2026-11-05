@@ -29,6 +29,8 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
   const key=randomBytes(32),gates=new Quality(db,key,new GitArtifacts(repo));
   await gates.publish(principal,project,0,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:true,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:nativeQaContractDigest(contract)});
   const runner=new NativeQa(db,gates,repo,spool,contract,key);const results=[];
+  const start=runner.start.bind(runner);const observed:{value:Awaited<ReturnType<DockerDaemon['inspect']>>}={value:null};
+  runner.start=async(...args)=>{const result=await start(...args);observed.value=await docker.inspect('ac-native-qa-'+args[3].id);return result;};
   for(const value of [2,3]){
    const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
    await writeFile(join(repo,'src/example.ts'),`export const value = ${value};\n`);git('add','.');git('commit','-m','fixture '+value);const commit=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}');
@@ -43,7 +45,10 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
    if(value===3)assert.equal((await db.tx(c=>gates.assertCorrectionFailures(c,artifact.id,[result.id],authority))).id,artifact.id);
    assert.equal((await runner.record(principal,authority,stageId)).id,result.id);
    const job=(await db.pool.query('SELECT receipt,container_id FROM ac_native_qa_jobs WHERE id=$1',[stageId])).rows[0];assert.equal(job.receipt.modelInference,false);assert.equal(job.receipt.synthetic,false);
-   const physical=await docker.inspect(job.container_id);assert.equal(physical?.HostConfig.NetworkMode,'none');assert.equal(physical?.Config.User,'10001:10001');assert.equal(physical?.Mounts.filter(m=>m.Type!=='tmpfs').length,1);
+   assert.equal(observed.value?.Id,job.container_id);assert.equal(observed.value?.HostConfig.NetworkMode,'none');assert.equal(observed.value?.Config.User,'10001:10001');assert.equal(observed.value?.Mounts.filter(m=>m.Type!=='tmpfs').length,1);
+   assert.equal(await docker.inspect(job.container_id),null);assert.equal(await docker.inspect('ac-native-qa-'+stageId),null);
+   assert.ok((await readFile(join(spool,stageId,'qa-logs.bin'))).length>0);
+   assert.equal((await db.pool.query('SELECT state FROM ac_native_qa_retirements WHERE job_id=$1',[stageId])).rows[0]?.state,'removed');
    assert.equal(git('rev-parse','refs/heads/protected'),sourceBase);await assert.rejects(db.tx(c=>gates.assertReady(c,artifact.id,authority)),value===2?/REVIEWS_MISSING/:/VERIFICATION_NOT_PASSED/);
   }
   assert.deepEqual(results,['passed','failed']);console.log(JSON.stringify({proof:'native-qa-real-docker',functionalCommands:2,outcomes:results,untrustedStdoutIgnored:true,network:'none',credentialsMounted:false,modelCalls:0,protectedBranchUnchanged:true}));
