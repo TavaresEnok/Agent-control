@@ -1,3 +1,4 @@
+import {cleanupGraphResources} from './fixtures/native-graph-cleanup.ts';
 import {test,mock} from 'node:test';
 import {ProviderEligibility} from '../src/provider-eligibility.ts';
 import {AccountHomes} from '../src/account-homes.ts';
@@ -50,7 +51,7 @@ for(const waiverMode of ['disabled'] as const) test(`synthetic physical native g
  const physicalRoot=process.env.AC_NATIVE_RETIREMENT_ROOT;
  if(physicalMode&&(!physicalRoot||!physicalRoot.endsWith('/.state/native-dispatch-physical')))throw Error('ISOLATED_NATIVE_RETIREMENT_ROOT_REQUIRED');
  const area=await mkdtemp(join(physicalMode?physicalRoot!:tmpdir(),'native-multi-'));
- let runtime:CezarRuntime|undefined,heartbeat:ReturnType<typeof setInterval>|undefined;
+ let runtime:CezarRuntime|undefined,heartbeat:ReturnType<typeof setInterval>|undefined,primary:unknown;
  try{
   await db.migrate();
   const project=randomUUID(),principal='native-multi-'+randomUUID();
@@ -122,7 +123,7 @@ for(const waiverMode of ['disabled'] as const) test(`synthetic physical native g
    });
    await options.quality.record(owner,receipt,signature,a);return receipt;
   }} as unknown as NativeQa;
-  const retire=supervisor.retireManagedWriter.bind(supervisor);supervisor.retireManagedWriter=async (...args)=>{const result=await retire(...args);const row=(await db.pool.query('SELECT network_id FROM ac_native_execution_jobs WHERE id=$1',[args[2]])).rows[0];if(row?.network_id){const inspect=JSON.parse(execFileSync('docker',['network','inspect',row.network_id],{encoding:'utf8'}))[0];assert.equal(inspect.Labels['agent-control.job'],args[2]);assert.equal(Object.keys(inspect.Containers??{}).length,0);execFileSync('docker',['network','rm',row.network_id]);}return result;};
+  const retire=supervisor.retireManagedWriter.bind(supervisor);supervisor.retireManagedWriter=async (...args)=>{const result=await retire(...args);if(process.env.AC_TEAM_GRAPH_CRASH_MARKER){const marker=process.env.AC_TEAM_GRAPH_CRASH_MARKER;await writeFile(marker,JSON.stringify({url:fixture.url,area,repo,project,principal,context,authority,supervisorConfig,account,verifierKey:Buffer.from(options.verifierKey).toString('base64'),qaDigest,parentId:(await db.pool.query('SELECT parent_intent_id FROM ac_intents WHERE id=$1',[(await db.pool.query('SELECT intent_id FROM ac_native_execution_jobs WHERE id=$1',[args[2]])).rows[0].intent_id])).rows[0].parent_intent_id,jobId:args[2]}),{mode:0o600,flag:'wx'});await new Promise(()=>{});}return result;};
   const realStart=supervisor.start.bind(supervisor);supervisor.start=async (...args)=>{try{return await realStart(...args);}catch(error){console.error('REAL_START_FAILED',error);throw error;}};
   const native=new NativeImplementation(db,repo,options.quality,[supervisor]);
   const nativeVerification=new NativeVerification(db,options.quality,[supervisor],options.verifierKey);
@@ -150,7 +151,11 @@ for(const waiverMode of ['disabled'] as const) test(`synthetic physical native g
   const jobs=(await db.pool.query('SELECT id,role,state,receipt FROM ac_native_execution_jobs ORDER BY role')).rows;assert.deepEqual(jobs.map(j=>j.role),['programmer','reviewer']);assert(jobs.every(j=>j.state==='completed'&&j.receipt));
   console.log(JSON.stringify({fixture:'synthetic-native-graph',jobs:jobs.map(j=>({id:j.id,role:j.role})),writer:'neutralized',modelCalls:0,capacity:'substituted',qa:'substituted',recovery:'not exercised'}));
   const target=git('rev-parse','refs/heads/protected');assert.notEqual(target,original);
- }finally{mock.restoreAll();if(heartbeat)clearInterval(heartbeat);await runtime?.close();
-  for(const job of (await db.pool.query("SELECT id,worker_id,tools_id,network_id FROM ac_native_execution_jobs")).rows){for(const id of [job.worker_id,job.tools_id])if(id){try{const info=JSON.parse(execFileSync('docker',['inspect',id],{encoding:'utf8',stdio:['ignore','pipe','ignore']}))[0];if(info.Config.Labels?.['agent-control.job']===job.id&&info.Image===process.env.AC_TEAM_GRAPH_IMAGE)execFileSync('docker',['rm','-f',id],{stdio:'ignore'});}catch{}}if(job.network_id){try{const info=JSON.parse(execFileSync('docker',['network','inspect',job.network_id],{encoding:'utf8',stdio:['ignore','pipe','ignore']}))[0];if(info.Labels?.['agent-control.job']===job.id&&Object.keys(info.Containers??{}).length===0)execFileSync('docker',['network','rm',job.network_id],{stdio:'ignore'});}catch{}}}
-  await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
+ }catch(error){primary=error;}finally{
+  mock.restoreAll();if(heartbeat)clearInterval(heartbeat);const errors:unknown[]=[];
+  try{await runtime?.close();}catch(error){errors.push(error);}
+  try{await cleanupGraphResources(db,process.env.AC_TEAM_GRAPH_IMAGE!);}catch(error){errors.push(error);}
+  try{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}catch(error){errors.push(error);}
+  if(errors.length)throw new AggregateError(primary?[primary,...errors]:errors,'NATIVE_GRAPH_CLEANUP_FAILED');
+ }if(primary)throw primary;
 });

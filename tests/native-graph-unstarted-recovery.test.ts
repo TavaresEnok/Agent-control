@@ -13,7 +13,7 @@ import {readManagedRecipe} from '../src/managed-plan.ts';
 import {NativeImplementation} from '../src/native-implementation.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
-import {digest} from '../src/contracts.ts';
+import {digest,Refusal} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 
@@ -54,4 +54,12 @@ test('unstarted managed native task adopts the successor only with intact frozen
   await recover.call(boundary,parent,next);assert.equal(resumes,1,'launch evidence prevents resumption');
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_execution_jobs')).rows[0].n,0);
  }finally{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
+});
+
+test('retirement retries a lost network removal acknowledgement once',async()=>{
+ let calls=0;const supervisor={retireManagedWriter:async()=>{if(++calls===1)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return {state:'neutralized'};}};
+ const retire=(NativeImplementation.prototype as unknown as {retire:(this:unknown,s:unknown,p:string,a:unknown,id:string)=>Promise<unknown>}).retire;
+ assert.deepEqual(await retire.call({},supervisor,'fixture',{},randomUUID()),{state:'neutralized'});assert.equal(calls,2);
+ let rejected=0;const other={retireManagedWriter:async()=>{rejected++;throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');}};
+ await assert.rejects(retire.call({},other,'fixture',{},randomUUID()),/NATIVE_RETIREMENT_UNCONFIRMED/);assert.equal(rejected,1);
 });

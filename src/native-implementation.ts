@@ -83,7 +83,7 @@ export class NativeImplementation{
  private async retire(supervisor:NativeExecutionSupervisor,owner:string,authority:Authority,jobId:string){
   try{return await supervisor.retireManagedWriter(owner,authority,jobId);}
   catch(error){
-   if(!(error instanceof Refusal)||!['DOCKER_UNCERTAIN','DOCKER_REMOVE_UNCERTAIN'].includes(error.code))throw error;
+   if(!(error instanceof Refusal)||!['DOCKER_UNCERTAIN','DOCKER_REMOVE_UNCERTAIN','DOCKER_NETWORK_UNCERTAIN'].includes(error.code))throw error;
    return supervisor.retireManagedWriter(owner,authority,jobId);
   }
  }
