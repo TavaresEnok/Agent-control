@@ -343,13 +343,14 @@ function WorkflowGraphEditor() {
   const { nodes: graphNodes, edges: graphEdges } = graph
   useEffect(() => {
     setValidating(true)
+    let active = true
     const t = setTimeout(() => {
       (projectId ? validateManagedWorkflow(projectId,{ nodes: graphNodes, edges: graphEdges }) : Promise.reject(Error('PROJECT_REQUIRED')))
-        .then((r) => setIssues(r.issues))
-        .catch((err: unknown) => setIssues([err instanceof Error ? err.message : String(err)]))
-        .finally(() => setValidating(false))
+        .then((r) => { if (active) setIssues(r.issues) })
+        .catch((err: unknown) => { if (active) setIssues([err instanceof Error ? err.message : String(err)]) })
+        .finally(() => { if (active) setValidating(false) })
     }, 350)
-    return () => clearTimeout(t)
+    return () => { active = false; clearTimeout(t) }
   }, [graphNodes, graphEdges, projectId])
 
   const issueNodes = useMemo(() => {

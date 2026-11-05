@@ -34,6 +34,17 @@ test('signed graph saves and replays immutable revisions',async()=>{
   await assert.rejects(service.save(principal,pending,proof(pending)),/WORKFLOW_FILE_CONFLICT/);
   assert.equal((await db.pool.query('SELECT state FROM ac_workflow_graph_intents WHERE id=$1',[pending.intentId])).rows[0].state,'pending');
   await rm(pendingFile);assert.equal((await service.save(principal,pending,proof(pending))).revision,1);
+  const crash={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name:'crash'}};
+  await db.pool.query(`CREATE FUNCTION ac_fixture_crash() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.name='crash' THEN RAISE EXCEPTION 'FIXTURE_CRASH'; END IF; RETURN NEW; END $$`);
+  await db.pool.query('CREATE TRIGGER ac_fixture_crash BEFORE INSERT ON ac_workflow_graph_revisions FOR EACH ROW EXECUTE FUNCTION ac_fixture_crash()');
+  await assert.rejects(service.save(principal,crash,proof(crash)),/FIXTURE_CRASH/);
+  assert.equal(JSON.parse(await readFile(join(repo,'.ai/cezar/workflows/crash.yaml'),'utf8')).version,2);
+  assert.equal((await db.pool.query('SELECT state FROM ac_workflow_graph_intents WHERE id=$1',[crash.intentId])).rows[0].state,'pending');
+  await db.pool.query('DROP TRIGGER ac_fixture_crash ON ac_workflow_graph_revisions');await db.pool.query('DROP FUNCTION ac_fixture_crash()');
+  assert.equal((await service.save(principal,crash,proof(crash))).revision,1);
+  const race={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name:'race'}};
+  const race2={...race,deliveryAttemptId:randomUUID()};
+  const same=await Promise.all([service.save(principal,race,proof(race)),service.save(principal,race2,proof(race2))]);assert.deepEqual(same[0],same[1]);
   await assert.rejects(db.pool.query("UPDATE ac_workflow_graph_revisions SET published_by='changed' WHERE project_id=$1",[projectId]));
  }finally{await db.pool.end();await rm(root,{recursive:true,force:true});}
 });
