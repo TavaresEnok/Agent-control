@@ -21,3 +21,8 @@ it('does not offer publication of an absolute or parent path',async()=>{
  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({projectId,revision:0,config:null,canConfigure:true,pathScope:'existing_repository_relative_directories'})))
  panel();fireEvent.click(await screen.findByRole('button',{name:'Carregar configuração de ambientes'}));fireEvent.change(screen.getByLabelText('Diretórios autorizados 1'),{target:{value:'/etc\n../private'}});expect((screen.getByRole('button',{name:'Publicar ambientes e destinos'}) as HTMLButtonElement).disabled).toBe(true)
 })
+it('preserves a definitive first refusal across reload and permits discarding it',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async(_url:string,init:RequestInit={})=>init.method==='POST'?Response.json({error:'PROJECT_ENVIRONMENT_REVISION_CONFLICT'},{status:409}):Response.json({projectId,revision:1,config:null,canConfigure:true,pathScope:'existing_repository_relative_directories',remoteHosts:[]})))
+ const first=panel();fireEvent.click(await screen.findByRole('button',{name:'Carregar configuração de ambientes'}));fireEvent.change(screen.getByLabelText('Diretórios autorizados 1'),{target:{value:'src'}});fireEvent.click(screen.getByRole('button',{name:'Publicar ambientes e destinos'}));await screen.findByText('PROJECT_ENVIRONMENT_REVISION_CONFLICT');first.unmount()
+ panel();fireEvent.click(await screen.findByRole('button',{name:'Descartar publicação recusada'}));await waitFor(()=>expect(sessionStorage.length).toBe(0));await waitFor(()=>expect((screen.getByRole('button',{name:'Carregar configuração de ambientes'}) as HTMLButtonElement).disabled).toBe(false))
+})

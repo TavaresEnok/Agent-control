@@ -17,7 +17,7 @@ type Config=z.infer<typeof projectEnvironmentConfigSchema>
 type Environment=Config['environments'][number]
 type Destination=Environment['destinations'][number]
 const payloadSchema=z.object({projectId:z.string().uuid(),expectedRevision:z.number().int().nonnegative(),config:projectEnvironmentConfigSchema})
-const pendingSchema=z.object({payload:payloadSchema,intentId:z.string().uuid()}).strict()
+const pendingSchema=z.object({payload:payloadSchema,intentId:z.string().uuid(),definitiveRefusal:z.boolean().optional()}).strict()
 const viewSchema=z.object({projectId:z.string().uuid(),revision:z.number().int().nonnegative(),config:projectEnvironmentConfigSchema.nullable(),canConfigure:z.boolean(),pathScope:z.literal('existing_repository_relative_directories'),remoteHosts:z.array(z.object({id:z.string().uuid(),label:z.string(),allowedPurposes:z.array(z.enum(purposes))})).optional()})
 const newDestination=():Destination=>({id:`destination-${crypto.randomUUID().slice(0,8)}`,label:'Destino local',kind:'local_repository'})
 const newEnvironment=():Environment=>({id:`environment-${crypto.randomUUID().slice(0,8)}`,label:'Novo ambiente',targetRef:'refs/heads/protected',authorizedDirectories:[],destinations:[newDestination()]})
@@ -29,6 +29,7 @@ export function AgentControlProjectEnvironments({projectId,principalId,installat
  const view=useQuery({queryKey:['ac-project-environments',projectId],retry:false,queryFn:async()=>{const value=viewSchema.parse(await json(await agentControlFetch(`/api/v1/ac/project-admin/environments?projectId=${projectId}`)));if(value.projectId!==projectId)throw Error('PROJECT_RESPONSE_MISMATCH');return value}})
  const normalizedDraft={...draft,environments:draft.environments.map(environment=>({...environment,authorizedDirectories:environment.authorizedDirectories.map(item=>item.trim()).filter(Boolean)}))}
  const pending=!!sessionStorage.getItem(storageKey)
+ let persistedRefusal=false;try{const saved=pendingSchema.safeParse(JSON.parse(sessionStorage.getItem(storageKey)||'null'));persistedRefusal=saved.success&&saved.data.definitiveRefusal===true}catch{/* Invalid storage is reported by the resume mutation. */}
  function editEnvironment(index:number,patch:Partial<Environment>){setDraft(current=>({...current,environments:current.environments.map((environment,i)=>i===index?{...environment,...patch}:environment)}))}
  function editDestination(environmentIndex:number,index:number,value:Destination){const environment=draft.environments[environmentIndex];if(environment)editEnvironment(environmentIndex,{destinations:environment.destinations.map((item,i)=>i===index?value:item)})}
  const send=useMutation({mutationFn:async(mode:'publish'|'resume')=>{
@@ -40,9 +41,9 @@ export function AgentControlProjectEnvironments({projectId,principalId,installat
   if(payload.projectId!==projectId)throw Error('PROJECT_RESPONSE_MISMATCH')
   const command={schemaVersion:1,intentId:saved?.intentId??crypto.randomUUID(),deliveryAttemptId:crypto.randomUUID(),action:'project.environments.configure',payload}
   const proof=await signControl(principalId,command,installationId)
-  sessionStorage.setItem(storageKey,JSON.stringify({payload,intentId:command.intentId}));setRefused(false)
+  sessionStorage.setItem(storageKey,JSON.stringify({payload,intentId:command.intentId,...(saved?.definitiveRefusal?{definitiveRefusal:true}:{})}));setRefused(false)
   const response=await agentControlFetch('/api/v1/ac/project-admin/environments',{method:'POST',headers:{'content-type':'application/json','x-ac-operator-proof':proof},body:JSON.stringify(command)})
-  if(!saved&&[400,403,409].includes(response.status))setRefused(true)
+  if(!saved&&[400,403,409].includes(response.status)){sessionStorage.setItem(storageKey,JSON.stringify({payload,intentId:command.intentId,definitiveRefusal:true}));setRefused(true)}
   const result=z.object({state:z.literal('applied'),projectId:z.string().uuid(),revision:z.number().int().positive()}).parse(await json(response))
   if(result.projectId!==projectId||result.revision!==payload.expectedRevision+1)throw Error('COMMAND_RESPONSE_MISMATCH')
   sessionStorage.removeItem(storageKey);setBase(result.revision)
@@ -86,7 +87,7 @@ export function AgentControlProjectEnvironments({projectId,principalId,installat
    </>}
   </>}
   {pending&&<><p role="status">Publicação pendente. Confirme a mesma operação antes de editar outra configuração.</p><Button className="h-auto min-h-11 min-w-0 max-w-full whitespace-normal py-2" disabled={send.isPending||!view.data?.canConfigure} onClick={()=>send.mutate('resume')}>Confirmar configuração de ambientes pendente</Button></>}
-  {refused&&<Button className="h-auto min-h-11 min-w-0 max-w-full whitespace-normal py-2" variant="outline" onClick={()=>{sessionStorage.removeItem(storageKey);setRefused(false);send.reset();void cache.invalidateQueries({queryKey:['ac-project-environments',projectId]})}}>Descartar publicação recusada</Button>}
+  {(refused||persistedRefusal)&&<Button className="h-auto min-h-11 min-w-0 max-w-full whitespace-normal py-2" variant="outline" onClick={()=>{sessionStorage.removeItem(storageKey);setRefused(false);send.reset();void cache.invalidateQueries({queryKey:['ac-project-environments',projectId]})}}>Descartar publicação recusada</Button>}
   {send.error&&<p role="alert">{send.error.message}</p>}
   {send.isSuccess&&<p role="status">Ambientes e destinos publicados e persistidos.</p>}
  </div>
