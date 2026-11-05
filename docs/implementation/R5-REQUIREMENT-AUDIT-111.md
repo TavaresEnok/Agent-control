@@ -2,7 +2,7 @@
 
 A matriz oficial permanece inalterada. Esta consolidação reúne as recomendações de produto R4 (48) e o inventário histórico runtime R3/R4 (63); o último não é uma revisão R4 integral concluída. Pareceres R4 já aprovados continuam válidos apenas nas versões e escopos que descrevem. O JSON preserva critério, fontes, recomendações e próxima evidência; nenhuma prova histórica é apresentada como nova execução.
 
-Prioridade: T21 correção QA física; T30 restauração de backup antigo com trabalhadores externos mais novos vivos; handoff Cezar e barreira de projeto; importação RF33 e exportação RF34; grafo assinado e jornadas móveis. RNF08 mantém a lacuna de composição de segredo apesar das 23 superfícies aprovadas. Nenhuma dessas lacunas locais é automaticamente uma dependência externa.
+Prioridade: preservar log versionado T21 aprovado no cenário literal; T30 restauração de backup antigo com trabalhadores externos mais novos vivos; handoff Cezar e barreira de projeto; importação RF33 e exportação RF34; grafo assinado e jornadas móveis. RNF08 mantém a lacuna de composição de segredo apesar das 23 superfícies aprovadas. Nenhuma dessas lacunas locais é automaticamente uma dependência externa.
 
 | Critério | Origem | Recomendação / estado | Próxima evidência |
 | --- | --- | --- | --- |
