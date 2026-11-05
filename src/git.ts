@@ -3,6 +3,7 @@ import { realpath } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { Refusal } from './contracts.ts';
+import { isNormalizedProtectedGatePath } from './quality-gate-paths.ts';
 const GitId=z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const Identity=z.object({commit:GitId,base:GitId,tree:GitId,legacyDigest:z.string().regex(/^[a-f0-9]{64}$/),
  source:z.literal('AcSafeGit+AcArtifactIdentity')}).strict();
@@ -105,6 +106,13 @@ export class GitArtifacts{
   GitId.parse(candidate);GitId.parse(base);
   const value=Identity.extend({diff:z.string().max(20000),truncated:z.boolean(),diffSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict()
    .parse(await this.invoke({action:'diff',candidate,base}));
+  if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  return value;
+ }
+ async protectedPathsChanged(candidate:string,base:string,paths:readonly string[]){
+  GitId.parse(candidate);GitId.parse(base);
+  if(paths.length<1||paths.length>64||paths.some(path=>!isNormalizedProtectedGatePath(path)))throw new Refusal('PROTECTED_GATE_PATH_INVALID');
+  const value=Identity.extend({protectedChanged:z.boolean()}).strict().parse(await this.invoke({action:'protected-paths',candidate,base,paths}));
   if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
   return value;
  }

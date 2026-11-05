@@ -21,13 +21,14 @@ begin
     when 'import' then %w[action base candidate repo sourceRepo]
     when 'compose' then %w[action base destination repo sources]
     when 'identity', 'diff' then %w[action base candidate repo]
+    when 'protected-paths' then %w[action base candidate paths repo]
     when 'observe' then %w[action base candidate repo targetRef]
     when 'snapshot' then %w[action base candidate destination repo]
     when 'cas' then %w[action base candidate operationId repo targetRef]
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[head identity diff observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[head identity diff protected-paths observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
   if input['action'] == 'head'
     ref = input.fetch('targetRef')
     raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
@@ -135,6 +136,16 @@ begin
     ref = input.fetch('targetRef')
     raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
     puts JSON.generate(identity.merge({targetRef: ref, head: git(repo, 'rev-parse', '--verify', ref)}))
+  elsif input['action'] == 'protected-paths'
+    paths = input.fetch('paths')
+    raise 'INVALID_REQUEST' unless paths.is_a?(Array) && paths.length.between?(1, 64) && paths.all? do |path|
+      path.is_a?(String) && path.bytesize.between?(1, 240) && path.match?(%r{\A[A-Za-z0-9._@+\-]+(?:/[A-Za-z0-9._@+\-]+)*/?\z}) && path.split('/').none? { |part| %w[. ..].include?(part) }
+    end
+    # AcSafeGit sets GIT_LITERAL_PATHSPECS=1; magic prefixes would be treated as filenames.
+    specs = paths.map { |path| path.delete_suffix('/') }
+    _, _, status = AcSafeGit.capture('-C', repo, 'diff', '--quiet', '--no-ext-diff', '--no-textconv', '--no-renames', base, candidate, '--', *specs)
+    raise 'GIT_OPERATION_FAILED' unless [0, 1].include?(status.exitstatus)
+    puts JSON.generate(identity.merge({protectedChanged: status.exitstatus == 1}))
   elsif input['action'] == 'diff'
     diff = git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', base, candidate, '--')
     puts JSON.generate(identity.merge({diff: diff.byteslice(0, 20_000).force_encoding('UTF-8').scrub,

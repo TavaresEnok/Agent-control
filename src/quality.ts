@@ -218,7 +218,7 @@ export async function refuseCurrentProtectedGate(c:pg.PoolClient,projectId:strin
 
 /** Gates only: Cezar remains the sole owner of sequencing and correction loops. */
 export class Quality {
-  constructor(readonly ledger:Ledger,private readonly verifierKey:Uint8Array,private readonly git:Pick<GitArtifacts,'identity'>){
+  constructor(readonly ledger:Ledger,private readonly verifierKey:Uint8Array,private readonly git:Pick<GitArtifacts,'identity'> & Partial<Pick<GitArtifacts,'protectedPathsChanged'>>){
     if(verifierKey.byteLength<32)throw Error('VERIFIER_KEY_TOO_SHORT');
   }
   async publish(principal:string,projectId:string,expectedRevision:number,raw:z.input<typeof QualityPolicy>){
@@ -416,6 +416,13 @@ export class Quality {
       const declared=native.snapshot?.writePaths;
       if(!Array.isArray(declared)||declared.some((path:unknown)=>typeof path!=='string'))throw new Refusal('NATIVE_TASK_INPUT_CONFLICT');
       if(writePathsIntersectProtectedGate(declared,policy.protectedGatePaths??[]))throw new Refusal('QUALITY_GATE_PATH_PROTECTED');
+    }
+    const protectedPaths=policy.protectedGatePaths??[];
+    if(protectedPaths.length){
+      if(!this.git.protectedPathsChanged)throw new Refusal('QUALITY_GATE_DIFF_UNAVAILABLE');
+      const actual=await this.git.protectedPathsChanged(artifact.commit_id,artifact.base_id,protectedPaths);
+      if(actual.tree!==artifact.tree_id)throw new Refusal('ARTIFACT_TREE_MISMATCH');
+      if(actual.protectedChanged)throw new Refusal('QUALITY_GATE_PATH_PROTECTED');
     }
     return artifact;
   }

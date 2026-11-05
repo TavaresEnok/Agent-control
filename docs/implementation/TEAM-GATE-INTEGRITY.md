@@ -1,0 +1,7 @@
+# Integridade de caminhos do gate
+
+Quando a política do artefato contém `protectedGatePaths`, `assertReady` compara base e commit exatos no repositório configurado, mesmo sem input nativo e mesmo quando os caminhos declarados são inocentes. O helper Git confiável usa pathspecs literais, `--no-renames`, `--no-ext-diff`, `--no-textconv` e `--quiet`: código 0 permite, 1 identifica alteração, demais recusam. A árvore calculada deve coincidir com a árvore do artefato; helper ausente, falha Git ou resultado inválido recusa. A mesma verificação é executada antes do CAS de integração. Não existe parsing de nomes ou saída truncável.
+
+O teste de PostgreSQL descartável exercita artefato com QA e revisão aprovados que modifica `package.json`, sem input e com input inocente; ambos são recusados. Também cobre mudança legítima, remoção, rename, substituição de arquivo por diretório e de ancestral por arquivo, nome com quebra de linha e objeto inexistente. `npm run typecheck` e `tests/quality-gate-integrity.test.ts` passaram.
+
+O proprietário ainda deve configurar explicitamente todos os arquivos e diretórios relevantes (comandos, configuração e testes de gate); políticas históricas sem lista continuam sem esta proteção. A verificação de caminhos não demonstra que os testes de uma política são suficientes e não protege arquivos omitidos. Nenhuma política pública, instalação operacional ou serviço externo foi alterado.

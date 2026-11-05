@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -25,7 +25,7 @@ describe('quality gate integrity', { skip }, () => {
   let Quality: typeof import('../src/quality.ts').Quality;
   let authorizeExplicitQaWaiver: typeof import('../src/quality.ts').authorizeExplicitQaWaiver;
   let ProjectTemplates: typeof import('../src/project-templates.ts').ProjectTemplates;
-  const quality = () => new Quality(db, randomBytes(32), { identity: async () => { throw new Error('unused'); } });
+  const quality = () => new Quality(db, randomBytes(32), { identity: async () => { throw new Error('unused'); }, protectedPathsChanged: async (commit,base) => ({commit,base,tree:'d'.repeat(40),legacyDigest:'a'.repeat(64),source:'AcSafeGit+AcArtifactIdentity',protectedChanged:false}) });
 
   test.before(async () => {
     const base = process.env.AC_TEST_DATABASE_URL;
@@ -71,11 +71,11 @@ describe('quality gate integrity', { skip }, () => {
     return id;
   }
 
-  async function artifact(env: Awaited<ReturnType<typeof project>>, input: { risk: 'low' | 'medium' | 'high'; commit: string; writePaths?: readonly string[]; evidence?: readonly { kind: 'qa' | 'review'; status: string }[] }) {
+  async function artifact(env: Awaited<ReturnType<typeof project>>, input: { risk: 'low' | 'medium' | 'high'; commit: string; base?:string; tree?:string; writePaths?: readonly string[]; evidence?: readonly { kind: 'qa' | 'review'; status: string }[] }) {
     const intentId = randomUUID();
     const operationId = randomUUID();
-    const base = 'c'.repeat(40);
-    const tree = 'd'.repeat(40);
+    const base = input.base??'c'.repeat(40);
+    const tree = input.tree??'d'.repeat(40);
     const command = { schemaVersion: 1, intentId };
     await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,1)`, [intentId, env.context, env.owner, digest(command), command, operationId, randomUUID(), env.authority.epoch]);
@@ -195,6 +195,48 @@ describe('quality gate integrity', { skip }, () => {
     assert.equal(directory.started, 0);
     const allowed = await launch(['src/app.ts']);
     assert.ok(!(allowed.error instanceof Refusal) || allowed.error.code !== 'QUALITY_GATE_PATH_PROTECTED');
+  });
+
+  test('actual Git changes cannot weaken protected gates even without a native input', async () => {
+    const env=await project('actual-gate-'+randomUUID(),protectedPolicy);
+    const area=await mkdtemp(join(tmpdir(),'quality-gate-actual-'));
+    try{
+      execFileSync('/usr/bin/git',['init','-q','-b','main',area]);
+      const git=(...args:string[])=>execFileSync('/usr/bin/git',['-C',area,...args],{encoding:'utf8'}).trim();
+      git('config','user.name','Fixture');git('config','user.email','fixture@invalid');
+      await mkdir(join(area,'src'));await mkdir(join(area,'.github/workflows'),{recursive:true});
+      await writeFile(join(area,'package.json'),'strict test command');
+      await writeFile(join(area,'.github/workflows/ci.yml'),'real gate');
+      await writeFile(join(area,'src/app.ts'),'old');
+      git('add','.');git('commit','-qm','base');const base=git('rev-parse','HEAD');
+      await writeFile(join(area,'package.json'),'invented passing tests');
+      git('add','.');git('commit','-qm','weaken gate');const bad=git('rev-parse','HEAD'),badTree=git('rev-parse','HEAD^{tree}');
+      git('reset','--hard',base);await writeFile(join(area,'src/app.ts'),'legitimate change');
+      git('add','.');git('commit','-qm','legitimate');const good=git('rev-parse','HEAD'),goodTree=git('rev-parse','HEAD^{tree}');
+      const {GitArtifacts}=await import('../src/git.ts');
+      const gitArtifacts=new GitArtifacts(area);
+      const real=new Quality(db,randomBytes(32),gitArtifacts);
+      const checkChange=async (mutate:()=>Promise<void>, paths:string[])=>{
+        git('reset','--hard',base);await mutate();git('add','-A');git('commit','-qm','path case');
+        return (await gitArtifacts.protectedPathsChanged(git('rev-parse','HEAD'),base,paths)).protectedChanged;
+      };
+      assert.equal(await checkChange(async()=>{await rm(join(area,'package.json'));},['package.json']),true);
+      assert.equal(await checkChange(async()=>{await rename(join(area,'package.json'),join(area,'moved.json'));},['package.json']),true);
+      assert.equal(await checkChange(async()=>{await rm(join(area,'package.json'));await mkdir(join(area,'package.json'));await writeFile(join(area,'package.json/new'),'x');},['package.json']),true);
+      assert.equal(await checkChange(async()=>{await rm(join(area,'.github'),{recursive:true});await writeFile(join(area,'.github'),'x');},['.github/workflows/']),true);
+      assert.equal(await checkChange(async()=>{await writeFile(join(area,'.github/workflows/new\nname'),'x');},['.github/workflows/']),true);
+      assert.equal(await checkChange(async()=>{await writeFile(join(area,'src/app.ts'),'only source');},['package.json','.github/workflows/']),false);
+      await assert.rejects(gitArtifacts.protectedPathsChanged('f'.repeat(40),base,['package.json']));
+      const passed=[{kind:'qa' as const,status:'passed'},{kind:'review' as const,status:'passed'}];
+      for(const writePaths of [undefined,['src/app.ts']]){
+        const id=await artifact(env,{risk:'high',commit:bad,base,tree:badTree,writePaths,evidence:passed});
+        await assert.rejects(db.tx(c=>real.assertReady(c,id,env.authority)),(error:unknown)=>error instanceof Refusal&&error.code==='QUALITY_GATE_PATH_PROTECTED');
+      }
+      const id=await artifact(env,{risk:'high',commit:good,base,tree:goodTree,evidence:passed});
+      assert.equal((await db.tx(c=>real.assertReady(c,id,env.authority))).id,id);
+      const unavailable=new Quality(db,randomBytes(32),{identity:async()=>{throw new Error('unused');}});
+      await assert.rejects(db.tx(c=>unavailable.assertReady(c,id,env.authority)),(error:unknown)=>error instanceof Refusal&&error.code==='QUALITY_GATE_DIFF_UNAVAILABLE');
+    }finally{await rm(area,{recursive:true,force:true});}
   });
 
   test('managed freeze refuses a protected write path before the native input is accepted', async () => {
