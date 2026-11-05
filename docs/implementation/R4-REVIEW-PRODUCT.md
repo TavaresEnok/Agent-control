@@ -21,3 +21,13 @@ RF-36 permanece suspenso até prova do menu canônico acessível→painel→alte
 ## Montagem gateway: `a16d20fa` + `fcb1d48b`
 
 **Aprovada na fatia estática e de contrato de dispatch.** A rota exata de ambientes é montada depois de autenticação e antes de selecionar runtime; não cai na whitelist pública. O caminho cookie passa por checkOrigin para mutações, e o serviço usa raízes/diretório privado da instalação. Reexecutei `tests/r4-environment-gateway.test.ts`: **1/1 passe, zero skips**, log `r4-review-product-environment-gateway.log`. O teste injeta o autenticador para provar sua posição e impede criação de runtime; não é prova HTTP real do autenticador nem substitui o browser final.
+
+## Scope fixo sintético: `3a146e86` (integrado `13a63264`)
+
+**Aprovado no armazenamento/fallback SQL.** Reexecutei a versão com escopo fixo imutável: **1/1 passe, zero skips**, substituindo o log de ambientes pela versão final. A migração079 mudou somente antes de migração operacional; a repetição usou outro PostgreSQL descartável recém-criado do autor, evitando checksum antigo. O fallback aplica-se exclusivamente a engineering-synthetic-v1 sem writePaths próprios. Persistência liga o snapshot à intenção e impede mutação; ausência de scope recusa contrato. Verificar digest, host/task/paths e criar scope somente a partir da configuração confiável antes do efeito continua responsabilidade da implementação delivery e de sua revisão runtime.
+
+## Resolver de conversa: `a324d90b` e frontend `be1aa0ad`
+
+**Aprovado no contrato versionado, sem aceite RF-36 por extensão.** Reexecutei `tests/r4-conversation-resolver.test.ts`: **1/1 passe, zero skips**, com banco filho aleatório de PostgreSQL descartável do principal; o fixture encerra seu banco. Log `r4-review-product-conversation-resolver.log`. O gateway exige autenticação e método GET exato, verifica acesso upstream antes de resolver, devolve no-store e não abre runtime. A consulta exige principal original do vínculo, membership atual, repositório registrado e contexto não arquivado. O callback de acesso upstream do teste é fixture; o server-main real conecta BrowserSessions.verifyHappierSession ao serviço configurado.
+
+O frontend unscoped acSession consulta o resolver; um resultado navega para o projeto exato, vazio/erro não abre formulário e múltiplos resultados pedem seleção explícita. Reexecutei seus **3 testes Vitest**, log `r4-review-product-conversation-resolver-ui.log`. Essa leitura não substitui o browser canônico e a alteração de política assinada/persistida a partir do menu.
