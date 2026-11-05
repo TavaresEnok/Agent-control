@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: SSH admission binds each operation to its plan; cancellation does not block a sibling plan
+ok 1 - SSH admission binds each operation to its plan; cancellation does not block a sibling plan
+  ---
+  duration_ms: 507.783546
+  type: 'test'
+  ...
+# Subtest: two disposable SSH hosts reconcile cancellation after lost acknowledgement
+ok 2 - two disposable SSH hosts reconcile cancellation after lost acknowledgement
+  ---
+  duration_ms: 2041.655018
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3114.818094

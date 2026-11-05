@@ -103,12 +103,13 @@ export class RemoteOperations{
    const context=await this.ledger.authorize(c,principal,input.contextId);
    if(input.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
    await this.ledger.fence(c,authority);
-   await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR UPDATE',[input.hostId,context.project_id])).rows[0];
    if(!host||!host.allowed_tasks.includes(input.taskId))throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
    const hash=digest(input);
    const prior=(await c.query('SELECT * FROM ac_remote_operations WHERE id=$1',[input.operationId])).rows[0];
    if(prior){if(prior.request_digest!==hash)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');return {host,projectId:context.project_id,existing:prior};}
+   // A replay only reconciles the previously admitted operation; it cannot start new work.
+   await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    const active=Number((await c.query("SELECT count(*) n FROM ac_remote_operations WHERE host_id=$1 AND state NOT IN ('completed','failed','canceled_confirmed')",[input.hostId])).rows[0].n);
    if(active>=host.max_concurrent)throw new Refusal('REMOTE_HOST_BUSY');
    await c.query("INSERT INTO ac_remote_operations(id,context_id,host_id,task_id,request_digest,manager_epoch,state,intent_id) VALUES($1,$2,$3,$4,$5,$6,'uncertain',$7)",
@@ -177,6 +178,10 @@ export class RemoteOperations{
    return (await c.query(`SELECT r.id FROM ac_remote_operations r JOIN ac_plan_cancellations k ON k.intent_id=r.intent_id
     WHERE r.context_id=$1 AND k.state='requested' AND r.state NOT IN ('completed','failed','canceled_confirmed') ORDER BY r.created_at`,[authority.contextId])).rows;
   });
-  for(const operation of operations)await this.cancel(principal,operation.id,authority);
+  const errors:unknown[]=[];
+  for(const operation of operations){
+   try{await this.cancel(principal,operation.id,authority);}catch(error){errors.push(error);}
+  }
+  if(errors.length)throw new AggregateError(errors,'REMOTE_CANCELLATION_RECONCILIATION_FAILED');
  }
 }
