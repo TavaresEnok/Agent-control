@@ -1019,7 +1019,7 @@
     "id": "RF-27",
     "normative_row": "RF-27\tP0\tPreservar identidade e resultado de uma operação SSH após desconexão\tI5",
     "criterion": "Preservar identidade e resultado de uma operação SSH após desconexão",
-    "source_version": "6553ce5c + 46fc57af + 5add3b71",
+    "source_version": "1ae70261 + 6553ce5c + 46fc57af + 5add3b71",
     "implementation": "worker.py operation digest/journal and inspect after lost ACK avoid blind repeat",
     "source_files": [
       "src/remote.ts",
@@ -1080,6 +1080,11 @@
         "version": "6553ce5c + 46fc57af + 5add3b71",
         "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
         "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
+      },
+      {
+        "version": "1ae70261",
+        "result": "Prelaunch cancel receipt fenced; independently ran exact added local counterproof: stale epoch rejected, journal uncertain unchanged",
+        "scope": "No repeated full SSH suite; earlier combined physical proof remains separately versioned"
       }
     ],
     "acceptance_rationale": "Literal criterion preserves operation identity/result after SSH disconnection. Independently rerun public real SSH lab discards start/removal ACK, reconnects with same operation, kills supervisor with surviving setsid descendant, successor confirms same immutable group/result and stable log hash without second start; ambiguous absence stays uncertain. No official provider account is needed for this SSH persistence property.",
