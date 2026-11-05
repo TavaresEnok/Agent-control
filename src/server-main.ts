@@ -17,6 +17,7 @@ import {createProjectAdminApi} from './project-admin-api.ts';
 import {InstallationAuthority} from './installation-authority.ts';
 import {createInstallationAuthorityApi} from './installation-authority-api.ts';
 import {remoteReturnTransport} from './remote-return-config.ts';
+import {configuredRemoteDevelopment} from './remote-development-config.ts';
 import {Control} from './control.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
@@ -133,7 +134,7 @@ async function main(){
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
-   projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn)})),
+   projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn),remoteDevelopment:configuredRemoteDevelopment(ledger,config.remoteDevelopment,(projectId,contextId)=>managerTransports.get(projectId)?.authority(contextId))})),
    verifyConversationAccess:(request,principal,sessionId)=>sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin),
    projectEnvironments:createProjectEnvironmentApi(new ProjectEnvironments(ledger,config.projectRoots,config.dataDirectory)),
    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),

@@ -12,6 +12,7 @@ import {CodexQuotaRegistryConfig} from './codex-quota-registry.ts';
 import {NativeBootstrapConfig,nativeBootstrapSchemaError} from './native-bootstrap.ts';
 import {InstallationToken} from './installation-authority.ts';
 import {RemoteReturnConfig} from './remote-return-config.ts';
+import {RemoteDevelopmentConfig} from './remote-development-config.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -28,6 +29,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  accountHomesDirectory:absolute.optional(),
  installationAuthority:z.object({mode:z.literal('synthetic-laboratory'),token:InstallationToken}).strict().optional(),
  remoteReturn:RemoteReturnConfig.optional(),
+ remoteDevelopment:RemoteDevelopmentConfig.optional(),
  nativeBootstrap:NativeBootstrapConfig.optional(),
  codexQuota:CodexQuotaRegistryConfig.optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
@@ -46,6 +48,18 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
   [value.project.repo,...value.projects.map(project=>project.repo),...value.projectRoots.map(root=>root.path)].every(path=>
    credential.path!==resolve(path)&&!credential.path.startsWith(resolve(path)+sep)&&!resolve(path).startsWith(credential.path+sep))),
  'SSH credentials must be outside repositories and authorized project roots')
+ .refine(value=>!value.remoteDevelopment||value.remoteDevelopment.projects.every(project=>{
+  const roots=[value.project.repo,...value.projects.map(p=>p.repo),...value.projectRoots.map(root=>root.path)].map(path=>resolve(path));
+  const overlaps=(a:string,b:string)=>a===b||a.startsWith(b+sep)||b.startsWith(a+sep);
+  return [value.project,...value.projects].some(p=>p.id===project.projectId)&&
+   resolve(value.dataDirectory)===value.dataDirectory&&resolve(project.verifierKeyFile)===project.verifierKeyFile&&
+   project.verifierKeyFile.startsWith(value.dataDirectory+sep)&&!roots.some(root=>overlaps(project.verifierKeyFile,root))&&
+   resolve(project.tmpfsRoot)===project.tmpfsRoot&&!roots.some(root=>overlaps(project.tmpfsRoot,root))&&
+   !overlaps(project.tmpfsRoot,value.dataDirectory)&&
+   (!value.contextVault||![value.contextVault.directory,value.contextVault.masterFile].some(path=>overlaps(project.tmpfsRoot,resolve(path))))&&
+   (!value.accountHomesDirectory||!overlaps(project.tmpfsRoot,resolve(value.accountHomesDirectory)))&&
+   value.remoteDevelopment!.transport.credentials.every(credential=>!overlaps(credential.path,project.tmpfsRoot)&&!roots.some(root=>overlaps(credential.path,root)));
+ }),'Remote development requires configured projects, private canonical verifier keys and isolated tmpfs/SSH paths')
  .superRefine((value,ctx)=>{const code=nativeBootstrapSchemaError(value);if(code)ctx.addIssue({code:'custom',message:code});});
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */

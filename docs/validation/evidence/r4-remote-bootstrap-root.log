@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: remote development bootstrap is explicit synthetic opt-in with isolated custody and fixed configured projects
+ok 1 - remote development bootstrap is explicit synthetic opt-in with isolated custody and fixed configured projects
+  ---
+  duration_ms: 20.419124
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1643.607383
