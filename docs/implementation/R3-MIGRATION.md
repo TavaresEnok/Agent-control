@@ -1,0 +1,29 @@
+# R3 — coexistência e troca de autoridade em laboratório
+
+Implementação aditiva da migração 075, `InstallationAuthority`, API assinada e guarda compartilhada no `Ledger`. Nenhuma instalação, conta, credencial, banco ou serviço operacional foi migrado. O modo aceito é exclusivamente `synthetic-laboratory`; a projeção declara `operationalActivation: blocked`. Isso não homologa a instalação antiga real nem RF-46/T28 integralmente.
+
+A bancada inicializa duas identidades antigas/nova, pausada, com epoch 1. A transferência exige pausa, alvo cadastrado, epoch esperado, ausência de reservas não liberadas, ausência de grants reais de Capacity ativos dos projetos vinculados e nenhuma renovação de credencial pendente/incerta. Transferência e rollback incrementam epoch; rollback só permite o titular anterior do último movimento. O rollback preserva pausa, histórico, configurações/políticas e contas: não restaura epoch antigo nem reproduz execução histórica. A intenção assinada é deduplicada pelo conteúdo sem deliveryAttemptId, permitindo retry após perda de ACK sem repetir a troca.
+
+`bindLaboratoryProject` vincula projetos com contas sintéticas previamente cadastradas. O `Ledger(url, installationToken)` passa a exigir token correspondente em acquire/fence para os projetos vinculados. Um controlador sem configuração também falha fechado. Portanto Capacity.reserve/transition, heartbeat e os caminhos existentes que usam Ledger.fence consultam a mesma autoridade PostgreSQL. Projetos/contextos são travados antes do domínio, e criação de contexto toma SHARE no projeto para serializar com o vínculo inicial. Projetos diferentes não podem vincular a mesma conta a domínios diferentes.
+
+Reservas avulsas servem à bancada de execução sem projeto; contas já compartilhadas com projetos são recusadas e devem usar Capacity. A execução avulsa grava primeiro a reivindicação durável; depois trava domínio e reserva durante o callback físico. Retry não invoca callback novamente. Queda entre reivindicação e callback ou perda de ACK conserva running/incerto. TTL vencido nunca prova ausência. Liberação por ausência exige identidade completa e verificador físico injetado; a ausência de verificador recusa. `not_started` só libera reserva que ainda não foi reivindicada para início. O produto existente mantém seus próprios recibos e contabilização de Capacity.
+
+`refreshCredentials` é uma ponte de callback de credenciais **sintéticas**: reivindicação durável, domínio/conta vinculados, exclusão global por conta enquanto claimed/uncertain e callback protegido pelo lock de autoridade. Falha ou ACK perdido mantém bloqueio até `reconcileRefresh` com verificador confiável. Token antigo é recusado antes de chamar o adaptador. `renew` separadamente renova apenas a lease da reserva; não significa renovação de credencial. Não se acessou HOME ou token real; uma implementação operacional de adaptador de refresh continua fora desta prova.
+
+API: `createInstallationAuthorityApi(service)` deve ser montada pelo integrador em `/api/v1/ac/installation-authority`, após sessão e Origin existentes. GET exige domainId UUID e administrador; POST usa `x-ac-operator-proof` no mesmo domínio de assinatura de Operators, corpo limitado e prazo de leitura. A API não cria instalações nem ativa modo operacional. Comandos: `installation.pause` ({expectedEpoch,paused}), `installation.transfer` e `installation.rollback` ({expectedEpoch,targetInstallationId}), com schemaVersion 1, intentId, deliveryAttemptId e domainId. Inicialização/vínculo são explícitos no módulo de laboratório.
+
+## Prova e limites
+
+Node 22.23.3, PostgreSQL 16 Alpine novo `ac-r3-migration-20261105-pg`, labels `ac.r3.front=migration` e `ac.disposable=true`, porta loopback aleatória. Cada teste cria e remove somente seu banco UUID. O processo físico é um filho Node sintético, encerrado por identidade mantida pela fixture; não se sinaliza processo preexistente.
+
+`tests/r3-migration.test.ts`: dois testes passam, zero skips. Evidência `docs/validation/evidence/r3-migration-20261105.log`. Incluem corrida de dois inícios com um filho real; pausa/TTL/renovação; perda de ACK e ausência; troca/rollback assinados com retry; tokens antigos; Capacity real com conta/perfil/política/elegibilidade/quota sintéticos; transição e heartbeat; admissão real aberta em transação concorrente com pausa/transferência; refresh em voo e transferência; incerteza durável; recusa de refresh da mesma conta pendente e de outro domínio; preservação de pausa e histórico.
+
+Comando reproduzível (URL aponta exclusivamente a bancada nova):
+
+```sh
+AC_TEST_DATABASE_URL=postgresql://postgres:synthetic-r3-migration@127.0.0.1:32785/ac_implementation_test PATH=/tmp/node-v22.23.3-linux-x64/bin:$PATH node --import tsx --test tests/r3-migration.test.ts
+```
+
+A verificação TypeScript local chegou a quatro erros apenas nas declarações vendorizadas de Cezar/Zod com `dist` ligado ao checkout principal; nenhum `skipLibCheck` foi usado e não se declara build geral verde. O integrador deve executar o build combinado com a preparação de dependências correta. O parecer independente é responsabilidade de outra frente; estes resultados são execução do autor.
+
+Limites: a prova não cobre migração de segredos/contas reais, refresh de provedor real, assinatura do painel numa instalação antiga, transplante entre bancos independentes, controladores que acessam diretamente SQL/OS ignorando o produto, todos os pontos de crash, nem medição homologada. O domínio precisa de banco comum e clientes que respeitam a guarda. Configurações adicionadas após vincular um projeto requerem cadastro explícito de conta/domínio para refresh; falham fechado sem isso. Os históricos são duráveis, mas a projeção atual não é paginada. Reservas avulsas de laboratório não substituem o alocador normal. Nenhuma guarda operacional foi removida.

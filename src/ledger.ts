@@ -1,3 +1,4 @@
+import {fenceInstallationContext,type InstallationFenceToken} from './installation-authority-fence.ts';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
@@ -10,7 +11,7 @@ export type Intent = { id: string; context_id: string; operation_id: string; run
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
 export class Ledger {
   readonly pool: pg.Pool;
-  constructor(connectionString: string) { this.pool = new pg.Pool({ connectionString, max: 8 }); }
+  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken) { this.pool = new pg.Pool({ connectionString, max: 8 }); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
     try { await c.query('BEGIN'); const v = await fn(c); await c.query('COMMIT'); return v; }
@@ -39,6 +40,7 @@ export class Ledger {
   }
   async createContext(principal: string, projectId: string, sessionId: string) {
     return this.tx(async c => {
+      await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE',[projectId]);
       const access = await c.query('SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [projectId, principal]);
       if (!access.rowCount || access.rows[0].role === 'viewer') throw new Refusal('PROJECT_FORBIDDEN', 403);
       await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,3))',[sessionId]);
@@ -57,6 +59,7 @@ export class Ledger {
     if (!Number.isInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 60) throw new Refusal('INVALID_LEASE', 400);
     return this.tx(async c => {
       await this.authorize(c, principal, contextId);
+      await fenceInstallationContext(c,contextId,this.installationAuthority);
       const r = await c.query(`INSERT INTO ac_managers VALUES($1,$2,$3,1,clock_timestamp()+$4*interval '1 second')
         ON CONFLICT(context_id) DO UPDATE SET instance_id=excluded.instance_id,profile_id=excluded.profile_id,
         epoch=ac_managers.epoch+1,lease_until=excluded.lease_until
@@ -73,6 +76,7 @@ export class Ledger {
       WHERE x.id=$1 AND m.instance_id=$2 AND m.epoch=$3 AND m.lease_until>clock_timestamp() FOR UPDATE OF x,m`,
     [a.contextId, a.instanceId, a.epoch]);
     if (!r.rowCount) throw new Refusal('STALE_MANAGER');
+    await fenceInstallationContext(c,a.contextId,this.installationAuthority,allowPaused);
     if (r.rows[0].paused && !allowPaused) throw new Refusal('HUMAN_PAUSED');
     const admission=(await c.query('SELECT enabled FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
     if (!admission?.enabled && !allowPaused) throw new Refusal('ADMISSION_CLOSED');
