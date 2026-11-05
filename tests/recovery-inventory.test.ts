@@ -10,7 +10,7 @@ import {Ledger} from '../src/ledger.ts';
 import {requireRecoveryInventory,configureRecoveryInventory,beginRestoredPhysicalRecovery} from '../src/recovery-inventory.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {sweepRestoredPhysicalInventory} from '../src/recovery-physical-sweep.ts';
-import {OpenSshTransport,type RemoteHost} from '../src/remote.ts';
+import {OpenSshTransport,RemoteOperations,type RemoteHost} from '../src/remote.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('enforced recovery policy requires a bootstrap capability before any guarded effect',async()=>{
@@ -21,6 +21,24 @@ test('enforced recovery policy requires a bootstrap capability before any guarde
   await db.pool.query('UPDATE ac_recovery_inventory_policy SET required=true,source_installation_id=$1,catalog_id=$2,manifest_hash=$3',[randomUUID(),randomUUID(),'a'.repeat(64)]);
   await assert.rejects(db.tx(c=>requireRecoveryInventory(c,db)),/RECOVERY_INVENTORY_REQUIRED/);
  }finally{await db.close();await fixture.close();}
+});
+
+test('enforced remote start rejects a forged transport before any exchange',async()=>{
+ const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const fixture=await isolatedDatabase(base,'inventoryforgery'),db=new Ledger(fixture.url),directory=await mkdtemp(join(tmpdir(),'ac-t30-forgery-'));
+ const source=randomUUID(),module=resolve('services/recovery/catalog.py');
+ try{
+  const init=await promisify(execFile)('/usr/bin/python3',['-c',`import importlib.util,sys,json\ns=importlib.util.spec_from_file_location('m',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nprint(json.dumps(m.initialize(sys.argv[2],sys.argv[3],[{'kind':'ssh','id':'fixture','identity':{'hostKey':'fixture'}}])))`,module,directory,source]);
+  const catalogId=JSON.parse(init.stdout).catalogId,manifestHash=createHash('sha256').update(await readFile(join(directory,'manifest.json'))).digest('hex');
+  await db.migrate();await db.pool.query('UPDATE ac_recovery_inventory_policy SET required=true,source_installation_id=$1,catalog_id=$2,manifest_hash=$3',[source,catalogId,manifestHash]);
+  await configureRecoveryInventory(db,{directory,installationId:source,catalogId,manifestHash,epoch:1});
+  const project=randomUUID(),principal='synthetic-owner',hostId=randomUUID();await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'fixture']);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  const context=await db.createContext(principal,project,randomUUID()),authority=await db.acquire(principal,context,randomUUID(),'synthetic',60);
+  const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
+  let calls=0;const remote=new RemoteOperations(db,{async exchange(){calls++;return {};}});
+  await remote.registerHost(principal,project,{id:hostId,label:'fixture',hostname:'fixture.invalid',port:22,username:'node',publicKey:'ssh-ed25519 '+'a'.repeat(40),fingerprint:'SHA256:'+'a'.repeat(43),credentialRef:randomUUID(),remoteRoot:'/fixture',allowedTasks:['fixture'],maxConcurrent:1});
+  await assert.rejects(remote.start(principal,{operationId:randomUUID(),intentId:intent.id,contextId:context,hostId,taskId:'fixture'},authority),/RECOVERY_PHYSICAL_IDENTITY_MISMATCH/);assert.equal(calls,0);
+ }finally{await db.close();await fixture.close();await rm(directory,{recursive:true,force:true});}
 });
 
 test('restored recovery records request before an idempotent epoch advance',async()=>{

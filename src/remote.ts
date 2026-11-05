@@ -157,6 +157,8 @@ export class RemoteOperations{
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
    let lease:Awaited<ReturnType<NonNullable<typeof inventory>['lease']>>|undefined;
    if(inventory){
+    assertIssuedOpenSshTransport(this.transport);
+    if(Object.getPrototypeOf(this.transport)!==OpenSshTransport.prototype)throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');
     const physical=z.object({schemaVersion:z.literal(1),operationId:Id,authorityId:z.string(),anchorId:z.string().regex(/^[a-f0-9]{64}$/),installationId:z.string(),stateRoot:z.string(),authorityEpoch:z.number().int().positive(),recoveryRequired:z.literal(true)}).strict().parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'authority-status',operationId:input.operationId}));
     if(physical.operationId!==input.operationId||physical.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');
     const identity={hostId:input.hostId,hostFingerprint:admitted.host.fingerprint,authorityId:physical.authorityId,anchorId:physical.anchorId,installationId:physical.installationId,stateRoot:physical.stateRoot};

@@ -93,6 +93,7 @@ export async function admitNativeResources(input:{docker:DockerDaemon;ledger:imp
  const inventory=await input.ledger.tx(c=>requireRecoveryInventory(c,input.ledger));
  if(!(input.docker instanceof NativeResourceDockerDaemon)){if(inventory)throw new Refusal('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED');return;}
  const docker=input.docker;
+ if(inventory)assertIssuedNativeResourceDaemon(docker);
  docker.bindRecoveryLedger(input.ledger);
  if(inventory)docker.bindRecoveryInventory(inventory);
  const validate=async(c:import('pg').PoolClient,active:boolean)=>{
