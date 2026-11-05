@@ -53,13 +53,17 @@ test('signed immutable project environments enforce real Git source, directories
   const project=definitions[0],context=await db.createContext(principal,project.id,randomUUID()),capacity=await provisionCapacity(db,principal,project.id);
   const profile=(await db.pool.query('SELECT p.* FROM ac_profiles p JOIN ac_account_access a ON a.account_id=p.account_id WHERE a.project_id=$1',[project.id])).rows[0];
   await db.pool.query("INSERT INTO ac_quality_policies(project_id,revision,snapshot,digest) VALUES($1,1,'{}','fixture')",[project.id]);
-  const intent=async(paths:string[],parentId?:string)=>{
-   const id=randomUUID();await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,parent_intent_id,parent_unit_id) VALUES($1,$2,$3,'fixture',$4,$5,$6,1,0,$7,$8)`,[id,context,principal,{payload:{writePaths:paths}},randomUUID(),randomUUID(),parentId??null,parentId?'unit-'+id:null]);return id;
+  const intent=async(paths:string[],parentId?:string,synthetic=false)=>{
+   const id=randomUUID();await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,parent_intent_id,parent_unit_id) VALUES($1,$2,$3,'fixture',$4,$5,$6,1,0,$7,$8)`,[id,context,principal,{payload:synthetic?{workflow:'engineering-synthetic-v1',messageRef:'fixed'}:{writePaths:paths}},randomUUID(),randomUUID(),parentId??null,parentId?'unit-'+id:null]);return id;
   };
   const contract=async(id:string,target='refs/heads/protected')=>db.pool.query('INSERT INTO ac_execution_contracts VALUES($1,$2,1,$3,$4)',[id,project.id,target,digest({qualityRevision:1,targetRef:target})]);
   const bad=await intent(['outside/a.txt']);await assert.rejects(contract(bad),/PROJECT_ENVIRONMENT_DIRECTORY_FORBIDDEN/);
   const traversalIntent=await intent(['src/../../private/a']);await assert.rejects(contract(traversalIntent),/PROJECT_ENVIRONMENT_DIRECTORY_FORBIDDEN/);
   const wrongTarget=await intent(['src/a.txt']);await assert.rejects(contract(wrongTarget,'refs/heads/main'),/PROJECT_ENVIRONMENT_TARGET_FORBIDDEN/);
+  const synthetic=await intent([],undefined,true);await assert.rejects(contract(synthetic),/PROJECT_ENVIRONMENT_WRITE_SCOPE_REQUIRED/);
+  const fixedScope={schemaVersion:1,source:'remote-fixed-task',hostId:hostIds[0],taskId:'fixed-task',writePaths:['src/a.txt']};
+  await db.pool.query('INSERT INTO ac_project_environment_write_scopes VALUES($1,$2,$3)',[synthetic,fixedScope,digest(fixedScope)]);await contract(synthetic);
+  await assert.rejects(db.pool.query('UPDATE ac_project_environment_write_scopes SET snapshot=$2 WHERE intent_id=$1',[synthetic,{...fixedScope,writePaths:['outside']}]),/POLICY_REVISION_IMMUTABLE/);
   const parent=await intent([]),child=await intent(['src/a.txt'],parent);await contract(child);
   const pin=(await db.pool.query('SELECT * FROM ac_project_environment_bindings WHERE intent_id=$1',[child])).rows[0];assert.equal(pin.revision,1);assert.equal(pin.environment_id,'lab');
   assert.equal((await db.tx(c=>requireProjectEnvironment(c,{projectId:project.id,contextId:context,intentId:child,hostId:hostIds[0],destinationRef:'refs/heads/protected',purpose:'remote-development'}))).environmentId,'lab');

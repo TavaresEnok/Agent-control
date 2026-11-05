@@ -37,6 +37,16 @@ CREATE TABLE ac_project_environment_sources (
 CREATE TRIGGER ac_project_environment_sources_immutable BEFORE UPDATE OR DELETE ON ac_project_environment_sources
  FOR EACH ROW EXECUTE FUNCTION ac_reject_policy_mutation();
 
+-- Startup fixed-task configuration supplies an immutable scope for synthetic
+-- commands which intentionally have no caller-provided writePaths.
+CREATE TABLE ac_project_environment_write_scopes (
+ intent_id uuid PRIMARY KEY REFERENCES ac_intents,
+ snapshot jsonb NOT NULL CHECK(snapshot->>'source'='remote-fixed-task' AND snapshot->>'schemaVersion'='1' AND jsonb_typeof(snapshot->'writePaths')='array'),
+ digest text NOT NULL CHECK(digest ~ '^[a-f0-9]{64}$')
+);
+CREATE TRIGGER ac_project_environment_write_scopes_immutable BEFORE UPDATE OR DELETE ON ac_project_environment_write_scopes
+ FOR EACH ROW EXECUTE FUNCTION ac_reject_policy_mutation();
+
 CREATE FUNCTION ac_environment_contract_binding() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE head integer; conf jsonb; env jsonb; paths jsonb; path text; unit jsonb;
 BEGIN
@@ -51,6 +61,9 @@ BEGIN
   SELECT item INTO unit FROM ac_intents i JOIN ac_managed_executions x ON x.parent_intent_id=i.parent_intent_id,
    LATERAL jsonb_array_elements(x.recipe->'units') item WHERE i.id=NEW.intent_id AND item->>'intentId'=NEW.intent_id::text;
   paths=unit->'writePaths';
+ END IF;
+ IF paths IS NULL AND EXISTS(SELECT 1 FROM ac_intents WHERE id=NEW.intent_id AND command->'payload'->>'workflow'='engineering-synthetic-v1') THEN
+  SELECT snapshot->'writePaths' INTO paths FROM ac_project_environment_write_scopes WHERE intent_id=NEW.intent_id;
  END IF;
  IF paths IS NULL OR jsonb_typeof(paths)<>'array' THEN RAISE EXCEPTION 'PROJECT_ENVIRONMENT_WRITE_SCOPE_REQUIRED'; END IF;
  FOR path IN SELECT jsonb_array_elements_text(paths) LOOP
