@@ -43,7 +43,6 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
    if(value===4){
     await runner.start(principal,authority,intent.id,{id:stageId,session_id:session},qaGrant,artifact);
     await db.pool.query("INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,1)",[intent.id,context,principal]);
-    await runner.stop(principal,authority,stageId,'canceled');
     await db.pool.query("UPDATE ac_plan_cancellations SET state='confirmed',confirmed_at=clock_timestamp() WHERE intent_id=$1",[intent.id]);
     for(let n=0;n<30;n++){
      await runner.reconcileContext(principal,authority);
