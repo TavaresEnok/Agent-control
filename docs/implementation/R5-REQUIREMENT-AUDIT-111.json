@@ -239,7 +239,8 @@
       "conclusion": "planning.ts compile batches partitions write overlap; managed-plan composes parallel outputs",
       "next_evidence": "Pure parallel compiler test rerun, physical graph source/evidence pending R3 independent review",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9d5bd732: Fluxo físico do autor executou plano com três tarefas; sem inferir aceite integral de todo grafo."
     },
     {
       "id": "RF-17",
@@ -267,7 +268,8 @@
       "conclusion": "engineering.ts separate QA/review/judge gates; native-verification and native-qa trusted executors",
       "next_evidence": "Real-capacity graph independence and terminal outcome reconciliation pending R3 flow",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9a8a796c: T21 físico verificou revisão e QA distintos antes e após correção; demais cenários de independência permanecem próprios."
     },
     {
       "id": "RF-19",
@@ -295,7 +297,8 @@
       "conclusion": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
       "next_evidence": "Native correction graph physical proof with real capacity not independently rerun",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9a8a796c: Ciclo físico T21 comprovou defeito→correção e evidências novas; não promove todo RF20 por um cenário."
     },
     {
       "id": "RF-21",
@@ -323,7 +326,8 @@
       "conclusion": "cezar.ts persisted launches/reconciliation and frozen recipes replay by stable operation",
       "next_evidence": "Historical reconciliation now durable bounded/fenced per3ca18eae; full composed workflow dispatch/wait/cancel/completion proof through actual capacity and public control pending R3 flow.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9d5bd732: Fluxo físico autor demonstrou despacho, espera e conclusão; queda e cancelamento assinados com sucessor também exercitados em contexto separado."
     },
     {
       "id": "RF-23",
@@ -351,7 +355,8 @@
       "conclusion": "control.ts signed control intents; cancellation.ts stop then separate receipt confirmation; pause revisions",
       "next_evidence": "Public signed control through graph with physical worker and reconnect evidence pending R3",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9d5bd732: Cancelamento assinado após SIGKILL e sucessor físico foi demonstrado; completar demais comandos e condições não contidas no ensaio."
     },
     {
       "id": "RF-25",
@@ -756,9 +761,10 @@
       "recommendation": "historical_R3_only_not_new_acceptance",
       "historical_recommendation": "not_accepted",
       "conclusion": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
-      "next_evidence": "Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+      "next_evidence": "Demonstrar atualização de runtime com mensagens, pausas e operações pendentes e retenção de workers antigos compatíveis, sem perder estado ou permitir efeitos obsoletos.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "48b0bcb6: Handoff local de gerações e replay da confirmação perdida aprovados por escopo; falta comprovar atualização com mensagens, pausas e operações pendentes no ciclo completo."
     },
     {
       "id": "RF-53",
@@ -984,7 +990,8 @@
       "conclusion": "disk-admission checks statfs; native Docker per-job limits and global account slot reservation",
       "next_evidence": "Remote aggregate CPU/memory/PIDs and admission physically proved in5add3b71. Central native supervisors still use per-job fixed limits; admission-to-central aggregate CPU/RAM authority wiring must be verified/implemented alongside disk, slots and account capacity before full RNF11 acceptance.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9d5bd732: Fluxo integrado demonstrou bridge e limites físicos em laboratório; não presume cobertura integral de todas as autoridades ou carga sustentada."
     },
     {
       "id": "RNF-12",
@@ -1011,7 +1018,8 @@
       "conclusion": "ProviderCollectors bind immutable adapter version/digest and refuse changed adapter before probe",
       "next_evidence": "Finite old/new/incompatible CLI protocol fixtures must prove default admission gated by contract confirmation; live account is not prerequisite.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "3fc2f818,508f10b0: Protocolo físico com imagens sintéticas e hooks de admissão aprovados por versão; reavaliar outros contratos/modos antes de aceite integral."
     },
     {
       "id": "RNF-14",
@@ -1156,7 +1164,8 @@
       "conclusion": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
       "next_evidence": "Reject review, correct same task preserving findings, invalidate old evidence then evaluate new artifact; Native correction graph physical proof with real capacity not independently rerun",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "9a8a796c: Prova T21 cobre QA falho e correção, não reprovação de review com achados de T09."
     },
     {
       "id": "T10",
@@ -1321,7 +1330,7 @@
       "next_evidence": "Log físico do autor versionado em 9a8a796c; execução com inferência sintética determinística.",
       "latest_R3_addendum": null,
       "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
-      "r5_versioned_delta": "Physical QA correction test 60a59273/5344816f/4d99e72f/61ebe55f against 0643b62a, author 1/1: reproducible failure, bound correction, fresh review and QA, corrected-only integration. See R5-INDEPENDENT-REVIEW-20261105.md."
+      "r5_versioned_delta": "9a8a796c: Ciclo T21 físico literal aprovado como recomendação; runner determinístico, log do autor versionado."
     },
     {
       "id": "T22",
@@ -1363,7 +1372,8 @@
       "conclusion": "private file reader refuses symlink/hardlink/growth; Docker worker mount/socket/network restrictions",
       "next_evidence": "Two actual concurrent CLIs denied shell/symlink/process credential access; distinct HOME insufficient; Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "da2c899e: Broker físico delimitado com dois workers hostis e administração legítima; dois CLIs/contas reais do cenário ainda não foram compostos."
     },
     {
       "id": "T25",
@@ -1394,7 +1404,8 @@
       "conclusion": "ProviderCollectors bind immutable adapter version/digest and refuse changed adapter before probe",
       "next_evidence": "Finite expired-auth and incompatible-protocol fixtures must preserve work and refuse admission until confirmation; actual account expiry is optional validation.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "3fc2f818,508f10b0: Sondas de protocolo e hooks aprovados; expiração de autenticação e recuperação conjunta do cenário literal ainda não compostas."
     },
     {
       "id": "T27",
@@ -1453,7 +1464,8 @@
       "conclusion": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
       "next_evidence": "Restore an older backup while newer external workers remain alive; prove reconciliation and neutralization before dispatch and preservation of pauses in a disposable local lab.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "dc7d0874: Admissão restaurada permanece fechada; ainda falta backup antigo com workers externos mais novos vivos, fence e neutralização comprovados."
     },
     {
       "id": "T31",
@@ -1478,10 +1490,10 @@
       "recommendation": "historical_R3_only_not_new_acceptance",
       "historical_recommendation": "not_accepted",
       "conclusion": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
-      "next_evidence": "Update worker with pending messages/pauses/operations and Continue-As-New while retaining compatible old workers; Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+      "next_evidence": "Demonstrar atualização de runtime com mensagens, pausas e operações pendentes e retenção de workers antigos compatíveis, sem perder estado ou permitir efeitos obsoletos.",
       "latest_R3_addendum": null,
       "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
-      "r5_versioned_delta": "f3c2d2c9, 48b0bcb6: project barrier and lost-ACK handoff replay scoped approval; full scenario and integrated physical proof remain pending."
+      "r5_versioned_delta": "48b0bcb6: Handoff local e replay aprovados por escopo; atualização com mensagens/pausas/efeitos pendentes, workers antigos e reconciliação completos ainda pendente."
     },
     {
       "id": "T33",
