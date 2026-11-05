@@ -36,6 +36,7 @@ test('programming saturation and explicit stage releases permit evaluation, with
   const createIntent=async(contextId:string,auth:typeof authority)=> (await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:synthetic-liveness'}},auth,'api')).id;
   const intentId=await createIntent(context,authority),otherIntent=await createIntent(otherContext,otherAuthority);
   const request=(role:Role)=>({attemptId:randomUUID(),intentId,contextId:context,role});
+  const persistedRole=async(id:string)=>(await db.pool.query<{role:Role}>('SELECT role FROM ac_capacity_grants WHERE id=$1',[id])).rows[0]?.role;
   const programming=request('programmer');
   await assert.rejects(capacity.reserve(principal,programming,authority),/ORIGINAL_RESERVE_NOT_NEEDED/);
   await capacity.observeQuota(principal,alternate,{status:'exhausted',source:'synthetic://liveness',ttlSeconds:3600});
@@ -54,16 +55,16 @@ test('programming saturation and explicit stage releases permit evaluation, with
   await assert.rejects(capacity.reserve(principal,qa,authority),/CAPACITY_BUSY/);
   await capacity.transition(principal,grant.id,authority,'released',{processId:'synthetic-programmer-not-started',state:'not_started'});
   const evalGrant=await capacity.reserve(principal,qa,authority);
-  assert.equal(evalGrant.role,'qa');
+  assert.equal(await persistedRole(evalGrant.id),'qa');
   const reviewer=request('reviewer');await assert.rejects(capacity.reserve(principal,reviewer,authority),/CAPACITY_BUSY/);
   await capacity.transition(principal,evalGrant.id,authority,'released',{processId:'synthetic-qa-not-started',state:'not_started'});
-  const reviewGrant=await capacity.reserve(principal,reviewer,authority);assert.equal(reviewGrant.role,'reviewer');
+  const reviewGrant=await capacity.reserve(principal,reviewer,authority);assert.equal(await persistedRole(reviewGrant.id),'reviewer');
   await capacity.transition(principal,reviewGrant.id,authority,'released',{processId:'synthetic-review-not-started',state:'not_started'});
-  const specialist=await capacity.reserve(principal,request('specialist'),authority);assert.equal(specialist.role,'specialist');
+  const specialist=await capacity.reserve(principal,request('specialist'),authority);assert.equal(await persistedRole(specialist.id),'specialist');
   await capacity.transition(principal,specialist.id,authority,'released',{processId:'synthetic-specialist-not-started',state:'not_started'});
   const alternative=await capacity.reserve(principal,alternateAttempt,otherAuthority);assert.equal(alternative.account_id,alternate);
   const concurrentQa=await capacity.reserve(principal,request('qa'),authority);
-  assert.equal(concurrentQa.role,'qa');
+  assert.equal(await persistedRole(concurrentQa.id),'qa');
   await capacity.transition(principal,concurrentQa.id,authority,'released',{processId:'synthetic-concurrent-qa-not-started',state:'not_started'});
   await capacity.transition(principal,alternative.id,otherAuthority,'released',{processId:'synthetic-alternate-not-started',state:'not_started'});
  }finally{await db.close();await database.close();}
