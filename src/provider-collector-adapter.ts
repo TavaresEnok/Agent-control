@@ -120,3 +120,16 @@ export function createProviderCollectorAdapter(options: ProviderCollectorAdapter
     },
   };
 }
+
+/** Opt-in probe only: it deliberately has no synthetic manifest and cannot be
+ * registered in ProviderCollectors until real account activation exists. */
+export function createCodexReadonlyQuotaProbe(source:import('./codex-readonly-quota-source.ts').CodexReadonlyQuotaSource,now:()=>Date=()=>new Date()):ProviderAdapter['probe']{
+ return async input=>{
+  const result=await source.read(input);
+  if(result.kind==='auth')return {status:'auth_required',ttlSeconds:COLLECTOR_TTL.unknown,remainingPercent:null,resetAt:null};
+  if(result.kind!=='stdout')return uncertain();
+  let observedAt:string;try{observedAt=now().toISOString();}catch{return uncertain();}
+  const observation=parseProviderCollector({kind:'stdout',provider:'codex',parserId:PROVIDER_COLLECTOR_PARSERS.codex,exitCode:0,stdout:result.stdout,observedAt});
+  return observation.failure==='none'?toProbeResult(observation):uncertain();
+ };
+}
