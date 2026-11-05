@@ -59,7 +59,7 @@ export async function retireFlowResources(envelope:FlowResourceEnvelope,area:str
 export async function snapshotFlowResources(envelope:FlowResourceEnvelope){
  const authorityId=envelope.resourceAuthority.authorityId;assert(authorityId.startsWith('ac-r3-resources-flow-'));
  const ids=(await exec('docker',['ps','-aq','--no-trunc','--filter','label=ac.resources.authority='+authorityId],{timeout:15000})).stdout.trim().split('\n').filter(Boolean);assert(ids.length<=32);
- const docker=new DockerDaemon(),containers=[];for(const id of ids){assert(/^[a-f0-9]{64}$/.test(id));const value=await docker.inspect(id);if(!value)continue;assert.equal(value.Config.Labels['ac.resources.authority'],authorityId);containers.push({id,status:value.State.Status,running:value.State.Running});}
+ const docker=new DockerDaemon(),containers=[];for(const id of ids){assert(/^[a-f0-9]{64}$/.test(id));const value=await docker.inspect(id);if(!value)continue;assert.equal(value.Config.Labels['ac.resources.authority'],authorityId);const name=value.Name.replace(/^\//,'');assert(/^[a-z0-9-]{1,160}$/.test(name));containers.push({id,name,status:value.State.Status,running:value.State.Running});}
  const prefix=createHash('sha256').update(authorityId).digest('hex').slice(0,24);const pendingHostReservations=(await readdir('/var/tmp/ac-resource-authority-'+process.geteuid!())).filter(name=>name.startsWith('reservation-'+prefix+'-')).length;
  return {containers,pendingHostReservations};
 }
