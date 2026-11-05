@@ -1,0 +1,5 @@
+# UI — revogação de dispensa de QA
+
+O painel apresenta o histórico de autorizações, distingue entradas revogadas e permite ao titular revogar uma entrada ativa pelo comando assinado `qa.waiver.revoke`. Respostas antigas sem `revoked` são interpretadas como ativas. Uma revogação impede nova autorização para o mesmo projeto, política, template, revisão e tarefa; entradas revogadas não contam como autorizações ativas ou ambíguas. O histórico também aparece sem template ativo e para usuários sem permissão de autorização. A atualização após a mutação usa a invalidação de consultas existente.
+
+Validação isolada em 2026-11-05, no checkout de trabalho: `npm test -- packages/web/src/routes/settings/agent-control-project-templates.test.tsx` em `upstream/cezar`, exit 0, oito testes; `npm run typecheck --workspace @open-mercato/cezar-web`, exit 0. A primeira tentativa do teste falhou com exit 127 por ausência de dependências no checkout; foi criado um link local para as dependências existentes e o comando foi repetido. Não houve teste integrado do backend nem validação visual em navegador. RF-37 permanece sem aceite; nenhuma equivalência móvel adicional foi declarada.

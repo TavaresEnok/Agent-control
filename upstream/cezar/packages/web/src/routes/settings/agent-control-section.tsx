@@ -165,7 +165,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   {mutate.error&&<p role="alert">{mutate.error.message}</p>}
   {mutate.isSuccess&&<p role="status">Alteração aplicada e persistida.</p>}
   {mutate.isSuccess&&mutate.variables.action==='qa.waiver.authorize'&&<p role="status">Autorização registrada: {z.object({result:z.object({authorizationId:z.string().uuid()})}).safeParse(mutate.data).success?z.object({result:z.object({authorizationId:z.string().uuid()})}).parse(mutate.data).result.authorizationId:'consulte a lista após atualizar'}</p>}
-  {data?.qaWaiver&&<AgentControlQaWaiver key={`qa-waiver-${contextId}`} view={data.qaWaiver} busy={busy} onAuthorize={payload=>mutate.mutate({action:'qa.waiver.authorize',payload})}/>}
+  {data?.qaWaiver&&<AgentControlQaWaiver key={`qa-waiver-${contextId}`} view={data.qaWaiver} busy={busy} onAuthorize={payload=>mutate.mutate({action:'qa.waiver.authorize',payload})} onRevoke={authorizationId=>mutate.mutate({action:'qa.waiver.revoke',payload:{authorizationId}})}/>}
   {contextId&&<AgentControlDiagnostics key={`diagnostics-${contextId}`} contextId={contextId}/>}
   {data&&<AgentControlManagerStatus key={`manager-status-${contextId}`} contextId={contextId}/>}
   {data&&<AgentControlPortableExport key={`portable-export-${contextId}`} contextId={contextId} canExport={data.canApproveIntegration}/>}

@@ -3,6 +3,7 @@ import {QueryClient,QueryClientProvider} from '@tanstack/react-query'
 import {afterEach,expect,it,vi} from 'vitest'
 import {AgentControlSection} from './agent-control-section'
 import {projectTemplateDigest} from './agent-control-project-templates'
+import {signControl} from './agent-control-operator'
 vi.mock('./agent-control-diagnostics',()=>({AgentControlDiagnostics:()=> <h2>Fixture diagnostics</h2>}))
 vi.mock('./agent-control-manager-plans',()=>({AgentControlManagerPlans:()=> <h2>Fixture plans</h2>}))
 vi.mock('./agent-control-operator',()=>({operatorIdentity:async()=>({deviceId:'00000000-0000-4000-8000-000000000002',publicKey:'fixture'}),signControl:vi.fn(async()=>'fixture-proof')}))
@@ -53,6 +54,35 @@ it('authorizes the displayed project-wide task binding through signed control',a
  await waitFor(()=>expect(posts).toHaveLength(1))
  expect(posts[0]).toMatchObject({action:'qa.waiver.authorize',contextId:context,payload:{policyRevision:4,templateId,templateRevision:2,taskId:'docs',riskRule:'explicit-low'}})
  expect(await screen.findByText(`Autorização registrada: ${templateId}`)).toBeTruthy()
+ client.clear()
+})
+
+it('revokes an active authorization with signed control and keeps revoked history read-only',async()=>{
+ const row={authorizationId:templateId,policyRevision:4,templateId,templateRevision:2,taskId:'docs'}
+ const revokedId='00000000-0000-4000-8000-000000000011'
+ const qaWaiver={canAuthorize:true,active:null,authorizations:[row,{...row,authorizationId:revokedId,revoked:true}],truncated:false}
+ const {posts,client}=renderSection({qaWaiver})
+ await screen.findByText(/Revogada · tarefa docs/)
+ expect(screen.queryByRole('button',{name:`Revogar autorização ${revokedId}`})).toBeNull()
+ fireEvent.click(screen.getByRole('button',{name:`Revogar autorização ${templateId}`}))
+ await waitFor(()=>expect(posts).toHaveLength(1))
+ expect(posts[0]).toMatchObject({action:'qa.waiver.revoke',contextId:context,payload:{authorizationId:templateId}})
+ expect(signControl).toHaveBeenCalledWith('fixture',expect.objectContaining({action:'qa.waiver.revoke',payload:{authorizationId:templateId}}),installation)
+ client.clear();cleanup()
+ const viewer=renderSection({qaWaiver:{...qaWaiver,canAuthorize:false}})
+ await screen.findByText(/Ativa · tarefa docs/)
+ expect(screen.queryByRole('button',{name:/Revogar autorização/})).toBeNull()
+ viewer.client.clear()
+})
+
+it('does not count revoked authorizations as matches for a task',async()=>{
+ const active={templateId,templateRevision:2,templateName:'Fluxo',templateDigest:digest,policyRevision:4,policyDigest:'cd'.repeat(32)}
+ const {client}=renderSection({qaWaiver:{canAuthorize:true,active,authorizations:[{authorizationId:templateId,policyRevision:4,templateId,templateRevision:2,taskId:'docs',revoked:true}],truncated:false}})
+ await screen.findByText(/Revogada · tarefa docs/)
+ fireEvent.change(screen.getByLabelText('Identificador da tarefa para dispensa de QA'),{target:{value:'docs'}})
+ expect(screen.queryByText('Autorização para o template ativo encontrada.')).toBeNull()
+ expect(screen.getByText(/não pode ser reativada/)).toBeTruthy()
+ expect((screen.getByRole('button',{name:'Autorizar dispensa de QA para esta tarefa'}) as HTMLButtonElement).disabled).toBe(true)
  client.clear()
 })
 
