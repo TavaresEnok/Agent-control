@@ -1,0 +1,2736 @@
+[
+  {
+    "id": "RF-04",
+    "normative_row": "RF-04\tP0\tManter exatamente um gerente ativo autorizado por contexto\tI1/I2",
+    "criterion": "Manter exatamente um gerente ativo autorizado por contexto",
+    "source_version": "ae2e141b",
+    "implementation": "managers.ts registry lifecycle and Ledger.fence guard live manager routes",
+    "source_files": [
+      "src/managers.ts",
+      "src/lab-main.ts",
+      "tests/managers.test.ts",
+      "src/context-vault.ts",
+      "src/context-vault-cli.ts",
+      "tests/context-vault.test.ts",
+      "src/manager-transport.ts",
+      "src/happier.ts",
+      "src/server-main.ts",
+      "tests/happier-access-boundary.test.ts",
+      "src/semantic-planning.ts",
+      "tests/semantic-conversation.test.ts",
+      "src/native-implementation.ts",
+      "tests/native-dispatch.test.ts",
+      "db/migrations/054_native_task_inputs.sql",
+      "src/native-bootstrap.ts",
+      "tests/native-bootstrap.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/managers.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/context-vault.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/happier-access-boundary.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/semantic-conversation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-dispatch.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-bootstrap.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Provider exhaustion/return handoff with continuously canonical conversation is not demonstrated",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-11",
+    "normative_row": "RF-11\tP0\tRespeitar permanência de trabalhador regular e devolução da reserva emergencial\tI3",
+    "criterion": "Respeitar permanência de trabalhador regular e devolução da reserva emergencial",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts preserves held regular selection and emergency grants across retries",
+    "source_files": [
+      "src/capacity.ts",
+      "tests/capacity.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Running official provider regular/emergency return scenario remains unexecuted",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-12",
+    "normative_row": "RF-12\tP0\tRetomar automaticamente espera por capacidade quando houver evidência válida, preservando pausa humana\tI3/I5",
+    "criterion": "Retomar automaticamente espera por capacidade quando houver evidência válida, preservando pausa humana",
+    "source_version": "ae2e141b",
+    "implementation": "providers.ts stores expiring observations and cezar.ts ticks reconcile waiting work",
+    "source_files": [
+      "src/providers.ts",
+      "src/capacity.ts",
+      "src/cezar.ts",
+      "src/codex-readonly-quota-source.ts",
+      "tests/codex-readonly-quota-source.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/codex-readonly-quota-source.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Automatic recovery from official quota evidence through native bootstrap remains unverified; R3 fixture wiring pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-13",
+    "normative_row": "RF-13\tP0\tReservar capacidade global e local atomicamente, sem contar a mesma conta duas vezes\tI1/I3",
+    "criterion": "Reservar capacidade global e local atomicamente, sem contar a mesma conta duas vezes",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts reserve transaction accounts global/local limits and deduplicates attempt digest",
+    "source_files": [
+      "src/capacity.ts",
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "tests/capacity.test.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "db/migrations/040_local_compositor_capacity.sql",
+      "tests/local-compositor-capacity.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "src/control.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/local-compositor-capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-14",
+    "normative_row": "RF-14\tP0\tDistribuir vagas entre chats com prioridade e justiça, evitando fome indefinida\tI3",
+    "criterion": "Distribuir vagas entre chats com prioridade e justiça, evitando fome indefinida",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts eligible wait query promotes age after five PG minutes, preserves sequence",
+    "source_files": [
+      "src/capacity.ts",
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "tests/capacity.test.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "db/migrations/040_local_compositor_capacity.sql",
+      "tests/local-compositor-capacity.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "src/control.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/local-compositor-capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Fairness requires progressing retries/release; general history loop unbounded at base; sustainable host-wide flow pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-15",
+    "normative_row": "RF-15\tP0\tGerar planos versionados com dependências, contratos de entrada/saída e critérios de aceite\tI1/I4",
+    "criterion": "Gerar planos versionados com dependências, contratos de entrada/saída e critérios de aceite",
+    "source_version": "ae2e141b",
+    "implementation": "planning.ts validates DAG/input producers and persists immutable revision/digest; managed-plan compiles frozen recipes",
+    "source_files": [
+      "src/managed-plan.ts",
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "src/quality.ts",
+      "src/git.ts",
+      "services/agent-control-git/helper.rb",
+      "src/happier.ts",
+      "src/semantic-planning.ts",
+      "tests/semantic-conversation.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/semantic-conversation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Source compiler inspected; complete plan propose/publish native execution evidence not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-16",
+    "normative_row": "RF-16\tP0\tExecutar tarefas independentes em paralelo e serializar dependências e integrações incompatíveis\tI4",
+    "criterion": "Executar tarefas independentes em paralelo e serializar dependências e integrações incompatíveis",
+    "source_version": "ae2e141b",
+    "implementation": "planning.ts compile batches partitions write overlap; managed-plan composes parallel outputs",
+    "source_files": [
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "upstream/cezar/packages/cezar/src/workflows/run.ts",
+      "tests/native-parallel.test.ts",
+      "src/planning.ts",
+      "upstream/cezar/packages/contract/src/agent-control-plans.ts",
+      "upstream/cezar/packages/cezar/src/workflows/graph.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-parallel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Pure parallel compiler test rerun, physical graph source/evidence pending R3 independent review",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-17",
+    "normative_row": "RF-17\tP0\tConsultar especialista antes da implementação quando o risco justificar\tI4",
+    "criterion": "Consultar especialista antes da implementação quando o risco justificar",
+    "source_version": "ae2e141b",
+    "implementation": "preimplementation-advice.ts checks policy, trusted receipt, input/base/scope/grant/physical isolation before writer",
+    "source_files": [
+      "src/preimplementation-advice.ts",
+      "src/isolated-advice.ts",
+      "src/engineering.ts",
+      "src/cezar.ts"
+    ],
+    "evidence": [],
+    "classification": "integration_evidence_missing",
+    "missing": "Physical specialist then writer graph with real capacity not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-18",
+    "normative_row": "RF-18\tP0\tExecutar QA e revisão independentes, quando exigidos pelo template da tarefa\tI4",
+    "criterion": "Executar QA e revisão independentes, quando exigidos pelo template da tarefa",
+    "source_version": "ae2e141b",
+    "implementation": "engineering.ts separate QA/review/judge gates; native-verification and native-qa trusted executors",
+    "source_files": [
+      "src/engineering.ts",
+      "src/isolated-verification.ts",
+      "src/sandbox-broker.ts",
+      "tests/engineering.test.ts",
+      "src/codex-execution-adapter.ts",
+      "tests/codex-execution-adapter.test.ts",
+      "src/native-artifact-finalizer.ts",
+      "src/native-verification.ts",
+      "services/agent-control-git/native_finalize.rb",
+      "tests/native-artifact-pipeline.test.ts",
+      "src/native-qa.ts",
+      "db/migrations/053_native_qa_jobs.sql",
+      "tests/native-qa-physical.test.ts",
+      "src/native-implementation.ts",
+      "tests/native-dispatch.test.ts",
+      "db/migrations/054_native_task_inputs.sql",
+      "src/native-execution-supervisor.ts",
+      "src/cezar.ts",
+      "src/isolated-implementation.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/engineering.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/codex-execution-adapter.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-artifact-pipeline.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-dispatch.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Real-capacity graph independence and terminal outcome reconciliation pending R3 flow",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-19",
+    "normative_row": "RF-19\tP0\tVincular pareceres e verificações a commits e condições exatos, invalidando evidência incompatível\tI4",
+    "criterion": "Vincular pareceres e verificações a commits e condições exatos, invalidando evidência incompatível",
+    "source_version": "ae2e141b",
+    "implementation": "quality.ts and native verification bind evidence to artifact/base/policy/executor identity",
+    "source_files": [
+      "src/managed-plan.ts",
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "src/quality.ts",
+      "src/git.ts",
+      "services/agent-control-git/helper.rb",
+      "src/native-artifact-finalizer.ts",
+      "src/native-verification.ts",
+      "services/agent-control-git/native_finalize.rb",
+      "tests/native-artifact-pipeline.test.ts",
+      "src/native-qa.ts",
+      "db/migrations/053_native_qa_jobs.sql",
+      "tests/native-qa-physical.test.ts",
+      "src/native-implementation.ts",
+      "tests/native-dispatch.test.ts",
+      "db/migrations/054_native_task_inputs.sql",
+      "tests/quality-gate-integrity.test.ts",
+      "tests/native-qa-logs.test.ts",
+      "src/native-execution-supervisor.ts",
+      "src/isolated-implementation.ts",
+      "src/sandbox-broker.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-artifact-pipeline.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-dispatch.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/quality-gate-integrity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-logs.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Gate tamper and stale commit source tests exist but not independently rerun here",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-20",
+    "normative_row": "RF-20\tP0\tRetornar uma entrega reprovada à implementação, preservando achados e exigindo nova avaliação\tI4",
+    "criterion": "Retornar uma entrega reprovada à implementação, preservando achados e exigindo nova avaliação",
+    "source_version": "ae2e141b",
+    "implementation": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
+    "source_files": [
+      "src/managed-plan.ts",
+      "src/engineering.ts",
+      "src/quality.ts",
+      "src/cezar.ts",
+      "src/native-implementation.ts",
+      "tests/native-corrections.test.ts",
+      "src/native-execution-supervisor.ts",
+      "src/native-verification.ts",
+      "src/native-qa.ts",
+      "src/isolated-implementation.ts",
+      "src/sandbox-broker.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-corrections.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Native correction graph physical proof with real capacity not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-21",
+    "normative_row": "RF-21\tP0\tLimitar ciclos de correção e recuperar falhas técnicas sem loops ilimitados de consumo\tI4/I5",
+    "criterion": "Limitar ciclos de correção e recuperar falhas técnicas sem loops ilimitados de consumo",
+    "source_version": "ae2e141b",
+    "implementation": "managed-plan.ts maxCorrections bounded 0..5 and finite correction graph",
+    "source_files": [
+      "src/managed-plan.ts",
+      "tests/managed-core-negative.test.ts",
+      "src/engineering.ts",
+      "src/quality.ts",
+      "tests/native-corrections.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/managed-core-negative.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-corrections.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Technical recovery/probe retry global consumption budgets not proven across persistent outage",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-22",
+    "normative_row": "RF-22\tP0\tUsar workflow durável para despacho, esperas, cancelamento e conclusão\tI1/I4/I5",
+    "criterion": "Usar workflow durável para despacho, esperas, cancelamento e conclusão",
+    "source_version": "ae2e141b",
+    "implementation": "cezar.ts persisted launches/reconciliation and frozen recipes replay by stable operation",
+    "source_files": [
+      "src/cezar.ts",
+      "src/happier.ts",
+      "upstream/cezar/packages/cezar/src/workflows/run.ts",
+      "tests/native-recovery.test.ts",
+      "tests/managed-recovery.test.ts",
+      "tests/managed-recovery-negative.test.ts",
+      "src/semantic-planning.ts",
+      "tests/semantic-conversation.test.ts",
+      "src/native-planning-supervisor.ts",
+      "tests/native-planning-cancellation.test.ts",
+      "src/native-execution-supervisor.ts",
+      "src/native-worker-gate.ts",
+      "src/native-tools-worker.ts",
+      "tests/native-execution-supervisor.test.ts",
+      "db/migrations/051_native_execution_jobs.sql",
+      "src/native-artifact-finalizer.ts",
+      "src/native-verification.ts",
+      "services/agent-control-git/native_finalize.rb",
+      "tests/native-artifact-pipeline.test.ts",
+      "src/native-qa.ts",
+      "db/migrations/053_native_qa_jobs.sql",
+      "tests/native-qa-physical.test.ts",
+      "src/native-implementation.ts",
+      "tests/native-dispatch.test.ts",
+      "db/migrations/054_native_task_inputs.sql",
+      "src/isolated-implementation.ts",
+      "src/sandbox-broker.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery-negative.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/semantic-conversation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-planning-cancellation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-execution-supervisor.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-artifact-pipeline.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-dispatch.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "General reconciliation historical sweep unbounded in base; R3 durable page cursor pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-23",
+    "normative_row": "RF-23\tP0\tReconciliar reinícios, confirmações perdidas e processos órfãos antes de repetir efeitos\tI1/I5",
+    "criterion": "Reconciliar reinícios, confirmações perdidas e processos órfãos antes de repetir efeitos",
+    "source_version": "ae2e141b",
+    "implementation": "cezar.ts per-phase error aggregate; native/sandbox signed physical retirement journals",
+    "source_files": [
+      "src/isolated-implementation.ts",
+      "src/sandbox-broker.ts",
+      "src/cezar.ts",
+      "tests/native-recovery.test.ts",
+      "tests/isolated-recovery.test.ts",
+      "tests/managed-recovery.test.ts",
+      "tests/managed-recovery-negative.test.ts",
+      "src/semantic-planning.ts",
+      "db/migrations/048_semantic_planning.sql",
+      "db/migrations/049_semantic_executor_bindings.sql",
+      "src/happier.ts",
+      "tests/semantic-conversation.test.ts",
+      "src/native-planning-supervisor.ts",
+      "tests/native-planning-cancellation.test.ts",
+      "src/native-execution-worker.ts",
+      "src/native-tool-forwarder.ts",
+      "src/native-worker-security.ts",
+      "src/native-implementation.ts",
+      "tests/native-dispatch.test.ts",
+      "db/migrations/054_native_task_inputs.sql",
+      "src/native-execution-supervisor.ts",
+      "src/native-verification.ts",
+      "src/native-qa.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/isolated-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery-negative.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/semantic-conversation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-planning-cancellation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-dispatch.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-24",
+    "normative_row": "RF-24\tP0\tPausar, retomar, cancelar e drenar com semânticas distintas e visíveis\tI1/I5/I6",
+    "criterion": "Pausar, retomar, cancelar e drenar com semânticas distintas e visíveis",
+    "source_version": "ae2e141b",
+    "implementation": "control.ts signed control intents; cancellation.ts stop then separate receipt confirmation; pause revisions",
+    "source_files": [
+      "src/control.ts",
+      "src/cancellation.ts",
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "tests/native-pause.test.ts",
+      "tests/cancellation.test.ts",
+      "tests/managed-cancellation.test.ts",
+      "tests/managed-running-recovery.test.ts",
+      "src/native-execution-supervisor.ts",
+      "src/native-worker-gate.ts",
+      "src/native-tools-worker.ts",
+      "tests/native-execution-supervisor.test.ts",
+      "db/migrations/051_native_execution_jobs.sql",
+      "src/native-artifact-finalizer.ts",
+      "src/native-verification.ts",
+      "services/agent-control-git/native_finalize.rb",
+      "tests/native-artifact-pipeline.test.ts",
+      "src/native-qa.ts",
+      "db/migrations/053_native_qa_jobs.sql",
+      "tests/native-qa-physical.test.ts",
+      "src/isolated-implementation.ts",
+      "src/sandbox-broker.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-pause.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/cancellation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-cancellation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-running-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-execution-supervisor.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-artifact-pipeline.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Public signed control through graph with physical worker and reconnect evidence pending R3",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-26",
+    "normative_row": "RF-26\tP0\tExecutar CLIs na central e operações autorizadas em dois servidores sem logins de IA nesses destinos\tI5",
+    "criterion": "Executar CLIs na central e operações autorizadas em dois servidores sem logins de IA nesses destinos",
+    "source_version": "ae2e141b",
+    "implementation": "remote.ts SSH executor authorized fixed task with worker durable receipt; two-host R2 source lab",
+    "source_files": [
+      "src/remote.ts",
+      "services/remote-worker/worker.py",
+      "tests/ssh.test.ts",
+      "tests/ssh-restart.test.ts",
+      "src/remote-git.ts",
+      "tests/remote-git.test.ts",
+      "db/migrations/041_remote_source_authorizations.sql",
+      "src/remote-source-authorizations.ts",
+      "tests/remote-source-authorization.test.ts",
+      "tests/ssh-aggregate-round2.test.ts",
+      "tests/ssh-cancellation-round2.test.ts",
+      "tests/ssh-source-flow-round2.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/ssh.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote-git.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote-source-authorization.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-aggregate-round2.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-cancellation-round2.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-source-flow-round2.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "No authorized operational remote accounts/targets; synthetic two-host lab is prior author evidence only",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-27",
+    "normative_row": "RF-27\tP0\tPreservar identidade e resultado de uma operação SSH após desconexão\tI5",
+    "criterion": "Preservar identidade e resultado de uma operação SSH após desconexão",
+    "source_version": "ae2e141b",
+    "implementation": "worker.py operation digest/journal and inspect after lost ACK avoid blind repeat",
+    "source_files": [
+      "src/remote.ts",
+      "services/remote-worker/worker.py",
+      "tests/remote-intent.test.ts",
+      "tests/remote_worker_test.py",
+      "src/remote-git.ts",
+      "tests/remote-git.test.ts",
+      "db/migrations/041_remote_source_authorizations.sql",
+      "src/remote-source-authorizations.ts",
+      "tests/remote-source-authorization.test.ts",
+      "tests/ssh-aggregate-round2.test.ts",
+      "tests/ssh-cancellation-round2.test.ts",
+      "tests/ssh-source-flow-round2.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/remote-intent.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote_worker_test.py",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote-git.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote-source-authorization.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-aggregate-round2.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-cancellation-round2.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-source-flow-round2.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Supervisor-death stable group proof pending R3; delayed Docker create timeout must stay uncertain",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-28",
+    "normative_row": "RF-28\tP0\tIsolar worktrees, processos, credenciais e redes conforme o perfil\tI5",
+    "criterion": "Isolar worktrees, processos, credenciais e redes conforme o perfil",
+    "source_version": "ae2e141b",
+    "implementation": "native-worker-security rejects linked private files; Docker native supervisors isolate account mounts/network",
+    "source_files": [
+      "src/isolated-implementation.ts",
+      "src/isolated-verification.ts",
+      "src/sandbox-broker.ts",
+      "tests/engineering.test.ts",
+      "src/native-planning-supervisor.ts",
+      "src/native-planning-worker.ts",
+      "src/account-homes.ts",
+      "src/codex-execution-adapter.ts",
+      "tests/codex-execution-adapter.test.ts",
+      "src/native-execution-worker.ts",
+      "src/native-tool-forwarder.ts",
+      "src/native-worker-security.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/engineering.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/codex-execution-adapter.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Physical multiaccount cross-process/credential/remote isolation not independently rerun; remote source confinement pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-29",
+    "normative_row": "RF-29\tP0\tOferecer capacidade administrativa autorizada ao gerente sem repassá-la ao trabalhador\tI5",
+    "criterion": "Oferecer capacidade administrativa autorizada ao gerente sem repassá-la ao trabalhador",
+    "source_version": "ae2e141b",
+    "implementation": "administrative-operations + managers authorize project administration; native tool forwarder private destinations",
+    "source_files": [
+      "src/administrative-operations.ts",
+      "src/managers.ts",
+      "src/happier.ts",
+      "src/control.ts",
+      "src/native-execution-worker.ts",
+      "src/native-tool-forwarder.ts",
+      "src/native-worker-security.ts"
+    ],
+    "evidence": [],
+    "classification": "integration_evidence_missing",
+    "missing": "Full direct API/terminal hostile-worker matrix while preserving valid project admin missing",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-38",
+    "normative_row": "RF-38\tP1\tPermitir equipe com vários revisores e julgador dentro dos limites compartilhados\tI4/I9",
+    "criterion": "Permitir equipe com vários revisores e julgador dentro dos limites compartilhados",
+    "source_version": "ae2e141b",
+    "implementation": "quality-policy review count/judge and engineering stage operations share capacity",
+    "source_files": [
+      "src/engineering.ts",
+      "src/quality-policy.ts",
+      "src/managed-plan.ts"
+    ],
+    "evidence": [],
+    "classification": "integration_evidence_missing",
+    "missing": "Physical multi-reviewer/judge graph used synthetic capacity in R2; R3 actual capacity fixture pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-44",
+    "normative_row": "RF-44\tP0\tPreservar pausas e bloqueios explícitos durante importação, reinício e recuperação de cota\tI5/I8",
+    "criterion": "Preservar pausas e bloqueios explícitos durante importação, reinício e recuperação de cota",
+    "source_version": "ae2e141b",
+    "implementation": "control.ts persisted pause revision and cezar recovery observes without admission",
+    "source_files": [
+      "src/control.ts",
+      "src/api.ts",
+      "src/ledger.ts",
+      "db/migrations/024_pause_revision.sql",
+      "tests/control.test.ts",
+      "tests/managed-recovery.test.ts",
+      "tests/managed-recovery-negative.test.ts",
+      "scripts/test-isolated.mjs",
+      "scripts/link-happier-test-deps.mjs",
+      "scripts/fixtures/export-context.test.ts",
+      "deploy/compose.round2-test.yml"
+    ],
+    "evidence": [
+      {
+        "path": "tests/control.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery-negative.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Import/restore plus actual quota recovery preservation not jointly rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-45",
+    "normative_row": "RF-45\tP0\tExigir a mesma autorização de tentativa/capacidade em painel, chat, MCP, automação, retry, fallback e recuperação\tI1/I4",
+    "criterion": "Exigir a mesma autorização de tentativa/capacidade em painel, chat, MCP, automação, retry, fallback e recuperação",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.reserve and ledger fences underpin control/Cezar launch paths",
+    "source_files": [
+      "src/capacity.ts",
+      "src/control.ts",
+      "src/cezar.ts",
+      "src/api.ts",
+      "db/migrations/004_policies_and_capacity.sql",
+      "db/migrations/005_artifacts_and_quality.sql",
+      "db/migrations/006_control_commands.sql",
+      "db/migrations/007_model_catalog.sql",
+      "tests/capacity.test.ts",
+      "tests/control.test.ts",
+      "src/sandbox-broker.ts",
+      "src/isolated-verification.ts",
+      "tests/broker-terminal-recovery.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/control.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/broker-terminal-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Cross-entry UI/chat/MCP/retry/fallback/recovery adversarial no-bypass sweep not complete",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-47",
+    "normative_row": "RF-47\tP0\tReservar recursos por execução de etapa e liberar os correspondentes após encerramento reconciliado, sem bloquear avaliação por retenção de worktree\tI3/I5",
+    "criterion": "Reservar recursos por execução de etapa e liberar os correspondentes após encerramento reconciliado, sem bloquear avaliação por retenção de worktree",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts separates model/local grants; retirement verifies physical absence before release; worktree lease separate",
+    "source_files": [
+      "src/capacity.ts",
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "tests/capacity.test.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "db/migrations/040_local_compositor_capacity.sql",
+      "tests/local-compositor-capacity.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "src/control.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/local-compositor-capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Saturated programmer to evaluator progress with actual provider capacity graph pending R3",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-48",
+    "normative_row": "RF-48\tP0\tAceitar evidências de verificação apenas do executor confiável e condicionar atomicamente a integração à base esperada\tI4",
+    "criterion": "Aceitar evidências de verificação apenas do executor confiável e condicionar atomicamente a integração à base esperada",
+    "source_version": "ae2e141b",
+    "implementation": "trusted signed verification receipt + quality gate binding and Git atomic update-ref helper",
+    "source_files": [
+      "src/managed-plan.ts",
+      "src/cezar.ts",
+      "src/engineering.ts",
+      "src/quality.ts",
+      "src/git.ts",
+      "services/agent-control-git/helper.rb",
+      "src/native-implementation.ts",
+      "tests/native-dispatch.test.ts",
+      "db/migrations/054_native_task_inputs.sql",
+      "src/native-qa.ts",
+      "tests/quality-gate-integrity.test.ts",
+      "tests/native-qa-logs.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-dispatch.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/quality-gate-integrity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-logs.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Independent execution of complete forged/truncated/gate-removal and external-writer races pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-49",
+    "normative_row": "RF-49\tP0\tImpedir acesso cruzado entre contas e acesso de agentes à administração da central por arquivos, processos e APIs\tI5",
+    "criterion": "Impedir acesso cruzado entre contas e acesso de agentes à administração da central por arquivos, processos e APIs",
+    "source_version": "ae2e141b",
+    "implementation": "native-worker-security signed scoped files; sandbox isolation and forwarding restrictions",
+    "source_files": [
+      "src/isolated-verification.ts",
+      "src/sandbox-broker.ts",
+      "upstream/cezar/packages/cezar/src/workflows/run.ts",
+      "tests/engineering.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/engineering.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Full cross-account shell/symlink/process/API plus central admin attack coverage remains unverified",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-52",
+    "normative_row": "RF-52\tP0\tAtualizar workers/workflows com estratégia de versões e restaurar a central em modo de reconciliação sem despacho automático\tI5/I7",
+    "criterion": "Atualizar workers/workflows com estratégia de versões e restaurar a central em modo de reconciliação sem despacho automático",
+    "source_version": "ae2e141b",
+    "implementation": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
+    "source_files": [
+      "scripts/import-restored-lab-database.mjs",
+      "scripts/prove-restored-worktrees.mjs",
+      "src/workflow-versions.ts",
+      "src/workflows.ts",
+      "src/cezar.ts",
+      "src/diagnostics.ts",
+      "src/control.ts",
+      "db/migrations/058_workflow_versions.sql",
+      "tests/workflow-versioning.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/workflow-versioning.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-54",
+    "normative_row": "RF-54\tP0\tGarantir um único escritor autorizado por worktree e neutralizar acesso antigo antes de compartilhar a mesma cópia com nova tentativa\tI5",
+    "criterion": "Garantir um único escritor autorizado por worktree e neutralizar acesso antigo antes de compartilhar a mesma cópia com nova tentativa",
+    "source_version": "ae2e141b",
+    "implementation": "worktree-lease claim/epoch plus signed physical native/sandbox retirement before writer transfer",
+    "source_files": [
+      "src/worktree-lease.ts",
+      "src/cezar.ts",
+      "db/migrations/061_worktree_writers.sql",
+      "tests/worktree-lease.test.ts",
+      "db/migrations/062_worktree_writer_proof.sql",
+      "src/managed-plan.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "tests/fixtures/managed-graph-broker.mjs",
+      "src/sandbox-broker.ts",
+      "src/isolated-implementation.ts",
+      "db/migrations/063_sandbox_writer_retirement.sql",
+      "tests/managed-retirement-restart.test.ts",
+      "db/migrations/064_native_writer_retirement.sql",
+      "src/native-execution-supervisor.ts",
+      "src/native-implementation.ts",
+      "tests/native-multitask.test.ts",
+      "src/cancellation.ts",
+      "tests/native-retirement-process-restart.test.ts",
+      "src/native-artifact-finalizer.ts",
+      "tests/native-live-finalizer.test.ts",
+      "tests/native-graph-sigkill-recovery.test.ts",
+      "tests/native-private-network-retirement.test.ts",
+      "src/native-verification.ts",
+      "src/native-qa.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/worktree-lease.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/fixtures/managed-graph-broker.mjs",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-retirement-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-multitask.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-retirement-process-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-live-finalizer.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-graph-sigkill-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-private-network-retirement.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Remote escaped descendant neutralization and successor shared-worktree physical matrix pending R3",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-56",
+    "normative_row": "RF-56\tAntes de G1\tPersistir a seleção regular por contexto, independente dos perfis imutáveis de tentativas e dos limites globais.\tI3",
+    "criterion": "Persistir a seleção regular por contexto, independente dos perfis imutáveis de tentativas e dos limites globais.",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts context selection separate from immutable attempt profiles; control exposes state",
+    "source_files": [
+      "src/capacity.ts",
+      "src/control.ts",
+      "tests/account-state.test.ts",
+      "tests/capacity.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/account-state.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Two live contexts restart/disabled account state not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RF-57",
+    "normative_row": "RF-57\tAntes de G3\tModelar dispensa de QA como decisão explícita de política, diferente de ausência de resultado, falha e cancelamento.\tI4",
+    "criterion": "Modelar dispensa de QA como decisão explícita de política, diferente de ausência de resultado, falha e cancelamento.",
+    "source_version": "ae2e141b",
+    "implementation": "qa-waiver-binding.ts explicit not_required distinct passed; artifact/policy/template digest binding",
+    "source_files": [
+      "src/quality.ts",
+      "src/qa-waiver-binding.ts",
+      "src/engineering.ts",
+      "src/native-execution-supervisor.ts",
+      "db/migrations/060_qa_waiver_binding.sql",
+      "tests/qa-waiver-binding.test.ts",
+      "tests/qa-waiver-stage.test.ts",
+      "tests/quality-gate-integrity.test.ts",
+      "src/control.ts",
+      "upstream/cezar/packages/web/src/routes/settings/agent-control-qa-waiver.tsx",
+      "tests/native-multitask.test.ts",
+      "src/managed-plan.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "tests/fixtures/managed-graph-broker.mjs",
+      "src/sandbox-broker.ts",
+      "src/isolated-implementation.ts",
+      "db/migrations/063_sandbox_writer_retirement.sql",
+      "tests/managed-retirement-restart.test.ts",
+      "db/migrations/065_qa_waiver_revocation.sql",
+      "tests/r2-qa-revocation-race.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/qa-waiver-stage.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/quality-gate-integrity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-multitask.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/fixtures/managed-graph-broker.mjs",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-retirement-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Seven pure waiver cases rerun; integrated waiver revocation versus physical retirement race not rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-01",
+    "normative_row": "RNF-01\tContinuidade\tReiniciar componentes não perde comandos confirmados nem autoriza uma segunda execução incompatível\tI1/I5/I7",
+    "criterion": "Reiniciar componentes não perde comandos confirmados nem autoriza uma segunda execução incompatível",
+    "source_version": "ae2e141b",
+    "implementation": "ledger intent dedup and epoch fencing; controller stable operation replay",
+    "source_files": [
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "src/happier.ts",
+      "src/api.ts",
+      "tests/",
+      "src/native-execution-supervisor.ts",
+      "src/native-worker-gate.ts",
+      "src/native-tools-worker.ts",
+      "tests/native-execution-supervisor.test.ts",
+      "db/migrations/051_native_execution_jobs.sql",
+      "src/native-artifact-finalizer.ts",
+      "src/native-verification.ts",
+      "services/agent-control-git/native_finalize.rb",
+      "tests/native-artifact-pipeline.test.ts",
+      "src/native-qa.ts",
+      "db/migrations/053_native_qa_jobs.sql",
+      "tests/native-qa-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-execution-supervisor.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-artifact-pipeline.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "All components intermediate launch/fallback/remote create windows not covered",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-02",
+    "normative_row": "RNF-02\tConsistência\tUm único proprietário por transição de estado; efeitos externos reconciliados e integração protegida por identidade/época\tI1/I4/I5",
+    "criterion": "Um único proprietário por transição de estado; efeitos externos reconciliados e integração protegida por identidade/época",
+    "source_version": "ae2e141b",
+    "implementation": "ledger.fence and operation digest plus atomic Git ref CAS; physical receipt bind",
+    "source_files": [
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "src/happier.ts",
+      "src/api.ts",
+      "tests/",
+      "src/native-execution-supervisor.ts",
+      "src/native-worker-gate.ts",
+      "src/native-tools-worker.ts",
+      "tests/native-execution-supervisor.test.ts",
+      "db/migrations/051_native_execution_jobs.sql",
+      "src/native-artifact-finalizer.ts",
+      "src/native-verification.ts",
+      "services/agent-control-git/native_finalize.rb",
+      "tests/native-artifact-pipeline.test.ts",
+      "src/native-qa.ts",
+      "db/migrations/053_native_qa_jobs.sql",
+      "tests/native-qa-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-execution-supervisor.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-artifact-pipeline.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Cross-dir remote authority transfer and resource authority epoch not yet implemented at base",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-03",
+    "normative_row": "RNF-03\tIsolamento\tTrabalhador não acessa conta alheia, chave administrativa, Docker socket ou diretório de outro projeto\tI5",
+    "criterion": "Trabalhador não acessa conta alheia, chave administrativa, Docker socket ou diretório de outro projeto",
+    "source_version": "ae2e141b",
+    "implementation": "private file reader refuses symlink/hardlink/growth; Docker worker mount/socket/network restrictions",
+    "source_files": [
+      "src/isolated-verification.ts",
+      "src/sandbox-broker.ts",
+      "tests/engineering.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/engineering.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-06",
+    "normative_row": "RNF-06\tManutenibilidade\tAdaptadores, políticas e workflows com contratos e versões; patch invasivo documentado em ADR\tI0/I7",
+    "criterion": "Adaptadores, políticas e workflows com contratos e versões; patch invasivo documentado em ADR",
+    "source_version": "ae2e141b",
+    "implementation": "versioned strict schemas, workflow pins and documented integration ADRs",
+    "source_files": [
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "src/happier.ts",
+      "src/api.ts",
+      "tests/"
+    ],
+    "evidence": [],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Protocol compatibility and all invasive upstream patches inventory not independently audited exhaustively",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-07",
+    "normative_row": "RNF-07\tEficiência\tEventos agrupados, contexto selecionado e verificações reutilizadas apenas sob identidade compatível\tI7",
+    "criterion": "Eventos agrupados, contexto selecionado e verificações reutilizadas apenas sob identidade compatível",
+    "source_version": "ae2e141b",
+    "implementation": "notifications batching/dedup and selected context; quality evidence identity reuse constraints",
+    "source_files": [
+      "src/notifications.ts",
+      "src/workspace-stream.ts",
+      "src/happier.ts"
+    ],
+    "evidence": [],
+    "classification": "integration_evidence_missing",
+    "missing": "Event/context efficiency quantities and all reuse paths not independently measured/audited",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-09",
+    "normative_row": "RNF-09\tReprodutibilidade\tVersões da base, CLI, modelo, política, imagem e código identificadas em cada tentativa\tI1/I7",
+    "criterion": "Versões da base, CLI, modelo, política, imagem e código identificadas em cada tentativa",
+    "source_version": "ae2e141b",
+    "implementation": "workflow pin runtime build, frozen launch and policy/account/executor digests",
+    "source_files": [
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "src/happier.ts",
+      "src/api.ts",
+      "tests/"
+    ],
+    "evidence": [],
+    "classification": "environment_validation_missing",
+    "missing": "Actual CLI/model/image provenance from official native attempt not independently proven",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-11",
+    "normative_row": "RNF-11\tCapacidade\tAdmissão considera memória, CPU, disco, vagas e contas; fila saudável substitui lançamento acima da capacidade\tI3/I5",
+    "criterion": "Admissão considera memória, CPU, disco, vagas e contas; fila saudável substitui lançamento acima da capacidade",
+    "source_version": "ae2e141b",
+    "implementation": "disk-admission checks statfs; native Docker per-job limits and global account slot reservation",
+    "source_files": [
+      "src/disk-admission.ts",
+      "src/storage.ts",
+      "src/sandbox-broker.ts",
+      "src/isolated-verification.ts",
+      "src/retention-plan.ts",
+      "tests/disk-admission.test.ts",
+      "tests/retention-plan.test.ts",
+      "src/retention-cli.ts",
+      "src/server-main.ts",
+      "tests/retention-cli.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/disk-admission.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/retention-plan.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/retention-cli.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Host aggregate CPU/memory/pids enforcement across state dirs absent at base; R3 resource authority pending review",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "RNF-13",
+    "normative_row": "RNF-13\tCompatibilidade\tAtualização de CLI ou modelo passa por contrato de protocolo antes de virar padrão\tI3/I7",
+    "criterion": "Atualização de CLI ou modelo passa por contrato de protocolo antes de virar padrão",
+    "source_version": "ae2e141b",
+    "implementation": "ProviderCollectors bind immutable adapter version/digest and refuse changed adapter before probe",
+    "source_files": [
+      "src/providers.ts",
+      "tests/providers.test.ts",
+      "scripts/prove-native-remote-protocol.mjs",
+      "upstream/cezar/packages/cezar/src/core/codex-app-server-runner.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/providers.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Actual CLI upgrade protocol qualification/default promotion proof missing",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T03",
+    "normative_row": "T03\tRegular anterior recupera enquanto outro regular trabalha\tSem preempção por simples prioridade\tRF-11\tI3",
+    "criterion": "Regular anterior recupera enquanto outro regular trabalha — Sem preempção por simples prioridade",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts preserves held regular selection and emergency grants across retries",
+    "source_files": [
+      "src/capacity.ts",
+      "src/control.ts",
+      "src/cezar.ts",
+      "src/api.ts",
+      "db/migrations/004_policies_and_capacity.sql",
+      "db/migrations/005_artifacts_and_quality.sql",
+      "db/migrations/006_control_commands.sql",
+      "db/migrations/007_model_catalog.sql",
+      "tests/capacity.test.ts",
+      "tests/control.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/control.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Exercise regular recovery while another regular healthy; assert no preemption or silent reassignment; Running official provider regular/emergency return scenario remains unexecuted",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T04",
+    "normative_row": "T04\tRegular recupera durante programação emergencial\tReserva conclui trabalho saudável e não recebe novas tarefas\tRF-11/12\tI3",
+    "criterion": "Regular recupera durante programação emergencial — Reserva conclui trabalho saudável e não recebe novas tarefas",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts preserves held regular selection and emergency grants across retries",
+    "source_files": [
+      "src/capacity.ts",
+      "src/control.ts",
+      "src/cezar.ts",
+      "src/api.ts",
+      "db/migrations/004_policies_and_capacity.sql",
+      "db/migrations/005_artifacts_and_quality.sql",
+      "db/migrations/006_control_commands.sql",
+      "db/migrations/007_model_catalog.sql",
+      "tests/capacity.test.ts",
+      "tests/control.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/control.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Exercise emergency programming while regular recovers; finish healthy reserve and stop new reserve dispatch; Running official provider regular/emergency return scenario remains unexecuted",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T05",
+    "normative_row": "T05\tTodos esgotados; depois uma conta volta\tEspera durável e retomada confirmada; sem depender do chat “continue”\tRF-12/22\tI3/I5",
+    "criterion": "Todos esgotados; depois uma conta volta — Espera durável e retomada confirmada; sem depender do chat “continue”",
+    "source_version": "ae2e141b",
+    "implementation": "providers.ts stores expiring observations and cezar.ts ticks reconcile waiting work",
+    "source_files": [
+      "src/happier.ts",
+      "src/cezar.ts",
+      "tests/happier.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/happier.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Persist all-exhausted wait, restart then fresh trusted observation wakes same plan without chat command; Automatic recovery from official quota evidence through native bootstrap remains unverified; R3 fixture wiring pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T06",
+    "normative_row": "T06\tPlano pausado durante recuperação/reinício\tContinua pausado; retomada explícita atua no mesmo plano\tRF-24/44\tI1/I5",
+    "criterion": "Plano pausado durante recuperação/reinício — Continua pausado; retomada explícita atua no mesmo plano",
+    "source_version": "ae2e141b",
+    "implementation": "control.ts persisted pause revision and cezar recovery observes without admission",
+    "source_files": [
+      "src/cezar.ts",
+      "tests/native-recovery.test.ts",
+      "tests/native-pause.test.ts",
+      "tests/managed-recovery.test.ts",
+      "tests/managed-recovery-negative.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-pause.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery-negative.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Pause before quota/restart and explicitly resume same plan with unchanged command identity; Import/restore plus actual quota recovery preservation not jointly rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T07",
+    "normative_row": "T07\tFalha após intenção, após criação do processo, antes/depois do handle; reenvio por UI/workflow/MCP\tMesmo processo reconhecido ou incerteza explícita; nenhum segundo lançamento cego ou bypass\tRF-13/23/45/53, RNF-01/02\tI1/I5",
+    "criterion": "Falha após intenção, após criação do processo, antes/depois do handle; reenvio por UI/workflow/MCP — Mesmo processo reconhecido ou incerteza explícita; nenhum segundo lançamento cego ou bypass",
+    "source_version": "ae2e141b",
+    "implementation": "cezar.ts per-phase error aggregate; native/sandbox signed physical retirement journals",
+    "source_files": [
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "src/happier.ts",
+      "src/api.ts",
+      "tests/"
+    ],
+    "evidence": [],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Crash each intent/process/handle window and resend via UI/workflow/MCP; prove same process or uncertainty; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T08",
+    "normative_row": "T08\tReinício nos pontos intermediários de lançamento, durante fallback e cancelamento\tReassocia/reconcilia; caminhos legados não relançam; resultado antigo não integra\tRF-22/23/25/45/54\tI1/I5",
+    "criterion": "Reinício nos pontos intermediários de lançamento, durante fallback e cancelamento — Reassocia/reconcilia; caminhos legados não relançam; resultado antigo não integra",
+    "source_version": "ae2e141b",
+    "implementation": "cezar.ts per-phase error aggregate; native/sandbox signed physical retirement journals",
+    "source_files": [
+      "src/cezar.ts",
+      "src/isolated-implementation.ts",
+      "upstream/cezar/packages/cezar/src/workflows/run.ts",
+      "tests/native-recovery.test.ts",
+      "tests/managed-recovery.test.ts",
+      "tests/managed-recovery-negative.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-recovery-negative.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Crash launch/fallback/cancel windows; no legacy bypass, relaunch or stale integration; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T09",
+    "normative_row": "T09\tRevisão reprova e programador corrige\tNova avaliação do novo artefato; parecer anterior não autoriza merge\tRF-18/19/20\tI4",
+    "criterion": "Revisão reprova e programador corrige — Nova avaliação do novo artefato; parecer anterior não autoriza merge",
+    "source_version": "ae2e141b",
+    "implementation": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
+    "source_files": [
+      "tests/managed-corrections.test.ts",
+      "tests/native-corrections.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/managed-corrections.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-corrections.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Reject review, correct same task preserving findings, invalidate old evidence then evaluate new artifact; Native correction graph physical proof with real capacity not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T10",
+    "normative_row": "T10\tDois chats integram e um escritor externo muda a branch imediatamente antes do efeito final\tComparação/atualização atômica impede candidato obsoleto; base reconciliada e evidências afetadas refeitas\tRF-16/25/48\tI4",
+    "criterion": "Dois chats integram e um escritor externo muda a branch imediatamente antes do efeito final — Comparação/atualização atômica impede candidato obsoleto; base reconciliada e evidências afetadas refeitas",
+    "source_version": "ae2e141b",
+    "implementation": "trusted signed verification receipt + quality gate binding and Git atomic update-ref helper",
+    "source_files": [
+      "tests/git-cas-concurrency.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/git-cas-concurrency.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Two chats plus immediate external ref update must reject stale expected base atomically; Independent execution of complete forged/truncated/gate-removal and external-writer races pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T11",
+    "normative_row": "T11\tLimite global disputado por vários chats/hosts\tNunca excede concessões válidas; fila justa; vagas liberadas corretamente\tRF-13/14, RNF-11\tI3",
+    "criterion": "Limite global disputado por vários chats/hosts — Nunca excede concessões válidas; fila justa; vagas liberadas corretamente",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts reserve transaction accounts global/local limits and deduplicates attempt digest",
+    "source_files": [
+      "src/capacity.ts",
+      "tests/capacity.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "src/control.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Concurrent chats and hosts contest global limit; no invalid grant and aged eligible queue progresses; Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T12",
+    "normative_row": "T12\tPolítica muda entre concessão, início e resultado\tSnapshot respeitado ou revogação explícita; sem erro arbitrário de ticket\tRF-09/42, RNF-02\tI1/I3",
+    "criterion": "Política muda entre concessão, início e resultado — Snapshot respeitado ou revogação explícita; sem erro arbitrário de ticket",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts reserve transaction accounts global/local limits and deduplicates attempt digest",
+    "source_files": [
+      "src/capacity.ts",
+      "src/control.ts",
+      "src/cezar.ts",
+      "src/api.ts",
+      "db/migrations/004_policies_and_capacity.sql",
+      "db/migrations/005_artifacts_and_quality.sql",
+      "db/migrations/006_control_commands.sql",
+      "db/migrations/007_model_catalog.sql",
+      "tests/capacity.test.ts",
+      "tests/control.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/control.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Change policy grant/start/result; retain frozen snapshot or explicit revocation with coherent ticket state; Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T14",
+    "normative_row": "T14\tSSH cai durante comando persistente\tConsulta recupera resultado; efeito incerto não é repetido cegamente\tRF-26/27\tI5",
+    "criterion": "SSH cai durante comando persistente — Consulta recupera resultado; efeito incerto não é repetido cegamente",
+    "source_version": "ae2e141b",
+    "implementation": "worker.py operation digest/journal and inspect after lost ACK avoid blind repeat",
+    "source_files": [
+      "src/remote.ts",
+      "tests/ssh.test.ts",
+      "tests/ssh-restart.test.ts",
+      "src/remote-git.ts",
+      "services/remote-worker/worker.py",
+      "tests/remote-git.test.ts",
+      "db/migrations/041_remote_source_authorizations.sql",
+      "src/remote-source-authorizations.ts",
+      "tests/remote-source-authorization.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/ssh.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/ssh-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote-git.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/remote-source-authorization.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Disconnect SSH persistent effect and recover result without repeating uncertain operation; Supervisor-death stable group proof pending R3; delayed Docker create timeout must stay uncertain",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T15",
+    "normative_row": "T15\tTrabalhador tenta acessar outra conta/projeto/administração\tAcesso negado pela fronteira técnica; tarefa legítima continua possível\tRF-28/29, RNF-03\tI5",
+    "criterion": "Trabalhador tenta acessar outra conta/projeto/administração — Acesso negado pela fronteira técnica; tarefa legítima continua possível",
+    "source_version": "ae2e141b",
+    "implementation": "private file reader refuses symlink/hardlink/growth; Docker worker mount/socket/network restrictions",
+    "source_files": [
+      "src/isolated-verification.ts",
+      "src/sandbox-broker.ts",
+      "scripts/sandbox-verifier.mjs",
+      "tests/engineering.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/engineering.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Physical worker cross account/project/admin denied while legitimate work still completes; Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T19",
+    "normative_row": "T19\tGerente principal esgota e recupera\tUm único gerente autorizado; retorno na fronteira segura e histórico contínuo\tRF-03/04/12\tI2/I3",
+    "criterion": "Gerente principal esgota e recupera — Um único gerente autorizado; retorno na fronteira segura e histórico contínuo",
+    "source_version": "ae2e141b",
+    "implementation": "managers.ts registry lifecycle and Ledger.fence guard live manager routes",
+    "source_files": [
+      "src/ledger.ts",
+      "src/cezar.ts",
+      "src/happier.ts",
+      "src/api.ts",
+      "tests/",
+      "src/managers.ts",
+      "tests/managers.test.ts",
+      "src/context-vault.ts",
+      "src/context-vault-cli.ts",
+      "tests/context-vault.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/managers.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/context-vault.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Manager exhausts/recovers; sole fenced manager returns only safe boundary with continuous conversation; Provider exhaustion/return handoff with continuously canonical conversation is not demonstrated",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T20",
+    "normative_row": "T20\tCancelamento e lease expirada com executor inacessível\tEstado incerto explícito; capacidade e efeitos antigos não liberados indevidamente\tRF-23/24/25\tI5",
+    "criterion": "Cancelamento e lease expirada com executor inacessível — Estado incerto explícito; capacidade e efeitos antigos não liberados indevidamente",
+    "source_version": "ae2e141b",
+    "implementation": "cezar.ts per-phase error aggregate; native/sandbox signed physical retirement journals",
+    "source_files": [
+      "src/cancellation.ts",
+      "tests/managed-cancellation.test.ts",
+      "tests/managed-running-recovery.test.ts",
+      "src/sandbox-broker.ts",
+      "src/isolated-implementation.ts",
+      "db/migrations/063_sandbox_writer_retirement.sql",
+      "tests/managed-retirement-restart.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/managed-cancellation.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-running-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-retirement-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Inaccessible executor + expired lease cancellation keeps uncertainty/grant/old effects until proof; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T21",
+    "normative_row": "T21\tQA encontra defeito após implementação e revisão inicial\tDefeito reproduzível retorna à correção, com novas evidências necessárias\tRF-18/19/20\tI4",
+    "criterion": "QA encontra defeito após implementação e revisão inicial — Defeito reproduzível retorna à correção, com novas evidências necessárias",
+    "source_version": "ae2e141b",
+    "implementation": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
+    "source_files": [
+      "tests/managed-corrections.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/managed-corrections.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "QA reproducible defect returns to bounded correction and requires replacement artifact evidence; Native correction graph physical proof with real capacity not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T23",
+    "normative_row": "T23\tArquivo/saída SSH tenta instruir gerente a revelar credenciais ou alterar controle da central\tConteúdo não cria autoridade; ferramentas/arquivos/APIs protegidos bloqueiam o efeito, preservando operações legítimas\tRF-29/49\tI5",
+    "criterion": "Arquivo/saída SSH tenta instruir gerente a revelar credenciais ou alterar controle da central — Conteúdo não cria autoridade; ferramentas/arquivos/APIs protegidos bloqueiam o efeito, preservando operações legítimas",
+    "source_version": "ae2e141b",
+    "implementation": "administrative-operations + managers authorize project administration; native tool forwarder private destinations",
+    "source_files": [
+      "tests/semantic-planning.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/semantic-planning.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Malicious SSH file/output cannot reveal credential or modify central authority; valid project admin survives; Full direct API/terminal hostile-worker matrix while preserving valid project admin missing",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T24",
+    "normative_row": "T24\tDuas CLIs concorrentes tentam ler credenciais uma da outra\tFronteira técnica bloqueia leitura cruzada, inclusive via shell/symlink/processo; HOME distinto sozinho não basta\tRF-05/28/49\tI5",
+    "criterion": "Duas CLIs concorrentes tentam ler credenciais uma da outra — Fronteira técnica bloqueia leitura cruzada, inclusive via shell/symlink/processo; HOME distinto sozinho não basta",
+    "source_version": "ae2e141b",
+    "implementation": "private file reader refuses symlink/hardlink/growth; Docker worker mount/socket/network restrictions",
+    "source_files": [
+      "tests/native-credential-isolation-physical.test.ts",
+      "src/native-worker-security.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/native-credential-isolation-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Two actual concurrent CLIs denied shell/symlink/process credential access; distinct HOME insufficient; Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T26",
+    "normative_row": "T26\tLogin expira ou versão de CLI muda protocolo\tTrabalho preservado; estado explicado; versão/auth incompatível não admite novas execuções até confirmação válida\tRF-06/08/10/23\tI3/I5",
+    "criterion": "Login expira ou versão de CLI muda protocolo — Trabalho preservado; estado explicado; versão/auth incompatível não admite novas execuções até confirmação válida",
+    "source_version": "ae2e141b",
+    "implementation": "ProviderCollectors bind immutable adapter version/digest and refuse changed adapter before probe",
+    "source_files": [
+      "src/providers.ts",
+      "tests/providers.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/providers.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "environment_validation_missing",
+    "missing": "Expire authentication or upgrade protocol; preserve work and refuse new native admission until confirmation; Actual CLI upgrade protocol qualification/default promotion proof missing",
+    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T29",
+    "normative_row": "T29\tProgramação satura o teto e precisa de QA/revisor/especialista\tVagas de etapa encerrada liberadas; revisão avança; nenhum chamador segura todos os recursos necessários ao chamado\tRF-14/47\tI3/I4",
+    "criterion": "Programação satura o teto e precisa de QA/revisor/especialista — Vagas de etapa encerrada liberadas; revisão avança; nenhum chamador segura todos os recursos necessários ao chamado",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts separates model/local grants; retirement verifies physical absence before release; worktree lease separate",
+    "source_files": [
+      "db/migrations/040_local_compositor_capacity.sql",
+      "src/capacity.ts",
+      "src/engineering.ts",
+      "tests/local-compositor-capacity.test.ts",
+      "tests/capacity.test.ts",
+      "tests/capacity-liveness.test.ts",
+      "src/control.ts",
+      "db/migrations/067_capacity_selection.sql",
+      "tests/capacity-aging.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/local-compositor-capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-liveness.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/capacity-aging.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Fill programmer ceiling then demand QA/reviewer/specialist; physical stage retirement frees exact slots; Saturated programmer to evaluator progress with actual provider capacity graph pending R3",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T30",
+    "normative_row": "T30\tRestauração de backup com efeitos externos posteriores e processos ainda vivos\tInicializa em recuperação, reconcilia/neutraliza antigos, preserva pausas e só depois libera novas admissões\tRF-23/34/44/52\tI7/I8",
+    "criterion": "Restauração de backup com efeitos externos posteriores e processos ainda vivos — Inicializa em recuperação, reconcilia/neutraliza antigos, preserva pausas e só depois libera novas admissões",
+    "source_version": "ae2e141b",
+    "implementation": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
+    "source_files": [
+      "scripts/import-restored-lab-database.mjs",
+      "scripts/prove-backup-restore.mjs"
+    ],
+    "evidence": [],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Restore older backup while newer external workers alive; reconciliation/neutralization before dispatch, pauses remain; Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T32",
+    "normative_row": "T32\tUpdate de worker e Continue-As-New com pendências\tVersão compatível, mensagens/pausas/operações preservadas, antigos workers retidos conforme necessidade\tRF-22/52\tI5/I7",
+    "criterion": "Update de worker e Continue-As-New com pendências — Versão compatível, mensagens/pausas/operações preservadas, antigos workers retidos conforme necessidade",
+    "source_version": "ae2e141b",
+    "implementation": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
+    "source_files": [
+      "src/workflow-versions.ts",
+      "src/workflows.ts",
+      "src/cezar.ts",
+      "src/diagnostics.ts",
+      "src/control.ts",
+      "db/migrations/058_workflow_versions.sql",
+      "tests/workflow-versioning.test.ts",
+      "docs/architecture/ADR-012-VERSOES-DE-WORKFLOW.md",
+      "docs/implementation/WORKFLOW-VERSIONING-20261104.md"
+    ],
+    "evidence": [
+      {
+        "path": "tests/workflow-versioning.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "implementation_and_evidence_gap",
+    "missing": "Update worker with pending messages/pauses/operations and Continue-As-New while retaining compatible old workers; Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T33",
+    "normative_row": "T33\tAgente inventa teste, entrega log truncado ou altera CI para remover gate\tEvidência inválida não integra; executor e política independente validam artefato/gates efetivos\tRF-19/25/48\tI4",
+    "criterion": "Agente inventa teste, entrega log truncado ou altera CI para remover gate — Evidência inválida não integra; executor e política independente validam artefato/gates efetivos",
+    "source_version": "ae2e141b",
+    "implementation": "trusted signed verification receipt + quality gate binding and Git atomic update-ref helper",
+    "source_files": [
+      "src/quality.ts",
+      "src/native-qa.ts",
+      "src/git.ts",
+      "services/agent-control-git/helper.rb",
+      "tests/quality-gate-integrity.test.ts",
+      "tests/native-qa-logs.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/quality-gate-integrity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-qa-logs.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Invent test/truncate log/remove CI gate; trusted independent executor refuses integration; Independent execution of complete forged/truncated/gate-removal and external-writer races pending",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T34",
+    "normative_row": "T34\tEscritor antigo continua vivo quando outra tentativa é preparada\tNunca compartilham a mesma cópia gravável; resultado e acesso antigos tratados antes de retomar\tRF-23/28/54\tI5",
+    "criterion": "Escritor antigo continua vivo quando outra tentativa é preparada — Nunca compartilham a mesma cópia gravável; resultado e acesso antigos tratados antes de retomar",
+    "source_version": "ae2e141b",
+    "implementation": "worktree-lease claim/epoch plus signed physical native/sandbox retirement before writer transfer",
+    "source_files": [
+      "src/worktree-lease.ts",
+      "src/cezar.ts",
+      "tests/worktree-lease.test.ts",
+      "db/migrations/062_worktree_writer_proof.sql",
+      "src/managed-plan.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "tests/fixtures/managed-graph-broker.mjs",
+      "src/sandbox-broker.ts",
+      "src/isolated-implementation.ts",
+      "db/migrations/063_sandbox_writer_retirement.sql",
+      "tests/managed-retirement-restart.test.ts",
+      "db/migrations/064_native_writer_retirement.sql",
+      "src/native-execution-supervisor.ts",
+      "src/native-implementation.ts",
+      "tests/native-multitask.test.ts",
+      "src/cancellation.ts",
+      "tests/native-retirement-process-restart.test.ts",
+      "src/native-artifact-finalizer.ts",
+      "tests/native-live-finalizer.test.ts",
+      "tests/native-graph-sigkill-recovery.test.ts",
+      "tests/native-private-network-retirement.test.ts",
+      "src/native-verification.ts",
+      "src/native-qa.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/worktree-lease.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/fixtures/managed-graph-broker.mjs",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-retirement-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-multitask.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-retirement-process-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-live-finalizer.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-graph-sigkill-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-private-network-retirement.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "integration_evidence_missing",
+    "missing": "Prepare successor while old writer lives; no shared writable copy before access/physical retirement; Remote escaped descendant neutralization and successor shared-worktree physical matrix pending R3",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T36",
+    "normative_row": "T36\tAcesso direto à API/WS/MCP/terminal ou tentativa administrativa sobre a central\tNenhum bypass do gateway/RBAC; gerente mantém administração autorizada do projeto, sem controlar a central\tRF-28/29/49\tI5",
+    "criterion": "Acesso direto à API/WS/MCP/terminal ou tentativa administrativa sobre a central — Nenhum bypass do gateway/RBAC; gerente mantém administração autorizada do projeto, sem controlar a central",
+    "source_version": "ae2e141b",
+    "implementation": "native-worker-security signed scoped files; sandbox isolation and forwarding restrictions",
+    "source_files": [
+      "upstream/cezar/packages/cezar/src/workflows/run.ts",
+      "upstream/cezar/packages/cezar/src/workflows/leftover-processes.test.ts"
+    ],
+    "evidence": [],
+    "classification": "integration_evidence_missing",
+    "missing": "Direct API/WS/MCP/terminal admin attack denied; manager authorized project administration still works; Full cross-account shell/symlink/process/API plus central admin attack coverage remains unverified",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T37",
+    "normative_row": "T37\tDois chats mantêm seleções regulares distintas ao disputar a capacidade global e após reinício; mudança em um não altera indevidamente o outro, e conta desabilitada é respeitada.\tSeleção por contexto persistente e capacidade global íntegra\tRF-56/RF-13\tI3",
+    "criterion": "Dois chats mantêm seleções regulares distintas ao disputar a capacidade global e após reinício; mudança em um não altera indevidamente o outro, e conta desabilitada é respeitada. — Seleção por contexto persistente e capacidade global íntegra",
+    "source_version": "ae2e141b",
+    "implementation": "capacity.ts context selection separate from immutable attempt profiles; control exposes state",
+    "source_files": [
+      "src/capacity.ts",
+      "src/control.ts",
+      "tests/account-state.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/account-state.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Two context regular selections persist independently across restart and account disable under global contention; Two live contexts restart/disabled account state not independently rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  },
+  {
+    "id": "T38",
+    "normative_row": "T38\tQA dispensado por política versus resultado cancelado/perdido/obsoleto\tDispensa válida permite avançar, demais estados bloqueiam; alteração de artefato invalida evidência incompatível\tRF-57/RF-18/RF-19\tI4",
+    "criterion": "QA dispensado por política versus resultado cancelado/perdido/obsoleto — Dispensa válida permite avançar, demais estados bloqueiam; alteração de artefato invalida evidência incompatível",
+    "source_version": "ae2e141b",
+    "implementation": "qa-waiver-binding.ts explicit not_required distinct passed; artifact/policy/template digest binding",
+    "source_files": [
+      "src/quality.ts",
+      "src/qa-waiver-binding.ts",
+      "src/engineering.ts",
+      "src/native-execution-supervisor.ts",
+      "db/migrations/060_qa_waiver_binding.sql",
+      "tests/qa-waiver-binding.test.ts",
+      "tests/qa-waiver-stage.test.ts",
+      "tests/quality-gate-integrity.test.ts",
+      "upstream/cezar/packages/web/src/routes/settings/agent-control-qa-waiver.tsx",
+      "tests/native-multitask.test.ts",
+      "src/managed-plan.ts",
+      "tests/managed-runtime-integration.test.ts",
+      "tests/fixtures/managed-graph-broker.mjs",
+      "src/sandbox-broker.ts",
+      "src/isolated-implementation.ts",
+      "db/migrations/063_sandbox_writer_retirement.sql",
+      "tests/managed-retirement-restart.test.ts",
+      "db/migrations/065_qa_waiver_revocation.sql",
+      "src/control.ts",
+      "src/native-verification.ts",
+      "src/native-qa.ts",
+      "src/cezar.ts",
+      "db/migrations/066_native_terminal_retirement.sql",
+      "db/migrations/070_native_qa_retirement.sql",
+      "tests/r2-qa-revocation-race.test.ts",
+      "tests/r2-graph-recovery.test.ts",
+      "tests/r2-graph-active-cancel.test.ts",
+      "tests/r2-graph-active-failure.test.ts",
+      "tests/r2-qa-retirement-physical.test.ts",
+      "tests/sandbox-public-retirement-physical.test.ts"
+    ],
+    "evidence": [
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/qa-waiver-stage.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/quality-gate-integrity.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/native-multitask.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-runtime-integration.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/fixtures/managed-graph-broker.mjs",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/managed-retirement-restart.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-revocation-race.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-recovery.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-cancel.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-active-failure.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-qa-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/sandbox-public-retirement-physical.test.ts",
+        "scope": "existing source inspected by filename/reference; historical success not independently rerun"
+      },
+      {
+        "path": "tests/r2-graph-cancellations.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/qa-waiver-binding.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/native-worker-security.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      },
+      {
+        "path": "tests/planning-parallelism.test.ts",
+        "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
+      }
+    ],
+    "classification": "complete_slice_verification_pending",
+    "missing": "Policy waiver advances; canceled/lost/stale results block; artifact change invalidates old binding; Seven pure waiver cases rerun; integrated waiver revocation versus physical retirement race not rerun",
+    "external_dependency": null,
+    "acceptance_recommendation": "not_accepted",
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+  }
+]
