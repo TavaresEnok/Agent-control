@@ -18,6 +18,7 @@ import {InstallationAuthority} from './installation-authority.ts';
 import {createInstallationAuthorityApi} from './installation-authority-api.ts';
 import {remoteReturnTransport} from './remote-return-config.ts';
 import {configuredRemoteDevelopment} from './remote-development-config.ts';
+import {prepareWorkflowRuntimeRegistration,startWorkflowRuntimeRegistration} from './workflow-runtime-bootstrap.ts';
 import {Control} from './control.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
@@ -59,7 +60,9 @@ async function main(){
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
- const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+ const localWorkflowRuntime=command==='serve'?await prepareWorkflowRuntimeRegistration(config.workflowRuntime):undefined;
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token,localWorkflowRuntime?.identity);
+ let workflowRegistration:Awaited<ReturnType<typeof startWorkflowRuntimeRegistration>>|undefined;
  const managerTransports=new Map<string,ManagerRegistry>();
  const configurationControls=new Map<string,Control>();
  const closeManagers=async()=>{const results=await Promise.allSettled([...managerTransports.values()].map(registry=>registry.close()));managerTransports.clear();if(results.some(result=>result.status==='rejected'))throw Error('MANAGER_TRANSPORT_SHUTDOWN_FAILED');};
@@ -94,6 +97,7 @@ async function main(){
   // Serving does not silently migrate schemas or create projects/credentials.
   const registered=(await ledger.pool.query("SELECT 1 FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id JOIN ac_project_repositories r ON r.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2 AND m.role='owner' AND r.repo=$3",[config.project.id,config.project.owner,config.project.repo])).rowCount;
   if(!registered)throw Error('INSTALLATION_NOT_INITIALIZED');
+  if(localWorkflowRuntime)workflowRegistration=await startWorkflowRuntimeRegistration(ledger,localWorkflowRuntime,[config.project,...config.projects],()=>console.error('WORKFLOW_RUNTIME_REGISTRATION_UNAVAILABLE'));
   const {prepareNativeBootstrap,nativeBootstrapRuntimeAttachment}=await import('./native-bootstrap.ts');
   const prepared=await prepareNativeBootstrap(config,{query:(sql,params)=>ledger.pool.query(sql,params as never[])});
   bootstrapSession=prepared.session;bootstrapReport=prepared.report;
@@ -144,11 +148,11 @@ async function main(){
     if(principal&&!bearer)sessions.checkOrigin(request);
     return principal;
    }});
-  const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:false,inferenceEnabled:false,nativeBootstrap:bootstrapReport})));
+  const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:false,inferenceEnabled:false,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
   serving=true;
   let closing=false;
-  const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
+  const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
   process.once('SIGTERM',close);process.once('SIGINT',close);
- }finally{if(!serving){try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{await ledger.close();}}}}}
+ }finally{if(!serving){try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{try{await workflowRegistration?.close();}finally{await ledger.close();}}}}}}
 }
 main().catch(()=>{console.error('INSTALLATION_COMMAND_FAILED: inspect private configuration, initialization and service availability; secrets are not logged.');process.exitCode=1;});

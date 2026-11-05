@@ -1,0 +1,7 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+tests/native-bootstrap.test.ts(476,136): error TS2345: Argument of type '{ schemaVersion: 1; mode: "administration-only"; databaseUrl: string; projectRoots: { id: string; label: string; path: string; }[]; dataDirectory: string; project: { id: string; label: string; repo: string; owner: string; }; ... 12 more ...; remoteDevelopment: { ...; }; }' is not assignable to parameter of type '{ schemaVersion: 1; mode: "administration-only"; databaseUrl: string; projectRoots: { id: string; label: string; path: string; }[]; dataDirectory: string; project: { id: string; label: string; repo: string; owner: string; }; ... 12 more ...; sessionMaxAgeSeconds: number; }'.
+  Types of property 'remoteDevelopment' are incompatible.
+    Property 'mode' is missing in type '{ transport: { credentials: { path: string; }[]; }; projects: { verifierKeyFile: string; tmpfsRoot: string; }[]; }' but required in type '{ mode: "synthetic-fixed-task-v1"; transport: { allowedHosts: string[]; credentials: { id: string; path: string; }[]; }; projects: { projectId: string; verifierKeyFile: string; tmpfsRoot: string; profiles: { ...; }[]; }[]; }'.
