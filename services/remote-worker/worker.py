@@ -226,7 +226,11 @@ def rpc(config_path):
                 other = json.loads(candidate.read_text())
                 if other['operationId'] != candidate_id:
                     raise ValueError('INVALID_OPERATION_JOURNAL')
-                if other['state'] not in ('completed', 'failed', 'canceled_confirmed'):
+                terminal = other['state'] in ('completed', 'failed', 'canceled_confirmed')
+                checksum = other.get('logSha256')
+                receipt = (type(other.get('exitCode')) is int and isinstance(checksum, str)
+                           and len(checksum) == 64 and all(ch in '0123456789abcdef' for ch in checksum))
+                if not terminal or not receipt:
                     active += 1
             if active >= maximum:
                 raise ValueError('REMOTE_HOST_BUSY')
