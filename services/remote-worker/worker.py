@@ -47,6 +47,19 @@ def operation_path(root, operation):
     return root / (str(uuid.UUID(operation)) + '.json')
 
 
+def workspace_module():
+    spec = importlib.util.spec_from_file_location('remote_git_workspace', '/usr/local/lib/agent-control/remote_git_workspace.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def project_directory(config, project, workspace=None):
+    if workspace is not None:
+        return pathlib.Path(workspace_module().workspace_directory(config, str(uuid.UUID(workspace)), project)).resolve(strict=True)
+    return pathlib.Path(config['projects'][project]).resolve(strict=True)
+
+
 def execute(config_path, operation):
     config, root = load(config_path)
     record = operation_path(root, operation)
@@ -62,7 +75,7 @@ def execute(config_path, operation):
             atomic(record, item)
             return
         project = item['projectId']
-        directory = pathlib.Path(config['projects'][project]).resolve(strict=True)
+        directory = project_directory(config, project, item.get('workspaceId'))
         if str(directory) != item['root'] or not directory.is_dir():
             raise ValueError('PROJECT_ROOT_CHANGED')
         command = config['tasks'][item['taskId']]
@@ -175,6 +188,9 @@ def dispatch(config_path, config, root):
     operation = str(uuid.UUID(request['operationId']))
     record = operation_path(root, operation)
     action = request.get('action')
+    if action in ('git-workspace-prepare', 'git-workspace-snapshot'):
+        module = workspace_module()
+        return module.prepare(config, request) if action == 'git-workspace-prepare' else module.snapshot(config, request)
     if action == 'git-return':
         if (request.get('projectId') not in config.get('gitReturnProjects', [])
                 or request.get('destinationRef') not in config.get('gitReturnRefs', {}).get(request.get('projectId'), [])):
@@ -213,12 +229,13 @@ def dispatch(config_path, config, root):
         item = json.loads(record.read_text())
         # Missing or reused identities are uncertainty, never proof of completion.
         return remote_supervisor.recover(config, root, item, atomic) if (item.get('stableGroup') or item.get('groupIntent')) else observed(item)
-    if action != 'start' or set(request) != {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'root', 'epoch'}:
+    start_keys = {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'root', 'epoch'}
+    if action != 'start' or set(request) not in (start_keys, start_keys | {'workspaceId'}):
         raise ValueError('INVALID_REQUEST')
     project, task = request['projectId'], request['taskId']
     if project not in config['projects'] or task not in config['tasks']:
         raise ValueError('TASK_FORBIDDEN')
-    directory = pathlib.Path(config['projects'][project]).resolve(strict=True)
+    directory = project_directory(config, project, request.get('workspaceId'))
     if str(directory) != request['root']:
         raise ValueError('PROJECT_ROOT_MISMATCH')
     if type(request['epoch']) is not int or request['epoch'] < 1:
@@ -235,6 +252,9 @@ def dispatch(config_path, config, root):
                 prior = json.loads(record.read_text())
                 if prior['requestDigest'] != fingerprint:
                     raise ValueError('OPERATION_ID_CONFLICT')
+                if config.get('resourceAuthority'):
+                    import resource_authority
+                    resource_authority.claim_operation(config, operation, request['epoch'], fingerprint, root)
                 return remote_supervisor.recover(config, root, prior, atomic) if (prior.get('stableGroup') or prior.get('groupIntent')) else observed(prior)
             maximum = config.get('maxConcurrent', 1)
             if type(maximum) is not int or not 1 <= maximum <= 32:
@@ -258,8 +278,15 @@ def dispatch(config_path, config, root):
                     active += 1
             if active >= maximum:
                 raise ValueError('REMOTE_HOST_BUSY')
+            if config.get('resourceAuthority'):
+                import resource_authority
+                fresh_claim = resource_authority.claim_operation(config, operation, request['epoch'], fingerprint, root)
+                if not fresh_claim:
+                    raise ValueError('REMOTE_OPERATION_JOURNAL_MISSING')
             item = {'schemaVersion': 1, 'operationId': operation, 'state': 'uncertain', 'projectId': project,
                     'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
+            if 'workspaceId' in request:
+                item['workspaceId'] = str(uuid.UUID(request['workspaceId']))
             # Persist before launching. A crash in this gap remains uncertain and is not blindly retried.
             atomic(record, item)
             subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), '--config', config_path, '--execute', operation],

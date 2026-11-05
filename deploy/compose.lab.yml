@@ -122,6 +122,7 @@ services:
       - ssh-host-a-state:/projects
       - ../services/remote-worker/worker.py:/usr/local/lib/agent-control/worker.py:ro
       - ../services/remote-worker/remote_supervisor.py:/usr/local/lib/agent-control/remote_supervisor.py:ro
+      - ../services/remote-worker/resource_authority.py:/usr/local/lib/agent-control/resource_authority.py:ro
       - ../services/remote-git/helper.py:/usr/local/lib/agent-control/remote_git.py:ro
     command: [sh, -ec, 'chown 1000:1000 /projects; mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-a/sshd_config -h /fixtures/host-a/host_key']
     depends_on:
@@ -140,6 +141,7 @@ services:
       - ssh-host-b-state:/projects
       - ../services/remote-worker/worker.py:/usr/local/lib/agent-control/worker.py:ro
       - ../services/remote-worker/remote_supervisor.py:/usr/local/lib/agent-control/remote_supervisor.py:ro
+      - ../services/remote-worker/resource_authority.py:/usr/local/lib/agent-control/resource_authority.py:ro
       - ../services/remote-git/helper.py:/usr/local/lib/agent-control/remote_git.py:ro
     command: [sh, -ec, 'chown 1000:1000 /projects; mkdir -p /projects/repo; chown 1000:1000 /projects/repo; exec /usr/sbin/sshd -D -e -f /fixtures/host-b/sshd_config -h /fixtures/host-b/host_key']
     depends_on:

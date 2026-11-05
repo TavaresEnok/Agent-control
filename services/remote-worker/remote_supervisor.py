@@ -30,12 +30,20 @@ def labels(config, item):
 
 @contextlib.contextmanager
 def authority(config, root, atomic):
-    if config.get('resourceAuthority'):
-        import resource_authority
-        shared = resource_authority.authority(config)
-    else:
-        shared = contextlib.nullcontext()
-    with shared:
+    with contextlib.ExitStack() as stack:
+        if config.get('resourceAuthority'):
+            import resource_authority
+            deadline = time.monotonic() + 20
+            while True:
+                try:
+                    stack.enter_context(resource_authority.authority(config))
+                    break
+                except ValueError as error:
+                    if str(error) != 'RESOURCE_AUTHORITY_BUSY' or time.monotonic() >= deadline:
+                        raise
+                    # Contention is transient; it must not crash a healthy supervisor.
+                    # Every eventual acquisition revalidates epoch before mutation.
+                    time.sleep(.05)
         with local_authority(config, root, atomic):
             yield
 
@@ -135,8 +143,9 @@ def execute(config, root, item, atomic):
     image = config.get('dockerImage')
     if not isinstance(image, str) or not image:
         raise ValueError('DOCKER_IMAGE_REQUIRED')
-    mount = config.get('dockerProjectRoots', {}).get(item['projectId'], item['root'])
-    options = ['--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    mount = item['root'] if item.get('workspaceId') else config.get('dockerProjectRoots', {}).get(item['projectId'], item['root'])
+    name = 'ac-remote-' + hashlib.sha256((config['installationId'] + '\0' + operation).encode()).hexdigest()
+    options = ['--name', name, '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5', '--log-opt', 'max-size=1m',
                '--mount', 'type=bind,src=' + mount + ',dst=/project', '--workdir', '/project',
                '--env', 'HOME=/project', '--env', 'PATH=/usr/local/bin:/usr/bin:/bin']
