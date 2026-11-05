@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: portable v2 preserves complete redacted contracts and durable bounded owner-scoped cuts
+ok 1 - portable v2 preserves complete redacted contracts and durable bounded owner-scoped cuts
+  ---
+  duration_ms: 4748.602672
+  type: 'test'
+  ...
+# Subtest: portable metadata export is owner-scoped, bounded and excludes sensitive content
+ok 2 - portable metadata export is owner-scoped, bounded and excludes sensitive content
+  ---
+  duration_ms: 2755.42497
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9472.23191

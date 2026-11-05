@@ -4,7 +4,7 @@ import {dirname,isAbsolute,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {Id,Refusal,digest,canonical} from './contracts.ts';
 import {readPrivateFile,type Installation} from './installation.ts';
-import {PortableExport} from './portable-export.ts';
+import {collectPortableMetadata} from './portable-export-collect.ts';
 import type {Ledger} from './ledger.ts';
 const Descriptor=z.object({contextId:Id,tokenFile:z.string().min(1),outputFile:z.string().min(1)}).strict();
 const Envelope=z.object({t:z.literal('encrypted'),c:z.string().min(1).max(1024*1024).regex(/^[A-Za-z0-9+/=_-]+$/)}).strict();
@@ -47,7 +47,7 @@ export async function exportContext(config:Installation,ledger:Ledger,descriptor
   if(profile.id!==config.project.owner)throw new Refusal('CONTEXT_EXPORT_FORBIDDEN',403);
   const session=z.object({session:z.object({id:z.string()}).passthrough()}).passthrough().parse(await request('/v2/sessions/'+encodeURIComponent(sessionId)));
   if(session.session.id!==sessionId)throw new Refusal('CONTEXT_EXPORT_FORBIDDEN',403);
-  const metadata=await new PortableExport(ledger).export(config.project.owner,config.project.id,descriptor.contextId);
+  const metadata=await collectPortableMetadata(ledger,config.project.owner,config.project.id,descriptor.contextId);
   const messages:{seq:number;localId:string|null;ciphertext:string}[]=[];let before:number|undefined,head:number|null=null,total=0,finished=false;
   for(let i=0;i<100;i++){
    if(await authorize()!==sessionId)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
@@ -65,7 +65,7 @@ export async function exportContext(config:Installation,ledger:Ledger,descriptor
   }
   if(!finished)throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
   if(await authorize()!==sessionId)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
-  const envelope={schemaVersion:1,kind:'agent_control_context_export_v1',projectId:config.project.id,contextId:descriptor.contextId,sessionId,
+  const envelope={schemaVersion:2,kind:'agent_control_context_export_v2',projectId:config.project.id,contextId:descriptor.contextId,sessionId,
    canonicalHistory:'happier',encrypted:true,keysIncluded:false,restorable:false,headSequence:head,metadata,messages:messages.reverse()};
   const serialized=Buffer.from(canonical({...envelope,digest:digest(envelope)}));
   if(serialized.length>MAX_BYTES)throw new Refusal('CONTEXT_EXPORT_TOO_LARGE');
