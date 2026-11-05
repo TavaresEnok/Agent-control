@@ -1,0 +1,7 @@
+# Corrida inversa de revogação QA
+
+`tests/r2-qa-revocation-race.test.ts` exercita `Integrator`, gate e helper Git reais com PostgreSQL em banco descartável e repositório Git temporário. A fixture usa contas e recibos sintéticos; a revogação chama a mesma função transacional de domínio, sem alegar prova adicional da autenticação do controle.
+
+Após a admissão ter gravado `uncertain`, a fixture pausa a abertura da segunda transação, inicia a revogação e confirma a espera do gate com `pg_blocking_pids`. Com COMMIT da revogação o gate retorna `QA_MISSING` e a referência permanece na base; com ROLLBACK, o gate prossegue e o CAS avança para o commit autorizado. Em outro cenário, um processo controlador separado é morto com SIGKILL ao entrar no método de identidade imediatamente antes do CAS: o registro permanece `uncertain`, a referência não muda, `reconcile` apenas observa e retorna nulo, e uma nova tentativa de integração recusa `INTEGRATION_UNCERTAIN`. O processo é interrompido antes de iniciar o helper de identidade; o teste não demonstra queda durante execução do helper ou CAS já iniciado.
+
+Executado em Node 22.23.3 com `AC_TEST_DATABASE_URL` apontado ao servidor descartável da rodada: 1 teste, 1 passou, sem skips. Não houve necessidade de alterar produção. A prova depende de PostgreSQL READ COMMITTED e do ponto de pausa instrumentado; não cobre todas as interleavings nem homologação operacional.
