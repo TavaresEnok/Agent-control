@@ -47,6 +47,9 @@ export async function backupLaboratoryDatabase(options:{containerId:string;sourc
  try{await snapshot.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
   const gate=(await snapshot.query('SELECT enabled,clock_timestamp() captured_at FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
   if(gate?.enabled!==false)throw new Refusal('RECOVERY_SOURCE_MUST_BE_QUIESCENT_SYNTHETIC');
+  if((await snapshot.query('SELECT 1 FROM ac_managers WHERE lease_until>clock_timestamp()')).rowCount||
+   (await snapshot.query("SELECT 1 FROM ac_accounts WHERE mode<>'synthetic'")).rowCount||
+   (await snapshot.query("SELECT 1 FROM ac_import_batches WHERE state='staging'")).rowCount)throw new Refusal('RECOVERY_SOURCE_MUST_BE_QUIESCENT_SYNTHETIC');
   const policy=(await snapshot.query('SELECT * FROM ac_recovery_inventory_policy WHERE singleton FOR SHARE')).rows[0];
   if(Boolean(policy?.required)!==Boolean(inventory)||(inventory&&(policy.source_installation_id!==inventory.config.installationId||policy.catalog_id!==inventory.config.catalogId||policy.manifest_hash!==inventory.config.manifestHash)))throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
   if(inventory)catalogCheckpoint=await inventory.checkpoint();
