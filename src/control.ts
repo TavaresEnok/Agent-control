@@ -17,6 +17,18 @@ import {ProviderEligibility,ProviderEligibilityInput} from './provider-eligibili
 import {AdministrativeOperations,AdministrativePolicy} from './administrative-operations.ts';
 import {capacityWaitExclusions} from './observability.ts';
 import {readWorkflowVersionSnapshot} from './workflow-versions.ts';
+const SelectionEvidence=z.object({accountId:Id,profileId:Id,policyRevision:z.number().int().positive(),
+ configRevision:z.number().int().positive(),chain:z.enum(['regular','emergency']),position:z.number().int().min(1).max(40),
+ reason:z.enum(['sticky','first_eligible','fallback'])}).strict();
+export function projectCapacitySelection(row:{selection:unknown;resource_kind:string;account_id:string|null;profile_id:string|null;policy_revision:number;config_revision:number;emergency:boolean}) {
+ const parsed=SelectionEvidence.safeParse(row.selection);
+ if(!parsed.success||row.resource_kind!=='model')return null;
+ const value=parsed.data;
+ if(value.accountId!==row.account_id||value.profileId!==row.profile_id||value.policyRevision!==row.policy_revision||
+  value.configRevision!==row.config_revision||(value.chain==='emergency')!==row.emergency||
+  (value.reason==='sticky'&&value.chain!=='regular')||(value.reason==='first_eligible'&&value.position!==1))return null;
+ return value;
+}
 const base={schemaVersion:z.literal(1),intentId:Id,deliveryAttemptId:Id,contextId:Id};
 export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('administrative.policy.publish'),payload:z.object({expectedRevision:z.number().int().nonnegative(),policy:AdministrativePolicy}).strict()}).strict(),
@@ -182,8 +194,8 @@ export class Control {
     'SELECT revision,digest,snapshot,created_at AS published_at FROM ac_administrative_policies WHERE context_id=$1 ORDER BY revision DESC LIMIT 100',[contextId])).rows};
    const providerEligibility=await new ProviderEligibility(this.ledger,c).viewProject(principal,context.project_id);
    const policies=(await c.query('SELECT revision,digest,snapshot,published_at FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision',[context.project_id])).rows;
-   const grants=(await c.query(`SELECT id,attempt_id,intent_id,resource_kind,profile_id,account_id,role,policy_revision,emergency,state,created_at
-    FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows;
+   const grants=(await c.query(`SELECT id,attempt_id,intent_id,resource_kind,profile_id,account_id,role,policy_revision,config_revision,emergency,state,created_at,selection
+    FROM ac_capacity_grants WHERE context_id=$1 ORDER BY created_at DESC LIMIT 100`,[contextId])).rows.map(row=>({...row,selection:projectCapacitySelection(row)}));
    const waits=(await c.query(`SELECT attempt_id,resource_kind,role,reason,desired_profile,priority,sequence,exclusions
     FROM ac_capacity_waits WHERE context_id=$1 ORDER BY priority DESC,sequence`,[contextId])).rows.map(row=>{
     const exclusions=capacityWaitExclusions(row.exclusions);

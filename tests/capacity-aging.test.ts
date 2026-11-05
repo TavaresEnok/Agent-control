@@ -1,0 +1,64 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {Ledger} from '../src/ledger.ts';
+import {Capacity} from '../src/capacity.ts';
+import {digest} from '../src/contracts.ts';
+import {projectCapacitySelection} from '../src/control.ts';
+import {isolatedDatabase} from './fixtures/isolated-database.ts';
+
+test('database queue preserves initial priority then bounds overtaking across contexts and clients',async()=>{
+ const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
+ const database=await isolatedDatabase(base,'capacityaging'),db=new Ledger(database.url),otherDb=new Ledger(database.url),capacity=new Capacity(db),other=new Capacity(otherDb);
+ try{
+  await db.migrate();
+  const principal='aging-'+randomUUID(),project=randomUUID();
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'aging']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+  await capacity.configure(principal,{programmingLimit:2,evaluationLimit:2});
+  await capacity.registerModel(principal,{provider:'synthetic',model:'fixture',efforts:['medium'],roles:['programmer','manager'],source:'fixture'});
+  const account=randomUUID(),programmer=randomUUID(),manager=randomUUID();
+  await capacity.addAccount(principal,project,{id:account,provider:'synthetic',label:'fixture',resourceIdentity:randomUUID(),mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'fixture',maxConcurrent:1});
+  for(const [id,role] of [[programmer,'programmer'],[manager,'manager']] as const)await capacity.addProfile(principal,project,{id,accountId:account,model:'fixture',effort:'medium',role});
+  await capacity.observeQuota(principal,account,{status:'available',source:'fixture',ttlSeconds:3600});
+  const revision=await capacity.publish(principal,project,0,{schemaVersion:1,maxProgrammersPerContext:2,maxEvaluatorsPerContext:1,roles:{programmer:{regular:[programmer],emergency:[]},manager:{regular:[manager],emergency:[]}}});
+  const contexts=await Promise.all([0,1,2].map(()=>db.createContext(principal,project,randomUUID())));
+  const authorities=await Promise.all(contexts.map(context=>db.acquire(principal,context,randomUUID(),'fixture',60)));
+  for(const context of contexts)await capacity.assignPolicy(principal,context,revision);
+  const intents=await Promise.all(contexts.map((contextId,i)=>db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authorities[i]!,'api')));
+  const req=(i:number,role:'programmer'|'manager')=>({attemptId:randomUUID(),intentId:intents[i]!.id,contextId:contexts[i]!,role});
+  const holder=await capacity.reserve(principal,req(0,'programmer'),authorities[0]!);
+  const low=req(1,'programmer'),high=req(2,'manager');
+  const waiting=await Promise.allSettled([capacity.reserve(principal,low,authorities[1]!),other.reserve(principal,high,authorities[2]!)]);
+  assert.ok(waiting.every(result=>result.status==='rejected'&&/CAPACITY_BUSY|CAPACITY_QUEUED/.test(String(result.reason))));
+  await capacity.transition(principal,holder.id,authorities[0]!,'released',{processId:'fixture',state:'not_started'});
+  await assert.rejects(capacity.reserve(principal,low,authorities[1]!),/CAPACITY_QUEUED/);
+  const first=await other.reserve(principal,high,authorities[2]!);
+  await other.transition(principal,first.id,authorities[2]!,'released',{processId:'fixture',state:'not_started'});
+  // Backdate only the server-owned row to avoid a five-minute test.
+  await db.pool.query("UPDATE ac_capacity_waits SET created_at=clock_timestamp()-interval '6 minutes' WHERE attempt_id=$1",[low.attemptId]);
+  const newer=req(2,'manager');
+  await assert.rejects(other.reserve(principal,newer,authorities[2]!),/CAPACITY_QUEUED/);
+  const winner=await capacity.reserve(principal,low,authorities[1]!);
+  const decision=(await db.pool.query('SELECT selection FROM ac_capacity_grants WHERE id=$1',[winner.id])).rows[0].selection;
+  assert.deepEqual(decision,{accountId:account,profileId:programmer,policyRevision:revision,configRevision:1,chain:'regular',position:1,reason:'first_eligible'});
+  const paused=req(1,'programmer');
+  await assert.rejects(capacity.reserve(principal,paused,authorities[1]!),/CAPACITY_QUEUED|CAPACITY_BUSY/);
+  await db.pool.query("UPDATE ac_capacity_waits SET created_at=clock_timestamp()-interval '6 minutes' WHERE attempt_id=$1",[paused.attemptId]);
+  // A paused context cannot hold the head of the queue.
+  await db.pool.query('UPDATE ac_contexts SET paused=true WHERE id=$1',[contexts[1]]);
+  await capacity.transition(principal,winner.id,authorities[1]!,'released',{processId:'fixture',state:'not_started'});
+  const next=await other.reserve(principal,newer,authorities[2]!);assert.equal(next.profile_id,manager);
+  await other.transition(principal,next.id,authorities[2]!,'released',{processId:'fixture',state:'not_started'});
+  const historical={schemaVersion:1,maxProgrammersPerContext:2,maxEvaluatorsPerContext:1,roles:{manager:{regular:[manager]}}};
+  await db.pool.query('INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,2,$2,$3,$4)',[project,digest(historical),historical,principal]);
+  await capacity.assignPolicy(principal,contexts[2]!,2);
+  const historicalGrant=await other.reserve(principal,req(2,'manager'),authorities[2]!);assert.equal(historicalGrant.profile_id,manager);
+  const row=(await db.pool.query('SELECT * FROM ac_capacity_grants WHERE id=$1',[historicalGrant.id])).rows[0];
+  assert.ok(projectCapacitySelection(row));
+  assert.equal(projectCapacitySelection({...row,selection:{...row.selection,accountId:randomUUID()}}),null);
+  assert.equal(projectCapacitySelection({...row,selection:{...row.selection,secret:'must not escape'}}),null);
+  assert.equal(projectCapacitySelection({...row,selection:null}),null);
+ }finally{await otherDb.close();await db.close();await database.close();}
+});

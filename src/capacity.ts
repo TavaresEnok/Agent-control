@@ -202,7 +202,7 @@ export class Capacity {
       const stored = (await c.query('SELECT snapshot,digest FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2', [context.project_id,context.capacity_policy_revision])).rows[0];
       if (!stored) throw new Refusal('CAPACITY_POLICY_REQUIRED');
       const policy = CapacityPolicy.parse(stored.snapshot);
-      if (digest(policy)!==stored.digest) throw new Refusal('POLICY_DIGEST_MISMATCH');
+      if (digest(stored.snapshot)!==stored.digest) throw new Refusal('POLICY_DIGEST_MISMATCH');
       const chain = policy.roles[request.role];
       if (!chain) throw new Refusal('ROLE_NOT_CONFIGURED');
       const priority=request.role==='manager'?100:evaluations.includes(request.role)?50:0;
@@ -237,7 +237,8 @@ export class Capacity {
         AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
         AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))
         AND ((COALESCE(r.snapshot->'roles'->w.role->'regular','[]'::jsonb)||COALESCE(r.snapshot->'roles'->w.role->'emergency','[]'::jsonb)) ? p.id::text) AND m.epoch=w.manager_epoch AND m.lease_until>clock_timestamp()
-        ORDER BY w.priority DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
+        ORDER BY (w.created_at <= clock_timestamp()-interval '5 minutes') DESC,
+          CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`,[selected.account_id])).rows[0];
       if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const isEvaluation = evaluations.includes(request.role);
       const group = isEvaluation ? evaluations : request.role==='programmer' ? ['programmer'] : ['manager'];
@@ -272,10 +273,14 @@ export class Capacity {
         {await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_BUSY' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_BUSY'};}
       const emergency = chain.emergency.includes(selected.id);
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
-        (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'reserved') RETURNING *`,
+        (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'reserved',$14::jsonb) RETURNING *`,
         [randomUUID(),request.attemptId,request.intentId,request.contextId,authority.epoch,selected.account_id,selected.id,request.role,
-          context.project_id,context.capacity_policy_revision,config.revision,hash,emergency])).rows[0];
+          context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify({
+            accountId:selected.account_id,profileId:selected.id,policyRevision:context.capacity_policy_revision,configRevision:config.revision,
+            chain:emergency?'emergency':'regular',position:ids.indexOf(selected.id)+1,
+            reason:preferred===selected.id?'sticky':ids.indexOf(selected.id)===0?'first_eligible':'fallback'
+          })])).rows[0];
       if (!emergency) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,
         [request.contextId,request.role,selected.id,context.capacity_policy_revision]);
@@ -327,7 +332,7 @@ export class Capacity {
       const stored=(await c.query('SELECT snapshot,digest FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',
         [context.project_id,context.capacity_policy_revision])).rows[0];
       if(!stored)throw new Refusal('CAPACITY_POLICY_REQUIRED');
-      const policy=CapacityPolicy.parse(stored.snapshot);if(digest(policy)!==stored.digest)throw new Refusal('POLICY_DIGEST_MISMATCH');
+      const policy=CapacityPolicy.parse(stored.snapshot);if(digest(stored.snapshot)!==stored.digest)throw new Refusal('POLICY_DIGEST_MISMATCH');
       const waiting=await c.query(`INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,priority,resource_kind)
         VALUES($1,$2,$3,'programmer',$4,$5,0,'local_compositor') ON CONFLICT(attempt_id) DO UPDATE SET manager_epoch=excluded.manager_epoch
         WHERE ac_capacity_waits.resource_kind='local_compositor' AND ac_capacity_waits.request_digest=excluded.request_digest RETURNING attempt_id`,
@@ -348,7 +353,8 @@ export class Capacity {
         AND (SELECT count(*) FROM ac_capacity_grants g WHERE g.context_id=w.context_id AND g.role='programmer' AND g.state<>'released') <
           CASE WHEN r.snapshot->>'maxProgrammersPerContext' ~ '^(10|[1-9])$' THEN (r.snapshot->>'maxProgrammersPerContext')::int ELSE 0 END
         AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN (i.id,i.parent_intent_id))
-        ORDER BY w.priority DESC,w.sequence LIMIT 1`)).rows[0];
+        ORDER BY (w.created_at <= clock_timestamp()-interval '5 minutes') DESC,
+          CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`)).rows[0];
       if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const grant=(await c.query<LocalCompositorGrant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,resource_kind)
