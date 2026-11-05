@@ -1,0 +1,8 @@
+
+> agent-control@0.1.0 typecheck
+> tsc -p tsconfig.json --noEmit
+
+tests/capacity-liveness.test.ts(57,26): error TS2339: Property 'role' does not exist on type 'Grant'.
+tests/capacity-liveness.test.ts(60,99): error TS2339: Property 'role' does not exist on type 'Grant'.
+tests/capacity-liveness.test.ts(62,110): error TS2339: Property 'role' does not exist on type 'Grant'.
+tests/capacity-liveness.test.ts(66,29): error TS2339: Property 'role' does not exist on type 'Grant'.

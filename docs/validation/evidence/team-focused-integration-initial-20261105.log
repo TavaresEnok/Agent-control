@@ -1,0 +1,196 @@
+TAP version 13
+# Subtest: programming saturation and explicit stage releases permit evaluation, with original reserve draining on recovery
+ok 1 - programming saturation and explicit stage releases permit evaluation, with original reserve draining on recovery
+  ---
+  duration_ms: 2320.589592
+  type: 'test'
+  ...
+# Subtest: running regular and emergency grants survive recovery and policy revision without preemption
+ok 2 - running regular and emergency grants survive recovery and policy revision without preemption
+  ---
+  duration_ms: 1718.641882
+  type: 'test'
+  ...
+# Subtest: concurrent synthetic CLIs cannot read the other container credential through shell, links or proc
+not ok 3 - concurrent synthetic CLIs cannot read the other container credential through shell, links or proc
+  ---
+  duration_ms: 1.784792
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-credential-isolation-physical.test.ts:1:606'
+  failureType: 'testCodeFailure'
+  error: 'ISOLATED_CREDENTIAL_TEST_OPT_IN_REQUIRED'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-credential-isolation-physical.test.ts:14:62)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: unstarted managed native task adopts the successor only with intact frozen input and no launch
+ok 4 - unstarted managed native task adopts the successor only with intact frozen input and no launch
+  ---
+  duration_ms: 2320.345267
+  type: 'test'
+  ...
+# Subtest: QA refuses incomplete or malformed Docker logs returned over a disposable socket
+ok 5 - QA refuses incomplete or malformed Docker logs returned over a disposable socket
+  ---
+  duration_ms: 37.791018
+  type: 'test'
+  ...
+# Subtest: private worker input refuses links, non-regular files and oversized content
+ok 6 - private worker input refuses links, non-regular files and oversized content
+  ---
+  duration_ms: 16.743494
+  type: 'test'
+  ...
+# Subtest: private worker read rejects a file that grows after stat
+ok 7 - private worker read rejects a file that grows after stat
+  ---
+  duration_ms: 3.763942
+  type: 'test'
+  ...
+# Subtest: worker accepts only a signed scoped request and the matching private subscription identity
+ok 8 - worker accepts only a signed scoped request and the matching private subscription identity
+  ---
+  duration_ms: 42.277737
+  type: 'test'
+  ...
+# Subtest: tool forwarding accepts only private IPv4 destinations and refuses local or public targets before binding
+ok 9 - tool forwarding accepts only private IPv4 destinations and refuses local or public targets before binding
+  ---
+  duration_ms: 11.531917
+  type: 'test'
+  ...
+# Subtest: a complete explicit waiver is not_required and does not invent a passed receipt
+ok 10 - a complete explicit waiver is not_required and does not invent a passed receipt
+  ---
+  duration_ms: 1.703121
+  type: 'test'
+  ...
+# Subtest: passed QA satisfies the gate without a waiver
+ok 11 - passed QA satisfies the gate without a waiver
+  ---
+  duration_ms: 0.233798
+  type: 'test'
+  ...
+# Subtest: failed, canceled, missing and stale evidence block even when the waiver matches
+ok 12 - failed, canceled, missing and stale evidence block even when the waiver matches
+  ---
+  duration_ms: 0.325125
+  type: 'test'
+  ...
+# Subtest: another artifact digest, another policy or a missing template does not inherit the waiver
+ok 13 - another artifact digest, another policy or a missing template does not inherit the waiver
+  ---
+  duration_ms: 0.275312
+  type: 'test'
+  ...
+# Subtest: a stage waiver receipt is not a passed verification receipt
+ok 14 - a stage waiver receipt is not a passed verification receipt
+  ---
+  duration_ms: 3.239876
+  type: 'test'
+  ...
+# Subtest: the signed control command accepts an owner QA waiver authorization
+ok 15 - the signed control command accepts an owner QA waiver authorization
+  ---
+  duration_ms: 3.321205
+  type: 'test'
+  ...
+# Subtest: high risk and a disabled policy stay missing instead of becoming not_required
+ok 16 - high risk and a disabled policy stay missing instead of becoming not_required
+  ---
+  duration_ms: 0.367452
+  type: 'test'
+  ...
+# Subtest: explicit QA waiver stage
+    # Subtest: signed control authorizes only an owner and deduplicates delivery
+    ok 1 - signed control authorizes only an owner and deduplicates delivery
+      ---
+      duration_ms: 190.380112
+      type: 'test'
+      ...
+    # Subtest: the QA settlement records not_required for one artifact and blocks failed evidence
+    ok 2 - the QA settlement records not_required for one artifact and blocks failed evidence
+      ---
+      duration_ms: 473.522054
+      type: 'test'
+      ...
+    1..2
+ok 17 - explicit QA waiver stage
+  ---
+  duration_ms: 1852.061889
+  type: 'suite'
+  ...
+# Subtest: quality gate integrity
+    # Subtest: owner waiver on a low-risk artifact is explicit, idempotent and does not travel to another commit
+    ok 1 - owner waiver on a low-risk artifact is explicit, idempotent and does not travel to another commit
+      ---
+      duration_ms: 290.376498
+      type: 'test'
+      ...
+    # Subtest: protected gate paths are refused before native execution and again at assertReady
+    ok 2 - protected gate paths are refused before native execution and again at assertReady
+      ---
+      duration_ms: 456.466961
+      type: 'test'
+      ...
+    # Subtest: actual Git changes cannot weaken protected gates even without a native input
+    ok 3 - actual Git changes cannot weaken protected gates even without a native input
+      ---
+      duration_ms: 1387.222767
+      type: 'test'
+      ...
+    # Subtest: managed freeze refuses a protected write path before the native input is accepted
+    ok 4 - managed freeze refuses a protected write path before the native input is accepted
+      ---
+      duration_ms: 1469.004403
+      type: 'test'
+      ...
+    1..4
+ok 18 - quality gate integrity
+  ---
+  duration_ms: 5139.50122
+  type: 'suite'
+  ...
+# Subtest: historical quality policy stays valid and keeps its digest without protectedGatePaths
+ok 19 - historical quality policy stays valid and keeps its digest without protectedGatePaths
+  ---
+  duration_ms: 15.762352
+  type: 'test'
+  ...
+# Subtest: protectedGatePaths is normalized, deduplicated and covered by the policy digest
+ok 20 - protectedGatePaths is normalized, deduplicated and covered by the policy digest
+  ---
+  duration_ms: 2.920175
+  type: 'test'
+  ...
+# Subtest: protectedGatePaths rejects absolute, parent and non-normalized paths and lists above 64
+ok 21 - protectedGatePaths rejects absolute, parent and non-normalized paths and lists above 64
+  ---
+  duration_ms: 4.991964
+  type: 'test'
+  ...
+# Subtest: write paths intersect exact gate files and directory prefixes, including parent scopes
+ok 22 - write paths intersect exact gate files and directory prefixes, including parent scopes
+  ---
+  duration_ms: 0.735205
+  type: 'test'
+  ...
+# Subtest: semantic planning journals uncertain generation, reconciles without inference replay, preserves pause and atomically publishes one proposal
+ok 23 - semantic planning journals uncertain generation, reconciles without inference replay, preserves pause and atomically publishes one proposal
+  ---
+  duration_ms: 2398.33715
+  type: 'test'
+  ...
+1..23
+# tests 27
+# suites 2
+# pass 26
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 22017.337273

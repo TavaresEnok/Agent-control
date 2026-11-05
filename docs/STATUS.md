@@ -1,3 +1,13 @@
+# Continuação vigente — equipe nativa
+
+Nove subagentes Terra/Médio foram efetivamente iniciados em worktrees separadas e houve revisão por agentes distintos. O principal não pode alterar ou confirmar seu modelo nesta sessão. O registro completo, commits e limitações estão em [NATIVE-TEAM-CONTINUATION-20261105.md](implementation/NATIVE-TEAM-CONTINUATION-20261105.md) e na [continuidade](CONTINUACAO-CURSOR.md).
+
+Foram integrados capacidade com fencing e fila revalidada, revogação assinada de dispensa QA e painel, proteção dos caminhos de gate pelo diff Git real, recusa de frames de log Docker incompletos, editor móvel por etapas e recuperação de tarefa não iniciada. Provas físicas delimitadas cobrem sentinelas em contêineres concorrentes, Ruby durante escrita Git e grafo sintético com lançamento real do supervisor, SIGKILL e retomada sem duplicar o programador. O programador terminal retira também sua rede privada validada.
+
+Matriz: **104 parciais, sete não implementados, nenhum dos 111 aceito**. O grafo usa substitutos declarados de capacidade, home, elegibilidade, QA e workers; não autentica conta real nem faz inferência. O gate continua dependendo da lista de caminhos aprovada pelo owner; os testes móveis não homologam aparelho. O build principal e o build web managed passaram em Node 22.23.3; falhas iniciais e seus limites não foram apagados. Consulte o fechamento para a lista precisa de checks. Arquitetura Cezar + Happier + PostgreSQL preservada; nenhum Paseo, deploy ou migração operacional foi iniciado.
+
+---
+
 # Agent Control — estado atual de implementação
 
 ## Continuação vigente: controlador e finalizador vivo — 05/11/2026

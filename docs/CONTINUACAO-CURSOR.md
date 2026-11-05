@@ -1,3 +1,19 @@
+# Continuação vigente — equipe nativa (04/11/2026 em Fortaleza)
+
+Esta rodada prevalece sobre as restrições históricas de delegação abaixo. O usuário autorizou o principal e até nove subagentes nativos, sem Paseo. Nove `spawn_agent` foram confirmados com Terra/Médio e worktrees separadas; o principal não dispõe de ferramenta para confirmar ou trocar seu próprio modelo. Agentes, modelos solicitados, ownership, commits, revisões, recursos e limites estão em [NATIVE-TEAM-CONTINUATION-20261105.md](implementation/NATIVE-TEAM-CONTINUATION-20261105.md).
+
+Partida em `50d76bf7`, branch `continuation/cursor-20261104`; preservados `47aced1a`, todos os sucessores e as alterações locais. O commit `d46386b6` guarda o trabalho preexistente. `test.txt` continua sem rastreamento, preservado. Sem reset, troca de branch operacional ou descarte.
+
+Entregas integradas: fencing da capacidade/fila, revogação assinada de dispensa e UI, gate sobre diff Git real dos caminhos protegidos, recusa de frames Docker truncados, prova física de sentinelas em contêineres concorrentes, editor móvel por etapas, recuperação de job ainda não iniciado, Ruby real durante escrita Git e retirada da rede privada do programador. O grafo sintético usa `start` real para programação/revisão e retoma após SIGKILL do controlador, preservando pausa e um único job programador. Capacidade, elegibilidade, home, QA e workers do grafo são substitutos declarados; autenticação/inferência reais não foram habilitadas.
+
+Revisão independente foi realizada por outros agentes; os pareceres ficam em `TEAM-REVIEW-NATIVE.md`, `TEAM-REVIEW-PRODUCT.md` e `TEAM-DOCUMENT-REVIEW.md`. A revisão de uma fatia não aceita o requisito inteiro. A matriz JSON/CSV tem 111 itens: 104 `partial`, sete `not_implemented`, 111 `not_accepted`. Continuam pendentes RF-39, RF-46, RNF-12, T01, T02, T16 e T28, com dependências operacionais/externas descritas no registro da rodada. Justiça durável e demais superfícies/janelas não demonstradas permanecem limites explícitos das provas parciais.
+
+Node 22.23.3 foi usado no fechamento. Build principal e web managed e typecheck web passaram; logs e falhas de preparação também foram preservados. A varredura geral interrompida e os ensaios com opt-in/label ausentes não contam como suítes verdes. Consulte o fechamento no registro da rodada para os resultados finais sem repetir cenários já verdes.
+
+O PostgreSQL novo `ac-team-20261105-pg` e os recursos Docker próprios das fixtures foram encerrados após a validação; serviços, projetos, bancos e credenciais preexistentes foram preservados. Paseo não foi iniciado nem usado para delegar. Nenhuma conta nova de provedor, API paga, deploy ou migração operacional.
+
+---
+
 # Continuação no Cursor — 04/11/2026
 
 ## Continuação mais recente — prevalece sobre os resumos históricos abaixo

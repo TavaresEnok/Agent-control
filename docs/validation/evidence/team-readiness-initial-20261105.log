@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: readiness and CLI inspect a newly initialized isolated PostgreSQL database without effects
+not ok 1 - readiness and CLI inspect a newly initialized isolated PostgreSQL database without effects
+  ---
+  duration_ms: 2321.881352
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/installation-readiness.test.ts:1:5728'
+  failureType: 'testCodeFailure'
+  error: 'Command failed: /tmp/node-v22.23.3-linux-x64/bin/node --import tsx src/server-main.ts inspect /tmp/ac-readiness-pg-9Ljl3d/installation.json'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    genericNodeError (node:internal/errors:983:15)
+    wrappedFn (node:internal/errors:537:14)
+    checkExecSyncError (node:child_process:916:11)
+    execFileSync (node:child_process:952:15)
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/installation-readiness.test.ts:87:16)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2941.344026

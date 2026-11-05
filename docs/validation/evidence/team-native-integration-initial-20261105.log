@@ -1,0 +1,298 @@
+Initial run: 25 pass, 2 harness failures (provider fixture label absent), no skips. Nonprintable child diagnostic bytes escaped; raw remains in /tmp/ac-team-native-final-20261105.log.
+Node 22.23.3; disposable PostgreSQL and synthetic image/provider network; no real account or inference.
+TAP version 13
+# Subtest: readiness reports local facts without writing or exposing configuration
+ok 1 - readiness reports local facts without writing or exposing configuration
+  ---
+  duration_ms: 6213.329134
+  type: 'test'
+  ...
+# Subtest: readiness and CLI inspect a newly initialized isolated PostgreSQL database without effects
+ok 2 - readiness and CLI inspect a newly initialized isolated PostgreSQL database without effects
+  ---
+  duration_ms: 3174.520564
+  type: 'test'
+  ...
+# Subtest: native execution retains uncertain capacity, fences takeover and replays only physical receipts
+ok 3 - native execution retains uncertain capacity, fences takeover and replays only physical receipts
+  ---
+  duration_ms: 1711.508621
+  type: 'test'
+  ...
+# Subtest: native execution recovery does not replay and keeps a grant without terminal proof
+ok 4 - native execution recovery does not replay and keeps a grant without terminal proof
+  ---
+  duration_ms: 1459.526817
+  type: 'test'
+  ...
+# Subtest: native execution recovery stops running tools after the worker exits and keeps the grant until both are terminal
+ok 5 - native execution recovery stops running tools after the worker exits and keeps the grant until both are terminal
+  ---
+  duration_ms: 19.16841
+  type: 'test'
+  ...
+# Subtest: native execution recovery interrupts an in-flight create or start and lets the successor read the same journal
+ok 6 - native execution recovery interrupts an in-flight create or start and lets the successor read the same journal
+  ---
+  duration_ms: 144.988466
+  type: 'test'
+  ...
+# Subtest: synthetic physical native graph disabled
+not ok 7 - synthetic physical native graph disabled
+  ---
+  duration_ms: 1427.585525
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts:1:2430'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'ac-team-20261105-graph'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts:94:189)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: synthetic native graph resumes after controller SIGKILL at retired programmer boundary
+not ok 8 - synthetic native graph resumes after controller SIGKILL at retired programmer boundary
+  ---
+  duration_ms: 2726.42989
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-sigkill-recovery.test.ts:1:1074'
+  failureType: 'testCodeFailure'
+  error: |-
+    CHILD_FAILED �\x0f\x00\x00\x00��\x0fo"\x04type"\x0ctest:enqueue"\x04datao"\x07nestingI\x00"\x04name"(synthetic physical native graph disabled"\x04type"\x04test"\x04lineI\x02"\x06columnI�%"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ctest:dequeue"\x04datao"\x07nestingI\x00"\x04name"(synthetic physical native graph disabled"\x04type"\x04test"\x04lineI\x02"\x06columnI�%"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x088�\x0fo"\x04type"test:complete"\x04datao"\x04name"(synthetic physical native graph disabled"\x07nestingI\x00"
+    testNumberI\x02"\x07detailso"\x0bduration_msN\x02JC�҅�@"\x04type"\x04test"\x05error\
+    �\x0e\x00�\x0fo"\x0bconstructor"\x05Error"
+    propertieso"\x04nameo"\x05value"\x05Error"\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x07messageo"\x05value"bExpected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    "\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x05stacko"
+    enumerableF"\x0cconfigurableT"\x05value"|Error [ERR_TEST_FAILURE]: Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    {\x03"\x04codeo"\x05value"\x10ERR_TEST_FAILURE"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x0bfailureTypeo"\x05value"\x0ftestCodeFailure"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x05causeo"\x05value\
+    �	\x00�\x0fo"\x0bconstructor"\x05Error"
+    propertieso"\x04nameo"\x05value"\x0eAssertionError"\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x07messageo"\x05value"bExpected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    "\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x05stacko"
+    enumerableF"\x0cconfigurableT"\x05value"�\x03AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    
+        at TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts:94:189)
+        at async Test.run (node:internal/test_runner/test:1054:7)
+        at async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3){\x03"\x10generatedMessageo"\x05valueT"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x04codeo"\x05value"ERR_ASSERTION"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x06actualo"\x05value_"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x08expectedo"\x05value"\x16ac-team-20261105-graph"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x08operatoro"\x05value"\x0bstrictEqual"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x04diffo"\x05value"\x06simple"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04{	{\x02"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04{\x06{\x02"\x06passedF{\x04"\x04lineI\x02"\x06columnI�%"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x07{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"
+    test:start"\x04datao"\x07nestingI\x00"\x04name"(synthetic physical native graph disabled"\x04lineI\x02"\x06columnI�%"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x05{\x02�\x0f\x00\x00\x08+�\x0fo"\x04type"	test:fail"\x04datao"\x04name"(synthetic physical native graph disabled"\x07nestingI\x00"
+    testNumberI\x02"\x07detailso"\x0bduration_msN\x02JC�҅�@"\x04type"\x04test"\x05error\
+    �\x0e\x00�\x0fo"\x0bconstructor"\x05Error"
+    propertieso"\x04nameo"\x05value"\x05Error"\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x07messageo"\x05value"bExpected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    "\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x05stacko"
+    enumerableF"\x0cconfigurableT"\x05value"|Error [ERR_TEST_FAILURE]: Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    {\x03"\x04codeo"\x05value"\x10ERR_TEST_FAILURE"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x0bfailureTypeo"\x05value"\x0ftestCodeFailure"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x05causeo"\x05value\
+    �	\x00�\x0fo"\x0bconstructor"\x05Error"
+    propertieso"\x04nameo"\x05value"\x0eAssertionError"\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x07messageo"\x05value"bExpected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    "\x08writableT"
+    enumerableF"\x0cconfigurableT{\x04"\x05stacko"
+    enumerableF"\x0cconfigurableT"\x05value"�\x03AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'ac-team-20261105-graph'
+    
+        at TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts:94:189)
+        at async Test.run (node:internal/test_runner/test:1054:7)
+        at async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3){\x03"\x10generatedMessageo"\x05valueT"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x04codeo"\x05value"ERR_ASSERTION"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x06actualo"\x05value_"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x08expectedo"\x05value"\x16ac-team-20261105-graph"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x08operatoro"\x05value"\x0bstrictEqual"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04"\x04diffo"\x05value"\x06simple"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04{	{\x02"\x08writableT"
+    enumerableT"\x0cconfigurableT{\x04{\x06{\x02{\x03"\x04lineI\x02"\x06columnI�%"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x07{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"	test:plan"\x04datao"\x07nestingI\x00"\x05countI\x02"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x05{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x07tests 1"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x08suites 0"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x06pass 0"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x06fail 1"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x0bcancelled 0"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"	skipped 0"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x06todo 0"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x00��\x0fo"\x04type"\x0ftest:diagnostic"\x04datao"\x07nestingI\x00"\x07message"\x17duration_ms 1512.502326"\x05level"\x04info"\x04lineI\x02"\x06columnI\x02"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x06{\x02�\x0f\x00\x00\x01\x12�\x0fo"\x04type"\x0ctest:summary"\x04datao"\x07successF"\x06countso"\x05testsI\x02"\x06failedI\x02"\x06passedI\x00"	cancelledI\x00"\x07skippedI\x00"\x04todoI\x00"\x08topLevelI\x02"\x06suitesI\x00{\x08"\x0bduration_msN�7�a\x02��@"\x04file"j/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts{\x04{\x02
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts:94:189)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3){\x03"\x10generatedMessageo"\x05valueT"\x08writableT"
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-physical-recovery.test.ts:94:189)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3){\x03"\x10generatedMessageo"\x05valueT"\x08writableT"
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/native-graph-sigkill-recovery.test.ts:28:122)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: unstarted managed native task adopts the successor only with intact frozen input and no launch
+ok 9 - unstarted managed native task adopts the successor only with intact frozen input and no launch
+  ---
+  duration_ms: 2105.58597
+  type: 'test'
+  ...
+# Subtest: retirement retries a lost network removal acknowledgement once
+ok 10 - retirement retries a lost network removal acknowledgement once
+  ---
+  duration_ms: 1.365578
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with same process identity
+ok 11 - native finalizer remains conservative with same process identity
+  ---
+  duration_ms: 2271.567668
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with different process identity
+ok 12 - native finalizer remains conservative with different process identity
+  ---
+  duration_ms: 1624.492579
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with legacy process identity
+ok 13 - native finalizer remains conservative with legacy process identity
+  ---
+  duration_ms: 1417.123318
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with otherboot process identity
+ok 14 - native finalizer remains conservative with otherboot process identity
+  ---
+  duration_ms: 1510.393218
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with controllercrash process identity
+ok 15 - native finalizer remains conservative with controllercrash process identity
+  ---
+  duration_ms: 2416.981292
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with rubycrash process identity
+ok 16 - native finalizer remains conservative with rubycrash process identity
+  ---
+  duration_ms: 2682.327541
+  type: 'test'
+  ...
+# Subtest: native finalizer remains conservative with rubywriting process identity
+ok 17 - native finalizer remains conservative with rubywriting process identity
+  ---
+  duration_ms: 3944.165706
+  type: 'test'
+  ...
+# Subtest: native recipe refuses a cycle and an overlapping scope before any execution
+ok 18 - native recipe refuses a cycle and an overlapping scope before any execution
+  ---
+  duration_ms: 5.399786
+  type: 'test'
+  ...
+# Subtest: native recipe keeps real acceptances and several write paths, and orders dependencies after the parallel batch
+ok 19 - native recipe keeps real acceptances and several write paths, and orders dependencies after the parallel batch
+  ---
+  duration_ms: 35.511007
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"physicalPair":false,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization disabled
+ok 20 - native plan runs independent tasks and dependent tasks; QA authorization disabled
+  ---
+  duration_ms: 12646.682005
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"physicalPair":false,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization valid
+ok 21 - native plan runs independent tasks and dependent tasks; QA authorization valid
+  ---
+  duration_ms: 12787.998553
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"physicalPair":false,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization missing
+ok 22 - native plan runs independent tasks and dependent tasks; QA authorization missing
+  ---
+  duration_ms: 12754.61066
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"physicalPair":false,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization mismatch
+ok 23 - native plan runs independent tasks and dependent tasks; QA authorization mismatch
+  ---
+  duration_ms: 12480.308265
+  type: 'test'
+  ...
+# {"proof":"native-multitask","tasks":3,"parallelProgrammers":2,"dependency":"gamma","modelCalls":0,"physicalPair":false,"qa":"injected substitute","review":"synthetic model substitute","git":"real finalizer and CAS"}
+# Subtest: native plan runs independent tasks and dependent tasks; QA authorization ambiguous
+ok 24 - native plan runs independent tasks and dependent tasks; QA authorization ambiguous
+  ---
+  duration_ms: 12825.694519
+  type: 'test'
+  ...
+# Subtest: private network removal verifies absence and retries a lost acknowledgement
+ok 25 - private network removal verifies absence and retries a lost acknowledgement
+  ---
+  duration_ms: 4.737606
+  type: 'test'
+  ...
+# Subtest: private network remains when identity, isolation or endpoints are unproven
+ok 26 - private network remains when identity, isolation or endpoints are unproven
+  ---
+  duration_ms: 5.704105
+  type: 'test'
+  ...
+# Subtest: success acknowledgement without physical absence is uncertain
+ok 27 - success acknowledgement without physical absence is uncertain
+  ---
+  duration_ms: 0.730391
+  type: 'test'
+  ...
+1..27
+# tests 27
+# suites 0
+# pass 25
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 107377.121338

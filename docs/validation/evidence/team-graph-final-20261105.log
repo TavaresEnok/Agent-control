@@ -1,0 +1,32 @@
+Node 22.23.3; fixture image sha256:bda5b714c89e6e4ff560abd72a615d43ded268e5fb869c0960f58246a9f39ad3; disposable provider network ef92b07a48a2140cbee57530f42aea5f0a75a57da415c4b91461eb87af00ea1f; required fixture label set.
+TAP version 13
+# {"fixture":"synthetic-native-graph","jobs":[{"id":"4bec7369-1f49-598d-a4d4-bbd4dc57d229","role":"programmer"},{"id":"7fad072f-fb8c-4743-b223-4925b3d13fb1","role":"reviewer"}],"writer":"neutralized","modelCalls":0,"capacity":"substituted","qa":"substituted","recovery":"not exercised"}
+# Subtest: synthetic physical native graph disabled
+ok 1 - synthetic physical native graph disabled
+  ---
+  duration_ms: 17497.122539
+  type: 'test'
+  ...
+# {"controller":"SIGKILL","pausePreserved":true,"programmerJob":"2eded1db-9aec-5767-a538-062e64ade27a","programmerJobs":1,"reviewJobs":1,"modelCalls":0,"capacity":"substituted","qa":"substituted"}
+# Subtest: synthetic native graph resumes after controller SIGKILL at retired programmer boundary
+ok 2 - synthetic native graph resumes after controller SIGKILL at retired programmer boundary
+  ---
+  duration_ms: 20743.878845
+  type: 'test'
+  ...
+# {"controller":"SIGKILL","boundary":"database created before migration","manifest":"private validated","database":"absent","area":"absent"}
+# Subtest: initial private manifest permits cleanup before migration and final marker
+ok 3 - initial private manifest permits cleanup before migration and final marker
+  ---
+  duration_ms: 1477.370032
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 42522.014718
