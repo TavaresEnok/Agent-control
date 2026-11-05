@@ -13,7 +13,7 @@ import {provisionCapacity} from './fixtures/provision-capacity.ts';
 
 test('physical failed and canceled writers survive lost removal ACK and successor broker',{timeout:120000,skip:process.env.AC_R2_SANDBOX_PHYSICAL!=='1'},async()=>{
  const url=process.env.AC_TEST_DATABASE_URL!,root=process.env.AC_R2_SANDBOX_ROOT!;
- if(!url?.endsWith('/ac_implementation_test')||!root?.startsWith('/tmp/ac-r2-sandbox-')||process.getuid?.()!==0)throw Error('ISOLATED_ROOT_FIXTURE_REQUIRED');
+ if(!/^\/ac_r2_sandbox_[a-z0-9]+$/.test(new URL(url).pathname)||!root?.startsWith('/tmp/ac-r2-sandbox-')||process.getuid?.()!==0)throw Error('ISOLATED_ROOT_FIXTURE_REQUIRED');
  const image='sha256:9914706a4d692f9e87c9c17313efbf3f0544574e1ebc3ddf77512a54eb5cb7b3';
  const probe=resolve('scripts/sandbox-probe.mjs'),worker=join(root,'worker.mjs');
  await mkdir(root,{recursive:true,mode:0o755});await chmod(root,0o755);
