@@ -2,7 +2,7 @@
 import {buildFlowImage} from './r3-flow-build-image.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, symlink, rm, open, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, rm, open, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -14,7 +14,7 @@ const server = join(root, 'upstream/happier/apps/server');
 const project = `ac-r3-flow-${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 const compose = ['compose', '-p', project, '-f', join(root, 'deploy/compose.round2-test.yml')];
 const logDir = process.env.AC_ISOLATED_LOG_DIR ? resolve(process.env.AC_ISOLATED_LOG_DIR) : null;
-let scratch, child, started = false, image, network;
+let scratch, child, started = false, image, image2, network;
 const cleanupErrors=[];
 let safeEnv;
 function run(cmd, args, options = {}) {
@@ -76,12 +76,13 @@ try {
   child.on('error', e => console.error('Happier spawn error:',e));
   await waitFor(async () => {if (!(await readFile(join(logs,'happier.log'),'utf8')).includes(`Server listening at http://127.0.0.1:${httpPort}`)) return false; const r=await fetch(`http://127.0.0.1:${httpPort}/v1/account/profile`); return r.status === 401;}, 'Happier HTTP');
   const label=project;
-  image=await buildFlowImage({root,scratch,project,run,publicBinary:process.env.AC_R3_FLOW_PUBLIC_CODEX_BINARY,expectedSha256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256});
+  image=await buildFlowImage({root,scratch,project,run,publicBinary:process.env.AC_R3_FLOW_PUBLIC_CODEX_BINARY,expectedSha256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256,r6PlanningFixture:process.env.AC_R6_CONTEXT_SWITCH_ONLY==='1'});
+  if(process.env.AC_R6_CONTEXT_SWITCH_ONLY==='1'){const dir=join(scratch,'r6-second-image');await mkdir(dir);await writeFile(join(dir,'Dockerfile'),`FROM ${image}\nLABEL agent-control.r6-fixture-variant=2\nRUN printf 2 > /opt/fixture/r6-version\n`);run('docker',['build','--pull=false','--network=none','-t',project+'-v2',dir]);image2=run('docker',['image','inspect','--format','{{.Id}}',project+'-v2']);if(image2===image)throw Error('R6_IMAGES_NOT_DISTINCT');}
   const toolsVersion=run('docker',['run','--rm','--label',`agent-control.synthetic-fixture=${project}`,'--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','/usr/local/bin/codex',image,'--version']);
   network=run('docker',['network','create','--internal','--subnet','10.251.249.0/28','--label',`agent-control.synthetic-fixture=${label}`,project]);
   const testLog = await open(join(logs,'tests.log'),'w');
-  const files=[join(root,'tests/r3-conversation-flow.test.ts')];
-  const result = spawnSync(process.execPath,['--import','tsx','--test','--test-concurrency=1',...files],{cwd:scratch,env:{...safeEnv,AC_TEST_DATABASE_URL:database,AC_TEST_HAPPIER_URL:`http://127.0.0.1:${httpPort}`,AC_R3_FLOW_IMAGE:image,AC_R3_FLOW_NETWORK:network,AC_R3_FLOW_LABEL:label,AC_R3_FLOW_TOOLS_KIND:'codex-exec-server',AC_R3_FLOW_PUBLIC_CODEX_SHA256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256,AC_R3_FLOW_PUBLIC_CODEX_VERSION:toolsVersion,AC_R3_FLOW_EVIDENCE:join(logs,'r3-flow.json')},stdio:['ignore',testLog.fd,testLog.fd]});
+  const files=process.env.AC_R6_CONTEXT_SWITCH_ONLY==='1'?[join(root,'scripts/fixtures/r6-context-switch.test.ts')]:[join(root,'tests/r3-conversation-flow.test.ts')];
+  const result = spawnSync(process.execPath,['--import','tsx','--test','--test-concurrency=1',...files],{cwd:scratch,env:{...safeEnv,AC_TEST_DATABASE_URL:database,AC_TEST_HAPPIER_URL:`http://127.0.0.1:${httpPort}`,AC_R3_FLOW_IMAGE:image,...(image2?{AC_R6_FLOW_IMAGE2:image2}:{}),AC_R3_FLOW_NETWORK:network,AC_R3_FLOW_LABEL:label,AC_R3_FLOW_TOOLS_KIND:'codex-exec-server',AC_R3_FLOW_PUBLIC_CODEX_SHA256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256,AC_R3_FLOW_PUBLIC_CODEX_VERSION:toolsVersion,AC_R3_FLOW_EVIDENCE:join(logs,'r3-flow.json')},stdio:['ignore',testLog.fd,testLog.fd]});
   await testLog.close(); await serverLog.close();
   if (result.error || result.status !== 0) throw Error(`integration tests failed (${result.error?.message ?? result.status}); see ${join(logs,'tests.log')}`);
   const output = await readFile(join(logs,'tests.log'), 'utf8');
@@ -95,6 +96,7 @@ finally {
     try { process.kill(-child.pid,'SIGKILL'); } catch {}
   }
   if(network)try{run('docker',['network','rm',network]);}catch(e){cleanupErrors.push(e);}
+  if(image2)try{run('docker',['image','rm',project+'-v2']);}catch(e){cleanupErrors.push(e);}
   if(image)try{run('docker',['image','rm',project]);}catch(e){cleanupErrors.push(e);}
   if (started) { const r=spawnSync('docker',[...compose,'down','--volumes','--remove-orphans'],{stdio:'inherit',env:safeEnv}); if (r.status !== 0) { console.error(`Cleanup failed; inspect project ${project}`); process.exitCode=1; } }
   if(cleanupErrors.length){console.error(new AggregateError(cleanupErrors,'R3_FLOW_RESOURCE_CLEANUP_FAILED'));process.exitCode=1;}
