@@ -264,10 +264,18 @@ test('actual prepared package handoff closes old Cezar lock, retries committed t
   await assert.rejects(prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime)=>{assert.equal(source!.ownsRuntimeLock,false);assert.equal(administration.ownsRuntimeLock,true);assert.equal(administration.executionMode,'administration-only');throw Error('SYNTHETIC_RECONCILER_RETRY');}}),/SYNTHETIC_RECONCILER_RETRY/);
   assert.equal((await s.next.pool.query("SELECT state FROM ac_workflow_generations WHERE intent_id=$1 AND generation=1",[s.intent.id])).rows[0].state,'reconciling');assert.equal(source.ownsRuntimeLock,false);
   assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'active');
-  const outcome=await prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime,authority:typeof s.authority)=>{assert.equal(administration.ownsRuntimeLock,true);await assert.rejects(s.next.tx(c=>s.next.fence(c,authority)),code('WORKFLOW_PROJECT_HANDOFF_REQUIRED'));}});
+  const prototype=Object.getPrototypeOf(s.newGenerations),end=prototype.endProjectHandoff;
+  prototype.endProjectHandoff=async function(...args:unknown[]){await end.apply(this,args);throw Error('SYNTHETIC_CRASH_AFTER_RELEASE');};
+  try{await assert.rejects(prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime,authority:typeof s.authority)=>{assert.equal(administration.ownsRuntimeLock,true);await assert.rejects(s.next.tx(c=>s.next.fence(c,authority)),code('WORKFLOW_PROJECT_HANDOFF_REQUIRED'));}}),/SYNTHETIC_CRASH_AFTER_RELEASE/);}finally{prototype.endProjectHandoff=end;}
+  assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'released');
+  const fresh=await s.nextHandoff.prepareWorkflowRuntime({ledger:s.next,capability:s.nextCapability,principal,runtimeArguments:[s.next,folder,s.project],allowExecutionActivation:true});
+  const outcome=await fresh.handoffFrom(source,request,{mode:'execution'});
   successor=outcome.runtime;assert.equal(successor!.ownsRuntimeLock,true);assert.equal(successor!.executionMode,'execution');assert.equal(successor!.store.getRun(s.intent.run_id)?.graphState?.cursor,'implement');assert.equal(successor!.store.readEvents(s.intent.run_id)[0]?.type,'note');
   successor!.store.appendEvent(s.intent.run_id,{type:'note',message:'Safe successor event after ACK loss.'});
-  const replay=await prepared.handoffFrom(source,request,{mode:'execution'});assert.equal(replay.runtime,successor);assert.equal(replay.authority.epoch,s.authority.epoch+1);assert.equal(successor!.store.getRun(s.intent.run_id)?.lastSeq,2);
+  const replay=await fresh.handoffFrom(source,request,{mode:'execution'});assert.equal(replay.runtime,successor);assert.equal(replay.authority.epoch,s.authority.epoch+1);assert.equal(successor!.store.getRun(s.intent.run_id)?.lastSeq,2);
+  const competingPrepared=await s.nextHandoff.prepareWorkflowRuntime({ledger:s.next,capability:s.nextCapability,principal,runtimeArguments:[s.next,folder,s.project],allowExecutionActivation:true});
+  await assert.rejects(competingPrepared.handoffFrom(source,request,{mode:'execution'}),/RUNTIME_ALREADY_ACTIVE/);
+  assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'released');assert.equal(successor!.ownsRuntimeLock,true);
   assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'released');
   await assert.rejects(prepared.handoffFrom(source,{...request,successorManagerInstance:randomUUID()},{mode:'execution'}),code('GENERATION_REQUEST_CONFLICT'));
   assert.equal((await s.next.pool.query('SELECT count(*) FROM ac_workflow_generations WHERE intent_id=$1',[s.intent.id])).rows[0].count,'2');await assert.rejects(s.old.heartbeat(s.authority),code('STALE_MANAGER'));

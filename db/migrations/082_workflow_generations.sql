@@ -86,7 +86,7 @@ BEGIN
  IF TG_OP='DELETE' THEN RAISE EXCEPTION 'PROJECT_HANDOFF_IMMUTABLE'; END IF;
  IF ROW(NEW.project_id,NEW.request_id,NEW.context_id,NEW.intent_id,NEW.target_build,NEW.request_digest,NEW.created_at)
  IS DISTINCT FROM ROW(OLD.project_id,OLD.request_id,OLD.context_id,OLD.intent_id,OLD.target_build,OLD.request_digest,OLD.created_at)
- OR NOT (NEW.state=OLD.state OR (OLD.state='active' AND NEW.state='released'))
+ OR NOT (NEW.state=OLD.state OR (OLD.state='active' AND NEW.state='released') OR (OLD.state='released' AND NEW.state='active'))
  THEN RAISE EXCEPTION 'PROJECT_HANDOFF_IMMUTABLE'; END IF; RETURN NEW;
 END $$;
 CREATE TRIGGER ac_workflow_project_handoff_guard BEFORE UPDATE OR DELETE ON ac_workflow_project_handoffs

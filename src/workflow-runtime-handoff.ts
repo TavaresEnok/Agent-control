@@ -58,15 +58,6 @@ export async function handoffWorkflowRuntime(source:CezarRuntime,target:Prepared
   return previous;
  }
  await prepared.registry.approveFrozen(prepared.principal,prepared.projectId,prepared.capability,intent.id);
- // Fence the entire project before inspecting any context: the Cezar lock is
- // shared by all of them, so closing its owner must not strand live effects.
- await prepared.registry.beginProjectHandoff(prepared.principal,prepared.projectId,prepared.capability,request);
- await prepared.registry.assertProjectContextsQuiescent(prepared.principal,prepared.projectId);
- const replay=(await prepared.ledger.pool.query('SELECT 1 FROM ac_workflow_generations WHERE request_id=$1',[request.requestId])).rowCount;
- if(!replay)await source.flushForGenerationHandoff(intent,request.authority);
- const transfer=await prepared.registry.rollover(prepared.principal,request.authority,{intentId:request.intentId,expectedGeneration:request.expectedGeneration,requestId:request.requestId,targetBuild:target.identity.buildId,successorManagerInstance:request.successorManagerInstance});
- const authority=options.recoveryAuthority?Authority.parse(options.recoveryAuthority):transfer.authority;
- if(authority.contextId!==request.authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
  const construct=async(requested:RuntimeMode)=>{
   const args=prepared.argumentsFor(requested);
   if(args[0]!==prepared.ledger||args[2]!==prepared.projectId||await realpath(args[1])!==prepared.repo)throw new Refusal('RUNTIME_HANDOFF_SCOPE_MISMATCH');
@@ -75,8 +66,22 @@ export async function handoffWorkflowRuntime(source:CezarRuntime,target:Prepared
  };
  let administration:CezarRuntime|undefined;
  try{
-  if(source.ownsRuntimeLock)await source.close();
-  administration=await construct('administration-only');
+  const released=(await prepared.ledger.pool.query("SELECT 1 FROM ac_workflow_project_handoffs WHERE project_id=$1 AND request_id=$2 AND state='released'",[prepared.projectId,request.requestId])).rowCount;
+  if(released){
+   // Validate exact durable replay before touching the existing owner. A live
+   // successor keeps the lock and this fresh caller fails without parking it.
+   await prepared.registry.rollover(prepared.principal,request.authority,{intentId:request.intentId,expectedGeneration:request.expectedGeneration,requestId:request.requestId,targetBuild:target.identity.buildId,successorManagerInstance:request.successorManagerInstance});
+   administration=await construct('administration-only');
+  }
+  // The project gate excludes fresh effects while quiescence is inspected.
+  await prepared.registry.beginProjectHandoff(prepared.principal,prepared.projectId,prepared.capability,request,Boolean(released));
+  await prepared.registry.assertProjectContextsQuiescent(prepared.principal,prepared.projectId);
+  const replay=(await prepared.ledger.pool.query('SELECT 1 FROM ac_workflow_generations WHERE request_id=$1',[request.requestId])).rowCount;
+  if(!replay)await source.flushForGenerationHandoff(intent,request.authority);
+  const transfer=await prepared.registry.rollover(prepared.principal,request.authority,{intentId:request.intentId,expectedGeneration:request.expectedGeneration,requestId:request.requestId,targetBuild:target.identity.buildId,successorManagerInstance:request.successorManagerInstance});
+  const authority=options.recoveryAuthority?Authority.parse(options.recoveryAuthority):transfer.authority;
+  if(authority.contextId!==request.authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
+  if(!administration){if(source.ownsRuntimeLock)await source.close();administration=await construct('administration-only');}
   await options.reconcile?.(administration,authority);
   await prepared.registry.reconciled(prepared.principal,authority,intent.id);
   await administration.close();administration=undefined;

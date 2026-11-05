@@ -125,7 +125,7 @@ export class WorkflowGenerations{
  /** Exclusive advisory gate precedes every domain lock. The barrier row has
  * no FKs so this short transaction never waits on a context/project row held
  * by a dispatcher waiting for this same gate. */
- async beginProjectHandoff(principal:string,projectId:string,capability:LocalWorkflowRuntime,request:{authority:Authority;intentId:string;expectedGeneration:number;requestId:string;successorManagerInstance:string}){
+ async beginProjectHandoff(principal:string,projectId:string,capability:LocalWorkflowRuntime,request:{authority:Authority;intentId:string;expectedGeneration:number;requestId:string;successorManagerInstance:string},resumeReleased=false){
   const evidence=await verifyLocalWorkflowRuntime(capability),requestDigest=digest({...request,targetBuild:evidence.identity.buildId});
   await this.ledger.tx(async c=>{
    await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,82001))",[projectId]);
@@ -133,7 +133,16 @@ export class WorkflowGenerations{
    if(!owner)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
    if(!(await c.query('SELECT 1 FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1 AND i.context_id=$2 AND x.project_id=$3',[request.intentId,request.authority.contextId,projectId])).rowCount)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
    const old=(await c.query('SELECT * FROM ac_workflow_project_handoffs WHERE project_id=$1 AND request_id=$2',[projectId,request.requestId])).rows[0];
-   if(old){if(old.request_digest!==requestDigest)throw new Refusal('PROJECT_HANDOFF_REQUEST_CONFLICT');if(old.state!=='active')throw new Refusal('PROJECT_HANDOFF_ALREADY_RELEASED');return;}
+   if(old){
+    if(old.request_digest!==requestDigest)throw new Refusal('PROJECT_HANDOFF_REQUEST_CONFLICT');
+    if(old.state==='released'){
+     if(!resumeReleased)throw new Refusal('PROJECT_HANDOFF_RETRY_REQUIRED');
+     if((await c.query("SELECT 1 FROM ac_workflow_project_handoffs WHERE project_id=$1 AND state='active'",[projectId])).rowCount)throw new Refusal('PROJECT_HANDOFF_ALREADY_ACTIVE');
+     if(!(await c.query("SELECT 1 FROM ac_workflow_generations WHERE request_id=$1 AND intent_id=$2 AND state='active'",[request.requestId,request.intentId])).rowCount)throw new Refusal('GENERATION_CONFLICT');
+     await c.query("UPDATE ac_workflow_project_handoffs SET state='active' WHERE project_id=$1 AND request_id=$2",[projectId,request.requestId]);
+    }
+    return;
+   }
    if((await c.query("SELECT 1 FROM ac_workflow_project_handoffs WHERE project_id=$1 AND state='active'",[projectId])).rowCount)throw new Refusal('PROJECT_HANDOFF_ALREADY_ACTIVE');
    await c.query("INSERT INTO ac_workflow_project_handoffs(project_id,request_id,context_id,intent_id,target_build,request_digest,state) VALUES($1,$2,$3,$4,$5,$6,'active')",[projectId,request.requestId,request.authority.contextId,request.intentId,evidence.identity.buildId,requestDigest]);
   });
