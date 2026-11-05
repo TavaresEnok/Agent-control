@@ -107,3 +107,7 @@ Aprovada a montagem delimitada por inspeção: o gateway despacha somente os doi
 ## Bootstrap de inventário de recuperação 102414b9
 
 Aprovada por inspeção a montagem delimitada: consulta policy PG, verifica identidade, hash, epoch e estado do catálogo físico antes de anexar a capability e iniciar runtime; configuração ausente quando exigida falha fechada. O teste sintético 1/1 é do autor, não demonstra server-main com PG físico, provisionamento, adapters nem reconciliação. Após avanço de epoch, o reinício exige configuração atualizada; epoch antigo falha fechado. O aceite integral T30 mantém os limites anteriores.
+
+## Integração de proteção de segredos 6dccfbbe
+
+Inspeção da composição com T22/T30 confirma os guards de modelo e inventário preservados no supervisor, junto ao snapshot, redação e gate de artefato. O log físico do autor registra programador nativo com inferência determinística, canário em objeto Git recusado, nenhum artefato registrado, target intacto e writer retirado; negativos de setup e label foram preservados. Aceite limitado à integração e ao cenário testado, sem fechar RNF08 ou provar composição worker CLI real → vault/export.
