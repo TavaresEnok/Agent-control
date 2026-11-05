@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+ok 1 - R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+  ---
+  duration_ms: 3021.275222
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6234.220327
