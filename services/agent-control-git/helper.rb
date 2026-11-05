@@ -11,6 +11,26 @@ def git(repo, *args)
   out.strip
 end
 
+# Bounded raw object reads: never capture unbounded worker-controlled output.
+def bounded_git(limit, *args)
+  env = { 'PATH' => '/usr/bin:/bin', 'HOME' => '/nonexistent', 'LANG' => 'C.UTF-8' }.merge(AcSafeGit::ENVIRONMENT)
+  reader, writer = IO.pipe
+  pid = Process.spawn(env, 'git', *AcSafeGit::OPTIONS, *args, in: File::NULL, out: writer, err: File::NULL, unsetenv_others: true)
+  writer.close
+  bytes = reader.read(limit + 1) || ''.b
+  if bytes.bytesize > limit
+    Process.kill('KILL', pid) rescue nil
+    Process.wait(pid) rescue nil
+    raise 'SCAN_LIMIT'
+  end
+  _, status = Process.wait2(pid)
+  raise 'GIT_OPERATION_FAILED' unless status.success?
+  bytes
+ensure
+  reader&.close unless reader&.closed?
+  writer&.close unless writer&.closed?
+end
+
 begin
   input = JSON.parse(STDIN.read(65_537))
   raise 'INVALID_REQUEST' unless input.is_a?(Hash)
@@ -22,13 +42,14 @@ begin
     when 'compose' then %w[action base destination repo sources]
     when 'identity', 'diff' then %w[action base candidate repo]
     when 'protected-paths' then %w[action base candidate paths repo]
+    when 'scan-new-secrets' then %w[action base candidate repo secrets]
     when 'observe' then %w[action base candidate repo targetRef]
     when 'snapshot' then %w[action base candidate destination repo]
     when 'cas' then %w[action base candidate operationId repo targetRef]
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[head identity diff protected-paths observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[head identity diff protected-paths scan-new-secrets observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
   if input['action'] == 'head'
     ref = input.fetch('targetRef')
     raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
@@ -136,6 +157,51 @@ begin
     ref = input.fetch('targetRef')
     raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
     puts JSON.generate(identity.merge({targetRef: ref, head: git(repo, 'rev-parse', '--verify', ref)}))
+  elsif input['action'] == 'scan-new-secrets'
+    secrets = input.fetch('secrets')
+    raise 'INVALID_REQUEST' unless secrets.is_a?(Array) && secrets.length <= 256 && secrets.all? { |value| value.is_a?(String) && !value.empty? } && secrets.sum(&:bytesize) <= 48_000
+    # Only objects newly reachable from candidate are examined: inherited base
+    # objects are not reclassified. No working tree, filters, hooks or refs are
+    # trusted. Every expanded object is bounded before reading its content.
+    found = false
+    AcSafeGit.with_repository(repo) do |metadata|
+      objects = bounded_git(128 * 1024, '--git-dir', metadata, 'rev-list', '--objects', '--no-object-names', candidate, "^#{base}")
+      ids = objects.lines.map(&:strip).reject(&:empty?).uniq
+      # A new path may reuse a blob already reachable from base. Enumerate
+      # each newly reachable commit's tree against the base tree as well.
+      read_tree = lambda do |commit|
+        data = bounded_git(8 * 1024 * 1024, '--git-dir', metadata, 'ls-tree', '-r', '-z', '--full-tree', commit)
+        data.b.split("\0").to_h do |entry|
+          header, path = entry.split("\t", 2); mode, kind, object = header.split(' ', 3)
+          raise 'GIT_OPERATION_FAILED' unless path && %w[blob commit].include?(kind) && object&.match?(/\A(?:[a-f0-9]{40}|[a-f0-9]{64})\z/)
+          [path, [mode, kind, object]]
+        end
+      end
+      baseline = read_tree.call(base)
+      commits = bounded_git(32 * 1024, '--git-dir', metadata, 'rev-list', candidate, "^#{base}")
+      commit_ids = commits.lines.map(&:strip).reject(&:empty?)
+      raise 'SCAN_LIMIT' if commit_ids.length > 256
+      commit_ids.each do |commit_id|
+        read_tree.call(commit_id).each do |path, entry|
+          ids << entry[2] if entry[1] == 'blob' && baseline[path] != entry
+        end
+      end
+      ids.uniq!
+      raise 'SCAN_LIMIT' if ids.length > 1024 || ids.any? { |id| !id.match?(/\A(?:[a-f0-9]{40}|[a-f0-9]{64})\z/) }
+      total = 0
+      ids.each do |id|
+        size = bounded_git(64, '--git-dir', metadata, 'cat-file', '-s', id)
+        raise 'GIT_OPERATION_FAILED' unless size.match?(/\A[0-9]+\s*\z/)
+        length = size.to_i; total += length
+        raise 'SCAN_LIMIT' if length > 4 * 1024 * 1024 || total > 32 * 1024 * 1024
+        kind = bounded_git(32, '--git-dir', metadata, 'cat-file', '-t', id).strip
+        raise 'GIT_OPERATION_FAILED' unless %w[blob tree commit tag].include?(kind)
+        bytes = bounded_git(length, '--git-dir', metadata, 'cat-file', kind, id)
+        raise 'GIT_OPERATION_FAILED' unless bytes.bytesize == length
+        found ||= secrets.any? { |secret| bytes.b.include?(secret.b) }
+      end
+    end
+    puts JSON.generate(identity.merge({secretFound: found}))
   elsif input['action'] == 'protected-paths'
     paths = input.fetch('paths')
     raise 'INVALID_REQUEST' unless paths.is_a?(Array) && paths.length.between?(1, 64) && paths.all? do |path|

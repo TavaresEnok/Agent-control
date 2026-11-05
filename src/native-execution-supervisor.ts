@@ -1,4 +1,8 @@
 import {assertModelAllowed} from './model-policy.ts';
+import {redactNativeLogsOrWithhold,assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
+import {readNativeSecretSnapshot,writeNativeSecretSnapshot,quarantineNativeLegacyLog,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
+import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
+import {assertCodexSubscriptionIdentity} from './native-worker-security.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
@@ -7,7 +11,7 @@ import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNat
 import {constants} from 'node:fs';
 import {mkdir,lstat,realpath,writeFile,open,rename} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
-import {createPrivateKey,createPublicKey,sign,createHash,randomBytes,verify} from 'node:crypto';
+import {createPrivateKey,createPublicKey,sign,createHash,createHmac,randomBytes,verify} from 'node:crypto';
 import {z} from 'zod';
 import type pg from 'pg';
 import {Ledger} from './ledger.ts';
@@ -86,7 +90,7 @@ export class NativeExecutionSupervisor{
   this.executorDigest=nativeExecutionExecutorDigest(config.workerImage,config.toolsImage);this.docker=nativeDockerDaemon(config.socketPath,config.resourceEnvelope);
  }
  async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority,recoverSource:'ac_native_execution_jobs',recoverJob:id=>this.recover(principal,authority,id)});}
- private paths(id:string){Id.parse(id);const root=join(this.config.hostRoot,id);return {root,input:join(root,'input'),output:join(root,'output'),planning:join(root,'planning'),work:join(root,'work'),key:join(root,'public.pem'),workerToken:join(root,'worker-token'),toolsToken:join(root,'tools-token')};}
+ private paths(id:string){Id.parse(id);const root=join(this.config.hostRoot,id);return {root,input:join(root,'input'),output:join(root,'output'),planning:join(root,'planning'),work:join(root,'work'),key:join(root,'public.pem'),workerToken:join(root,'worker-token'),toolsToken:join(root,'tools-token'),secretSnapshot:join(root,'redaction.enc')};}
  private async directory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid?.()||(s.mode&0o7777)!==0o700||await realpath(path)!==path)throw new Refusal('NATIVE_EXECUTION_DIRECTORY_UNSAFE');}
  private async scope(c:pg.PoolClient,principal:string,authority:Authority,input:Input,paused=false){
   const context=await this.ledger.authorize(c,principal,authority.contextId);
@@ -169,6 +173,17 @@ export class NativeExecutionSupervisor{
   const assessment=(await new ProviderEligibility(this.ledger).view(principal,g.project_id,g.account_id,1)).latest;
   if(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.authenticationMode!==(this.config.syntheticFixture?'synthetic':'subscription_oauth')||assessment.executionMode!==(this.config.syntheticFixture?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.executorDigest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(principal,input.grantId,authority);
+  const envSecrets=[...this.config.workerEnv,...this.config.toolsEnv].flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
+  let accountSecrets:string[]=[];
+  const accountRoot=join(this.config.accountRoot,g.account_id);
+  if(!this.config.syntheticFixture)accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+  else{
+   // Synthetic fixtures may opt into the production worker with synthetic
+   // auth; older deterministic substitute workers have no auth file.
+   let present=true;try{await lstat(join(accountRoot,'.codex','auth.json'));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')present=false;else throw error;}
+   if(present)accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+  }
+  assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
   await this.diskGuard?.assertAdmission();
   await this.directory(this.config.hostRoot);
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
@@ -186,6 +201,7 @@ export class NativeExecutionSupervisor{
   await new GitArtifacts(this.config.repository).snapshot(input.base,input.base,p.work);
   await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});const token=randomBytes(32).toString('hex');
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
+  await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false}];
   const toolsMounts=[{source:p.work,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
@@ -206,7 +222,7 @@ export class NativeExecutionSupervisor{
   const expected={jobId:input.jobId,launchDigest:hash,workerImage:this.config.workerImage,toolsImage:this.config.toolsImage,workerUser:this.user,toolsUser:this.user,providerNetwork:this.config.providerNetworkId,networkId:network,toolsAddress:address,workerMounts,toolsMounts,role:input.role,phase:'gated-running'};
   const rules={state:'running',workerEntrypoint,toolsEntrypoint,workerCmd:[],toolsCmd:[],workerEnv:[...this.config.workerEnv],toolsEnv:[...this.config.toolsEnv],workerWorkingDir:'/planning',toolsWorkingDir:'/work',workerMemory:512*1024*1024,toolsMemory:512*1024*1024,workerPids:96,toolsPids:96,workerNanoCpus:1e9,toolsNanoCpus:1e9};
   await inspectNativeExecutionPair(dockerReadOnly(this.config.socketPath??'/var/run/docker.sock'),{worker,tools,network},expected,rules);
-  const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:g.model,effort:g.effort,role:input.role,task:input.task,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000};
+  const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,credentialSnapshotTag:createHmac('sha256',token).update(canonical(accountSecrets)).digest('hex'),executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:g.model,effort:g.effort,role:input.role,task:input.task,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   // Atomic publication prevents partial JSON reads by the worker; the journal
   // and private directory make this an exclusive one-time release.
@@ -244,13 +260,15 @@ export class NativeExecutionSupervisor{
   const p=this.paths(jobId);await this.directory(this.config.hostRoot);await this.directory(p.root);
   const logs=[join(p.root,'worker-terminal.log'),join(p.root,'tools-terminal.log')];
   const readLog=async(path:string)=>{
+   try{await readNativeSecretSnapshot(p.secretSnapshot,jobId,this.key);}catch{return quarantineNativeLegacyLog(path,jobId,this.key);}
    const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK).catch(error=>{
     if(['ENOENT','ELOOP'].includes(String((error as NodeJS.ErrnoException).code)))throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');throw error;
    });
    try{const stat=await file.stat();if(!stat.isFile()||stat.nlink!==1||stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0||stat.size>1048576)throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');
     return createHash('sha256').update(await file.readFile()).digest('hex');}finally{await file.close();}
   };
-  const archive=async(path:string,bytes:Buffer)=>{
+  const archive=async(path:string,raw:Buffer)=>{
+   const bytes=await redactNativeLogsOrWithhold(raw,()=>readNativeSecretSnapshot(p.secretSnapshot,jobId,this.key));
    const hash=createHash('sha256').update(bytes).digest('hex');
    try{const file=await open(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}}
    catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
@@ -368,10 +386,12 @@ export class NativeExecutionSupervisor{
   const p=this.paths(jobId);await this.directory(this.config.hostRoot);await this.directory(p.root);
   const paths=[join(p.root,'worker-terminal.log'),join(p.root,'tools-terminal.log')];
   const readLog=async(path:string)=>{
+   try{await readNativeSecretSnapshot(p.secretSnapshot,jobId,this.key);}catch{return quarantineNativeLegacyLog(path,jobId,this.key);}
    const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK).catch(error=>{if(['ENOENT','ELOOP'].includes(String((error as NodeJS.ErrnoException).code)))throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');throw error;});
    try{const stat=await file.stat();if(!stat.isFile()||stat.nlink!==1||stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0||stat.size>1048576)throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');return createHash('sha256').update(await file.readFile()).digest('hex');}finally{await file.close();}
   };
-  const archive=async(path:string,bytes:Buffer)=>{
+  const archive=async(path:string,raw:Buffer)=>{
+   const bytes=await redactNativeLogsOrWithhold(raw,()=>readNativeSecretSnapshot(p.secretSnapshot,jobId,this.key));
    if(bytes.length>1048576)throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');
    const hash=createHash('sha256').update(bytes).digest('hex');
    try{const f=await open(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);try{await f.writeFile(bytes);await f.sync();}finally{await f.close();}}
@@ -551,6 +571,8 @@ export class NativeExecutionSupervisor{
   const input=await this.registeredInput(principal,authority,jobId),outcome=await this.reconcile(principal,authority,input);
   if(outcome.state!=='completed'||!('artifact' in outcome)||!outcome.artifact||input.role!=='programmer')throw new Refusal('NATIVE_ARTIFACT_NOT_READY');
   const artifact=NativeArtifactIdentity.parse(outcome.artifact);
+  const secrets=await readNativeArtifactSecrets(this.paths(jobId).secretSnapshot,jobId,this.key);
+  await new GitArtifacts(this.paths(jobId).work).assertNoNewArtifactSecrets(artifact.commit,artifact.base,secrets);
   const revision=await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,false);
    const contract=(await c.query('SELECT quality_revision,target_ref,digest FROM ac_execution_contracts WHERE intent_id=$1',[input.intentId])).rows[0];
    if(!contract||contract.digest!==digest({qualityRevision:contract.quality_revision,targetRef:contract.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');

@@ -181,9 +181,18 @@ export class NativeImplementation{
     const observed=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);
     if(observed.state==='failed'){await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');}
     if(observed.state==='completed'){
-     const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);
-     await this.refuseReusedCorrection(intent,artifact);
-     await this.materializeManagedCommit(intent,artifact.commit_id);
+     let artifact:Awaited<ReturnType<NativeExecutionSupervisor['registerArtifact']>>;
+     try{artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);
+      await this.refuseReusedCorrection(intent,artifact);
+      await this.materializeManagedCommit(intent,artifact.commit_id);
+     }
+     catch(error){
+      // A refused artifact stays in the private snapshot. Its completed writer
+      // must still be physically retired; do not register or rewrite it.
+      try{await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);}
+      catch(retirementError){throw new AggregateError([error,retirementError],'NATIVE_ARTIFACT_QUARANTINE_RETIREMENT_FAILED');}
+      throw error;
+     }
      await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);
      const row=(await this.ledger.pool.query('SELECT g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1',[intent.operation_id])).rows[0];
      const tokens=row?.physical_receipt?.normalizedTokensUsed;

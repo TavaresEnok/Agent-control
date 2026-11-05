@@ -1,0 +1,26 @@
+TAP version 13
+# Subtest: physical reviewer logs redact a split job capability before signed retirement
+not ok 1 - physical reviewer logs redact a split job capability before signed retirement
+  ---
+  duration_ms: 3163.036695
+  type: 'test'
+  location: '/tmp/ac-r5-composition-proof/tests/r5-native-log-physical.test.ts:1:437'
+  failureType: 'testCodeFailure'
+  error: 'PROJECT_ENVIRONMENT_DIRECTORY_FORBIDDEN'
+  code: 'PROJECT_ENVIRONMENT_DIRECTORY_FORBIDDEN'
+  stack: |-
+    ProjectEnvironments.configure (/tmp/ac-r5-composition-proof/src/project-environments.ts:93:18)
+    async remoteDevelopmentLab (/tmp/ac-r5-composition-proof/tests/fixtures/r3-delivery-lab.ts:88:43)
+    async TestContext.<anonymous> (/tmp/ac-r5-composition-proof/tests/r5-native-log-physical.test.ts:5:107)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4287.352651

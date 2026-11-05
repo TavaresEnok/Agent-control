@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,appendFile,open,chmod,symlink,link,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,appendFile,open,chmod,symlink,link,rm,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {z} from 'zod';
@@ -52,8 +52,8 @@ test('worker accepts only a signed scoped request and the matching private subsc
   await chmod(input,0o644);await assert.rejects(readSignedWorkerLaunch(schema,domain,input,publicKey),/INVALID_WORKER_PRIVATE_FILE/);
   const account=join(dir,'account'),codex=join(account,'.codex');await mkdir(account,{mode:0o700});await mkdir(codex,{mode:0o700});
   const auth=join(codex,'auth.json'),expected=digest({provider:'codex',subject:'synthetic-account'});
-  await writeFile(auth,JSON.stringify({auth_mode:'chatgpt',tokens:{account_id:'synthetic-account',access_token:'fixture',refresh_token:'fixture'}}),{mode:0o600});
-  await assertCodexSubscriptionIdentity(expected,account);
+  await writeFile(auth,JSON.stringify({auth_mode:'chatgpt',tokens:{account_id:'synthetic-account',access_token:'fixture',refresh_token:'fixture',id_token:'synthetic-id-token'}}),{mode:0o600});
+  assert((await assertCodexSubscriptionIdentity(expected,account)).secrets.includes('synthetic-id-token'));
   await assert.rejects(assertCodexSubscriptionIdentity('a'.repeat(64),account),/WORKER_ACCOUNT_IDENTITY_MISMATCH/);
   await symlink(join(dir,'missing-target'),join(codex,'config.toml'));
   await assert.rejects(assertCodexSubscriptionIdentity(expected,account),/CUSTOM_CODEX_CONFIG_FORBIDDEN/);
@@ -68,4 +68,10 @@ test('tool forwarding accepts only private IPv4 destinations and refuses local o
  for(const value of ['127.0.0.1','169.254.1.1','172.32.0.1','8.8.8.8','::1','localhost','10.2.3.999']){
   assert.equal(isPrivateToolAddress(value),false);await assert.rejects(startToolForwarder(value),/INVALID_TOOL_ADDRESS/);
  }
+});
+
+test('native external auth refuses a changed credential snapshot and uses a private child home',async()=>{
+ const {prepareNativeExternalAuth}=await import('../src/native-worker-security.ts');const {createHmac,randomBytes}=await import('node:crypto');const {canonical}=await import('../src/contracts.ts');const {buildCodexAppServerEnv}=await import('../upstream/cezar/packages/cezar/dist/core/codex-app-server-transport.js');
+ const root=await mkdtemp('/tmp/ac-native-auth-home-'),token=randomBytes(32).toString('hex'),secrets=['fixture-access-token','fixture-refresh-token'],tag=createHmac('sha256',token).update(canonical(secrets)).digest('hex');
+ try{await assert.rejects(prepareNativeExternalAuth(['changed-access-token',secrets[1]!],token,tag,root),/WORKER_CREDENTIAL_SNAPSHOT_CHANGED/);const privateHome=await prepareNativeExternalAuth(secrets,token,tag,root);assert.equal((await lstat(privateHome)).mode&0o777,0o700);const prior=process.env.CODEX_HOME;process.env.CODEX_HOME=privateHome;let env:NodeJS.ProcessEnv;try{env=buildCodexAppServerEnv();}finally{if(prior===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=prior;}assert.equal(env.CODEX_HOME,privateHome);assert(!privateHome.includes('/account/.codex'));}finally{await rm(root,{recursive:true,force:true});}
 });

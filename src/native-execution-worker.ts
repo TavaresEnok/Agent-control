@@ -2,13 +2,14 @@ import {constants} from 'node:fs';
 import {waitForNativeLaunch} from './native-worker-gate.ts';
 import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
-import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity} from './native-worker-security.ts';
+import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
+import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {CodexExecutionAdapter,CodexExecutionFailure} from './codex-execution-adapter.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 const UUID=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,intentId:UUID,grantId:UUID,accountId:UUID,profileId:UUID,sessionId:UUID,
- epoch:z.number().int().positive(),providerSubjectDigest:Hash,executorDigest:Hash,inputDigest:Hash,proxyUrl:z.literal('http://provider-egress:8080'),
+ epoch:z.number().int().positive(),providerSubjectDigest:Hash,credentialSnapshotTag:Hash,executorDigest:Hash,inputDigest:Hash,proxyUrl:z.literal('http://provider-egress:8080'),
  model:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/),effort:z.enum(['low','medium','high']),
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(z.string().max(240)).max(64),
  artifactCommit:z.string().regex(/^[a-f0-9]{40}$/).optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),
@@ -22,10 +23,11 @@ async function main(){
  await waitForNativeLaunch();
  const input=await readSignedWorkerLaunch(Launch,'agent-control:native-execution-launch:v1','/input/launch.json','/runner/execution-public-key.pem');
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
- initializeNativeWorkerEnvironment(input.proxyUrl);await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
+ initializeNativeWorkerEnvironment(input.proxyUrl);const account=await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_WORKER_DIRECTORY');
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;
  try{token=capability.toString('utf8').trim();if(!/^[A-Za-z0-9._~-]{32,512}$/.test(token))throw Error('INVALID_TOOL_CAPABILITY');}finally{capability.fill(0);}
+ process.env.CODEX_HOME=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
  let result:Awaited<ReturnType<CodexExecutionAdapter['run']>>|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|undefined;
@@ -33,7 +35,7 @@ async function main(){
   const adapter=new CodexExecutionAdapter(new CodexAppServerRunner({bin:'/usr/local/bin/codex',timeoutMs:input.timeoutMs}));
   result=await adapter.run({sessionId:input.sessionId,model:input.model,effort:input.effort,role:input.role,task:input.task,writePaths:input.writePaths,
    artifactCommit:input.artifactCommit,outputSchema:input.outputSchema,timeoutMs:input.timeoutMs,
-   environment:{id:input.environmentId,url:'ws://127.0.0.1:19492',authBearerToken:token,cwd:'/work'}},async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal);
+   environment:{id:input.environmentId,url:'ws://127.0.0.1:19492',authBearerToken:token,cwd:'/work'}},async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)],{accessToken:account.accessToken,accountId:account.accountId,planType:null});
  }catch(error){if(error instanceof CodexExecutionFailure){failedUsage=error;failure=error.code;}else failure='EXECUTION_FAILED';}
  finally{forwarder.close();}
  const usage=result?.usageWindows??failedUsage?.usageWindows??null,safeUsage=Buffer.byteLength(JSON.stringify(usage))<=32768?usage:null;

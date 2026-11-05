@@ -74,6 +74,10 @@ export interface AgentRunSpec {
   /** Supervisor-owned tool environment; never supplied by a workflow prompt.
    * Authentication is scoped to one isolated exec-server, not an AI account. */
   executionEnvironment?: { id: string; url: string; authBearerToken: string; cwd: string };
+  /** Private, explicitly configured Codex external auth. Never part of a prompt. */
+  externalCodexAuth?: { accessToken: string; accountId: string; planType: string | null;
+    refresh?: (previousAccountId: string | null) => Promise<{accessToken:string;accountId:string;planType:string|null}>;
+    registerSecret: (value:string) => Promise<void> };
   /** Avoid sharing a native daemon between admitted account/session containers. */
   isolatedAppServer?: boolean;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */

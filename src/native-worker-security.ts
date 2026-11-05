@@ -1,7 +1,7 @@
 import {constants} from 'node:fs';
-import {open,readFile,lstat} from 'node:fs/promises';
+import {open,readFile,lstat,mkdtemp} from 'node:fs/promises';
 import {join} from 'node:path';
-import {createPublicKey,verify} from 'node:crypto';
+import {createPublicKey,verify,createHmac,timingSafeEqual} from 'node:crypto';
 import {z} from 'zod';
 import {canonical,digest} from './contracts.ts';
 
@@ -41,5 +41,19 @@ export async function assertCodexSubscriptionIdentity(expected:string,accountRoo
  try{
   const auth=z.object({auth_mode:z.literal('chatgpt'),OPENAI_API_KEY:z.null().optional(),tokens:z.object({account_id:z.string().min(1),access_token:z.string().min(1),refresh_token:z.string().min(1)}).passthrough()}).passthrough().parse(JSON.parse(bytes.toString('utf8')));
   if(digest({provider:'codex',subject:auth.tokens.account_id})!==expected)throw Error('WORKER_ACCOUNT_IDENTITY_MISMATCH');
+  // All string leaves in the structured credential container are sensitive,
+  // including supported id tokens and future token fields.
+  const strings=(value:unknown):string[]=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(strings):value&&typeof value==='object'?Object.values(value).flatMap(strings):[];
+  const {account_id,access_token,...otherTokens}=auth.tokens;
+  return {accountId:account_id,accessToken:access_token,secrets:strings({access_token,...otherTokens}).filter(Boolean)};
  }finally{bytes.fill(0);}
+}
+
+/** Validate the controller's snapshot binding before giving any credential to
+ * the child, then point CODEX_HOME at a new private directory in its tmpfs. */
+export async function prepareNativeExternalAuth(secrets:readonly string[],token:string,expectedTag:string,tmpRoot='/tmp'){
+ if(!/^[a-f0-9]{64}$/.test(expectedTag))throw Error('WORKER_CREDENTIAL_SNAPSHOT_CHANGED');
+ const actual=createHmac('sha256',token).update(canonical(secrets)).digest();
+ if(!timingSafeEqual(actual,Buffer.from(expectedTag,'hex')))throw Error('WORKER_CREDENTIAL_SNAPSHOT_CHANGED');
+ return mkdtemp(join(tmpRoot,'ac-codex-external-'));
 }

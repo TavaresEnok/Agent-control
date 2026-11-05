@@ -109,6 +109,14 @@ export class GitArtifacts{
   if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
   return value;
  }
+ /** Inspect bounded, uncompressed new Git objects; no secret values leave the helper. */
+ async assertNoNewArtifactSecrets(candidate:string,base:string,secrets:readonly string[]){
+  GitId.parse(candidate);GitId.parse(base);
+  if(secrets.length>256||secrets.some(value=>!value)||Buffer.byteLength(JSON.stringify(secrets))>48000)throw new Refusal('NATIVE_ARTIFACT_SECRET_SCAN_UNAVAILABLE');
+  const value=Identity.extend({secretFound:z.boolean()}).strict().parse(await this.invoke({action:'scan-new-secrets',candidate,base,secrets}));
+  if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  if(value.secretFound)throw new Refusal('NATIVE_ARTIFACT_CONTAINS_SECRET');
+ }
  async protectedPathsChanged(candidate:string,base:string,paths:readonly string[]){
   GitId.parse(candidate);GitId.parse(base);
   if(paths.length<1||paths.length>64||paths.some(path=>!isNormalizedProtectedGatePath(path)))throw new Refusal('PROTECTED_GATE_PATH_INVALID');

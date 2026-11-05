@@ -1,0 +1,85 @@
+TAP version 13
+# Subtest: Docker log sanitizer redacts split known secrets per stream and refuses malformed frames
+ok 1 - Docker log sanitizer redacts split known secrets per stream and refuses malformed frames
+  ---
+  duration_ms: 18.317322
+  type: 'test'
+  ...
+# Subtest: secret snapshots are encrypted, bound to the job and detect tampering
+ok 2 - secret snapshots are encrypted, bound to the job and detect tampering
+  ---
+  duration_ms: 38.206509
+  type: 'test'
+  ...
+# Subtest: missing or corrupt legacy redaction context archives only a fixed diagnostic
+ok 3 - missing or corrupt legacy redaction context archives only a fixed diagnostic
+  ---
+  duration_ms: 0.504967
+  type: 'test'
+  ...
+# Subtest: legacy log quarantine preserves original digest, removes plaintext, and replays idempotently
+ok 4 - legacy log quarantine preserves original digest, removes plaintext, and replays idempotently
+  ---
+  duration_ms: 19.776411
+  type: 'test'
+  ...
+# Subtest: private worker input refuses links, non-regular files and oversized content
+ok 5 - private worker input refuses links, non-regular files and oversized content
+  ---
+  duration_ms: 14.503858
+  type: 'test'
+  ...
+# Subtest: private worker read rejects a file that grows after stat
+ok 6 - private worker read rejects a file that grows after stat
+  ---
+  duration_ms: 6.023733
+  type: 'test'
+  ...
+# Subtest: worker accepts only a signed scoped request and the matching private subscription identity
+ok 7 - worker accepts only a signed scoped request and the matching private subscription identity
+  ---
+  duration_ms: 30.715655
+  type: 'test'
+  ...
+# Subtest: tool forwarding accepts only private IPv4 destinations and refuses local or public targets before binding
+ok 8 - tool forwarding accepts only private IPv4 destinations and refuses local or public targets before binding
+  ---
+  duration_ms: 11.10867
+  type: 'test'
+  ...
+# Subtest: native external auth refuses a changed credential snapshot and uses a private child home
+ok 9 - native external auth refuses a changed credential snapshot and uses a private child home
+  ---
+  duration_ms: 265.200457
+  type: 'test'
+  ...
+# {"runner":"actual CodexAppServerRunner","cli":"scripted app-server process","splitDelta":true,"redacted":true,"providerInference":false,"container":false}
+# Subtest: successful real Codex runner and scripted app-server redact a fragmented known capability
+ok 10 - successful real Codex runner and scripted app-server redact a fragmented known capability
+  ---
+  duration_ms: 319.100338
+  type: 'test'
+  ...
+# {"proof":"known-tool-capability-in-successful-result","leakObserved":false,"runner":"deterministic injected AgentRunner","promptContainedCapability":false,"physicalContainer":false,"providerInference":false}
+# Subtest: successful native adapter redacts known capability in model output
+ok 11 - successful native adapter redacts known capability in model output
+  ---
+  duration_ms: 16.835993
+  type: 'test'
+  ...
+# {"runner":"CodexAppServerRunner","cli":"deterministic app-server process","initialAndRefreshRegisteredBeforeDelivery":true,"missingAuthorityRefused":true,"wrongAccountRefused":true,"registrationFailureRefused":true,"timeoutRefused":true,"providerInference":false}
+# Subtest: external auth registers each token before delivery and rejects absent refresh authority
+ok 12 - external auth registers each token before delivery and rejects absent refresh authority
+  ---
+  duration_ms: 6497.077087
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 12
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7255.338402

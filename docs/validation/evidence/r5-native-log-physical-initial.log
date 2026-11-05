@@ -1,0 +1,17 @@
+TAP version 13
+# {"proof":"physical-native-log-redaction","worker":"deterministic synthetic reviewer","capabilitySplitAcrossWrites":true,"passedReview":true,"secretAbsent":true,"shaMatchesArchivedBytes":true,"retired":true,"providerInference":false}
+# Subtest: physical reviewer logs redact a split job capability before signed retirement
+ok 1 - physical reviewer logs redact a split job capability before signed retirement
+  ---
+  duration_ms: 17569.936501
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 18815.314981

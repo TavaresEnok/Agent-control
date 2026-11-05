@@ -431,8 +431,21 @@ class CodexSession implements AgentSession {
 
   // ---- protocol -----------------------------------------------------------
 
+  private async authDeadline<T>(operation:Promise<T>):Promise<T> {
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('EXTERNAL_CODEX_AUTH_TIMEOUT')),5000);})]);}
+    finally{if(timer)clearTimeout(timer);}
+  }
+
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
+    const auth=this.spec.externalCodexAuth;
+    if(auth){
+      if(!this.spec.executionEnvironment||!auth.accessToken||auth.accessToken.length>65536||!auth.accountId||auth.accountId.length>1024||!(auth.planType===null||(typeof auth.planType==='string'&&auth.planType.length<=128)))throw new Error('EXTERNAL_CODEX_AUTH_INVALID');
+      await this.authDeadline(auth.registerSecret(auth.accessToken));
+      const login=await this.authDeadline(this.rpc.request('account/login/start',{type:'chatgptAuthTokens',accessToken:auth.accessToken,chatgptAccountId:auth.accountId,chatgptPlanType:auth.planType}));
+      if(login.type!=='chatgptAuthTokens')throw new Error('EXTERNAL_CODEX_AUTH_REJECTED');
+    }
     const remote=this.spec.executionEnvironment;
     if(remote){
       try{
@@ -549,8 +562,28 @@ class CodexSession implements AgentSession {
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }
 
+  private async refreshExternalAuth(id: string | number,params: Record<string,unknown>):Promise<void> {
+    const auth=this.spec.externalCodexAuth;
+    try {
+      const previous=params.previousAccountId;
+      if(!auth?.refresh||params.reason!=='unauthorized'||!(previous===null||previous===undefined||previous===auth.accountId))throw new Error('refresh unavailable');
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      const operation=(async()=>{
+        const value=await auth.refresh!(previous??null);
+        if(!value||typeof value.accessToken!=='string'||!value.accessToken||value.accessToken.length>65536||value.accountId!==auth.accountId||!(value.planType===null||(typeof value.planType==='string'&&value.planType.length<=128)))throw new Error('refresh invalid');
+        await auth.registerSecret(value.accessToken);
+        return value;
+      })();
+      const value=await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('refresh timeout')),5000);})]).finally(()=>{if(timer)clearTimeout(timer);});
+      this.rpc.respond({id,result:{accessToken:value.accessToken,chatgptAccountId:value.accountId,chatgptPlanType:value.planType}});
+    }catch{this.rpc.respond({id,error:{code:-32000,message:'External credential refresh unavailable'}});}
+  }
+
   private dispatch(msg: CodexAppServerMessage): void {
     if (this.rpc.dispatchResponse(msg)) return;
+    if (msg.method==='account/chatgptAuthTokens/refresh'&&((typeof msg.id==='number'&&Number.isSafeInteger(msg.id)&&msg.id>=0)||(typeof msg.id==='string'&&msg.id.length>0&&msg.id.length<=128))) {
+      void this.refreshExternalAuth(msg.id,msg.params ?? {});return;
+    }
     if (msg.method === 'item/tool/requestUserInput' && (typeof msg.id === 'number' || typeof msg.id === 'string')) {
       this.handleUserInputRequest(msg.id, msg.params ?? {});
       return;
