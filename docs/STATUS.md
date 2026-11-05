@@ -1,3 +1,9 @@
+# R5 em execução — Sol principal e cinco Terra/Médio
+
+Equipe reduzida por autorização do usuário. Cinco subagentes Terra6.1/Médio confirmados; Sol anteriores interrompidos. Estado e pendências em [CONTINUACAO-R5-20261105.md](implementation/CONTINUACAO-R5-20261105.md). Preserve AGENTS.md, .codex/ e test.txt locais. Esta entrada prevalece sobre os checkpoints anteriores; missão ainda não concluída.
+
+---
+
 # R4 em execução — retomada autorizada
 
 O usuário solicitou continuar após a pausa. Dez subagentes nativos Sol 6.1/Médio foram confirmados; estado e contratos em [CONTINUACAO-R4-20261105.md](implementation/CONTINUACAO-R4-20261105.md). Preserve AGENTS.md e test.txt. Esta entrada prevalece sobre os checkpoints históricos abaixo.
