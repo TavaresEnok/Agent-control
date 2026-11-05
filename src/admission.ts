@@ -10,6 +10,9 @@ export class Admission{
    if(!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1',[principal])).rowCount)throw new Refusal('CONTROL_ADMIN_REQUIRED',403);
    const state=(await c.query('SELECT * FROM ac_admission_control WHERE id=1 FOR UPDATE')).rows[0];
    if(state.revision!==value.expectedRevision)throw new Refusal('ADMISSION_REVISION_CONFLICT');
+   // A restored database cannot enumerate effects created after its snapshot.
+   // Keep the marker intact until a trusted physical inventory can clear it.
+   if(state.reason==='r3-restored-awaiting-reconciliation')throw new Refusal('RESTORE_PHYSICAL_RECONCILIATION_REQUIRED');
    if(value.enabled){
     const blockers=(await c.query(`SELECT
       (SELECT count(*) FROM ac_operations WHERE state IN ('running','uncertain'))+
