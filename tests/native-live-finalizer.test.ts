@@ -29,7 +29,8 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
   await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",[project,'b'.repeat(64),principal]);
   const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
   const grant=randomUUID(),keys=generateKeyPairSync('ed25519'),image='sha256:'+'d'.repeat(64);
-  const supervisor=new NativeExecutionSupervisor(db,{id:'fixture-native-finalizer',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'e'.repeat(64),socketPath:'/no-operational-socket',accountSubjects:[{accountId:account,subjectDigest:'a'.repeat(64)}],workerEnv:[],toolsEnv:[]});
+  const supervisorConfig={id:'fixture-native-finalizer',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'e'.repeat(64),socketPath:'/no-operational-socket',accountSubjects:[{accountId:account,subjectDigest:'a'.repeat(64)}],workerEnv:[],toolsEnv:[]};
+  const supervisor=new NativeExecutionSupervisor(db,supervisorConfig);
   const input=NativeExecutionRequest.parse({jobId:intent.operation_id,intentId:intent.id,grantId:grant,sessionId:randomUUID(),base,role:'programmer',task:'synthetic fixture',writePaths:['src/a.ts']});
   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
    VALUES($1,$2,$3,$4,$5,$6,$7,'programmer',$8,1,1,$9,false,'running')`,[grant,randomUUID(),intent.id,context,authority.epoch,account,profile,project,digest(input)]);
@@ -81,7 +82,17 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
    assert.equal(unknown.state,'running');assert.equal(unknown.receipt,null);assert.equal(unknown.grant_state,'running');assert.equal(unknown.operation_state,'uncertain');
    return;
   }
-  let settled=false;for(let i=0;i<100;i++){
+  let settled=false;
+  if(namespace==='controllercrash'){
+   await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+   const successor=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
+   await assert.rejects(supervisor.reconcileCancellation(principal,authority,input.jobId),/STALE_MANAGER/);process.kill(-finalizerPid,0);
+   const configFile=join(area,'reconciler.json');await writeFile(configFile,JSON.stringify({url:fixture.url,principal,authority:successor,input,supervisorConfig,worker,tools,finished}),{mode:0o600,flag:'wx'});
+   const next=spawn(process.execPath,['--import','tsx',new URL('./fixtures/native-live-finalizer-reconciler.ts',import.meta.url).pathname,configFile],{stdio:['ignore','ignore','pipe']});
+   let error='';next.stderr?.on('data',bytes=>{error=(error+String(bytes)).slice(-2000);});
+   const exit=await new Promise<{code:number|null;signal:NodeJS.Signals|null}>((resolve,reject)=>{next.once('error',reject);next.once('close',(code,signal)=>resolve({code,signal}));});
+   assert.equal(exit.code,0,`NEW_SUPERVISOR_FAILED ${error}`);settled=true;
+  }else for(let i=0;i<100;i++){
    const result=await supervisor.reconcileCancellation(principal,authority,input.jobId);
    if(result.state==='reconciled'){settled=true;break;}await new Promise(r=>setTimeout(r,20));
   }
