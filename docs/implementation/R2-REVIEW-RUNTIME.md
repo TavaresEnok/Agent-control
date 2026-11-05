@@ -13,3 +13,7 @@ A alteração amplia a decisão de retirada para saída física não zero e perm
 ## Native terminal `90e2b449` — exame preliminar
 
 O protocolo novo valida identidade e recibo assinado, registra hashes de logs antes da remoção, reconcilia journal `prepared`, inspeciona par e rede e assina prova de remoção; preserva a retirada específica de writer managed. Para reviewer/judge concluído exige evidência persistida vinculada. O autor informou typecheck e teste com Docker/ledger simulados para ACK perdido, replay e assinatura adulterada. Isso não prova execução física nem acionamento integrado. No commit isolado só há chamadas de `retireTerminal` em `NativeVerification`: programmer standalone e retomada após falha, cancelamento ou queda depois de registrar evidência dependem de wiring adicional. O autor confirmou que essa ligação está atribuída à frente graph. Parecer de integração e prova física pendentes.
+
+## SSH `fa198d4a` — parecer delimitado
+
+Revisão estática: replay com digest igual chama `reconcile` (inspect) sem novo start; operação nova continua exigindo intenção ativa. O laço remoto agora tenta os pedidos restantes e devolve erro agregado. O teste de contrato afirma que uma falha não impede outra tentativa; relatório do autor registra 2/2 com dois hosts SSH sintéticos e ACK descartado. Não reexecutei a bancada. O laço nativo anterior em Cezar ainda pode impedir chegar à rotina remota; o ajuste remoto não resolve esse caso. Morte do supervisor e recuperação de locks permanecem fora da prova, conforme relatório da frente.
