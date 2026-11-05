@@ -1,0 +1,20 @@
+
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/ac-r4-20261105-ui/upstream/cezar/packages/cezar/dist/workflows/types.js' imported from /tmp/ac-r4-20261105-ui/src/workflows.ts
+    at finalizeResolution (node:internal/modules/esm/resolve:275:11)
+    at moduleResolve (node:internal/modules/esm/resolve:865:10)
+    at defaultResolve (node:internal/modules/esm/resolve:989:11)
+    at nextResolve (node:internal/modules/esm/hooks:748:28)
+    at resolveBase (file:///home/app/srv_projetos/workspace/agent-control-implementation/node_modules/tsx/dist/esm/index.mjs?1793893812225:2:3744)
+    at async resolveDirectory (file:///home/app/srv_projetos/workspace/agent-control-implementation/node_modules/tsx/dist/esm/index.mjs?1793893812225:2:4237)
+    at async resolve (file:///home/app/srv_projetos/workspace/agent-control-implementation/node_modules/tsx/dist/esm/index.mjs?1793893812225:2:5355)
+    at async nextResolve (node:internal/modules/esm/hooks:748:22)
+    at async Hooks.resolve (node:internal/modules/esm/hooks:240:24)
+    at async handleMessage (node:internal/modules/esm/worker:199:18) {
+  code: 'ERR_MODULE_NOT_FOUND',
+  url: 'file:///tmp/ac-r4-20261105-ui/upstream/cezar/packages/cezar/dist/workflows/types.js'
+}
+
+Node.js v22.23.3

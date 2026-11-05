@@ -1,0 +1,35 @@
+HTTP_REFUSAL 401 /api/v1/ac/auth/status AUTH_REQUIRED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+PASS actual context switch clears targeted diagnostic selection and does not expose previous context task
+PASS actual authorized task catalog selection reaches stopped task beyond default diagnostic page; 101 synthetic failed rows, zero execution workers
+HTTP_REFUSAL 403 /api/v1/ac/control OPERATOR_DEVICE_NOT_ENROLLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+PASS environment079 actual signed publication, lost committed acknowledgement/reload/same-intent replay, real CAS 409, and revision2 persistence after gateway restart; existing tracked src only
+HTTP_REFUSAL 409 /api/v1/ac/control POLICY_CONFLICT
+LOCAL_METRIC signed pause acceptance_ms=308 projection_ms=463; loopback synthetic sample only
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+ADMIN_CHECK status=200 canRegister=true roots=1 error=none
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 401 /api/v1/ac/auth/status AUTH_REQUIRED
+PASS 360: canonical Happier token, production cookie/auth routes, conversation access, real usage JSON/CSV, disabled quota registry, mobile settings and logout, signed refusal/bootstrap/authority/template/policy conflict/rollback/pause/register and persistence after two server restarts
+HTTP_REFUSAL 401 /api/v1/ac/auth/status AUTH_REQUIRED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_ALERTS ["Objetivo violado. O destaque não depende só da cor."]
+R3_UI_FAILED stage=show linked conversation 390 type=AssertionError code=ERR_ASSERTION

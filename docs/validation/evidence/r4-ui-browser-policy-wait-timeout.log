@@ -1,0 +1,29 @@
+HTTP_REFUSAL 401 /api/v1/ac/auth/status AUTH_REQUIRED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+PASS actual context switch clears targeted diagnostic selection and does not expose previous context task
+PASS actual authorized task catalog selection reaches stopped task beyond default diagnostic page; 101 synthetic failed rows, zero execution workers
+HTTP_REFUSAL 403 /api/v1/ac/control OPERATOR_DEVICE_NOT_ENROLLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+PASS environment079 actual signed publication, lost committed acknowledgement/reload/same-intent replay, real CAS 409, and revision2 persistence after gateway restart; existing tracked src only
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+node:internal/process/promises:394
+    triggerUncaughtException(err, true /* fromPromise */);
+    ^
+
+page.waitForResponse: Timeout 10000ms exceeded while waiting for event "response"
+    at <anonymous> (/tmp/ac-r4-20261105-ui/scripts/r3-ui-authenticated-browser.mjs:109:27) {
+  log: [],
+  name: 'TimeoutError'
+}
+
+Node.js v22.23.3
