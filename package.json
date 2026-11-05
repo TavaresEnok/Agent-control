@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json && node scripts/prepare-build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:isolated": "node scripts/test-isolated.mjs",
     "start": "node --import tsx src/lab-main.ts",
     "start:built": "node dist/src/lab-main.js",
     "gateway": "node --import tsx src/server-main.ts",

@@ -12,7 +12,7 @@ import {keyFingerprint} from '../src/context-keys.ts';
 test('encrypted import survives lost acknowledgement, preserves order and pauses the imported context',{timeout:60000},async()=>{
  const database=process.env.AC_TEST_DATABASE_URL;if(!database?.includes('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
  const db=new Ledger(database);await db.migrate();const boundary=await loadHappier(),key=randomBytes(32),challenge=randomBytes(32),kp=nacl.sign.keyPair.fromSeed(key);
- const base='http://127.0.0.1:18401',b64=(x:Uint8Array)=>Buffer.from(x).toString('base64');
+ const base=(process.env.AC_TEST_HAPPIER_URL ?? 'http://127.0.0.1:18401'),b64=(x:Uint8Array)=>Buffer.from(x).toString('base64');
  const response=await fetch(base+'/v1/auth',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({publicKey:b64(kp.publicKey),challenge:b64(challenge),signature:b64(nacl.sign.detached(challenge,kp.secretKey))})});
  assert.equal(response.status,200);const {token}=z.object({token:z.string()}).passthrough().parse(await response.json());
  const api=async(path:string,payload?:unknown)=>{const result=await fetch(base+path,{method:payload?'POST':'GET',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:payload?JSON.stringify(payload):undefined});assert(result.ok,`fixture HTTP ${result.status}`);return result.json() as Promise<unknown>;};

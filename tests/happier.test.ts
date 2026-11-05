@@ -19,7 +19,7 @@ test('C02/C04/C05/C06: two encrypted Happier conversations -> PG -> Cezar -> Git
   const database = process.env.AC_TEST_DATABASE_URL;
   if (!database?.includes('/ac_implementation_test')) throw Error('TEST_DATABASE_REQUIRED');
   const b = await loadHappier(), db = new Ledger(database); await db.migrate();
-  const baseUrl = 'http://127.0.0.1:18401', key = randomBytes(32), kp = nacl.sign.keyPair.fromSeed(key), challenge = randomBytes(32);
+  const baseUrl = (process.env.AC_TEST_HAPPIER_URL ?? 'http://127.0.0.1:18401'), key = randomBytes(32), kp = nacl.sign.keyPair.fromSeed(key), challenge = randomBytes(32);
   const b64 = (v: Uint8Array) => Buffer.from(v).toString('base64');
   const authResponse = await fetch(baseUrl + '/v1/auth', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ publicKey: b64(kp.publicKey), challenge: b64(challenge), signature: b64(nacl.sign.detached(challenge, kp.secretKey)) }) });

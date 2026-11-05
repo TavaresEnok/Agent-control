@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    pull_policy: never
+    environment:
+      POSTGRES_USER: ac_test
+      POSTGRES_PASSWORD: synthetic-test-only
+      POSTGRES_DB: ac_implementation_test
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-p", "${AC_ISOLATED_PG_PORT:?required}"]
+    labels:
+      org.agent-control.purpose: isolated-test
+    tmpfs:
+      - /var/lib/postgresql/data
