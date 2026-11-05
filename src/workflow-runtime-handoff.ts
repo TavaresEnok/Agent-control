@@ -51,12 +51,20 @@ export async function handoffWorkflowRuntime(source:CezarRuntime,target:Prepared
  Authority.parse(request.authority);
  const intent=(await prepared.ledger.pool.query<Intent>('SELECT * FROM ac_intents WHERE id=$1 AND context_id=$2',[request.intentId,request.authority.contextId])).rows[0];
  if(!intent)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
+ const previous=prepared.completed.get(request.requestId);
+ if(previous?.runtime.ownsRuntimeLock){
+  if(previous.mode!==mode)throw new Refusal('RUNTIME_HANDOFF_MODE_CONFLICT');
+  await prepared.registry.rollover(prepared.principal,request.authority,{intentId:request.intentId,expectedGeneration:request.expectedGeneration,requestId:request.requestId,targetBuild:target.identity.buildId,successorManagerInstance:request.successorManagerInstance});
+  return previous;
+ }
  await prepared.registry.approveFrozen(prepared.principal,prepared.projectId,prepared.capability,intent.id);
+ // Fence the entire project before inspecting any context: the Cezar lock is
+ // shared by all of them, so closing its owner must not strand live effects.
+ await prepared.registry.beginProjectHandoff(prepared.principal,prepared.projectId,prepared.capability,request);
+ await prepared.registry.assertProjectContextsQuiescent(prepared.principal,prepared.projectId);
  const replay=(await prepared.ledger.pool.query('SELECT 1 FROM ac_workflow_generations WHERE request_id=$1',[request.requestId])).rowCount;
  if(!replay)await source.flushForGenerationHandoff(intent,request.authority);
  const transfer=await prepared.registry.rollover(prepared.principal,request.authority,{intentId:request.intentId,expectedGeneration:request.expectedGeneration,requestId:request.requestId,targetBuild:target.identity.buildId,successorManagerInstance:request.successorManagerInstance});
- const previous=prepared.completed.get(request.requestId);
- if(previous?.runtime.ownsRuntimeLock){if(previous.mode!==mode)throw new Refusal('RUNTIME_HANDOFF_MODE_CONFLICT');return previous;}
  const authority=options.recoveryAuthority?Authority.parse(options.recoveryAuthority):transfer.authority;
  if(authority.contextId!==request.authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
  const construct=async(requested:RuntimeMode)=>{
@@ -74,6 +82,7 @@ export async function handoffWorkflowRuntime(source:CezarRuntime,target:Prepared
   await administration.close();administration=undefined;
   // close() disposes RunManager; create a fresh instance for the final mode.
   const runtime=await construct(mode),result={runtime,authority,generation:transfer.generation,requestId:request.requestId,mode};
+  try{await prepared.registry.endProjectHandoff(prepared.principal,prepared.projectId,prepared.capability,request.requestId);}catch(error){await runtime.close();throw error;}
   prepared.completed.set(request.requestId,result);return result;
  }catch(error){await administration?.close();throw error;}
 }

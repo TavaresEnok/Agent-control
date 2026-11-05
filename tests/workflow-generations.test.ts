@@ -254,12 +254,22 @@ test('actual prepared package handoff closes old Cezar lock, retries committed t
   const denied=await s.nextHandoff.prepareWorkflowRuntime({ledger:s.next,capability:s.nextCapability,principal,runtimeArguments:[s.next,folder,s.project]});
   await assert.rejects(denied.handoffFrom(source,request,{mode:'execution'}),/RUNTIME_EXECUTION_ACTIVATION_NOT_AUTHORIZED/);assert.equal(source.ownsRuntimeLock,true);await s.old.heartbeat(s.authority);
   const prepared=await s.nextHandoff.prepareWorkflowRuntime({ledger:s.next,capability:s.nextCapability,principal,runtimeArguments:[s.next,folder,s.project],allowExecutionActivation:true});
+  const otherContext=await db.createContext(principal,s.project,randomUUID()),otherAuthority=await s.old.acquire(principal,otherContext,randomUUID(),'synthetic-other',60);
+  const other=await s.old.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:otherContext,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:other'}},otherAuthority,'api');
+  const stage=randomUUID();await s.old.pool.query("INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state) VALUES($1,$2,'review',$3,$4,$5,'uncertain')",[stage,other.id,randomUUID(),randomUUID(),otherAuthority.epoch]);
+  await assert.rejects(prepared.handoffFrom(source,request,{mode:'execution'}),code('GENERATION_EFFECT_RECONCILIATION_REQUIRED'));
+  assert.equal(source.ownsRuntimeLock,true);assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'active');
+  await assert.rejects(s.old.tx(c=>s.old.fence(c,otherAuthority)),code('WORKFLOW_PROJECT_HANDOFF_REQUIRED'));
+  await s.old.pool.query("UPDATE ac_stage_operations SET state='completed',receipt=$2 WHERE id=$1",[stage,{synthetic:true}]);
   await assert.rejects(prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime)=>{assert.equal(source!.ownsRuntimeLock,false);assert.equal(administration.ownsRuntimeLock,true);assert.equal(administration.executionMode,'administration-only');throw Error('SYNTHETIC_RECONCILER_RETRY');}}),/SYNTHETIC_RECONCILER_RETRY/);
   assert.equal((await s.next.pool.query("SELECT state FROM ac_workflow_generations WHERE intent_id=$1 AND generation=1",[s.intent.id])).rows[0].state,'reconciling');assert.equal(source.ownsRuntimeLock,false);
-  const outcome=await prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime,authority:typeof s.authority)=>{assert.equal(administration.ownsRuntimeLock,true);await assert.rejects(s.next.tx(c=>s.next.fence(c,authority)),code('WORKFLOW_GENERATION_RECONCILIATION_REQUIRED'));}});
+  assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'active');
+  const outcome=await prepared.handoffFrom(source,request,{mode:'execution',reconcile:async(administration:CezarRuntime,authority:typeof s.authority)=>{assert.equal(administration.ownsRuntimeLock,true);await assert.rejects(s.next.tx(c=>s.next.fence(c,authority)),code('WORKFLOW_PROJECT_HANDOFF_REQUIRED'));}});
   successor=outcome.runtime;assert.equal(successor!.ownsRuntimeLock,true);assert.equal(successor!.executionMode,'execution');assert.equal(successor!.store.getRun(s.intent.run_id)?.graphState?.cursor,'implement');assert.equal(successor!.store.readEvents(s.intent.run_id)[0]?.type,'note');
   successor!.store.appendEvent(s.intent.run_id,{type:'note',message:'Safe successor event after ACK loss.'});
   const replay=await prepared.handoffFrom(source,request,{mode:'execution'});assert.equal(replay.runtime,successor);assert.equal(replay.authority.epoch,s.authority.epoch+1);assert.equal(successor!.store.getRun(s.intent.run_id)?.lastSeq,2);
+  assert.equal((await s.next.pool.query('SELECT state FROM ac_workflow_project_handoffs WHERE request_id=$1',[request.requestId])).rows[0].state,'released');
+  await assert.rejects(prepared.handoffFrom(source,{...request,successorManagerInstance:randomUUID()},{mode:'execution'}),code('GENERATION_REQUEST_CONFLICT'));
   assert.equal((await s.next.pool.query('SELECT count(*) FROM ac_workflow_generations WHERE intent_id=$1',[s.intent.id])).rows[0].count,'2');await assert.rejects(s.old.heartbeat(s.authority),code('STALE_MANAGER'));
  }finally{await competitor?.close();await source?.close();await successor?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
 });

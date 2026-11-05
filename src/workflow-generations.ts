@@ -133,13 +133,13 @@ export class WorkflowGenerations{
    if(!owner)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
    if(!(await c.query('SELECT 1 FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE i.id=$1 AND i.context_id=$2 AND x.project_id=$3',[request.intentId,request.authority.contextId,projectId])).rowCount)throw new Refusal('INTENT_SCOPE_MISMATCH',403);
    const old=(await c.query('SELECT * FROM ac_workflow_project_handoffs WHERE project_id=$1 AND request_id=$2',[projectId,request.requestId])).rows[0];
-   if(old){if(old.request_digest!==requestDigest)throw new Refusal('PROJECT_HANDOFF_REQUEST_CONFLICT');return;}
+   if(old){if(old.request_digest!==requestDigest)throw new Refusal('PROJECT_HANDOFF_REQUEST_CONFLICT');if(old.state!=='active')throw new Refusal('PROJECT_HANDOFF_ALREADY_RELEASED');return;}
    if((await c.query("SELECT 1 FROM ac_workflow_project_handoffs WHERE project_id=$1 AND state='active'",[projectId])).rowCount)throw new Refusal('PROJECT_HANDOFF_ALREADY_ACTIVE');
    await c.query("INSERT INTO ac_workflow_project_handoffs(project_id,request_id,context_id,intent_id,target_build,request_digest,state) VALUES($1,$2,$3,$4,$5,$6,'active')",[projectId,request.requestId,request.authority.contextId,request.intentId,evidence.identity.buildId,requestDigest]);
   });
  }
- async assertOtherProjectContextsQuiescent(principal:string,projectId:string,exceptContext:string){
-  const contexts=(await this.ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND id<>$2 ORDER BY id',[projectId,exceptContext])).rows;
+ async assertProjectContextsQuiescent(principal:string,projectId:string){
+  const contexts=(await this.ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 ORDER BY id',[projectId])).rows;
   for(const context of contexts)await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,context.id);await assertContextEffectsQuiescent(c,context.id);});
  }
  async endProjectHandoff(principal:string,projectId:string,capability:LocalWorkflowRuntime,requestId:string,abortBeforeTransfer=false){
