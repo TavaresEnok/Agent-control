@@ -321,7 +321,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
 
     const out: DropdownMenuItem[] = [];
     if (configurationUrl) {
-      out.push({ id: AGENT_CONTROL_CONFIGURATION_ACTION, title: t('settingsProviders.configuration') });
+      out.push({ id: AGENT_CONTROL_CONFIGURATION_ACTION, testID: 'agent-control-configuration-menu-action', title: t('settingsProviders.configuration') });
     }
 
     if (Array.isArray(props.extraItems) && props.extraItems.length > 0) {

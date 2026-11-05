@@ -1,3 +1,4 @@
+import {AgentControlConversationResolver} from './agent-control-conversation-resolver'
 import {AgentControlUsageReport} from './agent-control-usage-report'
 import {AgentControlInstallationAuthority} from './agent-control-installation-authority'
 import {AgentControlQuotaRegistry} from './agent-control-quota-registry'
@@ -79,6 +80,8 @@ async function request(path:string,body?:unknown,extraHeaders:Record<string,stri
 /** Uses the existing Settings shell; all state comes from the PG authority. */
 export function AgentControlSection(){
  const {projectId}=useProjectScope()
+ const entry=conversationConfigurationEntry(window.location.search)
+ if(!projectId&&entry.requested)return <AgentControlConversationResolver sessionId={entry.sessionId}/>
  return <ScopedAgentControlSection key={projectId??'default'} projectId={projectId}/>
 }
 function ScopedAgentControlSection({projectId}:{projectId:string|null}){

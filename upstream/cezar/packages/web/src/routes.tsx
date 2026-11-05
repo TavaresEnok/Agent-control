@@ -1,3 +1,4 @@
+import {AgentControlSection} from './routes/settings/agent-control-section'
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
 import { lazy, memo, Suspense } from 'react'
 import {
@@ -661,6 +662,7 @@ export const AppRoutes = memo(function AppRoutes() {
 
           Static segments outrank the `*` legacy redirect below in React Router's ranking, so
           these win regardless of order — listed here for readability. */}
+      <Route path="/settings/agent-control" element={<AgentControlSection />} />
       <Route path="/settings/global" element={<SettingsIndexRoute scope="global" capabilities={capabilities} />} />
       {visibleSettingsSections('global', capabilities).map((section) => (
         <Route
