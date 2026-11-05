@@ -6,6 +6,7 @@ import {CapacityPolicy} from './capacity.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {ProjectEnvironmentConfig} from './project-environments.ts';
 import {Template} from './templates.ts';
+import {workflowGraphSchema,graphIssues,graphToSteps} from '../upstream/cezar/packages/cezar/dist/workflows/graph.js';
 import {Installation,type Installation as InstallationType} from './installation.ts';
 
 const MAX_ROWS=10000,MAX_BYTES=16*1024*1024;
@@ -13,7 +14,8 @@ const ref=(kind:string,id:string)=>({rebindNeeded:true as const,kind,id});
 const Binding=z.object({rebindNeeded:z.literal(true),kind:z.enum(['private_path','credential','endpoint','environment','principal','repository']),id:z.string().min(1).max(300)}).strict();
 const InstallationProjection=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),databaseUrl:Binding,projectRoots:z.array(z.json()),dataDirectory:Binding,project:z.json(),projects:z.array(z.json()),contextVault:z.json().optional(),accountHomesDirectory:Binding.optional(),workflowRuntime:z.json().optional(),installationAuthority:z.json().optional(),remoteReturn:z.json().optional(),remoteDevelopment:z.json().optional(),nativeBootstrap:z.json().optional(),codexQuota:z.json().optional(),managerTransport:z.json().optional(),http:z.json(),happier:z.json(),sessionMaxAgeSeconds:z.number().int(),repositoryLocations:z.array(z.json())}).strict();
 const ProjectConfig=z.object({id:Id,label:z.string(),repository:Binding}).strict();
-const ProjectPayload=z.object({project:ProjectConfig,
+const ManagedGraphs=z.object({schemaVersion:z.literal(1),availability:z.enum(['available','not_installed']),revisions:z.array(z.object({name:z.string().max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),revision:z.number().int().positive(),head:z.boolean(),sourceFileDigest:z.string().regex(/^[a-f0-9]{64}$/),sourceFileVerified:z.literal(false),snapshot:z.object({name:z.string(),description:z.string().max(4096).optional(),graph:z.json()}).strict()}).strict())}).strict().refine(v=>v.availability==='available'||v.revisions.length===0);
+const ProjectPayload=z.object({project:ProjectConfig,managedGraphs:ManagedGraphs.optional(),
  environments:z.array(z.object({revision:z.number().int().positive(),head:z.boolean(),config:ProjectEnvironmentConfig}).strict()),
  templates:z.array(z.object({id:Id,revision:z.number().int().positive(),name:z.string(),snapshot:Template}).strict()),
  capacityPolicies:z.array(z.object({revision:z.number().int().positive(),policy:CapacityPolicy}).strict()),
@@ -48,6 +50,15 @@ function checkInstallation(value:unknown){
   if(typeof v==='string'&&v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_INVALID_PROJECTION');if(Array.isArray(v)){for(const x of v)visit(x,'');}else if(v&&typeof v==='object')for(const [k,x] of Object.entries(v))visit(x,k);};visit(root,'installation');
 }
 function checkProjectSet(dto:z.infer<typeof ConfigDto>){const p=z.object({id:Id}).passthrough();const configured=[p.parse(dto.installation.project).id,...dto.installation.projects.map(x=>p.parse(x).id)];const actual=[dto.project.id,...dto.additionalProjects.map(x=>x.project.id)];if(new Set(configured).size!==configured.length||new Set(actual).size!==actual.length||configured.length!==actual.length||configured.some(id=>!actual.includes(id)))throw new Refusal('CONFIG_EXPORT_PROJECT_SET_INVALID');}
+function checkGraphProjections(dto:z.infer<typeof ConfigDto>){
+ for(const project of [dto,...dto.additionalProjects]){const catalog=project.managedGraphs;if(!catalog)continue;
+  const counts=new Map<string,number>();for(const row of catalog.revisions){if(row.snapshot.name!==row.name)throw new Refusal('CONFIG_EXPORT_CORRUPT');counts.set(row.name,(counts.get(row.name)??0)+(row.head?1:0));
+   const raw=z.object({nodes:z.array(z.record(z.string(),z.json())).max(256),edges:z.array(z.json()).max(1024),layout:z.json().optional()}).strict().parse(row.snapshot.graph);
+   const nodes=raw.nodes.map(node=>{const output={...node};if('secrets' in output){const b=Binding.parse(output.secrets);if(b.kind!=='credential')throw new Refusal('CONFIG_EXPORT_CORRUPT');output.secrets=['CONFIG_REBIND'];}if(output.type==='notify.webhook'){const b=Binding.parse(output.url);if(b.kind!=='endpoint')throw new Refusal('CONFIG_EXPORT_CORRUPT');output.url='https://example.invalid/';}return output;});
+   const graph=workflowGraphSchema.parse({...raw,nodes});if(digest(graph)!==digest({...raw,nodes})||graphIssues(graph).length)throw new Refusal('CONFIG_EXPORT_CORRUPT');graphToSteps(graph);
+  }if([...counts.values()].some(count=>count!==1))throw new Refusal('CONFIG_EXPORT_CORRUPT');
+ }
+}
 function checkPortable(value:unknown){
  const walk=(v:unknown)=>{if(typeof v==='string'){if(v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');if(/(?:https?:\/\/[^\s/]+@|[?&](?:token|password|key|secret)=|\bHOME=|-----BEGIN |\b(?:sk|ghp|github_pat|xox[baprs])-|bearer\s+|(?:password|secret|token|credential)\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i.test(v))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');return;}if(Array.isArray(v)){for(const x of v)walk(x);return;}if(v&&typeof v==='object')for(const x of Object.values(v))walk(x);};walk(value);
 }
@@ -60,6 +71,7 @@ export async function collectConfiguration(ledger:Ledger,principal:string,projec
   if(!(await c.query("SELECT 1 FROM ac_control_admins a JOIN ac_memberships m ON m.principal_id=a.principal_id WHERE a.principal_id=$1 AND m.project_id=$2 AND m.role='owner'",[principal,projectId])).rowCount)throw new Refusal('CONFIG_EXPORT_FORBIDDEN',403);
   const projectIds=[config.project,...config.projects].map(p=>p.id);if(!projectIds.includes(projectId))throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
   if(Number((await c.query("SELECT count(*) n FROM ac_memberships WHERE principal_id=$1 AND role='owner' AND project_id=ANY($2::uuid[])",[principal,projectIds])).rows[0].n)!==projectIds.length)throw new Refusal('CONFIG_EXPORT_FORBIDDEN',403);
+  const graphTables=(await c.query("SELECT to_regclass('public.ac_workflow_graph_revisions') revisions,to_regclass('public.ac_workflow_graph_heads') heads")).rows[0];if(Boolean(graphTables.revisions)!==Boolean(graphTables.heads))throw new Refusal('CONFIG_EXPORT_INCOMPLETE_GRAPH_SCHEMA');const graphsAvailable=Boolean(graphTables.revisions);
   let totalRows=0;const rows=async(sql:string,id:string)=>{const r=(await c.query(sql,[id,MAX_ROWS+1])).rows;totalRows+=r.length;if(totalRows>MAX_ROWS)throw new Refusal('CONFIG_EXPORT_TOO_LARGE');return r;};
   const collectProject=async(id:string)=>{
   const project=(await c.query('SELECT id,label FROM ac_projects WHERE id=$1',[id])).rows[0];if(!project)throw new Refusal('CONFIG_EXPORT_FORBIDDEN',403);
@@ -70,8 +82,10 @@ export async function collectConfiguration(ledger:Ledger,principal:string,projec
   const profiles=await rows('SELECT p.id,p.account_id,p.model,p.effort,p.role,p.enabled FROM ac_profiles p JOIN ac_account_access a ON a.account_id=p.account_id WHERE a.project_id=$1 ORDER BY p.id LIMIT $2',id);
   const accounts=await rows('SELECT a.id,a.provider,a.label,a.mode,a.eligibility,a.enabled,a.max_concurrent FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 ORDER BY a.id LIMIT $2',id);
   const models=await rows('SELECT DISTINCT c.provider,c.model,c.efforts,c.roles FROM ac_model_catalog c JOIN ac_accounts a ON a.provider=c.provider JOIN ac_account_access x ON x.account_id=a.id JOIN ac_profiles p ON p.account_id=a.id AND p.model=c.model WHERE x.project_id=$1 ORDER BY c.provider,c.model LIMIT $2',id);
+  const graphs=graphsAvailable?await rows('SELECT r.name,r.revision,r.snapshot,r.file_digest,(h.revision=r.revision) AS head FROM ac_workflow_graph_revisions r LEFT JOIN ac_workflow_graph_heads h ON h.project_id=r.project_id AND h.name=r.name WHERE r.project_id=$1 ORDER BY r.name,r.revision LIMIT $2',id):[];
   const verify=(r:any)=>{if(digest(r.snapshot)!==r.digest)throw new Refusal('CONFIG_EXPORT_CORRUPT');};
-  return {project:{id:project.id,label:project.label,repository:ref('repository',`project.${project.id}.repository`)},
+  const graphRevisions=graphs.map(r=>{const snapshot=z.object({name:z.string(),description:z.string().max(4096).optional(),graph:z.unknown()}).strict().parse(r.snapshot);if(snapshot.name!==r.name)throw new Refusal('CONFIG_EXPORT_CORRUPT');const graph=workflowGraphSchema.parse(snapshot.graph);if(digest(graph)!==digest(snapshot.graph)||graph.nodes.length>256||graph.edges.length>1024||Buffer.byteLength(JSON.stringify(snapshot))>256*1024||graphIssues(graph).length)throw new Refusal('CONFIG_EXPORT_CORRUPT');graphToSteps(graph);const nodes=graph.nodes.map(node=>{const item:any={...node};if('secrets' in item&&item.secrets!==undefined)item.secrets=ref('credential',`project.${id}.graph.${r.name}.${r.revision}.node.${node.id}.secrets`);if(item.type==='notify.webhook')item.url=ref('endpoint',`project.${id}.graph.${r.name}.${r.revision}.node.${node.id}.url`);return item;});return {name:r.name,revision:r.revision,head:!!r.head,sourceFileDigest:r.file_digest,sourceFileVerified:false as const,snapshot:{name:snapshot.name,...(snapshot.description===undefined?{}:{description:snapshot.description}),graph:{...graph,nodes}}};});
+  return {managedGraphs:{schemaVersion:1 as const,availability:graphsAvailable?'available' as const:'not_installed' as const,revisions:graphRevisions},project:{id:project.id,label:project.label,repository:ref('repository',`project.${project.id}.repository`)},
    environments:env.map(r=>{verify(r);return {revision:r.revision,head:!!r.head,config:ProjectEnvironmentConfig.parse(r.snapshot)};}),
    templates:templates.map(r=>{verify(r);return {id:r.template_id,revision:r.revision,name:r.name,snapshot:Template.parse(r.snapshot)};}),
    capacityPolicies:capacity.map(r=>{verify(r);return {revision:r.revision,policy:CapacityPolicy.parse(r.snapshot)};}),
@@ -82,18 +96,18 @@ export async function collectConfiguration(ledger:Ledger,principal:string,projec
   };
   const main=await collectProject(projectId),additionalProjects=[];for(const id of projectIds)if(id!==projectId)additionalProjects.push(await collectProject(id));
   const dto={schemaVersion:2 as const,kind:'agent_control_config_projection' as const,restorable:false as const,installation,...main,additionalProjects};
-  checkPortable(dto);checkInstallation(dto.installation);checkProjectSet(ConfigDto.parse(dto));
+  checkPortable(dto);checkInstallation(dto.installation);checkProjectSet(ConfigDto.parse(dto));checkGraphProjections(ConfigDto.parse(dto));
   if(Buffer.byteLength(canonical(dto))>MAX_BYTES)throw new Refusal('CONFIG_EXPORT_TOO_LARGE');return dto;
  });
 }
 /** Key supplied independently by caller; neither key nor source credentials enter the envelope. */
 export function sealConfiguration(dto:Awaited<ReturnType<typeof collectConfiguration>>,key:Uint8Array){
- if(key.length!==32)throw new Refusal('CONFIG_EXPORT_INVALID_KEY');checkPortable(dto);checkInstallation(dto.installation);checkProjectSet(ConfigDto.parse(dto));const plaintext=Buffer.from(canonical(ConfigDto.parse(dto)));if(plaintext.length>MAX_BYTES)throw new Refusal('CONFIG_EXPORT_TOO_LARGE');
+ if(key.length!==32)throw new Refusal('CONFIG_EXPORT_INVALID_KEY');checkPortable(dto);checkInstallation(dto.installation);checkProjectSet(ConfigDto.parse(dto));checkGraphProjections(ConfigDto.parse(dto));const plaintext=Buffer.from(canonical(ConfigDto.parse(dto)));if(plaintext.length>MAX_BYTES)throw new Refusal('CONFIG_EXPORT_TOO_LARGE');
  try{const nonce=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,nonce);cipher.setAAD(Buffer.from('agent-control-config-v2'));const ciphertext=Buffer.concat([cipher.update(plaintext),cipher.final()]);return envelope.parse({schemaVersion:2,kind:'agent_control_config_encrypted',algorithm:'aes-256-gcm',nonce:nonce.toString('hex'),tag:cipher.getAuthTag().toString('hex'),ciphertext:ciphertext.toString('hex')});}finally{plaintext.fill(0);}
 }
 /** Inspection only, never restores or activates settings. */
 export function inspectConfiguration(raw:unknown,key:Uint8Array){
- if(key.length!==32)throw new Refusal('CONFIG_EXPORT_INVALID_KEY');const e=envelope.parse(raw);try{const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(e.nonce,'hex'));cipher.setAAD(Buffer.from('agent-control-config-v2'));cipher.setAuthTag(Buffer.from(e.tag,'hex'));const bytes=Buffer.concat([cipher.update(Buffer.from(e.ciphertext,'hex')),cipher.final()]);try{const dto=ConfigDto.parse(JSON.parse(bytes.toString('utf8')));checkPortable(dto);checkInstallation(dto.installation);checkProjectSet(dto);return dto;}finally{bytes.fill(0);}}catch{throw new Refusal('CONFIG_EXPORT_INVALID_ARTIFACT');}
+ if(key.length!==32)throw new Refusal('CONFIG_EXPORT_INVALID_KEY');const e=envelope.parse(raw);try{const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(e.nonce,'hex'));cipher.setAAD(Buffer.from('agent-control-config-v2'));cipher.setAuthTag(Buffer.from(e.tag,'hex'));const bytes=Buffer.concat([cipher.update(Buffer.from(e.ciphertext,'hex')),cipher.final()]);try{const dto=ConfigDto.parse(JSON.parse(bytes.toString('utf8')));checkPortable(dto);checkInstallation(dto.installation);checkProjectSet(dto);checkGraphProjections(dto);return dto;}finally{bytes.fill(0);}}catch{throw new Refusal('CONFIG_EXPORT_INVALID_ARTIFACT');}
 }
 
 /** Private, exclusive creation. Key file is supplied separately and never embedded. */
