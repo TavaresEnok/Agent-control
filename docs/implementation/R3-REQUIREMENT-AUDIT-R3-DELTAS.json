@@ -243,6 +243,61 @@
       "implemented_delta": "Signed stale policy edit rejected409; historical snapshot restored exactly into new revision; signed per-project template publish/reuse frozen snapshot verified PG.",
       "remaining": "Root final combined authenticated browser rerun on integrated version. No official provider account required by these literal local criteria.",
       "recommendation": "recommend_accept_literal_local_criterion_after_final_integrated_browser_proof"
+    },
+    {
+      "id": "RF-36",
+      "reviewed_commits": [
+        "9736198f",
+        "25b6450b",
+        "a9a159ad"
+      ],
+      "independent_reviewer": "r3_review_runtime",
+      "independent_review_report_commit": "5ae3c37d",
+      "independent_evidence": "docs/validation/evidence/r3-review-runtime-chat-config.log",
+      "result": "Runtime reviewer independently ran real Happier/PG/HTTP chat configuration lab1/1 zero skips; product reviewer inspected log/report, did not rerun",
+      "implemented_delta": "Signed typed human chat command uses exact same configured per-project Control.execute as HTTP panel, with session/key/principal/epoch/link fence and transactional effect/dedupe; replay parity both directions; malformed/unsigned/text-only/revoked/expired/cross-context commands rejected.",
+      "remaining": "No literal criterion gap identified in supported signed typed configuration contract. Freeform text/model output has no authority by design. No official subscription needed for this local criterion.",
+      "acceptance_recommendation": "recommend_accept_supported_signed_chat_configuration_contract"
+    },
+    {
+      "id": "RF-33",
+      "reviewed_commit": "c135cd59",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-recovery-http.log",
+      "result": "Product reviewer independently ran own isolated runner2/2 zero skips before additive source provenance preflight; final preflight statically reviewed + author2/2 final log inspected",
+      "implemented_delta": "Actual stopped HappierHTTP persistence/snapshot/restore with same IDs/seq/ciphertext; authenticated restored session; fresh central identity vault rewrap/load decrypts actual HTTP history; replay dedupe; exported PG RR snapshot and artifact hashes/temporal cut.",
+      "supersedes_prior_gap": "Actual canonical service restore and fresh target vault activation are now demonstrated; prior fixture-only records remain historical.",
+      "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO.",
+      "recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately"
+    },
+    {
+      "id": "RF-34",
+      "reviewed_commit": "c135cd59",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-recovery-http.log",
+      "result": "Product reviewer independently ran own isolated runner2/2 zero skips before additive source provenance preflight; final preflight statically reviewed + author2/2 final log inspected",
+      "implemented_delta": "Actual stopped HappierHTTP persistence/snapshot/restore with same IDs/seq/ciphertext; authenticated restored session; fresh central identity vault rewrap/load decrypts actual HTTP history; replay dedupe; exported PG RR snapshot and artifact hashes/temporal cut.",
+      "supersedes_prior_gap": "Actual canonical service restore and fresh target vault activation are now demonstrated; prior fixture-only records remain historical.",
+      "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO.",
+      "recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately"
+    },
+    {
+      "id": "T18",
+      "reviewed_commit": "c135cd59",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-recovery-http.log",
+      "result": "Product reviewer independently ran own isolated runner2/2 zero skips before additive source provenance preflight; final preflight statically reviewed + author2/2 final log inspected",
+      "implemented_delta": "Actual stopped HappierHTTP persistence/snapshot/restore with same IDs/seq/ciphertext; authenticated restored session; fresh central identity vault rewrap/load decrypts actual HTTP history; replay dedupe; exported PG RR snapshot and artifact hashes/temporal cut.",
+      "supersedes_prior_gap": "Actual canonical service restore and fresh target vault activation are now demonstrated; prior fixture-only records remain historical.",
+      "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO.",
+      "recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately"
+    },
+    {
+      "id": "RNF-10",
+      "reviewed_commit": "c135cd59",
+      "independent_evidence": "docs/validation/evidence/r3-review-product-recovery-http.log",
+      "result": "Product reviewer independently ran own isolated runner2/2 zero skips before additive source provenance preflight; final preflight statically reviewed + author2/2 final log inspected",
+      "implemented_delta": "Actual stopped HappierHTTP persistence/snapshot/restore with same IDs/seq/ciphertext; authenticated restored session; fresh central identity vault rewrap/load decrypts actual HTTP history; replay dedupe; exported PG RR snapshot and artifact hashes/temporal cut.",
+      "supersedes_prior_gap": "Actual canonical service restore and fresh target vault activation are now demonstrated; prior fixture-only records remain historical.",
+      "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO.",
+      "recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately"
     }
   ]
 }
