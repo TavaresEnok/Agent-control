@@ -50,9 +50,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Provider exhaustion/return handoff with continuously canonical conversation is not demonstrated",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "complete_slice_verification_pending",
+    "missing": "Registry lifecycle, stale manager route rejection and concurrent Ledger claim tests require independent rerun; provider exhaustion belongs to T19, not this exact-one-manager criterion.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -72,9 +72,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Running official provider regular/emergency return scenario remains unexecuted",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "integration_evidence_missing",
+    "missing": "Demonstrate healthy regular nonpreemption and emergency completion/return through real capacity workflow; deterministic trusted observations suffice for this control criterion.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -946,9 +946,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "No authorized operational remote accounts/targets; synthetic two-host lab is prior author evidence only",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "integration_evidence_missing",
+    "missing": "Independent rerun of authorized two-host SSH lab plus proof no IA credentials/login on targets pending; operational deployment is outside this criterion proof.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -1705,9 +1705,9 @@
       "tests/"
     ],
     "evidence": [],
-    "classification": "environment_validation_missing",
-    "missing": "Actual CLI/model/image provenance from official native attempt not independently proven",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "complete_slice_verification_pending",
+    "missing": "Verify persisted base/CLI/model/policy/image/code fields for every attempt kind, including retry/recovery; official account access is not prerequisite to schema/provenance counterproof.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -1767,9 +1767,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Actual CLI upgrade protocol qualification/default promotion proof missing",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "complete_slice_verification_pending",
+    "missing": "Finite old/new/incompatible CLI protocol fixtures must prove default admission gated by contract confirmation; live account is not prerequisite.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -1812,9 +1812,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Exercise regular recovery while another regular healthy; assert no preemption or silent reassignment; Running official provider regular/emergency return scenario remains unexecuted",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "integration_evidence_missing",
+    "missing": "Exercise regular recovery while another regular healthy; assert no preemption or silent reassignment through real capacity paths; synthetic observations suffice.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -1857,9 +1857,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Exercise emergency programming while regular recovers; finish healthy reserve and stop new reserve dispatch; Running official provider regular/emergency return scenario remains unexecuted",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "integration_evidence_missing",
+    "missing": "Exercise emergency programming while regular recovers; finish healthy reserve and stop new reserve dispatch through real capacity paths; synthetic observations suffice.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -2138,8 +2138,8 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "implementation_and_evidence_gap",
-    "missing": "Disconnect SSH persistent effect and recover result without repeating uncertain operation; Supervisor-death stable group proof pending R3; delayed Docker create timeout must stay uncertain",
+    "classification": "integration_evidence_missing",
+    "missing": "Independent SSH disconnect/lost-ACK recovery test pending, including supervisor death and no blind uncertain-operation repeat; two authorized disposable hosts suffice.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
@@ -2212,9 +2212,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Manager exhausts/recovers; sole fenced manager returns only safe boundary with continuous conversation; Provider exhaustion/return handoff with continuously canonical conversation is not demonstrated",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "integration_evidence_missing",
+    "missing": "Controlled exhaustion/recovery observation can prove handoff without official login; same-context canonical history, fenced singleton and safe return must be demonstrated together.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
@@ -2349,9 +2349,9 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "environment_validation_missing",
-    "missing": "Expire authentication or upgrade protocol; preserve work and refuse new native admission until confirmation; Actual CLI upgrade protocol qualification/default promotion proof missing",
-    "external_dependency": "Authorized official provider accounts/targets only where criterion explicitly exercises official runtime; no such authorization in R3",
+    "classification": "complete_slice_verification_pending",
+    "missing": "Finite expired-auth and incompatible-protocol fixtures must preserve work and refuse admission until confirmation; actual account expiry is optional validation.",
+    "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
   },
