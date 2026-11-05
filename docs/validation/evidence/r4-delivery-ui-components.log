@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /tmp/ac-r4-20261105-delivery/upstream/cezar/packages/web
+
+
+ Test Files  2 passed (2)
+      Tests  9 passed (9)
+   Start at  16:07:20
+   Duration  4.42s (transform 1.96s, setup 104ms, import 4.16s, tests 945ms, environment 3.00s)
+

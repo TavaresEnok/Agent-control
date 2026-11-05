@@ -1,0 +1,53 @@
+R3_HAPPIER_SOURCE_PROVENANCE {"tree":"7b8ace4cfc8e1c24b03529a8015951adf09f1f7b","files":1164,"sourceSha256":"6084780b8c5211f3477f3783fbe06334de863158476ce022cc42331fa797b6a5","cacheMatchesVendored":true}
+4:06:10 PM [vite] (client) [optimizer] scanning dependencies...
+4:06:11 PM [vite] (client) [optimizer] bundling dependencies...
+4:06:13 PM [vite] (client) hmr update /src/routes/settings/agent-control-remote-development.tsx, /src/styles/index.css
+R4_BROWSER_STAGE register
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+locator.click: Timeout 20000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('button', { name: 'Confirmar pedido remoto pendente', exact: true })[22m
+[2m    - locator resolved to <button disabled data-slot="button" data-size="default" data-variant="primary" class="inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 bg-primary text-primary-foreground hover:brightness-[0.96] h-9 p…>Confirmar pedido remoto pendente</button>[22m
+[2m  - attempting click action[22m
+[2m    2 × waiting for element to be visible, enabled and stable[22m
+[2m      - element is not enabled[22m
+[2m    - retrying click action[22m
+[2m    - waiting 20ms[22m
+[2m    2 × waiting for element to be visible, enabled and stable[22m
+[2m      - element is not enabled[22m
+[2m    - retrying click action[22m
+[2m      - waiting 100ms[22m
+[2m    3 × waiting for element to be visible, enabled and stable[22m
+[2m      - element is not enabled[22m
+[2m    - retrying click action[22m
+[2m      - waiting 500ms[22m
+[2m    - waiting for element to be visible, enabled and stable[22m
+[2m  - element was detached from the DOM, retrying[22m
+
+    at /tmp/ac-r4-20261105-delivery/scripts/r4-delivery-browser.mjs:64:128 {
+  log: [
+    "  - waiting for getByRole('button', { name: 'Confirmar pedido remoto pendente', exact: true })",
+    `    - locator resolved to <button disabled data-slot="button" data-size="default" data-variant="primary" class="inline-flex shrink-0 items-center justify-center gap-[7px] rounded-md font-semibold whitespace-nowrap transition-[background-color,border-color,opacity,filter] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 bg-primary text-primary-foreground hover:brightness-[0.96] h-9 p…>Confirmar pedido remoto pendente</button>`,
+    '  - attempting click action',
+    '    2 × waiting for element to be visible, enabled and stable',
+    '      - element is not enabled',
+    '    - retrying click action',
+    '    - waiting 20ms',
+    '    2 × waiting for element to be visible, enabled and stable',
+    '      - element is not enabled',
+    '    - retrying click action',
+    '      - waiting 100ms',
+    '    3 × waiting for element to be visible, enabled and stable',
+    '      - element is not enabled',
+    '    - retrying click action',
+    '      - waiting 500ms',
+    '    - waiting for element to be visible, enabled and stable',
+    '  - element was detached from the DOM, retrying'
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v22.23.3

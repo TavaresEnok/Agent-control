@@ -23,7 +23,7 @@ import {isolatedDatabase} from './isolated-database.ts';
 const command=(binary:string,args:string[])=>execFileSync(binary,args,{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 export const labGit=(repo:string,...args:string[])=>command('git',['-C',repo,...args]);
 /** New disposable resources only; no inherited accounts, credentials or daemon changes. */
-export async function remoteDevelopmentLab(base:string,options:{requireJudge?:boolean;configureEnvironment?:boolean}={}){
+export async function remoteDevelopmentLab(base:string,options:{requireJudge?:boolean;configureEnvironment?:boolean;principal?:string}={}){
  const isolated=await isolatedDatabase(base,'r3dev'),db=new Ledger(isolated.url),root=await mkdtemp(join(tmpdir(),'ac-r3-dev-')),scratch=await mkdtemp('/dev/shm/ac-r3-dev-');
  const name='ac-r3-delivery-dev-'+randomUUID().slice(0,8),installationId='ac-r3-delivery-dev-'+randomUUID();let container=false,mounted=false;
  const close=async()=>{
@@ -46,7 +46,7 @@ export async function remoteDevelopmentLab(base:string,options:{requireJudge?:bo
   command('git',['init','-q','-b','agent-control-export',original]);await mkdir(join(original,'src'));await writeFile(join(original,'src/example.ts'),'export const value = 1;\n');
   labGit(original,'add','.');labGit(original,'-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','base');
   const source=labGit(original,'rev-parse','HEAD'),sourceTree=labGit(original,'rev-parse','HEAD^{tree}');command('git',['clone','--bare','-q',original,bare]);
-  const projectId=randomUUID(),hostId=randomUUID(),credentialId=randomUUID(),principal='r3-development-'+randomUUID(),deviceId=randomUUID(),keys=generateKeyPairSync('ed25519');
+  const projectId=randomUUID(),hostId=randomUUID(),credentialId=randomUUID(),principal=options.principal??'r3-development-'+randomUUID(),deviceId=randomUUID(),keys=generateKeyPairSync('ed25519');
   command('ssh-keygen',['-q','-t','ed25519','-N','','-f',join(root,'controller')]);command('ssh-keygen',['-q','-t','ed25519','-N','','-f',join(root,'host')]);
   await writeFile(join(root,'authorized_keys'),await readFile(join(root,'controller.pub')),{mode:0o600});
   for(const [sourcePath,target] of [['services/remote-worker/worker.py','worker.py'],['services/remote-worker/remote_supervisor.py','remote_supervisor.py'],['services/remote-git/helper.py','remote_git.py'],['services/remote-git/return_helper.py','remote_git_return.py'],['services/remote-git/workspace_helper.py','remote_git_workspace.py']])await copyFile(resolve(sourcePath),join(installed,target));
