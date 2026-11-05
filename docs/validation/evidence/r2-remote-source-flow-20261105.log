@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: signed source authorization, SSH export and project materialization preserve provenance on both hosts
+ok 1 - signed source authorization, SSH export and project materialization preserve provenance on both hosts
+  ---
+  duration_ms: 4761.902277
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6018.327776
