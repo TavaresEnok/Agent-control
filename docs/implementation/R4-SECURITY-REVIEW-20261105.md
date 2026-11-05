@@ -37,3 +37,13 @@ A diretriz mestre proíbe adicionar Temporal como motor concorrente. A palavra T
 A custódia privada do vault e a preservação de ciphertext sem chaves são observações válidas na fatia executada. Redação nativa pode ser desativada por `CEZ_REDACT_SECRETS=0`; o subprocesso allowlist não testa configuração hostil nem demonstra uma imposição de configuração no gateway. Campos genéricos de continuidade upstream e sessões fora do gateway ficam fora deste teste conforme já admitido pelo autor. As evidências anteriores de R3-FLOW/R3-MIGRATION devem ser ligadas pelos hashes e limites próprios; sua simples menção não executa a composição RNF-08.
 
 O autor deve corrigir os testes e controles negativos, e encaminhar novo commit à revisão independente. Este revisor não corrigiu nem autoaprovou produto ou testes.
+
+## Revisão da correção `b451ae1e`
+
+**Aprovada somente a correção dos oráculos e a prova finita declarada**, sem aceite integral RNF-08. O autor preservou os limites e não alterou produto. Revisão independente da fonte confirmou reconstrução por run/step/item/field com substituição de snapshot/acréscimo de deltas, exigência de texto seguro preservado e marcador de redação, inspeção de objetos Git descomprimidos alcançáveis por todas as refs, controles negativos de blob atual/histórico/outra ref e conjunto exato de23 superfícies normalizadas.
+
+Reexecução independente na mesma base de revisão (`c24cefb1` + checkpoint original + correção aplicada como `3917379b`): **5/5, zero skips**, cerca de oito segundos. Nova bancada PG exclusiva, local e sintética, label `ac.review=r4-security-corrected-20261105`; mesmos caches de dependências e dist local já explicitados acima. Log `r4-secret-corrected-independent-20261105.log` registra23 superfícies e8 objetos/1ref examinados.
+
+A mutação real que fazia o teste antigo passar foi aplicada novamente somente no dist isolado: retorno imediato de `StreamRedaction.transform`. Desta vez o teste corrigido falhou exit1 por `REGISTERED_SECRET_NOT_REDACTED_native-events-live-reconstructed`, log `r4-secret-corrected-mutation-independent-20261105.log`. Dist restaurado byte a byte. A prova mata a mutação relevante; não se trata de aceitar apenas um teste espelho do novo helper. PG removido pelo ID verificado após execução; nenhum serviço operacional alterado.
+
+Os três achados deste parecer estão resolvidos nesta fatia de testes. Permanecem as lacunas RNF-08 de composição e superfícies enumeradas anteriormente, inclusive SSE de deltas, tarefa com segredo, saída bem-sucedida do runner, backup composto e configuração hostil. Scanner de teste não equivale a uma recusa de artefato pelo produto. Não promover os111 critérios por esta aprovação delimitada.
