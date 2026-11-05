@@ -97,3 +97,5 @@ A prova sustenta o cenário físico delimitado, não autoriza sozinho aceite glo
 ## T22 — recusa de política
 
 13738f3b/71cb3949/adfcc6d4 e guard nativo 092aa259/462762ca: recomendação de aceite do cenário literal após integração/gateway final. Script e log do autor mostram política assinada com Astra, esforço fora do catálogo e conta removida recusados com razão legível, sem novo job ou alteração de quota, em 360/390. Os perfis legados são preparados pela fixture e o dispositivo é sintético. Guard de supervisores foi repetido independentemente 2/2 com mocks, não como PG físico.
+
+6513a674/86a85b1a/78351e75: aprovado o escopo do gate de objetos Git novos para valores conhecidos, com limites fail-closed e sem reescrever commit. Teste Git independente 1/1 cobre blob reutilizado e commit intermediário; ausência de snapshot em job legado impede registro de novo artefato com diagnóstico explícito, sem impedir retirada física. Fluxo físico integrado do gate, segredos desconhecidos e codificações permanecem fora da prova.
