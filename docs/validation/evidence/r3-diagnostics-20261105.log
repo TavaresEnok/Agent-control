@@ -1,0 +1,71 @@
+TAP version 13
+# Subtest: pure projection keeps a coherent closed cause and drops private receipt fields
+ok 1 - pure projection keeps a coherent closed cause and drops private receipt fields
+  ---
+  duration_ms: 6.112257
+  type: 'test'
+  ...
+# Subtest: pure projection redacts an unknown or absent code and does not infer quota or success
+ok 2 - pure projection redacts an unknown or absent code and does not infer quota or success
+  ---
+  duration_ms: 0.801297
+  type: 'test'
+  ...
+# Subtest: pure projection treats prototype failure codes as unknown and keeps the sibling diagnosis
+ok 3 - pure projection treats prototype failure codes as unknown and keeps the sibling diagnosis
+  ---
+  duration_ms: 1.548062
+  type: 'test'
+  ...
+# Subtest: pure projection ignores non-terminal, success, foreign ids and evaluator/implementation mix
+ok 4 - pure projection ignores non-terminal, success, foreign ids and evaluator/implementation mix
+  ---
+  duration_ms: 0.954795
+  type: 'test'
+  ...
+# Subtest: legacy diagnostic findings remain valid and arbitrary cause codes are rejected
+ok 5 - legacy diagnostic findings remain valid and arbitrary cause codes are rejected
+  ---
+  duration_ms: 1.535185
+  type: 'test'
+  ...
+# Subtest: stored native terminal failure on isolated postgres
+    # Subtest: read is scoped, ordered, limited and free of false or raw failures
+    ok 1 - read is scoped, ordered, limited and free of false or raw failures
+      ---
+      duration_ms: 2090.354688
+      type: 'test'
+      ...
+    1..1
+ok 6 - stored native terminal failure on isolated postgres
+  ---
+  duration_ms: 2090.710046
+  type: 'suite'
+  ...
+# Subtest: QA diagnostics distinguish missing evidence, cancellation, timeout and test failure without raw receipts
+ok 7 - QA diagnostics distinguish missing evidence, cancellation, timeout and test failure without raw receipts
+  ---
+  duration_ms: 3.106054
+  type: 'test'
+  ...
+# Subtest: remote and capacity projection use closed persisted facts and reject private reasons
+ok 8 - remote and capacity projection use closed persisted facts and reject private reasons
+  ---
+  duration_ms: 3.323846
+  type: 'test'
+  ...
+# Subtest: actual PG/API diagnostics include per-intent uncertainty, SSH, QA, wait exclusions, ACL and truncation
+ok 9 - actual PG/API diagnostics include per-intent uncertainty, SSH, QA, wait exclusions, ACL and truncation
+  ---
+  duration_ms: 1270.679
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 1
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4461.744819

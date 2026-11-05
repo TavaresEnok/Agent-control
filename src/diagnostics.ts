@@ -1,3 +1,4 @@
+import {remoteDiagnostic,nativeQaDiagnostic,waitDiagnostic} from './diagnostic-projections.ts';
 import {Id,Refusal,digest} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {QualityPolicy} from './quality-policy.ts';
@@ -20,7 +21,7 @@ export class ContextDiagnostics{
     WHERE x.id=$1 AND NOT x.archived`,[contextId,principal])).rows[0];
    if(!context)throw new Refusal('CONTEXT_FORBIDDEN',403);
    if(context.project_id!==this.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-   const findings:DiagnosticFinding[]=[];
+   const findings:DiagnosticFinding[]=[],diagnosedIntents=new Set<string>();
    if(context.paused)findings.push({code:'context_paused',meaning:'A pausa humana está ativa.',owner:'Operador do contexto',nextCondition:'Retomada explícita e autorizada.',evidence:[{kind:'context',id:contextId}]});
    if(context.draining)findings.push({code:'context_draining',meaning:'A drenagem impede admitir novos planos; planos aceitos podem continuar.',owner:'Operador do contexto',nextCondition:'Encerramento autorizado da drenagem para admitir novos planos.',evidence:[{kind:'context',id:contextId}]});
    const active=(await c.query(`SELECT EXISTS(SELECT 1 FROM ac_intents WHERE context_id=$1
@@ -61,8 +62,21 @@ export class ContextDiagnostics{
      stageId:row.stage_id,stageNode:row.stage_node,stageReceipt:row.stage_receipt,
      finalizerState:row.finalizer_state,finalizerReceipt:row.finalizer_receipt};
     const finding=projectNativeTerminalFailure(source);
-    if(finding)findings.push(finding);
+    if(finding){findings.push({...finding,evidence:[...finding.evidence,{kind:'intent',id:row.intent_id}]});diagnosedIntents.add(row.intent_id);}
    }
+   const remote=await c.query(`SELECT id,intent_id,state FROM ac_remote_operations WHERE context_id=$1
+    AND state IN ('registered','uncertain','failed','canceled_confirmed') ORDER BY created_at,id LIMIT 101`,[contextId]);
+   for(const row of remote.rows.slice(0,100)){const finding=remoteDiagnostic(row);if(finding){findings.push(finding);if(row.intent_id)diagnosedIntents.add(row.intent_id);}}
+   const qa=await c.query(`SELECT id,intent_id,state,stop_reason,receipt,artifact_id,grant_id,session_id,contract_digest FROM ac_native_qa_jobs WHERE context_id=$1
+    AND (state IN ('uncertain','failed') OR (state='running' AND stop_reason IS NOT NULL)
+      OR (state='completed' AND (stop_reason IS NULL AND receipt->>'status'='passed'
+        AND receipt->'exitCode'='0'::jsonb AND receipt->'logsAvailable'='true'::jsonb
+        AND receipt->>'jobId'=id::text AND receipt->>'artifactId'=artifact_id::text
+        AND receipt->>'grantId'=grant_id::text AND receipt->>'sessionId'=session_id::text
+        AND receipt->>'contractDigest'=contract_digest AND jsonb_typeof(receipt->'logSha256')='string'
+        AND receipt->>'logSha256' ~ '^[a-f0-9]{64}$') IS NOT TRUE))
+    ORDER BY CASE WHEN state IN ('uncertain','failed') THEN 0 ELSE 1 END,created_at,id LIMIT 101`,[contextId]);
+   for(const row of qa.rows.slice(0,100)){const finding=nativeQaDiagnostic(row);if(finding){findings.push(finding);diagnosedIntents.add(row.intent_id);}}
    const advice=await c.query(`SELECT id,state,receipt->>'status' verdict FROM ac_specialist_advice WHERE context_id=$1
     AND (state IN ('running','uncertain') OR (state='completed' AND receipt->>'status'='rejected')) ORDER BY id LIMIT 101`,[contextId]);
    for(const row of advice.rows.slice(0,100))findings.push(row.state==='completed'
@@ -75,11 +89,12 @@ export class ContextDiagnostics{
    for(const row of cancellations.rows.slice(0,100))findings.push(row.state==='confirmed'
     ?{code:'cancellation_confirmed',meaning:'O cancelamento do plano foi confirmado no registro.',owner:'Controlador de execução',nextCondition:'Nenhuma condição adicional de cancelamento registrada.',evidence:[{kind:'cancellation',id:row.intent_id}]}
     :{code:'cancellation_requested',meaning:'Cancelamento solicitado; a confirmação ainda não consta.',owner:'Controlador de execução',nextCondition:'Conciliar efeitos e concessões; confirmar a parada quando houver prova.',evidence:[{kind:'cancellation',id:row.intent_id}]});
-   const waits=await c.query('SELECT attempt_id FROM ac_capacity_waits WHERE context_id=$1 ORDER BY sequence LIMIT 101',[contextId]);
-   for(const row of waits.rows.slice(0,100))findings.push({code:'capacity_wait',meaning:'Uma tentativa aguarda capacidade autorizada.',owner:'Controlador de capacidade',nextCondition:'Capacidade elegível e autorização disponíveis para a mesma tentativa.',evidence:[{kind:'capacity_wait',id:row.attempt_id}]});
-   const operations=await c.query(`SELECT o.id,i.parent_intent_id FROM ac_operations o JOIN ac_intents i ON i.id=o.intent_id
+   const waits=await c.query('SELECT attempt_id,intent_id,reason,exclusions FROM ac_capacity_waits WHERE context_id=$1 ORDER BY sequence LIMIT 101',[contextId]);
+   for(const row of waits.rows.slice(0,100)){findings.push(waitDiagnostic(row));diagnosedIntents.add(row.intent_id);}
+   const operations=await c.query(`SELECT o.id,o.intent_id,i.parent_intent_id FROM ac_operations o JOIN ac_intents i ON i.id=o.intent_id
     WHERE i.context_id=$1 AND o.state='uncertain' ORDER BY o.id LIMIT 101`,[contextId]);
-   for(const row of operations.rows.slice(0,100))findings.push({code:row.parent_intent_id?'managed_effect_uncertain':'effect_uncertain',meaning:'O resultado físico da operação não está confirmado.',owner:'Controlador de recuperação',nextCondition:'Obter e conferir evidência física da operação original.',evidence:[{kind:'operation',id:row.id}]});
+   for(const row of operations.rows.slice(0,100))findings.push({code:row.parent_intent_id?'managed_effect_uncertain':'effect_uncertain',meaning:'O resultado físico da operação não está confirmado.',owner:'Controlador de recuperação',nextCondition:'Obter e conferir evidência física da operação original.',evidence:[{kind:'operation',id:row.id},{kind:'intent',id:row.intent_id}]});
+   for(const row of operations.rows.slice(0,100))diagnosedIntents.add(row.intent_id);
    const localGrants=await c.query(`SELECT o.id operation_id FROM ac_capacity_grants g
     LEFT JOIN ac_operations o ON o.id=(SELECT op.id FROM ac_operations op WHERE op.intent_id=g.intent_id AND op.grant_id=g.id LIMIT 1)
     WHERE g.context_id=$1 AND g.resource_kind='local_compositor' AND g.state='uncertain' ORDER BY g.id LIMIT 101`,[contextId]);
@@ -108,7 +123,15 @@ export class ContextDiagnostics{
     if(!policy.success||digest(policy.data)!==row.digest){findings.push({code:'policy_unknown',meaning:'Não foi possível verificar a política congelada.',owner:'Administrador do projeto',nextCondition:'Conciliar a política e sua integridade.',evidence:[{kind:'artifact',id:row.id}]});continue;}
     if(policy.data.requireHumanIntegration)findings.push({code:'approval_missing',meaning:'A aprovação exigida para este artefato e destino ainda não consta.',owner:'Aprovador autorizado',nextCondition:'Decisão autorizada sobre o artefato e destino congelados.',evidence:[{kind:'artifact',id:row.id},{kind:'stage',id:row.stage_id}]});
    }
-   const truncated=[planning,nativePlanning,nativeFailures,advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
+   const tasks=await c.query(`SELECT id,state FROM ac_intents WHERE context_id=$1
+    AND state NOT IN ('done','completed','review')
+    ORDER BY CASE WHEN state='failed' THEN 0 WHEN state IN ('canceled','cancelled') THEN 1 WHEN state='cancellation_requested' THEN 2 ELSE 3 END,created_at,id LIMIT 101`,[contextId]);
+   for(const row of tasks.rows.slice(0,100)){
+    if(diagnosedIntents.has(row.id))continue;
+    if(['canceled','cancelled'].includes(row.state))findings.push({code:'intent_canceled',meaning:'Esta intenção está registrada como cancelada.',owner:'Controlador de recuperação',nextCondition:'Conferir os recibos e concessões da mesma intenção para confirmar a conciliação dos efeitos físicos.',evidence:[{kind:'intent',id:row.id}]});
+    else findings.push({code:'task_diagnosis_unknown',meaning:row.state==='failed'?'Esta intenção está registrada como falha, mas a causa específica não foi comprovada.':'Não há causa específica de parada comprovada para esta intenção; as condições de contexto continuam aplicáveis e a execução pode estar em andamento.',owner:'Controlador de recuperação e administrador do projeto',nextCondition:'Consultar a operação e o executor originais, conferir seus recibos e conciliar o estado antes de decidir nova solicitação; não relançar um efeito incerto.',evidence:[{kind:'intent',id:row.id}]});
+   }
+   const truncated=[planning,nativePlanning,nativeFailures,remote,qa,tasks,advice,administrative,cancellations,waits,operations,localGrants,stages,receipts,integrations,approvals].some(r=>r.rows.length>100);
    await c.query('COMMIT');
    return {contextId,findings,truncated,assessment:findings.length?'observed':'unknown',
     ...(findings.length?{}:{explanation:'Nenhuma causa foi comprovada nos registros consultados; o estado de parada é desconhecido.'})};

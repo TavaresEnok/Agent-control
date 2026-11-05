@@ -188,7 +188,7 @@ describe('stored native terminal failure on isolated postgres',{skip},()=>{
    const coherentFinding=byJob(coherent.jobId);
    assert.equal(coherentFinding?.nativeFailure?.cause,'invalid_scope');
    assert.equal(coherentFinding?.nativeFailure?.origin,'stored_agreement');
-   assert.deepEqual(coherentFinding?.evidence.map(item=>item.kind),['native_execution_job','operation']);
+   assert.deepEqual(coherentFinding?.evidence.map(item=>item.kind),['native_execution_job','operation','intent']);
    assert.equal(byJob(absent.jobId)?.nativeFailure?.cause,'unknown');
    assert.equal(byJob(absent.jobId)?.nativeFailure?.origin,'stored_agreement');
    assert.equal(byJob(malicious.jobId)?.nativeFailure?.cause,'unknown');
@@ -209,7 +209,7 @@ describe('stored native terminal failure on isolated postgres',{skip},()=>{
    assert.equal(unrelatedFinding?.nativeFailure?.origin,'unreconciled');
    const reviewFinding=byJob(reviewer.jobId);
    assert.equal(reviewFinding?.nativeFailure?.cause,'execution_failed');
-   assert.deepEqual(reviewFinding?.evidence.map(item=>item.kind),['native_execution_job','stage']);
+   assert.deepEqual(reviewFinding?.evidence.map(item=>item.kind),['native_execution_job','stage','intent']);
    assert.equal(reviewFinding?.evidence.some(item=>item.id===reviewer.operationId),false);
    assert.equal(byJob(success.jobId),undefined);
    assert.equal(byJob(pending.jobId),undefined);
@@ -228,7 +228,7 @@ describe('stored native terminal failure on isolated postgres',{skip},()=>{
    const limitedIds=limited.findings.filter(item=>item.code==='native_execution_failed').map(item=>item.evidence.find(evidence=>evidence.kind==='native_execution_job')?.id);
    assert.deepEqual(limitedIds,ordered.slice(0,100));
    assert.equal(limitedIds.includes(ordered[100]),false);
-   assert.equal(limited.findings.every(item=>item.nativeFailure?.cause==='no_changes'),true);
+   assert.equal(limited.findings.filter(item=>item.code==='native_execution_failed').every(item=>item.nativeFailure?.cause==='no_changes'),true);
    assert.equal(await fingerprint(),before);
   }finally{await db.close();await fixture.close();}
  });

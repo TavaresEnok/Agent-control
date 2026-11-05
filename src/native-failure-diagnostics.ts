@@ -3,7 +3,7 @@ import {agentControlDiagnosticFindingSchema, type AgentControlDiagnosticFinding}
 export const NATIVE_TERMINAL_FAILURE_COPY={
  meaning:'Um job de execução nativa deste contexto está armazenado como falha terminal.',
  owner:'Supervisor de execução nativa',
- nextCondition:'Conservar o job citado. Esta consulta não altera execução, seleção ou recuperação.',
+ nextCondition:'Consultar o job e executor originais, conferir recibos e logs autorizados e conciliar a retirada física antes de decidir nova solicitação; não repetir um efeito incerto.',
 } as const;
 
 const STORED_CAUSE={

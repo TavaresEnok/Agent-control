@@ -11,3 +11,9 @@ A bancada reutiliza os fixtures reais de UI e fluxo: não cria outro servidor de
 Os relatórios contêm amostras, p50/p95 por nearest rank, máximo, versão Node, kernel, CPU/memória do host, transporte e limites. A inferência externa aparece separada como `exercised:false`, duração nula; o fixture de provedor é determinístico. Esses números são benchmark sintético local, `homologated:false`, e não homologação RNF-12, Android físico ou quota/inferência de conta real.
 
 Integração: UI invoca o helper por opt-in `AC_R3_UI_LATENCY=1`; fluxo incorpora os probes no fixture `r3-conversation-flow`. As evidências executadas devem ser preservadas pelos respectivos runners antes de declarar resultado. O helper do browser grava relatório antes de falhar nos thresholds.
+
+## Execuções integradas locais
+
+A bancada browser com opt-in executou doze comandos assinados: aceitação p50 76,20 ms e p95/máximo 235,44 ms; atualização DOM p50 156,46 ms e p95/máximo 319,55 ms. Autenticação teve p95/máximo 31,349 ms. A evidência pertence a `r3-ui-latency.json`, produzida pelo autor da UI.
+
+O fluxo isolado executou oito samples de comando (um novo e sete retries idempotentes): p50 38,54 ms e p95/máximo 253,32 ms. Dez projeções reais comprometidas tiveram limite superior de visibilidade p50 150,54 ms e p95/máximo 611,84 ms; autenticação das leituras p95 63,44 ms. O runner completo passou 1/1 sem skips em 100,4 s, incluindo a execução física que já integrava o fixture. Sua evidência `r3-flow.json` pertence ao autor do fluxo. As parcelas de inferência continuam fora desses objetivos: o probe de evento começa no snapshot PG, depois da geração do evento, e não na solicitação de uma resposta do provedor.
