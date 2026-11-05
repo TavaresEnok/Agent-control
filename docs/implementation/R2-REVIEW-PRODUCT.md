@@ -27,3 +27,7 @@ Integráveis por revisão estática, condicionados ao contrato de seleção da c
 ## Capacity `41a26ad1` + `a1a25682` + `0a95f2ec`
 
 Integráveis por revisão estática. Os deltas filtram candidatos bloqueados por limites de contexto/grupo e pela regra de reserva original; o autor informou teste PG com contraprovas para ambos os casos, não repetido nesta revisão. A seleção registra posição na ordem efetiva total após sticky e concatenação das cadeias. O envelhecimento depende de capacidade liberada, elegibilidade e retries; não prova justiça geral, preempção ou operação com conta real.
+
+## Quota experimental `e641be67` + `969efbd2`
+
+Integráveis por revisão estática como fonte injetável sem registro no bootstrap ou ativação real. A leitura vincula identidade antes da quota, ancora HOME no descritor verificado e recusa resultado em erro; testes adicionais cobrem falha de spawn, abort ativo e encerramento do PID da fixture. O autor informou testes e typecheck verdes, não repetidos por esta revisão. A documentação corretamente limita o encerramento ao grupo, exige executável confiável e supervisão durável, e não afirma compatibilidade com CLI ou conta real.
