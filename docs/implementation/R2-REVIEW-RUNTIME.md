@@ -9,3 +9,7 @@ Em `src/cezar.ts`, `reconcileCancellations` processa jobs nativos sequencialment
 ## Sandbox `ae75f948` — exame preliminar
 
 A alteração amplia a decisão de retirada para saída física não zero e permite descartar saída zero sem aplicação quando estado terminal persistido do filho ou pai autoriza; mantém verificação de recibo físico, identidade e journal. O teste adicionado verifica somente o predicado, não o controlador, Docker, retomada ou cancelamento. O acionamento de `reconcileManagedTask` em filhos terminais e após reinício é dependência declarada e está sob implementação na frente de grafo; ainda não há parecer de integração. A frente sandbox informou que prepara ensaios físicos em banco exclusivo.
+
+## Native terminal `90e2b449` — exame preliminar
+
+O protocolo novo valida identidade e recibo assinado, registra hashes de logs antes da remoção, reconcilia journal `prepared`, inspeciona par e rede e assina prova de remoção; preserva a retirada específica de writer managed. Para reviewer/judge concluído exige evidência persistida vinculada. O autor informou typecheck e teste com Docker/ledger simulados para ACK perdido, replay e assinatura adulterada. Isso não prova execução física nem acionamento integrado. No commit isolado só há chamadas de `retireTerminal` em `NativeVerification`: programmer standalone e retomada após falha, cancelamento ou queda depois de registrar evidência dependem de wiring adicional. O autor confirmou que essa ligação está atribuída à frente graph. Parecer de integração e prova física pendentes.
