@@ -32,3 +32,19 @@ Limites persistem: sem credenciais/contas reais, APIs pagas, deploy ou migraçã
 PostgreSQL exclusivo root: nome ac-r4-root-20261105-pg, ID72b1622e94add3ae9b28b998bc71363a7ae54192757feec274c29ac81ef695c1, label agent-control.disposable=r4-root-20261105, loopback32869, dados tmpfs, credencial sintética de laboratório. Testes criam/removem seus próprios bancos filhos. Remover apenas identidade/label conferidas ao fechar. Bancos antigos R3 não foram reusados.
 
 Um build da frente conversation atingiu dist ignorado compartilhado por symlink; nenhum arquivo rastreado foi alterado. Autor comunicou e isolou seu dist; build integrado final precisa produzir assets da versão integrada, não usar esses assets como evidência.
+
+## Segunda integração e validações delimitadas
+
+081 integrado para validação conjunta:51b8512e/67b49baf/79549a7b/2425575f/4ad29d7d →e48461c8/de1bc706/8451a730/eb07bfa4/6c8c5299. Revisão estática e PG2/2 independentes; aceite físico final aguarda continuidade do writer086 e fluxo integrado. Não confundir com conclusão RNF11. Foi encontrado planner terminal sem chamada de retirada; agora a retirada ocorre após publicação confirmada, não apenas na fixture.
+
+UI079/diagnóstico integrada189a67d9..173b86be, parecer470c8697: focal independente10/10 e browser dos novos critérios passaram; harness independente depois falhou no estágio legado de política. Browser completo do autor passou, com proveniência distinta. RF01 e RNF05 receberam aceite do contrato local literal conforme recomendação independente2dc5442a, sem promover Android/execução/deploy por tabela. Matriz atual3aceitos/108semaceite; CSV e JSON preservam111itens.
+
+Retorno/desenvolvimento remoto079: b69e5a51→42e2ec67 e revisão09bdd182, independente8/8. Bootstrap613880ef corrigido85858161 após contraprova real de alias pai da chave; factory agora verifica descriptor canônico aberto, revisão852fdc6d. Callerweb797f40fc/44e0a3b4/e59e52f9/d57fc1fc: componente14/14 independente, browser autor realHappier/cookie/gateway/SSH passou; rota canônica completa+registry de server-main ainda em desenvolvimento, sem substituir silenciosamente essa prova.
+
+Exportação083:6f031066→be2403b6, revisão produto d8e4dd12, PG2/2 independente. CLI com história cifrada e agrupamento de notificações ainda em prova. Segredos delimitados permanecem aprovados somente nas23superfícies verificadas.
+
+Broker:429a0bf2/a30c2a91/012874ae→c5302cbb/f611bdea/bd24ed87, revisão da2c899e. Shutdown normal corrigido; perda real de lock ainda falha. Prova física1/1exit0,2workers hostis+administração assinada legítima; revisor inspecionou código e resultado serializado do autor sem alegar outra execução independente.
+
+Carga simultânea de Expo/typechecks/provas físicas esgotou memória e provocou timeouts de laboratório; provas pesadas passaram a ser serializadas, sem enfraquecer timeouts de produto. Um único Expo canônico produz artifact com hashes para reexecução independente em nova bancada, evitando segundo build pesado. Typecheck principal no snapshot ca312d89 passou; log r4-integrated-typecheck-progress.log não é fechamento final.
+
+Pendências técnicas ativas:086 continuidade segura de writer após múltiplos takeovers;082 gerações Cezar e identidade real de runtime;084/085 confirmação de protocolo com watchdog confiável independente da imagem candidata; fluxo integrado078/079/081/086; menu canônico; CLI/exportação e notificações; entrada remota com registry real. Todas permanecem executáveis, não impedimentos externos. Migrações reservadas082/083/084/085/086 não autorizam operação em bancos preexistentes.

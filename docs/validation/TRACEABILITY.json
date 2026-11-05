@@ -2,15 +2,15 @@
   {
     "id": "RF-01",
     "normative_row": "RF-01\tP0\tCadastrar projeto, repositório, branch, ambientes e diretórios autorizados pelo painel\tI1/I6",
-    "status": "partially_examined",
-    "code_state": "partial",
-    "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md;docs/implementation/PROJECT-ADMIN-20261102.md;docs/implementation/PRODUCT-P0-CONTINUATION-20261102.md;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
-    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts;src/project-admin.ts;src/project-admin-api.ts;tests/project-admin.test.ts;tests/project-admin-api.test.ts;src/installation-readiness.ts;tests/installation-readiness.test.ts",
-    "independent_review": "pending",
+    "status": "examined",
+    "code_state": "implemented",
+    "test_result": "passed_supported_contract",
+    "evidence": "docs/validation/evidence/product-mobile-native-stream-final-20261102.log;docs/validation/evidence/product-mobile-integrated-proof.json;docs/implementation/PRODUCT-TEAM-20261102.md;docs/implementation/PROJECT-ADMIN-20261102.md;docs/implementation/PRODUCT-P0-CONTINUATION-20261102.md;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/product-admin-mobile-third-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log;docs/implementation/R4-REVIEW-PRODUCT.md;docs/implementation/R4-UI.md;docs/validation/evidence/r4-review-product-environments.log;docs/validation/evidence/r4-review-product-ui-browser-final.log",
+    "files": "src/projects.ts;src/projects-api.ts;src/installation.ts;src/server-main.ts;tests/projects.test.ts;src/project-admin.ts;src/project-admin-api.ts;tests/project-admin.test.ts;tests/project-admin-api.test.ts;src/installation-readiness.ts;tests/installation-readiness.test.ts;src/project-environments.ts;src/project-environments-api.ts;tests/r3-project-environments.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-project-environments.tsx",
+    "independent_review": "approved_scoped_R4_2dc5442a",
     "authorization": "isolated_synthetic_only",
-    "acceptance": "not_accepted",
-    "limitation": "PG project registry and native selection/ACL demonstrated with two synthetic repositories; registration uses signed administration and configured private roots, at most four active runtimes, no live remote project deployment. Signed local project registration requires configured private roots; filesystem races, remote administration and operational deployment remain open. Integrated build passed; this is not behavioral acceptance. The third mobile run covered synthetic registration, preview and geometry but is not overall mobile acceptance; local inspect is read-only and does not establish operational readiness. Final synthetic Chromium 360/390 proof covered signed third-project registration, sanitized preview and no execution intents, operations, outbox or grants; no physical phone, native approval, inference or operational migration was demonstrated. Final administrative browser path also rejects automatic native ui-state/telemetry effects; no physical phone or production acceptance."
+    "acceptance": "accepted",
+    "limitation": "Aceite do critério local literal de cadastro de projeto/repositório/branch/ambientes/diretórios pelo painel, após recomendação independente2dc5442a e provas079/author6083ab18/revisorad06fc87 integradas até173b86be/470c8697/5550b187. Cadastro assinado histórico e nova configuração079 com autoridade, caminhos Git verificados, CAS, ACK perdido/replay, persistência e viewport móvel compõem a evidência. A prova independente focal passou; seu estágio posterior de política legado teve timeout e não é declarado verde. Não é aceite de Android físico, execução remota integral, conta real, deploy ou migração operacional: esses não integram o texto RF-01 e permanecem em seus próprios requisitos."
   },
   {
     "id": "RF-02",
@@ -795,15 +795,15 @@
   {
     "id": "RNF-05",
     "normative_row": "RNF-05\tObservabilidade\tToda tarefa parada informa motivo, evidência, responsável pela recuperação e próxima condição de avanço\tI6/I7",
-    "status": "partially_examined",
-    "code_state": "partial",
-    "test_result": "not_run",
-    "evidence": "docs/validation/evidence/diagnostics-focused-first-20261102.log;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/diagnostics-manager-transport-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log",
-    "files": "src/diagnostics.ts;src/diagnostics-api.ts;tests/diagnostics.test.ts;src/installation-readiness.ts;src/server-main.ts;tests/installation-readiness.test.ts;tests/managers.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx",
-    "independent_review": "pending",
+    "status": "examined",
+    "code_state": "implemented",
+    "test_result": "passed_supported_contract",
+    "evidence": "docs/validation/evidence/diagnostics-focused-first-20261102.log;docs/validation/evidence/six-workers-integrated-build-second-20261102.log;docs/validation/evidence/installation-readiness-focused-20261102.log;docs/validation/evidence/diagnostics-manager-transport-20261102.log;docs/validation/evidence/product-diagnostics-duplicate-red-20261102.log;docs/validation/evidence/product-admin-mobile-final-20261102.log;docs/validation/evidence/product-admin-mobile-75965300-aa8e-46a1-a1d1-2e91fb824b04.json;docs/implementation/PRODUCT-MOBILE-FINAL-20261102.md;docs/validation/evidence/product-admin-mobile-native-effects-final-20261102.log;docs/implementation/R4-REVIEW-PRODUCT.md;docs/implementation/R4-UI.md;docs/validation/evidence/r4-review-product-ui-focused.log;docs/validation/evidence/r4-review-product-ui-browser-final.log",
+    "files": "src/diagnostics.ts;src/diagnostics-api.ts;tests/diagnostics.test.ts;src/installation-readiness.ts;src/server-main.ts;tests/installation-readiness.test.ts;tests/managers.test.ts;upstream/cezar/packages/web/src/routes/settings/agent-control-section-diagnostics.test.tsx;src/diagnostic-projections.ts;tests/r3-diagnostics.test.ts",
+    "independent_review": "approved_scoped_R4_2dc5442a",
     "authorization": "isolated_synthetic_only",
-    "acceptance": "not_accepted",
-    "limitation": "Read-only context-scoped diagnostics extended to manager lease, global admission, specialist rejection/uncertainty and administrative uncertainty; facts include recovery owner and next condition. No new PG behavioral proof for added queries; idle unknown is preserved."
+    "acceptance": "accepted",
+    "limitation": "Aceite da observabilidade no contrato suportado: projeções persistentes de motivo/evidência/responsável/próxima condição, unknown explícito quando não comprovado, catálogo paginado e busca exata por intenção além dos100 primeiros; contexto não autorizado recusado. BackendR3 revisado e consumidor móvel R4 em173b86be/470c8697, recomendação independente2dc5442a. Seleção da tarefa101 e troca de contexto verificadas no navegador real. Não afirma causa física onde o sistema só conhece incerteza, nem aceita automaticamente execução, segurança ou desempenho operacional."
   },
   {
     "id": "RNF-06",
