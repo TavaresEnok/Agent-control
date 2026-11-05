@@ -3,7 +3,7 @@
 This process boundary is not a hostile-code sandbox; deploy it as a restricted executor.
 """
 import remote_supervisor
-import argparse, fcntl, hashlib, importlib.util, json, os, pathlib, resource, signal, stat, subprocess, sys, time, uuid
+import argparse, contextlib, fcntl, hashlib, importlib.util, json, os, pathlib, resource, signal, stat, subprocess, sys, time, uuid
 
 
 def atomic(path, value):
@@ -65,15 +65,17 @@ def execute(config_path, operation):
     record = operation_path(root, operation)
     with open(root / (operation + '.writer.lock'), 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        item = json.loads(record.read_text())
-        if item['state'] != 'uncertain':
-            return
-        cancel_path = root / (operation + '.cancel.json')
-        if cancel_path.exists():
-            item.update(state='canceled_confirmed', exitCode=0, canceledWithoutStart=True,
-                        logSha256=hashlib.sha256(b'').hexdigest(), finishedAt=time.time())
-            atomic(record, item)
-            return
+        guard = remote_supervisor.authority(config, root, atomic) if config.get('executionBackend') == 'docker' else contextlib.nullcontext()
+        with guard:
+            item = json.loads(record.read_text())
+            if item['state'] != 'uncertain':
+                return
+            cancel_path = root / (operation + '.cancel.json')
+            if cancel_path.exists():
+                item.update(state='canceled_confirmed', exitCode=0, canceledWithoutStart=True,
+                            logSha256=hashlib.sha256(b'').hexdigest(), finishedAt=time.time())
+                atomic(record, item)
+                return
         project = item['projectId']
         directory = project_directory(config, project, item.get('workspaceId'))
         if str(directory) != item['root'] or not directory.is_dir():

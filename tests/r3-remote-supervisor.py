@@ -185,3 +185,28 @@ print('lost-removal-ack retained uncertainty')
                     claim.unlink()
         run('docker', 'exec', server, 'chown', '-R', f'{os.getuid()}:{os.getgid()}', str(lab))
         run('docker', 'rm', '-f', server)
+
+# A prelaunch cancel receipt is also a mutation and must honor authority fencing.
+import sys
+sys.path.insert(0, str(REPO / 'services/remote-worker'))
+import worker as local_worker
+import remote_supervisor as local_supervisor
+with tempfile.TemporaryDirectory(prefix='ac-r3-remote-prelaunch-') as directory:
+    root = pathlib.Path(directory)
+    operation = str(uuid.uuid4())
+    configuration = {'stateDirectory': str(root), 'projects': {}, 'tasks': {}, 'executionBackend': 'docker',
+                     'installationId': 'ac-r3-prelaunch-' + uuid.uuid4().hex, 'authorityEpoch': 1}
+    config_path = root / 'config'; config_path.write_text(json.dumps(configuration))
+    record = root / (operation + '.json')
+    local_worker.atomic(record, {'operationId': operation, 'state': 'uncertain'})
+    local_worker.atomic(root / (operation + '.cancel.json'), {'operationId': operation})
+    with local_supervisor.authority({**configuration, 'authorityEpoch': 2}, root, local_worker.atomic):
+        pass
+    try:
+        local_worker.execute(str(config_path), operation)
+    except ValueError as error:
+        assert str(error) == 'STALE_REMOTE_AUTHORITY'
+    else:
+        raise AssertionError('stale prelaunch supervisor wrote cancellation receipt')
+    assert json.loads(record.read_text())['state'] == 'uncertain'
+    print('PASS stale prelaunch supervisor cannot publish canceledWithoutStart after authority advance')
