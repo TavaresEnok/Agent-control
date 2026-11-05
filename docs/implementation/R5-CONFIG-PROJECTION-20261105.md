@@ -1,0 +1,7 @@
+# Projeção cifrada de configuração — bancada parcial
+
+A projeção v1 é somente leitura e não restaura nem ativa configuração. A coleta exige que o mesmo principal seja administrador e owner do projeto, usa transação PostgreSQL repeatable read e recusa limites excedidos. O envelope AES-256-GCM exige chave de 32 bytes mantida em arquivo privado separado; a escrita usa criação exclusiva e não sobrescreve. O leitor valida o DTO e não executa restauração.
+
+O esquema permite somente campos tipados. Referências a repositório, credenciais, endpoints, diretórios, ramos, nomes e modelos são identificadores opacos `rebindNeeded`, sem seus valores; dados de credenciais e arquivos de chaves de origem não são consultados. O resultado preserva estruturas de ambientes, destinos, templates, políticas e perfis, mas **não é uma exportação completa utilizável para reconstituir a instalação**: omite configurações globais, nomes e valores de referências e depende de reconfiguração manual. RF-34 e T18 permanecem parciais. O módulo não está conectado a comando ou API de produção neste checkpoint e requer revisão independente.
+
+Teste de bancada: PostgreSQL filho descartável e fixtures sintéticas; `tests/config-export.test.ts` verificou autorização, cifra, inspeção, rejeição de chave/tag incorretas, não sobrescrita e canários. `npm run typecheck` passou neste worktree com dependências locais compartilhadas. Isto não demonstra restauração de instalação, ausência universal de segredos em dados mal classificados, custódia externa de chave ou uso operacional.
