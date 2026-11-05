@@ -1,3 +1,4 @@
+import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {constants} from 'node:fs';
@@ -79,10 +80,16 @@ export class NativePlanningSupervisor{
    model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
+  await this.ledger.tx(async c=>{
+   await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
+   if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,{workerImage:this.config.imageId,toolsImage:this.config.imageId,providerNetworkId:this.config.providerNetwork},{projectId:identity.projectId,contextId:input.contextId});
+   else await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
+  });
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal:identity.principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.callId,names:[name]});
   // Journal uncertainty BEFORE touching Docker. If any acknowledgement is lost,
   // reconcile observes this same name; it never starts or creates a substitute.
   await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
+   if(!this.config.syntheticFixture)await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
    await c.query("INSERT INTO ac_native_planning_jobs(id,grant_id,context_id,input_digest,launch_digest,container_name,state) VALUES($1,$2,$3,$4,$5,$6,'uncertain')",[input.callId,input.grantId,input.contextId,input.inputDigest,launchDigest,name]);});
   await mkdir(paths.root,{mode:0o700});for(const path of [paths.input,paths.output,paths.planning])await mkdir(path,{mode:0o700});
   await writeFile(join(paths.input,'launch.json'),JSON.stringify(signed),{mode:0o600,flag:'wx'});await writeFile(paths.key,this.publicKey,{mode:0o600,flag:'wx'});
