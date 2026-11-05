@@ -13,7 +13,7 @@ function readPending(key:string){
  return value===null?null:Pending.parse(value)
 }
 export function AgentControlRemoteDevelopment({principalId,installationId,projectId,view}:{principalId:string;installationId:string;projectId:string;view:z.infer<typeof remoteDevelopmentViewSchema>}){
- const cache=useQueryClient(),[revision,setRevision]=useState(0),[discardable,setDiscardable]=useState(false)
+ const cache=useQueryClient(),[revision,setRevision]=useState(0)
  const key=`ac-remote-development:${encodeURIComponent(principalId)}:${installationId}:${projectId}`
  let pending:z.infer<typeof Pending>|null=null,storageError=false
  try{pending=readPending(key)}catch{storageError=true}
@@ -25,23 +25,26 @@ export function AgentControlRemoteDevelopment({principalId,installationId,projec
   sessionStorage.setItem(key,JSON.stringify(record));setRevision(value=>value+1)
   const command={schemaVersion:1,intentId:record.intentId,deliveryAttemptId:crypto.randomUUID(),...semantic}
   let proof:string
-  try{proof=await signControl(principalId,command,installationId)}catch(error){if(!record.uncertain)setDiscardable(true);throw error}
-  setDiscardable(false);sessionStorage.setItem(key,JSON.stringify({...record,uncertain:true}));setRevision(value=>value+1)
+  proof=await signControl(principalId,command,installationId)
+  sessionStorage.setItem(key,JSON.stringify({...record,uncertain:true}));setRevision(value=>value+1)
   const response=await agentControlFetch('/api/v1/ac/project-admin/remote-development',{method:'POST',headers:{'content-type':'application/json','x-ac-operator-proof':proof},body:JSON.stringify(command)})
   const value:unknown=await response.json().catch(()=>null)
   if(!response.ok){const error=z.object({error:z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/)}).safeParse(value);throw Error(error.success?error.data.error:`HTTP_${response.status}`)}
   const result=Result.safeParse(value),expected=semantic.action==='project.prepareRemoteDevelopment'?'prepared':semantic.action==='project.launchRemoteDevelopment'?'launched':'registered'
   if(!result.success||result.data.state!==expected||result.data.projectId!==projectId||result.data.contextId!==semantic.payload.contextId||result.data.workspaceId!==semantic.payload.workspaceId||expected==='registered'&&result.data.state!=='registered')throw Error('COMMAND_RESPONSE_MISMATCH')
-  sessionStorage.removeItem(key);setDiscardable(false);setRevision(value=>value+1)
+  sessionStorage.removeItem(key);setRevision(value=>value+1)
   return result.data
  },onSuccess:()=>{void cache.invalidateQueries({queryKey:['ac-project-admin']})}})
  const disabled=execute.isPending||pending!==null||storageError
+ const noEffect=pending?.semantic.action==='project.launchRemoteDevelopment'&&view.workspaces.some(item=>item.projectId===projectId&&item.contextId===pending!.semantic.payload.contextId&&item.workspaceId===pending!.semantic.payload.workspaceId&&item.implementationState==='completed'&&item.emissionPhase==='no_effect')
+ const clearPending=()=>{sessionStorage.removeItem(key);setRevision(value=>value+1);execute.reset()}
  return <div className="flex min-w-0 flex-col gap-2" data-testid="ac-remote-development" data-revision={revision}>
   <p>Desenvolvimento remoto. A execução usa a tarefa configurada e o gerente ativo do contexto. O artefato permanece não revisado; QA, revisão e aprovação são etapas posteriores.</p>
   {!view.configured&&<p role="status">Desenvolvimento remoto não configurado neste servidor.</p>}
   {storageError&&<p role="alert">PENDING_COMMAND_INVALID</p>}
   {pending&&<div><p role="status">{pending.uncertain?'Envio anterior incerto. Confirme o mesmo pedido para recuperar seu resultado.':'Pedido preparado para assinatura.'}</p><Button disabled={execute.isPending} onClick={()=>execute.mutate(undefined)}>Confirmar pedido remoto pendente</Button></div>}
-  {discardable&&<Button variant="outline" onClick={()=>{sessionStorage.removeItem(key);setDiscardable(false);setRevision(value=>value+1);execute.reset()}}>Descartar pedido remoto recusado</Button>}
+  {pending?.uncertain===false&&<Button disabled={execute.isPending} variant="outline" onClick={clearPending}>Descartar pedido ainda não enviado</Button>}
+  {noEffect&&<div><p>O servidor confirmou ausência de efeito remoto. Uma nova execução exige nova intenção e origem autorizada.</p><Button disabled={execute.isPending} variant="outline" onClick={clearPending}>Encerrar pedido sem efeito confirmado</Button></div>}
   {view.configured&&view.candidates.filter(item=>item.projectId===projectId).map(candidate=><div key={`${candidate.contextId}:${candidate.sourceOperationId}`} className="min-w-0 break-words">
    <p>{candidate.label}; contexto {candidate.contextId}; origem {candidate.commit}; não revisada.</p>
    <Button disabled={disabled} onClick={()=>execute.mutate({action:'project.prepareRemoteDevelopment',payload:{projectId,contextId:candidate.contextId,workspaceId:crypto.randomUUID(),hostId:candidate.hostId,sourceOperationId:candidate.sourceOperationId}})}>Preparar workspace remoto</Button>

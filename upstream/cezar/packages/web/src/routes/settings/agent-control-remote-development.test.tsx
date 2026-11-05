@@ -22,3 +22,14 @@ it('signs only the configured launch identifiers and requires unreviewed registr
  cleanup();panel([],[{projectId,contextId,workspaceId,hostId,state:'prepared',implementationState:'uncertain',emissionPhase:'emitting'}]);fireEvent.click(screen.getByRole('button',{name:'Registrar artefato remoto'}));expect(await screen.findByRole('alert')).toHaveProperty('textContent','COMMAND_RESPONSE_MISMATCH');expect(sessionStorage.length).toBe(1)
 })
 it('does not offer another project candidate or an unconfigured task',()=>{panel([{...candidate,projectId:installationId}]);expect(screen.queryByRole('button',{name:'Preparar workspace remoto'})).toBeNull();expect(screen.queryByRole('textbox')).toBeNull()})
+
+it('closes a submitted launch only when authenticated workspace state proves completed no-effect',async()=>{
+ const workspaceId='00000000-0000-4000-8000-000000000006';
+ vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'REMOTE_IMPLEMENTATION_START_NOT_ELIGIBLE'},{status:409})))
+ const first=panel([],[{projectId,contextId,workspaceId,hostId,state:'prepared'}]);fireEvent.click(screen.getByRole('button',{name:'Executar tarefa remota configurada'}));await screen.findByRole('alert');expect(screen.queryByRole('button',{name:'Encerrar pedido sem efeito confirmado'})).toBeNull();first.unmount();
+ panel([],[{projectId,contextId,workspaceId,hostId,state:'prepared',implementationState:'completed',emissionPhase:'no_effect'}]);fireEvent.click(screen.getByRole('button',{name:'Encerrar pedido sem efeito confirmado'}));expect(sessionStorage.length).toBe(0);expect(screen.queryByRole('button',{name:'Confirmar pedido remoto pendente'})).toBeNull()
+})
+it('keeps a never-submitted signing failure discardable after remount',async()=>{
+ vi.mocked(signControl).mockRejectedValueOnce(Error('DEVICE_KEY_INVALID'))
+ const first=panel();fireEvent.click(screen.getByRole('button',{name:'Preparar workspace remoto'}));await screen.findByRole('alert');first.unmount();panel();fireEvent.click(screen.getByRole('button',{name:'Descartar pedido ainda não enviado'}));expect(sessionStorage.length).toBe(0)
+})
