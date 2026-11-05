@@ -1,3 +1,4 @@
+import {AccountRename,ProfileVersionEditor} from './agent-control-resource-edit'
 import {AgentControlConversationResolver} from './agent-control-conversation-resolver'
 import {AgentControlUsageReport} from './agent-control-usage-report'
 import {AgentControlInstallationAuthority} from './agent-control-installation-authority'
@@ -57,7 +58,7 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  administrative:administrativeViewSchema,
  providerBindings:z.array(agentControlProviderBindingSchema),providerAdapters:z.array(agentControlProviderAdapterSchema),
  accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),mode:z.string(),quota_status:z.string(),quota_scope_mode:z.enum(['account','model']).optional(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
- profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),quota_status:z.string().optional(),quota_scope_mode:z.enum(['account','model']).optional(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
+ profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),quota_status:z.string().optional(),quota_scope_mode:z.enum(['account','model']).optional(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean(),config_digest:z.string().regex(/^[a-f0-9]{64}$/).optional()})),
  catalog:z.array(catalogEntrySchema),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
  qualityPolicies:z.array(z.object({revision:z.number(),snapshot:z.object({requireSpecialistBeforeImplementation:z.boolean().optional()}).passthrough().optional()})),
@@ -238,6 +239,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      {a.can_manage?<Button type="button" disabled={busy||(!a.enabled&&a.mode!=='synthetic')} onClick={()=>mutate.mutate({action:'account.state',payload:{id:a.id,enabled:!a.enabled,expectedRevision:a.revision}})}>
       {a.enabled?'Desabilitar conta':'Habilitar conta'}
      </Button>:<span className="text-xs">Gerenciada pelo titular da conta.</span>}
+     {a.can_manage&&<AccountRename key={`${a.id}:${a.revision}`} account={a} busy={busy} onSave={payload=>mutate.mutate({action:'account.rename',payload})}/>}
     </li>)}</ul>
     <form className="flex min-w-0 flex-col gap-2" onSubmit={e=>{e.preventDefault();const id=accountId??crypto.randomUUID();setAccountId(id)
      mutate.mutate({action:'account.add',payload:{id,provider:accountProvider,label,resourceIdentity:accountMode==='synthetic'?`synthetic-${id}`:resourceIdentity,
@@ -265,6 +267,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      {p.can_manage?<Button type="button" disabled={busy||(!p.enabled&&account?.mode!=='synthetic')} onClick={()=>mutate.mutate({action:'profile.state',payload:{id:p.id,enabled:!p.enabled,expectedRevision:p.revision}})}>
       {p.enabled?'Desabilitar perfil':'Habilitar perfil'}
      </Button>:<span className="text-xs">Gerenciado pelo titular da conta.</span>}
+     {p.can_manage&&account&&p.config_digest&&<ProfileVersionEditor key={`${p.id}:${p.config_digest}`} profile={{...p,config_digest:p.config_digest}} account={account} catalog={data.catalog} busy={busy} onSave={(payload,onSuccess)=>mutate.mutate({action:'profile.revise',payload},{onSuccess})}/>}
     </li>})}</ul>
     <AgentControlProfileEditor key={contextId} accounts={data.accounts} catalog={data.catalog} busy={busy}
      onAdd={payload=>mutate.mutate({action:'profile.add',payload})}/>

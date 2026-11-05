@@ -2,7 +2,7 @@ import { z } from 'zod';
 import {CAPACITY_EXCLUSION_REASONS} from './capacity-exclusions.ts';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { Capacity, CapacityPolicy, AccountInput, ProfileInput, QuotaInput } from './capacity.ts';
+import { Capacity, CapacityPolicy, AccountInput, ProfileInput, ProfileRevisionInput, AccountRenameInput, profileConfigDigest, QuotaInput } from './capacity.ts';
 import { Authority, digest, Id, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import { Operators,type OperatorProof } from './operator.ts';
@@ -56,6 +56,8 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('plan.cancel'),payload:z.object({intentId:Id,planRevision:z.number().int().positive()}).strict()}).strict(),
  z.object({...base,action:z.literal('provider.bind'),payload:ProviderBinding}).strict(),
  z.object({...base,action:z.literal('account.add'),payload:AccountInput}).strict(),
+ z.object({...base,action:z.literal('account.rename'),payload:AccountRenameInput}).strict(),
+ z.object({...base,action:z.literal('profile.revise'),payload:ProfileRevisionInput}).strict(),
  z.object({...base,action:z.literal('account.share'),payload:z.object({accountId:Id}).strict()}).strict(),
  z.object({...base,action:z.literal('account.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
  z.object({...base,action:z.literal('profile.state'),payload:z.object({id:Id,enabled:z.boolean(),expectedRevision:z.number().int().positive()}).strict()}).strict(),
@@ -161,6 +163,8 @@ export class Control {
       result={intentId:command.payload.intentId,cancellationState:prior?.state??'requested'};break;
      }
      case 'provider.bind':result=await new ProviderCollectors(this.ledger,this.providerAdapters,c).bind(principal,context.project_id,command.payload);break;
+     case 'account.rename':await service.renameAccount(principal,context.project_id,command.payload);result={id:command.payload.id,revision:command.payload.expectedRevision+1};break;
+     case 'profile.revise':await service.reviseProfile(principal,context.project_id,command.payload);result={profileId:command.payload.newId};break;
      case 'account.add':await service.addAccount(principal,context.project_id,command.payload);result={accountId:command.payload.id};break;
      case 'account.share':await service.shareAccount(principal,command.payload.accountId,context.project_id);result={accountId:command.payload.accountId};break;
      case 'account.state':await service.setEnabled(principal,context.project_id,'account',command.payload);result={id:command.payload.id,enabled:command.payload.enabled,revision:command.payload.expectedRevision+1};break;
@@ -202,7 +206,7 @@ export class Control {
      snapshot:row.snapshot?projectProviderSnapshot(row.snapshot,storedDigest,row.fresh===true):null};});
    const providerAdapters=this.providerAdapters.map(adapter=>({id:adapter.manifest.id,version:adapter.manifest.version,provider:adapter.manifest.provider,mode:adapter.manifest.mode,source:adapter.manifest.source}));
    const profiles=(await c.query(`SELECT p.*,ac_profile_quota_status(a.id,p.model) quota_status,a.quota_scope_mode,(a.mode='synthetic') can_activate,(a.owner_id=$2 AND $3::boolean) can_manage FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
-    JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows;
+    JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 ORDER BY p.id`,[context.project_id,principal,context.role==='owner'])).rows.map(row=>({...row,config_digest:profileConfigDigest(row)}));
    const catalog=(await c.query(`SELECT m.provider,m.model,m.efforts,m.roles,m.source FROM ac_model_catalog m
     WHERE EXISTS(SELECT 1 FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE a.provider=m.provider AND x.project_id=$1)
     ORDER BY m.provider,m.model`,[context.project_id])).rows;

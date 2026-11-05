@@ -14,6 +14,13 @@ export const AccountInput = z.object({ id: Id, provider: z.string().min(1).max(8
   eligibilitySource: z.string().min(1).max(500), maxConcurrent: z.number().int().min(1).max(128) }).strict();
 export const ProfileInput = z.object({ id: Id, accountId: Id, model: z.string().min(1).max(100),
   effort: z.enum(['low','medium','high']), role: Role }).strict();
+export const ProfileRevisionInput=z.object({sourceProfileId:Id,expectedDigest:z.string().regex(/^[a-f0-9]{64}$/),newId:Id,
+ model:z.string().min(1).max(100),effort:z.enum(['low','medium','high']),role:Role}).strict().refine(v=>v.sourceProfileId!==v.newId);
+export const AccountRenameInput=z.object({id:Id,label:z.string().min(1).max(100).refine(v=>v.trim()===v&&!/[\x00-\x1f\x7f]/.test(v)),expectedRevision:z.number().int().positive()}).strict();
+const ProfileDigestValue=z.object({id:Id,accountId:Id,model:z.string(),effort:z.enum(['low','medium','high']),role:Role,revision:z.number().int().positive(),enabled:z.boolean()}).strict();
+export function profileConfigDigest(row:{id:string;account_id:string;model:string;effort:string;role:string;revision:number;enabled:boolean}){
+ return digest(ProfileDigestValue.parse({id:row.id,accountId:row.account_id,model:row.model,effort:row.effort,role:row.role,revision:row.revision,enabled:row.enabled}));
+}
 const Chain = z.object({ regular: z.array(Id).min(1).max(20), emergency: z.array(Id).max(20).default([]) }).strict();
 export const CapacityPolicy = z.object({ schemaVersion: z.literal(1),
   maxProgrammersPerContext: z.number().int().min(1).max(10),
@@ -109,6 +116,32 @@ export class Capacity {
       if(input.enabled&&row.mode!=='synthetic')throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
       await c.query(kind==='account'?'UPDATE ac_accounts SET enabled=$2,revision=revision+1 WHERE id=$1':
         'UPDATE ac_profiles SET enabled=$2,revision=revision+1 WHERE id=$1',[input.id,input.enabled]);
+    });
+  }
+  async renameAccount(principal:string,projectId:string,raw:z.input<typeof AccountRenameInput>){
+    const input=AccountRenameInput.parse(raw);
+    await this.tx(async c=>{await this.owner(c,principal,projectId);
+      await c.query('SELECT id FROM ac_capacity_config WHERE id=1 FOR UPDATE');
+      const row=(await c.query(`SELECT a.revision FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
+       WHERE a.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a`,[input.id,principal,projectId])).rows[0];
+      if(!row)throw new Refusal('ACCOUNT_FORBIDDEN',403);
+      if(row.revision!==input.expectedRevision)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
+      await c.query('UPDATE ac_accounts SET label=$2,revision=revision+1 WHERE id=$1',[input.id,input.label]);
+    });
+  }
+  async reviseProfile(principal:string,projectId:string,raw:z.input<typeof ProfileRevisionInput>){
+    const input=ProfileRevisionInput.parse(raw);
+    await this.tx(async c=>{await this.owner(c,principal,projectId);
+      const source=(await c.query(`SELECT p.*,a.mode,a.enabled account_enabled FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
+       JOIN ac_account_access x ON x.account_id=a.id WHERE p.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF a,p`,[input.sourceProfileId,principal,projectId])).rows[0];
+      if(!source)throw new Refusal('ACCOUNT_PROFILE_FORBIDDEN',403);
+      if(profileConfigDigest(source)!==input.expectedDigest)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
+      if(!source.account_enabled)throw new Refusal('ACCOUNT_DISABLED',409);
+      if(!(await c.query('SELECT 1 FROM ac_model_catalog WHERE provider=(SELECT provider FROM ac_accounts WHERE id=$1) AND model=$2 AND $3=ANY(efforts) AND $4=ANY(roles)',[source.account_id,input.model,input.effort,input.role])).rowCount)throw new Refusal('MODEL_EFFORT_NOT_IN_CATALOG');
+      if((await c.query('SELECT 1 FROM ac_profiles WHERE id=$1',[input.newId])).rowCount)throw new Refusal('PROFILE_ID_CONFLICT');
+      const inserted=await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING RETURNING id',[input.newId,source.account_id,input.model,input.effort,input.role,source.mode==='synthetic']);
+      if(!inserted.rowCount)throw new Refusal('PROFILE_ID_CONFLICT');
+      await c.query('INSERT INTO ac_profile_lineage(new_profile_id,source_profile_id,source_digest,created_by) VALUES($1,$2,$3,$4)',[input.newId,input.sourceProfileId,input.expectedDigest,principal]);
     });
   }
   async addProfile(principal: string, projectId: string, raw: z.input<typeof ProfileInput>) {
