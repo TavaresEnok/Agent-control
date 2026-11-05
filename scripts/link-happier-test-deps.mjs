@@ -1,6 +1,6 @@
 // Link only absent ignored dependencies from an existing local Happier workspace.
 // install SOURCE_ROOT MANIFEST; remove MANIFEST. Run from the checkout to modify.
-import {lstat, readdir, readFile, realpath, symlink, unlink, writeFile} from 'node:fs/promises';
+import {lstat, readdir, readFile, readlink, realpath, symlink, unlink, writeFile} from 'node:fs/promises';
 import {join, resolve, dirname, relative, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -32,7 +32,7 @@ if(action==='install' && args.length===2){
  const seen=new Set(), existing=[];
  for(const entry of data.entries){
   const {from,to}=entry;
-  if(typeof from!=='string'||typeof to!=='string'||resolve(to)!==to||seen.has(to))throw Error('INVALID_MANIFEST_DESTINATION');
+  if(typeof from!=='string'||resolve(from)!==from||typeof to!=='string'||resolve(to)!==to||seen.has(to))throw Error('INVALID_MANIFEST_DESTINATION');
   seen.add(to);
   const rel=relative(target,to),parts=rel.split(sep);
   const valid=(parts.length===2&&parts[0]==='node_modules'&&parts[1]!=='@happier-dev')||
@@ -40,7 +40,7 @@ if(action==='install' && args.length===2){
    (parts.length===3&&parts[0]==='apps'&&parts[1]==='server'&&['node_modules','generated'].includes(parts[2]));
   if(!valid||parts.some(p=>!p||p==='.'||p==='..'))throw Error('INVALID_MANIFEST_DESTINATION');
   if(!await exists(to))continue;
-  const st=await lstat(to);if(!st.isSymbolicLink() || await realpath(to)!==await realpath(from))throw Error('CHANGED_LINK');
+  const st=await lstat(to);if(!st.isSymbolicLink() || await readlink(to)!==from)throw Error('CHANGED_LINK');
   existing.push(to);
  }
  for(const to of existing.reverse())await unlink(to);
