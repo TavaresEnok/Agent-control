@@ -117,7 +117,7 @@ async function main(){
   };
   const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
   runtimes=new ProjectRuntimes(async project=>{
-   const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report):undefined;
+   const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report,prepared.resources):undefined;
    const runtime=new CezarRuntime(ledger,project.repo,project.id,undefined,undefined,undefined,nativeBootstrap?{nativeBootstrap}:undefined);
    try{
     await runtime.start('administration-only');
