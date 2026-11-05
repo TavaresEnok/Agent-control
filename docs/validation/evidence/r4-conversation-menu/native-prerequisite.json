@@ -1,0 +1,8 @@
+{
+  "package": "lightningcss-linux-x64-gnu",
+  "version": "1.31.1",
+  "registry": "https://registry.npmjs.org",
+  "sha256": "bd064ad4edd3f7308dca3216b14a0ad57115547e4499e3c46e0744335de6b335",
+  "scope": "disposable worktree ignored dependencies only",
+  "sharedCacheModified": false
+}

@@ -1,0 +1,30 @@
+
+ RUN  v4.1.10 /tmp/ac-r4-20261105-conversation/upstream/cezar/packages/web
+
+ ❯ |web| src/routes/settings/agent-control-conversation-resolver.test.tsx (3 tests | 1 failed) 154ms
+   × requires explicit choice for ambiguous authorized matches 43ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |web| src/routes/settings/agent-control-conversation-resolver.test.tsx > requires explicit choice for ambiguous authorized matches
+AssertionError: expected <p></p> to be null
+
+- Expected:
+null
+
++ Received:
+<p>
+  Scoped panel
+</p>
+
+ ❯ src/routes/settings/agent-control-conversation-resolver.test.tsx:15:194
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+   Start at  15:56:51
+   Duration  5.61s (transform 670ms, setup 490ms, import 761ms, tests 154ms, environment 3.49s)
+

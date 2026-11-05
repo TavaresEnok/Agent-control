@@ -1,0 +1,16 @@
+Starting Metro Bundler
+Web apps/ui/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+ WARN  Attempted to import the module "/home/app/projects/agent-control-implementation/upstream/happier/node_modules/@noble/hashes/crypto.js" which is not listed in the "exports" of "/home/app/projects/agent-control-implementation/upstream/happier/node_modules/@noble/hashes" under the requested subpath "./crypto.js". Falling back to file-based resolution. Consider updating the call site or asking the package maintainer(s) to expose this API.
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓░░░░░░░ 61.6% (2453/3912)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓░░░░░ 71.6% (5840/6903)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 77.3% ( 8793/11015)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.1% (13825/14192)
+Web Bundling failed 15255ms apps/ui/index.ts (14666 modules)
+SyntaxError: sources/theme.css: Cannot find module '../lightningcss.linux-x64-gnu.node'
+Require stack:
+- /home/app/projects/agent-control-implementation/upstream/happier/node_modules/lightningcss/node/index.js
+- /home/app/projects/agent-control-implementation/upstream/happier/apps/ui/node_modules/@expo/metro-config/build/transform-worker/transform-worker.js
+- /home/app/projects/agent-control-implementation/upstream/happier/node_modules/@expo/metro-config/build/transform-worker/supervising-transform-worker.js
+- /home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro/src/DeltaBundler/Worker.flow.js
+- /home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro/src/DeltaBundler/Worker.js
+- /home/app/projects/agent-control-implementation/upstream/happier/node_modules/jest-worker/build/workers/processChild.js

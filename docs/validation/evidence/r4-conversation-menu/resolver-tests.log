@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /tmp/ac-r4-20261105-conversation/upstream/cezar/packages/web
+
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  15:53:06
+   Duration  3.86s (transform 180ms, setup 142ms, import 682ms, tests 362ms, environment 2.22s)
+

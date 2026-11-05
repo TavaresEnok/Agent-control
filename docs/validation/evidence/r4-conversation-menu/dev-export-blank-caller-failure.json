@@ -1,0 +1,7 @@
+{
+  "error": "locator.waitFor: Timeout 120000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByTestId('session-header-action-menu-trigger') to be visible\u001b[22m\n",
+  "pageErrors": [],
+  "url": "http://127.0.0.1:42573/session/cmw3r0fe90002a0v8m7ywtnlz",
+  "title": "Happier (internal dev)",
+  "body": ""
+}

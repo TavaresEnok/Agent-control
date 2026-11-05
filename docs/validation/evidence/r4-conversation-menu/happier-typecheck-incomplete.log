@@ -1,0 +1,10 @@
+yarn run v1.22.22
+$ node scripts/ensureWorkspacePackagesBuilt.mjs && node ../../scripts/workspaces/runTypeScriptCli.mjs -p tsconfig.json --noEmit
+1.22.22
+1.22.22
+1.22.22
+1.22.22
+1.22.22
+1.22.22
+error Command failed with exit code 1.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.

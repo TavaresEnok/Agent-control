@@ -1,0 +1,41 @@
+ATTEMPT first: Metro TreeFS duplicate symbolic watch directory
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_ALERTS ["Objetivo violado. O destaque não depende só da cor."]
+R3_UI_FAILED stage=canonical conversation menu type=Error code=assertion_or_timeout
+FAILED_SCRATCH /tmp/ac-r3-ui-701434d4-c6otRF
+
+ATTEMPT second: Metro external cache SHA1 unavailable
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_ALERTS ["Objetivo violado. O destaque não depende só da cor."]
+R3_UI_FAILED stage=canonical conversation menu type=Error code=assertion_or_timeout
+FAILED_SCRATCH /tmp/ac-r3-ui-9fb1cce3-dKmDl9
+
+ATTEMPT third: 240-second fixture export limit, still CPU-active
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_ALERTS ["Objetivo violado. O destaque não depende só da cor."]
+R3_UI_FAILED stage=canonical conversation menu type=Error code=assertion_or_timeout
+FAILED_SCRATCH /tmp/ac-r3-ui-bfd6cbb0-PgfyvD
+
+ATTEMPT fourth: fixture web built without VITE_AGENT_CONTROL_MANAGED
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_ALERTS []
+R3_UI_FAILED stage=conversation browser type=TimeoutError code=assertion_or_timeout
+FAILED_SCRATCH /tmp/ac-r3-ui-63058c65-Fe8b8g
+
+ATTEMPT fifth: fixture web built without VITE_AGENT_CONTROL_MANAGED
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R4_UI_BODY Page not found
+
+Nothing lives at this address. The link may be mistyped, or it points at something that is gone.
+
+Back to tasks
+Command palette
+
+Search projects, tasks, views, actions, and skills
+
+Task palette
+
+Act on a task, switch tasks, or open one of its files
+R3_UI_ALERTS []
+R3_UI_FAILED stage=conversation browser type=TimeoutError code=assertion_or_timeout
+FAILED_SCRATCH /tmp/ac-r3-ui-fda30e77-HmaoRy

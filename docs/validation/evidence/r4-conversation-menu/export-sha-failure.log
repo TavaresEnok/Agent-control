@@ -1,0 +1,30 @@
+Starting Metro Bundler
+Web apps/ui/index.ts ▓░░░░░░░░░░░░░░░  9.0% (3/9)
+Web apps/ui/index.ts ▓▓░░░░░░░░░░░░░░ 18.4% (23/79)
+Web apps/ui/index.ts ▓▓▓░░░░░░░░░░░░░ 19.2% ( 60/137)
+Web apps/ui/index.ts ▓▓▓░░░░░░░░░░░░░ 20.5% (163/544)
+Web apps/ui/index.ts ▓▓▓░░░░░░░░░░░░░ 20.5% (241/676)
+Web apps/ui/index.ts ▓▓▓▓░░░░░░░░░░░░ 29.6% (388/713)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓░░░░░░░░░ 48.0% (561/810)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓░░░░░ 73.1% (696/814)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 84.2% (792/863)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (846/966)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% ( 950/1118)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% ( 955/1118)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% ( 960/1118)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (1027/1156)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (1084/1303)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (1115/1317)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (1192/1408)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (1282/1440)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 86.2% (1357/1487)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 90.0% (1462/1541)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 91.7% (1549/1623)
+Web apps/ui/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 92.3% (1638/1723)
+Web Bundling failed 79740ms apps/ui/index.ts (1741 modules)
+Error: Failed to get the SHA-1 for: /home/app/projects/agent-control-implementation/upstream/happier/apps/ui/node_modules/@expo/metro-runtime/src/index.ts.
+      Potential causes:
+        1) The file is not watched. Ensure it is under the configured `projectRoot` or `watchFolders`.
+        2) Check `blockList` in your metro.config.js and make sure it isn't excluding the file path.
+        3) The file may have been deleted since it was resolved - try refreshing your app.
+        4) Otherwise, this is a bug in Metro or the configured resolver - please report it.

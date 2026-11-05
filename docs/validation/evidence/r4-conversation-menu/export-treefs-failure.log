@@ -1,0 +1,11 @@
+Starting Metro Bundler
+Failed to construct transformer:  Error: TreeFS: Could not add directory ../../node_modules/expo-modules-core, adding ../../node_modules/expo-modules-core/.eslintrc.js. ../../node_modules/expo-modules-core already exists in the file map as a file.
+    at TreeFS.bulkAddOrModify (/home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro-file-map/src/lib/TreeFS.js:301:17)
+    at FileMap._applyFileDelta (/home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro-file-map/src/index.js:443:16)
+    at /home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro-file-map/src/index.js:252:9
+    at DependencyGraph.ready (/home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro/src/node-haste/DependencyGraph.js:88:5)
+    at Bundler.ready (/home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro/src/Bundler.js:62:5)
+    at IncrementalBundler.ready (/home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro/src/IncrementalBundler.js:302:5)
+    at Server.ready (/home/app/projects/agent-control-implementation/upstream/happier/node_modules/metro/src/Server.js:1305:5)
+
+TypeError: Cannot read properties of undefined (reading 'get')

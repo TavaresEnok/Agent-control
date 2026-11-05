@@ -1,0 +1,17 @@
+{
+  "canonicalMenu": true,
+  "authenticatedCookie": true,
+  "sessionPinned": true,
+  "contextPinned": true,
+  "signedControlStatus": 200,
+  "signedPolicyStatus": 200,
+  "durablePolicyRevision": 2,
+  "maxProgrammersPerContext": 2,
+  "unsignedRefusedStatus": 403,
+  "signaturePresent": true,
+  "durablePaused": true,
+  "reloadedPaused": true,
+  "externalNetworkBlocked": true,
+  "syntheticAccount": true,
+  "physicalAndroid": false
+}
