@@ -27,11 +27,11 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'physical QA fixture']);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
   await new Capacity(db).addAccount(principal,project,{id:account,provider:'synthetic',label:'fixture metadata',resourceIdentity:'fixture:'+randomUUID(),mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://fixture',maxConcurrent:4});
   for(const [id,role] of [[programmer,'programmer'],[qaProfile,'qa']])await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role) VALUES($1,$2,'fixture','medium',$3)",[id,account,role]);
-  const context=await db.createContext(principal,project,randomUUID()),authority=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",[project,'a'.repeat(64),principal]);
+  const context=await db.createContext(principal,project,randomUUID());let authority=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",[project,'a'.repeat(64),principal]);
   const key=randomBytes(32),gates=new Quality(db,key,new GitArtifacts(repo));
   await gates.publish(principal,project,0,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:true,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:nativeQaContractDigest(contract)});
   const runner=new NativeQa(db,gates,repo,spool,contract,key);const results=[];
-  for(const value of [2,3]){
+  for(const value of [2,3,4]){
    const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
    await writeFile(join(repo,'src/example.ts'),`export const value = ${value};\n`);git('add','.');git('commit','-m','fixture '+value);const commit=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}');
    const implementation=randomUUID(),writer=randomUUID(),qaGrant=randomUUID(),qaAttempt=randomUUID(),stageId=randomUUID(),session=randomUUID();
@@ -40,6 +40,21 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
    await db.pool.query("UPDATE ac_operations SET state='completed',grant_id=$2,native_session_id=$3,receipt=$4 WHERE id=$1",[intent.operation_id,implementation,writer,{commit,tree,base:sourceBase,exitCode:0,synthetic:true}]);
    const artifact=await gates.register(principal,{id:randomUUID(),contextId:context,intentId:intent.id,implementationGrantId:implementation,implementationSessionId:writer,policyRevision:1,commit,tree,base:sourceBase,risk:'high'},authority);
    await db.pool.query("INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state) VALUES($1,$2,'qa',$3,$4,$5,'registered')",[stageId,intent.id,session,qaAttempt,authority.epoch]);
+   if(value===4){
+    await runner.start(principal,authority,intent.id,{id:stageId,session_id:session},qaGrant,artifact);
+    await db.pool.query("INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,1)",[intent.id,context,principal]);
+    await runner.stop(principal,authority,stageId,'canceled');
+    await db.pool.query("UPDATE ac_plan_cancellations SET state='confirmed',confirmed_at=clock_timestamp() WHERE intent_id=$1",[intent.id]);
+    for(let n=0;n<30;n++){
+     await runner.reconcileContext(principal,authority);
+     if((await db.pool.query("SELECT 1 FROM ac_native_qa_retirements WHERE job_id=$1 AND state='removed'",[stageId])).rowCount)break;
+     await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const canceled=(await db.pool.query('SELECT j.receipt,s.receipt stage_receipt,r.state retirement FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id LEFT JOIN ac_native_qa_retirements r ON r.job_id=j.id WHERE j.id=$1',[stageId])).rows[0];
+    assert.equal(canceled.receipt.status,'canceled');assert.equal(canceled.stage_receipt.cancellation,true);assert.equal(canceled.retirement,'removed');
+    assert.equal(await docker.inspect('ac-native-qa-'+stageId),null);assert.ok((await readFile(join(spool,stageId,'qa-logs.bin'))).length>=0);
+    continue;
+   }
    let result;
    if(value===2){
     const daemon=(runner as any).docker as DockerDaemon,remove=daemon.remove.bind(daemon);
@@ -52,6 +67,9 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
     daemon.remove=async id=>{await remove(id);throw Error('simulated lost acknowledgement');};
     await assert.rejects(runner.retire(principal,authority,stageId),/simulated lost acknowledgement/);
     daemon.remove=remove;
+    const stale=authority;await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+    authority=await db.acquire(principal,context,randomUUID(),'fixture-successor',60);
+    await assert.rejects(runner.retire(principal,stale,stageId),/FENC|LEASE|AUTHORITY|STALE_MANAGER/);
     result=await runner.record(principal,authority,stageId);
    }else result=await runner.run(principal,intent,authority,{id:stageId,session_id:session},qaGrant,artifact,()=>false);
    results.push(result.status);
@@ -74,7 +92,7 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
     }
     const seen:string[]=[],original=runner.reconcile.bind(runner);
     runner.reconcile=async(_principal,_authority,id)=>{seen.push(id);if(seen.length===1)throw Error('fixture failure');return {state:'uncertain'};};
-    await runner.reconcileContext(principal,authority);runner.reconcile=original;
+    await assert.rejects(runner.reconcileContext(principal,authority),/NATIVE_QA_RECONCILIATION_FAILED/);runner.reconcile=original;
     assert.equal(seen.length,40);assert.deepEqual(new Set(seen),new Set(ids));
    }
    assert.equal(git('rev-parse','refs/heads/protected'),sourceBase);await assert.rejects(db.tx(c=>gates.assertReady(c,artifact.id,authority)),value===2?/REVIEWS_MISSING/:/VERIFICATION_NOT_PASSED/);

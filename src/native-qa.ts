@@ -221,10 +221,10 @@ export class NativeQa{
   });
  }
  async reconcileContext(principal:string,authority:Authority){
-  let cursor:{created_at:string;id:string}|null=null;
+  let cursor:{created_at:string;id:string}|null=null;const errors:unknown[]=[];
   for(;;){
    const jobs:Record<string,any>[]=await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
-    return (await c.query(`SELECT j.*,j.created_at::text cursor_created_at,x.state cancellation_state,s.state stage_state FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id
+    return (await c.query(`SELECT j.*,j.created_at::text cursor_created_at,x.state cancellation_state,s.state stage_state,s.receipt stage_receipt FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id
      LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id WHERE j.context_id=$1 AND
      (j.state IN ('uncertain','running') OR s.state<>'completed' OR (j.container_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ac_native_qa_retirements r WHERE r.job_id=j.id AND r.state='removed')))
      AND ($2::timestamptz IS NULL OR (j.created_at,j.id)>($2::timestamptz,$3::uuid))
@@ -239,15 +239,16 @@ export class NativeQa{
      if(job.cancellation_state==='requested')await this.stop(principal,authority,job.id,'canceled');
      const result=await this.reconcile(principal,authority,job.id);
      if(result.state==='completed'||result.state==='failed'){
-      if(job.cancellation_state==='requested'){
+      if(['requested','confirmed'].includes(job.cancellation_state)||job.stage_receipt?.cancellation===true){
        await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
         await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND grant_id=$3 AND state IN ('uncertain','running')",[job.id,{cancellation:true,nativeQa:result.receipt},job.grant_id]);});
        await this.retire(principal,authority,job.id);
       }else await this.record(principal,authority,job.id);
      }
-    }catch{/* A single unconfirmed job must not prevent reconciliation of later jobs. */}
+    }catch(error){errors.push(error);}
    }
   }
+  if(errors.length)throw new AggregateError(errors,'NATIVE_QA_RECONCILIATION_FAILED');
  }
 
  async record(principal:string,authority:Authority,id:string){
