@@ -17,7 +17,7 @@ import {
   type NodeChange,
   type NodeProps,
 } from '@xyflow/react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -36,13 +36,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { useParams } from 'react-router'
 
 import {
-  ApiError,
-  createWorkflow,
   deleteWorkflow,
   parseWorkflow,
   postPlan,
-  saveWorkflowGraph,
-  validateWorkflowGraph,
 } from '@/api/client'
 import { queryKeys, useSkills, useWorkflowNodes, useWorkflows } from '@/api/queries'
 import type { WorkflowGraph, WorkflowGraphNode } from '@open-mercato/cezar-api-client'
@@ -81,7 +77,6 @@ import {
   advanceFork,
   forkBranchIds,
   setForkBranches,
-  skillStackOfGraph,
   stepsFromPlan,
   parseFrom,
   portsOf,
@@ -97,6 +92,8 @@ import {
 import { WorkflowsLoading } from '../workflows/workflows-loading'
 import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
 import { writeClipboard } from '@/lib/clipboard'
+import { useProjectScope } from '@/api/project-scope-context'
+import { managedWorkflow, saveManagedWorkflow, validateManagedWorkflow } from './managed-workflow'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -241,6 +238,10 @@ export function FloatingPanel({
 
 function WorkflowGraphEditor() {
   const { name: routeName } = useParams()
+  const {projectId} = useProjectScope()
+  const managed = useQuery({queryKey:['managed-workflow',projectId,routeName],enabled:!!projectId&&!!routeName,
+    retry:false,queryFn:()=>managedWorkflow(projectId!,routeName!)})
+  const loadedRevision = useRef<{name:string;revision:number}|null>(null)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const workflows = useWorkflows()
@@ -305,13 +306,15 @@ function WorkflowGraphEditor() {
   useEffect(() => {
     const key = routeName ?? '(new)'
     if (loadedFor.current === key) return
-    if (routeName && !workflows.data) return
+    if (routeName && (!workflows.data || (projectId && (managed.isPending || managed.isError)))) return
     loadedFor.current = key
     const def = routeName ? workflows.data?.workflows.find((w) => w.name === routeName) : undefined
-    setGraph(def ? graphForWorkflow(def) : blankGraph())
+    const owned = managed.data?.workflow
+    loadedRevision.current = owned && routeName ? {name:routeName,revision:managed.data!.revision} : null
+    setGraph(owned ? owned.graph : def ? graphForWorkflow(def) : blankGraph())
     // A built-in is a template: its canvas saves as your own copy unless you rename it back.
-    setName(def ? (def.source === 'built-in' ? `${def.name}-copy` : def.name) : '')
-    setDescription(def?.description ?? '')
+    setName(owned ? owned.name : def ? `${def.name}-copy` : '')
+    setDescription(owned?.description ?? def?.description ?? '')
     setDirty(false)
     setSelectedId(null)
     setSim(null)
@@ -321,7 +324,7 @@ function WorkflowGraphEditor() {
     setValidating(true)
     if (routeName && !def) toast(`No workflow named “${routeName}” — starting a new one.`, { tone: 'danger' })
     pendingFit.current = true
-  }, [routeName, workflows.data])
+  }, [routeName, workflows.data, projectId, managed.data, managed.isPending, managed.isError])
 
   useEffect(() => {
     if (!nodesInitialized || !pendingFit.current || rfNodes.length === 0) return
@@ -341,13 +344,13 @@ function WorkflowGraphEditor() {
   useEffect(() => {
     setValidating(true)
     const t = setTimeout(() => {
-      validateWorkflowGraph({ nodes: graphNodes, edges: graphEdges })
+      (projectId ? validateManagedWorkflow(projectId,{ nodes: graphNodes, edges: graphEdges }) : Promise.reject(Error('PROJECT_REQUIRED')))
         .then((r) => setIssues(r.issues))
         .catch((err: unknown) => setIssues([err instanceof Error ? err.message : String(err)]))
         .finally(() => setValidating(false))
     }, 350)
     return () => clearTimeout(t)
-  }, [graphNodes, graphEdges])
+  }, [graphNodes, graphEdges, projectId])
 
   const issueNodes = useMemo(() => {
     const ids = new Set<string>()
@@ -558,16 +561,15 @@ function WorkflowGraphEditor() {
   }, [confirm, selectedId, workflowPanel])
 
   const save = useMutation({
-    mutationFn: (overwrite: boolean) => {
-      const head = { name: name.trim(), ...(description.trim() ? { description: description.trim() } : {}) }
-      // A pure stack of skills stays in the portable compact form (spec 012); anything richer is
-      // a `version: 2` graph.
-      const stack = skillStackOfGraph(graph)
-      return stack
-        ? createWorkflow({ ...head, skills: stack, ...(overwrite ? { overwrite: true } : {}) })
-        : saveWorkflowGraph({ ...head, graph, overwrite })
+    mutationFn: (_overwrite: boolean) => {
+      if (!projectId) throw Error('PROJECT_REQUIRED')
+      const target=name.trim()
+      const base=loadedRevision.current
+      if (workflows.data?.workflows.some(w=>w.name===target) && base?.name!==target) throw Error('SAVE_COPY_WITH_NEW_NAME')
+      return saveManagedWorkflow(projectId,target,description.trim(),graph,base?.name===target ? base.revision : 0)
     },
     onSuccess: (res) => {
+      loadedRevision.current={name:res.name,revision:res.revision}
       setDirty(false)
       toast(`Saved ${res.path.split('/').pop() ?? res.path}`)
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflows })
@@ -576,11 +578,7 @@ function WorkflowGraphEditor() {
         void navigate(`/workflows/${encodeURIComponent(res.name)}`)
       }
     },
-    onError: (err, overwrite) => {
-      if (!overwrite && err instanceof ApiError && err.exists) {
-        setConfirm({ kind: 'overwrite' })
-        return
-      }
+    onError: (err) => {
       toast(err instanceof Error ? err.message : String(err), { tone: 'danger' })
     },
   })
@@ -652,13 +650,11 @@ function WorkflowGraphEditor() {
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null
   const cursorNode = sim?.cursor ? graph.nodes.find((n) => n.id === sim.cursor) : undefined
   const unwired = unwiredPorts(graph)
-  const canSave = name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
+  const canSave = !!projectId && !managed.isError && name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
   // Re-saving the file this canvas was opened from overwrites silently; the confirm is only for
   // a name that collides with ANOTHER file (or a built-in-shadowing new one).
   const opened = routeName ? workflows.data?.workflows.find((w) => w.name === routeName) : undefined
-  const savingOwnFile = opened?.source === 'file' && name.trim() === routeName
   // A file named like a built-in (`quick-task`) REPLACES it for every task in the repo.
-  const shadowsBuiltIn = Boolean(workflows.data?.workflows.some((w) => w.name === name.trim() && w.source === 'built-in'))
 
   return (
     <div data-route="workflows" className="flex h-full min-h-0 min-w-0 flex-col">
@@ -767,7 +763,7 @@ function WorkflowGraphEditor() {
             size="sm"
             variant="primary"
             disabled={!canSave}
-            onClick={() => (shadowsBuiltIn ? setConfirm({ kind: 'shadow' }) : save.mutate(savingOwnFile))}
+            onClick={() => save.mutate(false)}
           >
             <SaveIcon /> Save
           </Button>
