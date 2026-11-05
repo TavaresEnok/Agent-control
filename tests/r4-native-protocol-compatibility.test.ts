@@ -58,7 +58,9 @@ test('trusted Docker protocol confirmation gates new images and preserves exact 
   const deadPhysicalId=physical.Id;while(Date.now()<Number(probe.deadline_ms)+1500){try{physical=JSON.parse((await run('docker',['inspect',deadPhysicalId])).stdout)[0];if(!physical.State.Running)break;}catch{physical=undefined;break;}await new Promise(resolve=>setTimeout(resolve,100));}
   assert.ok(!physical||!physical.State.Running,'independent watchdog stops setsid descendants after controller death');
   if(physical){const stoppedLogs=(await run('docker',['logs',deadPhysicalId])).stderr;await new Promise(resolve=>setTimeout(resolve,300));assert.equal((await run('docker',['logs',deadPhysicalId])).stderr,stoppedLogs,'descendant stopped writing');}else await assert.rejects(run('docker',['top',deadPhysicalId]));
+  while(Date.now()<=Number(probe.deadline_ms))await new Promise(resolve=>setTimeout(resolve,Math.min(100,Number(probe.deadline_ms)-Date.now()+1)));
   await service.reconcile(principal);await assert.rejects(run('docker',['inspect',deadPhysicalId]));
+  assert.equal((await db.pool.query('SELECT retired FROM ac_native_protocol_probe_operations WHERE id=$1',[probe.id])).rows[0].retired,true);
   assert.equal((await db.pool.query('SELECT container_id,retired FROM ac_native_protocol_probe_operations WHERE id=$1',[probe.id])).rows[0].container_id,deadPhysicalId);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_protocol_receipts WHERE executor_digest=$1',[spec('hang-descendant').executorDigest])).rows[0].n,0);
   // A create delayed past an absent reconciliation cannot start the CLI, and
