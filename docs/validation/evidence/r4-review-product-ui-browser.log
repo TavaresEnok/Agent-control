@@ -1,0 +1,2 @@
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_FAILED stage=Happier light type=Error code=assertion_or_timeout

@@ -1,0 +1,21 @@
+HTTP_REFUSAL 401 /api/v1/ac/auth/status AUTH_REQUIRED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+PASS actual context switch clears targeted diagnostic selection and does not expose previous context task
+PASS actual authorized task catalog selection reaches stopped task beyond default diagnostic page; 101 synthetic failed rows, zero execution workers
+HTTP_REFUSAL 403 /api/v1/ac/control OPERATOR_DEVICE_NOT_ENROLLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/providers/status PROVIDER_RUNTIME_NOT_ACTIVATED
+HTTP_REFUSAL 403 /api/v1/workspace/skills-update INGRESS_DISABLED
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+PASS environment079 actual signed publication, lost committed acknowledgement/reload/same-intent replay, real CAS 409, and revision2 persistence after gateway restart; existing tracked src only
+HTTP_REFUSAL 403 /api/v1/star-count INGRESS_DISABLED
+R3_UI_UPSTREAM_RATE_LIMIT_RESPONSES 0
+R3_UI_ALERTS ["Objetivo violado. O destaque não depende só da cor."]
+R3_UI_FAILED stage=concurrent signed policy edits type=TimeoutError code=assertion_or_timeout
