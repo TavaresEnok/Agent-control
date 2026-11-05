@@ -5,6 +5,7 @@ Provisioning is explicit and separate; executor state directories are never auth
 Docker socket access and configuration are trusted, as with the remote executor.
 """
 import contextlib
+import datetime
 import fcntl
 import hashlib
 import json
@@ -119,10 +120,17 @@ def _verify_installation(config, value, parent):
     return directory
 
 
+def _group_processes(root, inspected):
+    group = root / ('docker-' + inspected['Id'] + '.scope')
+    try: return (group / 'cgroup.procs').read_text().splitlines()
+    except FileNotFoundError:
+        if not root.is_dir(): raise ValueError('RESOURCE_ENVELOPE_UNCERTAIN')
+        raise
+
+
 def _physical_member(root, inspected):
     # Read the real kernel hierarchy, not merely Docker's requested HostConfig.
-    group = root / ('docker-' + inspected['Id'] + '.scope')
-    if str(inspected['State']['Pid']) not in (group / 'cgroup.procs').read_text().splitlines():
+    if str(inspected['State']['Pid']) not in _group_processes(root, inspected):
         raise ValueError('RESOURCE_PHYSICAL_GROUP_MISMATCH')
 
 
@@ -310,9 +318,9 @@ def reservation(config, operation_id, epoch):
         _write_reservation(path, slot, False)
 
 
-def validate_group(config, inspect_dict, operation_id, epoch):
+def validate_group(config, inspect_dict, operation_id, epoch, reinspect=None):
     with authority(config):
-        _validate_group(config, inspect_dict)
+        inspect_dict = _validate_group(config, inspect_dict, reinspect)
         labels = inspect_dict['Config']['Labels']
         if labels.get('ac.resources.operation') != operation_id or labels.get('ac.resources.epoch') != str(epoch):
             raise ValueError('RESOURCE_OPERATION_GROUP_MISMATCH')
@@ -326,14 +334,70 @@ def validate_group(config, inspect_dict, operation_id, epoch):
                 if slot.get('containerId') is None:
                     slot['containerId'] = inspect_dict['Id']
                     _write_reservation(path, slot, False)
+        return inspect_dict
 
 
-def _validate_group(config, inspect_dict):
+def _inspect_immutable(identifier):
+    observed = json.loads(docker('inspect', identifier))
+    if not isinstance(observed, list) or len(observed) != 1:
+        raise ValueError('RESOURCE_GROUP_REOBSERVATION_INVALID')
+    return observed[0]
+
+
+def _started(value):
+    matched = re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]{1,9}))?Z', value) if isinstance(value, str) else None
+    if matched is None or value.startswith('0001-'):
+        raise ValueError('RESOURCE_GROUP_TERMINAL_UNCONFIRMED')
+    try: return datetime.datetime.fromisoformat(matched[1] + '+00:00'), int((matched[2] or '').ljust(9, '0'))
+    except ValueError: raise ValueError('RESOURCE_GROUP_TERMINAL_UNCONFIRMED')
+
+
+def _reobserve_membership(root, original, reinspect):
+    identifier = original.get('Id')
+    if not isinstance(identifier, str) or not re.fullmatch(r'[a-f0-9]{64}', identifier):
+        raise ValueError('RESOURCE_GROUP_REOBSERVATION_INVALID')
+    # Never re-observe by reusable name. The caller holds the host authority
+    # lock; this bounded observation handles natural process exit, not a retry
+    # of create/start, a missing container, or an authority-anchor failure.
+    current = reinspect(identifier)
+    if not isinstance(current, dict) or current.get('Id') != identifier or any(current.get(key) != original.get(key) for key in ('Name', 'Image', 'Config', 'HostConfig', 'RestartCount')):
+        raise ValueError('RESOURCE_GROUP_REOBSERVATION_MISMATCH')
+    state = current.get('State')
+    previous = original.get('State')
+    if not isinstance(state, dict) or not isinstance(previous, dict) or state.get('StartedAt') != previous.get('StartedAt'):
+        raise ValueError('RESOURCE_GROUP_RESTARTED')
+    if state.get('Running') is True:
+        if type(state.get('Pid')) is not int or state['Pid'] <= 0 or state['Pid'] != previous.get('Pid') or state.get('Restarting') is not False or state.get('Status') != 'running' or state.get('Paused') is not False or state.get('Dead') is not False:
+            raise ValueError('RESOURCE_PHYSICAL_GROUP_UNCERTAIN')
+        _started(state.get('StartedAt'))
+        try: _physical_member(root, current)
+        except (FileNotFoundError, ValueError): raise ValueError('RESOURCE_PHYSICAL_GROUP_UNCERTAIN')
+        return current
+    if state.get('Status') != 'exited' or state.get('Running') is not False or state.get('Restarting') is not False or state.get('Dead') is not False or state.get('Paused') is not False or type(state.get('Pid')) is not int or state['Pid'] != 0 or type(state.get('ExitCode')) is not int:
+        raise ValueError('RESOURCE_GROUP_TERMINAL_UNCONFIRMED')
+    if _started(state.get('FinishedAt')) < _started(state.get('StartedAt')):
+        raise ValueError('RESOURCE_GROUP_TERMINAL_UNCONFIRMED')
+    # Docker terminal state is insufficient while any process still occupies
+    # its kernel group. The completed group may legitimately have disappeared.
+    try:
+        if _group_processes(root, current): raise ValueError('RESOURCE_TERMINAL_GROUP_OCCUPIED')
+    except FileNotFoundError: pass
+    return current
+
+
+def _validate_group(config, inspect_dict, reinspect=None):
     value, parent = verify(config)
     if inspect_dict['Config']['Labels'].get(LABEL) != value['authorityId'] or inspect_dict['HostConfig']['CgroupParent'] != parent:
         raise ValueError('RESOURCE_GROUP_MISMATCH')
     if inspect_dict['State']['Running']:
-        _physical_member(pathlib.Path('/sys/fs/cgroup') / parent, inspect_dict)
+        root = pathlib.Path('/sys/fs/cgroup') / parent
+        try: _physical_member(root, inspect_dict)
+        except FileNotFoundError:
+            return _reobserve_membership(root, inspect_dict, reinspect or _inspect_immutable)
+        except ValueError as error:
+            if str(error) != 'RESOURCE_PHYSICAL_GROUP_MISMATCH': raise
+            return _reobserve_membership(root, inspect_dict, reinspect or _inspect_immutable)
+    return inspect_dict
 
 
 def release(config, container_id, operation_id, epoch):

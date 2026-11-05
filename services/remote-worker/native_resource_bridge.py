@@ -60,8 +60,8 @@ def expected(config, physical):
     # Existing claims must match immutable request digest, epoch and state-root identity.
     if claim_operation(config,op,epoch,labels['ac.resources.request'],config['_stateRoot']):
         raise ValueError('NATIVE_RESOURCE_CLAIM_MISSING')
-    validate_group(config,physical,op,epoch)
-    return op,epoch
+    physical=validate_group(config,physical,op,epoch,inspect)
+    return op,epoch,physical
 
 @contextlib.contextmanager
 def serialized_authority(config):
@@ -154,7 +154,7 @@ def execute(request):
                 created=create_group();slot['containerId']=created['Id'];_write_reservation(path,slot,False)
             else:
                 with reservation(config,op,epoch):created=create_group()
-            physical=inspect(created['Id']);expected(config,physical)
+            physical=inspect(created['Id']);_,_,physical=expected(config,physical)
             return {'id':physical['Id']}
         identifier=request['id']
         if not re.fullmatch(r'[a-f0-9]{64}',identifier) and not re.fullmatch(r'ac-native-(?:plan|worker|tools|qa)-[a-f0-9-]{36}',identifier):
@@ -176,7 +176,7 @@ def execute(request):
             if action=='remove' and re.fullmatch(r'[a-f0-9]{64}',identifier):return {'ok':True}
             # Absence without the bound operation metadata cannot release a pending admission.
             raise ValueError('NATIVE_RESOURCE_GROUP_ABSENT')
-        op,epoch=expected(config,physical)
+        op,epoch,physical=expected(config,physical)
         identifier=physical['Id']
         if action=='inspect':return {'physical':physical}
         if action=='start':
@@ -193,13 +193,17 @@ def execute(request):
         else:raise ValueError('NATIVE_RESOURCE_ACTION_INVALID')
         return {'ok':True}
 
-try:
-    raw=sys.stdin.buffer.read(2097153)
-    if len(raw)>2097152:raise ValueError('NATIVE_RESOURCE_REQUEST_TOO_LARGE')
-    result=execute(json.loads(raw))
-    print(json.dumps(result))
-except Exception as error:
-    code=str(error)
-    if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,100}',code):code='NATIVE_RESOURCE_UNCERTAIN'
-    print(json.dumps({'error':code}))
-    sys.exit(1)
+def main():
+    try:
+        raw=sys.stdin.buffer.read(2097153)
+        if len(raw)>2097152:raise ValueError('NATIVE_RESOURCE_REQUEST_TOO_LARGE')
+        result=execute(json.loads(raw))
+        print(json.dumps(result))
+    except Exception as error:
+        code=str(error)
+        if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,100}',code):code='NATIVE_RESOURCE_UNCERTAIN'
+        print(json.dumps({'error':code}))
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

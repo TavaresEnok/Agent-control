@@ -105,7 +105,7 @@ def finish(config, root, item, atomic, recovered=False):
     if observed is not None:
         if config.get('resourceAuthority'):
             import resource_authority
-            resource_authority.validate_group(config, observed, item['operationId'], item['epoch'])
+            observed = resource_authority.validate_group(config, observed, item['operationId'], item['epoch'])
         if not observed['State']['Running']:
             code = observed['State']['ExitCode']
         logs = docker('logs', '--tail', '1000', group['id'], check=False)
