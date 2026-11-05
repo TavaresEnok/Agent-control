@@ -104,8 +104,11 @@ test('revocation held before gate serializes commit and rollback; killed control
   const f=await prepare();
   const childCode=`import {Ledger} from './src/ledger.ts';import {Quality} from './src/quality.ts';import {GitArtifacts} from './src/git.ts';import {Integrator} from './src/integration.ts';const x=JSON.parse(process.env.R2_CHILD);const db=new Ledger(x.url);const git=new GitArtifacts(x.repo);git.identity=async()=>{process.stdout.write('BEFORE_CAS\\n');await new Promise(()=>{});};await new Integrator(db,new Quality(db,Buffer.alloc(32),git),git,x.project,'refs/heads/lab').integrate(x.owner,x.id,x.authority);`;
   const child=spawn(process.execPath,['--import','tsx','--input-type=module','-e',childCode],{cwd:process.cwd(),env:{...process.env,R2_CHILD:JSON.stringify({url:fixture.url,repo,project:f.env.id,owner:f.env.owner,id:f.integration.id,authority:f.env.authority})},stdio:['ignore','pipe','pipe']});
-  let out='';await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('child marker timeout')),15000);child.stdout.on('data',b=>{out+=b;if(out.includes('BEFORE_CAS')){clearTimeout(timer);resolve();}});child.once('exit',()=>{clearTimeout(timer);reject(Error('child exited before marker'));});});
-  child.kill('SIGKILL');await new Promise<void>(resolve=>child.once('exit',()=>resolve()));
+  try{
+   let out='';await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('child marker timeout')),15000);child.stdout.on('data',b=>{out+=b;if(out.includes('BEFORE_CAS')){clearTimeout(timer);resolve();}});child.once('exit',()=>{clearTimeout(timer);reject(Error('child exited before marker'));});});
+  }finally{
+   if(child.exitCode===null&&child.signalCode===null){const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));child.kill('SIGKILL');await exited;}
+  }
   assert.equal(gitcmd('rev-parse','refs/heads/lab'),f.base);
   assert.equal((await db.pool.query('SELECT state FROM ac_integration_intents WHERE id=$1',[f.integration.id])).rows[0].state,'uncertain');
   const integrator=new Integrator(db,f.quality,f.git,f.env.id,'refs/heads/lab');assert.equal(await integrator.reconcile(f.env.owner,f.integration.id,f.env.authority),null);
