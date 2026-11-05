@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: offline conversion preserves source provenance, typed links and unknown fields without authorizing execution
+ok 1 - offline conversion preserves source provenance, typed links and unknown fields without authorizing execution
+  ---
+  duration_ms: 34.362721
+  type: 'test'
+  ...
+# Subtest: offline conversion refuses unknown versions and ambiguous or broken references
+ok 2 - offline conversion refuses unknown versions and ambiguous or broken references
+  ---
+  duration_ms: 12.709268
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 717.996784
