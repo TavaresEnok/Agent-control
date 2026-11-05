@@ -497,7 +497,7 @@
       "recommendation": "do_not_accept_full_requirement",
       "conclusion": "Backup/restauração R3 e relatórios exportáveis existem; metadata v2 não exporta toda configuração da instalação.",
       "next_evidence": "Inventariar/exportar parâmetros de projeto/ambiente/templates/perfis/adapters necessários sem credenciais e provar leitura/uso do artefato; preservar recuperação já demonstrada.",
-      "r5_versioned_delta": "7b387f7f: CLI privada de exportação/leitura aprovada em escopo, R3 backup/restore preservado; projeção de grafos 088 ainda pendente."
+      "r5_versioned_delta": "7b387f7f + 924acab0/900eec29: CLI e grafos 088 versionados por escopo; backup/restore R3 preservado; confirmar hash 088 e montagem integrada."
     },
     {
       "id": "RF-35",
@@ -1426,8 +1426,8 @@
       ],
       "recommendation": "do_not_accept_full_requirement",
       "conclusion": "Retries focais estão demonstrados, mas não as quatro ações do cenário móvel inteiro.",
-      "next_evidence": "Timeout/reconnect mobile para início/pausa/retomada/política com efeito único por intenção e intenção nova distinta.",
-      "r5_versioned_delta": "df89c41d: pausa/retomada/política ACK perdido em 360/390; início após timeout/reconexão ainda falta."
+      "next_evidence": "Revisar montagem integrada; se efeito de início exige lançamento físico, compor retry com worker e provar efeito único.",
+      "r5_versioned_delta": "df89c41d/665de0e3: start, pausa, retomada e política após ACK perdido em 360/390 com mesmo intent e duas deliveries, autor/gateway temporário; start comprova persistência única e zero workers, não unicidade de lançamento físico."
     },
     {
       "id": "T28",
