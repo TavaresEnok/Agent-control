@@ -1,0 +1,7 @@
+# Política de modelo desabilitado — T22
+
+A identidade de modelo é normalizada por remoção de espaço externo, caixa baixa e seleção do último componente separado por `:` ou `/`. Somente os aliases explícitos `astra`, `gpt-6-astra` e `gpt-6.1-astra` são bloqueados; nomes opacos, sufixos e outros aliases não são presumidos equivalentes. A recusa estável é `ModelDisabledByPolicy`. Uma nova identidade oficial exige atualização explícita desta lista e seus testes.
+
+O cadastro de catálogo, criação/revisão de perfil, publicação/atribuição de política e nova reserva verificam a regra. Perfis e políticas legados são preservados; uma cadeia legada não concede nova capacidade ao modelo desabilitado. Esforço ou papel fora do catálogo e conta sem acesso também são recusados. Motivos persistidos distinguem `model_disabled_by_policy`, `model_effort_not_in_catalog` e `access_removed`, sem alterar observações de cota. A reconciliação de concessões ou jobs já existentes continua sujeita a seus próprios protocolos; esta alteração não solicita cancelamento nem invalida recibos.
+
+A prova de navegador usa contas sintéticas, dados legados inseridos em banco descartável e sessão Happier/BrowserSessions reais. As três políticas são enviadas com assinatura de dispositivo; o painel mostra motivos legíveis, a contagem de novos jobs nativos não aumenta e a observação de quota permanece idêntica. Os hooks físicos dos supervisores são validados em frente separada e precisam estar presentes no integrado para fechar a admissão nativa.

@@ -25,7 +25,7 @@ test('legacy prohibited models, unapproved effort and removed accounts fail poli
   const account=(await db.pool.query('SELECT account_id FROM ac_account_access WHERE project_id=$1',[project])).rows[0].account_id;
   const originalQuota=(await db.pool.query('SELECT * FROM ac_quota_observations WHERE account_id=$1',[account])).rows[0];
   // Simulate rows accepted by an older release, without enabling a real account.
-  await db.pool.query("INSERT INTO ac_model_catalog VALUES('synthetic','GPT-6-ASTRA',ARRAY['medium'],ARRAY['programmer'],'synthetic://legacy')");
+  await db.pool.query("INSERT INTO ac_model_catalog VALUES('synthetic','GPT-6-ASTRA',ARRAY['medium'],ARRAY['programmer'],'synthetic://legacy') ON CONFLICT DO NOTHING");
   const ids=[randomUUID(),randomUUID(),randomUUID()];
   await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$4,'GPT-6-ASTRA','medium','programmer',true),($2,$4,'fixed-worker-v1','high','programmer',true),($3,$4,'fixed-worker-v1','medium','programmer',true)",[...ids,account]);
   await assert.rejects(capacity.addProfile(principal,project,{id:randomUUID(),accountId:account,model:'codex:astra',effort:'medium',role:'programmer'}),/ModelDisabledByPolicy/);
