@@ -60,6 +60,15 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
   while(!await allowed())await new Promise(r=>setTimeout(r,100));
  }
  async cancelAdmission(names:string[],token?:string){const admissionId=token??this.admissionAttempts.get(names[0]);if(!admissionId)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');const result=await this.callResource('cancel_admission',{names,admissionId});if(result.proof!=='no_groups_no_create_claims')throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');for(const name of names)this.admissions.delete(name);return {state:'not_started' as const,source:'native-resource-host-absence' as const};}
+ /** Inventory and retire the entire one-root lab authority while its physical
+  * epoch lock is held. A caller still must validate all catalog authorities
+  * and retain the global admission fence before treating this as evidence. */
+ async sweepRecovery(recoveryToken:string){
+  z.uuid().parse(recoveryToken);
+  const result=z.object({state:z.literal('neutralized'),authorityId:z.string(),installationId:z.string(),anchorId:z.string().regex(/^[a-f0-9]{64}$/),epoch:z.number().int().positive(),stateRoot:z.string(),containerIds:z.array(z.string().regex(/^[a-f0-9]{64}$/))}).strict().parse(await this.callResource('recovery_sweep',{recoveryToken}));
+  if(result.authorityId!==this.authorityId||result.installationId!==this.envelope.installationId||result.anchorId!==this.envelope.resourceAuthority.anchorId||result.epoch!==this.envelope.authorityEpoch||result.stateRoot!==this.stateRoot)throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');
+  return result;
+ }
  override async create(name:string,configuration:object){return z.string().regex(/^[a-f0-9]{64}$/).parse((await this.callResource('create',{name,configuration,admissionId:this.admissions.get(name)})).id);}
  override async start(id:string){await this.callResource('start',{id});}
  override async stop(id:string){await this.callResource('stop',{id});}

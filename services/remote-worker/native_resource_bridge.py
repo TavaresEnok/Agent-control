@@ -13,7 +13,7 @@ import re
 import socket
 import sys
 import uuid
-from resource_authority import authority, reservation, validate_group, release, claim_operation, verify, ledger_path, _reservation_paths, _read_reservation, _write_reservation
+from resource_authority import authority, reservation, validate_group, release, claim_operation, verify, ledger_path, _reservation_paths, _read_reservation, _write_reservation, _reobserve_membership
 
 class UnixHTTP(http.client.HTTPConnection):
     def connect(self):
@@ -83,11 +83,56 @@ def execute(request):
     if not config['resourceAuthority']['authorityId'].startswith('ac-r3-resources-'):
         raise ValueError('NATIVE_RESOURCE_LAB_REQUIRED')
     action=request['action']
+    if action=='recovery_sweep':
+        try:config['_recoveryToken']=str(uuid.UUID(request['recoveryToken']))
+        except (KeyError,TypeError,ValueError):raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
     with serialized_authority(config):
         value,parent=verify(config)
         anchor=inspect(value['anchorId'])
         if anchor['Config']['Labels'].get('ac.r3.disposable')!='true':
             raise ValueError('NATIVE_RESOURCE_LAB_REQUIRED')
+        if action=='recovery_sweep':
+            if not config.get('_recoveryToken'):raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+            # Full scope only: a pending create or another state root is not
+            # evidence of absence. Authority lock and epoch fence span the
+            # physical inventory, stop, verification and removal.
+            slots=[_read_reservation(path) for path in _reservation_paths(config)]
+            if any(slot.get('stateRoot')!=request['stateRoot'] or not re.fullmatch(r'[a-f0-9]{64}',str(slot.get('containerId',''))) for slot in slots):
+                raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+            ids=[item['Id'] for item in rpc('GET','containers/json?all=1')[1]
+                 if (item.get('Labels') or {}).get('ac.resources.authority')==value['authorityId'] and item['Id']!=value['anchorId']]
+            bound=[slot['containerId'] for slot in slots]
+            if len(ids)!=len(bound) or set(ids)!=set(bound) or len(set(bound))!=len(bound):
+                raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+            if len(ids)>32:raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+            key=hashlib.sha256((value['authorityId']+'\0'+config['_recoveryToken']).encode()).hexdigest()
+            journal=ledger_path(config).parent/('recovery-sweep-'+key+'.json')
+            if os.path.lexists(journal):
+                previous=_read_reservation(journal)
+                if previous.get('state')!='completed' or previous.get('epoch')!=config['authorityEpoch'] or ids or slots:
+                    raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+                return previous['proof']
+            _write_reservation(journal,{'operationId':config['_recoveryToken'],'epoch':config['authorityEpoch'],'state':'started','containerIds':sorted(ids)},True)
+            removed=[]
+            for identifier in sorted(ids):
+                physical=inspect(identifier)
+                if physical is None or physical.get('Id')!=identifier:raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+                op,epoch,physical=expected(config,physical)
+                if physical['State']['Running']:
+                    rpc('POST','containers/'+identifier+'/stop?t=3',allowed=(204,304))
+                    physical=inspect(identifier)
+                if physical is None or physical.get('Id')!=identifier:raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+                _reobserve_membership(pathlib.Path('/sys/fs/cgroup')/parent,physical,inspect)
+                rpc('DELETE','containers/'+identifier,allowed=(204,404))
+                if inspect(identifier) is not None:raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+                release(config,identifier,op,epoch)
+                removed.append(identifier)
+            if list(_reservation_paths(config)) or any((item.get('Labels') or {}).get('ac.resources.authority')==value['authorityId'] and item['Id']!=value['anchorId'] for item in rpc('GET','containers/json?all=1')[1]):
+                raise ValueError('RECOVERY_RESOURCE_INVENTORY_UNCERTAIN')
+            proof={'state':'neutralized','authorityId':value['authorityId'],'installationId':config['installationId'],
+                   'anchorId':value['anchorId'],'epoch':config['authorityEpoch'],'stateRoot':request['stateRoot'],'containerIds':removed}
+            _write_reservation(journal,{'operationId':config['_recoveryToken'],'epoch':config['authorityEpoch'],'state':'completed','proof':proof},False)
+            return proof
         if action=='cancel_admission':
             names=request['names'];token=str(uuid.UUID(request['admissionId']));paths=[]
             for name in names:

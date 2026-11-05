@@ -214,7 +214,17 @@ def _authority(config):
                 raise ValueError('RESOURCE_AUTHORITY_LEDGER_MISMATCH')
             if type(ledger.get('epoch')) is not int or epoch < ledger['epoch']:
                 raise ValueError('RESOURCE_AUTHORITY_FENCED')
+        recovery = config.get('_recoveryToken')
+        if recovery is not None:
+            import uuid
+            try: recovery = str(uuid.UUID(recovery))
+            except (TypeError, ValueError): raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+            if epoch == ledger['epoch'] and ledger.get('recoveryToken') != recovery:
+                raise ValueError('RECOVERY_RESOURCE_EPOCH_NOT_ADVANCED')
+        elif epoch == ledger['epoch']:
+            recovery = ledger.get('recoveryToken')
         ledger = {'anchorId': value['anchorId'], 'installationId': installation, 'epoch': epoch}
+        if recovery is not None: ledger['recoveryToken'] = recovery
         encoded = json.dumps(ledger, sort_keys=True).encode()
         os.lseek(fd, 0, os.SEEK_SET)
         if os.write(fd, encoded) != len(encoded):
