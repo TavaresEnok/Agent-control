@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: a backup-lab manifest with matching components and a closed inventory is apto and deterministic
+ok 1 - a backup-lab manifest with matching components and a closed inventory is apto and deterministic
+  ---
+  duration_ms: 16.731204
+  type: 'test'
+  ...
+# Subtest: the existing backup manifest is accepted, and a missing, truncated, or divergent manifest is inapto
+ok 2 - the existing backup manifest is accepted, and a missing, truncated, or divergent manifest is inapto
+  ---
+  duration_ms: 1.689842
+  type: 'test'
+  ...
+# Subtest: component absence is parcial and a divergent or incompatible component is inapto
+ok 3 - component absence is parcial and a divergent or incompatible component is inapto
+  ---
+  duration_ms: 2.071211
+  type: 'test'
+  ...
+# Subtest: effects after the backup are uncertain, and a cutoff after createdAt is never apto
+ok 4 - effects after the backup are uncertain, and a cutoff after createdAt is never apto
+  ---
+  duration_ms: 2.648494
+  type: 'test'
+  ...
+# Subtest: a valid truncated manifest is inapto unless the independent registered digest matches the body received
+ok 5 - a valid truncated manifest is inapto unless the independent registered digest matches the body received
+  ---
+  duration_ms: 2.941185
+  type: 'test'
+  ...
+# Subtest: the verifier stays in memory and keeps a fixed component order
+ok 6 - the verifier stays in memory and keeps a fixed component order
+  ---
+  duration_ms: 1.121681
+  type: 'test'
+  ...
+# Subtest: apto, parcial, digest ausente ou divergente, manifesto truncado e efeito posterior saem com o código do veredito
+ok 7 - apto, parcial, digest ausente ou divergente, manifesto truncado e efeito posterior saem com o código do veredito
+  ---
+  duration_ms: 5121.392219
+  type: 'test'
+  ...
+# Subtest: a função extraída do produtor, sem Docker, grava o mesmo digest que o verificador
+ok 8 - a função extraída do produtor, sem Docker, grava o mesmo digest que o verificador
+  ---
+  duration_ms: 338.491796
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5916.057471
