@@ -15,3 +15,7 @@ O ensaio executa o Ruby real pelo finalizador de produção, congela-o antes de 
 ## Revisão do fallback do grafo — commit 8bf7b6a7
 
 A revisão estática não identificou falha concreta no fallback de tarefa native managed ainda não iniciada. A origem é reconstruída da proposta conferida por digest, identidade da tarefa e writePaths; a adoção ocorre sob autorização e fencing, com operação travada e somente em `registered`, sem handle/sessão ou lançamento/sandbox registrado. O registro do job native e a transição da operação são atômicos sob a trava da operação. A contraprova adicionada usa boundary simulado para retomar o filho, não demonstra retomada integral do grafo ou lançamento físico. Não houve reexecução independente nesta revisão.
+
+## Revisão da contraprova de injeção — commit a122f500
+
+As quatro variantes de saída sintética assinada verificam rejeição de campo administrativo, branch, referência desconhecida e revisão de qualidade; contagens de propostas e intenções e controle legítimo sustentam o recorte declarado. O texto apenas simula origem em arquivo/SSH. A prova não observa credenciais, rede, arquivos ou ferramentas de exfiltração e não demonstra ausência geral de vazamento; o relatório da equipe explicita esses limites. Revisão estática sem reexecução independente; T23 não é aceito por esta prova.
