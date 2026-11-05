@@ -80,7 +80,9 @@ test('authenticated usage report/export compares period deltas, preserves unknow
   await db.pool.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state,grant_id,started_at,finished_at) VALUES($1,$2,'review',$3,$4,1,'completed',$5,'2026-01-02T01:00:00Z','2026-01-02T02:00:00Z')`,[randomUUID(),missingBaseline.intent.id,randomUUID(),randomUUID(),missingBaseline.id]);
   const running=await make('2025-12-01T00:00:00Z',second);
   await db.pool.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state,grant_id,started_at) VALUES($1,$2,'review',$3,$4,1,'running',$5,'2026-01-01T12:00:00Z')`,[randomUUID(),running.intent.id,randomUUID(),randomUUID(),running.id]);
+  const openUnreported=await make('2025-12-01T00:00:00Z',second);await db.pool.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[openUnreported.id]);
   const allParams=new URLSearchParams(params);allParams.set('limit','200');const finalReport=await (await get(path+'?'+allParams)).json() as UsageReport;
+  assert.equal(finalReport.attempts.find(row=>row.grantId===openUnreported.id)!.counters.input,null);
   assert.equal(finalReport.consistency,'per_request_snapshot');
   assert.equal(finalReport.attempts.find(row=>row.grantId===missingBaseline.id)!.time.wallMilliseconds,null);
   assert.deepEqual(finalReport.attempts.find(row=>row.grantId===running.id)!.time,{wallMilliseconds:null,source:'unknown',activeModelMilliseconds:null});

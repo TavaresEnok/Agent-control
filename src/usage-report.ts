@@ -41,7 +41,7 @@ const reportCte=`WITH periods AS (
   FROM ac_stage_operations WHERE grant_id=g.id) s ON true
  LEFT JOIN LATERAL(SELECT seq,counters,observed_at FROM ac_usage_observations WHERE grant_id=g.id AND observed_at<w.end_at ORDER BY seq DESC LIMIT 1) u ON true
  LEFT JOIN LATERAL(SELECT seq,counters FROM ac_usage_observations WHERE grant_id=g.id AND observed_at<w.start_at ORDER BY seq DESC LIMIT 1) b ON true
- WHERE ($5::uuid IS NULL OR g.profile_id=$5) AND (g.created_at>=w.start_at OR EXISTS(SELECT 1 FROM ac_usage_observations o WHERE o.grant_id=g.id AND o.observed_at>=w.start_at AND o.observed_at<w.end_at) OR EXISTS(SELECT 1 FROM ac_stage_operations t WHERE t.grant_id=g.id AND t.started_at<w.end_at AND (t.finished_at>w.start_at OR t.finished_at IS NULL)))
+ WHERE ($5::uuid IS NULL OR g.profile_id=$5) AND (g.created_at>=w.start_at OR g.state<>'released' OR EXISTS(SELECT 1 FROM ac_usage_observations o WHERE o.grant_id=g.id AND o.observed_at>=w.start_at AND o.observed_at<w.end_at) OR EXISTS(SELECT 1 FROM ac_stage_operations t WHERE t.grant_id=g.id AND t.started_at<w.end_at AND (t.finished_at>w.start_at OR t.finished_at IS NULL)))
 ), filtered AS (SELECT * FROM measured WHERE $6='all' OR ($6='only' AND rework) OR ($6='exclude' AND NOT rework))`;
 const summarySql=reportCte+` SELECT period,profile_id,model,effort,rework,count(*)::int attempts,
  ${counters.map(k=>`coalesce(sum(${k}),0)::text ${k}_sum,count(${k})::int ${k}_known,(count(*)-count(${k}))::int ${k}_unknown`).join(',')}
