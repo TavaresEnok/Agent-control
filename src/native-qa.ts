@@ -1,4 +1,5 @@
 import {ReconciliationHistory} from './reconciliation-history.ts';
+import {reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {mkdir,lstat,realpath,open,rename} from 'node:fs/promises';
@@ -37,11 +38,12 @@ export async function collectQaLogs(fetch:()=>Promise<Buffer>){
 export class NativeQa{
  readonly contract:NativeQaContract;readonly verifierDigest:string;private readonly key:Buffer;private readonly docker:DockerDaemon;
  constructor(readonly ledger:Ledger,readonly quality:Quality,readonly repository:string,private readonly root:string,contract:NativeQaContract,key:Uint8Array,
-  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){
+  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope){
   if(quality.ledger!==ledger||key.byteLength<32||resolve(root)!==root||resolve(repository)!==repository||root===repository||root.startsWith(repository+sep)||repository.startsWith(root+sep))throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
   this.contract=Object.freeze(NativeQaContract.parse(structuredClone(contract)));Object.freeze(this.contract.argv);Object.freeze(this.contract.environment);
-  this.verifierDigest=nativeQaContractDigest(this.contract);this.key=Buffer.from(key);this.docker=new DockerDaemon(socketPath);
+  this.verifierDigest=nativeQaContractDigest(this.contract);this.key=Buffer.from(key);this.docker=nativeDockerDaemon(socketPath,resourceEnvelope);
  }
+ async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority});}
  private paths(id:string){z.uuid().parse(id);const area=join(this.root,id);return {area,work:join(area,'work')};}
  private async authorize(c:import('pg').PoolClient,principal:string,authority:Authority,intentId:string,paused:boolean){
   const context=await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,paused);if(!paused)await this.ledger.assertIntentActive(c,authority.contextId,intentId);
@@ -80,6 +82,7 @@ export class NativeQa{
   });
   if(previous)return this.reconcile(principal,authority,stage.id);
   await this.diskGuard?.assertAdmission();const root=await lstat(this.root);if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==process.getuid?.()||(root.mode&0o7777)!==0o700||await realpath(this.root)!==this.root)throw new Refusal('NATIVE_QA_ROOT_UNSAFE');
+  await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId,grantId,jobId:stage.id,names:['ac-native-qa-'+stage.id]});
   await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);
    const s=(await c.query('SELECT state,attempt_id,manager_epoch FROM ac_stage_operations WHERE id=$1 FOR UPDATE',[stage.id])).rows[0];
@@ -222,6 +225,7 @@ export class NativeQa{
   });
  }
  async reconcileContext(principal:string,authority:Authority){
+  await this.reconcileResourceAdmissions(principal,authority);
   const errors:unknown[]=[];
   await new ReconciliationHistory(this.ledger).run(authority,'native-qa','ac_native_qa_jobs',async(ids,retain)=>{
    const jobs:Record<string,any>[]=await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);

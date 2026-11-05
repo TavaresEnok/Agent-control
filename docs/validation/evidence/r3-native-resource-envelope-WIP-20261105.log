@@ -1,0 +1,25 @@
+TAP version 13
+# Subtest: R3 native backend binds real Capacity across controllers to aggregate kernel limits and preserves orphan admissions
+not ok 1 - R3 native backend binds real Capacity across controllers to aggregate kernel limits and preserves orphan admissions
+  ---
+  duration_ms: 19102.357298
+  type: 'test'
+  location: '/tmp/ac-r3-20261105/quota/tests/r3-native-resource-envelope.test.ts:1:1080'
+  failureType: 'testCodeFailure'
+  error: 'NATIVE_QA_CONTAINER_MISMATCH'
+  code: 'NATIVE_QA_CONTAINER_MISMATCH'
+  stack: |-
+    NativeQa.inspect (/tmp/ac-r3-20261105/quota/src/native-qa.ts:129:168)
+    NativeQa.reconcile (/tmp/ac-r3-20261105/quota/src/native-qa.ts:146:118)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async NativeQa.run (/tmp/ac-r3-20261105/quota/src/native-qa.ts:61:64)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 20035.240643

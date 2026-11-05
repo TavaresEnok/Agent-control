@@ -100,6 +100,7 @@ export class NativeImplementation{
   return this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,false,c);if(!frozenManaged&&!this.hasSource(authority))return false;
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];if(op?.state!=='registered'||op.handle||op.native_session_id)return false;
    if((await c.query('SELECT 1 FROM ac_execution_launches WHERE operation_id=$1 UNION ALL SELECT 1 FROM ac_sandbox_jobs WHERE id=$1',[intent.operation_id])).rowCount)return false;
+   if(op.grant_id&&(await c.query("SELECT 1 FROM ac_native_resource_admissions WHERE grant_id=$1 AND state<>'canceled'",[op.grant_id])).rowCount)return false;
    if(op.grant_id){const g=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[op.grant_id])).rows[0];if(!g||!['reserved','released'].includes(g.state))return false;
     if(Number(op.manager_epoch)===authority.epoch&&g.state==='reserved'&&Number(g.manager_epoch)===authority.epoch)return true;
     if(g.state==='reserved')await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[g.id,{state:'not_started',source:'native-unstarted-recovery'}]);
@@ -112,7 +113,7 @@ export class NativeImplementation{
   await this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,true,c);
    const op=(await c.query('SELECT * FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[intent.operation_id,intent.id])).rows[0];
    if(op?.state!=='registered'||!op.grant_id||(await c.query('SELECT 1 FROM ac_native_execution_jobs WHERE id=$1 UNION ALL SELECT 1 FROM ac_sandbox_jobs WHERE id=$1 UNION ALL SELECT 1 FROM ac_execution_launches WHERE operation_id=$1',[intent.operation_id])).rowCount)return;
-   const changed=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND context_id=$3 AND intent_id=$4 AND role='programmer' AND state='reserved' AND manager_epoch=$5 RETURNING id",[op.grant_id,{state:'not_started',source:'native-programmer-preparation'},authority.contextId,intent.id,authority.epoch]);
+   const changed=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND context_id=$3 AND intent_id=$4 AND role='programmer' AND state='reserved' AND manager_epoch=$5 AND NOT EXISTS(SELECT 1 FROM ac_native_resource_admissions r WHERE r.grant_id=ac_capacity_grants.id AND r.state<>'canceled') RETURNING id",[op.grant_id,{state:'not_started',source:'native-programmer-preparation'},authority.contextId,intent.id,authority.epoch]);
    if(changed.rowCount)await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1",[intent.operation_id,{operationId:intent.operation_id,exitCode:1,synthetic:false,failureCode:error instanceof Refusal?error.code:'NATIVE_PREPARATION_FAILED'}]);
   });
  }
@@ -168,7 +169,7 @@ export class NativeImplementation{
       await this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,true,c);
        const saved=(await c.query('SELECT state,grant_id FROM ac_operations WHERE id=$1 FOR UPDATE',[intent.operation_id])).rows[0];
        if(saved?.state==='registered'&&saved.grant_id===frozen.grantId&&!Boolean((await c.query('SELECT 1 FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rowCount)){
-        const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state='reserved' AND manager_epoch=$3 RETURNING id",[frozen.grantId,{state:'not_started',source:'native-programmer-admission'},authority.epoch]);
+        const released=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state='reserved' AND manager_epoch=$3 AND NOT EXISTS(SELECT 1 FROM ac_native_resource_admissions r WHERE r.grant_id=ac_capacity_grants.id AND r.state<>'canceled') RETURNING id",[frozen.grantId,{state:'not_started',source:'native-programmer-admission'},authority.epoch]);
         if(released.rowCount)await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1",[intent.operation_id,{operationId:intent.operation_id,exitCode:1,synthetic:false,failureCode:error instanceof Refusal?error.code:'NATIVE_ADMISSION_FAILED'}]);
        }
       });throw error;

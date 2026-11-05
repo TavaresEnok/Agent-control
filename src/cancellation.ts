@@ -69,7 +69,7 @@ export class Cancellations{
     // Reserved capacity can be returned only when its owner never persisted
     // launch preparation and no broker/remote job exists. Unknown effects hold it.
     await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$2
-     WHERE g.intent_id=$1 AND g.state='reserved'
+     WHERE g.intent_id=$1 AND g.state='reserved' AND NOT EXISTS(SELECT 1 FROM ac_native_resource_admissions a WHERE a.grant_id=g.id AND a.state<>'canceled')
      AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)
      AND NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.grant_id=g.id)
      AND NOT EXISTS(SELECT 1 FROM ac_native_qa_jobs j WHERE j.grant_id=g.id)
@@ -85,7 +85,7 @@ export class Cancellations{
     // reserved grant can be returned only while no physical job was recorded.
     // Uncertain calls remain occupied even if a grant happens to look released.
     await c.query(`UPDATE ac_capacity_grants g SET state='released',physical_receipt=$2
-      WHERE g.intent_id=$1 AND g.role='manager' AND g.state='reserved'
+      WHERE g.intent_id=$1 AND g.role='manager' AND g.state='reserved' AND NOT EXISTS(SELECT 1 FROM ac_native_resource_admissions a WHERE a.grant_id=g.id AND a.state<>'canceled')
       AND EXISTS(SELECT 1 FROM ac_semantic_planning_calls s WHERE s.intent_id=$1 AND s.attempt_id=g.attempt_id AND s.state='registered' AND s.grant_id IS NULL)
       AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.grant_id=g.id)
       AND NOT EXISTS(SELECT 1 FROM ac_sandbox_jobs j WHERE j.grant_id=g.id)

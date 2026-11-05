@@ -1,3 +1,4 @@
+import {reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {constants} from 'node:fs';
 import {open,lstat,realpath,mkdir,writeFile} from 'node:fs/promises';
@@ -20,7 +21,7 @@ const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.strin
 export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
 function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
- protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];syntheticFixture?:NativeSyntheticFixture};
+ protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];syntheticFixture?:NativeSyntheticFixture};
 /** Fixed Docker supervisor, not a scheduler. No HTTP-controlled image, mount,
  * command, provider address or key. Construction alone performs no inference.
  * Runtime eligibility remains an independent mandatory gate. */
@@ -43,11 +44,12 @@ export class NativePlanningSupervisor{
   this.key=createPrivateKey(config.signingKeyPem);if(this.key.asymmetricKeyType!=='ed25519')throw new Refusal('PLANNING_RECEIPT_KEY_INVALID');
   this.publicKey=createPublicKey(this.key).export({format:'pem',type:'spki'}).toString();
   this.keyFingerprint=createHash('sha256').update(createPublicKey(this.key).export({format:'der',type:'spki'})).digest('hex');
-  this.docker=new DockerDaemon(config.socketPath);
+  this.docker=nativeDockerDaemon(config.socketPath,config.resourceEnvelope);
   this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:config.syntheticFixture?.provider??'codex',mode:config.syntheticFixture?'synthetic':'subscription_cli',
    execute:(input:PlanningInvocation)=>this.execute(input),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
  }
  private async privateDirectory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o7777)!==0o700||s.uid!==process.getuid?.()||await realpath(path)!==path)throw new Refusal('NATIVE_PLANNING_DIRECTORY_UNSAFE');}
+ async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority});}
  private paths(id:string){z.uuid().parse(id);const root=join(this.config.hostRoot,id);return {root,input:join(root,'input'),output:join(root,'output'),planning:join(root,'planning'),key:join(root,'public-key.pem')};}
  private async execute(input:PlanningInvocation){
   await input.assertAuthorized();
@@ -77,6 +79,7 @@ export class NativePlanningSupervisor{
    model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
+  await admitNativeResources({docker:this.docker,ledger:this.ledger,principal:identity.principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.callId,names:[name]});
   // Journal uncertainty BEFORE touching Docker. If any acknowledgement is lost,
   // reconcile observes this same name; it never starts or creates a substitute.
   await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
