@@ -1,0 +1,1 @@
+Node v22.23.3; npx tsc --noEmit --pretty false; exit 0; snapshot 9d5bd732
