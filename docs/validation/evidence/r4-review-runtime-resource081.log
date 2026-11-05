@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: R3 native backend binds real Capacity across controllers to aggregate kernel limits and preserves orphan admissions
+ok 1 - R3 native backend binds real Capacity across controllers to aggregate kernel limits and preserves orphan admissions
+  ---
+  duration_ms: 70903.418545
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 72997.025256
