@@ -21,6 +21,8 @@ export async function remoteQualityReviewer(lab:{db:Ledger;root:string;local:str
  const binary=await readFile(publicBinary);if(createHash('sha256').update(binary).digest('hex')!==publicSha256)throw Error('REMOTE_QUALITY_PUBLIC_CODEX_PIN_CHANGED');await copyFile(publicBinary,join(context,'codex'));await chmod(join(context,'codex'),0o555);
  const esbuild=resolve('upstream/cezar/node_modules/.bin/esbuild'),banner='--banner:js=import { createRequire as __acCreateRequire } from "node:module"; const require = __acCreateRequire(import.meta.url);';
  for(const [input,output] of [[resolve('src/native-tools-worker.ts'),'native-tools-worker.mjs'],[resolve('tests/fixtures/r3-remote-quality-worker/exec-client.mjs'),'exec-client.mjs']])run(esbuild,[input!,'--bundle','--platform=node','--target=node22','--format=esm',banner,'--outfile='+join(context,output!)]);
+ // esbuild respects the caller's umask; the image runs as a non-root UID.
+ for(const name of ['native-tools-worker.mjs','exec-client.mjs'])await chmod(join(context,name),0o644);
  await writeFile(join(context,'Dockerfile'),'FROM agent-control-lab:0.1.0\nCOPY worker.mjs /opt/agent-control/dist/src/native-execution-worker.mjs\nCOPY native-tools-worker.mjs /opt/agent-control/dist/src/native-tools-worker.mjs\nCOPY exec-client.mjs /opt/fixture/exec-client.mjs\nCOPY codex /usr/local/bin/codex\nCOPY verify.mjs /opt/fixture/verify.mjs\n');
  let image='',network='';try{
  run('docker',['build','--pull=false','--network=none','--label','agent-control.synthetic-fixture='+label,'-t',label,context]);image=run('docker',['image','inspect','--format','{{.Id}}',label]);
