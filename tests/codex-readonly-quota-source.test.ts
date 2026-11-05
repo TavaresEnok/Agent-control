@@ -30,7 +30,10 @@ test('readonly Codex fixture binds identity and only emits metadata RPCs',async(
   await writeFile(join(home,'fixture.json'),JSON.stringify({mode:'overflow'}));assert.equal((await probe({accountId,signal:new AbortController().signal})).status,'unknown');
   await writeFile(join(home,'fixture.json'),JSON.stringify({mode:'hang'}));const timeout=new CodexReadonlyQuotaSource(executable,binding,100);
   const pending=timeout.read({accountId,signal:new AbortController().signal});const second=new CodexReadonlyQuotaSource(executable,binding,100);assert.equal((await second.read({accountId,signal:new AbortController().signal})).kind,'unknown');assert.equal((await pending).kind,'unknown');
-  const controller=new AbortController();const aborted=timeout.read({accountId,signal:controller.signal});controller.abort();assert.equal((await aborted).kind,'unknown');
+  const deadPid=(await readFile(join(home,'trace'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)).filter(item=>item.pid).at(-1).pid;
+  assert.throws(()=>process.kill(deadPid,0),(error:unknown)=>(error as NodeJS.ErrnoException).code==='ESRCH');
+  const controller=new AbortController(),long=new CodexReadonlyQuotaSource(executable,binding,2000);const aborted=long.read({accountId,signal:controller.signal});await new Promise(r=>setTimeout(r,100));controller.abort();assert.equal((await aborted).kind,'unknown');
+  const nonexistent=new CodexReadonlyQuotaSource('/nonexistent/ac-test-codex',binding,200);assert.equal((await nonexistent.read({accountId,signal:new AbortController().signal})).kind,'unknown');
   await chmod(home,0o755);assert.equal((await source.read({accountId,signal:new AbortController().signal})).kind,'unknown');
  }finally{await rm(home,{recursive:true,force:true});}
 });

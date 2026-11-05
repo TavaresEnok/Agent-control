@@ -2,7 +2,7 @@
 import {createInterface} from 'node:readline';
 import {appendFileSync,readFileSync} from 'node:fs';
 const home=process.env.HOME, config=JSON.parse(readFileSync(home+'/fixture.json','utf8'));
-appendFileSync(home+'/trace',JSON.stringify({argv:process.argv.slice(2),cwd:process.cwd(),env:Object.keys(process.env).sort(),home,codeHome:process.env.CODEX_HOME})+'\n');
+appendFileSync(home+'/trace',JSON.stringify({pid:process.pid,argv:process.argv.slice(2),cwd:process.cwd(),env:Object.keys(process.env).sort(),home,codeHome:process.env.CODEX_HOME})+'\n');
 const rl=createInterface({input:process.stdin});
 rl.on('line',line=>{
  const msg=JSON.parse(line);appendFileSync(home+'/trace',JSON.stringify(msg)+'\n');
