@@ -214,17 +214,7 @@ def _authority(config):
                 raise ValueError('RESOURCE_AUTHORITY_LEDGER_MISMATCH')
             if type(ledger.get('epoch')) is not int or epoch < ledger['epoch']:
                 raise ValueError('RESOURCE_AUTHORITY_FENCED')
-        recovery = config.get('_recoveryToken')
-        if recovery is not None:
-            import uuid
-            try: recovery = str(uuid.UUID(recovery))
-            except (TypeError, ValueError): raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
-            if epoch == ledger['epoch'] and ledger.get('recoveryToken') != recovery:
-                raise ValueError('RECOVERY_RESOURCE_EPOCH_NOT_ADVANCED')
-        elif epoch == ledger['epoch']:
-            recovery = ledger.get('recoveryToken')
-        ledger = {'anchorId': value['anchorId'], 'installationId': installation, 'epoch': epoch}
-        if recovery is not None: ledger['recoveryToken'] = recovery
+        ledger = recovery_transition(ledger, epoch, config.get('_recoveryToken'), config.get('_recoveryPhase'))
         encoded = json.dumps(ledger, sort_keys=True).encode()
         os.lseek(fd, 0, os.SEEK_SET)
         if os.write(fd, encoded) != len(encoded):
@@ -250,6 +240,23 @@ def authority(config):
     with installation_lock(config):
         with _authority(config):
             yield
+
+
+def recovery_transition(ledger, epoch, token, phase):
+    """Durable host hold prevents new physical effects until recovery CAS."""
+    import uuid
+    prior = ledger['epoch']
+    if phase is not None:
+        if phase not in ('hold', 'release'): raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+        try: token = str(uuid.UUID(token))
+        except (TypeError, ValueError): raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+        if epoch == prior and ledger.get('recoveryToken') != token: raise ValueError('RECOVERY_RESOURCE_EPOCH_NOT_ADVANCED')
+        if phase == 'release' and (epoch != prior or ledger.get('recoveryToken') != token): raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+        ledger = {**ledger, 'epoch': epoch, 'recoveryToken': token, 'recoveryHold': phase == 'hold'}
+    else:
+        if ledger.get('recoveryHold') is True: raise ValueError('RECOVERY_RESOURCE_HOLD')
+        ledger = {**ledger, 'epoch': epoch}
+    return ledger
 
 
 def _reservation_paths(config):

@@ -31,7 +31,7 @@ class RemoteRecoverySweepTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='ac-t30-ssh-') as tmp:
             path = pathlib.Path(tmp)
             operation = str(uuid.uuid4())
-            request = {'schemaVersion': 1, 'action': 'recovery-sweep', 'operationId': str(uuid.uuid4())}
+            request = {'schemaVersion': 1, 'action': 'recovery-sweep', 'operationId': str(uuid.uuid4()), 'recoveryToken': str(uuid.uuid4())}
             config = {'executionBackend': 'docker', 'installationId': 'synthetic', 'authorityEpoch': 2, 'recoveryInventoryRequired': True,
                       'resourceAuthority': {'authorityId': 'fixture', 'anchorId': 'a' * 64}}
             (path / (operation + '.json')).write_text(json.dumps({'operationId': operation, 'state': 'uncertain'}))

@@ -136,6 +136,18 @@ c=m.Catalog(sys.argv[2],sys.argv[3],sys.argv[4]);c.begin(1,"ssh","fixture","post
                 child.stdout.close()
             with catalog.Catalog(root, installation, manifest['catalogId']) as c:
                 self.assertIn('postcut', c.state()[1])
+            child = subprocess.Popen([sys.executable, str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            try:
+                child.stdin.write(json.dumps(request) + '\n'); child.stdin.flush()
+                self.assertIn('postcut', json.loads(child.stdout.readline())['pending'])
+                child.stdin.write(json.dumps({'proofs': [{'kind':'ssh','authority':'fixture','proofDigest':'b'*64}]}) + '\n'); child.stdin.flush()
+                self.assertEqual(json.loads(child.stdout.readline())['state'], 'recorded')
+                child.stdin.close(); self.assertEqual(child.wait(timeout=5), 0)
+            finally:
+                if child.poll() is None: child.kill(); child.wait(timeout=5)
+                child.stdout.close()
+            with catalog.Catalog(root, installation, manifest['catalogId']) as c:
+                self.assertEqual(c.state()[1], {})
 
 
 if __name__ == '__main__':

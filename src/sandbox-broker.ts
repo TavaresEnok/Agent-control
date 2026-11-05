@@ -5,6 +5,7 @@ import { chmod,chown,lstat,mkdir,open,readFile,realpath,rm,unlink,writeFile } fr
 import {constants} from 'node:fs';
 import { join,resolve,sep } from 'node:path';
 import { z } from 'zod';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import { Authority,Id,canonical,digest,Refusal } from './contracts.ts';
@@ -235,6 +236,7 @@ export class SandboxBroker{
   if(!principal)throw new Refusal('GRANT_FORBIDDEN',403);
   const admission=await this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,value.authority.contextId);await this.ledger.fence(c,value.authority,value.action!=='start');
+   if(value.action==='start'&&await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[value.grantId]);
    const grant=(await c.query(`SELECT g.*,a.enabled account_enabled,a.eligibility,p.enabled profile_enabled,ac_profile_quota_status(a.id,p.model) quota_status,q.expires_at>clock_timestamp() quota_fresh
     FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id

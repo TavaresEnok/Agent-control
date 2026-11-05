@@ -1,5 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {constants} from 'node:fs';
 import {lstat,mkdir,open,readFile,realpath,rename,rm,writeFile} from 'node:fs/promises';
 import {dirname,join,resolve,sep} from 'node:path';
@@ -263,6 +264,7 @@ export async function materializeRemoteProjectSource(admin:ProjectAdmin,principa
  if(conflictsPrivate(admin.privateDirectory,destination)||conflictsPrivate(admin.privateDirectory,staging))throw new Refusal('PROJECT_PRIVATE_DIRECTORY_CONFLICT',403);
  await admin.ledger.tx(async c=>{
   await authorize(c);
+  if(await requireRecoveryInventory(c,admin.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
   if(bundle.length>65536)throw new Refusal('REMOTE_SOURCE_BUNDLE_TOO_LARGE');
   await loadAuthorized(c,principal,payload,bundle);
   if((await c.query(`SELECT 1 FROM ac_project_repositories WHERE project_id=$1 UNION ALL SELECT 1 FROM ac_project_repository_identity WHERE project_id=$1`,[payload.projectId])).rowCount)

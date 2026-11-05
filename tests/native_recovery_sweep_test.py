@@ -11,9 +11,23 @@ sys.path.insert(0, str(root / 'services/remote-worker'))
 spec = importlib.util.spec_from_file_location('native_resource_bridge_test', root / 'services/remote-worker/native_resource_bridge.py')
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
+import resource_authority
 
 
 class NativeRecoverySweepTest(unittest.TestCase):
+    def test_host_hold_blocks_emission_until_exact_release(self):
+        token = '17c6e027-0842-47da-9de0-c69114df4761'
+        before = {'anchorId':'a'*64, 'installationId':'fixture', 'epoch':1}
+        held = resource_authority.recovery_transition(before, 2, token, 'hold')
+        self.assertTrue(held['recoveryHold'])
+        with self.assertRaisesRegex(ValueError, 'RECOVERY_RESOURCE_HOLD'):
+            resource_authority.recovery_transition(held, 2, None, None)
+        with self.assertRaisesRegex(ValueError, 'RECOVERY_RESOURCE_EPOCH_NOT_ADVANCED'):
+            resource_authority.recovery_transition(held, 2, str(__import__('uuid').uuid4()), 'hold')
+        released = resource_authority.recovery_transition(held, 2, token, 'release')
+        self.assertFalse(released['recoveryHold'])
+        self.assertEqual(resource_authority.recovery_transition(released, 2, token, 'release'), released)
+        self.assertEqual(resource_authority.recovery_transition(released, 2, None, None), released)
     def test_interrupted_sweep_never_becomes_empty_success(self):
         config = {'installationId': 'fixture', 'authorityEpoch': 2, 'resourceAuthority': {'authorityId': 'ac-r3-resources-fixture', 'anchorId': 'a' * 64}}
         token = '17c6e027-0842-47da-9de0-c69114df4761'

@@ -83,14 +83,16 @@ def execute(request):
     if not config['resourceAuthority']['authorityId'].startswith('ac-r3-resources-'):
         raise ValueError('NATIVE_RESOURCE_LAB_REQUIRED')
     action=request['action']
-    if action=='recovery_sweep':
+    if action in ('recovery_sweep','recovery_release'):
         try:config['_recoveryToken']=str(uuid.UUID(request['recoveryToken']))
         except (KeyError,TypeError,ValueError):raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+        config['_recoveryPhase']='hold' if action=='recovery_sweep' else 'release'
     with serialized_authority(config):
         value,parent=verify(config)
         anchor=inspect(value['anchorId'])
         if anchor['Config']['Labels'].get('ac.r3.disposable')!='true':
             raise ValueError('NATIVE_RESOURCE_LAB_REQUIRED')
+        if action=='recovery_release':return {'state':'released','authorityId':value['authorityId'],'epoch':config['authorityEpoch']}
         if action=='recovery_sweep':
             if not config.get('_recoveryToken'):raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
             # Full scope only: a pending create or another state root is not

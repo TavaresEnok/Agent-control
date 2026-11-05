@@ -179,33 +179,41 @@ def observed(item):
 
 def rpc(config_path):
     config, root = load(config_path)
+    raw = sys.stdin.buffer.read(98305)
+    if len(raw) > 98304: raise ValueError('REQUEST_TOO_LARGE')
+    request = json.loads(raw)
+    if isinstance(request, dict) and request.get('action') in ('recovery-authority','recovery-sweep','recovery-release'):
+        try: config['_recoveryToken'] = str(uuid.UUID(request['recoveryToken']))
+        except (KeyError,TypeError,ValueError): raise ValueError('RECOVERY_RESOURCE_TOKEN_INVALID')
+        config['_recoveryPhase'] = 'release' if request['action']=='recovery-release' else 'hold'
     if config.get('executionBackend') == 'docker':
         # Keep fencing held through request validation, journal mutations, recovery
         # and admission. A stale request cannot pass a check then mutate later.
         with remote_supervisor.authority(config, root, atomic):
-            return dispatch(config_path, config, root)
-    return dispatch(config_path, config, root)
+            return dispatch(config_path, config, root, request)
+    return dispatch(config_path, config, root, request)
 
 
-def dispatch(config_path, config, root):
-    raw = sys.stdin.buffer.read(98305)
-    if len(raw) > 98304:
-        raise ValueError('REQUEST_TOO_LARGE')
-    request = json.loads(raw)
+def dispatch(config_path, config, root, request=None):
+    if request is None:
+        raw = sys.stdin.buffer.read(98305)
+        if len(raw) > 98304: raise ValueError('REQUEST_TOO_LARGE')
+        request = json.loads(raw)
     if not isinstance(request, dict) or request.get('schemaVersion') != 1:
         raise ValueError('INVALID_REQUEST')
     operation = str(uuid.UUID(request['operationId']))
     record = operation_path(root, operation)
     action = request.get('action')
-    if action == 'recovery-authority':
-        if set(request) != {'schemaVersion', 'operationId', 'action'} or config.get('executionBackend') != 'docker' or not isinstance(config.get('resourceAuthority'), dict):
+    if action in ('recovery-authority','authority-status'):
+        keys={'schemaVersion', 'operationId', 'action'} | ({'recoveryToken'} if action=='recovery-authority' else set())
+        if set(request) != keys or config.get('executionBackend') != 'docker' or config.get('recoveryInventoryRequired') is not True or not isinstance(config.get('resourceAuthority'), dict):
             raise ValueError('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED')
         value = config['resourceAuthority']
         return {'schemaVersion': 1, 'operationId': operation, 'authorityId': value['authorityId'],
                 'anchorId': value['anchorId'], 'installationId': config['installationId'], 'stateRoot': str(root),
                 'authorityEpoch': config['authorityEpoch'], 'recoveryRequired': config.get('recoveryInventoryRequired') is True}
     if action == 'recovery-sweep':
-        if set(request) != {'schemaVersion', 'operationId', 'action'} or config.get('executionBackend') != 'docker' or config.get('recoveryInventoryRequired') is not True or not isinstance(config.get('resourceAuthority'), dict):
+        if set(request) != {'schemaVersion', 'operationId', 'action', 'recoveryToken'} or config.get('executionBackend') != 'docker' or config.get('recoveryInventoryRequired') is not True or not isinstance(config.get('resourceAuthority'), dict):
             raise ValueError('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED')
         # dispatch is already inside resource + local authority locks. Every
         # older executor must pass those locks again before it can create/start.
@@ -232,6 +240,10 @@ def dispatch(config_path, config, root):
         return {'schemaVersion': 1, 'operationId': operation, 'state': 'neutralized', 'authorityId': value['authorityId'],
                 'anchorId': value['anchorId'], 'installationId': config['installationId'], 'stateRoot': str(root),
                 'authorityEpoch': config['authorityEpoch'], 'operations': checked}
+    if action == 'recovery-release':
+        if set(request) != {'schemaVersion','operationId','action','recoveryToken'} or config.get('executionBackend') != 'docker' or config.get('recoveryInventoryRequired') is not True or not isinstance(config.get('resourceAuthority'), dict):
+            raise ValueError('RECOVERY_PHYSICAL_AUTHORITY_REQUIRED')
+        return {'schemaVersion':1,'operationId':operation,'state':'released','authorityId':config['resourceAuthority']['authorityId'],'authorityEpoch':config['authorityEpoch']}
     if action in ('git-workspace-prepare', 'git-workspace-snapshot'):
         module = workspace_module()
         return module.prepare(config, request) if action == 'git-workspace-prepare' else module.snapshot(config, request)

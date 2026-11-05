@@ -7,7 +7,10 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {Ledger} from '../src/ledger.ts';
-import {requireRecoveryInventory,beginRestoredPhysicalRecovery} from '../src/recovery-inventory.ts';
+import {requireRecoveryInventory,configureRecoveryInventory,beginRestoredPhysicalRecovery} from '../src/recovery-inventory.ts';
+import {CezarRuntime} from '../src/cezar.ts';
+import {sweepRestoredPhysicalInventory} from '../src/recovery-physical-sweep.ts';
+import {OpenSshTransport,type RemoteHost} from '../src/remote.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('enforced recovery policy requires a bootstrap capability before any guarded effect',async()=>{
@@ -32,7 +35,14 @@ test('restored recovery records request before an idempotent epoch advance',asyn
   await db.pool.query("UPDATE ac_admission_control SET enabled=false,reason='r3-restored-awaiting-reconciliation' WHERE id=1");
   await db.pool.query("INSERT INTO ac_recovery_inventory_restores(installation_id,source_installation_id,checkpoint,state) VALUES($1,$2,$3,'physical-reconciliation-required')",[installation,source,checkpoint]);
   const config={directory,installationId:source,catalogId:checkpoint.catalogId,manifestHash,epoch:1};
+  await configureRecoveryInventory(db,config);
+  const runtime=new CezarRuntime(db,directory,randomUUID());
+  try{await assert.rejects(runtime.start('execution'),/RECOVERY_EFFECT_NOT_INSTRUMENTED/);}finally{await runtime.close();}
   assert.equal((await beginRestoredPhysicalRecovery(db,config,recoveryId)).epoch,2);
+  await assert.rejects(sweepRestoredPhysicalInventory({ledger:db,principal:'synthetic-admin',config,recoveryId,native:new Map(),ssh:new Map()}),/RECOVERY_PHYSICAL_SCOPE_INCOMPLETE/);
+  const forged=Object.create(OpenSshTransport.prototype) as OpenSshTransport;
+  await assert.rejects(sweepRestoredPhysicalInventory({ledger:db,principal:'synthetic-admin',config,recoveryId,native:new Map(),ssh:new Map([['fixture',{host:{id:'fixture'} as RemoteHost,transport:forged}]])}),/RECOVERY_PHYSICAL_IDENTITY_MISMATCH/);
+  assert.equal((await db.pool.query('SELECT enabled FROM ac_admission_control WHERE id=1')).rows[0].enabled,false);
   assert.equal((await beginRestoredPhysicalRecovery(db,config,recoveryId)).epoch,2);
   await assert.rejects(beginRestoredPhysicalRecovery(db,config,randomUUID()),/CATALOG_RECOVERY_CONFLICT/);
   const state=(await db.pool.query('SELECT recovery_id,source_epoch,recovery_epoch FROM ac_recovery_inventory_restores WHERE installation_id=$1',[installation])).rows[0];

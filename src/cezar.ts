@@ -1,4 +1,5 @@
 import {workflowRuntimeParkingReason} from './workflow-generations.ts';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {assertCurrentRuntimeBuild} from './local-workflow-runtime.ts';
 import type {NativeImplementation} from './native-implementation.ts';
 import type {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
@@ -194,6 +195,7 @@ export class CezarRuntime {
   }
   async start(mode:'execution'|'administration-only'='execution') {
     if(this.nativeBootstrapAttachment&&mode==='execution')throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+    if(mode==='execution'&&await this.ledger.tx(c=>requireRecoveryInventory(c,this.ledger)))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
     this.executionEnabled=mode==='execution';
     if(this.executionEnabled)await this.refreshSchedulerBudget();
     const c = await this.ledger.pool.connect();

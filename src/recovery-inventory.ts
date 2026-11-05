@@ -40,6 +40,10 @@ async function runCatalog(helper:string,request:object){
  });
  try{return JSON.parse(output) as unknown;}catch{throw new Refusal('CATALOG_UNCERTAIN');}
 }
+export async function readRecoveryManifest(config:RecoveryInventoryConfig,checkpoint:z.infer<typeof RecoveryCatalogCheckpoint>){
+ const parsed=Config.parse(config);RecoveryCatalogCheckpoint.parse(checkpoint);
+ return runCatalog('catalog_manifest.py',{directory:parsed.directory,installationId:parsed.installationId,catalogId:parsed.catalogId,manifestHash:parsed.manifestHash,checkpoint});
+}
 /** Advance only after the restored installation's durable closed marker has
  * been checked. No PG row lock is held while waiting on the catalog lock. */
 export async function beginRestoredPhysicalRecovery(ledger:Ledger,raw:Config,recoveryId:string){

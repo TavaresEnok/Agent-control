@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
+import {requireRecoveryInventory} from './recovery-inventory.ts';
 import type pg from 'pg';
 import {Capacity,QuotaInput} from './capacity.ts';
 import {Id,digest,Refusal} from './contracts.ts';
@@ -73,6 +74,7 @@ export class ProviderCollectors{
   if(this.client)throw new Refusal('PROVIDER_COLLECTION_TRANSACTION_FORBIDDEN');
   Id.parse(projectId);Id.parse(accountId);Id.parse(observationId);
   const admitted=await this.ledger.tx(async c=>{
+   if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
    const account=await this.owner(c,principal,projectId,accountId);
    const binding=(await c.query('SELECT *,lease_until>clock_timestamp() live,last_started_at+minimum_interval_seconds*interval \'1 second\'>clock_timestamp() throttled FROM ac_provider_bindings WHERE account_id=$1 FOR UPDATE',[accountId])).rows[0];
    if(!binding)throw new Refusal('PROVIDER_BINDING_REQUIRED');

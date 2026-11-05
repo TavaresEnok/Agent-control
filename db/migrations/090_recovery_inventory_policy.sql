@@ -18,5 +18,6 @@ CREATE TABLE ac_recovery_inventory_restores (
  source_epoch integer CHECK(source_epoch IS NULL OR source_epoch>0),
  recovery_epoch integer CHECK(recovery_epoch IS NULL OR recovery_epoch>0),
  proof_digest text CHECK(proof_digest IS NULL OR proof_digest ~ '^[a-f0-9]{64}$'),
+ proof_checkpoint jsonb,
  CHECK ((state='legacy-blocked') = (checkpoint IS NULL))
 );

@@ -35,8 +35,10 @@ function run(binary:string,args:string[],input:string,timeoutMs:number):Promise<
  });
 }
 /** No agent chooses a private-key path or accepts a new host key. Allowed targets are controller configuration. */
+const issuedSshTransports=new WeakSet<object>();
+export function assertIssuedOpenSshTransport(value:unknown):asserts value is OpenSshTransport{if(!value||typeof value!=='object'||!issuedSshTransports.has(value))throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');}
 export class OpenSshTransport implements RemoteTransport{
- constructor(private readonly credentialPath:(id:string)=>Promise<string>,private readonly allowedHosts:ReadonlySet<string>){}
+ constructor(private readonly credentialPath:(id:string)=>Promise<string>,private readonly allowedHosts:ReadonlySet<string>){issuedSshTransports.add(this);}
  async exchange(host:RemoteHost,request:object){
   if(!this.allowedHosts.has(host.hostname))throw new Refusal('REMOTE_TARGET_NOT_ENABLED',403);
   const original=await this.credentialPath(host.credential_ref);
@@ -155,7 +157,7 @@ export class RemoteOperations{
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
    let lease:Awaited<ReturnType<NonNullable<typeof inventory>['lease']>>|undefined;
    if(inventory){
-    const physical=z.object({schemaVersion:z.literal(1),operationId:Id,authorityId:z.string(),anchorId:z.string().regex(/^[a-f0-9]{64}$/),installationId:z.string(),stateRoot:z.string(),authorityEpoch:z.number().int().positive(),recoveryRequired:z.literal(true)}).strict().parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'recovery-authority',operationId:input.operationId}));
+    const physical=z.object({schemaVersion:z.literal(1),operationId:Id,authorityId:z.string(),anchorId:z.string().regex(/^[a-f0-9]{64}$/),installationId:z.string(),stateRoot:z.string(),authorityEpoch:z.number().int().positive(),recoveryRequired:z.literal(true)}).strict().parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'authority-status',operationId:input.operationId}));
     if(physical.operationId!==input.operationId||physical.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');
     const identity={hostId:input.hostId,hostFingerprint:admitted.host.fingerprint,authorityId:physical.authorityId,anchorId:physical.anchorId,installationId:physical.installationId,stateRoot:physical.stateRoot};
     lease=await inventory.lease('ssh',input.hostId,identity,digest({input,projectId:admitted.projectId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch}));

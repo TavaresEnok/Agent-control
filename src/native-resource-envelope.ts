@@ -17,6 +17,8 @@ export const NativeResourceEnvelope=z.object({stateRoot:z.string().refine(p=>res
  memoryBytes:z.number().int().min(16777216).max(1099511627776),pidsLimit:z.number().int().min(4).max(1e6),maxJobs:z.number().int().min(1).max(10000)}).strict()}).strict();
 export type NativeResourceEnvelope=z.infer<typeof NativeResourceEnvelope>;
 const bridge=fileURLToPath(new URL('../services/remote-worker/native_resource_bridge.py',import.meta.url));
+const issuedNativeDaemons=new WeakSet<object>();
+export function assertIssuedNativeResourceDaemon(value:unknown):asserts value is NativeResourceDockerDaemon{if(!value||typeof value!=='object'||!issuedNativeDaemons.has(value))throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');}
 export class NativeResourceDockerDaemon extends DockerDaemon{
  private readonly envelope:NativeResourceEnvelope;private readonly admissions=new Map<string,string>();private readonly admissionAttempts=new Map<string,string>();
  private inventory?:RecoveryInventoryCapability;
@@ -25,7 +27,7 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
  get authorityId(){return this.envelope.resourceAuthority.authorityId;}
  get recoveryIdentity(){return {installationId:this.envelope.installationId,authorityId:this.envelope.resourceAuthority.authorityId,anchorId:this.envelope.resourceAuthority.anchorId,stateRoot:this.envelope.stateRoot};}
  get recoveryEpoch(){return this.envelope.authorityEpoch;}
- constructor(raw:NativeResourceEnvelope){super();this.envelope=NativeResourceEnvelope.parse(raw);}
+ constructor(raw:NativeResourceEnvelope){super();this.envelope=NativeResourceEnvelope.parse(raw);issuedNativeDaemons.add(this);}
  bindRecoveryInventory(inventory:RecoveryInventoryCapability){if(this.envelope.authorityEpoch!==inventory.config.epoch)throw new Refusal('RECOVERY_PHYSICAL_EPOCH_MISMATCH');this.inventory=inventory;}
  bindRecoveryLedger(ledger:import('./ledger.ts').Ledger){if(this.inventoryLedger&&this.inventoryLedger!==ledger)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');this.inventoryLedger=ledger;}
  async callResource(action:string,value:Record<string,unknown>):Promise<any>{
@@ -71,6 +73,7 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
   if(result.authorityId!==this.authorityId||result.installationId!==this.envelope.installationId||result.anchorId!==this.envelope.resourceAuthority.anchorId||result.epoch!==this.envelope.authorityEpoch||result.stateRoot!==this.stateRoot)throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');
   return result;
  }
+ async releaseRecovery(recoveryToken:string){z.uuid().parse(recoveryToken);const result=z.object({state:z.literal('released'),authorityId:z.string(),epoch:z.number().int().positive()}).strict().parse(await this.callResource('recovery_release',{recoveryToken}));if(result.authorityId!==this.authorityId||result.epoch!==this.envelope.authorityEpoch)throw new Refusal('RECOVERY_PHYSICAL_IDENTITY_MISMATCH');return result;}
  override async create(name:string,configuration:object){return z.string().regex(/^[a-f0-9]{64}$/).parse((await this.callResource('create',{name,configuration,admissionId:this.admissions.get(name)})).id);}
  override async start(id:string){await this.callResource('start',{id});}
  override async stop(id:string){await this.callResource('stop',{id});}
