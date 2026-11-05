@@ -1,0 +1,18 @@
+TAP version 13
+# PASS broker lifecycle: explicit shutdown preserves exit code; terminating the actual PostgreSQL lock session exits isolated controller with code1
+# {"proof":"r4-composed-broker-isolation","workers":2,"overlapping":true,"assertionsPerWorker":42,"refusedAttacksPerWorker":41,"permittedLocalControlsPerWorker":1,"authorizedHostMutation":"environment079 revision1","hostApiCounterprobes":["unauthenticated401","forged-signature403","cross-project403","owner-central-admin403","busy-worker-project409"],"workerApiResult":"network-denied-not-authentication-proof","protectedGitUnchanged":true,"canariesUnchanged":true,"synthetic":true,"nativeFullIsolation":false}
+# Subtest: two real broker workers attack central authority while signed owner environment administration succeeds
+ok 1 - two real broker workers attack central authority while signed owner environment administration succeeds
+  ---
+  duration_ms: 6912.721865
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7587.180161
