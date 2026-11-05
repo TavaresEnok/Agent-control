@@ -66,10 +66,10 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
    if(!orphanPid)throw Error('SYNTHETIC_FINALIZER_PID_MISSING');
   }
   const finalizerPid=orphanPid??child.pid;
-  if(namespace!=='rubycrash'){let observed='';for(let i=0;i<100;i++){observed=await readFile(join(work,'src/a.ts'),'utf8');if(observed==='active synthetic finalizer\n')break;await new Promise(r=>setTimeout(r,20));}
-  assert.equal(observed,'active synthetic finalizer\n');}else assert.match(await readFile(`/proc/${finalizerPid}/cmdline`,'utf8'),/native_finalize\.rb/);
   const proc=await readFile(`/proc/${finalizerPid}/stat`,'utf8'),startTime=proc.slice(proc.lastIndexOf(')')+2).split(' ')[19];
   if(orphanPid)orphanStart=startTime;
+  if(namespace!=='rubycrash'){let observed='';for(let i=0;i<100;i++){observed=await readFile(join(work,'src/a.ts'),'utf8');if(observed==='active synthetic finalizer\n')break;await new Promise(r=>setTimeout(r,20));}
+  assert.equal(observed,'active synthetic finalizer\n');}else assert.match(await readFile(`/proc/${finalizerPid}/cmdline`,'utf8'),/native_finalize\.rb/);
   const actualNamespace=await readlink('/proc/self/ns/pid');
   const handle={pid:finalizerPid,startTime,bootId:namespace==='otherboot'?'unverified-other-host':(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim(),
    ...(namespace==='legacy'?{}:{pidNamespace:namespace==='different'?'pid:[999999999]':actualNamespace})};
