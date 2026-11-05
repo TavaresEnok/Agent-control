@@ -40,7 +40,7 @@ test('R3 configured signed product API prepares, launches and registers exact re
   provider!.resolve=async()=>{
    if(++entrants===8)unblock();
    await barrier;
-   await lab.db.pool.query({text:'SELECT 1',query_timeout:2000});
+   const probe={text:'SELECT 1',query_timeout:2000};await lab.db.pool.query(probe);
    throw new Refusal('CONCURRENT_ADAPTER_CONNECTION_AVAILABLE');
   };
   const concurrent=await Promise.all(Array.from({length:8},()=>gateway(post({...prepare,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...prepare.payload,workspaceId:randomUUID()}}))));
