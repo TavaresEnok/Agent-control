@@ -12,7 +12,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import { ExternalLinkIcon, WorkflowIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -97,6 +97,15 @@ export function TaskGraphRoute() {
 }
 
 export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
+  // TanStack records receipt of the detail response or a merged SSE frame; this is
+  // client observation age, not server projection latency.
+  const observed = useRun(run.id)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const observedSeconds = observed.dataUpdatedAt ? Math.max(0, Math.floor((now - observed.dataUpdatedAt) / 1000)) : null
   const def = run.workflowDef
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
   const overlay = useMemo(() => (graph ? runOverlay(graph, run) : null), [graph, run])
@@ -174,7 +183,7 @@ export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded
             <button className="rounded-md border px-3 py-2 aria-pressed:bg-muted focus-visible:outline" type="button" aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Grafo</button>
             <button className="rounded-md border px-3 py-2 aria-pressed:bg-muted focus-visible:outline" type="button" aria-pressed={view === 'cards'} onClick={() => setView('cards')}>Cartões</button>
           </div>
-          <p className="px-2 text-meta text-muted-foreground">Atraso de projeção: indisponível (o registro não informa quando o estado foi projetado).</p>
+          <p className="px-2 text-meta text-muted-foreground">{observedSeconds === null ? 'Última atualização recebida: indisponível' : `Última atualização recebida há ${observedSeconds} s`} · Não mede a latência de projeção no servidor.</p>
           {view === 'cards' && overlay ? (
             <ol aria-label="Etapas do workflow" className="space-y-2 p-2">
               {graph.nodes.map((node) => {
@@ -183,8 +192,8 @@ export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded
                 return <li key={node.id} className="rounded-md border p-3" data-node-id={node.id}>
                   <strong>{node.name ?? node.id}</strong><p>Identificador: {node.id}</p>
                   <p>Estado: {overlay.nodes.get(node.id)?.status ?? 'pending'}</p>
-                  <p>Responsável: não informado</p>
-                  {step?.profileId && <p>Perfil da sessão: {step.profileId}</p>}
+                  <p>Responsável pela etapa: não informado</p>
+                  <p>Responsável pela sessão: {step?.profileId ? `perfil ${step.profileId}` : 'não informado'}</p>
                   {childRunId && <Link to={`/tasks/${childRunId}`}>Abrir subtarefa</Link>}
                 </li>
               })}
@@ -250,8 +259,7 @@ function NodeDetails({
   loopMax?: number
   childRunId?: string
 }) {
-  const rows: [string, string][] = [['Identificador', nodeId], ['Estado', state.status], ['Responsável', 'não informado'], ['Atraso de projeção', 'indisponível']]
-  if (profileId) rows.push(['Perfil da sessão', profileId])
+  const rows: [string, string][] = [['Identificador', nodeId], ['Estado', state.status], ['Responsável pela etapa', 'não informado'], ['Responsável pela sessão', profileId ? `perfil ${profileId}` : 'não informado']]
   if (state.iterations) rows.push(['runs', String(state.iterations)])
   if (state.costUsd) rows.push(['cost', `$${state.costUsd.toFixed(2)}`])
   if (state.loopCount !== undefined) rows.push(['iterations', `${state.loopCount}${loopMax ? ` / ${loopMax}` : ''}`])
