@@ -8,6 +8,7 @@ import pg from 'pg';
 import {z} from 'zod';
 import {Ledger} from './ledger.ts';
 import {Refusal} from './contracts.ts';
+import {configureRecoveryInventory,requireRecoveryInventory,RecoveryCatalogCheckpoint,type RecoveryInventoryConfig} from './recovery-inventory.ts';
 
 const exec=promisify(execFile),limit=32*1024*1024,scope='ac-r3-migration-disposable-recovery-v1';
 const sha=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
@@ -26,18 +27,21 @@ async function privateBytes(path:string,max=limit){
 }
 /** Fresh labelled laboratory only. Existing backup/vault tools remain the operational gate.
  * The source must already be quiescent; this helper never closes a live installation. */
-export async function backupLaboratoryDatabase(options:{containerId:string;sourceUrl:string;directory:string;canonicalHistoryFile:string;vaultArchiveFile:string;happierSnapshotFile?:string}){
+export async function backupLaboratoryDatabase(options:{containerId:string;sourceUrl:string;directory:string;canonicalHistoryFile:string;vaultArchiveFile:string;happierSnapshotFile?:string;recoveryInventory?:RecoveryInventoryConfig}){
  const url=await validateContainer(options.containerId,options.sourceUrl),name=url.pathname.slice(1);
  if(!/^ac_implementation_test_r3[a-z0-9_]+$/.test(name))throw new Refusal('RECOVERY_SOURCE_DATABASE_REQUIRED');
  if(resolve(options.directory)!==options.directory||await realpath(options.directory)!==options.directory)throw new Refusal('RECOVERY_DIRECTORY_REQUIRED');
  const info=await lstat(options.directory);if(!info.isDirectory()||(info.mode&0o077)!==0||info.uid!==process.getuid?.())throw new Refusal('RECOVERY_DIRECTORY_REQUIRED');
- const ledger=new Ledger(options.sourceUrl);let sourceInstallationId:string;
+ const ledger=new Ledger(options.sourceUrl);let sourceInstallationId:string,catalogCheckpoint:z.infer<typeof RecoveryCatalogCheckpoint>|undefined;
  try{
   if((await ledger.pool.query('SELECT enabled FROM ac_admission_control WHERE id=1')).rows[0]?.enabled!==false||
    (await ledger.pool.query('SELECT 1 FROM ac_managers WHERE lease_until>clock_timestamp()')).rowCount||
    (await ledger.pool.query("SELECT 1 FROM ac_accounts WHERE mode<>'synthetic'")).rowCount||
    (await ledger.pool.query("SELECT 1 FROM ac_import_batches WHERE state='staging'")).rowCount)throw new Refusal('RECOVERY_SOURCE_MUST_BE_QUIESCENT_SYNTHETIC');
   sourceInstallationId=(await ledger.pool.query('SELECT id FROM ac_installation_identity')).rows[0].id;
+  if(options.recoveryInventory)await configureRecoveryInventory(ledger,options.recoveryInventory);
+  const inventory=await ledger.tx(c=>requireRecoveryInventory(c,ledger));
+  if(inventory){if(inventory.config.installationId!==sourceInstallationId)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');catalogCheckpoint=await inventory.checkpoint();}
  }finally{await ledger.pool.end();}
  const snapshot=new pg.Client({connectionString:options.sourceUrl});await snapshot.connect();let dump:Buffer;let checkpoint:{snapshotId:string;capturedAt:string;artifacts?:{historySha256:string;vaultSha256:string;happierSha256?:string;happierCapturedAt?:string}};
  try{await snapshot.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');const cut=(await snapshot.query('SELECT pg_export_snapshot() id,clock_timestamp() captured_at')).rows[0];checkpoint={snapshotId:cut.id,capturedAt:cut.captured_at.toISOString()};
@@ -48,7 +52,7 @@ export async function backupLaboratoryDatabase(options:{containerId:string;sourc
  const happier=options.happierSnapshotFile?await privateBytes(options.happierSnapshotFile):undefined;
  checkpoint.artifacts={historySha256:sha(history),vaultSha256:sha(vault)};
  if(happier){const cut=z.object({scope:z.literal('ac-r3-happier-stopped'),capturedAt:z.string().datetime()}).passthrough().parse(JSON.parse(happier.toString('utf8')));if(Date.parse(cut.capturedAt)>Date.parse(checkpoint.capturedAt))throw new Refusal('RECOVERY_HAPPIER_CUT_AFTER_DATABASE');checkpoint.artifacts.happierSha256=sha(happier);checkpoint.artifacts.happierCapturedAt=cut.capturedAt;}
- const payload=Buffer.from(JSON.stringify({database:dump.toString('base64'),canonicalHistory:history.toString('base64'),vaultArchive:vault.toString('base64'),checkpoint,...(happier?{happierSnapshot:happier.toString('base64')}:{})}));happier?.fill(0);
+ const payload=Buffer.from(JSON.stringify({database:dump.toString('base64'),canonicalHistory:history.toString('base64'),vaultArchive:vault.toString('base64'),checkpoint,...(catalogCheckpoint?{catalogCheckpoint}:{}),...(happier?{happierSnapshot:happier.toString('base64')}:{})}));happier?.fill(0);
  cipher.setAAD(Buffer.from(JSON.stringify(header)));const ciphertext=Buffer.concat([cipher.update(payload),cipher.final()]);payload.fill(0);history.fill(0);vault.fill(0);
  const basename='ac-r3-recovery-'+randomUUID(),archiveFile=join(options.directory,basename+'.json'),keyFile=join(options.directory,basename+'.key');
  try{await writeFile(keyFile,key,{mode:0o600,flag:'wx'});await writeFile(archiveFile,JSON.stringify({...header,nonce:nonce.toString('hex'),tag:cipher.getAuthTag().toString('hex'),ciphertext:ciphertext.toString('base64')}),{mode:0o600,flag:'wx'});return {archiveFile,keyFile,sha256:header.sha256,sourceInstallationId};}
@@ -65,7 +69,8 @@ export async function restoreLaboratoryDatabase(options:{containerId:string;sour
  let payloadBytes:Buffer;
  try{payloadBytes=Buffer.concat([decipher.update(Buffer.from(ciphertext,'base64')),decipher.final()]);}catch{throw new Refusal('RECOVERY_ARCHIVE_AUTHENTICATION_FAILED');}finally{key.fill(0);}
  if(sourceDatabase!==url.pathname.slice(1))throw new Refusal('RECOVERY_SOURCE_DATABASE_MISMATCH');
- const payload=z.object({database:z.string().max(limit*2),canonicalHistory:z.string().max(limit*2),vaultArchive:z.string().max(limit*2),happierSnapshot:z.string().max(limit*2).optional(),checkpoint:z.object({snapshotId:z.string(),capturedAt:z.string().datetime(),artifacts:z.object({historySha256:z.string().length(64),vaultSha256:z.string().length(64),happierSha256:z.string().length(64).optional(),happierCapturedAt:z.string().datetime().optional()}).strict().optional()}).strict().optional()}).strict().parse(JSON.parse(payloadBytes.toString('utf8')));payloadBytes.fill(0);
+ const payload=z.object({database:z.string().max(limit*2),canonicalHistory:z.string().max(limit*2),vaultArchive:z.string().max(limit*2),happierSnapshot:z.string().max(limit*2).optional(),catalogCheckpoint:RecoveryCatalogCheckpoint.optional(),checkpoint:z.object({snapshotId:z.string(),capturedAt:z.string().datetime(),artifacts:z.object({historySha256:z.string().length(64),vaultSha256:z.string().length(64),happierSha256:z.string().length(64).optional(),happierCapturedAt:z.string().datetime().optional()}).strict().optional()}).strict().optional()}).strict().parse(JSON.parse(payloadBytes.toString('utf8')));payloadBytes.fill(0);
+ if(payload.catalogCheckpoint&&payload.catalogCheckpoint.installationId!==sourceInstallationId)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
  const artifactHashes=payload.checkpoint?.artifacts;
  if(artifactHashes&&(sha(Buffer.from(payload.canonicalHistory,'base64'))!==artifactHashes.historySha256||sha(Buffer.from(payload.vaultArchive,'base64'))!==artifactHashes.vaultSha256||(payload.happierSnapshot&&sha(Buffer.from(payload.happierSnapshot,'base64'))!==artifactHashes.happierSha256)))throw new Refusal('RECOVERY_ARTIFACT_DIGEST_MISMATCH');
  const dump=Buffer.from(payload.database,'base64');
@@ -90,7 +95,10 @@ export async function restoreLaboratoryDatabase(options:{containerId:string;sour
   const restored=new Ledger(target.href),installationId=randomUUID();
   try{await restored.tx(async c=>{
    await c.query('INSERT INTO ac_installation_identity(singleton,id) VALUES(true,$1)',[installationId]);
-   await c.query("UPDATE ac_admission_control SET enabled=false,revision=revision+1,reason='r3-restored-awaiting-reconciliation',updated_at=clock_timestamp() WHERE id=1");
+   const recoveryTable=(await c.query("SELECT to_regclass('ac_recovery_inventory_restores') AS name")).rows[0].name;
+   if(!recoveryTable&&payload.catalogCheckpoint)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISSING');
+   if(recoveryTable)await c.query('INSERT INTO ac_recovery_inventory_restores(installation_id,source_installation_id,checkpoint,state) VALUES($1,$2,$3,$4)',[installationId,sourceInstallationId,payload.catalogCheckpoint??null,payload.catalogCheckpoint?'physical-reconciliation-required':'legacy-blocked']);
+   await c.query('UPDATE ac_admission_control SET enabled=false,revision=revision+1,reason=$1,updated_at=clock_timestamp() WHERE id=1',[payload.catalogCheckpoint?'r3-restored-awaiting-reconciliation':'r3-restored-legacy-no-catalog']);
    await c.query('UPDATE ac_contexts SET paused=true,pause_revision=pause_revision+1');
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second'");
    await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE state<>'released'");
@@ -105,7 +113,7 @@ export async function restoreLaboratoryDatabase(options:{containerId:string;sour
   await writeFile(join(artifactsDirectory,'canonical-history.json'),Buffer.from(payload.canonicalHistory,'base64'),{mode:0o600,flag:'wx'});
   await writeFile(join(artifactsDirectory,'context-vault.archive'),Buffer.from(payload.vaultArchive,'base64'),{mode:0o600,flag:'wx'});
   if(payload.happierSnapshot)await writeFile(join(artifactsDirectory,'happier.snapshot.json'),Buffer.from(payload.happierSnapshot,'base64'),{mode:0o600,flag:'wx'});
-  return {database,url:target.href,artifactsDirectory,checkpoint:payload.checkpoint,installationId,sourceInstallationId,admission:'closed' as const,physicalReconciliation:'required' as const,vaultActivation:'blocked-until-rewrapped' as const};
+  return {database,url:target.href,artifactsDirectory,checkpoint:payload.checkpoint,catalogCheckpoint:payload.catalogCheckpoint,installationId,sourceInstallationId,admission:'closed' as const,physicalReconciliation:'required' as const,vaultActivation:'blocked-until-rewrapped' as const};
  }catch(error){await rm(artifactsDirectory,{recursive:true,force:true});if(created)await admin.query(`DROP DATABASE "${database}"`);throw error;}
  finally{await admin.end();await rm(local,{recursive:true,force:true});await docker(options.containerId,['rm','-rf',containerDirectory]);}
 }

@@ -9,3 +9,10 @@ CREATE TABLE ac_recovery_inventory_policy (
  CHECK (NOT required OR (source_installation_id IS NOT NULL AND catalog_id IS NOT NULL AND manifest_hash IS NOT NULL))
 );
 INSERT INTO ac_recovery_inventory_policy(singleton) VALUES(true);
+CREATE TABLE ac_recovery_inventory_restores (
+ installation_id uuid PRIMARY KEY,
+ source_installation_id uuid NOT NULL,
+ checkpoint jsonb,
+ state text NOT NULL CHECK(state IN ('legacy-blocked','physical-reconciliation-required')),
+ CHECK ((state='legacy-blocked') = (checkpoint IS NULL))
+);

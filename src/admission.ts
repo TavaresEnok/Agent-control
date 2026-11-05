@@ -12,7 +12,7 @@ export class Admission{
    if(state.revision!==value.expectedRevision)throw new Refusal('ADMISSION_REVISION_CONFLICT');
    // A restored database cannot enumerate effects created after its snapshot.
    // Keep the marker intact until a trusted physical inventory can clear it.
-   if(state.reason==='r3-restored-awaiting-reconciliation')throw new Refusal('RESTORE_PHYSICAL_RECONCILIATION_REQUIRED');
+   if(['r3-restored-awaiting-reconciliation','r3-restored-legacy-no-catalog'].includes(state.reason))throw new Refusal('RESTORE_PHYSICAL_RECONCILIATION_REQUIRED');
    if(value.enabled){
     const blockers=(await c.query(`SELECT
       (SELECT count(*) FROM ac_operations WHERE state IN ('running','uncertain'))+
