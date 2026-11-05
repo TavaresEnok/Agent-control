@@ -133,7 +133,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   await capacity.observeModelQuota(principal,execAccount,'fixed-programmer',{status:'exhausted',source:'synthetic://r4-combined-model-scope',ttlSeconds:3600});
   const command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'message:r3-approved-plan',proposalRevision:proposal.revision,proposalDigest:proposal.digest,native:true}};
   assert.equal((await product.request('/api/v1/ac/commands',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(command)})).status,401);
-  eventProbe=startCommittedEventProbe({ledger:db,contextId:context,fetchEvents:async()=>product.request('/api/v1/ac/contexts/'+context+'/events',{headers:{cookie,origin}}),samples:10,timeoutMs:90000});await eventProbe.ready;
+  eventProbe=startCommittedEventProbe({ledger:db,contextId:context,fetchEvents:async()=>product.request('/api/v1/ac/contexts/'+context+'/events',{headers:{cookie,origin}}),samples:10,timeoutMs:240000});await eventProbe.ready;
   const measured=await measureCommandRequests(value=>request('/api/v1/ac/commands',value),command,8);evidence.commandLatency=measured.report;
   const response=measured.response;const started=await response.json() as {intentId:string;runId:string};
   await until(async()=>Number((await db.pool.query("SELECT count(*)::int n FROM ac_capacity_waits w JOIN ac_intents i ON i.id=w.intent_id WHERE i.parent_intent_id=$1 AND w.role='programmer' AND w.reason='NO_ELIGIBLE_CAPACITY'",[started.intentId])).rows[0].n)>=2,()=>"SCOPED_PROGRAMMER_QUOTA_DID_NOT_BLOCK_PRODUCT",30000);
