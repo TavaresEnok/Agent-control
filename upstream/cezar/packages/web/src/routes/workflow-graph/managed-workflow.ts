@@ -42,8 +42,9 @@ async function sendPending(projectId:string,payload?:Payload){
  let result:unknown;try{result=await response.json()}catch{throw Error('COMMAND_RESPONSE_INVALID')}
  if(!response.ok){
   const parsed=z.object({error:z.string()}).safeParse(result),code=parsed.success?parsed.data.error:`HTTP_${response.status}`
-  // Only the first, definitely refused revision-CAS attempt is known not to have a journal.
-  if(!record.uncertain&&code==='WORKFLOW_REVISION_CONFLICT')sessionStorage.removeItem(key)
+  // These first-attempt refusals happen before journal insertion; earlier uncertain attempts stay recoverable.
+  const refusedBeforeJournal=['WORKFLOW_REVISION_CONFLICT','INVALID_CONTRACT','WORKFLOW_GRAPH_INVALID','WORKFLOW_GRAPH_TOO_LARGE','WORKFLOW_GRAPH_FORBIDDEN','HUMAN_CONTROL_AUTH_REQUIRED','WORKFLOW_REPOSITORY_REQUIRED','WORKFLOW_REPOSITORY_FORBIDDEN','WORKFLOW_REPOSITORY_UNAVAILABLE','WORKFLOW_REPOSITORY_CHANGED'].includes(code)||[413,415].includes(response.status)
+  if(!record.uncertain&&refusedBeforeJournal)sessionStorage.removeItem(key)
   throw Error(code==='WORKFLOW_REVISION_CONFLICT'&&!record.uncertain?'A revisão mudou. Recarregue o fluxo antes de salvar.':code)
  }
  const parsed=z.object({state:z.literal('applied'),projectId:z.string().uuid(),name:z.string(),revision:z.number().int(),path:z.string()}).safeParse(result)
