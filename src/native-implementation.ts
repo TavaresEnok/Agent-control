@@ -80,17 +80,18 @@ export class NativeImplementation{
   if(!input.correction||input.correction.revision!==managed.unit.correctionRevision||input.correction.taskId!==managed.unit.taskId)throw new Refusal('MANAGED_CORRECTION_MISMATCH');
   assertNativeCorrectionDistinct(artifact.commit_id,artifact.tree_id,input.correction.priorCommit,input.correction.priorTree);
  }
- private async retire(supervisor:NativeExecutionSupervisor,owner:string,authority:Authority,jobId:string){
-  try{return await supervisor.retireManagedWriter(owner,authority,jobId);}
+ private async retire(supervisor:NativeExecutionSupervisor,owner:string,authority:Authority,jobId:string,standalone=false){
+  const retire=()=>standalone?supervisor.retireTerminal(owner,authority,jobId):supervisor.retireManagedWriter(owner,authority,jobId);
+  try{return await retire();}
   catch(error){
    if(!(error instanceof Refusal)||!['DOCKER_UNCERTAIN','DOCKER_REMOVE_UNCERTAIN','DOCKER_NETWORK_UNCERTAIN'].includes(error.code))throw error;
-   return supervisor.retireManagedWriter(owner,authority,jobId);
+   return retire();
   }
  }
  async prepareRecovery(intent:Intent,authority:Authority){
   const owner=(await this.ledger.pool.query('SELECT principal_id FROM ac_intents WHERE id=$1',[intent.id])).rows[0]?.principal_id;if(!owner)throw new Refusal('INTENT_MISSING');
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rows[0];
-  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state!=='completed')return false;const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);await this.refuseReusedCorrection(intent,artifact);await this.materializeManagedCommit(intent,artifact.commit_id);await this.retire(supervisor,owner,authority,intent.operation_id);return true;}
+  if(job){const supervisor=this.supervisors.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');const result=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);if(result.state==='failed'){await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);return false;}if(result.state!=='completed')return false;const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);await this.refuseReusedCorrection(intent,artifact);await this.materializeManagedCommit(intent,artifact.commit_id);await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);return true;}
   // Managed tasks derive their request from the immutable proposal, so a
   // restarted controller does not need a live chat source to start them.
   const managed=await readManagedUnit(this.ledger,intent);
@@ -175,14 +176,14 @@ export class NativeImplementation{
    }
    if(!supervisor)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
    for(;;){
-    if(canceled||!this.active){const stopped=await supervisor.reconcileCancellation(owner,authority,intent.operation_id);if(stopped.state==='reconciled')await this.retire(supervisor,owner,authority,intent.operation_id);throw new Refusal('STAGE_CANCELED');}
+    if(canceled||!this.active){const stopped=await supervisor.reconcileCancellation(owner,authority,intent.operation_id);if(stopped.state==='reconciled')await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);throw new Refusal('STAGE_CANCELED');}
     const observed=await supervisor.reconcileRegistered(owner,authority,intent.operation_id);
-    if(observed.state==='failed'){await this.retire(supervisor,owner,authority,intent.operation_id);throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');}
+    if(observed.state==='failed'){await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);throw new Refusal('NATIVE_IMPLEMENTATION_FAILED');}
     if(observed.state==='completed'){
      const artifact=await supervisor.registerArtifact(owner,authority,intent.operation_id,this.quality);
      await this.refuseReusedCorrection(intent,artifact);
      await this.materializeManagedCommit(intent,artifact.commit_id);
-     await this.retire(supervisor,owner,authority,intent.operation_id);
+     await this.retire(supervisor,owner,authority,intent.operation_id,!intent.parent_intent_id);
      const row=(await this.ledger.pool.query('SELECT g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1',[intent.operation_id])).rows[0];
      const tokens=row?.physical_receipt?.normalizedTokensUsed;
      const text=`Native artifact prepared for independent QA and review: ${artifact.commit_id}`;
