@@ -1,3 +1,4 @@
+import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {constants} from 'node:fs';
 import {mkdir,lstat,realpath,writeFile,open,rename} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
@@ -158,6 +159,7 @@ export class NativeExecutionSupervisor{
   await this.directory(this.config.hostRoot);
   // Commit the uncertainty before files, Docker networks or processes exist.
   await this.ledger.tx(async c=>{await this.identity(c,principal,authority,input);
+   if(input.role==='programmer')await requireProjectEnvironmentLaunch(c,{intentId:input.intentId,base:input.base});
    await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,executor_digest,key_fingerprint,input_digest,base_id,role,account_id,profile_id,profile_digest,eligibility_revision,state)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'uncertain')`,[input.jobId,input.grantId,input.intentId,authority.contextId,authority.epoch,input.sessionId,this.executorDigest,this.fingerprint,hash,input.base,input.role,g.account_id,g.profile_id,this.profileDigest(g),assessment.revision]);
    await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[input.grantId]);

@@ -1,3 +1,4 @@
+import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
@@ -115,6 +116,7 @@ export class IsolatedImplementation{
      if(contract){const policy=QualityPolicy.parse(contract.snapshot);if(digest(policy)!==contract.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
       if(policy.requireSpecialistBeforeImplementation){if(!this.specialistGuard)throw new Refusal('SPECIALIST_ADVICE_REQUIRED');
        await this.specialistGuard(c,intent,authority,{sessionId:z.uuid().parse(spec.sessionId),grantId:operation.grant_id});}}
+     await requireProjectEnvironmentLaunch(c,{intentId:intent.id,base});
      await c.query('INSERT INTO ac_execution_launches(operation_id,context_id,manager_epoch,snapshot,digest) VALUES($1,$2,$3,$4,$5)',
       [intent.operation_id,authority.contextId,authority.epoch,snapshot,digest(snapshot)]);
      await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[intent.operation_id,z.uuid().parse(spec.sessionId)]);

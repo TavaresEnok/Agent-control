@@ -12,6 +12,7 @@ import { OperatorProof,Operators } from './operator.ts';
 import type { BrowserSessions } from './sessions.ts';
 import {Usage} from './usage.ts';
 import {createUsageReportApi} from './usage-report-api.ts';
+import {environmentRefusal} from './project-environments.ts';
 import {GitArtifacts} from './git.ts';
 import type {HappierAuthRelay} from './auth-relay.ts';
 import {ProviderCollectors,type ProviderAdapter} from './providers.ts';
@@ -78,7 +79,8 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.use('/api/v1/ac/*',bodyLimit({maxSize:256*1024,onError:c=>c.json({error:'REQUEST_BODY_TOO_LARGE'},413)}));
   app.onError((e, c) => {
-    if (e instanceof Refusal) return c.json({ error: e.code }, e.status);
+    const refusal=e instanceof Refusal?e:environmentRefusal(e);
+    if (refusal) return c.json({ error: refusal.code }, refusal.status);
     if (e instanceof z.ZodError || e instanceof SyntaxError) return c.json({ error: 'INVALID_CONTRACT' }, 400);
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);

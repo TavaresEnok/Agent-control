@@ -1,3 +1,4 @@
+import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile, lstat, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -329,6 +330,7 @@ export class EngineeringStages{
    await c.query('INSERT INTO ac_managed_composition_sources(intent_id,snapshot,digest) VALUES($1,$2,$3) ON CONFLICT(intent_id) DO NOTHING',[intent.id,JSON.stringify(snapshot),digest(snapshot)]);
    const stored=(await c.query('SELECT snapshot,digest FROM ac_managed_composition_sources WHERE intent_id=$1',[intent.id])).rows[0];
    if(!stored||stored.digest!==digest(snapshot)||digest(stored.snapshot)!==stored.digest)throw new Refusal('MANAGED_SOURCE_MISMATCH');
+   await requireProjectEnvironmentLaunch(c,{intentId:intent.id,base:input.base});
    const changed=await c.query("UPDATE ac_operations SET state='uncertain',grant_id=$2 WHERE id=$1 AND intent_id=$3 AND state='registered' AND manager_epoch=$4 AND (grant_id IS NULL OR grant_id=$2)",[intent.operation_id,grant.id,intent.id,authority.epoch]);
    if(!changed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
   });

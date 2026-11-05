@@ -1,3 +1,4 @@
+import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import { createHash, createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type pg from 'pg';
@@ -436,6 +437,7 @@ export class Quality {
       await this.assertHumanApproval(c,artifact,ref);
       const prior=(await c.query('SELECT * FROM ac_integration_intents WHERE artifact_id=$1',[artifactId])).rows[0];
       if(prior){if(prior.target_ref!==ref)throw new Refusal('INTEGRATION_TARGET_CONFLICT');return prior;}
+      await requireProjectEnvironmentLaunch(c,{intentId:artifact.intent_id,base:artifact.base_id,targetRef:ref,integration:true});
       return (await c.query(`INSERT INTO ac_integration_intents(id,artifact_id,context_id,manager_epoch,target_ref,state)
         VALUES($1,$2,$3,$4,$5,'registered') RETURNING *`,[randomUUID(),artifact.id,artifact.context_id,authority.epoch,ref])).rows[0];
     });
