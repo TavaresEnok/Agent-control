@@ -52,6 +52,7 @@ export function startCommittedEventProbe({ledger,contextId,fetchEvents,samples=1
     }
     if(metrics.committedEventUpdateUpperBound.length<samples)await new Promise(resolve=>setTimeout(resolve,50));
    }
+   if(metrics.committedEventUpdateUpperBound.length!==samples)console.error('R3_EVENT_PROBE_INCOMPLETE '+JSON.stringify({requested:samples,observed:metrics.committedEventUpdateUpperBound.length,dbEvents:dbSeen.size,candidates:committed.size,deadlineElapsed:performance.now()>=deadline,stopped}));
    const measured=metrics.committedEventUpdateUpperBound.length?report(metrics,{transport:'committed PostgreSQL projection → authenticated product events endpoint',
     network:'in-process Hono request; real authentication network; includes 50ms polling interval',
     eventClock:'conservative upper bound from start of previous PG snapshot query (which lacked the event) to authenticated API observation; includes DB query/auth/polling',
