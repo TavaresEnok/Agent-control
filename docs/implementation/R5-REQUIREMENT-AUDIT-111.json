@@ -476,7 +476,8 @@
       ],
       "recommendation": "do_not_accept_full_requirement",
       "conclusion": "Histórico cifrado e registros de runs com estado/artifactRef são importados e deduplicados; ImportBundle v1 não contém contratos completos de planos nem evidências de verificação. Restore/reimport não fecha essas capacidades nomeadas.",
-      "next_evidence": "Versionar o bundle e importar planos/evidências legadas identificadas com proveniência, pausa e dedupe de trabalho concluído; provar falha/reenvio/restore sem criar execução indevida. Não requer abrir Paseo operacional sem autorização."
+      "next_evidence": "Versionar o bundle e importar planos/evidências legadas identificadas com proveniência, pausa e dedupe de trabalho concluído; provar falha/reenvio/restore sem criar execução indevida. Não requer abrir Paseo operacional sem autorização.",
+      "r5_versioned_delta": "fdeb9962, 0e2ec7e8, 1963fbc7, 863395f2: scoped historical import approved; composed restore and conversion of real authorized source remain pending."
     },
     {
       "id": "RF-34",
@@ -941,7 +942,8 @@
       ],
       "recommendation": "do_not_accept_full_requirement",
       "conclusion": "Oráculos corrigidos cobrem23 superfícies/objetos Git, mas não a composição inteira de segredo em execução.",
-      "next_evidence": "Conversa→planejamento→prompt→runner bem-sucedido→deltas SSE/logs→artefato/export, com canário e controles negativos; testar configuração hostil e backup composto."
+      "next_evidence": "Conversa→planejamento→prompt→runner bem-sucedido→deltas SSE/logs→artefato/export, com canário e controles negativos; testar configuração hostil e backup composto.",
+      "r5_versioned_delta": "23 finite secret surfaces independently reviewed; complete conversation-to-runner/SSE/artifact/export composition and hostile configuration remain pending."
     },
     {
       "id": "RNF-09",
@@ -1318,7 +1320,8 @@
       "conclusion": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
       "next_evidence": "Prove real QA defect returns through bounded correction to replacement artifact and fresh verification; permission correction 972373ad/1865dfec is scoped evidence only.",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "972373ad, 1865dfec: QA snapshot permission and crash-retry scope approved; physical defect-correction flow remains pending."
     },
     {
       "id": "T22",
@@ -1477,7 +1480,8 @@
       "conclusion": "workflow-versions.ts pins frozen digest/current-vs-retained; restored lab starts reconciling",
       "next_evidence": "Update worker with pending messages/pauses/operations and Continue-As-New while retaining compatible old workers; Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
       "latest_R3_addendum": null,
-      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred."
+      "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
+      "r5_versioned_delta": "f3c2d2c9, 48b0bcb6: project barrier and lost-ACK handoff replay scoped approval; full scenario and integrated physical proof remain pending."
     },
     {
       "id": "T33",
