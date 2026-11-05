@@ -565,6 +565,7 @@ function WorkflowGraphEditor() {
     mutationFn: (_overwrite: boolean) => {
       if (!projectId) throw Error('PROJECT_REQUIRED')
       const target=name.trim()
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(target) || target.length > 80) throw Error('WORKFLOW_NAME_INVALID')
       const base=loadedRevision.current
       if (workflows.data?.workflows.some(w=>w.name===target) && base?.name!==target) throw Error('SAVE_COPY_WITH_NEW_NAME')
       return saveManagedWorkflow(projectId,target,description.trim(),graph,base?.name===target ? base.revision : 0)
