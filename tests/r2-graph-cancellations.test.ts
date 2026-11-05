@@ -12,3 +12,12 @@ test('one uncertain native job does not block another job or remote cancellation
  const runtime={running:true,lock:true,ledger,manager:{cancel(){}},nativePlanning:[],nativeExecutions:[supervisor],remote:{async reconcileCancellationRequests(){seen.push('remote');}}};
  try{await assert.rejects(CezarRuntime.prototype.reconcileCancellations.call(runtime as never,{contextId:randomUUID(),epoch:1,instanceId:randomUUID()},'owner'),(error:any)=>error instanceof AggregateError&&error.errors.length===1&&error.errors[0].cause.message==='UNCERTAIN');assert.deepEqual(seen,[...ids,'remote']);}finally{mock.restoreAll();}
 });
+
+test('confirmed reviewer cancellation retires without recording verification',async()=>{
+ const id=randomUUID(),seen:string[]=[];
+ mock.method(Cancellations.prototype,'reconcile',async()=>{});
+ const supervisor={supportsAccount:()=>true,executorDigest:'digest',keyFingerprint:'key',async reconcileRegistered(){seen.push('reconcile');return {state:'completed'};},async retireTerminal(_p:string,_a:unknown,job:string){assert.equal(job,id);seen.push('retire');}};
+ const ledger={heartbeat:async()=>{},pool:{query:async(sql:string)=>sql.includes('SELECT j.id,j.role')?{rows:[{id,role:'reviewer',account_id:'a',executor_digest:'digest',key_fingerprint:'key',cancellation_state:'confirmed'}]}:sql.includes('SELECT 1 FROM ac_native_execution_jobs j')?{rows:[{}],rowCount:1}:{rows:[],rowCount:0}}};
+ const runtime={running:true,lock:true,ledger,manager:{cancel(){}},nativePlanning:[],nativeExecutions:[supervisor],engineering:{reconcileIntegrationResult:async()=>{},options:{nativeVerification:{record:async()=>{seen.push('record');}}}}};
+ try{await CezarRuntime.prototype.reconcileCancellations.call(runtime as never,{contextId:randomUUID(),epoch:1,instanceId:randomUUID()},'owner');assert.deepEqual(seen,['reconcile','retire']);}finally{mock.restoreAll();}
+});
