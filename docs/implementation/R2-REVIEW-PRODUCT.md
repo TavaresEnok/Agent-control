@@ -23,3 +23,7 @@ Integráveis por revisão estática. O teste observa bloqueio PostgreSQL com `pg
 ## UI `16942f45` + `db1246c9`
 
 Integráveis por revisão estática, condicionados ao contrato de seleção da capacidade. Arquivos de prova agora são exclusivos, limpeza limita-se aos criados e a posição indica ordem efetiva total. O autor informou browser em 360/390/1280 e seis testes unitários aprovados; esta revisão não repetiu os comandos. A API de persistência é fixture em memória e as larguras são viewports, sem comprovar persistência do servidor ou Android físico.
+
+## Capacity `41a26ad1` + `a1a25682` + `0a95f2ec`
+
+Integráveis por revisão estática. Os deltas filtram candidatos bloqueados por limites de contexto/grupo e pela regra de reserva original; o autor informou teste PG com contraprovas para ambos os casos, não repetido nesta revisão. A seleção registra posição na ordem efetiva total após sticky e concatenação das cadeias. O envelhecimento depende de capacidade liberada, elegibilidade e retries; não prova justiça geral, preempção ou operação com conta real.
