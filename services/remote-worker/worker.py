@@ -60,6 +60,21 @@ def project_directory(config, project, workspace=None):
     return pathlib.Path(config['projects'][project]).resolve(strict=True)
 
 
+def task_configuration(config, task):
+    command = config['tasks'][task]
+    if not isinstance(command, list) or not command or any(not isinstance(x, str) for x in command):
+        raise ValueError('INVALID_TASK_CONFIGURATION')
+    if not os.path.isabs(command[0]):
+        raise ValueError('EXECUTABLE_MUST_BE_ABSOLUTE')
+    max_log = config.get('maxLogBytes', 1048576)
+    max_seconds = config.get('maxSeconds', 60)
+    if type(max_log) is not int or not 1024 <= max_log <= 16777216:
+        raise ValueError('INVALID_LOG_LIMIT')
+    if type(max_seconds) is not int or not 1 <= max_seconds <= 3600:
+        raise ValueError('INVALID_TIME_LIMIT')
+    return command, max_log, max_seconds
+
+
 def execute(config_path, operation):
     config, root = load(config_path)
     record = operation_path(root, operation)
@@ -80,17 +95,7 @@ def execute(config_path, operation):
         directory = project_directory(config, project, item.get('workspaceId'))
         if str(directory) != item['root'] or not directory.is_dir():
             raise ValueError('PROJECT_ROOT_CHANGED')
-        command = config['tasks'][item['taskId']]
-        if not isinstance(command, list) or not command or any(not isinstance(x, str) for x in command):
-            raise ValueError('INVALID_TASK_CONFIGURATION')
-        if not os.path.isabs(command[0]):
-            raise ValueError('EXECUTABLE_MUST_BE_ABSOLUTE')
-        max_log = config.get('maxLogBytes', 1048576)
-        max_seconds = config.get('maxSeconds', 60)
-        if type(max_log) is not int or not 1024 <= max_log <= 16777216:
-            raise ValueError('INVALID_LOG_LIMIT')
-        if type(max_seconds) is not int or not 1 <= max_seconds <= 3600:
-            raise ValueError('INVALID_TIME_LIMIT')
+        command, max_log, max_seconds = task_configuration(config, item['taskId'])
         if config.get('executionBackend') == 'docker':
             remote_supervisor.execute(config, root, item, atomic)
             return
@@ -237,6 +242,7 @@ def dispatch(config_path, config, root):
     project, task = request['projectId'], request['taskId']
     if project not in config['projects'] or task not in config['tasks']:
         raise ValueError('TASK_FORBIDDEN')
+    task_configuration(config, task)
     directory = project_directory(config, project, request.get('workspaceId'))
     if str(directory) != request['root']:
         raise ValueError('PROJECT_ROOT_MISMATCH')
@@ -254,6 +260,8 @@ def dispatch(config_path, config, root):
                 prior = json.loads(record.read_text())
                 if prior['requestDigest'] != fingerprint:
                     raise ValueError('OPERATION_ID_CONFLICT')
+                if 'workspaceId' in request:
+                    workspace_module().claim_execution(config, str(uuid.UUID(request['workspaceId'])), project, operation)
                 if config.get('resourceAuthority'):
                     import resource_authority
                     resource_authority.claim_operation(config, operation, request['epoch'], fingerprint, root)
@@ -285,6 +293,9 @@ def dispatch(config_path, config, root):
                 fresh_claim = resource_authority.claim_operation(config, operation, request['epoch'], fingerprint, root)
                 if not fresh_claim:
                     raise ValueError('REMOTE_OPERATION_JOURNAL_MISSING')
+            if 'workspaceId' in request:
+                if not workspace_module().claim_execution(config, str(uuid.UUID(request['workspaceId'])), project, operation):
+                    raise ValueError('REMOTE_WORKSPACE_JOURNAL_MISSING')
             item = {'schemaVersion': 1, 'operationId': operation, 'state': 'uncertain', 'projectId': project,
                     'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
             if 'workspaceId' in request:
