@@ -1,3 +1,9 @@
+# R3 em execução
+
+Missão retomada com dez subagentes nativos Sol 6.1/Médio e revisão independente. O trabalho executável ainda está em andamento; consulte [a continuidade R3](implementation/CONTINUACAO-R3-20261105.md) para commits, evidências, pendências e recursos próprios de laboratório. Os resumos históricos abaixo não representam o fechamento desta missão.
+
+---
+
 # Continuação vigente — R2
 
 A implementação e as provas desta rodada estão em [CONTINUACAO-R2-20261105.md](implementation/CONTINUACAO-R2-20261105.md), incluindo nove subagentes Terra 6.1/Médio reais, revisões independentes e commits. Foram completadas frentes locais de retirada terminal/QA/sandbox, reconciliação, aging e seleção explicável, editor móvel persistido pelo Cezar real, protocolo SSH conservador e bancada Happier reproduzível. O coletor Codex somente leitura permanece experimental, sem ativação.

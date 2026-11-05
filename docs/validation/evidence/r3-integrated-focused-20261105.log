@@ -1,0 +1,126 @@
+TAP version 13
+# Subtest: durable finite reconciliation sweeps replay crashes, fence acknowledgements and revisit old/late/changed rows
+not ok 1 - durable finite reconciliation sweeps replay crashes, fence acknowledgements and revisit old/late/changed rows
+  ---
+  duration_ms: 2.025352
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-history.test.ts:1:388'
+  failureType: 'testCodeFailure'
+  error: 'DISPOSABLE_R3_HISTORY_DATABASE_REQUIRED'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-history.test.ts:10:44)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: real cancellation rows isolate one callback failure and commit later confirmations
+not ok 2 - real cancellation rows isolate one callback failure and commit later confirmations
+  ---
+  duration_ms: 0.426804
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-history.test.ts:2:4974'
+  failureType: 'testCodeFailure'
+  error: 'DISPOSABLE_R3_HISTORY_DATABASE_REQUIRED'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-history.test.ts:90:93)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: normal page uses indexed active/fresh sets across 20000 inactive memberships
+not ok 3 - normal page uses indexed active/fresh sets across 20000 inactive memberships
+  ---
+  duration_ms: 1.489508
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-history.test.ts:2:6768'
+  failureType: 'testCodeFailure'
+  error: 'DISPOSABLE_R3_HISTORY_DATABASE_REQUIRED'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-history.test.ts:110:93)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: R3 laboratory old/new authority, durable execution, pause, renewal, rollback and signed route
+ok 4 - R3 laboratory old/new authority, durable execution, pause, renewal, rollback and signed route
+  ---
+  duration_ms: 1513.12789
+  type: 'test'
+  ...
+# Subtest: R3 shared authority fences real Capacity and credential refresh across restart/transfer/rollback
+ok 5 - R3 shared authority fences real Capacity and credential refresh across restart/transfer/rollback
+  ---
+  duration_ms: 1470.916846
+  type: 'test'
+  ...
+# Subtest: R3 shared physical account enforces exact model quota scopes and one physical capacity cap
+ok 6 - R3 shared physical account enforces exact model quota scopes and one physical capacity cap
+  ---
+  duration_ms: 2200.657519
+  type: 'test'
+  ...
+# Subtest: R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+ok 7 - R3 named synthetic chain records actual handoff causes, eligibility and healthy reserve drain in one context
+  ---
+  duration_ms: 2047.813412
+  type: 'test'
+  ...
+# Subtest: R3 quota durable container fixture, exact protocol, identity, unavailable and restart reconciliation
+ok 8 - R3 quota durable container fixture, exact protocol, identity, unavailable and restart reconciliation
+  ---
+  duration_ms: 7171.162877
+  type: 'test'
+  ...
+# Subtest: SSH return configuration separates credentials from every writable project root
+ok 9 - SSH return configuration separates credentials from every writable project root
+  ---
+  duration_ms: 8.886374
+  type: 'test'
+  ...
+# Subtest: SSH transport refuses mutable aliases and shared or exposed credential files before exchange
+ok 10 - SSH transport refuses mutable aliases and shared or exposed credential files before exchange
+  ---
+  duration_ms: 9.14398
+  type: 'test'
+  ...
+# Subtest: serialized fixture opt-in cannot issue a native execution capability
+ok 11 - serialized fixture opt-in cannot issue a native execution capability
+  ---
+  duration_ms: 3.648796
+  type: 'test'
+  ...
+# Subtest: authenticated usage report/export compares period deltas, preserves unknowns and paginates exact timestamps
+not ok 12 - authenticated usage report/export compares period deltas, preserves unknowns and paginates exact timestamps
+  ---
+  duration_ms: 1.408477
+  type: 'test'
+  location: '/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-usage-report.test.ts:1:391'
+  failureType: 'testCodeFailure'
+  error: 'DISPOSABLE_R3_USAGE_DATABASE_REQUIRED'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    TestContext.<anonymous> (/home/app/srv_projetos/workspace/agent-control-implementation/tests/r3-usage-report.test.ts:12:89)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 8
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 22306.572686
