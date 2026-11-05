@@ -3,7 +3,7 @@ import {CAPACITY_EXCLUSION_REASONS} from './capacity-exclusions.ts';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Capacity, CapacityPolicy, AccountInput, ProfileInput, QuotaInput } from './capacity.ts';
-import { digest, Id, Refusal } from './contracts.ts';
+import { Authority, digest, Id, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import { Operators,type OperatorProof } from './operator.ts';
 import { Admission } from './admission.ts';
@@ -65,6 +65,11 @@ export const ControlCommand=z.discriminatedUnion('action',[
  z.object({...base,action:z.literal('capacity.configure'),payload:z.object({programmingLimit:z.number().int().min(1).max(128),evaluationLimit:z.number().int().min(1).max(128),expectedRevision:z.number().int().nonnegative(),originalFallback:z.object({accountId:Id,programmingLimit:z.number().int().min(1).max(128),evaluationLimit:z.number().int().min(1).max(128)}).strict().nullable().optional()}).strict()}).strict(),
  z.object({...base,action:z.literal('quota.observe'),payload:z.object({accountId:Id,observation:QuotaInput}).strict()}).strict(),
 ]);
+export const ControlSessionBinding=z.object({authority:Authority,principal:z.string().min(1).max(200),
+ sessionId:z.string().min(1).max(200),keyVersion:z.number().int().positive(),
+ encryptionVariant:z.enum(['legacy','dataKey']),keyFingerprint:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export type ControlSessionBinding=z.infer<typeof ControlSessionBinding>;
+
 /** Human administration has a separate intent identity but uses the same PG/RBAC authority.
  * A nested Capacity view shares this transaction: effect and dedupe commit together. */
 export class Control {
@@ -73,10 +78,18 @@ export class Control {
   for(const value of [this.qualityExecutors.reviewDigest,this.qualityExecutors.qaDigest])if(value!==undefined&&!/^[a-f0-9]{64}$/.test(value))throw new Refusal('QUALITY_EXECUTOR_CONFIGURATION_INVALID');
   if(administrative.ledger!==ledger)throw new Refusal('ADMIN_SERVICE_LEDGER_MISMATCH',403);
  }
- async execute(principal:string,raw:z.input<typeof ControlCommand>,proof:OperatorProof){
-  const command=ControlCommand.parse(raw);
+ async execute(principal:string,raw:z.input<typeof ControlCommand>,proof:OperatorProof,session?:ControlSessionBinding){
+  const command=ControlCommand.parse(raw),binding=session?ControlSessionBinding.parse(session):undefined;
   return this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,command.contextId);
+   if(binding){
+    if(binding.principal!==principal||binding.authority.contextId!==command.contextId)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
+    await this.ledger.fence(c,binding.authority,true);
+    if(!(await c.query('SELECT 1 FROM ac_session_links WHERE context_id=$1 AND session_id=$2 AND principal_id=$3 FOR SHARE',
+      [command.contextId,binding.sessionId,principal])).rowCount)throw new Refusal('SESSION_CONTEXT_MISMATCH',403);
+    if(!(await c.query("SELECT 1 FROM ac_context_keys WHERE context_id=$1 AND version=$2 AND variant=$3 AND fingerprint=$4 AND state='active' FOR SHARE",
+      [command.contextId,binding.keyVersion,binding.encryptionVariant,binding.keyFingerprint])).rowCount)throw new Refusal('CONTEXT_KEY_UNAUTHORIZED',403);
+   }
    if(this.projectScope&&context.project_id!==this.projectScope)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
    await new Operators(this.ledger).verify(c,principal,raw,proof);
    if(command.action==='remote.source.authorize'&&context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
