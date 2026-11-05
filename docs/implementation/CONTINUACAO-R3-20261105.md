@@ -26,3 +26,13 @@ Remote é dono de worker.py; resources fornece helper de autoridade física e am
 Recursos de teste novos devem ser identificáveis por frente e removidos somente por identidade/label verificada. PostgreSQL R2 não existe mais. Nenhuma credencial real, API paga, deploy ou migração operacional autorizada. Paseo permanece pausado. Provas R2 válidas não serão repetidas sem alteração relevante. Dificuldades técnicas e ausência de fixture não serão tratadas como bloqueios externos.
 
 Esta rodada ainda está em execução. Commits, provas, pareceres e limites serão atualizados progressivamente; não há declaração de conclusão ou aceite integral.
+
+## Progresso e revisão intermediária
+
+Auditorias de base integradas: runtime `9be557fe` → `45416130`; produto `3932c082` → `40b2acd3`; combinação dos 111 itens `b78b7e09` → `3e00029a`; revisão SSH/contratos `093dbc0e` → `8ac76c69`. A auditoria descreve a base ae2e141b, não antecipa aceite das implementações R3. Propostas de aceites específicos serão revistas sobre os commits efetivos.
+
+Entrega remota inicial do autor `46fc57af` passou reexecução SSH independente de quatro grupos de cenários; ainda aguardando contrato combinado de recursos e correção de deduplicação entre diretórios antes da integração. A revisão detectou ordenação lexical do cursor de histórico, durabilidade insuficiente do fence de recursos em /tmp, sobreposição de refresh entre domínios e retirada indevida de probe vivo no bootstrap de cotas. As correções estão com os respectivos autores; achados não foram encobertos como impedimentos externos.
+
+Backlog adicional da auditoria já distribuído: configuração assinada pelo chat ao agente remote; exportação/comparação de uso ao history; restauração conjunta histórico/políticas ao migration; publicação/reconexão Happier ao flow; rollback e edição concorrente no browser ao UI; worktree remota gravável ao delivery (migração 076 reservada).
+
+Houve uma escrita acidental da frente delivery no checkout principal por omissão de workdir. O autor copiou e comparou seus quatro arquivos para sua worktree e restaurou somente suas alterações no principal. A gerência verificou que restaram apenas o AGENTS.md local preexistente e test.txt. Nenhum trabalho preexistente foi descartado.
