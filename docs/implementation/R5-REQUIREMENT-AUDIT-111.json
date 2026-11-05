@@ -1315,13 +1315,13 @@
       "reviewed_versions": [
         "ae2e141b"
       ],
-      "recommendation": "historical_R3_only_not_new_acceptance",
+      "recommendation": "accept_literal_scenario_author_physical_proof",
       "historical_recommendation": "not_accepted",
       "conclusion": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
-      "next_evidence": "Prove real QA defect returns through bounded correction to replacement artifact and fresh verification; permission correction 972373ad/1865dfec is scoped evidence only.",
+      "next_evidence": "Preserve versioned final author log; physical scenario passed with deterministic synthetic inference.",
       "latest_R3_addendum": null,
       "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
-      "r5_versioned_delta": "972373ad, 1865dfec: QA snapshot permission and crash-retry scope approved; physical defect-correction flow remains pending."
+      "r5_versioned_delta": "Physical QA correction test 60a59273/5344816f/4d99e72f/61ebe55f against 0643b62a, author 1/1: reproducible failure, bound correction, fresh review and QA, corrected-only integration. See R5-INDEPENDENT-REVIEW-20261105.md."
     },
     {
       "id": "T22",
