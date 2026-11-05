@@ -17,3 +17,5 @@ O protocolo novo valida identidade e recibo assinado, registra hashes de logs an
 ## SSH `fa198d4a` — parecer delimitado
 
 Revisão estática: replay com digest igual chama `reconcile` (inspect) sem novo start; operação nova continua exigindo intenção ativa. O laço remoto agora tenta os pedidos restantes e devolve erro agregado. O teste de contrato afirma que uma falha não impede outra tentativa; relatório do autor registra 2/2 com dois hosts SSH sintéticos e ACK descartado. Não reexecutei a bancada. O laço nativo anterior em Cezar ainda pode impedir chegar à rotina remota; o ajuste remoto não resolve esse caso. Morte do supervisor e recuperação de locks permanecem fora da prova, conforme relatório da frente.
+
+A prova complementar sandbox `94b24876` relata Docker e PostgreSQL reais, escrita, falha/cancelamento, ACK perdido e retomada por processo sucessor com epoch novo. O teste chama diretamente método privado e usa registros sintéticos; não valida o serviço broker completo nem o grafo. Não foi reexecutado pelo revisor; a dependência de acionamento integrado permanece.
