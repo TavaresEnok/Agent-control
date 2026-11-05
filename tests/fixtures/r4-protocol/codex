@@ -3,6 +3,7 @@ const readline=require('node:readline');
 const mode=process.env.FIXTURE_PROTOCOL_MODE;
 if(process.argv[2]==='--version'){console.log('codex-cli '+(mode==='new'?'2.0.0':'1.0.0'));process.exit(0);}
 if(process.argv[2]!=='app-server')process.exit(71);
+if(mode==='early-exit')process.exit(73);
 const input=readline.createInterface({input:process.stdin});
 input.on('line',line=>{const message=JSON.parse(line);
  if(message.method==='initialized')return;
@@ -11,5 +12,6 @@ input.on('line',line=>{const message=JSON.parse(line);
  if(mode==='auth'){console.log(JSON.stringify({id:message.id,error:{code:-32000,message:'synthetic auth expired'}}));return;}
  if(mode==='incompatible'){console.log(JSON.stringify({id:message.id,result:{models:[{name:'wrong-wire-shape'}]}}));return;}
  if(mode==='timeout')return;
+ if(mode==='hang-descendant'){require('node:child_process').spawn(process.execPath,['-e',"const fs=require('node:fs');const sid=Number(fs.readFileSync('/proc/self/stat','utf8').split(' ')[5]);process.stderr.write(JSON.stringify({probeDetached:true,pid:process.pid,sid})+'\\n');setInterval(()=>process.stderr.write('SYNTHETIC_PULSE\\n'),100);"],{detached:true,stdio:['ignore','ignore','inherit']});return;}
  console.log(JSON.stringify({id:message.id,result:{data:[{model:mode==='new'?'fixed-worker-v2':'fixed-worker-v1',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}],nextCursor:null}}));
 });

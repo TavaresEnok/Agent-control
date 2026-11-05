@@ -15,6 +15,7 @@ const execute=promisify(execFile);
 async function setup(label:string){
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
  const isolated=await isolatedDatabase(url,label),db=new Ledger(isolated.url),folder=await mkdtemp(join(tmpdir(),'ac-r4-provider-restart-'));
+ try{
  await db.migrate();const project=randomUUID(),principal='r4-restart-'+randomUUID();
  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'R4 synthetic restart protocol']);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
  const provision=await provisionCapacity(db,principal,project),account=(await db.pool.query('SELECT id FROM ac_accounts')).rows[0].id;
@@ -36,6 +37,7 @@ async function setup(label:string){
  const state=async()=>({intents:(await db.pool.query('SELECT id,context_id,command,state FROM ac_intents ORDER BY id')).rows,paused:(await db.pool.query('SELECT paused FROM ac_contexts WHERE id=$1',[context])).rows[0].paused});
  const noWorkers=async()=>{assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_operations WHERE state<>'registered' OR handle IS NOT NULL OR receipt IS NOT NULL")).rows[0].n,0);for(const table of ['ac_native_execution_jobs','ac_native_planning_jobs'])assert.equal((await db.pool.query('SELECT count(*)::int n FROM '+table)).rows[0].n,0);};
  return {db,isolated,folder,bind,child,effects,age,reserve,state,noWorkers,account,project,principal,provision,context,authority,intent,close:async()=>{await db.close();await isolated.close();await rm(folder,{recursive:true,force:true});}};
+ }catch(error){await db.close();await isolated.close();await rm(folder,{recursive:true,force:true});throw error;}
 }
 
 test('RF21 finite effect count persists across collector process restarts under failure and uncertain teardown',{timeout:120000},async()=>{
