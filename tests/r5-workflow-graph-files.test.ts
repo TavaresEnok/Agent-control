@@ -22,3 +22,13 @@ test('immutable publication accepts identical replay and refuses foreign and sym
   await assert.rejects(reconcileWorkflowFile(repo,identity,'test',1,hash(a),a),/WORKFLOW_FILESYSTEM_UNAVAILABLE/);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('legacy inspection rejects a replaced registered repository',async()=>{
+ const root=await mkdtemp('/tmp/ac-workflow-replaced-');
+ try{
+  const repo=join(root,'repo');await mkdir(repo,{mode:0o700});execFileSync('git',['init',repo],{stdio:'ignore'});await chmod(join(repo,'.git'),0o700);
+  const identity=await projectRepositoryIdentity(repo);await (await import('node:fs/promises')).rename(repo,join(root,'old'));
+  await mkdir(repo,{mode:0o700});execFileSync('git',['init',repo],{stdio:'ignore'});await chmod(join(repo,'.git'),0o700);
+  const {legacyWorkflowNames}=await import('../src/workflow-graph-files.ts');await assert.rejects(legacyWorkflowNames(repo,identity),/WORKFLOW_LEGACY_CATALOG_UNAVAILABLE/);
+ }finally{await rm(root,{recursive:true,force:true});}
+});

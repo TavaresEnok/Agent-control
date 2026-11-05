@@ -1,0 +1,5 @@
+6d1c1e159e2d2363b98a1a807101d9773b0515a13b7380862236dd53c2220c70  src/workflow-graph-files.ts
+95f7b03b3f4c7d51ccdd93adc6793e7950decd10fb4ea9eb0d01e5ebba8b131b  src/workflow-graph-service.ts
+133d12749a409ffd703e7e22281e343595065b25ac42eaf96ee7daa240c7f29b  tests/r5-workflow-graph-files.test.ts
+56584450b16a49897e147e56e45dcfbf399d0de9ec8737e47e58d2735af9f6d5  tests/r5-workflow-graph-pg.test.ts
+2cdda98639119d577a6ccc893cef0591c9010c250c5b7a488de0ec6a2f2df316  docs/validation/evidence/r5-graph-collision-identity-20261105.log

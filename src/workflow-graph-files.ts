@@ -40,6 +40,8 @@ export async function legacyWorkflowNames(repo:string,identity:unknown){
  try{
   if(digest(await projectRepositoryIdentity(repo))!==digest(identity))throw Error('identity');
   let dir=await open(repo,constants.O_RDONLY|constants.O_DIRECTORY|nofollow);handles.push(dir);
+  const rootStat=await dir.stat({bigint:true}),expected=identity as {repoDev:string;repoIno:string};
+  if(String(rootStat.dev)!==expected.repoDev||String(rootStat.ino)!==expected.repoIno)throw Error('identity');
   for(const part of ['.ai','cezar','workflows']){
    try{dir=await open(`/proc/self/fd/${dir.fd}/${part}`,constants.O_RDONLY|constants.O_DIRECTORY|nofollow);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return new Set([QUICK_TASK_WORKFLOW,...BUILT_IN_GRAPH_WORKFLOWS].map(w=>w.name));throw e;}
    handles.push(dir);const stat=await dir.stat();if(stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0)throw Error('unsafe directory');
