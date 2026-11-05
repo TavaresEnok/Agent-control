@@ -13,6 +13,7 @@ import {projectRepositoryIdentity} from './project-repository.ts';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {Template} from './templates.ts';
+import {remoteImplementationWritePaths} from './remote-write-paths.ts';
 import {RemoteOperations,type RemoteTransport} from './remote.ts';
 
 const Prepare=z.object({workspaceId:Id,contextId:Id,intentId:Id,hostId:Id,sourceOperationId:Id}).strict();
@@ -102,7 +103,13 @@ export class RemoteDevelopment{
    if(grant.state==='reserved')await capacity.transition(principal,grant.id,authority,'released',{processId:bound.intent.operation_id,state:'not_started'});
    throw new Refusal('REMOTE_IMPLEMENTATION_PROFILE_NOT_CONFIGURED');
   }
-  const writePaths=bound.payload.workflow==='engineering-native-v1'?bound.payload.writePaths:z.array(z.string().min(1)).min(1).max(64).parse(configured.writePaths);
+  let writePaths:string[];
+  try{
+   writePaths=remoteImplementationWritePaths(bound.payload.workflow==='engineering-native-v1'?bound.payload.writePaths:configured.writePaths??[],configured.writePaths);
+  }catch(error){
+   if(grant.state==='reserved')await capacity.transition(principal,grant.id,authority,'released',{processId:bound.intent.operation_id,state:'not_started'});
+   throw error;
+  }
   await this.ledger.tx(async c=>{
    await this.context(c,principal,authority.contextId,authority);await this.ledger.assertIntentActive(c,authority.contextId,bound.intent.id);
    await refuseCurrentProtectedGate(c,bound.workspace.project_id,writePaths);

@@ -7,10 +7,10 @@ import {RemoteDevelopment} from './remote-development.ts';
 import type {RemoteDevelopmentAdministration} from './remote-development-admin.ts';
 import {Quality} from './quality.ts';
 import {GitArtifacts} from './git.ts';
-const WritePath=z.string().min(1).max(240).refine(value=>!value.startsWith('/')&&!value.includes('\\')&&!/[\x00-\x1f\x7f]/.test(value)&&value.split('/').filter(Boolean).every(part=>part!=='.'&&part!=='..'&&part!=='.git'));
+import {RemoteWritePath} from './remote-write-paths.ts';
 export const RemoteDevelopmentConfig=z.object({mode:z.literal('synthetic-fixed-task-v1'),transport:RemoteReturnConfig,
  projects:z.array(z.object({projectId:Id,verifierKeyFile:z.string().refine(isAbsolute),tmpfsRoot:z.string().refine(isAbsolute),
-  profiles:z.array(z.object({profileId:Id,hostId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),writePaths:z.array(WritePath).min(1).max(64)}).strict()).min(1).max(64)}).strict()).min(1).max(32)
+  profiles:z.array(z.object({profileId:Id,hostId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),writePaths:z.array(RemoteWritePath).min(1).max(64)}).strict()).min(1).max(64)}).strict()).min(1).max(32)
 }).strict().refine(value=>new Set(value.projects.map(item=>item.projectId)).size===value.projects.length&&value.projects.every(item=>new Set(item.profiles.map(profile=>profile.profileId)).size===item.profiles.length));
 /** Explicit configured product entry. Absence is disabled. Authority is resolved
  * from the active manager registry for each request, never from caller JSON.

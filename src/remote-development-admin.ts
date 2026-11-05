@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import type pg from 'pg';
+import pg from 'pg';
 import {Authority,Id,Refusal,digest} from './contracts.ts';
 import {RemoteDevelopment} from './remote-development.ts';
 import type {Quality} from './quality.ts';
@@ -24,7 +24,14 @@ export async function executeRemoteDevelopmentAdmin(admin:ProjectAdmin,principal
  authorize:(c:pg.PoolClient)=>Promise<void>,delivery:(c:pg.PoolClient)=>Promise<void>){
  const command=Command.parse(raw),p=command.payload,provider=admin.options.remoteDevelopment;
  if(!provider)throw new Refusal('REMOTE_DEVELOPMENT_NOT_CONFIGURED');
- return admin.ledger.tx(async c=>{
+ // Keep the human authority transaction off the shared adapter pool. Every
+ // adapter step may acquire a shared client while these locks remain held.
+ const pool=new pg.Pool({...admin.ledger.pool.options,max:1,connectionTimeoutMillis:3000,statement_timeout:10000,query_timeout:11000});
+ try{
+ const c=await pool.connect();
+ try{
+ await c.query('BEGIN');
+ const result=await (async()=>{
   await authorize(c);
   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,2))',[command.intentId]);
   const prior=(await c.query('SELECT payload_digest,result FROM ac_project_admin_intents WHERE id=$1',[command.intentId])).rows[0];
@@ -59,7 +66,10 @@ export async function executeRemoteDevelopmentAdmin(admin:ProjectAdmin,principal
   await delivery(c);
   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'project.remote_development.admin',$2)",[p.contextId,{action:command.action,intentId:command.intentId,principal,...result}]);
   return result;
- });
+ })();
+ await c.query('COMMIT');return result;
+ }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
+ }finally{await pool.end();}
 }
 
 /** Closed display projection. Candidate rows grant no authority until rechecked. */
