@@ -1,5 +1,5 @@
 import {ReconciliationHistory} from './reconciliation-history.ts';
-import {reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
+import {cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {mkdir,lstat,realpath,open,rename} from 'node:fs/promises';
@@ -103,6 +103,7 @@ export class NativeQa{
     const row=(await c.query("SELECT state,container_id FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE",[stage.id])).rows[0];
     const grant=(await c.query('SELECT state FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
     if(row?.state!=='uncertain'||row.container_id||grant?.state!=='uncertain')throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
+    await cancelPreparedNativeResources(c,this.docker,stage.id,grantId,authority);
     await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
    });return {state:'failed' as const,receipt};
   }

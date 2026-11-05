@@ -15,7 +15,7 @@ import {Control} from '../src/control.ts';
 import {Operators,operatorMessage} from '../src/operator.ts';
 import {Ledger} from '../src/ledger.ts';
 import {Capacity} from '../src/capacity.ts';
-import {NativeResourceDockerDaemon} from '../src/native-resource-envelope.ts';
+import {admitNativeResources,reconcileNativeResourceAdmissions,NativeResourceDockerDaemon} from '../src/native-resource-envelope.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 const exec=promisify(execFile);
 test('R3 native backend binds real Capacity across controllers to aggregate kernel limits and preserves orphan admissions',{timeout:90000},async()=>{
@@ -45,7 +45,7 @@ test('R3 native backend binds real Capacity across controllers to aggregate kern
   const repo=join(area,'repo'),qaRoot=join(area,'qa');await mkdir(qaRoot,{mode:0o700});
   const git=async(...args:string[])=>(await exec('git',['-C',repo,...args])).stdout.trim();await exec('git',['init',repo]);await git('config','user.name','Synthetic resource fixture');await git('config','user.email','fixture@example.invalid');await writeFile(join(repo,'fixture.txt'),'base');await git('add','.');await git('commit','-m','base');const sourceBase=await git('rev-parse','HEAD');await writeFile(join(repo,'fixture.txt'),'candidate');await git('add','.');await git('commit','-m','candidate');const candidate=await git('rev-parse','HEAD'),tree=await git('rev-parse','HEAD^{tree}');
   await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
-  const contract=NativeQaContract.parse({schemaVersion:1,id:'r3-resource-qa',image,argv:['/usr/bin/python3','-c','import time;time.sleep(1)'],environment:[],timeoutMs:15000,memoryBytes:268435456,pids:64,nanoCpus:1000000000}),key=randomBytes(32),quality=new Quality(db,key,new GitArtifacts(repo));await quality.publish(principal,project,0,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:true,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:nativeQaContractDigest(contract)});
+  const contract=NativeQaContract.parse({schemaVersion:1,id:'r3-resource-qa',image,argv:['/usr/bin/python3','-c','import time;time.sleep(1)'],environment:JSON.parse((await exec('docker',['image','inspect',image])).stdout)[0].Config.Env,timeoutMs:15000,memoryBytes:268435456,pids:64,nanoCpus:1000000000}),key=randomBytes(32),quality=new Quality(db,key,new GitArtifacts(repo));await quality.publish(principal,project,0,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:true,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:nativeQaContractDigest(contract)});
   const qaEnvelope={...envelope,stateRoot:qaRoot},qa=new NativeQa(db,quality,repo,qaRoot,contract,key,undefined,undefined,qaEnvelope),qaAuthority=sessions[1].authority;
   const device=randomUUID(),keys=generateKeyPairSync('ed25519');await new Operators(db).enroll(principal,principal,device,keys.publicKey.export({format:'der',type:'spki'}).toString('base64'));const installationId=(await db.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0].id,control=new Control(db);
   const signed=async(action:'plan.cancel'|'context.pause',payload:any)=>{const command={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:qaAuthority.contextId,action,payload},proof={deviceId:device,expiresAt:Date.now()+120000};return control.execute(principal,command as any,{...proof,signature:sign(null,Buffer.from(operatorMessage(principal,command,proof,installationId)),keys.privateKey).toString('hex')});};
@@ -77,6 +77,33 @@ test('R3 native backend binds real Capacity across controllers to aggregate kern
   // Exact replay after retirement must not consume a new pending resource slot.
   const afterReplay=await restarted.create('ac-native-qa-'+randomUUID(),replacementConfig);ids.push(afterReplay);await restarted.start(afterReplay);await restarted.stop(afterReplay);await restarted.remove(afterReplay);await capacity.transition(principal,ready[1].grantId,sessions[1].authority,'released',{state:'exited',processId:ids[1]});
   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_capacity_grants WHERE account_id=$1 AND state<>'released'",[account])).rows[0].n,0);
+  // Kill after the durable batch reservation and before any native job exists.
+  const takeoverContext=await db.createContext(principal,project,randomUUID());await capacity.assignPolicy(principal,takeoverContext,revision);
+  const old=await db.acquire(principal,takeoverContext,randomUUID(),'prejournal-old',60);
+  const newIntent=async(authority:import('../src/contracts.ts').Authority)=>db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:authority.contextId,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:prejournal'}},authority,'api');
+  const abandoned=await newIntent(old),jobId=randomUUID(),names=['ac-native-tools-'+jobId,'ac-native-worker-'+jobId],recoveryRoot=join(area,'prejournal');await mkdir(recoveryRoot,{mode:0o700});
+  const inputFile=join(area,'prejournal.json');await writeFile(inputFile,JSON.stringify({database:isolated.url,principal,envelope:{...envelope,stateRoot:recoveryRoot},request:{attemptId:randomUUID(),contextId:takeoverContext,intentId:abandoned.id,role:'programmer'},authority:old,prejournal:true,jobId,names}),{mode:0o600});
+  const orphan=spawn(process.execPath,['--import','tsx','tests/fixtures/r3-native-resource-controller.ts',inputFile],{stdio:['ignore','pipe','pipe']});children.push(orphan);let orphanErrors='';orphan.stderr!.on('data',(v:Buffer)=>{orphanErrors+=v;});
+  const reservation=await Promise.race([once(orphan.stdout!,'data').then(([v])=>JSON.parse(v.toString())),once(orphan,'exit').then(()=>{throw Error(orphanErrors);})]);
+  orphan.kill('SIGKILL');await once(orphan,'exit');
+  assert.equal((await db.pool.query('SELECT state FROM ac_native_resource_admissions WHERE job_id=$1',[jobId])).rows[0].state,'admitted');
+  const recoveryDocker=new NativeResourceDockerDaemon({...envelope,stateRoot:recoveryRoot});
+  const foreignIntent=await newIntent(old),foreignGrant=await capacity.reserve(principal,{attemptId:randomUUID(),contextId:takeoverContext,intentId:foreignIntent.id,role:'programmer'},old);
+  await assert.rejects(admitNativeResources({docker:recoveryDocker,ledger:db,principal,authority:old,intentId:foreignIntent.id,grantId:foreignGrant.id,jobId,names,isCanceled:()=>true}),/NATIVE_RESOURCE_ADMISSION_UNCERTAIN/);
+  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[foreignGrant.id])).rows[0].state,'reserved');
+  assert.equal((await db.pool.query('SELECT state FROM ac_native_resource_admissions WHERE job_id=$1',[jobId])).rows[0].state,'admitted');
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[takeoverContext]);
+  const successor=await db.acquire(principal,takeoverContext,randomUUID(),'prejournal-successor',60);
+  await assert.rejects(admitNativeResources({docker:recoveryDocker,ledger:db,principal,authority:old,intentId:abandoned.id,grantId:reservation.grantId,jobId,names,isCanceled:()=>true}),/STALE_MANAGER/);
+  assert.equal((await db.pool.query('SELECT state FROM ac_native_resource_admissions WHERE job_id=$1',[jobId])).rows[0].state,'admitted');
+  await reconcileNativeResourceAdmissions({docker:recoveryDocker,ledger:db,principal,authority:successor});
+  assert.equal((await db.pool.query('SELECT state FROM ac_native_resource_admissions WHERE job_id=$1',[jobId])).rows[0].state,'canceled');
+  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[reservation.grantId])).rows[0].state,'released');
+  // An impossible batch fails finitely and returns only its own never-started grant.
+  const oversized=await newIntent(successor),oversizedGrant=await capacity.reserve(principal,{attemptId:randomUUID(),contextId:takeoverContext,intentId:oversized.id,role:'programmer'},successor),oversizedJob=randomUUID();
+  await assert.rejects(admitNativeResources({docker:recoveryDocker,ledger:db,principal,authority:successor,intentId:oversized.id,grantId:oversizedGrant.id,jobId:oversizedJob,names:['ac-native-worker-'+oversizedJob,'ac-native-tools-'+oversizedJob,'ac-native-qa-'+oversizedJob]}),/NATIVE_RESOURCE_BATCH_TOO_LARGE/);
+  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[oversizedGrant.id])).rows[0].state,'released');
+
  }finally{
   if(heartbeat)clearInterval(heartbeat);
   for(const child of children)if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit');}

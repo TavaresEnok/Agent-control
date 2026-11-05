@@ -20,3 +20,15 @@ BEGIN
 END $$;
 CREATE TRIGGER ac_native_resource_admission_release BEFORE UPDATE OF state ON ac_capacity_grants
  FOR EACH ROW EXECUTE FUNCTION ac_guard_native_resource_admission_release();
+
+-- Membership uses job_id because the admission deliberately precedes a job row.
+CREATE FUNCTION ac_native_resource_membership() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO ac_reconciliation_entries(context_id,source,row_id)
+ VALUES(NEW.context_id,TG_TABLE_NAME,NEW.job_id) ON CONFLICT(source,row_id) DO UPDATE SET revision=ac_reconciliation_entries.revision+1;
+ UPDATE ac_reconciliation_visits v SET active=true FROM ac_reconciliation_entries e
+ WHERE e.source=TG_TABLE_NAME AND e.row_id=NEW.job_id AND v.seq=e.seq;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER reconciliation_membership AFTER INSERT OR UPDATE ON ac_native_resource_admissions
+ FOR EACH ROW EXECUTE FUNCTION ac_native_resource_membership();
