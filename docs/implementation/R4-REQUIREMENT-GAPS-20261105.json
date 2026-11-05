@@ -1,0 +1,1065 @@
+{
+  "schemaVersion": 1,
+  "kind": "read_only_remaining_work_recommendations",
+  "reviewedVersion": "c24cefb183a4f822692930d6298ec5550048ce51",
+  "method": "static source/normative audit; no test execution; R4 concurrent deliverables not assessed",
+  "notTraceabilityMatrix": true,
+  "count": 111,
+  "requirements": [
+    {
+      "id": "RF-01",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Complete registration of environments and remote destinations with same authorization and filesystem race proof.",
+      "latest_R3_adendum": {
+        "update_index": 41,
+        "reviewed_version": null,
+        "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+        "remaining": "env079 backend draft not independently rerun; signed UI/config+execution admission integration pending"
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-02",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Multi-destination operational lifecycle and isolation beyond four configured active runtimes.",
+      "latest_R3_adendum": {
+        "update_index": 42,
+        "reviewed_version": null,
+        "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+        "remaining": "env079 multi-project/destination draft integration and actual browser pending"
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-03",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Continuous real manager/account/model/CLI handoff with identical history and vault custody across restart.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-04",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Registry lifecycle, stale manager route rejection and concurrent Ledger claim tests require independent rerun; provider exhaustion belongs to T19, not this exact-one-manager criterion.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-05",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Physical two-account identity/credential/usage isolation integrated with live adapters.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-06",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Official subscription login lifecycle and execution proof; inactive guard is refusal, not authentication implementation acceptance.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-07",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "All role, priority and fallback configuration through signed browser-to-PG flow and error paths.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-08",
+      "action": "finite_audit_before_new_implementation",
+      "task": "protocol_promotion_counterproof",
+      "historical_missing_not_retested": "Versioned official discovery/catalog synchronization and integrated invalid model admission proof.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-09",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Combined signed browser/PG proof chosen and refused profiles after policy change.",
+      "latest_R3_adendum": {
+        "update_index": 13,
+        "reviewed_version": "a61c728d",
+        "acceptance_recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions",
+        "remaining": "Synthetic grant state, no physical worker/conversation continuity/official login. Web enum/selection DTO sync in UI front required; same-provider model quota scope still separate next implementation."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-10",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Production registered official source and durable escaped-process quarantine; timeout never proves logout or exhaustion.",
+      "latest_R3_adendum": {
+        "update_index": 20,
+        "reviewed_version": "c5c6ef46",
+        "acceptance_recommendation": "approve_scoped_contract_not_official_provider_homologation",
+        "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-11",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Demonstrate healthy regular nonpreemption and emergency completion/return through real capacity workflow; deterministic trusted observations suffice for this control criterion.",
+      "latest_R3_adendum": {
+        "update_index": 15,
+        "reviewed_version": "a61c728d",
+        "acceptance_recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions",
+        "remaining": "Synthetic grant state, no physical worker/conversation continuity/official login. Web enum/selection DTO sync in UI front required; same-provider model quota scope still separate next implementation."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-12",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Automatic recovery from official quota evidence through native bootstrap remains unverified; R3 fixture wiring pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-13",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-14",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Capacity aging source preserves eligible age under retry/release; general historical backlog now bounded by3ca18eae. Actual multi-context physical stage graph fairness and resource release integration still pending.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-15",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Source compiler inspected; complete plan propose/publish native execution evidence not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-16",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Pure parallel compiler test rerun, physical graph source/evidence pending R3 independent review",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-17",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Physical specialist then writer graph with real capacity not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-18",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Real-capacity graph independence and terminal outcome reconciliation pending R3 flow",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-19",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Gate tamper and stale commit source tests exist but not independently rerun here",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-20",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Native correction graph physical proof with real capacity not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-21",
+      "action": "finite_audit_before_new_implementation",
+      "task": "persistent_recovery_consumption_audit",
+      "historical_missing_not_retested": "Technical recovery/probe retry global consumption budgets not proven across persistent outage",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-22",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Historical reconciliation now durable bounded/fenced per3ca18eae; full composed workflow dispatch/wait/cancel/completion proof through actual capacity and public control pending R3 flow.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-23",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Bounded history and immutable remote orphan neutralization now independently proved for approved modules; full workflow entrypoint/fallback/recovery/intermediate crash matrix still requires composed integration verification.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-24",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Public signed control through graph with physical worker and reconnect evidence pending R3",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-25",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Remaining crash/CAS/cancellation intervals and stale external writer interleavings across production path.",
+      "latest_R3_adendum": {
+        "update_index": 32,
+        "reviewed_version": "b8358172",
+        "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+        "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-26",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Independent rerun of authorized two-host SSH lab plus proof no IA credentials/login on targets pending; operational deployment is outside this criterion proof.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-27",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": null,
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-28",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Physical multiaccount cross-process/credential/remote isolation not independently rerun; remote source confinement pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-29",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Full direct API/terminal hostile-worker matrix while preserving valid project admin missing",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-30",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Account-facing registered observable source and full stale/recovery display journey.",
+      "latest_R3_adendum": {
+        "update_index": 21,
+        "reviewed_version": "c5c6ef46",
+        "acceptance_recommendation": "approve_scoped_contract_not_official_provider_homologation",
+        "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-31",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Completeness/retention audit across all ingress and export decisions under restart.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-32",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Full account-team-fallback-plan-pause-resume-delivery mobile journey with suspension/reconnect.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-33",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "End-to-end historical plans/evidence import plus completed-work dedupe after failed/repeated restore.",
+      "latest_R3_adendum": {
+        "update_index": 27,
+        "reviewed_version": "c135cd59",
+        "acceptance_recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately",
+        "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-34",
+      "action": "implement_bounded_task",
+      "task": "complete_portable_export",
+      "historical_missing_not_retested": "Complete configuration/report export and coherent multi-store recoverability/custody proof; verifier itself does no restore.",
+      "latest_R3_adendum": {
+        "update_index": 28,
+        "reviewed_version": "c135cd59",
+        "acceptance_recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately",
+        "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-35",
+      "action": "finite_audit_before_new_implementation",
+      "task": "happier_notification_ack_reconnect",
+      "historical_missing_not_retested": "Real Happier publication/reconnect proof and exclusion of irrelevant child notifications end to end.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-36",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Chat tool route for policy/config changes with same validation and prohibition of internal file editing; current materialize panel is insufficient.",
+      "latest_R3_adendum": {
+        "update_index": 43,
+        "reviewed_version": null,
+        "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+        "remaining": "Shipped conversation-visible signed caller not yet proven; backend RPC approval retained only"
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-37",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Touch interaction completeness and all graph operations across both editor modes.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-38",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Physical multi-reviewer/judge graph used synthetic capacity in R2; R3 actual capacity fixture pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-39",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Homologated direct remote worktree adapter with writable artifact consistency; export/materialize is a different mode.",
+      "latest_R3_adendum": {
+        "update_index": 37,
+        "reviewed_version": [
+          "cddbe8a4",
+          "27056341",
+          "5931a421"
+        ],
+        "acceptance_recommendation": "approve_backend_workspace_emission_contract_hold_full_product_path",
+        "remaining": "Product admin API8be0c4d1 nested shared-pool acquisition and ignored configured profile.writePaths need review/fix; actual bootstrap/menu/env079 integration unfinished at user shutdown."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-40",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Export of usage/profile/attempt/time/rework plus simple labeled comparison; advanced analytics remain P1.",
+      "latest_R3_adendum": {
+        "update_index": 46,
+        "reviewed_version": null,
+        "acceptance_recommendation": "retain_committed_scope_approval_new_draft_review_pending",
+        "remaining": "Committed report5d1d2a73 and UI70385609 approved; subsequent uncommitted old-active-grant coverage adjustment requires review"
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-41",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Distinct delivery, publication and deploy capabilities with independent permission denial counterproofs.",
+      "latest_R3_adendum": {
+        "update_index": 34,
+        "reviewed_version": "b8358172",
+        "acceptance_recommendation": "approve_combined_backend_contract_hold_full_product_path_acceptance_until_accessible_entry_final_guards_proof",
+        "remaining": "Actual shipped remote-development product entry and final080/env079 integration not yet proven. Deterministic semantic fixtures are not official provider inference/homologation."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-42",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Signed concurrent browser-to-PG edit conflict and visible rollback journey with immutable old attempt snapshot.",
+      "latest_R3_adendum": {
+        "update_index": 24,
+        "reviewed_version": "4766e6b3",
+        "acceptance_recommendation": "recommend_accept_literal_local_criterion_after_final_integrated_browser_proof",
+        "remaining": "Root final combined authenticated browser rerun on integrated version. No official provider account required by these literal local criteria."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-43",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Full browser publish/apply proof and revalidation of semantic template quality dependencies.",
+      "latest_R3_adendum": {
+        "update_index": 25,
+        "reviewed_version": "4766e6b3",
+        "acceptance_recommendation": "recommend_accept_literal_local_criterion_after_final_integrated_browser_proof",
+        "remaining": "Root final combined authenticated browser rerun on integrated version. No official provider account required by these literal local criteria."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-44",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Import/restore plus actual quota recovery preservation not jointly rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-45",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Cross-entry UI/chat/MCP/retry/fallback/recovery adversarial no-bypass sweep not complete",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-46",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Admission plus credential-renewal shared authority or proven nonoverlap, including rollback and live unknown grants.",
+      "latest_R3_adendum": {
+        "update_index": 5,
+        "reviewed_version": [
+          "cbcc506a",
+          "6bb083d1"
+        ],
+        "acceptance_recommendation": "reclassify_missing_capability_to_implemented_synthetic_integration_slice_do_not_accept_operational_scenario",
+        "remaining": "Real legacy installation must use the same authority/refresh bridge; operational overlap and rollback with real credential adapter not authorized or executed. Synthetic callback does not renew an official credential."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-47",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Saturated programmer to evaluator progress with actual provider capacity graph pending R3",
+      "latest_R3_adendum": {
+        "update_index": 38,
+        "reviewed_version": [
+          "cddbe8a4",
+          "27056341",
+          "5931a421"
+        ],
+        "acceptance_recommendation": "approve_backend_workspace_emission_contract_hold_full_product_path",
+        "remaining": "Product admin API8be0c4d1 nested shared-pool acquisition and ignored configured profile.writePaths need review/fix; actual bootstrap/menu/env079 integration unfinished at user shutdown."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-48",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Independent execution of complete forged/truncated/gate-removal and external-writer races pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-49",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Full cross-account shell/symlink/process/API plus central admin attack coverage remains unverified",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-50",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Live correction/reconnect consistency, responsible actors and projection delay across graph/cards.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-51",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Complete safe initial-source path for larger bundles and controlled delivery integration; materialization alone is not approval.",
+      "latest_R3_adendum": {
+        "update_index": 39,
+        "reviewed_version": [
+          "cddbe8a4",
+          "27056341",
+          "5931a421"
+        ],
+        "acceptance_recommendation": "approve_backend_workspace_emission_contract_hold_full_product_path",
+        "remaining": "Product admin API8be0c4d1 nested shared-pool acquisition and ignored configured profile.writePaths need review/fix; actual bootstrap/menu/env079 integration unfinished at user shutdown."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-52",
+      "action": "implement_bounded_task",
+      "task": "cezar_update_renewal",
+      "historical_missing_not_retested": "Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-53",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "All start/pause/resume/policy ingress replay and timeout/reconnect through mobile and WS/MCP.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-54",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Remote escaped descendant neutralization and successor shared-worktree physical matrix pending R3",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-55",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Independent official provider/plan/holder/mode eligibility verification; owner assertion is not official eligibility.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-56",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Two live contexts restart/disabled account state not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RF-57",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Seven pure waiver cases rerun; integrated waiver revocation versus physical retirement race not rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-01",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "All components intermediate launch/fallback/remote create windows not covered",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-02",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Host-shared resource epoch and operation claims now fence across state dirs; full ownership/CAS/state transition proof across all components still requires final integration verification.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-03",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-04",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Every essential workflow usable without hover, full touch navigation/error/suspension checks.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-05",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Exhaustive coverage for every stopped task and PG behavioral proof of all added branches/truncation.",
+      "latest_R3_adendum": {
+        "update_index": 44,
+        "reviewed_version": null,
+        "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+        "remaining": "Backend9/9 independently reviewed by runtime0014ab90; selected-task UI consumer/browser draft not finalized"
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-06",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Protocol compatibility and all invasive upstream patches inventory not independently audited exhaustively",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-07",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Event/context efficiency quantities and all reuse paths not independently measured/audited",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-08",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Canaries across conversation, workflow state, logs, prompts and artifacts over all adapters; arbitrary agent output is not universally scrubbed.",
+      "latest_R3_adendum": {
+        "update_index": 45,
+        "reviewed_version": null,
+        "acceptance_recommendation": "hold_full_acceptance_pending_exact_implementation_or_product_proof",
+        "remaining": "New broad secret-probe slice pending independent review; earlier limited vault/tool-home evidence does not close every output channel"
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-09",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Verify persisted base/CLI/model/policy/image/code fields for every attempt kind, including retry/recovery; official account access is not prerequisite to schema/provenance counterproof.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-10",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Measured RPO<=24h/RTO<=2h pilot with complete stores and external reconciliation.",
+      "latest_R3_adendum": {
+        "update_index": 30,
+        "reviewed_version": "c135cd59",
+        "acceptance_recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately",
+        "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-11",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Remote aggregate CPU/memory/PIDs and admission physically proved in5add3b71. Central native supervisors still use per-job fixed limits; admission-to-central aggregate CPU/RAM authority wiring must be verified/implemented alongside disk, slots and account capacity before full RNF11 acceptance.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-12",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Measure command acknowledgement<=2s and event update<=5s; separate external authentication/provider latency.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-13",
+      "action": "finite_audit_before_new_implementation",
+      "task": "protocol_promotion_counterproof",
+      "historical_missing_not_retested": "Finite old/new/incompatible CLI protocol fixtures must prove default admission gated by contract confirmation; live account is not prerequisite.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-14",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Audit every display/admission projection, including fresh-to-stale transition, on integrated version.",
+      "latest_R3_adendum": {
+        "update_index": 22,
+        "reviewed_version": "c5c6ef46",
+        "acceptance_recommendation": "recommend_accept_unknown_balance_transparency_criterion_after_UI_sync_integrated_proof",
+        "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "RNF-15",
+      "action": "implement_bounded_task",
+      "task": "complete_portable_export",
+      "historical_missing_not_retested": "Full plans/policies/history/evidence portability; capacity export only summarizes configured roles and lacks reconstructible full policy; common-store snapshot absent.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T01",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Exact two-Codex-account scenario with separate identity/credential/usage and no silent swap is unexecuted.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T02",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Exact Grok->Codex->Gemini->Sonnet Antigravity->reserve complete handoff unexecuted.",
+      "latest_R3_adendum": {
+        "update_index": 16,
+        "reviewed_version": "a61c728d",
+        "acceptance_recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions",
+        "remaining": "Synthetic grant state, no physical worker/conversation continuity/official login. Web enum/selection DTO sync in UI front required; same-provider model quota scope still separate next implementation."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T03",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Exercise regular recovery while another regular healthy; assert no preemption or silent reassignment through real capacity paths; synthetic observations suffice.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T04",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Exercise emergency programming while regular recovers; finish healthy reserve and stop new reserve dispatch through real capacity paths; synthetic observations suffice.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T05",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Persist all-exhausted wait, restart then fresh trusted observation wakes same plan without chat command; Automatic recovery from official quota evidence through native bootstrap remains unverified; R3 fixture wiring pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T06",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Pause before quota/restart and explicitly resume same plan with unchanged command identity; Import/restore plus actual quota recovery preservation not jointly rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T07",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Crash each intent/process/handle window and resend via UI/workflow/MCP; prove same process or uncertainty; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T08",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Crash launch/fallback/cancel windows; no legacy bypass, relaunch or stale integration; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T09",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Reject review, correct same task preserving findings, invalidate old evidence then evaluate new artifact; Native correction graph physical proof with real capacity not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T10",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Two chats plus immediate external ref update must reject stale expected base atomically; Independent execution of complete forged/truncated/gate-removal and external-writer races pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T11",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Concurrent chats and hosts contest global limit; no invalid grant and aged eligible queue progresses; Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T12",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Change policy grant/start/result; retain frozen snapshot or explicit revocation with coherent ticket state; Cross-host same authority and resource identity contention not independently rerun in R3; coexistence authority separate",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T13",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Whole adapter recovery test for auth expiry/network failure/invalid model before new admission.",
+      "latest_R3_adendum": {
+        "update_index": 17,
+        "reviewed_version": "a61c728d",
+        "acceptance_recommendation": "approve_exact_synthetic_slice_full_original_acceptance_still_requires_missing_conditions",
+        "remaining": "Synthetic grant state, no physical worker/conversation continuity/official login. Web enum/selection DTO sync in UI front required; same-provider model quota scope still separate next implementation."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T14",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Independent SSH disconnect/lost-ACK recovery test pending, including supervisor death and no blind uncertain-operation repeat; two authorized disposable hosts suffice.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T15",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Physical worker cross account/project/admin denied while legitimate work still completes; Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T16",
+      "action": "external_homologation_plus_preserve_local_gaps",
+      "task": null,
+      "historical_missing_not_retested": "Actual Android full account/team/fallback/plan/pause/resume/delivery journey absent.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T17",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Reexecute PG test on final integrated revision; source semantics must identify cumulative counters before operational use.",
+      "latest_R3_adendum": {
+        "update_index": 19,
+        "reviewed_version": "5d1d2a73",
+        "acceptance_recommendation": "recommend_accept_exact_cumulative_unknown_balance_arithmetic_criterion_on_final_integrated_rerun",
+        "remaining": "Exact UI time-source mapping final proof pending. Current profile metadata, server observation attribution, per-request snapshots explicitly scoped; no active inference duration or statistical provider conclusions."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T18",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Canonical history/policy completeness and duplicate integrated-work proof through backup+restore+reimport as one scenario.",
+      "latest_R3_adendum": {
+        "update_index": 29,
+        "reviewed_version": "c135cd59",
+        "acceptance_recommendation": "approve_restoration_contract_demonstrated_on_actual_isolated_services_assess_complete_original_scope_separately",
+        "remaining": "Controlled writer quiescence precondition, no general online distributed snapshot or physical browser journey; one trace2messages/0lost and readable9789ms is not generalized disaster RPO/RTO."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T19",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Controlled exhaustion/recovery observation can prove handoff without official login; same-context canonical history, fenced singleton and safe return must be demonstrated together.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T20",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Inaccessible executor + expired lease cancellation keeps uncertainty/grant/old effects until proof; Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T21",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "QA reproducible defect returns to bounded correction and requires replacement artifact evidence; Native correction graph physical proof with real capacity not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T22",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Exact prohibited Astra/effort/removed-account cases before any launch via signed policy command and browser reason.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T23",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Malicious SSH file/output cannot reveal credential or modify central authority; valid project admin survives; Full direct API/terminal hostile-worker matrix while preserving valid project admin missing",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T24",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Two actual concurrent CLIs denied shell/symlink/process credential access; distinct HOME insufficient; Pure file/security tests rerun; physical two CLIs account/process boundary not rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T25",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Test approved artifact then controlled return with exact base CAS, replay/lost ACK and distinct permission.",
+      "latest_R3_adendum": {
+        "update_index": 40,
+        "reviewed_version": [
+          "cddbe8a4",
+          "27056341",
+          "5931a421"
+        ],
+        "acceptance_recommendation": "approve_backend_workspace_emission_contract_hold_full_product_path",
+        "remaining": "Product admin API8be0c4d1 nested shared-pool acquisition and ignored configured profile.writePaths need review/fix; actual bootstrap/menu/env079 integration unfinished at user shutdown."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T26",
+      "action": "finite_audit_before_new_implementation",
+      "task": "protocol_promotion_counterproof",
+      "historical_missing_not_retested": "Finite expired-auth and incompatible-protocol fixtures must preserve work and refuse admission until confirmation; actual account expiry is optional validation.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T27",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Mobile timeout/reconnect replay for all four start/pause/resume/policy commands and distinct intents.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T28",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Pilot failure and rollback with shared authority/global tally; stale snapshot cannot grant; refresh fenced too.",
+      "latest_R3_adendum": {
+        "update_index": 6,
+        "reviewed_version": [
+          "cbcc506a",
+          "6bb083d1"
+        ],
+        "acceptance_recommendation": "reclassify_missing_capability_to_implemented_synthetic_integration_slice_do_not_accept_operational_scenario",
+        "remaining": "Real legacy installation must use the same authority/refresh bridge; operational overlap and rollback with real credential adapter not authorized or executed. Synthetic callback does not renew an official credential."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T29",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Fill programmer ceiling then demand QA/reviewer/specialist; physical stage retirement frees exact slots; Saturated programmer to evaluator progress with actual provider capacity graph pending R3",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T30",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Restore older backup while newer external workers alive; reconciliation/neutralization before dispatch, pauses remain; Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T31",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Combined unknown-capacity/recent-success/unknown-balance/concurrent-probe scenario including durable timeout quarantine.",
+      "latest_R3_adendum": {
+        "update_index": 23,
+        "reviewed_version": "c5c6ef46",
+        "acceptance_recommendation": "approve_scoped_contract_not_official_provider_homologation",
+        "remaining": "Source remains synthetic; official provider observability outside scope. RemoteDevelopment new physical gate coordinated separately."
+      },
+      "acceptance_change": false
+    },
+    {
+      "id": "T32",
+      "action": "implement_bounded_task",
+      "task": "cezar_update_renewal",
+      "historical_missing_not_retested": "Update worker with pending messages/pauses/operations and Continue-As-New while retaining compatible old workers; Real pending update/Continue-As-New migration with old-worker retention absent; pinning alone is not update strategy proof",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T33",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Invent test/truncate log/remove CI gate; trusted independent executor refuses integration; Independent execution of complete forged/truncated/gate-removal and external-writer races pending",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T34",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Prepare successor while old writer lives; no shared writable copy before access/physical retirement; Remote escaped descendant neutralization and successor shared-worktree physical matrix pending R3",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T35",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Suspend/reconnect while actual correction changes state; graph/cards same identity/state/owner/projection delay without losing navigation.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T36",
+      "action": "finite_audit_before_new_implementation",
+      "task": "physical_authority_boundary_counterproof",
+      "historical_missing_not_retested": "Direct API/WS/MCP/terminal admin attack denied; manager authorized project administration still works; Full cross-account shell/symlink/process/API plus central admin attack coverage remains unverified",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T37",
+      "action": "retain_individual_gap_review_no_rerun_without_cause",
+      "task": null,
+      "historical_missing_not_retested": "Two context regular selections persist independently across restart and account disable under global contention; Two live contexts restart/disabled account state not independently rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T38",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Policy waiver advances; canceled/lost/stale results block; artifact change invalidates old binding; Seven pure waiver cases rerun; integrated waiver revocation versus physical retirement race not rerun",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    },
+    {
+      "id": "T39",
+      "action": "await_existing_front_deliverable",
+      "task": null,
+      "historical_missing_not_retested": "Exact technically-functional but ineligible adapter denies before spawn through integrated signed entry and legible UI.",
+      "latest_R3_adendum": null,
+      "acceptance_change": false
+    }
+  ]
+}
