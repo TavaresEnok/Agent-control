@@ -1,0 +1,27 @@
+TAP version 13
+# R4_FLOW_FAILURE {"primary":{"name":"Error","message":"COMBINED_POSITIVE_RUN_FAILED"},"runtimeCodes":[{"file":"ac85e569-8edd-4925-9622-1166e81abd3c.ndjson","code":"NATIVE_RESOURCE_UNCERTAIN"},{"file":"ac85e569-8edd-4925-9622-1166e81abd3c.ndjson","code":"NATIVE_RESOURCE_UNCERTAIN"},{"file":"ac85e569-8edd-4925-9622-1166e81abd3c.ndjson","code":"NATIVE_RESOURCE_UNCERTAIN"}],"beforeCleanup":{"containers":[{"id":"e15e78af5f8a9bb9fe2c1e300b4ac517d3cfb7eda13a36b4c4a18c9594215e84","status":"exited","running":false},{"id":"ce957553a6e5112bd91f031e3ed9d75eabec60245682d2ee1c2eb654928fab75","status":"running","running":true}],"pendingHostReservations":1},"cleanup":[]}
+# Subtest: R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+not ok 1 - R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+  ---
+  duration_ms: 52578.744266
+  type: 'test'
+  location: '/tmp/ac-r4-20261105-flow-final/tests/r3-conversation-flow.test.ts:1:3824'
+  failureType: 'testCodeFailure'
+  error: 'COMBINED_POSITIVE_RUN_FAILED'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    JSON.stringify.error (/tmp/ac-r4-20261105-flow-final/tests/r3-conversation-flow.test.ts:142:110)
+    until (/tmp/ac-r4-20261105-flow-final/tests/r3-conversation-flow.test.ts:50:143)
+    async TestContext.<anonymous> (/tmp/ac-r4-20261105-flow-final/tests/r3-conversation-flow.test.ts:142:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 59619.222752

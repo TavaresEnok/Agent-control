@@ -1,0 +1,25 @@
+TAP version 13
+# Subtest: R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+not ok 1 - R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+  ---
+  duration_ms: 59865.606362
+  type: 'test'
+  location: '/tmp/ac-r4-20261105-flow-final/tests/r3-conversation-flow.test.ts:1:2553'
+  failureType: 'testCodeFailure'
+  error: 'R3_FLOW_CLEANUP_FAILED'
+  code: 'ERR_TEST_FAILURE'
+  name: 'AggregateError'
+  stack: |-
+    TestContext.<anonymous> (/tmp/ac-r4-20261105-flow-final/tests/r3-conversation-flow.test.ts:211:182)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 67268.22397

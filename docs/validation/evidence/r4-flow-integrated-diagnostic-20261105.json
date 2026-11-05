@@ -1,0 +1,39 @@
+{
+  "fixture": "r3-conversation-flow",
+  "failure": {
+    "primary": {
+      "name": "Error",
+      "message": "COMBINED_POSITIVE_RUN_FAILED"
+    },
+    "runtimeCodes": [
+      {
+        "file": "ac85e569-8edd-4925-9622-1166e81abd3c.ndjson",
+        "code": "NATIVE_RESOURCE_UNCERTAIN"
+      },
+      {
+        "file": "ac85e569-8edd-4925-9622-1166e81abd3c.ndjson",
+        "code": "NATIVE_RESOURCE_UNCERTAIN"
+      },
+      {
+        "file": "ac85e569-8edd-4925-9622-1166e81abd3c.ndjson",
+        "code": "NATIVE_RESOURCE_UNCERTAIN"
+      }
+    ],
+    "beforeCleanup": {
+      "containers": [
+        {
+          "id": "e15e78af5f8a9bb9fe2c1e300b4ac517d3cfb7eda13a36b4c4a18c9594215e84",
+          "status": "exited",
+          "running": false
+        },
+        {
+          "id": "ce957553a6e5112bd91f031e3ed9d75eabec60245682d2ee1c2eb654928fab75",
+          "status": "running",
+          "running": true
+        }
+      ],
+      "pendingHostReservations": 1
+    },
+    "cleanup": []
+  }
+}
