@@ -125,6 +125,46 @@ async function clickSave() {
 }
 
 describe('WorkflowGraphRoute', () => {
+  it('edits nodes and branching connections in the step view and saves the same graph', async () => {
+    const sent = stubFetch({
+      'POST /api/v1/workflows/graph': () => jsonResponse({ path: '.ai/cezar/workflows/mobile.yaml', name: 'mobile' }, 201),
+    })
+    renderAt('/workflows')
+    fireEvent.change(await nameField(), { target: { value: 'mobile' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }))
+    fireEvent.click(screen.getByRole('button', { name: /One agent session/ }))
+    fireEvent.change(screen.getByLabelText('name', { selector: 'input' }), { target: { value: 'Review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Close inspector' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close node palette' }))
+    fireEvent.change(screen.getByLabelText('work done destination'), { target: { value: 'agent' } })
+    fireEvent.change(screen.getByLabelText('agent done destination'), { target: { value: 'end' } })
+    fireEvent.change(screen.getByLabelText('agent failed destination'), { target: { value: 'work' } })
+    await clickSave()
+    await waitFor(() => expect(sentTo(sent, 'POST', '/api/v1/workflows/graph')).toHaveLength(1))
+    const body = sentTo(sent, 'POST', '/api/v1/workflows/graph')[0]?.body as { graph: { nodes: unknown[]; edges: unknown[] } }
+    expect(body.graph.nodes).toContainEqual(expect.objectContaining({ id: 'agent', name: 'Review' }))
+    expect(body.graph.edges).toEqual(expect.arrayContaining([
+      { from: 'work.done', to: 'agent' }, { from: 'agent.done', to: 'end' }, { from: 'agent.failed', to: 'work' },
+    ]))
+  })
+
+  it('opens and deletes a step and disconnects its ports without a canvas gesture', async () => {
+    const sent = stubFetch({
+      'POST /api/v1/workflows/graph': () => jsonResponse({ path: '.ai/cezar/workflows/verify.yaml', name: 'verify' }, 201),
+    })
+    renderAt('/workflows/verify')
+    await nameField()
+    fireEvent.change(screen.getByLabelText('start next destination'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit tests' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
+    expect(screen.queryByRole('button', { name: 'Edit tests' })).toBeNull()
+    await clickSave()
+    await waitFor(() => expect(sentTo(sent, 'POST', '/api/v1/workflows/graph')).toHaveLength(1))
+    const body = sentTo(sent, 'POST', '/api/v1/workflows/graph')[0]?.body as { graph: { nodes: { id: string }[]; edges: { from: string; to: string }[] } }
+    expect(body.graph.nodes.map((node) => node.id)).not.toContain('tests')
+    expect(body.graph.edges.some((edge) => edge.from === 'start.next' || edge.to === 'tests')).toBe(false)
+  })
+
   it('opens a saved workflow by name, and a built-in as a copy to save under a new name', async () => {
     stubFetch()
     renderAt('/workflows/ship-it')

@@ -224,7 +224,7 @@ export function FloatingPanel({
     <aside
       aria-label={label}
       className={cn(
-        'absolute top-3 bottom-3 z-10 flex flex-col overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur',
+        'absolute top-3 bottom-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur',
         side === 'left' ? 'left-3 w-60' : 'right-3 w-80',
       )}
     >
@@ -772,6 +772,7 @@ function WorkflowGraphEditor() {
       </header>
 
       <div className="relative min-h-0 flex-1" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+        <div className="hidden h-full sm:block">
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
@@ -797,6 +798,32 @@ function WorkflowGraphEditor() {
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
           <Controls showInteractive={false} position="bottom-left" />
         </ReactFlow>
+        </div>
+        <section aria-label="Workflow steps" className="absolute inset-0 overflow-y-auto bg-background p-3 pb-24 sm:hidden">
+          <h2 className="mb-2 text-sm font-medium">Workflow steps</h2>
+          <p className="mb-3 text-xs text-muted-foreground">Edit each node and choose a destination for each output. Connections can branch or loop.</p>
+          <ol className="flex min-w-0 flex-col gap-3">
+            {graph.nodes.map((node, index) => (
+              <li key={node.id} className="min-w-0 rounded-md border border-border p-3">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <span className="min-w-0 break-all text-sm">{index + 1}. {node.name ?? node.id} ({node.type})</span>
+                  <Button size="sm" variant="outline" disabled={!!sim} onClick={() => { setSelectedId(node.id); setWorkflowPanel(false); setPaletteOpen(false) }}>Edit {node.id}</Button>
+                </div>
+                {portsOf(node).map((port) => (
+                  <label key={port} className="mt-2 flex min-w-0 flex-col gap-1 text-xs">
+                    <span className="break-all">{node.id} · {port} →</span>
+                    <select aria-label={`${node.id} ${port} destination`} className="min-h-11 min-w-0 max-w-full rounded-md border border-input bg-card px-2" disabled={!!sim}
+                      value={targetOf(graph, node.id, port) ?? ''}
+                      onChange={(event) => { const target = event.target.value; edit((g) => target ? connect(g, node.id, port, target) : disconnect(g, node.id, port)) }}>
+                      <option value="">No destination</option>
+                      {graph.nodes.map((target) => <option key={target.id} value={target.id}>{target.name ?? target.id} ({target.id})</option>)}
+                    </select>
+                  </label>
+                ))}
+              </li>
+            ))}
+          </ol>
+        </section>
 
         {paletteOpen && (
           <FloatingPanel
