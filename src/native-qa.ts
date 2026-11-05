@@ -1,3 +1,4 @@
+import {ReconciliationHistory} from './reconciliation-history.ts';
 import {constants} from 'node:fs';
 import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {mkdir,lstat,realpath,open,rename} from 'node:fs/promises';
@@ -221,18 +222,17 @@ export class NativeQa{
   });
  }
  async reconcileContext(principal:string,authority:Authority){
-  let cursor:{created_at:string;id:string}|null=null;const errors:unknown[]=[];
-  for(;;){
+  const errors:unknown[]=[];
+  await new ReconciliationHistory(this.ledger).run(authority,'native-qa','ac_native_qa_jobs',async(ids,retain)=>{
    const jobs:Record<string,any>[]=await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
-    return (await c.query(`SELECT j.*,j.created_at::text cursor_created_at,x.state cancellation_state,s.state stage_state,s.receipt stage_receipt FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id
+    return (await c.query(`SELECT j.*,x.state cancellation_state,s.state stage_state,s.receipt stage_receipt FROM ac_native_qa_jobs j JOIN ac_stage_operations s ON s.id=j.id
      LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id WHERE j.context_id=$1 AND
      (j.state IN ('uncertain','running') OR s.state<>'completed' OR (j.container_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ac_native_qa_retirements r WHERE r.job_id=j.id AND r.state='removed')))
-     AND ($2::timestamptz IS NULL OR (j.created_at,j.id)>($2::timestamptz,$3::uuid))
-     ORDER BY j.created_at,j.id LIMIT 32`,[authority.contextId,cursor?.created_at??null,cursor?.id??null])).rows;
+     AND j.id=ANY($2::uuid[])
+     ORDER BY j.created_at,j.id`,[authority.contextId,ids])).rows;
    });
-   if(!jobs.length)break;
+   retain(jobs.map(row=>row.id));
    for(const job of jobs){
-    cursor={created_at:job.cursor_created_at,id:job.id};
     await this.ledger.heartbeat(authority);
     try{
      if(job.contract_digest!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
@@ -247,7 +247,7 @@ export class NativeQa{
      }
     }catch(error){errors.push(error);}
    }
-  }
+  });
   if(errors.length)throw new AggregateError(errors,'NATIVE_QA_RECONCILIATION_FAILED');
  }
 

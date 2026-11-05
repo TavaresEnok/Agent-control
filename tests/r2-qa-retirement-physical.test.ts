@@ -91,8 +91,11 @@ test('real isolated QA uses Docker exit code, preserves the commit and rejects f
     }
     const seen:string[]=[],original=runner.reconcile.bind(runner);
     runner.reconcile=async(_principal,_authority,id)=>{seen.push(id);if(seen.length===1)throw Error('fixture failure');return {state:'uncertain'};};
-    await assert.rejects(runner.reconcileContext(principal,authority),/NATIVE_QA_RECONCILIATION_FAILED/);runner.reconcile=original;
-    assert.equal(seen.length,40);assert.deepEqual(new Set(seen),new Set(ids));
+    await assert.rejects(runner.reconcileContext(principal,authority),/NATIVE_QA_RECONCILIATION_FAILED/);
+    assert.ok(seen.length<=32,'one tick must bound reconciliation work');
+    for(let tick=0;tick<4&&new Set(seen).size<ids.length;tick++)await runner.reconcileContext(principal,authority);
+    runner.reconcile=original;
+    assert.equal(new Set(seen).size,40);assert.deepEqual(new Set(seen),new Set(ids));
    }
    assert.equal(git('rev-parse','refs/heads/protected'),sourceBase);await assert.rejects(db.tx(c=>gates.assertReady(c,artifact.id,authority)),value===2?/REVIEWS_MISSING/:/VERIFICATION_NOT_PASSED/);
   }

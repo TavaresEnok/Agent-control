@@ -1,3 +1,4 @@
+import {ReconciliationHistory} from './reconciliation-history.ts';
 import {z} from 'zod';
 import {digest,Refusal,type Authority} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
@@ -17,6 +18,7 @@ export class Cancellations{
  /** A successor has no live native session to signal. Reuse only the immutable
   * broker job identity; never start a replacement or trust a PID from history. */
  async reconcileSandbox(authority:Authority,client:SandboxClient){
+  await new ReconciliationHistory(this.ledger).run(authority,'sandbox-cancellation','ac_sandbox_jobs',async(ids,retain)=>{
   const jobs=await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
    return (await c.query(`SELECT j.*,g.intent_id,l.snapshot,l.digest FROM ac_sandbox_jobs j
@@ -24,9 +26,11 @@ export class Cancellations{
     LEFT JOIN LATERAL (SELECT snapshot,digest FROM ac_execution_launches WHERE operation_id=j.id
      UNION ALL SELECT snapshot,digest FROM ac_stage_execution_launches WHERE stage_id=j.id
      UNION ALL SELECT snapshot,digest FROM ac_specialist_execution_launches WHERE advice_id=j.id) l ON true
-    WHERE x.context_id=$1 AND x.state='requested' ORDER BY j.created_at`,[authority.contextId])).rows;
+    WHERE x.context_id=$1 AND j.id=ANY($2::uuid[]) AND x.state='requested' ORDER BY j.created_at`,[authority.contextId,ids])).rows;
   });
-  for(const job of jobs){
+  const pendingJobs=new Set(jobs.map(row=>row.id));retain([...pendingJobs]);
+  const errors:unknown[]=[];
+  for(const job of jobs){try{
    const execution=job.profile==='synthetic-probe-v1'?undefined:Execution.parse(job.snapshot);
    if(execution&&(execution.profile!==job.profile||digest(execution)!==job.digest))throw new Refusal('SANDBOX_LAUNCH_SNAPSHOT_MISMATCH');
    const result=await client.perform('stop',job.id,job.grant_id,authority,execution);
@@ -44,14 +48,22 @@ export class Cancellations{
     if(job.profile==='synthetic-verification-v1')await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND intent_id=$3 AND state IN ('running','uncertain')",[job.id,receipt,job.intent_id]);
     if(job.profile==='synthetic-specialist-v1')await c.query("UPDATE ac_specialist_advice SET state='completed',receipt=$2 WHERE id=$1 AND intent_id=$3 AND state IN ('running','uncertain')",[job.id,receipt,job.intent_id]);
    });
-  }
+   pendingJobs.delete(job.id);retain([...pendingJobs]);
+  }catch(error){errors.push(error);}}
+  if(errors.length)throw new AggregateError(errors,'SANDBOX_CANCELLATION_RECONCILIATION_FAILED');
+  });
  }
  async reconcile(authority:Authority,cancelNative:(runId:string)=>void){
-  return this.ledger.tx(async c=>{
+  return new ReconciliationHistory(this.ledger).run(authority,'cancellation-state','ac_intents',async(ids,retain)=>{
+  const errors:unknown[]=[];
+  await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
    const requests=(await c.query(`SELECT x.intent_id,i.run_id FROM ac_plan_cancellations x JOIN ac_intents i ON i.id=x.intent_id
-    WHERE x.context_id=$1 AND x.state='requested' FOR UPDATE OF x`,[authority.contextId])).rows;
+    WHERE x.context_id=$1 AND i.id=ANY($2::uuid[]) AND x.state='requested' FOR UPDATE OF x`,[authority.contextId,ids])).rows;
+   retain(requests.map(row=>row.intent_id));
    for(const request of requests){
+    await c.query('SAVEPOINT cancellation_row');
+    try{
     cancelNative(request.run_id);
     await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[request.intent_id]);
     // Reserved capacity can be returned only when its owner never persisted
@@ -107,7 +119,11 @@ export class Cancellations{
     await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[request.intent_id]);
     await this.ledger.refreshPending(c,authority.contextId);
     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'plan.cancellation_confirmed',$2)",[authority.contextId,{intentId:request.intent_id}]);
+    }catch(error){await c.query('ROLLBACK TO SAVEPOINT cancellation_row');errors.push(error);}
+    finally{await c.query('RELEASE SAVEPOINT cancellation_row');}
    }
+  });
+  if(errors.length)throw new AggregateError(errors,'CANCELLATION_STATE_RECONCILIATION_FAILED');
   });
  }
 }

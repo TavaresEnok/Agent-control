@@ -1,3 +1,4 @@
+import {ReconciliationHistory} from './reconciliation-history.ts';
 import { z } from 'zod';
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, lstat, rm, writeFile } from 'node:fs/promises';
@@ -173,15 +174,18 @@ export class RemoteOperations{
   });
  }
  async reconcileCancellationRequests(principal:string,authority:Authority){
+  await new ReconciliationHistory(this.ledger).run(authority,'remote-cancellation','ac_remote_operations',async(ids,retain)=>{
   const operations=await this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
    return (await c.query(`SELECT r.id FROM ac_remote_operations r JOIN ac_plan_cancellations k ON k.intent_id=r.intent_id
-    WHERE r.context_id=$1 AND k.state='requested' AND r.state NOT IN ('completed','failed','canceled_confirmed') ORDER BY r.created_at`,[authority.contextId])).rows;
+    WHERE r.context_id=$1 AND r.id=ANY($2::uuid[]) AND k.state='requested' AND r.state NOT IN ('completed','failed','canceled_confirmed') ORDER BY r.created_at`,[authority.contextId,ids])).rows;
   });
+  retain(operations.map(row=>row.id));
   const errors:unknown[]=[];
   for(const operation of operations){
    try{await this.cancel(principal,operation.id,authority);}catch(error){errors.push(error);}
   }
   if(errors.length)throw new AggregateError(errors,'REMOTE_CANCELLATION_RECONCILIATION_FAILED');
+  });
  }
 }

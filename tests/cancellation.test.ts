@@ -52,7 +52,7 @@ test('signed cancellation blocks effects and confirms only never-started or phys
      VALUES($1,$2,$3,$4,'synthetic-probe-v1',$5,'uncertain')`,[intent.operation_id,contextId,grant.id,authority.epoch,'synthetic-cancel-fixture']);
     const receipt={jobId:intent.operation_id,containerId:'a'.repeat(64),exitCode:137,synthetic:true};
     class ForgedStop extends SandboxClient{override async perform(){return receipt;}}
-    await assert.rejects(service.reconcileSandbox(authority,new ForgedStop()),/CANCELLATION_PHYSICAL_RECEIPT_UNCONFIRMED/);
+    await assert.rejects(service.reconcileSandbox(authority,new ForgedStop()),(error:unknown)=>error instanceof AggregateError&&error.errors.some(cause=>cause instanceof Error&&cause.message==='CANCELLATION_PHYSICAL_RECEIPT_UNCONFIRMED'));
     assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant.id])).rows[0].state,'uncertain');
     // Contract stub, not a Docker proof: only the trusted broker may persist these receipts.
     class ConfirmedStop extends SandboxClient{override async perform(){

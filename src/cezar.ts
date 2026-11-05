@@ -29,6 +29,7 @@ import {IsolatedImplementation} from './isolated-implementation.ts';
 import {IsolatedVerification} from './isolated-verification.ts';
 import {IsolatedAdvice} from './isolated-advice.ts';
 import {Cancellations} from './cancellation.ts';
+import {ReconciliationHistory} from './reconciliation-history.ts';
 import type {RemoteOperations} from './remote.ts';
 import type {NativePlanningSupervisor} from './native-planning-supervisor.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
@@ -661,29 +662,32 @@ export class CezarRuntime {
   }
   async reconcileCancellations(authority:Authority,principal?:string){
     if(!this.running||!this.lock)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
-    const service=new Cancellations(this.ledger),reconciliationErrors:unknown[]=[];
+    const service=new Cancellations(this.ledger),history=new ReconciliationHistory(this.ledger),reconciliationErrors:unknown[]=[];
     const phase=async(name:string,work:()=>Promise<unknown>)=>{try{await work();}catch(error){reconciliationErrors.push(new Error(name,{cause:error}));}};
     await phase('CANCELLATION_STATE_RECONCILIATION_FAILED',()=>service.reconcile(authority,runId=>{this.manager.cancel(runId);}));
-    if(this.engineering)await phase('INTEGRATION_RECONCILIATION_FAILED',async()=>{
+    if(this.engineering)await phase('INTEGRATION_RECONCILIATION_FAILED',()=>history.run(authority,'integration','ac_intents',async (ids,retain)=>{
       const canceled=(await this.ledger.pool.query<Intent>(`SELECT i.* FROM ac_intents i JOIN ac_plan_cancellations k ON k.intent_id=i.id
-        WHERE i.context_id=$1 AND k.state='requested'`,[authority.contextId])).rows;
+        WHERE i.context_id=$1 AND i.id=ANY($2::uuid[]) AND k.state='requested'`,[authority.contextId,ids])).rows;
+      retain(canceled.map(row=>row.id));
       for(const intent of canceled)await phase(`INTEGRATION_RECONCILIATION_FAILED: ${intent.id}`,()=>this.engineering!.reconcileIntegrationResult(intent,authority));
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
-    });
+    }));
     if(this.isolated){
       await phase('SANDBOX_CANCELLATION_RECONCILIATION_FAILED',()=>service.reconcileSandbox(authority,this.isolated!.client));
-      await phase('SANDBOX_TERMINAL_RECONCILIATION_FAILED',async()=>{
+      await phase('SANDBOX_TERMINAL_RECONCILIATION_FAILED',()=>history.run(authority,'sandbox-terminal','ac_intents',async (ids,retain)=>{
       // Terminal parents are excluded from normal graph replay, but their
       // previously launched children still need physical reconciliation.
       const terminalChildren=(await this.ledger.pool.query<Intent>(`SELECT i.* FROM ac_intents i
         JOIN ac_intents p ON p.id=i.parent_intent_id JOIN ac_execution_launches l ON l.operation_id=i.operation_id
         JOIN ac_sandbox_jobs j ON j.id=i.operation_id
-        WHERE i.context_id=$1 AND (i.state IN ('failed','canceled') OR p.state IN ('failed','canceled') OR j.state='failed')
-        ORDER BY i.created_at,i.id`,[authority.contextId])).rows;
+        WHERE i.context_id=$1 AND i.id=ANY($2::uuid[]) AND (i.state IN ('failed','canceled') OR p.state IN ('failed','canceled') OR j.state='failed')
+        ORDER BY i.created_at,i.id`,[authority.contextId,ids])).rows;
+      const pendingTerminal=new Set(terminalChildren.map(row=>row.id));retain([...pendingTerminal]);
       for(const child of terminalChildren){try{const bound=await readManagedUnit(this.ledger,child);
-        if(bound?.unit.kind==='task')await this.isolated!.reconcileManagedTask(child,authority,bound.unit);
+        if(bound?.unit.kind==='task'){const outcome=await this.isolated!.reconcileManagedTask(child,authority,bound.unit);
+          if(outcome!=='uncertain'){pendingTerminal.delete(child.id);retain([...pendingTerminal]);}}
       }catch(error){reconciliationErrors.push(new Error(`SANDBOX_JOB_RECONCILIATION_FAILED: ${child.id}`,{cause:error}));}}
-      });
+      }));
       await phase('CANCELLATION_STATE_RECONCILIATION_FAILED',()=>service.reconcile(authority,runId=>{this.manager.cancel(runId);}));
     }
     if(this.engineering?.options.nativeQa)await phase('NATIVE_QA_RECONCILIATION_FAILED',async()=>{
@@ -691,26 +695,28 @@ export class CezarRuntime {
       await this.engineering!.options.nativeQa!.reconcileContext(principal,authority);
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     });
-    if(this.nativePlanning.length)await phase('PLANNING_RECONCILIATION_FAILED',async()=>{
+    if(this.nativePlanning.length)await phase('PLANNING_RECONCILIATION_FAILED',()=>history.run(authority,'planning','ac_semantic_planning_calls',async (ids,retain)=>{
       if(!principal)throw new Refusal('PLANNING_PRINCIPAL_REQUIRED');
       const calls=(await this.ledger.pool.query(`SELECT s.id FROM ac_semantic_planning_calls s
         JOIN ac_plan_cancellations x ON x.intent_id=s.intent_id AND x.context_id=s.context_id
-        JOIN ac_native_planning_jobs j ON j.id=s.id WHERE s.context_id=$1 AND x.state='requested' AND s.state='uncertain'
-        ORDER BY s.created_at,s.id`,[authority.contextId])).rows;
+        JOIN ac_native_planning_jobs j ON j.id=s.id WHERE s.context_id=$1 AND s.id=ANY($2::uuid[]) AND x.state='requested' AND s.state='uncertain'
+        ORDER BY s.created_at,s.id`,[authority.contextId,ids])).rows;
+      retain(calls.map(row=>row.id));
       for(const call of calls)for(const supervisor of this.nativePlanning)await phase(`PLANNING_JOB_RECONCILIATION_FAILED: ${call.id}`,()=>supervisor.reconcileCancellation(principal,authority,call.id));
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
-    });
-    if(this.nativeExecutions.length)await phase('NATIVE_EXECUTION_RECONCILIATION_FAILED',async()=>{
+    }));
+    if(this.nativeExecutions.length)await phase('NATIVE_EXECUTION_RECONCILIATION_FAILED',()=>history.run(authority,'native-execution','ac_native_execution_jobs',async (ids,retain)=>{
       if(!principal)throw new Refusal('NATIVE_EXECUTION_PRINCIPAL_REQUIRED');
       const jobs=(await this.ledger.pool.query(`SELECT j.id,j.role,j.account_id,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
         LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id AND x.context_id=j.context_id
-        WHERE j.context_id=$1 AND (j.state IN ('uncertain','running') OR x.state='requested' OR
+        WHERE j.context_id=$1 AND j.id=ANY($2::uuid[]) AND (j.state IN ('uncertain','running') OR x.state='requested' OR
          (j.state='completed' AND j.role='programmer' AND j.receipt->'payload'->'artifact'->>'commit' IS NOT NULL AND
           NOT EXISTS(SELECT 1 FROM ac_artifacts a WHERE a.intent_id=j.intent_id AND a.commit_id=j.receipt->'payload'->'artifact'->>'commit')) OR
          (j.state='completed' AND j.role IN ('reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND (s.state<>'completed' OR (s.receipt->'verification' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id))))) OR
          (j.state IN ('completed','failed') AND ((j.role IN ('reviewer','judge') AND (j.state='failed' OR EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id) OR EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state='completed' AND s.receipt->>'cancellation'='true'))) OR (j.role='programmer' AND EXISTS(SELECT 1 FROM ac_intents i JOIN ac_operations o ON o.id=j.id WHERE i.id=j.intent_id AND i.parent_intent_id IS NULL AND o.state='completed'))) AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')) OR
          (j.state IN ('completed','failed') AND j.role='programmer' AND EXISTS(SELECT 1 FROM ac_intents i JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id JOIN ac_operations o ON o.id=j.id WHERE i.id=j.intent_id AND w.state='held' AND (j.state='failed' OR o.receipt->>'cancellation'='true'))))
-        ORDER BY j.created_at,j.id`,[authority.contextId])).rows;
+        ORDER BY j.created_at,j.id`,[authority.contextId,ids])).rows;
+      retain(jobs.map(row=>row.id));
       for(const job of jobs){
         try{
         const supervisor=this.nativeExecutions.find(s=>s.supportsAccount(job.account_id)&&s.executorDigest===job.executor_digest&&s.keyFingerprint===job.key_fingerprint);
@@ -743,7 +749,7 @@ export class CezarRuntime {
         }catch(error){reconciliationErrors.push(new Error(`NATIVE_JOB_RECONCILIATION_FAILED: ${job.id}`,{cause:error}));}
       }
       await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
-    });
+    }));
     if(this.remote)await phase('REMOTE_CANCELLATION_RECONCILIATION_FAILED',async()=>{
       if(!principal)throw new Refusal('REMOTE_PRINCIPAL_REQUIRED');
         await this.remote!.reconcileCancellationRequests(principal,authority);
