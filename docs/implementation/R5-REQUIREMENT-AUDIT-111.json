@@ -943,7 +943,7 @@
       "recommendation": "do_not_accept_full_requirement",
       "conclusion": "Oráculos corrigidos cobrem23 superfícies/objetos Git, mas não a composição inteira de segredo em execução.",
       "next_evidence": "Conversa→planejamento→prompt→runner bem-sucedido→deltas SSE/logs→artefato/export, com canário e controles negativos; testar configuração hostil e backup composto.",
-      "r5_versioned_delta": "23 finite secret surfaces independently reviewed; complete conversation-to-runner/SSE/artifact/export composition and hostile configuration remain pending."
+      "r5_versioned_delta": "1bed0f6a: contraprova adapter repetida independentemente; 5d17720f/1aa3eeef redigem retorno; 738118f1 runner roteirizado repetido 1/1. Logs, rotação e composição completa seguem abertos."
     },
     {
       "id": "RNF-09",
@@ -1318,7 +1318,7 @@
       "recommendation": "accept_literal_scenario_author_physical_proof",
       "historical_recommendation": "not_accepted",
       "conclusion": "managed-plan.ts bounded correction units and engineering.ts reject findings bind prior/new artifact",
-      "next_evidence": "Preserve versioned final author log; physical scenario passed with deterministic synthetic inference.",
+      "next_evidence": "Log físico do autor versionado em 9a8a796c; execução com inferência sintética determinística.",
       "latest_R3_addendum": null,
       "note": "R3 base and gap inventory are historical; R4 version-specific scoped reviews remain valid, see R4-REVIEW-RUNTIME.md and CONTINUACAO-R4-20261105.md. No whole-criterion promotion inferred.",
       "r5_versioned_delta": "Physical QA correction test 60a59273/5344816f/4d99e72f/61ebe55f against 0643b62a, author 1/1: reproducible failure, bound correction, fresh review and QA, corrected-only integration. See R5-INDEPENDENT-REVIEW-20261105.md."
