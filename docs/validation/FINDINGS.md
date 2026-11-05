@@ -1,6 +1,9 @@
 # Achados canônicos — implementação 0.1.0
 
 
+**Atualização posterior 05/11/2026:** SIGKILL entre remoções durante falha e cancelamento foi seguido de reconciliação em outro processo pelo runtime Cezar. O reconciliador de contexto pode processar outros jobs terminais somente com seus próprios diários, logs e recibos; um ensaio negativo e sua análise foram preservados. Ainda faltam finalizador ativo na queda, lançamento real, retomada integral do grafo e revisão independente. Ver `docs/implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
+
+
 **Atualização 05/11/2026:** falha/cancelamento native terminais retiram o par sob prova física; SIGKILL entre remoções foi seguido por reconciliação em outro processo usando a preparação do Cezar. Executor vivo, observação inacessível e identidade divergente mantiveram posse e diário sem recibo. Uma prova posterior cobriu escrita e cancelamento com tools vivo na cópia privada do job. Faltam runner real e retomada integral do grafo, além de revisão independente. RF-54/T34 seguem parciais e sem aceite. Ver `docs/implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
 
 

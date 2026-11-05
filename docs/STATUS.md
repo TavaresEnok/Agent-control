@@ -1,5 +1,9 @@
 # Agent Control — estado atual de implementação
 
+## Continuação vigente: retomada de falha e cancelamento — 05/11/2026
+
+Quedas reais entre as duas remoções durante falha e cancelamento foram reconciliadas em outro processo pelo runtime Cezar. O cancelamento aguardou a retirada, e cada trabalho processado pelo reconciliador de contexto teve seu próprio diário e recibo. O lançamento e parte do artefato seguem fixtures; não há prova integral do grafo nem revisão independente final. Detalhes em `implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.
+
 ## Continuação vigente: falha, cancelamento e SIGKILL — 05/11/2026
 
 O caminho native managed reconcilia falha e cancelamento terminais com logs, remoção do par e prova assinada; cancelamento não confirma enquanto o escritor native permanece em posse `held`. A bancada matou o controlador entre remoções e outro processo retomou pelo método de preparação do Cezar. Executor ativo, identidade divergente e Docker inacessível bloquearam a retirada. O lançamento e o artefato ainda são fixtures; uma prova posterior cobriu acesso gravável à cópia privada do job; falta retomada integral do grafo e lançamento real. Revisão independente pendente; nenhum requisito aceito. Ver `implementation/NATIVE-RETIREMENT-RECOVERY-20261105.md`.

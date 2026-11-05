@@ -9,6 +9,7 @@ import {DockerDaemon} from '../src/sandbox-broker.ts';
 import {NativeImplementation} from '../src/native-implementation.ts';
 import {GitArtifacts} from '../src/git.ts';
 import {Quality} from '../src/quality.ts';
+import {CezarRuntime} from '../src/cezar.ts';
 import {canonical,digest} from '../src/contracts.ts';
 
 test('new controller reconciles native retirement after SIGKILL between physical removals',
@@ -18,13 +19,14 @@ test('new controller reconciles native retirement after SIGKILL between physical
  const meta=await stat(marker);if(!meta.isFile()||meta.uid!==process.getuid?.()||(meta.mode&0o077)!==0||meta.nlink!==1)throw Error('INVALID_PRIVATE_FIXTURE');
  const f=JSON.parse(await readFile(marker,'utf8'));
  const url=new URL(f.url);if(url.hostname!=='db'||!/^\/ac_implementation_test_nativemulti_[a-f0-9]{20}$/.test(url.pathname))throw Error('ISOLATED_DATABASE_REQUIRED');
- const db=new Ledger(f.url),docker=new DockerDaemon();
+ const db=new Ledger(f.url),docker=new DockerDaemon();let runtime:CezarRuntime|undefined;
  try{
   const rows=(await db.pool.query(`SELECT r.*,w.state writer_state,i.context_id FROM ac_native_writer_retirements r
    JOIN ac_worktree_writers w ON w.parent_intent_id=r.parent_intent_id AND w.run_id=r.run_id
    JOIN ac_intents i ON i.id=r.holder_intent_id WHERE r.state='prepared'`)).rows;
   assert(rows.length>=1&&rows.length<=2);assert(rows.every(row=>row.writer_state==='held'&&row.context_id===f.context));
   let partiallyRemoved=0;
+  let recoveredCancellation=0,recoveredFailure=0;
   for(const row of rows){
    const worker=await docker.inspect(row.worker_id),tools=await docker.inspect(row.tools_id);
    if(!worker&&tools)partiallyRemoved++;
@@ -39,7 +41,7 @@ test('new controller reconciles native retirement after SIGKILL between physical
   await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[f.context]);
   const next=await db.acquire(f.principal,f.context,randomUUID(),'fixture-manager',60);
   const supervisor=new NativeExecutionSupervisor(db,f.supervisorConfig);
-  const git=new GitArtifacts(f.supervisorConfig.repository),quality=new Quality(db,randomBytes(32),git);
+  const verifierKey=randomBytes(32),git=new GitArtifacts(f.supervisorConfig.repository),quality=new Quality(db,verifierKey,git);
   const implementation=new NativeImplementation(db,f.supervisorConfig.repository,quality,[supervisor]);
   const guarded=(supervisor as unknown as {docker:DockerDaemon}).docker,inspect=guarded.inspect.bind(guarded);
   const target=rows.find(row=>row.tools_id)!;
@@ -53,10 +55,26 @@ test('new controller reconciles native retirement after SIGKILL between physical
   guarded.inspect=inspect;
   const before=(await db.pool.query('SELECT r.state,r.proof,w.state writer_state FROM ac_native_writer_retirements r JOIN ac_worktree_writers w ON w.parent_intent_id=r.parent_intent_id AND w.run_id=r.run_id WHERE r.job_id=$1',[target.job_id])).rows[0];
   assert.equal(before.state,'prepared');assert.equal(before.proof,null);assert.equal(before.writer_state,'held');assert(await inspect(target.tools_id));
+  for(const id of intact)assert(await docker.inspect(id),'refused job must not remove another job container');
+  const canceled=process.env.AC_NATIVE_RETIREMENT_RESTART_CANCEL==='1';
+  const failed=process.env.AC_NATIVE_RETIREMENT_RESTART_FAIL==='1';
+  if(canceled||failed){
+   const project=(await db.pool.query('SELECT project_id FROM ac_contexts WHERE id=$1',[f.context])).rows[0].project_id;
+   runtime=new CezarRuntime(db,f.supervisorConfig.repository,project,{quality,git,verifierKey},undefined,undefined,{nativeExecutions:[supervisor]});
+   await runtime.start('administration-only');
+  }
   for(const row of rows){
    await assert.rejects(supervisor.retireManagedWriter(f.principal,f.authority,row.job_id),/STALE_MANAGER/);
    const intent=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[row.holder_intent_id])).rows[0];
-   assert.equal(await implementation.prepareRecovery(intent,next),true);
+   const cancelRow=(await db.pool.query('SELECT state FROM ac_plan_cancellations WHERE intent_id=$1',[intent.id])).rows[0];
+   if(canceled&&cancelRow){
+    assert.equal(cancelRow.state,'requested');
+    await runtime!.reconcileCancellations(next,f.principal);
+    assert.equal((await db.pool.query('SELECT state FROM ac_plan_cancellations WHERE intent_id=$1',[intent.id])).rows[0].state,'confirmed');
+    recoveredCancellation++;
+   }else if(failed&&(await db.pool.query('SELECT state FROM ac_native_execution_jobs WHERE id=$1',[row.job_id])).rows[0].state==='failed'){
+    await runtime!.reconcileCancellations(next,f.principal);recoveredFailure++;
+   }else assert.equal(await implementation.prepareRecovery(intent,next),true);
    assert.equal((await supervisor.retireManagedWriter(f.principal,next,row.job_id)).state,'neutralized');
    const saved=(await db.pool.query(`SELECT r.*,w.state writer_state,w.proof_digest,w.revocation_proof FROM ac_native_writer_retirements r
     JOIN ac_worktree_writers w ON w.parent_intent_id=r.parent_intent_id AND w.run_id=r.run_id WHERE r.job_id=$1`,[row.job_id])).rows[0];
@@ -66,7 +84,20 @@ test('new controller reconciles native retirement after SIGKILL between physical
    assert.equal(await docker.inspect(row.worker_id),null);assert.equal(await docker.inspect(row.tools_id),null);
    assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.native_writer_revoked' AND detail->>'jobId'=$1",[row.job_id])).rows[0].n,1);
   }
-  for(const id of intact)assert(await docker.inspect(id),'unrelated container must remain');
+  if(canceled)assert.equal(recoveredCancellation,1);
+  if(failed)assert.equal(recoveredFailure,1);
+  for(const id of intact)if(!await docker.inspect(id)){
+   // The context-wide reconciler may independently process another terminal job.
+   const other=(await db.pool.query(`SELECT r.*,w.state writer_state FROM ac_native_writer_retirements r
+    JOIN ac_worktree_writers w ON w.parent_intent_id=r.parent_intent_id AND w.run_id=r.run_id
+    WHERE (r.worker_id=$1 OR r.tools_id=$1) AND r.state='revoked'`,[id])).rows[0];
+   assert(other&&other.writer_state==='neutralized'&&!rows.some(row=>row.job_id===other.job_id),'another job needs its own terminal retirement');
+   assert.equal(other.proof.payload.jobId,other.job_id);assert.equal(other.proof.payload.workerId,other.worker_id);assert.equal(other.proof.payload.toolsId,other.tools_id);
+   assert(verify(null,Buffer.from('agent-control:native-writer-retirement:v1\n'+canonical(other.proof.payload)),createPublicKey(f.supervisorConfig.signingKeyPem),Buffer.from(other.proof.signature,'hex')));
+   for(const [name,sha] of [['worker-terminal.log',other.worker_log_sha256],['tools-terminal.log',other.tools_log_sha256]] as const)
+    assert.equal(createHash('sha256').update(await readFile(join(f.supervisorConfig.hostRoot,other.job_id,name))).digest('hex'),sha);
+   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.native_writer_revoked' AND detail->>'jobId'=$1",[other.job_id])).rows[0].n,1);
+  }
   console.log(JSON.stringify({prepared:rows.length,partialPairs:partiallyRemoved,unrelatedContainers:intact.length,oldManager:'rejected',newManager:'reconciled',replayedWorkers:0}));
- }finally{await db.close();}
+ }finally{await runtime?.close();await db.close();}
 });

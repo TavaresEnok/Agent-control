@@ -1,0 +1,26 @@
+TAP version 13
+# Subtest: new controller reconciles native retirement after SIGKILL between physical removals
+not ok 1 - new controller reconciles native retirement after SIGKILL between physical removals
+  ---
+  duration_ms: 266.126234
+  type: 'test'
+  location: '/home/app/projects/agent-control-implementation/tests/native-retirement-process-restart.test.ts:1:632'
+  failureType: 'testCodeFailure'
+  error: 'NATIVE_ARTIFACT_REGISTRY_UNAVAILABLE'
+  code: 'NATIVE_ARTIFACT_REGISTRY_UNAVAILABLE'
+  stack: |-
+    CezarRuntime.reconcileCancellations (/home/app/projects/agent-control-implementation/src/cezar.ts:708:40)
+    async TestContext.<anonymous> (/home/app/projects/agent-control-implementation/tests/native-retirement-process-restart.test.ts:70:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2111.416834
+

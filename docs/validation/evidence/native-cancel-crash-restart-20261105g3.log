@@ -1,0 +1,17 @@
+TAP version 13
+# {"prepared":1,"partialPairs":1,"unrelatedContainers":2,"oldManager":"rejected","newManager":"reconciled","replayedWorkers":0}
+# Subtest: new controller reconciles native retirement after SIGKILL between physical removals
+ok 1 - new controller reconciles native retirement after SIGKILL between physical removals
+  ---
+  duration_ms: 832.833283
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2759.475473

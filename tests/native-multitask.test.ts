@@ -159,7 +159,13 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
   }
   if(physicalMode&&process.env.AC_NATIVE_RETIREMENT_CRASH==='1'){
    const docker=(supervisor as unknown as {docker:DockerDaemon}).docker,remove=docker.remove.bind(docker);
-   docker.remove=async id=>{await remove(id);process.kill(process.pid,'SIGKILL');};
+   docker.remove=async id=>{
+    let target=true;
+    if(process.env.AC_NATIVE_RETIREMENT_CANCEL==='1')target=Boolean((await db.pool.query(`SELECT 1 FROM ac_native_execution_jobs j
+     JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id WHERE j.worker_id=$1 OR j.tools_id=$1`,[id])).rowCount);
+    else if(process.env.AC_NATIVE_RETIREMENT_FAIL==='1')target=Boolean((await db.pool.query("SELECT 1 FROM ac_native_execution_jobs WHERE state='failed' AND (worker_id=$1 OR tools_id=$1)",[id])).rowCount);
+    await remove(id);if(target)process.kill(process.pid,'SIGKILL');
+   };
   }
   let openProgrammers=0,maxProgrammers=0,parallelArrivals=0;const programmerOrder:string[]=[];
   Object.defineProperty(supervisor,'start',{value:async(_principal:string,a:typeof authority,raw:unknown)=>{
