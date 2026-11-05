@@ -9,8 +9,8 @@ import {Ledger} from './ledger.ts';
 import {Refusal} from './contracts.ts';
 import {acquireRecoveryCatalogLease} from './recovery-catalog-lease.ts';
 
-const Config=z.object({directory:z.string().min(1),installationId:z.uuid(),catalogId:z.uuid(),manifestHash:z.string().regex(/^[a-f0-9]{64}$/),epoch:z.number().int().positive()}).strict();
-type Config=z.infer<typeof Config>;
+export const RecoveryInventoryConfig=z.object({directory:z.string().min(1),installationId:z.uuid(),catalogId:z.uuid(),manifestHash:z.string().regex(/^[a-f0-9]{64}$/),epoch:z.number().int().positive()}).strict();
+type Config=z.infer<typeof RecoveryInventoryConfig>;
 export type RecoveryInventoryConfig=Config;
 export const RecoveryCatalogCheckpoint=z.object({catalogId:z.uuid(),installationId:z.uuid(),manifestHash:z.string().regex(/^[a-f0-9]{64}$/),seq:z.number().int().nonnegative(),head:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 export type RecoveryInventoryCapability={readonly config:Readonly<Config>;lease(kind:'native'|'ssh',authority:string,identity:Record<string,unknown>,requestDigest:string):ReturnType<typeof acquireRecoveryCatalogLease>;checkpoint():Promise<z.infer<typeof RecoveryCatalogCheckpoint>>};
@@ -18,12 +18,19 @@ const attached=new WeakMap<Ledger,RecoveryInventoryCapability>();
 /** Trusted installation bootstrap supplies this capability; serialized request
  * data alone does not activate a new external authority. */
 export async function configureRecoveryInventory(ledger:Ledger,raw:Config):Promise<void>{
- const config=Config.parse(raw);
+ const config=RecoveryInventoryConfig.parse(raw);
  if(!isAbsolute(config.directory)||resolve(config.directory)!==config.directory||await realpath(config.directory)!==config.directory)throw new Refusal('CATALOG_DIRECTORY_UNSAFE');
  const row=(await ledger.pool.query('SELECT * FROM ac_recovery_inventory_policy WHERE singleton')).rows[0];
  if(!row?.required||row.source_installation_id!==config.installationId||row.catalog_id!==config.catalogId||row.manifest_hash!==config.manifestHash)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
  const frozen=Object.freeze({...config});
  attached.set(ledger,{config:frozen,lease:(kind,authority,identity,requestDigest)=>acquireRecoveryCatalogLease({...frozen,kind,authority,identity,requestDigest,operation:randomUUID()}),checkpoint:()=>catalogCheckpoint(frozen)});
+}
+/** Validate the physical catalog and epoch before the serving bootstrap attaches it. */
+export async function inspectRecoveryInventory(raw:Config){
+ const config=RecoveryInventoryConfig.parse(raw);
+ const inspected=z.object({epoch:z.number().int().positive(),manifest:z.object({schemaVersion:z.literal(1),catalogId:z.uuid(),installationId:z.uuid(),directoryDevice:z.number(),directoryInode:z.number(),authorities:z.array(z.object({kind:z.enum(['native','ssh']),id:z.string().min(1),identity:z.record(z.string(),z.unknown())}).strict()).min(1)}).strict()}).strict().parse(await runCatalog('catalog_inspect.py',config));
+ const authorities=inspected.manifest.authorities;
+ if(inspected.epoch!==config.epoch||inspected.manifest.catalogId!==config.catalogId||inspected.manifest.installationId!==config.installationId||new Set(authorities.map(a=>a.kind+'\0'+a.id)).size!==authorities.length)throw new Refusal('CATALOG_IDENTITY_MISMATCH');
 }
 async function catalogCheckpoint(config:Readonly<Config>){
  const value=await runCatalog('catalog_checkpoint.py',{directory:config.directory,installationId:config.installationId,catalogId:config.catalogId,manifestHash:config.manifestHash});
@@ -41,13 +48,13 @@ async function runCatalog(helper:string,request:object){
  try{return JSON.parse(output) as unknown;}catch{throw new Refusal('CATALOG_UNCERTAIN');}
 }
 export async function readRecoveryManifest(config:RecoveryInventoryConfig,checkpoint:z.infer<typeof RecoveryCatalogCheckpoint>){
- const parsed=Config.parse(config);RecoveryCatalogCheckpoint.parse(checkpoint);
+ const parsed=RecoveryInventoryConfig.parse(config);RecoveryCatalogCheckpoint.parse(checkpoint);
  return runCatalog('catalog_manifest.py',{directory:parsed.directory,installationId:parsed.installationId,catalogId:parsed.catalogId,manifestHash:parsed.manifestHash,checkpoint});
 }
 /** Advance only after the restored installation's durable closed marker has
  * been checked. No PG row lock is held while waiting on the catalog lock. */
 export async function beginRestoredPhysicalRecovery(ledger:Ledger,raw:Config,recoveryId:string){
- const config=Config.parse(raw);z.uuid().parse(recoveryId);await configureRecoveryInventory(ledger,config);
+ const config=RecoveryInventoryConfig.parse(raw);z.uuid().parse(recoveryId);await configureRecoveryInventory(ledger,config);
  const row=await ledger.tx(async c=>{
   const state=(await c.query(`SELECT r.*,a.enabled,a.reason FROM ac_recovery_inventory_restores r CROSS JOIN ac_installation_identity i CROSS JOIN ac_admission_control a
    WHERE r.installation_id=i.id AND a.id=1 FOR UPDATE OF r`)).rows[0];

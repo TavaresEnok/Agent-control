@@ -22,6 +22,7 @@ import {remoteReturnTransport} from './remote-return-config.ts';
 import {configuredRemoteDevelopment} from './remote-development-config.ts';
 import {prepareWorkflowRuntimeRegistration,startWorkflowRuntimeRegistration} from './workflow-runtime-bootstrap.ts';
 import {Control} from './control.ts';
+import {bootstrapRecoveryInventory} from './recovery-bootstrap.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
@@ -100,6 +101,8 @@ async function main(){
   if(command==='vault-backup'||command==='vault-restore'){
    const {executeVaultBackup}=await import('./context-vault-cli.ts');console.log(JSON.stringify(await executeVaultBackup(command,config,ledger,extra[0])));return;
   }
+  // Attach the pre-provisioned recovery inventory before starting any runtime.
+  await bootstrapRecoveryInventory(ledger,config.recoveryInventory);
   // Serving does not silently migrate schemas or create projects/credentials.
   const registered=(await ledger.pool.query("SELECT 1 FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id JOIN ac_project_repositories r ON r.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2 AND m.role='owner' AND r.repo=$3",[config.project.id,config.project.owner,config.project.repo])).rowCount;
   if(!registered)throw Error('INSTALLATION_NOT_INITIALIZED');

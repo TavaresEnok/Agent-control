@@ -14,6 +14,7 @@ import {InstallationToken} from './installation-authority.ts';
 import {RemoteReturnConfig} from './remote-return-config.ts';
 import {RemoteDevelopmentConfig} from './remote-development-config.ts';
 import {WorkflowRuntimeRegistrationConfig} from './workflow-runtime-bootstrap.ts';
+import {RecoveryInventoryConfig} from './recovery-inventory.ts';
 const origin=()=>z.string().transform(value=>{
  const url=new URL(value);
  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||
@@ -29,6 +30,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
  workflowRuntime:WorkflowRuntimeRegistrationConfig.optional(),
+ recoveryInventory:RecoveryInventoryConfig.optional(),
  installationAuthority:z.object({mode:z.literal('synthetic-laboratory'),token:InstallationToken}).strict().optional(),
  remoteReturn:RemoteReturnConfig.optional(),
  remoteDevelopment:RemoteDevelopmentConfig.optional(),
