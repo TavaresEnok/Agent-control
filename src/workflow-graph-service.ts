@@ -6,7 +6,7 @@ import {Ledger} from './ledger.ts';
 import {Operators,type OperatorProof} from './operator.ts';
 import {parseWorkflowGraphCommand,WorkflowGraphName} from './workflow-graph-contract.ts';
 import {workflowGraphSchema,graphIssues,graphToSteps} from '../upstream/cezar/packages/cezar/dist/workflows/graph.js';
-import {workflowRepository,reconcileWorkflowFile,readWorkflowFile} from './workflow-graph-files.ts';
+import {workflowRepository,reconcileWorkflowFile,readWorkflowFile,legacyWorkflowNames} from './workflow-graph-files.ts';
 
 export class WorkflowGraphs{
  constructor(readonly ledger:Ledger,readonly roots:readonly {id:string;path:string}[],readonly privateDirectory:string){}
@@ -28,7 +28,8 @@ export class WorkflowGraphs{
    if(!WorkflowGraphName.safeParse(name).success)return null;
    return (await c.query('SELECT r.revision,r.snapshot,r.file_digest FROM ac_workflow_graph_heads h JOIN ac_workflow_graph_revisions r USING(project_id,name,revision) WHERE h.project_id=$1 AND h.name=$2',[projectId,name])).rows[0]??null;});
   if(!row)return {projectId,name,revision:0,workflow:null};
-  const repo=await this.repository(projectId),bytes=await readWorkflowFile(repo.repo,repo.identity,name,row.revision,row.file_digest);
+  const repo=await this.repository(projectId);if((await legacyWorkflowNames(repo.repo,repo.identity)).has(name))throw new Refusal('WORKFLOW_CATALOG_AMBIGUOUS',409);
+  const bytes=await readWorkflowFile(repo.repo,repo.identity,name,row.revision,row.file_digest);
   let document:unknown;try{document=JSON.parse(bytes.toString('utf8'));}catch{throw new Refusal('WORKFLOW_FILE_CONFLICT',409);}
   if(digest(document)!==digest({version:2,name,...(row.snapshot.description===undefined?{}:{description:row.snapshot.description}),...row.snapshot.graph}))throw new Refusal('WORKFLOW_FILE_CONFLICT',409);
   return {projectId,name,revision:row.revision,workflow:row.snapshot};
@@ -70,6 +71,8 @@ export class WorkflowGraphs{
    const prior=(await c.query('SELECT * FROM ac_workflow_graph_intents WHERE id=$1',[command.intentId])).rows[0];
    if(prior&&(prior.principal_id!==principal||prior.payload_digest!==hash))throw new Refusal('WORKFLOW_INTENT_CONFLICT',409);
    if(!prior){
+    const legacyNames=await legacyWorkflowNames(repo.repo,repo.identity);
+    if(legacyNames.has(name))throw new Refusal('SAVE_COPY_WITH_NEW_NAME',409);
     if((await c.query("SELECT 1 FROM ac_workflow_graph_intents WHERE project_id=$1 AND name=$2 AND state='pending'",[projectId,name])).rowCount)throw new Refusal('WORKFLOW_PUBLICATION_PENDING',409);
     const head=(await c.query('SELECT r.revision,r.file_digest FROM ac_workflow_graph_heads h JOIN ac_workflow_graph_revisions r USING(project_id,name,revision) WHERE h.project_id=$1 AND h.name=$2',[projectId,name])).rows[0];
     if((head?.revision??0)!==expectedRevision)throw new Refusal('WORKFLOW_REVISION_CONFLICT',409);
@@ -86,7 +89,9 @@ export class WorkflowGraphs{
    const item=(await c.query('SELECT * FROM ac_workflow_graph_intents WHERE id=$1 FOR UPDATE',[command.intentId])).rows[0];
    if(item.state==='applied')return item.result;
    if(digest(repo.identity)!==digest(item.repository_identity))throw new Refusal('WORKFLOW_REPOSITORY_CHANGED',409);
+   if((await legacyWorkflowNames(repo.repo,repo.identity)).has(name))throw new Refusal('WORKFLOW_CATALOG_AMBIGUOUS',409);
    await reconcileWorkflowFile(repo.repo,item.repository_identity,name,expectedRevision+1,item.desired_digest,item.desired_bytes);
+   if((await legacyWorkflowNames(repo.repo,repo.identity)).has(name))throw new Refusal('WORKFLOW_CATALOG_AMBIGUOUS',409);
    const revision=expectedRevision+1,result={state:'applied',projectId,name,revision,path:`.ai/cezar/workflows/.managed/${name}/${revision}-${item.desired_digest}.yaml`};
    await c.query('INSERT INTO ac_workflow_graph_revisions(project_id,name,revision,snapshot,file_digest,published_by) VALUES($1,$2,$3,$4,$5,$6)',[projectId,name,revision,JSON.stringify(item.snapshot),item.desired_digest,principal]);
    await c.query('INSERT INTO ac_workflow_graph_heads VALUES($1,$2,$3) ON CONFLICT(project_id,name) DO UPDATE SET revision=excluded.revision',[projectId,name,revision]);

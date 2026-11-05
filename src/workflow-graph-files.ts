@@ -1,9 +1,13 @@
 import {constants} from 'node:fs';
-import {open,link,unlink,mkdir,type FileHandle} from 'node:fs/promises';
+import {open,link,unlink,mkdir,readdir,type FileHandle} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import {relative,resolve,sep} from 'node:path';
 import {Refusal,digest} from './contracts.ts';
 import {projectRepositoryIdentity,validateTrustedProjectPath} from './project-repository.ts';
+import {createRequire} from 'node:module';
+import {QUICK_TASK_WORKFLOW} from '../upstream/cezar/packages/cezar/dist/workflows/types.js';
+import {BUILT_IN_GRAPH_WORKFLOWS} from '../upstream/cezar/packages/cezar/dist/workflows/templates.js';
+const parseYaml=(createRequire(new URL('../upstream/cezar/packages/cezar/dist/workflows/load.js',import.meta.url))('yaml') as {parse:(value:string)=>unknown}).parse;
 
 const hash=(value:Buffer)=>createHash('sha256').update(value).digest('hex');
 const nofollow=constants.O_NOFOLLOW;
@@ -29,6 +33,29 @@ async function withDirectory<T>(repo:string,identity:unknown,name:string,create:
   return await fn(dir);
  }catch(e){if(e instanceof Refusal)throw e;throw new Refusal('WORKFLOW_FILESYSTEM_UNAVAILABLE',409);}
  finally{for(const h of handles.reverse())await h.close().catch(()=>{});}
+}
+/** Inspect only bounded regular legacy leaves before invoking the native parser. */
+export async function legacyWorkflowNames(repo:string,identity:unknown){
+ const handles:FileHandle[]=[];
+ try{
+  if(digest(await projectRepositoryIdentity(repo))!==digest(identity))throw Error('identity');
+  let dir=await open(repo,constants.O_RDONLY|constants.O_DIRECTORY|nofollow);handles.push(dir);
+  for(const part of ['.ai','cezar','workflows']){
+   try{dir=await open(`/proc/self/fd/${dir.fd}/${part}`,constants.O_RDONLY|constants.O_DIRECTORY|nofollow);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return new Set([QUICK_TASK_WORKFLOW,...BUILT_IN_GRAPH_WORKFLOWS].map(w=>w.name));throw e;}
+   handles.push(dir);const stat=await dir.stat();if(stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0)throw Error('unsafe directory');
+  }
+  const base=`/proc/self/fd/${dir.fd}`,entries=await readdir(base);if(entries.length>1024)throw Error('too many files');
+  const names=new Set([QUICK_TASK_WORKFLOW,...BUILT_IN_GRAPH_WORKFLOWS].map(w=>w.name));
+  for(const entry of entries){if(!/\.(?:yaml|yml)$/i.test(entry))continue;
+   const file=await open(`${base}/${entry}`,constants.O_RDONLY|nofollow|constants.O_NONBLOCK);
+   try{const stat=await file.stat();if(!stat.isFile()||stat.uid!==process.getuid?.()||(stat.mode&0o022)!==0||stat.size>256*1024)throw Error('unsafe legacy file');
+    const bytes=await file.readFile();if(bytes.length>256*1024)throw Error('unsafe legacy file');
+    const parsed=parseYaml(bytes.toString('utf8'));if(parsed&&typeof parsed==='object'&&'name' in parsed&&typeof parsed.name==='string')names.add(parsed.name);
+   }finally{await file.close();}names.add(entry.replace(/\.(?:yaml|yml)$/i,''));
+  }
+  return names;
+ }catch(e){if(e instanceof Refusal)throw e;throw new Refusal('WORKFLOW_LEGACY_CATALOG_UNAVAILABLE',409);}
+ finally{for(const handle of handles.reverse())await handle.close().catch(()=>{});}
 }
 const leaf=(dir:FileHandle,revision:number,fileDigest:string)=>`/proc/self/fd/${dir.fd}/${revision}-${fileDigest}.yaml`;
 async function readLeaf(path:string){

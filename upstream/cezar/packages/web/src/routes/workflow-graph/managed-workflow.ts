@@ -43,9 +43,9 @@ async function sendPending(projectId:string,payload?:Payload){
  if(!response.ok){
   const parsed=z.object({error:z.string()}).safeParse(result),code=parsed.success?parsed.data.error:`HTTP_${response.status}`
   // These first-attempt refusals happen before journal insertion; earlier uncertain attempts stay recoverable.
-  const refusedBeforeJournal=['WORKFLOW_REVISION_CONFLICT','INVALID_CONTRACT','WORKFLOW_GRAPH_INVALID','WORKFLOW_GRAPH_TOO_LARGE','HUMAN_CONTROL_AUTH_REQUIRED','WORKFLOW_REPOSITORY_REQUIRED','WORKFLOW_REPOSITORY_FORBIDDEN','WORKFLOW_REPOSITORY_UNAVAILABLE'].includes(code)||[413,415].includes(response.status)
+  const refusedBeforeJournal=['WORKFLOW_REVISION_CONFLICT','SAVE_COPY_WITH_NEW_NAME','INVALID_CONTRACT','WORKFLOW_GRAPH_INVALID','WORKFLOW_GRAPH_TOO_LARGE','HUMAN_CONTROL_AUTH_REQUIRED','WORKFLOW_REPOSITORY_REQUIRED','WORKFLOW_REPOSITORY_FORBIDDEN','WORKFLOW_REPOSITORY_UNAVAILABLE'].includes(code)||[413,415].includes(response.status)
   if(!record.uncertain&&refusedBeforeJournal)sessionStorage.removeItem(key)
-  throw Error(code==='WORKFLOW_REVISION_CONFLICT'&&!record.uncertain?'A revisão mudou. Recarregue o fluxo antes de salvar.':code)
+  throw Error(code==='WORKFLOW_REVISION_CONFLICT'&&!record.uncertain?'A revisão mudou. Recarregue o fluxo antes de salvar.':code==='SAVE_COPY_WITH_NEW_NAME'?'Escolha outro nome para salvar uma cópia.':code)
  }
  const parsed=z.object({state:z.literal('applied'),projectId:z.string().uuid(),name:z.string(),revision:z.number().int(),path:z.string()}).safeParse(result)
  if(!parsed.success||parsed.data.projectId!==projectId||parsed.data.name!==record.payload.name||parsed.data.revision!==record.payload.expectedRevision+1)throw Error('COMMAND_RESPONSE_MISMATCH')

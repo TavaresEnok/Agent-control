@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync,sign} from 'node:crypto';
-import {mkdtemp,mkdir,readFile,writeFile,rm,chmod} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,rm,chmod,symlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {Ledger} from '../src/ledger.ts';
@@ -34,7 +34,26 @@ test('signed graph saves and replays immutable revisions',async()=>{
   assert.equal(catalog.status,200);assert.equal((await catalog.json()).workflows[0].definition.name,'test');
   const replay={...cmd,deliveryAttemptId:randomUUID()};assert.deepEqual(await service.save(principal,replay,proof(replay)),result);
   assert.equal((await service.view(principal,projectId,'test')).revision,1);
+  await writeFile(join(repo,'.ai/cezar/workflows/test.yaml'),'name: test\nsteps:\n  - id: work\n    prompt: legacy\n',{mode:0o600});
+  await assert.rejects(service.view(principal,projectId,'test'),/WORKFLOW_CATALOG_AMBIGUOUS/);
+  await assert.rejects(service.list(principal,projectId),/WORKFLOW_CATALOG_AMBIGUOUS/);
+  assert.deepEqual(await service.save(principal,replay,proof(replay)),result);
+  await rm(join(repo,'.ai/cezar/workflows/test.yaml'));
+
   assert.equal(JSON.parse(await readFile(join(repo,result.path),'utf8')).version,2);
+  const builtin={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name:'quick-task'}};
+  await assert.rejects(service.save(principal,builtin,proof(builtin)),/SAVE_COPY_WITH_NEW_NAME/);
+  await writeFile(join(repo,'.ai/cezar/workflows/legacy-file.yaml'),'name: legacy-name\nsteps:\n  - id: work\n    prompt: test\n',{mode:0o600});
+  for(const name of ['legacy-file','legacy-name']){
+   const legacy={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name}};
+   await assert.rejects(service.save(principal,legacy,proof(legacy)),/SAVE_COPY_WITH_NEW_NAME/);
+   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_workflow_graph_intents WHERE id=$1',[legacy.intentId])).rows[0].n,0);
+  }
+  const secret=join(root,'secret');await writeFile(secret,'do not read',{mode:0o600});
+  const link=join(repo,'.ai/cezar/workflows/foreign.yaml');await symlink(secret,link);
+  const unsafe={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name:'safe'}};
+  await assert.rejects(service.save(principal,unsafe,proof(unsafe)),/WORKFLOW_LEGACY_CATALOG_UNAVAILABLE/);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_workflow_graph_intents WHERE id=$1',[unsafe.intentId])).rows[0].n,0);await rm(link);
   const stale={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
   await assert.rejects(service.save(principal,stale,proof(stale)),/WORKFLOW_REVISION_CONFLICT/);
   const pending={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name:'pending'}};
