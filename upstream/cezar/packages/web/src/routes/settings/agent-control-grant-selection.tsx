@@ -7,5 +7,5 @@ export function AgentControlGrantSelection({selection,accountId,profileId,accoun
  if(!selection||selection.accountId!==accountId||selection.profileId!==profileId)return <p>Detalhes da seleção não disponíveis para esta concessão.</p>
  const account=accounts.find(a=>a.id===selection.accountId),profile=profiles.find(p=>p.id===selection.profileId&&p.account_id===selection.accountId)
  return <div className="mt-2 text-sm"><p><strong>Perfil selecionado:</strong> {account&&profile?`${account.label} · ${profile.model} · ${profile.effort} · ${profile.role}`:'Detalhes do perfil indisponíveis'}</p>
-  <p>Política de capacidade: revisão {selection.policyRevision} · configuração: revisão {selection.configRevision}</p><p>Cadeia {selection.chain==='regular'?'regular':'emergencial'} · posição {selection.position}</p><p>Motivo: {reasons[selection.reason]}</p></div>
+  <p>Política de capacidade: revisão {selection.policyRevision} · configuração: revisão {selection.configRevision}</p><p>Cadeia {selection.chain==='regular'?'regular':'emergencial'} · posição {selection.position} na ordem efetiva total</p><p>Motivo: {reasons[selection.reason]}</p></div>
 }

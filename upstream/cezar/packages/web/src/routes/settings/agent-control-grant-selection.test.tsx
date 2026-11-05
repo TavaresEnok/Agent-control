@@ -6,7 +6,7 @@ const base={accountId,profileId,policyRevision:3,configRevision:2,chain:'regular
 afterEach(cleanup)
 it('explains the selected authorized profile, revisions and fallback',()=>{
  render(<AgentControlGrantSelection selection={grantSelectionSchema.parse(base)} accountId={accountId} profileId={profileId} accounts={[{id:accountId,label:'Conta visível'}]} profiles={[{id:profileId,account_id:accountId,model:'modelo',effort:'medium',role:'programmer'}]}/>)
- expect(screen.getByText(/Conta visível · modelo · medium/)).toBeTruthy();expect(screen.getByText(/revisão 3.*revisão 2/)).toBeTruthy();expect(screen.getByText(/Perfil alternativo escolhido/)).toBeTruthy()
+ expect(screen.getByText(/Conta visível · modelo · medium/)).toBeTruthy();expect(screen.getByText(/revisão 3.*revisão 2/)).toBeTruthy();expect(screen.getByText(/Perfil alternativo escolhido/)).toBeTruthy();expect(screen.getByText(/posição 2 na ordem efetiva total/)).toBeTruthy()
 })
 it('does not disclose unknown identities and tolerates malformed selection',()=>{
  expect(grantSelectionSchema.parse({...base,reason:'unknown'})).toBeNull()
