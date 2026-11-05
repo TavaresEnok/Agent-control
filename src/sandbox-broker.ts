@@ -77,6 +77,10 @@ export class DockerDaemon{
   if(r.status!==201)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
   return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(r.body.toString('utf8'))).Id;
  }
+ async removePrivateNetwork(id:string){
+  if(!/^[a-f0-9]{64}$/.test(id))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('DELETE',`/v1.44/networks/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+ }
  async inspectPrivateNetwork(id:string):Promise<Record<string,any>|null>{
   if(!/^[a-f0-9]{64}$/.test(id))throw new Refusal('DOCKER_NETWORK_INVALID');
   const r=await this.call('GET',`/v1.44/networks/${id}`);if(r.status===404)return null;

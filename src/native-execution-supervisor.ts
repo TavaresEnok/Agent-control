@@ -36,6 +36,24 @@ const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max
 export {nativeExecutionExecutorDigest};
 const toolsEntrypoint=['node','/opt/agent-control/dist/src/native-tools-worker.mjs'];
 const workerEntrypoint=['node','/opt/agent-control/dist/src/native-execution-worker.mjs'];
+/** Remove only the private network identified by the signed terminal receipt.
+ * Caller must hold the fenced job lock and have confirmed both containers absent. */
+export async function retireNativePrivateNetwork(docker:Pick<DockerDaemon,'inspectPrivateNetwork'|'removePrivateNetwork'>,
+ identity:{networkId:string;providerNetworkId:string;jobId:string;inputDigest:string}){
+ const {networkId,providerNetworkId,jobId,inputDigest}=identity;
+ if(!/^[a-f0-9]{64}$/.test(networkId)||networkId===providerNetworkId||!Id.safeParse(jobId).success||!Hash.safeParse(inputDigest).success)
+  throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
+ const network=await docker.inspectPrivateNetwork(networkId);
+ if(network){
+  const labels=network.Labels,containers=network.Containers;
+  if(network.Id!==networkId||network.Name!=='ac-native-exec-'+jobId||network.Internal!==true||
+   !labels||labels['agent-control.contract']!=='native-execution-v1'||labels['agent-control.job']!==jobId||labels['agent-control.launch']!==inputDigest||
+   !containers||typeof containers!=='object'||Array.isArray(containers)||Object.keys(containers).length!==0)
+   throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
+  await docker.removePrivateNetwork(networkId);
+ }
+ if(await docker.inspectPrivateNetwork(networkId))throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
+}
 /** Effect supervisor only. A trusted Cezar stage must already own the grant,
  * frozen source and policy. No scheduler, inference on construction, fallback,
  * approval or Git integration occurs here. Production bootstrap does not construct
@@ -240,7 +258,8 @@ export class NativeExecutionSupervisor{
     !physical||physical.exitCode!==payload.exitCode||physical.workerExitCode!==payload.workerExitCode||payload.physicalDigest!==digest(physical)||
     !row.operation_receipt?.nativeExecution||digest(row.operation_receipt.nativeExecution)!==digest(receipt)||
     !/^[a-f0-9]{64}$/.test(String(row.worker_id??''))||!/^[a-f0-9]{64}$/.test(String(row.tools_id??''))||row.worker_id===row.tools_id||
-    physical.containerId!==row.worker_id||physical.toolsContainerId!==row.tools_id||
+    physical.containerId!==row.worker_id||physical.toolsContainerId!==row.tools_id||physical.networkId!==row.network_id||
+    !/^[a-f0-9]{64}$/.test(String(row.network_id??''))||row.network_id===this.config.providerNetworkId||
     (row.operation_receipt.cancellation===true?!row.cancellation_requested:
      (row.operation_receipt.exitCode!==payload.exitCode||(row.state==='completed'&&(!payload.artifact||
       row.operation_receipt.commit!==payload.artifact.commit||row.operation_receipt.tree!==payload.artifact.tree||row.operation_receipt.base!==payload.artifact.base||payload.artifact.base!==input.base))))||
@@ -269,6 +288,8 @@ export class NativeExecutionSupervisor{
     Number(saved.writer_epoch)!==Number(row.writer_epoch)||saved.worker_id!==row.worker_id||saved.tools_id!==row.tools_id||saved.terminal_digest!==digest(row.receipt)||
     await readLog(logs[0]!)!==saved.worker_log_sha256||await readLog(logs[1]!)!==saved.tools_log_sha256)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   };
+  const removeNetwork=async(row:Record<string,any>)=>retireNativePrivateNetwork(this.docker,{networkId:row.network_id,
+   providerNetworkId:this.config.providerNetworkId,jobId,inputDigest:row.input_digest});
   const revoked=async(row:Record<string,any>,saved:Record<string,any>|undefined)=>{
    await checked(row,saved);const proof=saved!.proof;
    if(saved!.state!=='revoked'||row.revocation_job_id!==jobId||!proof?.payload||digest(proof.payload)!==digest(payloadFor(row,saved!))||
@@ -277,6 +298,7 @@ export class NativeExecutionSupervisor{
     digest(proof)!==row.proof_digest||digest(proof)!==digest(row.revocation_proof))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    if(await this.docker.inspect(saved!.worker_id)||await this.docker.inspect(saved!.tools_id)||
     await this.docker.inspect('ac-native-worker-'+jobId)||await this.docker.inspect('ac-native-tools-'+jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   await removeNetwork(row);
   };
   const prepared=await this.ledger.tx(async c=>{
    const row=await locked(c),saved=(await c.query('SELECT * FROM ac_native_writer_retirements WHERE job_id=$1 FOR UPDATE',[jobId])).rows[0];
@@ -299,6 +321,7 @@ export class NativeExecutionSupervisor{
    for(const container of observed)if(container)await this.docker.remove(container.Id);
    if(await this.docker.inspect(saved.worker_id)||await this.docker.inspect(saved.tools_id)||
     await this.docker.inspect('ac-native-worker-'+jobId)||await this.docker.inspect('ac-native-tools-'+jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   await removeNetwork(row);
    const payload=payloadFor(row,saved),proof={payload,signature:sign(null,Buffer.from('agent-control:native-writer-retirement:v1\n'+canonical(payload)),this.key).toString('hex')};
    await c.query("UPDATE ac_native_writer_retirements SET state='revoked',proof=$2 WHERE job_id=$1 AND state='prepared'",[jobId,proof]);
    const changed=await c.query(`UPDATE ac_worktree_writers SET state='neutralized',proof_digest=$5,revocation_job_id=$6,revocation_proof=$7

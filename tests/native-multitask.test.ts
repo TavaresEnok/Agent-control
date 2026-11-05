@@ -148,9 +148,10 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
    await writeFile(marker,JSON.stringify({url:fixture.url,principal,context,authority,supervisorConfig}),{mode:0o600,flag:'wx'});
   }
   const physical=new Map<string,{Id:string;Image:string;Config:{Labels:Record<string,string>};State:{Status:string;Running:boolean;ExitCode:number;FinishedAt:string}}>();
+  const networks=new Map<string,Record<string,unknown>>();
   let lostRetirementAck=false;
   const physicalDocker=physicalMode?new DockerDaemon():undefined;
-  if(!physicalMode)Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
+  if(!physicalMode)Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async(id:string)=>networks.get(id)??null,removePrivateNetwork:async(id:string)=>{networks.delete(id);},stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
    remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);
     if(process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1'&&!lostRetirementAck){lostRetirementAck=true;throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}}}});
   if(physicalMode&&process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1'){
@@ -193,13 +194,15 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
     const labels={'agent-control.job':input.jobId,'agent-control.launch':inputDigest,'agent-control.contract':'native-execution-v1','agent-control.fixture':'native-retirement'};
     const config={Image:modelImage,User:'10001:10001',Entrypoint:['node','-e',cancelFixture?"process.stdout.write('synthetic running\\n');setInterval(()=>{},1000)":failFixture?"process.stderr.write('synthetic failure\\n');process.exit(7)":"process.stdout.write('synthetic native fixture\\n')"],Labels:labels,
      HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:64,Memory:268435456,NanoCpus:1000000000,Init:true}};
+    const networkId=physicalDocker?'d'.repeat(64):createHash('sha256').update(input.jobId+'network').digest('hex');
+    if(!physicalDocker)networks.set(networkId,{Id:networkId,Name:'ac-native-exec-'+input.jobId,Internal:true,Labels:labels,Containers:{}});
     const workerId=physicalDocker?await physicalDocker.create('ac-native-worker-'+input.jobId,config):createHash('sha256').update(input.jobId+'worker').digest('hex');
     const toolsConfig=writeFixture?{...config,User:'1000:1000',Entrypoint:['node','-e',`require('fs').writeFileSync(${JSON.stringify('/work/'+path)},${JSON.stringify(path+'\n')});process.stdout.write('fixture wrote worktree\\n');${cancelFixture?'setInterval(()=>{},1000)':''}`],
      HostConfig:{...config.HostConfig,Binds:[join(hostRoot!,area.slice(physicalRoot!.length+1),'native',input.jobId,'work')+':/work:rw']}}:config;
     const toolsId=physicalDocker?await physicalDocker.create('ac-native-tools-'+input.jobId,toolsConfig):createHash('sha256').update(input.jobId+'tools').digest('hex');
     await db.tx(async c=>{await db.authorize(c,principal,a.contextId);await db.fence(c,a);
      await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,$14,'running',$15,$16,$17)`,[input.jobId,input.grantId,input.intentId,a.contextId,a.epoch,input.sessionId,g.account_id,g.profile_id,digest({accountId:g.account_id,profileId:g.profile_id,model:g.model,effort:g.effort,role:g.role}),supervisor.executorDigest,supervisor.keyFingerprint,inputDigest,input.base,input.role,workerId,toolsId,'d'.repeat(64)]);
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,$14,'running',$15,$16,$17)`,[input.jobId,input.grantId,input.intentId,a.contextId,a.epoch,input.sessionId,g.account_id,g.profile_id,digest({accountId:g.account_id,profileId:g.profile_id,model:g.model,effort:g.effort,role:g.role}),supervisor.executorDigest,supervisor.keyFingerprint,inputDigest,input.base,input.role,workerId,toolsId,networkId]);
      await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[input.grantId]);
      if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
      else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
@@ -311,6 +314,7 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
    for(const [name,hash] of [['worker-terminal.log',proof.payload.workerLogSha256],['tools-terminal.log',proof.payload.toolsLogSha256]] as const)
     assert.equal(createHash('sha256').update(await readFile(join(spool,proof.payload.jobId,name))).digest('hex'),hash);
    assert.equal((await supervisor.retireManagedWriter(principal,authority,proof.payload.jobId)).state,'neutralized');
+   if(!physicalDocker){const row=(await db.pool.query('SELECT network_id FROM ac_native_execution_jobs WHERE id=$1',[proof.payload.jobId])).rows[0];assert.equal(networks.has(row.network_id),false);}
    if(physicalDocker){assert.equal(await physicalDocker.inspect(proof.payload.workerId),null);assert.equal(await physicalDocker.inspect(proof.payload.toolsId),null);}
    assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='worktree.native_writer_revoked' AND detail->>'jobId'=$1",[proof.payload.jobId])).rows[0].n,1);
   }
