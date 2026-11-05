@@ -650,7 +650,7 @@ function WorkflowGraphEditor() {
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null
   const cursorNode = sim?.cursor ? graph.nodes.find((n) => n.id === sim.cursor) : undefined
   const unwired = unwiredPorts(graph)
-  const canSave = !!projectId && !managed.isError && name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
+  const canSave = !!projectId && (!routeName || (!managed.isPending && !managed.isError && loadedFor.current === routeName)) && name.trim().length > 0 && issues.length === 0 && !validating && !save.isPending
   // Re-saving the file this canvas was opened from overwrites silently; the confirm is only for
   // a name that collides with ANOTHER file (or a built-in-shadowing new one).
   const opened = routeName ? workflows.data?.workflows.find((w) => w.name === routeName) : undefined

@@ -19,6 +19,7 @@ export function createWorkflowGraphApi(service:WorkflowGraphs,options:{bodyTimeo
  app.get('/api/v1/ac/workflow-graphs',async c=>c.json(await service.view(c.env.principal,Id.parse(c.req.query('projectId')),c.req.query('name')??'')));
  app.post('/api/v1/ac/workflow-graphs/validate',async c=>{
   if(!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(c.req.header('content-type')??''))return c.json({error:'UNSUPPORTED_MEDIA_TYPE'},415);
+  if(!/^(?:identity)?$/i.test(c.req.header('content-encoding')??''))return c.json({error:'UNSUPPORTED_CONTENT_ENCODING'},415);
   const body=z.object({projectId:Id,graph:z.unknown()}).strict().parse(await readBoundedJson(c.req.raw,options.bodyTimeoutMs??10000));
   return c.json(await service.validate(c.env.principal,body.projectId,body.graph));
  });

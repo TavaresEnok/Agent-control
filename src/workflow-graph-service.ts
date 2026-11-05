@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {relative} from 'node:path';
 import type pg from 'pg';
 import {Id,Refusal,digest} from './contracts.ts';
 import {Ledger} from './ledger.ts';
@@ -34,9 +35,11 @@ export class WorkflowGraphs{
   const desiredDigest=createHash('sha256').update(bytes).digest('hex');
   const authenticate=async(c:pg.PoolClient)=>{await this.authorize(c,principal,projectId);await new Operators(this.ledger).verify(c,principal,raw as Record<string,unknown>,proof);};
   await this.ledger.tx(authenticate);
-  const registered=(await this.ledger.pool.query('SELECT repo FROM ac_project_repositories WHERE project_id=$1',[projectId])).rows[0];
+  const registered=(await this.ledger.pool.query('SELECT r.repo,i.repo_dev,i.repo_ino,i.git_dev,i.git_ino,i.root_id,i.root_path,i.relative_path FROM ac_project_repositories r JOIN ac_project_repository_identity i USING(project_id) WHERE r.project_id=$1',[projectId])).rows[0];
   if(!registered)throw new Refusal('WORKFLOW_REPOSITORY_REQUIRED',409);
   const repo=await workflowRepository(registered.repo,this.roots,this.privateDirectory);
+  if(repo.root.id!==registered.root_id||repo.root.path!==registered.root_path||relative(repo.root.path,repo.repo)!==registered.relative_path||
+   digest(repo.identity)!==digest({repoDev:registered.repo_dev,repoIno:registered.repo_ino,gitDev:registered.git_dev,gitIno:registered.git_ino}))throw new Refusal('WORKFLOW_REPOSITORY_CHANGED',409);
   const lock=async(c:pg.PoolClient)=>{await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE',[projectId]);await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,88))',[command.intentId]);};
   await this.ledger.tx(async c=>{
    await authenticate(c);await lock(c);
@@ -49,6 +52,7 @@ export class WorkflowGraphs{
     await c.query(`INSERT INTO ac_workflow_graph_intents(id,principal_id,payload_digest,project_id,name,expected_revision,snapshot,repository_identity,old_digest,desired_digest,desired_bytes,state)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending')`,[command.intentId,principal,hash,projectId,name,expectedRevision,JSON.stringify({name,description,graph}),JSON.stringify(repo.identity),head?.file_digest??null,desiredDigest,bytes]);
    }
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,89))',[deliveryAttemptId]);
    const delivery=(await c.query('SELECT intent_id FROM ac_workflow_graph_deliveries WHERE id=$1',[deliveryAttemptId])).rows[0];
    if(delivery&&delivery.intent_id!==command.intentId)throw new Refusal('WORKFLOW_DELIVERY_CONFLICT',409);
    if(!delivery)await c.query('INSERT INTO ac_workflow_graph_deliveries VALUES($1,$2)',[deliveryAttemptId,command.intentId]);
