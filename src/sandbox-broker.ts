@@ -34,6 +34,14 @@ function confirmedTerminal(job:Record<string,any>,grant:Record<string,any>,reque
     digest(job.receipt)!==digest(grant.physical_receipt))throw new Refusal('SANDBOX_RECEIPT_UNCONFIRMED');
  return job.receipt;
 }
+/** A successful result may only be discarded after a durable terminal decision.
+ * Failed processes need no artifact application, but cannot contradict a completed operation. */
+export function managedRetirementTerminalAllowed(row:{state:string;operation_state:string;intent_state:string;parent_state:string;receipt:any;operation_receipt:any}){
+ if(row.state==='failed')return row.operation_state!=='completed'&&Number.isInteger(row.receipt?.exitCode)&&row.receipt.exitCode!==0;
+ if(row.state!=='completed'||row.receipt?.exitCode!==0)return false;
+ if(row.operation_state==='completed')return Boolean(row.receipt?.implementation)&&digest(row.operation_receipt)===digest(row.receipt.implementation);
+ return ['failed','canceled'].includes(row.intent_state)||['failed','canceled'].includes(row.parent_state);
+}
 export type SandboxExecution={profile:'synthetic-implementation-v1';source:NonNullable<SandboxRequest['source']>}|
  {profile:'synthetic-verification-v1';source:NonNullable<SandboxRequest['source']>;verification:NonNullable<SandboxRequest['verification']>}|
  {profile:'synthetic-specialist-v1';source:NonNullable<SandboxRequest['source']>;advice:NonNullable<SandboxRequest['advice']>};
@@ -554,7 +562,8 @@ export class SandboxBroker{
   };
   const locked=async(c:pg.PoolClient)=>{
    await this.ledger.fence(c,value.authority,true);
-   const row=(await c.query(`SELECT i.id intent_id,i.context_id intent_context,i.parent_intent_id,i.run_id,o.state operation_state,o.receipt operation_receipt,
+   const row=(await c.query(`SELECT i.id intent_id,i.context_id intent_context,i.parent_intent_id,i.run_id,i.state intent_state,
+    (SELECT state FROM ac_intents WHERE id=i.parent_intent_id) parent_state,o.state operation_state,o.receipt operation_receipt,
     o.grant_id operation_grant,o.execution_attempt_id,o.manager_epoch operation_epoch,
     j.id,j.context_id,j.grant_id,j.manager_epoch,j.state,j.container_id,j.receipt,j.profile,j.spec_digest,
     g.state grant_state,g.physical_receipt,g.intent_id grant_intent,g.context_id grant_context,g.manager_epoch grant_epoch,g.role grant_role,g.attempt_id grant_attempt,
@@ -565,10 +574,10 @@ export class SandboxBroker{
    if(!row||row.profile!=='synthetic-implementation-v1'||row.spec_digest!==spec||row.holder_intent_id!==row.intent_id||
     Number(row.writer_epoch)!==Number(row.manager_epoch)||Number(row.grant_epoch)!==Number(row.manager_epoch)||Number(row.operation_epoch)>value.authority.epoch||
     row.intent_context!==value.authority.contextId||row.operation_grant!==row.grant_id||row.execution_attempt_id!==row.grant_attempt||row.grant_intent!==row.intent_id||
-    row.grant_context!==value.authority.contextId||row.grant_role!=='programmer'||Number(row.manager_epoch)>value.authority.epoch||row.operation_state!=='completed'||
-    row.grant_state!=='released'||row.state!=='completed'||!row.receipt?.implementation||digest(row.operation_receipt)!==digest(row.receipt.implementation)||
+    row.grant_context!==value.authority.contextId||row.grant_role!=='programmer'||Number(row.manager_epoch)>value.authority.epoch||
+    row.grant_state!=='released'||!managedRetirementTerminalAllowed(row)||
     digest(row.receipt)!==digest(row.physical_receipt)||row.receipt.jobId!==value.jobId||row.receipt.containerId!==row.container_id||
-    row.receipt.exitCode!==0||!Number.isFinite(Date.parse(row.receipt.finishedAt))||row.receipt.finishedAt.startsWith('0001-'))
+    (row.state==='completed')!==(row.receipt.exitCode===0)||!Number.isFinite(Date.parse(row.receipt.finishedAt))||row.receipt.finishedAt.startsWith('0001-'))
     throw new Refusal('SANDBOX_RETIREMENT_UNCONFIRMED');
    return row;
   };

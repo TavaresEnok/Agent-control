@@ -147,6 +147,7 @@ export class IsolatedImplementation{
      await new Promise(resolve=>setTimeout(resolve,250));
     }
     if(!receipt)throw new Refusal('SANDBOX_RESULT_UNCERTAIN');
+    if(unit&&receipt.exitCode!==0){await this.cleanup(intent.operation_id,grantId,authority,execution);throw new Refusal('SANDBOX_IMPLEMENTATION_FAILED');}
     const committed=await this.apply(principal,intent,authority,spec.cwd,receipt,execution,Boolean(unit));
     await this.cleanup(intent.operation_id,grantId,authority,execution);
     const text=`Isolated synthetic implementation completed: ${committed.commit}`;
@@ -162,7 +163,7 @@ export class IsolatedImplementation{
   if(!bound||digest(bound.unit)!==digest(unit)||unit.kind!=='task')throw new Refusal('MANAGED_UNIT_MISMATCH');
   const initial=await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority,true);
-   const row=(await c.query(`SELECT i.principal_id,o.state,o.manager_epoch,o.grant_id,l.snapshot,l.digest,l.context_id launch_context,l.manager_epoch launch_epoch
+   const row=(await c.query(`SELECT i.principal_id,i.state intent_state,(SELECT state FROM ac_intents WHERE id=i.parent_intent_id) parent_state,o.state,o.manager_epoch,o.grant_id,l.snapshot,l.digest,l.context_id launch_context,l.manager_epoch launch_epoch
     FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id LEFT JOIN ac_execution_launches l ON l.operation_id=o.id
     WHERE i.id=$1 AND i.context_id=$2 AND i.run_id=$3 AND o.id=$4 FOR UPDATE OF o`,[intent.id,authority.contextId,intent.run_id,intent.operation_id])).rows[0];
    if(!row)throw new Refusal('MANAGED_RECEIPT_MISMATCH');await this.ledger.authorize(c,row.principal_id,authority.contextId);
@@ -195,7 +196,11 @@ export class IsolatedImplementation{
    return row;
   });
   if(!terminal)return 'uncertain';
-  if(receipt.exitCode!==0){if(terminal.state==='completed')throw new Refusal('MANAGED_RECEIPT_MISMATCH');return 'failed';}
+  if(receipt.exitCode!==0){if(terminal.state==='completed')throw new Refusal('MANAGED_RECEIPT_MISMATCH');
+   await this.cleanup(intent.operation_id,initial.grant_id,authority,launch);return 'failed';}
+  if(terminal.state!=='completed'&&(['failed','canceled'].includes(initial.intent_state)||['failed','canceled'].includes(initial.parent_state))){
+   await this.cleanup(intent.operation_id,initial.grant_id,authority,launch);return 'failed';
+  }
   if(!receipt.implementation||!receipt.bundle||receipt.implementation.operationId!==intent.operation_id||receipt.implementation.base!==input.base)
    throw new Refusal('MANAGED_RECEIPT_MISMATCH');
   const cwd=await this.managedCwd(bound.parentIntentId,unit);
