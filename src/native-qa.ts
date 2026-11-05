@@ -1,3 +1,4 @@
+import {setQaSnapshotPermissions} from './native-qa-snapshot.ts';
 import {ReconciliationHistory} from './reconciliation-history.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
@@ -93,7 +94,7 @@ export class NativeQa{
    await c.query("UPDATE ac_stage_operations SET state='uncertain',grant_id=$2 WHERE id=$1",[stage.id,grantId]);await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[grantId]);
   });
   const p=this.paths(stage.id);
-  try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);}
+  try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);await setQaSnapshotPermissions(p.work,true);}
   catch(error){
    // This catch covers only preparation, before the first Docker request.
    // A later create/start failure remains uncertain and is never freed here.
@@ -236,6 +237,7 @@ export class NativeQa{
    if(await this.docker.inspect(verified.job.container_id)||await this.docker.inspect('ac-native-qa-'+id))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
    if(saved.state==='prepared')await c.query("UPDATE ac_native_qa_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[id,{identity:verified.identity,signature:signature.toString('hex')}]);
   });
+  await setQaSnapshotPermissions(this.paths(id).work,false);
  }
  async reconcileContext(principal:string,authority:Authority){
   await this.reconcileResourceAdmissions(principal,authority);
