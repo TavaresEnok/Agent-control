@@ -27,3 +27,5 @@ A identidade do órfão é capturada antes das asserções que motivaram o apont
 ## Revisão do isolamento físico de credenciais — commit 45254bba
 
 A prova usa dois contêineres físicos, verifica namespaces PID distintos, controla a leitura da própria sentinela e procura reciprocamente a sentinela externa por caminhos, links e `/proc`, inclusive varrendo PIDs locais; a conclusão não depende apenas de um PID do host ser válido no namespace do contêiner. A asserção observa stdout/stderr, não todas as possíveis vias de exfiltração; CLI real e topologia completa não são cobertos. A limpeza tenta remover ambos os contêineres, mas ignora erros de `docker rm`; se o daemon falhar, um contêiner pode restar sem que a prova sinalize falha de limpeza. Recomenda-se verificar ausência dos nomes e registrar erro. Revisão estática sem reexecução independente; T24 não é aceito por esta prova.
+
+A correção `356f0e77` endereça a ressalva de limpeza: restringe a identificação aos nomes e label da fixture, confirma ausência após remoção e preserva erros originais e de limpeza. Aprovação estática da correção; os limites de cobertura acima persistem.
