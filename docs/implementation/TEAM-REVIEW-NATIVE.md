@@ -43,3 +43,7 @@ Achado de recuperação: `NativeImplementation.retire` repete apenas `DOCKER_UNC
 ## Revisão da recuperação do grafo — commit e74e71af
 
 A adição de `DOCKER_NETWORK_UNCERTAIN` ao retry endereça o achado anterior; a contraprova confirma segunda chamada e ausência de repetição em recusa de identidade. A prova física de SIGKILL parte após conclusão da retirada e usa processo sucessor, verifica pausa, rejeição de época anterior, um único job de programador com mesmo ID e conclusão do grafo. Os substitutos e a janela restrita estão descritos no relatório da equipe. A limpeza dos recursos registrados agora confirma ausência e agrega falhas. Se o processo filho morrer antes de gravar o marcador, o pai não recebe o banco/área necessários para limpá-los; esse caso não invalida a execução positiva, mas limita a robustez da fixture. Aprovação estática delimitada, sem reexecução independente.
+
+## Revisão da limpeza antes do marcador — commit abe48f4c
+
+O callback opcional de `isolatedDatabase` preserva a validação preexistente de banco, host e label e registra a URL de nome aleatório antes de `CREATE DATABASE`. O manifesto validado exige arquivo privado, mesmo endpoint e credenciais, banco com nome sintético esperado e área exata sob a raiz privada. A limpeza preserva o manifesto e agrega erros quando falha. A contraprova cobre morte após criação do banco e área, antes da migração; não prova a janela concorrente durante `CREATE DATABASE`. Aprovação estática delimitada, sem reexecução independente.
