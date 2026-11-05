@@ -52,7 +52,7 @@ try {
   if (logDir) await mkdir(logDir, {recursive:true});
   const logs = await mkdtemp(join(logDir ?? tmpdir(), 'ac-isolated-logs-'));
   console.log(`project=${project} scratch=${scratch} logs=${logs}`);
-  for (const name of ['src','tests','db','adapters','upstream','node_modules','package.json']) await symlink(join(root,name), join(scratch,name));
+  for (const name of ['src','tests','db','adapters','upstream','node_modules','package.json','scripts','services']) await symlink(join(root,name), join(scratch,name));
   await mkdir(join(scratch,'.state/projects'), {recursive:true});
   await mkdir(join(scratch,'docs/validation/evidence'), {recursive:true});
   const port = await freePort();

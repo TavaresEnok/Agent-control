@@ -14,7 +14,7 @@ const m=JSON.parse(await readFile(process.argv[2]!,'utf8'));
 if(m.contract!=='r3-flow-controller-v1'||!m.fixture.label.startsWith('ac-r3-flow-'))throw Error('R3_CONTROLLER_MANIFEST_REQUIRED');
 installGraphAllocator();
 const db=new Ledger(m.database),capability=await authorizeNativeSyntheticFixture(m.fixture),verifierKey=Buffer.from(m.verifierKey,'base64'),git=new GitArtifacts(m.repo),quality=new Quality(db,verifierKey,git);
-const supervisor=new NativeExecutionSupervisor(db,{...m.executionConfig,syntheticFixture:capability}),nativeImplementation=new NativeImplementation(db,m.repo,quality,[supervisor]),nativeVerification=new NativeVerification(db,quality,[supervisor],verifierKey),nativeQa=new NativeQa(db,quality,m.repo,m.qaRoot,m.qaContract,verifierKey);
+const supervisor=new NativeExecutionSupervisor(db,{...m.executionConfig,syntheticFixture:capability}),nativeImplementation=new NativeImplementation(db,m.repo,quality,[supervisor]),nativeVerification=new NativeVerification(db,quality,[supervisor],verifierKey),nativeQa=new NativeQa(db,quality,m.repo,m.qaRoot,m.qaContract,verifierKey,undefined,undefined,m.executionConfig.resourceEnvelope);
 const runtime=new CezarRuntime(db,m.repo,m.project,{quality,git,verifierKey,qualityRevision:m.qualityRevision,targetRef:'refs/heads/protected',allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification},undefined,undefined,{nativeExecutions:[supervisor],nativeImplementation});
 await runtime.start();const interval=setInterval(()=>{void db.heartbeat(m.authority).catch(()=>{});},2000);
 const intent=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[m.intentId])).rows[0];await runtime.dispatch(intent,m.authority);

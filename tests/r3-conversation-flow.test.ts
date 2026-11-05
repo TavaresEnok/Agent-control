@@ -1,3 +1,6 @@
+import {DockerDaemon as FlowDockerDaemon} from '../src/sandbox-broker.ts';
+import {ProjectEnvironments} from '../src/project-environments.ts';
+import {provisionFlowResources,assertFlowResourceLimits,assertFlowResourceMembers,retireFlowResources,type FlowResourceEnvelope} from './fixtures/r3-flow-resources.ts';
 import {measureCommandRequests,startCommittedEventProbe,assertEventReport} from './fixtures/r3-latency-probe.ts';
 import {test,mock} from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,9 +41,10 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
  const base=process.env.AC_TEST_DATABASE_URL,url=process.env.AC_TEST_HAPPIER_URL,image=process.env.AC_R3_FLOW_IMAGE,network=process.env.AC_R3_FLOW_NETWORK,label=process.env.AC_R3_FLOW_LABEL;
  if(!base||!url||!image||!network||!label||process.env.AC_R3_FLOW_TOOLS_KIND!=='codex-exec-server')throw Error('R3_FLOW_ISOLATED_RUNNER_REQUIRED');
  const fixture=await isolatedDatabase(base,'r3flow'),db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-r3-flow-'));
+ let resourceEnvelope:FlowResourceEnvelope|undefined,managerHeartbeat:ReturnType<typeof setInterval>|undefined;
  let runtime:CezarRuntime|undefined,endpoint:HappierEndpoint|undefined,controller:ReturnType<typeof spawn>|undefined,eventProbe:ReturnType<typeof startCommittedEventProbe>|undefined,primary:unknown;const evidence:Record<string,unknown>={fixture:'r3-conversation-flow',inference:'deterministic-only',substitutions:['deterministic planning/model output','private subnet allocator'],providerGuards:'intact',tools:{kind:'actual native-tools-worker with public Codex exec-server',version:process.env.AC_R3_FLOW_PUBLIC_CODEX_VERSION,publicBinarySha256:process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256,transport:'authenticated WebSocket capability token',operations:['initialize','initialized','fs/createDirectory','fs/writeFile','fs/readFile'],inference:false}};
  try{
-  installGraphAllocator();await db.migrate();
+  installGraphAllocator();await db.migrate();resourceEnvelope=await provisionFlowResources(area,image);evidence.resourceLimits=await assertFlowResourceLimits(resourceEnvelope);
   const boundary=await loadHappier(),key=randomBytes(32),kp=nacl.sign.keyPair.fromSeed(key),challenge=randomBytes(32),b64=(v:Uint8Array)=>Buffer.from(v).toString('base64');
   const auth=await fetch(url+'/v1/auth',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({publicKey:b64(kp.publicKey),challenge:b64(challenge),signature:b64(nacl.sign.detached(challenge,kp.secretKey))})});assert.equal(auth.status,200);
   const {token}=await auth.json() as {token:string};
@@ -50,8 +54,8 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   const session=(await api('/v1/sessions',{tag:label+'-'+randomUUID(),encryptionMode:'e2ee',metadata:seal({machineId,path:area,host:'r3-flow',homeDir:area,version:'0.2.18',name:'R3 flow',flavor:'codex',startedBy:'terminal',startedFromDaemon:false}),agentState:seal({controlledByUser:false,requests:{},completedRequests:{}})})).session.id as string;
   const project=randomUUID(),repo=join(area,'repo'),spool=join(area,'execution'),planRoot=join(area,'planning'),homes=join(area,'homes'),qaRoot=join(area,'qa');
   for(const p of [spool,planRoot,homes,qaRoot])await mkdir(p,{mode:0o700});
-  execFileSync('git',['init','-q','-b','main',repo]);const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
-  git('config','user.name','R3 synthetic');git('config','user.email','r3-flow@example.invalid');await mkdir(join(repo,'src'));await writeFile(join(repo,'src/.gitkeep'),'');git('add','.');git('commit','-qm','base');const original=git('rev-parse','HEAD');git('branch','protected');
+  execFileSync('git',['init','-q','-b','main',repo]);await chmod(repo,0o700);await chmod(join(repo,'.git'),0o700);const git=(...args:string[])=>execFileSync('git',['-C',repo,...args],{encoding:'utf8'}).trim();
+  git('config','user.name','R3 synthetic');git('config','user.email','r3-flow@example.invalid');await mkdir(join(repo,'src'),{mode:0o700});await writeFile(join(repo,'src/.gitkeep'),'');git('add','.');git('commit','-qm','base');const original=git('rev-parse','HEAD');git('branch','protected');
   await mkdir(join(repo,'.ai/cezar'),{recursive:true});await writeFile(join(repo,'.ai/cezar/config.json'),JSON.stringify({baseBranch:'main',skillsRepos:[],worktreeRetention:0}));
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,label]);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[project,repo]);
   const {revision,options}=await provisionEngineering(db,principal,project,repo,1,false,false),capacity=new Capacity(db);
@@ -68,7 +72,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   await chmod(join(homes,execAccount),0o755);await assert.rejects(accountHomes.inspect(principal,project,execAccount),/ACCOUNT_HOME_IDENTITY_MISMATCH/);await chmod(join(homes,execAccount),0o700);
   await assert.rejects(db.pool.query("UPDATE ac_accounts SET mode='subscription_cli' WHERE id=$1",[execAccount]));
   const keys=generateKeyPairSync('ed25519'),pem=keys.privateKey.export({format:'pem',type:'pkcs8'}).toString();
-  const executionConfig={id:'r3-flow-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:homes,repository:repo,protectedRepositories:[],signingKeyPem:pem,providerNetworkId:network,accountSubjects:[{accountId:execAccount,subjectDigest:subject}],workerEnv:['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','NODE_VERSION=22.23.3','YARN_VERSION=1.22.22'],toolsEnv:['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','NODE_VERSION=22.23.3','YARN_VERSION=1.22.22'],syntheticFixture:fixtureCapability};
+  const executionConfig={resourceEnvelope,id:'r3-flow-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:homes,repository:repo,protectedRepositories:[],signingKeyPem:pem,providerNetworkId:network,accountSubjects:[{accountId:execAccount,subjectDigest:subject}],workerEnv:['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','NODE_VERSION=22.23.3','YARN_VERSION=1.22.22'],toolsEnv:['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','NODE_VERSION=22.23.3','YARN_VERSION=1.22.22'],syntheticFixture:fixtureCapability};
   const supervisor=new NativeExecutionSupervisor(db,executionConfig);
   const canary='AC_R3_SYNTHETIC_SECRET_'+randomUUID();await writeFile(join(homes,execAccount,'r3-secret-canary'),canary,{mode:0o600,flag:'wx'});
   const outsider='r3-outsider-'+randomUUID();await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'viewer')",[project,outsider]);await assert.rejects(accountHomes.inspect(outsider,project,execAccount),/ACCOUNT_FORBIDDEN/);
@@ -77,21 +81,28 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   await capacity.registerModel(principal,{provider:'synthetic-engineering',model:'fixed-manager',efforts:['medium'],roles:['manager'],source:'synthetic://r3-flow'});
   await capacity.addProfile(principal,project,{id:managerProfile,accountId:managerAccount,model:'fixed-manager',effort:'medium',role:'manager'});await capacity.observeQuota(principal,managerAccount,{status:'available',source:'synthetic://r3-flow',ttlSeconds:3600});await new AccountHomes(db,homes,[repo]).initialize(principal,project,managerAccount);
   await writeFile(join(homes,managerAccount,'r3-secret-canary'),canary,{mode:0o600,flag:'wx'});
-  const planning=new NativePlanningSupervisor(db,{id:'r3-flow-planning',executorDigest:nativePlanningExecutorDigest(image),imageId:image,hostRoot:planRoot,accountRoot:homes,protectedRepositories:[repo],signingKeyPem:pem,providerNetwork:network,accountSubjects:[{accountId:managerAccount,subjectDigest:'d'.repeat(64)}],syntheticFixture:fixtureCapability});
+  const planning=new NativePlanningSupervisor(db,{resourceEnvelope,id:'r3-flow-planning',executorDigest:nativePlanningExecutorDigest(image),imageId:image,hostRoot:planRoot,accountRoot:homes,protectedRepositories:[repo],signingKeyPem:pem,providerNetwork:network,accountSubjects:[{accountId:managerAccount,subjectDigest:'d'.repeat(64)}],syntheticFixture:fixtureCapability});
   for(const [accountId,id,version] of [[execAccount,'r3-flow-execution',supervisor.executorDigest],[managerAccount,planning.executor.id,planning.executor.digest]])await new ProviderEligibility(db).publish(principal,project,{accountId,expectedRevision:0,plan:'deterministic lab',adapterId:id,adapterVersion:version,authenticationMode:'synthetic',executionMode:'synthetic',sourceURL:'https://example.invalid/r3-flow',status:'documented_supported',reason:'Explicit disposable fixture',reviewedAt:new Date().toISOString(),validForSeconds:3600});
   const prior=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project,revision])).rows[0].snapshot;
   const policyRevision=await capacity.publish(principal,project,revision,{...prior,roles:{...prior.roles,manager:{regular:[managerProfile],emergency:[]}}});await capacity.assignPolicy(principal,context,policyRevision);
   const qaContract=NativeQaContract.parse({schemaVersion:1,id:'r3-flow-qa',image,argv:['/usr/local/bin/node','-e',"const fs=require('fs'); const names=['alpha','beta','gamma'].filter(n=>fs.existsSync('/work/src/'+n)); if(!names.length)process.exit(1); for(const n of names)if(!fs.readFileSync('/work/src/'+n+'/a.ts','utf8').startsWith('// synthetic src/'))process.exit(2); console.log('physical QA passed '+names.join(','))"],environment:['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','NODE_VERSION=22.23.3','YARN_VERSION=1.22.22','HOME=/tmp'],timeoutMs:15000,memoryBytes:268435456,pids:64,nanoCpus:1000000000});
   const qualityRevision=await options.quality.publish(principal,project,1,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:nativeQaContractDigest(qaContract)});
   await new Templates(db).publish(principal,context,0,{workflow:'semantic-proposal-v1',qualityRevision,targetRef:'refs/heads/protected'});await new ContextKeys(db).authorize(principal,context,1,'legacy',keyFingerprint(key));
-  const authority=await db.acquire(principal,context,randomUUID(),'r3-fixture-manager',60);
-  const nativeQa=new NativeQa(db,options.quality,repo,qaRoot,qaContract,options.verifierKey),nativeImplementation=new NativeImplementation(db,repo,options.quality,[supervisor]),nativeVerification=new NativeVerification(db,options.quality,[supervisor],options.verifierKey);
+  const authority=await db.acquire(principal,context,randomUUID(),'r3-fixture-manager',60);managerHeartbeat=setInterval(()=>{void db.heartbeat(authority).catch(()=>{});},2000);
+  const nativeQa=new NativeQa(db,options.quality,repo,qaRoot,qaContract,options.verifierKey,undefined,undefined,resourceEnvelope),nativeImplementation=new NativeImplementation(db,repo,options.quality,[supervisor]),nativeVerification=new NativeVerification(db,options.quality,[supervisor],options.verifierKey);
   runtime=new CezarRuntime(db,repo,project,{...options,allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification},undefined,undefined,{nativeExecutions:[supervisor],nativeImplementation,nativePlanning:[planning]});await runtime.start();
   const semantic=new SemanticPlanning(db,planning.executor);endpoint=new HappierEndpoint(db,runtime,boundary,{baseUrl:url,token,key,principal,sessionId:session,machineId,authority,semanticPlanning:semantic});await endpoint.start();
   let completionAckLost=false;const realAck=endpoint.ack.bind(endpoint);
   endpoint.ack=async(event,data)=>{const result=await realAck(event,data);if(event==='message'&&!completionAckLost){const payload=data as {message?:string};if(payload.message){const decoded=boundary.decrypt(key,'legacy',boundary.decodeBase64(payload.message));if(JSON.stringify(decoded).includes('"kind":"completion"')){completionAckLost=true;throw Error('FIXTURE_COMPLETION_ACK_LOST_AFTER_SERVER_WRITE');}}}return result;};
   const deviceId=randomUUID(),operator=generateKeyPairSync('ed25519');await new Operators(db).enroll(principal,principal,deviceId,operator.publicKey.export({format:'der',type:'spki'}).toString('base64'));
   const installation=(await db.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0].id;
+  const environmentCommand={schemaVersion:1 as const,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'project.environments.configure' as const,payload:{projectId:project,expectedRevision:0,config:{sourceBranch:'refs/heads/main',environments:[{id:'lab',label:'Combined lab',targetRef:'refs/heads/protected',authorizedDirectories:['src'],destinations:[{id:'local',label:'Local repository',kind:'local_repository' as const}]}]}}};
+  const environmentProof={deviceId,expiresAt:Date.now()+120000};
+  await new ProjectEnvironments(db,[{id:'flow',path:area}],join(area,'environment-private')).configure(principal,environmentCommand,{...environmentProof,signature:sign(null,Buffer.from(operatorMessage(principal,environmentCommand,environmentProof,installation)),operator.privateKey).toString('hex')});
+  const models=(await db.pool.query('SELECT DISTINCT p.account_id,p.model FROM ac_profiles p JOIN ac_account_access a ON a.account_id=p.account_id WHERE a.project_id=$1',[project])).rows;
+  for(const profile of models)await capacity.observeModelQuota(principal,profile.account_id,profile.model,{status:'available',source:'synthetic://r4-combined-model-scope',ttlSeconds:3600});
+  assert.equal((await db.pool.query('SELECT ac_profile_quota_status($1,$2) status',[execAccount,'unobserved-fixture-model'])).rows[0].status,'unknown');
+  evidence.scopedQuota={unknownModelUnavailable:true,models:models.map(row=>row.model).sort(),mode:'model',source:'deterministic fixture observation'};
   const verifyBearer=async(request:Request)=>{const authorization=request.headers.get('authorization');if(!authorization?.startsWith('Bearer '))return null;const response=await fetch(url+'/v1/account/profile',{headers:{authorization},signal:AbortSignal.timeout(5000)});if(!response.ok)return null;const identity=await response.json() as {id:string};return identity.id;};
   const origin='http://127.0.0.1:18889',browserSessions=new BrowserSessions(db,randomBytes(32),verifyBearer,{origin,secure:false,maxAgeSeconds:600});
   const createProduct=()=>createApi(db,runtime!,verifyBearer,id=>id===context?authority:undefined,undefined,undefined,browserSessions);let product=createProduct();
@@ -103,6 +114,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   const localId='r3-request-'+randomUUID(),accepted=await endpoint.accept({text:'Implement alpha and beta, then gamma after both; run tests and independent review.',localId});assert.equal((await endpoint.accept({text:'Implement alpha and beta, then gamma after both; run tests and independent review.',localId})).result.intentId,accepted.result.intentId);
   await until(async()=>Number((await db.pool.query('SELECT count(*) n FROM ac_manager_plans WHERE context_id=$1',[context])).rows[0].n)===1,()=>JSON.stringify(endpoint?.lastError));
   const proposal=(await db.pool.query('SELECT revision,digest FROM ac_manager_plans WHERE context_id=$1',[context])).rows[0];
+  const planningPhysical=new FlowDockerDaemon();for(const job of (await db.pool.query('SELECT id,container_id FROM ac_native_planning_jobs WHERE context_id=$1',[context])).rows)await until(async()=>await planningPhysical.inspect(job.container_id)===null,()=>"PRODUCT_TERMINAL_PLANNING_CONTAINER_REMAINS",30000);evidence.productPlanningRetirementConfirmed=true;
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_execution_jobs')).rows[0].n,0,'proposal never starts implementation');
   const executionTemplate={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,action:'template.publish',payload:{expectedRevision:1,template:{workflow:'engineering-native-v1',qualityRevision,targetRef:'refs/heads/protected',writePaths:['src'],execution:'plan'}}};
   const configured=await request('/api/v1/ac/control',executionTemplate,true);assert.equal(configured.status,200,await configured.clone().text());
@@ -111,7 +123,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   eventProbe=startCommittedEventProbe({ledger:db,contextId:context,fetchEvents:async()=>product.request('/api/v1/ac/contexts/'+context+'/events',{headers:{cookie,origin}}),samples:10,timeoutMs:90000});await eventProbe.ready;
   const measured=await measureCommandRequests(value=>request('/api/v1/ac/commands',value),command,8);evidence.commandLatency=measured.report;
   const response=measured.response;const started=await response.json() as {intentId:string;runId:string};
-  await until(async()=>runtime!.store.getRun(started.runId)?.status==='done',()=>JSON.stringify({error:endpoint?.lastError,run:runtime?.store.getRun(started.runId)}));
+  await until(async()=>{const status=runtime!.store.getRun(started.runId)?.status;if(status==='failed')throw Error('COMBINED_POSITIVE_RUN_FAILED');return status==='done';},()=>JSON.stringify({error:endpoint?.lastError,run:runtime?.store.getRun(started.runId)}));
   evidence.eventLatency=assertEventReport(await eventProbe.done);eventProbe.stop();
   const jobs=(await db.pool.query('SELECT id,role,state,receipt FROM ac_native_execution_jobs')).rows;assert.equal(jobs.filter(j=>j.role==='programmer').length,3);assert(jobs.filter(j=>j.role==='reviewer').length>=3);assert(jobs.every(j=>j.state==='completed'&&j.receipt));
   const qa=(await db.pool.query('SELECT state,receipt FROM ac_native_qa_jobs')).rows;assert(qa.length>=3&&qa.every(j=>j.state==='completed'&&j.receipt.exitCode===0));
@@ -133,12 +145,13 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   // Dispatch explicitly so the original same manager owns the graph while the
   // transport is stopped. Physical start still passes all supervisor gates.
   const cancelIntent=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[canceled.intentId])).rows[0];
-  await runtime.close();runtime=undefined;
+  clearInterval(managerHeartbeat);managerHeartbeat=undefined;await runtime.close();runtime=undefined;
   const manifest=join(area,'controller.json');await writeFile(manifest,JSON.stringify({contract:'r3-flow-controller-v1',database:fixture.url,fixture:fixtureCapability,executionConfig,repo,project,qaRoot,qaContract,qualityRevision,verifierKey:Buffer.from(options.verifierKey).toString('base64'),authority,intentId:canceled.intentId}),{mode:0o600,flag:'wx'});
   controller=spawn(process.execPath,['--import','tsx',new URL('./fixtures/r3-flow-controller.ts',import.meta.url).pathname,manifest],{cwd:process.cwd(),env:{PATH:process.env.PATH!,HOME:area,TZ:'UTC'},stdio:['ignore','pipe','pipe']});let controllerOutput='';controller.stdout?.on('data',b=>{controllerOutput+=String(b);});controller.stderr?.on('data',b=>{controllerOutput+=String(b);});
 
   const {DockerDaemon}=await import('../src/sandbox-broker.ts');const physical=new DockerDaemon();let activeWorkers:string[]=[];
   await until(async()=>{const rows=(await db.pool.query("SELECT j.worker_id FROM ac_native_execution_jobs j JOIN ac_intents i ON i.id=j.intent_id WHERE i.parent_intent_id=$1 AND j.state='running'",[canceled.intentId])).rows;if(rows.length!==2)return false;for(const row of rows){const c=await physical.inspect(row.worker_id);if(!c?.State.Running)return false;}activeWorkers=rows.map(j=>j.worker_id);return true;},()=>JSON.stringify({controllerOutput,exit:controller?.exitCode}),30000);
+  evidence.runningResourceMembers=await assertFlowResourceMembers(resourceEnvelope,activeWorkers);
   const pause={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,action:'context.pause',payload:{paused:true,expectedRevision:0}};assert.equal((await request('/api/v1/ac/control',pause,true)).status,200);
   controller.kill('SIGKILL');await new Promise(resolve=>controller!.once('exit',resolve));assert.equal(controller.signalCode,'SIGKILL');controller=undefined;
   for(const id of activeWorkers)assert((await physical.inspect(id))?.State.Running,'worker persists after controller SIGKILL');
@@ -169,15 +182,20 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   assert(!JSON.stringify(await history()).includes(canary),'SYNTHETIC_CANARY_LEAK_IN_CANONICAL_CHAT');
   assert(toolWrites>=3&&toolReadonlyDenials>=4&&toolCapabilityDenials>=7,'REAL_EXEC_SERVER_LOG_PROOF_REQUIRED');Object.assign(evidence.tools as object,{writeReadProofs:toolWrites,readOnlyRefusals:toolReadonlyDenials,badCapabilityRefusals:toolCapabilityDenials,accountHomeAbsent:true});
   evidence.secretCanary={synthetic:true,surfaces:['execution/planning requests, launches, outputs and retained logs','QA retained logs','protected Git artifact files','decrypted canonical Happier messages'],generatedFilesScanned:scannedFiles,wrongOwnerRefused:true,leaks:0,excluded:['vault (not configured)','portable export (not exercised)','real provider secrets']};
+  const bindings=(await db.pool.query('SELECT b.intent_id,b.revision,b.environment_id FROM ac_project_environment_bindings b JOIN ac_intents i ON i.id=b.intent_id WHERE i.context_id=$1',[context])).rows;
+  assert(bindings.length>=5);assert(bindings.every(row=>row.revision===1&&row.environment_id==='lab'));const sources=(await db.pool.query('SELECT s.source_commit FROM ac_project_environment_sources s JOIN ac_intents i ON i.id=s.parent_intent_id WHERE i.context_id=$1',[context])).rows;assert.equal(sources.length,2);assert(sources.every(row=>row.source_commit===original));evidence.environment={revision:1,id:'lab',sourceCommit:original,boundIntents:bindings.length};
+  const cancelAdmissions=(await db.pool.query("SELECT r.state FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id WHERE i.id=$1 OR i.parent_intent_id=$1",[canceled.intentId])).rows;assert(cancelAdmissions.length>=2);assert(cancelAdmissions.every(row=>row.state!=='waiting'&&row.state!=='uncertain'));
+  const admissions=(await db.pool.query('SELECT state,count(*)::int n FROM ac_native_resource_admissions GROUP BY state')).rows;assert(admissions.length>0);evidence.resourceAdmissions=admissions;
   evidence.cancel={authenticated:'real Happier bearer → encrypted browser session → Origin cookie',signed:true,paused:true,controllerSigkill:true,successorEpoch:authority.epoch,physicallyRunningBeforeRequest:activeWorkers.length,confirmed:true,remainingGrants:live};console.log(JSON.stringify(evidence));
-  if(process.env.AC_R3_FLOW_EVIDENCE)await writeFile(process.env.AC_R3_FLOW_EVIDENCE,JSON.stringify(evidence,null,2)+'\n');
+
  }catch(error){primary=error;}finally{
-  eventProbe?.stop();
+  if(managerHeartbeat)clearInterval(managerHeartbeat);eventProbe?.stop();
   if(controller?.pid&&controller.exitCode===null&&controller.signalCode===null){controller.kill('SIGKILL');await new Promise(resolve=>controller!.once('exit',resolve));}
   endpoint?.close();const errors:unknown[]=[];try{await runtime?.close();}catch(e){errors.push(e);}
   try{const plans=(await db.pool.query('SELECT container_id FROM ac_native_planning_jobs')).rows;for(const j of plans)if(j.container_id){try{execFileSync('docker',['rm','-f',j.container_id],{stdio:'ignore'});}catch{}}
    const {DockerDaemon}=await import('../src/sandbox-broker.ts');const docker=new DockerDaemon();for(const j of (await db.pool.query('SELECT id FROM ac_native_qa_jobs')).rows){const c=await docker.inspect('ac-native-qa-'+j.id);if(c){assert.equal(c.Config.Labels['agent-control.job'],j.id);assert.equal(c.Image,image);if(c.State.Running)await docker.stop(c.Id);await docker.remove(c.Id);}}
-   await cleanupGraphResources(db,image!);
+   await cleanupGraphResources(db,image!);if(resourceEnvelope)evidence.resourceRetirement=await retireFlowResources(resourceEnvelope,area);
   }catch(e){errors.push(e);}mock.restoreAll();try{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}catch(e){errors.push(e);}if(errors.length)throw new AggregateError(primary?[primary,...errors]:errors,'R3_FLOW_CLEANUP_FAILED');
  }if(primary)throw primary;
+ if(process.env.AC_R3_FLOW_EVIDENCE)await writeFile(process.env.AC_R3_FLOW_EVIDENCE,JSON.stringify(evidence,null,2)+'\n');
 });
