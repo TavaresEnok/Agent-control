@@ -98,7 +98,7 @@ Prioridade: T21 correção QA física; T30 restauração de backup antigo com tr
 | T18 | R4 produto | accept_for_scope | — |
 | T19 | R3 runtime + inventário R4 | historical_R3_only_not_new_acceptance | Controlled exhaustion/recovery observation can prove handoff without official login; same-context canonical history, fenced singleton and safe return must be demonstrated together. |
 | T20 | R3 runtime + inventário R4 | historical_R3_only_not_new_acceptance | Inaccessible executor + expired lease cancellation keeps uncertainty/grant/old effects until proof; Remote stable orphan group neutralization missing at base, R3 new primitive pending review |
-| T21 | R3 runtime + inventário R4 | historical_R3_only_not_new_acceptance | Prove real QA defect returns through bounded correction to replacement artifact and fresh verification; permission correction 972373ad/1865dfec is scoped evidence only. |
+| T21 | R5 teste físico do autor | accept_literal_scenario_author_physical_proof | Preservar log final versionado; execução física com inferência determinística. |
 | T22 | R4 produto | do_not_accept_full_requirement | Enviar essas três políticas pelo caller entregue e provar recusa legível antes de qualquer lançamento. |
 | T23 | R3 runtime + inventário R4 | historical_R3_only_not_new_acceptance | Malicious SSH file/output cannot reveal credential or modify central authority; valid project admin survives; Full direct API/terminal hostile-worker matrix while preserving valid project admin missing |
 | T24 | R3 runtime + inventário R4 | historical_R3_only_not_new_acceptance | Two actual concurrent CLIs denied shell/symlink/process credential access; distinct HOME insufficient; Pure file/security tests rerun; physical two CLIs account/process boundary not rerun |
