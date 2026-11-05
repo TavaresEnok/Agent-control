@@ -719,7 +719,7 @@ export class CezarRuntime {
           if(outcome.state==='completed'&&job.role==='programmer'&&'artifact' in outcome&&outcome.artifact){
             if(!this.engineering)throw new Refusal('NATIVE_ARTIFACT_REGISTRY_UNAVAILABLE');
             await supervisor.registerArtifact(principal,authority,job.id,this.engineering.options.quality);
-          }else if(outcome.state==='completed'&&['reviewer','judge'].includes(job.role)){
+          }else if(outcome.state==='completed'&&['reviewer','judge'].includes(job.role)&&!job.cancellation_state){
             const verifier=this.engineering?.options.nativeVerification;if(!verifier)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
             await verifier.record(principal,authority,job.id);
           }
