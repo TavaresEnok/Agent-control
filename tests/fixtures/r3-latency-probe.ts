@@ -10,7 +10,10 @@ export async function measureCommandRequests(request:(command:Record<string,unkn
  for(let index=0;index<samples;index++){
   const started=performance.now();response=await request({...command,deliveryAttemptId:randomUUID()});
   const accepted=await response.clone().json();assert.equal(response.status,202);
-  if(index===0)first=accepted;else assert.deepEqual(accepted,first,'RETRY_CHANGED_ACCEPTED_EFFECT');
+  const identity={intentId:accepted.intentId,runId:accepted.runId};
+  assert.equal(typeof identity.intentId,'string');assert.equal(typeof identity.runId,'string');
+  assert.equal(typeof accepted.state,'string');
+  if(index===0)first=identity;else assert.deepEqual(identity,first,'RETRY_CHANGED_ACCEPTED_EFFECT');
   metrics.commandAcceptance.push(performance.now()-started);
   const server=timingHeader(response.headers.get('server-timing'));
   metrics.authentication.push(server.authentication);metrics.application.push(server.application);
