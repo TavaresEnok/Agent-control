@@ -1,3 +1,4 @@
+import {AgentControlGrantSelection,grantSelectionSchema} from './agent-control-grant-selection'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { z } from 'zod'
@@ -36,7 +37,7 @@ const usageSchema=z.object({subscriptionBalance:z.literal('unknown'),overlapping
 ]))})
 const grantBase={id:z.string(),role:z.string(),state:z.string()}
 const grantSchema=z.discriminatedUnion('resource_kind',[
- z.object({...grantBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),emergency:z.boolean()}),
+ z.object({...grantBase,resource_kind:z.literal('model'),account_id:z.string().uuid(),profile_id:z.string().uuid(),emergency:z.boolean(),selection:grantSelectionSchema}),
  z.object({...grantBase,resource_kind:z.literal('local_compositor'),account_id:z.null(),profile_id:z.null(),emergency:z.literal(false)}),
 ])
 const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),installationId:z.string().uuid(),principalId:z.string(),verifierDigest:z.string().regex(/^[a-f0-9]{64}$/),qaVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),specialistVerifierDigest:z.string().regex(/^[a-f0-9]{64}$/).nullish(),contextId:z.string(),assignedPolicyRevision:z.number().nullable(),
@@ -314,7 +315,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
     <AgentControlCapacityWaits waits={data.waits} profiles={data.profiles} accounts={data.accounts}/>
     <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">
-     {g.resource_kind==='local_compositor'?'Composição determinística local':g.role} · {g.state}{g.emergency?' · reserva emergencial':''}<br/><span className="text-xs">{g.id}</span>
+     {g.resource_kind==='local_compositor'?'Composição determinística local':g.role} · {g.state}{g.emergency?' · reserva emergencial':''}
+     {g.resource_kind==='model'&&<AgentControlGrantSelection selection={g.selection} accountId={g.account_id} profileId={g.profile_id} accounts={data.accounts} profiles={data.profiles}/>}
     </li>)}</ul>
    </SettingsField>
    <SettingsField title="Uso por tentativa" hint="Contadores de modelos são informados pelo executor, não representam saldo da assinatura. Cache e raciocínio podem estar incluídos em entrada e saída.">

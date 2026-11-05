@@ -719,6 +719,9 @@ function WorkflowGraphEditor() {
           {issues.length ? <AlertTriangleIcon className="size-3.5" /> : <CheckCircle2Icon className="size-3.5" />}
           {issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'valid'}
         </button>
+        <span className="sr-only" role="status" aria-live="polite">
+          {validating ? 'Validating workflow' : issues.length ? `Workflow has ${issues.length} validation issues: ${issues.join('; ')}. Open workflow settings for details.` : 'Workflow validated'}
+        </span>
         <div className="flex flex-wrap items-center gap-1 sm:ml-auto">
           <Button
             size="sm"
@@ -807,7 +810,7 @@ function WorkflowGraphEditor() {
               <li key={node.id} className="min-w-0 rounded-md border border-border p-3">
                 <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                   <span className="min-w-0 break-all text-sm">{index + 1}. {node.name ?? node.id} ({node.type})</span>
-                  <Button size="sm" variant="outline" disabled={!!sim} onClick={() => { setSelectedId(node.id); setWorkflowPanel(false); setPaletteOpen(false) }}>Edit {node.id}</Button>
+                  <Button size="sm" variant="outline" className="min-h-11" disabled={!!sim} onClick={() => { setSelectedId(node.id); setWorkflowPanel(false); setPaletteOpen(false) }}>Edit {node.id}</Button>
                 </div>
                 {portsOf(node).map((port) => (
                   <label key={port} className="mt-2 flex min-w-0 flex-col gap-1 text-xs">
