@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: QA diagnostics distinguish missing evidence, cancellation, timeout and test failure without raw receipts
+ok 1 - QA diagnostics distinguish missing evidence, cancellation, timeout and test failure without raw receipts
+  ---
+  duration_ms: 4.264638
+  type: 'test'
+  ...
+# Subtest: remote and capacity projection use closed persisted facts and reject private reasons
+ok 2 - remote and capacity projection use closed persisted facts and reject private reasons
+  ---
+  duration_ms: 2.993401
+  type: 'test'
+  ...
+# Subtest: actual PG/API diagnostics include per-intent uncertainty, SSH, QA, wait exclusions, ACL and truncation
+ok 3 - actual PG/API diagnostics include per-intent uncertainty, SSH, QA, wait exclusions, ACL and truncation
+  ---
+  duration_ms: 1679.420877
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2339.779714

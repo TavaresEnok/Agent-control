@@ -1,5 +1,5 @@
 import type {AgentControlDiagnosticFinding} from '../upstream/cezar/packages/contract/src/agent-control-operations.ts';
-import {capacityWaitExclusions} from './observability.ts';
+import {agentControlDiagnosticCapacityWaitSchema} from '../upstream/cezar/packages/contract/src/agent-control-operations.ts';
 
 type Finding=AgentControlDiagnosticFinding;
 export function remoteDiagnostic(row:{id:string;intent_id:string|null;state:string}):Finding|null{
@@ -35,6 +35,7 @@ export function nativeQaDiagnostic(row:{id:string;intent_id:string;state:string;
 const WAIT_REASONS=['NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','CAPACITY_BUSY','CAPACITY_QUEUED','GLOBAL_CAPACITY_LIMIT','CONTEXT_CAPACITY_LIMIT','ACCOUNT_CAPACITY_LIMIT'] as const;
 export function waitDiagnostic(row:{attempt_id:string;intent_id:string;reason:unknown;exclusions:unknown}):Finding{
  const reason=typeof row.reason==='string'&&WAIT_REASONS.includes(row.reason as typeof WAIT_REASONS[number])?row.reason as typeof WAIT_REASONS[number]:'unknown';
- const exclusions=capacityWaitExclusions(row.exclusions)??[];
+ const parsed=agentControlDiagnosticCapacityWaitSchema.shape.exclusions.safeParse(row.exclusions);
+ const exclusions=parsed.success?parsed.data:[];
  return {code:'capacity_wait',meaning:reason==='unknown'?'Uma tentativa aguarda capacidade; o motivo detalhado não foi comprovado.':'Uma tentativa aguarda capacidade autorizada conforme o motivo estruturado registrado.',owner:'Controlador de capacidade',nextCondition:'Reavaliar a mesma tentativa quando houver capacidade e perfil elegíveis; conciliar as exclusões registradas sem assumir quota esgotada a partir de indisponibilidade.',evidence:[{kind:'capacity_wait',id:row.attempt_id},{kind:'intent',id:row.intent_id}],capacityWait:{reason,exclusions}};
 }

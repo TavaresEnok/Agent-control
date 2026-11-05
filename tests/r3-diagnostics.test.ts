@@ -36,6 +36,7 @@ test('remote and capacity projection use closed persisted facts and reject priva
  const profileId=randomUUID();
  const wait=waitDiagnostic({attempt_id:id,intent_id:intent,reason:'NO_ELIGIBLE_CAPACITY',exclusions:[{profileId,reason:'quota_unknown'}]});
  assert.deepEqual(wait.capacityWait,{reason:'NO_ELIGIBLE_CAPACITY',exclusions:[{profileId,reason:'quota_unknown'}]});
+ for(const reason of ['rate_limited','authentication_required','provider_unreachable','provider_configuration_error','quota_disabled']){const value=waitDiagnostic({attempt_id:id,intent_id:intent,reason:'NO_ELIGIBLE_CAPACITY',exclusions:[{profileId,reason}]});assert.equal(value.capacityWait?.exclusions[0]?.reason,reason);}
  const poisoned=waitDiagnostic({attempt_id:id,intent_id:intent,reason:secret,exclusions:[{profileId,reason:secret}]});
  assert.deepEqual(poisoned.capacityWait,{reason:'unknown',exclusions:[]});assert(!JSON.stringify(poisoned).includes(secret));
  agentControlDiagnosticFindingSchema.parse(wait);agentControlDiagnosticFindingSchema.parse(poisoned);
