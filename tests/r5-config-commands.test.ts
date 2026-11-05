@@ -21,7 +21,8 @@ test('configured CLI exports and reads private usable configuration without init
   for(const dir of ['repo','private','keys','exports','empty-home'])await mkdir(join(folder,dir),{mode:0o700});
   const configPath=join(folder,'installation.json'),descriptor=join(folder,'descriptor.json'),artifactFile=join(folder,'exports','configuration.ac'),keyFile=join(folder,'keys','configuration.key');
   await writeFile(keyFile,randomBytes(32),{mode:0o600});
-  const config={schemaVersion:1,mode:'administration-only',databaseUrl:fixture.url,dataDirectory:join(folder,'private'),projectRoots:[],
+  const recoveryInventory={directory:join(folder,'external-catalog'),installationId:randomUUID(),catalogId:randomUUID(),manifestHash:'a'.repeat(64),epoch:2};
+  const config={recoveryInventory,schemaVersion:1,mode:'administration-only',databaseUrl:fixture.url,dataDirectory:join(folder,'private'),projectRoots:[],
    project:{id:projectId,label:'CLI semantic label',repo:join(folder,'repo'),owner},
    http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
    happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}};
@@ -31,7 +32,7 @@ test('configured CLI exports and reads private usable configuration without init
   await request('export');const exported=await run('config-export');assert.equal(JSON.parse(exported.stdout).state,'exported');assert.equal((await stat(artifactFile)).mode&0o777,0o600);
   const original=await readFile(artifactFile);assert(!original.includes(Buffer.from('CLI semantic label')));assert(!original.includes(Buffer.from('disposable_r4_only')));
   await assert.rejects(run('config-export'));assert.deepEqual(await readFile(artifactFile),original);
-  await request('read');const inspected=await run('config-read'),dto=JSON.parse(inspected.stdout);assert.equal(dto.project.id,projectId);assert.equal(dto.project.label,'CLI semantic label');assert.equal(dto.restorable,false);assert(!inspected.stdout.includes(fixture.url));
+  await request('read');const inspected=await run('config-read'),dto=JSON.parse(inspected.stdout);assert.equal(dto.project.id,projectId);assert.equal(dto.project.label,'CLI semantic label');assert.equal(dto.restorable,false);assert.deepEqual(dto.installation.recoveryInventory,{...recoveryInventory,directory:{rebindNeeded:true,kind:'private_path',id:'installation.recoveryInventory.directory'}});assert(!inspected.stdout.includes(recoveryInventory.directory));assert(!inspected.stdout.includes(fixture.url));
   await ledger.pool.query('DELETE FROM ac_control_admins WHERE principal_id=$1',[owner]);await assert.rejects(run('config-read'));
   for(const table of ['ac_intents','ac_operations','ac_capacity_grants','ac_workflow_runtime_instances'])assert.equal((await ledger.pool.query('SELECT 1 FROM '+table)).rowCount,0,table);
  }finally{await ledger.close();await fixture.close();await rm(folder,{recursive:true,force:true});}
