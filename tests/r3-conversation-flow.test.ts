@@ -1,3 +1,4 @@
+import {measureCommandRequests,startCommittedEventProbe,assertEventReport} from './fixtures/r3-latency-probe.ts';
 import {test,mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,randomBytes,generateKeyPairSync,sign} from 'node:crypto';
@@ -37,7 +38,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
  const base=process.env.AC_TEST_DATABASE_URL,url=process.env.AC_TEST_HAPPIER_URL,image=process.env.AC_R3_FLOW_IMAGE,network=process.env.AC_R3_FLOW_NETWORK,label=process.env.AC_R3_FLOW_LABEL;
  if(!base||!url||!image||!network||!label)throw Error('R3_FLOW_ISOLATED_RUNNER_REQUIRED');
  const fixture=await isolatedDatabase(base,'r3flow'),db=new Ledger(fixture.url),area=await mkdtemp(join(tmpdir(),'ac-r3-flow-'));
- let runtime:CezarRuntime|undefined,endpoint:HappierEndpoint|undefined,controller:ReturnType<typeof spawn>|undefined,primary:unknown;const evidence:Record<string,unknown>={fixture:'r3-conversation-flow',inference:'deterministic-only',substitutions:['deterministic planning/model output','fixed tools HTTP endpoint','private subnet allocator'],providerGuards:'intact'};
+ let runtime:CezarRuntime|undefined,endpoint:HappierEndpoint|undefined,controller:ReturnType<typeof spawn>|undefined,eventProbe:ReturnType<typeof startCommittedEventProbe>|undefined,primary:unknown;const evidence:Record<string,unknown>={fixture:'r3-conversation-flow',inference:'deterministic-only',substitutions:['deterministic planning/model output','fixed tools HTTP endpoint','private subnet allocator'],providerGuards:'intact'};
  try{
   installGraphAllocator();await db.migrate();
   const boundary=await loadHappier(),key=randomBytes(32),kp=nacl.sign.keyPair.fromSeed(key),challenge=randomBytes(32),b64=(v:Uint8Array)=>Buffer.from(v).toString('base64');
@@ -107,8 +108,11 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   const configured=await request('/api/v1/ac/control',executionTemplate,true);assert.equal(configured.status,200,await configured.clone().text());
   const command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'message:r3-approved-plan',proposalRevision:proposal.revision,proposalDigest:proposal.digest,native:true}};
   assert.equal((await product.request('/api/v1/ac/commands',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(command)})).status,401);
-  const response=await request('/api/v1/ac/commands',command);assert.equal(response.status,202,await response.clone().text());const started=await response.json() as {intentId:string;runId:string};
+  eventProbe=startCommittedEventProbe({ledger:db,contextId:context,fetchEvents:async()=>product.request('/api/v1/ac/contexts/'+context+'/events',{headers:{cookie,origin}}),samples:10,timeoutMs:90000});await eventProbe.ready;
+  const measured=await measureCommandRequests(value=>request('/api/v1/ac/commands',value),command,8);evidence.commandLatency=measured.report;
+  const response=measured.response;const started=await response.json() as {intentId:string;runId:string};
   await until(async()=>runtime!.store.getRun(started.runId)?.status==='done',()=>JSON.stringify({error:endpoint?.lastError,run:runtime?.store.getRun(started.runId)}));
+  evidence.eventLatency=assertEventReport(await eventProbe.done);eventProbe.stop();
   const jobs=(await db.pool.query('SELECT id,role,state,receipt FROM ac_native_execution_jobs')).rows;assert.equal(jobs.filter(j=>j.role==='programmer').length,3);assert(jobs.filter(j=>j.role==='reviewer').length>=3);assert(jobs.every(j=>j.state==='completed'&&j.receipt));
   const qa=(await db.pool.query('SELECT state,receipt FROM ac_native_qa_jobs')).rows;assert(qa.length>=3&&qa.every(j=>j.state==='completed'&&j.receipt.exitCode===0));
   assert.notEqual(git('rev-parse','protected'),original);assert(git('show','protected:src/gamma/a.ts').startsWith('// synthetic'));
@@ -167,6 +171,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   evidence.cancel={authenticated:'real Happier bearer → encrypted browser session → Origin cookie',signed:true,paused:true,controllerSigkill:true,successorEpoch:authority.epoch,physicallyRunningBeforeRequest:activeWorkers.length,confirmed:true,remainingGrants:live};console.log(JSON.stringify(evidence));
   if(process.env.AC_R3_FLOW_EVIDENCE)await writeFile(process.env.AC_R3_FLOW_EVIDENCE,JSON.stringify(evidence,null,2)+'\n');
  }catch(error){primary=error;}finally{
+  eventProbe?.stop();
   if(controller?.pid&&controller.exitCode===null&&controller.signalCode===null){controller.kill('SIGKILL');await new Promise(resolve=>controller!.once('exit',resolve));}
   endpoint?.close();const errors:unknown[]=[];try{await runtime?.close();}catch(e){errors.push(e);}
   try{const plans=(await db.pool.query('SELECT container_id FROM ac_native_planning_jobs')).rows;for(const j of plans)if(j.container_id){try{execFileSync('docker',['rm','-f',j.container_id],{stdio:'ignore'});}catch{}}
