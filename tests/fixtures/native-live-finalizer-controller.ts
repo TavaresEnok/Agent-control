@@ -10,7 +10,7 @@ const db=new Ledger(f.url);
 try{
  let checks=0;
  await new NativeArtifactFinalizer(db,f.root).finalize(f.principal,f.authority,f.binding,async()=>{
-  if(++checks!==2)return;
+  if(++checks!==2||!f.freezeBeforeInput)return;
   // Freeze the actual spawned Ruby before input is released. The parent test
   // observes the committed handle, then kills this controller process.
   const children=(await readFile(`/proc/self/task/${process.pid}/children`,'utf8')).trim().split(/\s+/).filter(Boolean);
