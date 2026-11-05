@@ -95,3 +95,9 @@ Repeated successors now recheck host absence under the current fence while a reg
 Native terminal writer retirement uses the same exact continuation verifier when job epoch differs from original writer epoch, and includes its digest in signed revocation evidence. This source predicate has been reviewed; physical exercised continuation/retirement remains part of integration evidence, not asserted from the PG fixture. Rejected signed planner results now invoke trusted cleanup only after rejected state commits, including replay, preserving the signed result and requiring no new inference.
 
 No084/085 protocol module is a dependency of086. Overall combined081/086 physical-flow acceptance remains pending the single final coordinated run.
+
+## Remote candidate projectiona9f196fd: approved
+
+`a9f196fd` **approved for the read-projection contract**. Independent PostgreSQL test `tests/r4-remote-source-candidates.test.ts`: **1/1 passed, zero skips**, log `r4-review-runtime-source-candidates.log`. The test deliberately seeds projection inputs; it is not a new SSH/materialization execution.
+
+The projection may offer a new live-epoch export only when its project/context/host/commit/tree match the immutable materialized source, its request digest is exact, its intent has matching human-signed source authorization and current implementation epoch, and it is uncanceled and not already bound to a workspace. Wrong commit/tree/digest/epoch and unsigned exports remain invisible; the original materialization operation identity is unchanged. Candidate display grants no new effect authority: the existing prepare and final emission gates still revalidate source, manager and environment. Full canonical browser execution remains a separate pending proof.
