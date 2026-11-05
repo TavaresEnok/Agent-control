@@ -42,6 +42,7 @@ export class NativeVerification{
    if(isCanceled()){await supervisor.stop(principal,authority,request);throw new Refusal('STAGE_CANCELED');}
    await new Promise(resolve=>setTimeout(resolve,1000));status=await supervisor.reconcile(principal,authority,request);
   }
+  if(status.state==='failed'){await supervisor.retireTerminal(principal,authority,stage.id);throw new Refusal('NATIVE_VERIFICATION_EXECUTION_UNCONFIRMED');}
   return this.record(principal,authority,stage.id);
  }
  async record(principal:string,authority:Authority,jobId:string){
@@ -69,6 +70,6 @@ export class NativeVerification{
    if(!['uncertain','running'].includes(row.state))throw new Refusal('NATIVE_VERIFICATION_STAGE_MISMATCH');
    await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[jobId,{verification:receipt,signature,nativeExecution:observed.receipt}]);
   });
-  await this.quality.record(principal,receipt,signature,authority);return receipt;
+  await this.quality.record(principal,receipt,signature,authority);await supervisor.retireTerminal(principal,authority,jobId);return receipt;
  }
 }
