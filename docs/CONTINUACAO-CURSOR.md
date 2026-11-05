@@ -1,3 +1,9 @@
+# Parado por solicitação do usuário — checkpoint R3
+
+Estado para desligamento e retomada: [R3-STOP-20261105.md](implementation/R3-STOP-20261105.md). Todos os dez subagentes encerrados; código validado integrado, WIPs preservados em branches, recursos próprios retirados. A missão não está concluída. Preserve AGENTS.md local e test.txt. Esta entrada prevalece sobre o histórico abaixo.
+
+---
+
 # Missão R3 em execução — Sol 6.1 Médio
 
 Continuação ativa a partir de ae2e141b, com dez subagentes nativos Sol/Médio confirmados e dois revisores independentes. Preserve AGENTS.md local e test.txt. Estado, ownership, commits, provas e backlog executável: [CONTINUACAO-R3-20261105.md](implementation/CONTINUACAO-R3-20261105.md). A missão ainda não está concluída; esta entrada prevalece sobre fechamentos históricos R2. Não repetir provas válidas sem mudança relevante nem tratar integrações ainda executáveis como bloqueios externos.

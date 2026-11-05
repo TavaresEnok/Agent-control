@@ -1,0 +1,3 @@
+Verified own container ID and label before removal.
+1b2e0aa953a51bf7ece4c9b56ab0c392adc93b1847add2c1387c58224fb39c36
+Own integration PostgreSQL absent after removal; no operational resources targeted.

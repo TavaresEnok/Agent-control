@@ -1,0 +1,78 @@
+{
+  "state": "stopped_at_user_request",
+  "base": "ae2e141b60e6ea90125dd43babb97e9a0abc0f16",
+  "branch": "continuation/cursor-20261104",
+  "integrated_before_stop_documentation": "0e8e343475ec0bad8fb47c6802ee40736c9deac4",
+  "validated_code_checkpoint": "17aae012",
+  "native_subagents": 10,
+  "subagent_model": "gpt-6.1-sol",
+  "subagent_reasoning_effort": "medium",
+  "all_subagents_completed_confirmed": true,
+  "git_common_directory": "/home/app/projects/agent-control-implementation/.git",
+  "branches": [
+    {
+      "branch": "r3/20261105/delivery",
+      "commit": "538a8717cb14e1948cdcf5c82e3b02ebbc2e6e18"
+    },
+    {
+      "branch": "r3/20261105/flow",
+      "commit": "78279d80b91897e5d72a9bee11e278d98e7d4a0b"
+    },
+    {
+      "branch": "r3/20261105/history",
+      "commit": "03d25ed38430019e170b62564eea64d33ba3a02d"
+    },
+    {
+      "branch": "r3/20261105/migration",
+      "commit": "c135cd596b7bb63a286adcecf302f6eef1d9f96d"
+    },
+    {
+      "branch": "r3/20261105/quota",
+      "commit": "ea8c119a351de87b552e76a094be69a30c931721"
+    },
+    {
+      "branch": "r3/20261105/remote",
+      "commit": "bd314ae1a517c0944252f0d3dff3bc81bca5145b"
+    },
+    {
+      "branch": "r3/20261105/remote-quality",
+      "commit": "b8358172ae0b1ef53da9d4eca0b62e20b8c89271"
+    },
+    {
+      "branch": "r3/20261105/resources",
+      "commit": "3b6e4020ea6c807e273cd4156ec86ab3d71b0446"
+    },
+    {
+      "branch": "r3/20261105/review_product",
+      "commit": "2f01db270a741b79c393fcce3bc6ca3f14316df9"
+    },
+    {
+      "branch": "r3/20261105/review_runtime",
+      "commit": "3fe17e8afcf98e6cce41ba43db929fcafee7805a"
+    },
+    {
+      "branch": "r3/20261105/secret-surfaces",
+      "commit": "0bbfeac17443ab5a62b849b62dd084964864bc89"
+    },
+    {
+      "branch": "r3/20261105/ui",
+      "commit": "d2ecd8f9f3857e127848b2d5c6477b2f065f7915"
+    }
+  ],
+  "preserved_local_files": [
+    "AGENTS.md (preexisting modified)",
+    "test.txt (preexisting untracked)"
+  ],
+  "integrated_lab_resources_removed": true,
+  "wip_not_integrated": [
+    "ea8c119a",
+    "03d25ed3",
+    "8be0c4d1",
+    "538a8717",
+    "24a65581",
+    "d2ecd8f9",
+    "bd314ae1",
+    "78279d80",
+    "0bbfeac1"
+  ]
+}

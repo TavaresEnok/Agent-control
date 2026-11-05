@@ -340,15 +340,15 @@
   {
     "id": "RF-27",
     "normative_row": "RF-27\tP0\tPreservar identidade e resultado de uma operação SSH após desconexão\tI5",
-    "status": "partially_examined",
-    "code_state": "partial",
-    "test_result": "partial_scope_only",
-    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md;docs/implementation/R2-REMOTE.md;docs/implementation/R2-REMOTE-SOURCE-FLOW.md;docs/implementation/R2-REVIEW-RUNTIME.md",
-    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py;src/remote-git.ts;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts;tests/ssh-aggregate-round2.test.ts;tests/ssh-cancellation-round2.test.ts;tests/ssh-source-flow-round2.test.ts",
-    "independent_review": "pending",
+    "status": "examined",
+    "code_state": "implemented",
+    "test_result": "passed_supported_runtime_contract",
+    "evidence": "docs/validation/evidence/ssh-two-hosts-first-20261102.log;docs/validation/evidence/ssh-restart-persistence-20261102.log;docs/validation/evidence/remote-plan-cancel-final-20261102.log;docs/validation/evidence/remote-cancel-journal-20261102.log;docs/validation/evidence/remote-git-hardening-final-20261102.log;docs/validation/evidence/remote-git-source-snapshot-20261102.log;docs/implementation/REMOTE-GIT-20261102.md;docs/validation/evidence/remote-source-signed-first-20261102.log;docs/implementation/LOCAL-CAPACITY-SOURCE-VAULT-20261102.md;docs/implementation/R2-REMOTE.md;docs/implementation/R2-REMOTE-SOURCE-FLOW.md;docs/implementation/R2-REVIEW-RUNTIME.md;docs/implementation/R3-REMOTE.md;docs/implementation/R3-RESOURCES.md;docs/implementation/R3-REVIEW-RUNTIME.md",
+    "files": "src/remote.ts;services/remote-worker/worker.py;tests/remote-intent.test.ts;tests/remote_worker_test.py;src/remote-git.ts;tests/remote-git.test.ts;db/migrations/041_remote_source_authorizations.sql;src/remote-source-authorizations.ts;tests/remote-source-authorization.test.ts;tests/ssh-aggregate-round2.test.ts;tests/ssh-cancellation-round2.test.ts;tests/ssh-source-flow-round2.test.ts;services/remote-worker/remote_supervisor.py;services/remote-worker/resource_authority.py;tests/r3-remote-supervisor.py",
+    "independent_review": "approved",
     "authorization": "isolated_synthetic_only",
-    "acceptance": "not_accepted",
-    "limitation": "Plan binding and parent-confirmed cancellation implemented. Two-host lost-ack proof is historical; new cancellation through SSH, supervisor death and interrupted-host recovery remain open. SSH Git export uses synthetic hosts and produces a not_reviewed snapshot; the original intent payload is unchanged; product integration, aggregate resource limits and lock recovery remain open. Separate signed owner authorization binds intent, host, commit and tree before export and replay; it authorizes source reading, not merge. Focused PG proof passed; previous synthetic SSH proof was not rerun under this contract. R2: two synthetic SSH hosts exercised cancellation ACK loss, bound replay, origin identity and shared-state admission across aliases. An orphan or incomplete receipt retains capacity; supervisor death is uncertain and never causes an unsafe historical-PGID signal. The owner-signed export and materialization flow now jointly checks differing commits/trees, immutable provenance, replay and not_reviewed state. Distinct state directories, physical CPU/memory limits, immutable process-group supervision, operational remote worktree and push-back remain outside the proof."
+    "acceptance": "accepted",
+    "limitation": "Aceite do critério RF-27 no contrato SSH suportado, baseado na revisão independente e provas físicas dos commits 6553ce5c/5add3b71, no fencing adicional 1ae70261 e unicidade 2e98b970: identidade, journal, resultado e replay permanecem após desconexão/perda de ACK; ausência não comprovada permanece incerta. Backend Docker/cgroup v2 e configuração confiável explicitados nos relatórios. Isto não aceita automaticamente RF-39, RNF-11, a entrada de produto WIP nem servidores operacionais. Evidências históricas anteriores são preservadas no Git e na lista de referências."
   },
   {
     "id": "RF-28",
@@ -496,15 +496,15 @@
   {
     "id": "RF-39",
     "normative_row": "RF-39\tP1\tOperar diretamente em worktree remota via adaptador homologado, com consistência de artefatos\tI9",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": ";docs/implementation/R2-REMOTE.md;docs/implementation/R2-REMOTE-SOURCE-FLOW.md;docs/implementation/R2-REVIEW-RUNTIME.md",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/R2-REMOTE.md;docs/implementation/R2-REMOTE-SOURCE-FLOW.md;docs/implementation/R2-REVIEW-RUNTIME.md;docs/implementation/R3-DELIVERY.md;docs/implementation/R3-REMOTE-QUALITY.md",
     "files": ";services/remote-worker/worker.py;src/remote.ts;tests/ssh-aggregate-round2.test.ts;tests/ssh-cancellation-round2.test.ts;tests/ssh-source-flow-round2.test.ts",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario. R2: two synthetic SSH hosts exercised cancellation ACK loss, bound replay, origin identity and shared-state admission across aliases. An orphan or incomplete receipt retains capacity; supervisor death is uncertain and never causes an unsafe historical-PGID signal. The owner-signed export and materialization flow now jointly checks differing commits/trees, immutable provenance, replay and not_reviewed state. Distinct state directories, physical CPU/memory limits, immutable process-group supervision, operational remote worktree and push-back remain outside the proof."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. R2: two synthetic SSH hosts exercised cancellation ACK loss, bound replay, origin identity and shared-state admission across aliases. An orphan or incomplete receipt retains capacity; supervisor death is uncertain and never causes an unsafe historical-PGID signal. The owner-signed export and materialization flow now jointly checks differing commits/trees, immutable provenance, replay and not_reviewed state. Distinct state directories, physical CPU/memory limits, immutable process-group supervision, operational remote worktree and push-back remain outside the proof. R3: adaptador de workspace SSH isolado, writer exclusivo, snapshot selado e registro real Capacity/Quality; cadeia física QA/reviewer/judge/aprovação humana/CAS/retorno comprovada. Entrada de produto 8be0c4d1 permanece WIP fora do integrado, com saturação de pool e writePaths a corrigir; homologação operacional não executada."
   },
   {
     "id": "RF-40",
@@ -587,15 +587,15 @@
   {
     "id": "RF-46",
     "normative_row": "RF-46\tP0\tCompartilhar autoridade de admissão e renovação de credenciais entre antigo/novo durante migração e reversão, ou impedir sobreposição de contas\tI8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/R3-MIGRATION.md",
     "files": "",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. R3: autoridade compartilhada sintética ligada ao Ledger/Capacity, transferência/rollback/refresh com fencing e exclusão global da conta comprovados. Instalação antiga real precisa adotar a mesma ponte; migração operacional continua não autorizada."
   },
   {
     "id": "RF-47",
@@ -886,15 +886,15 @@
   {
     "id": "RNF-12",
     "normative_row": "RNF-12\tResponsividade\tMeta inicial: aceite de comando em até 2 s e atualização de evento em até 5 s no ambiente homologado; autenticação/provedor externos medidos separadamente\tI6/I7",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/R3-LATENCY.md;docs/validation/evidence/r3-flow-20261105.json;docs/validation/evidence/r3-ui-latency.json",
     "files": "",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. R3: telemetria e probes finitas de aceite/eventos/DOM implementadas e executadas no laboratório; resultados e distinção entre autenticação, processamento e inferência constam das evidências. Ambiente operacional homologado continua pendente."
   },
   {
     "id": "RNF-13",
@@ -1289,15 +1289,15 @@
   {
     "id": "T28",
     "normative_row": "T28\tAntigo e novo usam a mesma conta durante piloto, falha e reversão\tUma autoridade de reservas/refresh; soma global dentro do teto; sem conceder vaga por snapshot divergente\tRF-13/46\tI8",
-    "status": "future_phase",
-    "code_state": "not_implemented",
-    "test_result": "not_run",
-    "evidence": "",
+    "status": "partially_examined",
+    "code_state": "partial",
+    "test_result": "partial_scope_only",
+    "evidence": "docs/implementation/R3-MIGRATION.md",
     "files": "",
     "independent_review": "pending",
     "authorization": "isolated_synthetic_only",
     "acceptance": "not_accepted",
-    "limitation": "A partial test does not approve the full requirement or acceptance scenario."
+    "limitation": "A partial test does not approve the full requirement or acceptance scenario. R3: coexistência sintética, reservas reais Capacity, refresh exclusivo, pausas e reversão exercitados com duas instâncias lógicas. O cenário com a instalação e credenciais operacionais reais não foi executado."
   },
   {
     "id": "T29",

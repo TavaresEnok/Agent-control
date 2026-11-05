@@ -1,3 +1,9 @@
+# R3 parado para retomada
+
+Parada solicitada pelo usuário. Consulte [o checkpoint de encerramento](implementation/R3-STOP-20261105.md). Build principal, typecheck web e 4 checks focados passaram. Matriz: 1 requisito aceito (RF-27), 110 sem aceite; WIPs técnicos explicitamente preservados, sem declaração de conclusão integral.
+
+---
+
 # R3 em execução
 
 Missão retomada com dez subagentes nativos Sol 6.1/Médio e revisão independente. O trabalho executável ainda está em andamento; consulte [a continuidade R3](implementation/CONTINUACAO-R3-20261105.md) para commits, evidências, pendências e recursos próprios de laboratório. Os resumos históricos abaixo não representam o fechamento desta missão.

@@ -1,3 +1,9 @@
+# Estado vigente: parado por solicitação do usuário
+
+Veja [R3-STOP-20261105.md](R3-STOP-20261105.md) e o manifesto JSON homônimo. Dez agentes concluídos; checkpoints WIP preservados; bancadas próprias encerradas. O histórico abaixo registra a execução e não substitui o estado final de parada.
+
+---
+
 # Continuação R3 — missão em execução
 
 Base `ae2e141b60e6ea90125dd43babb97e9a0abc0f16`, branch `continuation/cursor-20261104`. Antes de editar: alteração local preexistente em `AGENTS.md` (gerente Astra, subagentes Sol Médio) e `test.txt` não rastreado; ambos preservados. A última instrução explícita solicita subagentes Sol 6.1 Médio. O principal não dispõe de ferramenta para confirmar ou trocar seu próprio modelo.
