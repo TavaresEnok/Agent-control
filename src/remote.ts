@@ -8,6 +8,7 @@ import { resolve, join } from 'node:path';
 import { Authority, Id, Refusal, digest } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import {GitExportRequest,sourceSnapshot,verifyGitExport} from './remote-git.ts';
+import {beginRemoteImplementationEmission} from './remote-emission.ts';
 import {requireRemoteSource} from './remote-source-authorizations.ts';
 export const RemoteHostInput=z.object({id:Id,label:z.string().min(1).max(100),hostname:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/),
  port:z.number().int().min(1).max(65535),username:z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
@@ -140,24 +141,13 @@ export class RemoteOperations{
    return {host,projectId:context.project_id,workspaceRoot,existing:null};
   });
   if(admitted.existing)return this.reconcile(principal,input.operationId,authority);
-  return this.ledger.tx(async c=>{
+  const effect=await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);
    await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
    if(input.workspaceId){
-    // Prelock the physical account before the fresh quota/eligibility statement;
-    // collector exhaustion/disable cannot race the actual remote launch effect.
-    const locked=await c.query(`SELECT a.id FROM ac_remote_development_implementations i JOIN ac_capacity_grants g ON g.id=i.grant_id JOIN ac_accounts a ON a.id=g.account_id
-     WHERE i.workspace_id=$1 AND i.operation_id=$2 FOR SHARE OF a`,[input.workspaceId,input.operationId]);
-    if(!locked.rowCount)throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_REQUIRED');
-    const eligible=await c.query(`SELECT 1 FROM ac_remote_development_implementations i JOIN ac_capacity_grants g ON g.id=i.grant_id JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id
-     JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=g.project_id
-     WHERE i.workspace_id=$1 AND i.operation_id=$2 AND i.task_id=$3 AND g.context_id=$4 AND g.intent_id=$5 AND g.manager_epoch=$6
-      AND g.state IN ('reserved','running') AND g.role='programmer' AND p.role='programmer' AND p.enabled AND a.enabled AND a.mode='synthetic'
-      AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available' FOR SHARE OF p`,
-     [input.workspaceId,input.operationId,input.taskId,input.contextId,input.intentId,authority.epoch]);
-    if(!eligible.rowCount)throw new Refusal('REMOTE_IMPLEMENTATION_START_NOT_ELIGIBLE');
-    await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=(SELECT grant_id FROM ac_remote_development_implementations WHERE workspace_id=$1 AND operation_id=$2) AND state='reserved'",[input.workspaceId,input.operationId]);
+    const emission=await beginRemoteImplementationEmission(c,this.ledger,principal,{...input,workspaceId:input.workspaceId},authority);
+    if(emission.blocked)return {blocked:emission.blocked} as const;
    }
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
    const response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,
@@ -169,8 +159,10 @@ export class RemoteOperations{
    if(['completed','failed','canceled_confirmed'].includes(response.state)&&(response.exitCode===undefined||response.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');
    if((response.state==='completed'&&response.exitCode!==0)||(response.state==='failed'&&response.exitCode===0))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INVALID');
    await c.query('UPDATE ac_remote_operations SET state=$2,remote_receipt=$3 WHERE id=$1',[input.operationId,response.state,response]);
-   return response;
+   return {reply:response} as const;
   });
+  if(effect.blocked)throw new Refusal(effect.blocked);
+  return effect.reply;
  }
  async reconcile(principal:string,operationId:string,authority:Authority){
   return this.ledger.tx(async c=>{

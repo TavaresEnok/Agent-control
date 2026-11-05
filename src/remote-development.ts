@@ -96,6 +96,7 @@ export class RemoteDevelopment{
    return {workspace,intent,operation,payload,contract};
   });
   const capacity=new Capacity(this.ledger),grant=await capacity.reserve(principal,{attemptId:bound.operation.execution_attempt_id,intentId:bound.intent.id,contextId:authority.contextId,role:'programmer'},authority);
+  if(grant.state==='released')throw new Refusal('REMOTE_IMPLEMENTATION_NEW_ATTEMPT_REQUIRED');
   const configured=this.options.implementationProfiles?.get(grant.profile_id);
   if(!configured||configured.hostId!==bound.workspace.host_id||configured.taskId!==value.taskId){
    if(grant.state==='reserved')await capacity.transition(principal,grant.id,authority,'released',{processId:bound.intent.operation_id,state:'not_started'});
@@ -111,6 +112,7 @@ export class RemoteDevelopment{
    const operation=(await c.query('SELECT * FROM ac_operations WHERE id=$1 FOR UPDATE',[bound.operation.id])).rows[0];
    if(operation.state!=='registered'||operation.handle||operation.native_session_id||operation.grant_id&&operation.grant_id!==grant.id)throw new Refusal('REMOTE_IMPLEMENTATION_ALREADY_STARTED');
    await c.query(`INSERT INTO ac_remote_development_implementations(workspace_id,operation_id,grant_id,session_id,task_id,policy_revision,input_snapshot,input_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[value.workspaceId,operation.id,grant.id,value.sessionId,value.taskId,Number(bound.contract.quality_revision),frozen,digest(frozen)]);
+   await c.query("INSERT INTO ac_remote_implementation_emissions(operation_id,workspace_id,grant_id,manager_epoch,phase) VALUES($1,$2,$3,$4,'pending')",[operation.id,value.workspaceId,grant.id,authority.epoch]);
    await c.query("UPDATE ac_operations SET state='uncertain',grant_id=$2,native_session_id=$3,handle=$4 WHERE id=$1",[operation.id,grant.id,value.sessionId,{source:'remote-development',workspaceId:value.workspaceId,operationId:operation.id}]);
   });
   return this.start(principal,{workspaceId:value.workspaceId,operationId:bound.operation.id,contextId:authority.contextId,intentId:bound.intent.id,hostId:bound.workspace.host_id,taskId:value.taskId},authority);
