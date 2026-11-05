@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: SSH return configuration separates credentials from every writable project root
+ok 1 - SSH return configuration separates credentials from every writable project root
+  ---
+  duration_ms: 20.282443
+  type: 'test'
+  ...
+# Subtest: SSH transport refuses mutable aliases and shared or exposed credential files before exchange
+ok 2 - SSH transport refuses mutable aliases and shared or exposed credential files before exchange
+  ---
+  duration_ms: 19.787425
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1298.319558
