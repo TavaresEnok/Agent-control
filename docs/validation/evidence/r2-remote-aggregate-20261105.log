@@ -1,0 +1,17 @@
+TAP version 13
+# Subtest: SSH aliases sharing a worker state serialize admission and retain uncertain capacity
+ok 1 - SSH aliases sharing a worker state serialize admission and retain uncertain capacity
+  ---
+  duration_ms: 5036.597764
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5504.15202
+Synthetic supervisor SIGKILL: cancellation not confirmed; inspection remains uncertain after child exit.

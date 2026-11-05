@@ -200,21 +200,44 @@ def rpc(config_path):
     if type(request['epoch']) is not int or request['epoch'] < 1:
         raise ValueError('INVALID_EPOCH')
     fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    with open(root / (operation + '.admission.lock'), 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if record.exists():
-            prior = json.loads(record.read_text())
-            if prior['requestDigest'] != fingerprint:
-                raise ValueError('OPERATION_ID_CONFLICT')
-            return observed(prior)
-        item = {'schemaVersion': 1, 'operationId': operation, 'state': 'uncertain', 'projectId': project,
-                'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
-        # Persist before launching. A crash in this gap remains uncertain and is not blindly retried.
-        atomic(record, item)
-        subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), '--config', config_path, '--execute', operation],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-                         env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
-        return item
+    # Every alias and controller using this state directory shares this lock.
+    # Terminal journal replacement is atomic; uncertain and orphaned records keep
+    # their slot. A malformed operation record fails closed.
+    with open(root / '.global-admission.lock', 'a') as global_lock:
+        fcntl.flock(global_lock, fcntl.LOCK_EX)
+        with open(root / (operation + '.admission.lock'), 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if record.exists():
+                prior = json.loads(record.read_text())
+                if prior['requestDigest'] != fingerprint:
+                    raise ValueError('OPERATION_ID_CONFLICT')
+                return observed(prior)
+            maximum = config.get('maxConcurrent', 1)
+            if type(maximum) is not int or not 1 <= maximum <= 32:
+                raise ValueError('INVALID_CONCURRENCY_LIMIT')
+            active = 0
+            for candidate in root.glob('*.json'):
+                try:
+                    candidate_id = str(uuid.UUID(candidate.stem))
+                except ValueError:
+                    continue
+                if candidate.name != candidate_id + '.json':
+                    continue
+                other = json.loads(candidate.read_text())
+                if other['operationId'] != candidate_id:
+                    raise ValueError('INVALID_OPERATION_JOURNAL')
+                if other['state'] not in ('completed', 'failed', 'canceled_confirmed'):
+                    active += 1
+            if active >= maximum:
+                raise ValueError('REMOTE_HOST_BUSY')
+            item = {'schemaVersion': 1, 'operationId': operation, 'state': 'uncertain', 'projectId': project,
+                    'taskId': task, 'root': str(directory), 'epoch': request['epoch'], 'requestDigest': fingerprint}
+            # Persist before launching. A crash in this gap remains uncertain and is not blindly retried.
+            atomic(record, item)
+            subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), '--config', config_path, '--execute', operation],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                             env={'PATH': '/usr/local/bin:/usr/bin:/bin'})
+            return item
 
 
 def main():

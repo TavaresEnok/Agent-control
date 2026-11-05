@@ -3,7 +3,7 @@ import json, subprocess, uuid, time, pathlib, os, signal
 config='/fixtures/host-a/worker.json'
 c=json.loads(pathlib.Path(config).read_text()); op=str(uuid.uuid4())
 project=next(iter(c['projects'])); worker='/usr/local/lib/agent-control/worker.py'
-assert c['stateDirectory']=='/projects/journal' and c['projects'][project]=='/projects/repo'
+assert c['stateDirectory'] in ('/projects/journal','/projects/aggregate-journal','/projects/aggregate-journal-2') and c['projects'][project]=='/projects/repo'
 def rpc(req):
     p=subprocess.run(['python3',worker,'--config',config],input=json.dumps(req),text=True,capture_output=True,check=True)
     return json.loads(p.stdout)
@@ -39,4 +39,11 @@ assert res['state']!='canceled_confirmed'
 time.sleep(2.2)
 res=rpc(dict(schemaVersion=1,action='inspect',operationId=op))
 assert res['state']=='uncertain',res
+if c.get('maxConcurrent') == 1:
+    try:
+        rpc(dict(schemaVersion=1,action='start',operationId=str(uuid.uuid4()),projectId=project,taskId='slow',root='/projects/repo',epoch=1))
+    except subprocess.CalledProcessError:
+        pass
+    else:
+        raise AssertionError('uncertain orphan released its capacity')
 print('Synthetic supervisor SIGKILL: cancellation not confirmed; inspection remains uncertain after child exit.')
