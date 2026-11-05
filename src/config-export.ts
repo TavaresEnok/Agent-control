@@ -60,7 +60,7 @@ export async function collectConfiguration(ledger:Ledger,principal:string,projec
   if(!(await c.query("SELECT 1 FROM ac_control_admins a JOIN ac_memberships m ON m.principal_id=a.principal_id WHERE a.principal_id=$1 AND m.project_id=$2 AND m.role='owner'",[principal,projectId])).rowCount)throw new Refusal('CONFIG_EXPORT_FORBIDDEN',403);
   const projectIds=[config.project,...config.projects].map(p=>p.id);if(!projectIds.includes(projectId))throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
   if(Number((await c.query("SELECT count(*) n FROM ac_memberships WHERE principal_id=$1 AND role='owner' AND project_id=ANY($2::uuid[])",[principal,projectIds])).rows[0].n)!==projectIds.length)throw new Refusal('CONFIG_EXPORT_FORBIDDEN',403);
-  const rows=async(sql:string,id:string)=>{const r=(await c.query(sql,[id,MAX_ROWS+1])).rows;if(r.length>MAX_ROWS)throw new Refusal('CONFIG_EXPORT_TOO_LARGE');return r;};
+  let totalRows=0;const rows=async(sql:string,id:string)=>{const r=(await c.query(sql,[id,MAX_ROWS+1])).rows;totalRows+=r.length;if(totalRows>MAX_ROWS)throw new Refusal('CONFIG_EXPORT_TOO_LARGE');return r;};
   const collectProject=async(id:string)=>{
   const project=(await c.query('SELECT id,label FROM ac_projects WHERE id=$1',[id])).rows[0];if(!project)throw new Refusal('CONFIG_EXPORT_FORBIDDEN',403);
   const env=await rows('SELECT r.revision,r.snapshot,r.digest,(h.revision=r.revision) AS head FROM ac_project_environment_revisions r LEFT JOIN ac_project_environment_heads h USING(project_id) WHERE r.project_id=$1 ORDER BY r.revision LIMIT $2',id);
