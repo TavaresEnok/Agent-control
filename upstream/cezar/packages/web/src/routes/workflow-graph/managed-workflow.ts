@@ -4,6 +4,11 @@ import {signControl} from '../settings/agent-control-operator'
 
 type Projection={projectId:string;name:string;revision:number;workflow:{name:string;description?:string;graph:WorkflowGraph}|null}
 async function json(response:Response){const body=await response.json();if(!response.ok)throw Error(typeof body?.error==='string'?body.error:`HTTP_${response.status}`);return body}
+export async function defaultProject():Promise<string>{
+ const value=await json(await agentControlFetch('/api/v1/ac/operator/identity'))
+ if(typeof value.projectId!=='string'||!value.projectId)throw Error('PROJECT_REQUIRED')
+ return value.projectId
+}
 export async function managedWorkflows(projectId:string):Promise<{workflows:{name:string;revision:number}[]}>{
  return json(await agentControlFetch(`/api/v1/ac/workflow-graphs?projectId=${encodeURIComponent(projectId)}`))
 }

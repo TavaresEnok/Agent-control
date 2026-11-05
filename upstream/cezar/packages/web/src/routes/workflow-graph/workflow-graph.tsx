@@ -92,7 +92,7 @@ import { WorkflowsLoading } from '../workflows/workflows-loading'
 import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
 import { writeClipboard } from '@/lib/clipboard'
 import { useProjectScope } from '@/api/project-scope-context'
-import { managedWorkflow, managedWorkflows, saveManagedWorkflow, validateManagedWorkflow } from './managed-workflow'
+import { managedWorkflow, managedWorkflows, saveManagedWorkflow, validateManagedWorkflow, defaultProject } from './managed-workflow'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -237,7 +237,9 @@ export function FloatingPanel({
 
 function WorkflowGraphEditor() {
   const { name: routeName } = useParams()
-  const {projectId} = useProjectScope()
+  const {projectId:scopeProjectId} = useProjectScope()
+  const defaultScope = useQuery({queryKey:['managed-default-project'],enabled:!scopeProjectId,retry:false,queryFn:defaultProject})
+  const projectId = scopeProjectId ?? defaultScope.data ?? null
   const managed = useQuery({queryKey:['managed-workflow',projectId,routeName],enabled:!!projectId&&!!routeName,
     retry:false,queryFn:()=>managedWorkflow(projectId!,routeName!)})
   const managedList = useQuery({queryKey:['managed-workflows',projectId],enabled:!!projectId,retry:false,queryFn:()=>managedWorkflows(projectId!)})
@@ -305,6 +307,7 @@ function WorkflowGraphEditor() {
   // Load once per route name — a background refetch must never clobber edits in progress.
   useEffect(() => {
     const key = routeName ?? '(new)'
+    if (!projectId) return
     if (loadedFor.current === key) return
     if (routeName && (!workflows.data || (projectId && (managed.isPending || managed.isError)))) return
     loadedFor.current = key
