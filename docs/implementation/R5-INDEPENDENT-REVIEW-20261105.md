@@ -83,3 +83,5 @@ A prova física do autor 4134196e (`/tmp/ac-r5-native-log-physical-3.log`) passa
 665de0e3: aprovado o escopo do autor para start autenticado com ACK perdido e reload em 360/390: um intent persistido, duas deliveries e segunda proposta/intent distinto. A prova estabelece zero native_execution_jobs; não demonstra unicidade de lançamento físico. Avaliar T27 junto das demais ações e montagem final, sem ampliar a evidência.
 
 caa5781b: após ACK perdido e reload, pausa/retomada e política refletem estado/revisão autoritativos em 360/390; start é reenviado após reload com mesmo intent. As ações pausa/política após reload não são reenviadas nesse trecho, mas seu retry sem reload foi provado em df89c41d. Nenhum worker físico é iniciado nessa bancada.
+
+091 c40d7c99 acrescenta controles negativos de catálogo, colisão e digest obsoleto, além de segundo descendente válido; inspecionados script e log PG 1/1 do autor. Aprovação delimitada mantida.
