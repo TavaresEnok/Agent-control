@@ -1,0 +1,90 @@
+TAP version 13
+# Subtest: new-object gate refuses uncompressed current and historical blobs without reclassifying base
+ok 1 - new-object gate refuses uncompressed current and historical blobs without reclassifying base
+  ---
+  duration_ms: 577.37704
+  type: 'test'
+  ...
+# Subtest: Docker log sanitizer redacts split known secrets per stream and refuses malformed frames
+ok 2 - Docker log sanitizer redacts split known secrets per stream and refuses malformed frames
+  ---
+  duration_ms: 21.478907
+  type: 'test'
+  ...
+# Subtest: secret snapshots are encrypted, bound to the job and detect tampering
+ok 3 - secret snapshots are encrypted, bound to the job and detect tampering
+  ---
+  duration_ms: 78.591006
+  type: 'test'
+  ...
+# Subtest: missing or corrupt legacy redaction context archives only a fixed diagnostic
+ok 4 - missing or corrupt legacy redaction context archives only a fixed diagnostic
+  ---
+  duration_ms: 0.719348
+  type: 'test'
+  ...
+# Subtest: legacy log quarantine preserves original digest, removes plaintext, and replays idempotently
+ok 5 - legacy log quarantine preserves original digest, removes plaintext, and replays idempotently
+  ---
+  duration_ms: 26.201381
+  type: 'test'
+  ...
+# Subtest: legacy quarantine recovers interrupted publish and post-encryption cuts
+ok 6 - legacy quarantine recovers interrupted publish and post-encryption cuts
+  ---
+  duration_ms: 33.782373
+  type: 'test'
+  ...
+# Subtest: known credential in task is refused before launch; safe task remains valid
+ok 7 - known credential in task is refused before launch; safe task remains valid
+  ---
+  duration_ms: 0.638862
+  type: 'test'
+  ...
+# Subtest: legacy artifact without redaction snapshot is held with explicit diagnostic
+ok 8 - legacy artifact without redaction snapshot is held with explicit diagnostic
+  ---
+  duration_ms: 5.817043
+  type: 'test'
+  ...
+# Subtest: execution refuses a legacy blocked model before effects and reconciles existing jobs
+ok 9 - execution refuses a legacy blocked model before effects and reconciles existing jobs
+  ---
+  duration_ms: 5.682248
+  type: 'test'
+  ...
+# Subtest: planning refuses a legacy blocked model before resources but reconciles an existing call
+ok 10 - planning refuses a legacy blocked model before resources but reconciles an existing call
+  ---
+  duration_ms: 1.138749
+  type: 'test'
+  ...
+# {"runner":"actual CodexAppServerRunner","cli":"scripted app-server process","splitDelta":true,"redacted":true,"providerInference":false,"container":false}
+# Subtest: successful real Codex runner and scripted app-server redact a fragmented known capability
+ok 11 - successful real Codex runner and scripted app-server redact a fragmented known capability
+  ---
+  duration_ms: 321.8655
+  type: 'test'
+  ...
+# {"runner":"CodexAppServerRunner","cli":"deterministic app-server process","initialAndRefreshRegisteredBeforeDelivery":true,"missingAuthorityRefused":true,"wrongAccountRefused":true,"registrationFailureRefused":true,"timeoutRefused":true,"providerInference":false}
+# Subtest: external auth registers each token before delivery and rejects absent refresh authority
+ok 12 - external auth registers each token before delivery and rejects absent refresh authority
+  ---
+  duration_ms: 6512.06563
+  type: 'test'
+  ...
+# Subtest: managed graph gateway mounts only exact authenticated paths before runtime selection
+ok 13 - managed graph gateway mounts only exact authenticated paths before runtime selection
+  ---
+  duration_ms: 46.679666
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7252.784511
