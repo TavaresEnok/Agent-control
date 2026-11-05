@@ -93,8 +93,9 @@ export class Ledger {
   }
   /** Must run after fence/authorize has locked the context. Cancellation then
    * serializes with the physical-effect transaction, not only a UI flag. */
+  async assertRuntimeRoute(c:pg.PoolClient,intentId:string){await assertGenerationIntent(c,intentId,this.runtimeIdentity);}
   async assertIntentActive(c:pg.PoolClient,contextId:string,intentId:string){
-    await assertGenerationIntent(c,intentId,this.runtimeIdentity);
+    await this.assertRuntimeRoute(c,intentId);
     if(!(await c.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2',[intentId,contextId])).rowCount)
       throw new Refusal('INTENT_SCOPE_MISMATCH',403);
     if((await c.query('SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 OR intent_id=(SELECT parent_intent_id FROM ac_intents WHERE id=$1)',[intentId])).rowCount)

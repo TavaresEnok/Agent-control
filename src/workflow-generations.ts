@@ -223,3 +223,11 @@ async function assertContextEffectsQuiescent(c:PoolClient,contextId:string){
   }
  }
 }
+
+const runtimeParkingReasons=new Set(['WORKFLOW_GENERATION_RECONCILIATION_REQUIRED','WORKFLOW_RUNTIME_ROUTE_MISMATCH','WORKFLOW_RUNTIME_UNAVAILABLE','WORKFLOW_RUNTIME_PROCESS_MISMATCH','CEZAR_RUNTIME_PACKAGE_MISMATCH','WORKFLOW_RUNTIME_MISSING_OR_INCOMPATIBLE']);
+/** Package-local Refusal classes may differ across retained loaded builds.
+ * Only these closed, non-authorizing reasons are adapted for per-intent waits. */
+export function workflowRuntimeParkingReason(error:unknown):string|undefined{
+ if(!error||typeof error!=='object'||!('code' in error)||typeof error.code!=='string')return;
+ return runtimeParkingReasons.has(error.code)?error.code:undefined;
+}

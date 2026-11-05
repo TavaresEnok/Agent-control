@@ -1,3 +1,4 @@
+import {workflowRuntimeParkingReason} from './workflow-generations.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Socket } from 'socket.io-client';
@@ -363,8 +364,8 @@ export class HappierEndpoint {
     await this.ledger.heartbeat(this.options.authority);
     if(this.options.transportOnly){this.socket.emit('session-alive',{sid:this.options.sessionId,time:Date.now(),thinking:false,mode:'remote'});return;}
     let recoveryFailure:unknown;
-    try{await this.runtime.reconcileCancellations(this.options.authority,this.options.principal);}catch(error){recoveryFailure=error;}
-    try{await this.runtime.recoverManaged(this.options.authority);}catch(error){recoveryFailure??=error;}
+    try{await this.runtime.reconcileCancellations(this.options.authority,this.options.principal);}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure=error;}
+    try{await this.runtime.recoverManaged(this.options.authority);}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure??=error;}
     this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
     if (Date.now() - this.lastPendingAt >= 1000) {
       this.lastPendingAt = Date.now();
@@ -382,8 +383,14 @@ export class HappierEndpoint {
             status:intent.cancellation_state==='confirmed'?'cancel_confirmed':'cancel_requested',reason:intent.cancellation_state==='confirmed'?'NONE':'PLAN_CANCELLATION_REQUESTED'});
         continue;
       }
+      // A retained build can be absent while unrelated new admissions remain
+      // runnable. Route checks precede planning as well as graph dispatch.
+      try{await this.ledger.tx(async c=>{await this.ledger.fence(c,this.options.authority,true);await this.ledger.assertRuntimeRoute(c,intent.id);});}
+      catch(error){if(!workflowRuntimeParkingReason(error))throw error;
+        await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RUNTIME_UNAVAILABLE'});continue;}
       if(intent.command.payload.workflow==='semantic-proposal-v1'){
         if(!['done','failed','canceled','cancelled'].includes(intent.state))try{await this.processSemanticProposal(intent);}catch(error){
+          if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.id,source:'manager',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}
           if(error instanceof Refusal&&['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code)){capacityWait??=error;continue;}
           if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED'].includes(error.code)){
             const localId='proposal-failed-'+intent.id;
@@ -416,6 +423,7 @@ export class HappierEndpoint {
           {entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'recovered'});
       }
       catch(error){
+        if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}
         if(!(error instanceof Refusal)||!['PLAN_CANCELLATION_REQUESTED','HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
         if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))capacityWait??=error;
         await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,

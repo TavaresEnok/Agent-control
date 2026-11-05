@@ -12,7 +12,8 @@ import fs from 'node:fs';
 import {syncBuiltinESMExports} from 'node:module';
 import {promisify} from 'node:util';
 import {Ledger} from '../src/ledger.ts';
-import {digest} from '../src/contracts.ts';
+import {digest,Refusal} from '../src/contracts.ts';
+import {HappierEndpoint} from '../src/happier.ts';
 import {provisionCapacity} from './fixtures/provision-capacity.ts';
 import {WorkflowGenerations} from '../src/workflow-generations.ts';
 import {workflowVersionRegistry} from '../src/workflow-versions.ts';
@@ -194,4 +195,26 @@ test('modern RunStore restart and first append use frozen record and bounded tai
   assert.equal(wholeReads,0);assert.ok(tailBytes>0&&tailBytes<=64*1024);assert.ok(tailBytes<fileBytes/10);
   console.log(JSON.stringify({modernManagedRecovery:true,retainedEvents:10000,transcriptBytes:fileBytes,wholeTranscriptReads:wholeReads,tailBytes,successorSeq:next.seq,graphCursor:'implement'}));
  }finally{if(instrumented){fs.openSync=original.open;fs.readSync=original.read;fs.readFileSync=original.readFile;fs.closeSync=original.close;syncBuiltinESMExports();}await runtime?.close();await reopened?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
+});
+
+test('Happier tick parks absent old build per intent while new build admissions and queued delivery continue',async()=>{
+ const s=await setup();let folder:string|undefined,runtime:CezarRuntime|undefined;
+ try{
+  await s.generations.selectForNew(principal,s.project,s.nextIdentity.buildId);const newer=await s.accept(s.next);
+  await s.old.pool.query("UPDATE ac_workflow_runtime_instances SET lease_until=clock_timestamp()-interval '1 second' WHERE instance_id=$1",[s.oldIdentity.instanceId]);
+  folder=await mkdtemp(join(tmpdir(),'ac-r4-generation-caller-'));runtime=new s.nextCezar.CezarRuntime(s.next,folder,s.project);
+  const seen:string[]=[],waits:Record<string,unknown>[]= [];let flushed=false,delivered=false;
+  // Transport shell only. Actual route/fence and workflow reconciliation use
+  // PG/Ledger/Cezar; no message is sent to a real account or socket.
+  const endpoint=Object.create(HappierEndpoint.prototype);
+  Object.assign(endpoint,{ledger:s.next,options:{authority:s.authority,principal,sessionId:s.session},socket:{connected:true,emit:()=>{}},lastPendingAt:Date.now(),
+   validateLink:async()=>s.next.tx(async c=>{await s.next.authorize(c,principal,s.context);await s.next.fence(c,s.authority,true);}),
+   runtime:{reconcileCancellations:async()=>{throw new Refusal('WORKFLOW_RUNTIME_UNAVAILABLE');},recoverManaged:async()=>{throw new Refusal('WORKFLOW_RUNTIME_ROUTE_MISMATCH');},
+    dispatch:async(intent:typeof newer,authority:typeof s.authority)=>{await runtime!.reconcileWorkflowVersion(intent,authority);seen.push(intent.id);return undefined;},
+    observe:async()=>{throw Error('WRONG_RUNTIME_OBSERVE_FORBIDDEN');}},
+   notifications:{observe:async(_principal:string,_authority:unknown,_session:string,value:Record<string,unknown>)=>{waits.push(value);}},
+   receivePending:async()=>{},flushNotifications:async()=>{flushed=true;},deliverQueuedMessages:async()=>{delivered=true;}});
+  await endpoint.tick();assert.deepEqual(seen,[newer.id]);assert.ok(waits.some(row=>row.entityId===s.intent.run_id&&row.reason==='RUNTIME_UNAVAILABLE'));assert.equal(flushed,true);assert.equal(delivered,true);
+  const before=(await s.old.pool.query('SELECT state FROM ac_operations WHERE id=$1',[s.intent.operation_id])).rows[0].state;assert.equal(before,'registered');
+ }finally{await runtime?.close();if(folder)await rm(folder,{recursive:true,force:true});await s.close();}
 });

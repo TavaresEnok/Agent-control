@@ -1,3 +1,4 @@
+import {workflowRuntimeParkingReason} from './workflow-generations.ts';
 import {assertCurrentRuntimeBuild} from './local-workflow-runtime.ts';
 import type {NativeImplementation} from './native-implementation.ts';
 import type {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
@@ -1023,7 +1024,7 @@ export class CezarRuntime {
           this.authorities.set(intent.run_id,authority);
           await this.invocation.run({intent,authority},()=>this.manager.resumeConfirmedNode(intent.run_id));
         }catch(error){
-          if(error instanceof Refusal&&['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))continue;
+          if(workflowRuntimeParkingReason(error)||error instanceof Refusal&&['HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))continue;
           throw error;
         }
       }
