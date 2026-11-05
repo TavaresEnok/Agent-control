@@ -38,6 +38,15 @@ export class Projects {
  async list(principal:string):Promise<ProjectSummary[]>{
   return (await this.ledger.pool.query(`SELECT p.id,p.label,m.role FROM ac_projects p JOIN ac_project_repositories r ON r.project_id=p.id JOIN ac_memberships m ON m.project_id=p.id WHERE m.principal_id=$1 ORDER BY p.label,p.id`,[principal])).rows;
  }
+ /** Resolve only the caller's active linked conversation, without opening runtimes. */
+ async conversationEntry(principal:string,sessionId:string):Promise<{projectId:string;contextId:string}[]>{
+  return (await this.ledger.pool.query(`SELECT x.project_id AS "projectId",x.id AS "contextId"
+   FROM ac_session_links s JOIN ac_contexts x ON x.id=s.context_id
+   JOIN ac_memberships m ON m.project_id=x.project_id AND m.principal_id=$1
+   JOIN ac_project_repositories r ON r.project_id=x.project_id
+   WHERE s.session_id=$2 AND s.principal_id=$1 AND NOT x.archived
+   ORDER BY x.project_id,x.id`,[principal,sessionId])).rows;
+ }
  async listNative(principal:string){
   const rows=(await this.ledger.pool.query(`SELECT p.id,p.label,r.repo,r.registered_at FROM ac_projects p JOIN ac_project_repositories r ON r.project_id=p.id JOIN ac_memberships m ON m.project_id=p.id WHERE m.principal_id=$1 ORDER BY p.label,p.id`,[principal])).rows;
   return Promise.all(rows.map(async row=>{

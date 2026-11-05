@@ -134,6 +134,7 @@ async function main(){
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
    projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn)})),
+   verifyConversationAccess:(request,principal,sessionId)=>sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin),
    projectEnvironments:createProjectEnvironmentApi(new ProjectEnvironments(ledger,config.projectRoots,config.dataDirectory)),
    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),
    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
