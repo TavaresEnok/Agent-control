@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -15,6 +16,16 @@ spec.loader.exec_module(catalog)
 
 
 class CatalogTest(unittest.TestCase):
+    def test_catalog_directory_substitution_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='ac-t30-source-') as root, tempfile.TemporaryDirectory(prefix='ac-t30-substitute-') as other:
+            installation = str(uuid.uuid4())
+            manifest = catalog.initialize(root, installation, [{'kind': 'ssh', 'id': 'fixture', 'identity': {'hostKey': 'fixture'}}])
+            for name in ('manifest.json', 'lock', 'journal'):
+                shutil.copyfile(pathlib.Path(root) / name, pathlib.Path(other) / name)
+                os.chmod(pathlib.Path(other) / name, 0o600)
+            with self.assertRaisesRegex(ValueError, 'CATALOG_IDENTITY_MISMATCH'):
+                catalog.Catalog(other, installation, manifest['catalogId'])
+
     def test_lease_eof_preserves_pending(self):
         with tempfile.TemporaryDirectory(prefix='ac-t30-catalog-lease-') as root:
             installation = str(uuid.uuid4())

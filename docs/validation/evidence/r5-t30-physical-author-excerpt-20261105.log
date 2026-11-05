@@ -1,0 +1,15 @@
+Scope: author-run, disposable lab; excerpt transcribed from tool output, not a complete raw log.
+Command: /tmp/node-v22.23.3-linux-x64/bin/node scripts/r5-recovery-isolated.mjs
+Revision: WIP worktree based on 8df84a97 plus uncommitted host-hold/CAS and test changes; exact final tree requires independent validation.
+Runner: T30_RECOVERY_RUNNER {"label":"ac-r5-t30-recovery-5214185c","disposable":true,"node":"22.23.3"}
+T30_PHYSICAL {"scope":"ac-r5-t30-c54d4aa6-0494-4f28-9637-f4c84b0380ba","sourceInstallation":"d0f8598f-7063-46ec-8574-46274eb95fde","recoveryInstallation":"af0f3bcd-379a-4a65-b668-9a1010f9fcc4","nativeId":"462671921ab31e20a517fc5bd07c764a2c27962fc1b1690b25abd2aba9b3561e","sshId":"63d99945976caa6480ddbdbfa143b107e1b83b1adb6e3f44f1565b673d6a71c2","epoch":2,"paused":true,"admission":"open","postCutLedgerRows":0}
+ok 1 - T30 post-backup physical native and SSH writers are fenced and retired before reopening
+1..1
+# tests 1
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# duration_ms 45028.752478
+The test included killing the catalog helper before admission CAS, a second kill after CAS while one physical authority release was blocked, and retrying that release. A missing-authority attempt stayed closed. The runner and fixture exited successfully after owned-resource cleanup.
+Known limits: uncommitted tree, no independent rerun, no proof against simultaneous rollback of catalog and its trusted custody, and no claim for uninstrumented backends. Earlier unsuccessful fixture attempts were SSH StrictModes setup errors before backup.
