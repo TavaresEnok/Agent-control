@@ -11,6 +11,8 @@ import {createProjectGateway} from './projects-api.ts';
 import {BrowserSessions} from './sessions.ts';
 import {HappierAuthRelay} from './auth-relay.ts';
 import {ProjectAdmin} from './project-admin.ts';
+import {ProjectEnvironments} from './project-environments.ts';
+import {createProjectEnvironmentApi} from './project-environments-api.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
 import {InstallationAuthority} from './installation-authority.ts';
 import {createInstallationAuthorityApi} from './installation-authority-api.ts';
@@ -132,6 +134,7 @@ async function main(){
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
    projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn)})),
+   projectEnvironments:createProjectEnvironmentApi(new ProjectEnvironments(ledger,config.projectRoots,config.dataDirectory)),
    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),
    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
     const bearer=request.headers.get('authorization');
