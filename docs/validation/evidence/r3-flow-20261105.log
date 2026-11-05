@@ -1,0 +1,17 @@
+TAP version 13
+# {"fixture":"r3-conversation-flow","inference":"deterministic-only","substitutions":["deterministic planning/model output","fixed tools HTTP endpoint","private subnet allocator"],"providerGuards":"intact","positive":{"planningJobs":1,"executionJobs":[{"id":"e024eb47-fd49-406e-9b15-7e1d08e6a904","role":"reviewer","state":"completed"},{"id":"848d8c23-a771-47fa-9120-a209a630a7e5","role":"reviewer","state":"completed"},{"id":"6b4b967a-257b-52f3-a487-5211381001ea","role":"programmer","state":"completed"},{"id":"11975ab6-ec6b-5691-aaeb-4ad0c64658cc","role":"programmer","state":"completed"},{"id":"959ea40c-b252-5280-a320-cf2d4fdc484c","role":"programmer","state":"completed"},{"id":"08e100e5-b83f-415e-b8f4-a762e6a6749d","role":"reviewer","state":"completed"},{"id":"8faaf1d6-6aed-4377-90d5-c31d5b93d070","role":"reviewer","state":"completed"}],"qaJobs":4,"protectedCommit":"f306b9dbb8d66e8eaae49c353f030b5170add0d8","capacity":"actual","eligibility":"actual","home":"actual","conversation":"real Happier E2EE","canonicalCompletion":true,"publicationAckLoss":true,"reconnectRecovered":true},"secretCanary":{"synthetic":true,"surfaces":["execution/planning requests, launches, outputs and retained logs","QA retained logs","protected Git artifact files","decrypted canonical Happier messages"],"generatedFilesScanned":121,"wrongOwnerRefused":true,"leaks":0,"excluded":["vault (not configured)","portable export (not exercised)","real provider secrets"]},"cancel":{"authenticated":"real Happier bearer → encrypted browser session → Origin cookie","signed":true,"paused":true,"controllerSigkill":true,"successorEpoch":2,"physicallyRunningBeforeRequest":2,"confirmed":true,"remainingGrants":0}}
+# Subtest: R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+ok 1 - R3 encrypted conversation → admitted isolated plan → native graph → QA/review → integration → canonical chat; signed active cancellation
+  ---
+  duration_ms: 87359.355766
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 89144.896721

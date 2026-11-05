@@ -1,0 +1,70 @@
+TAP version 13
+# Subtest: default and explicit disabled bootstrap stay administrative and perform no queries
+ok 1 - default and explicit disabled bootstrap stay administrative and perform no queries
+  ---
+  duration_ms: 32.318539
+  type: 'test'
+  ...
+# Subtest: incomplete, incompatible and socket configuration is refused before effects
+ok 2 - incomplete, incompatible and socket configuration is refused before effects
+  ---
+  duration_ms: 18.900592
+  type: 'test'
+  ...
+# Subtest: configured opt-in refuses bad keys, paths, sources and accounts before writes, and does not become ready
+ok 3 - configured opt-in refuses bad keys, paths, sources and accounts before writes, and does not become ready
+  ---
+  duration_ms: 56.315653
+  type: 'test'
+  ...
+# Subtest: bench injection composes explicit substitutes, authorizes the source and never calls a model
+ok 4 - bench injection composes explicit substitutes, authorizes the source and never calls a model
+  ---
+  duration_ms: 6.572645
+  type: 'test'
+  ...
+# Subtest: partial shutdown closes only unstarted components and preserves uncertain grants
+ok 5 - partial shutdown closes only unstarted components and preserves uncertain grants
+  ---
+  duration_ms: 2.092841
+  type: 'test'
+  ...
+# Subtest: shutdown keeps going when close or the release query rejects and a later call is not an empty success
+ok 6 - shutdown keeps going when close or the release query rejects and a later call is not an empty success
+  ---
+  duration_ms: 2.016654
+  type: 'test'
+  ...
+# Subtest: bench composition builds the real CezarRuntime and refuses a revoked fence without a model
+ok 7 - bench composition builds the real CezarRuntime and refuses a revoked fence without a model
+  ---
+  duration_ms: 28.866354
+  type: 'test'
+  ...
+# Subtest: a ledger takeover leaves the old registry open and refuses the read before the resolver
+ok 8 - a ledger takeover leaves the old registry open and refuses the read before the resolver
+  ---
+  duration_ms: 19.638896
+  type: 'test'
+  ...
+# Subtest: manager transport and registry do not start for bench bootstrap or an unbound context
+ok 9 - manager transport and registry do not start for bench bootstrap or an unbound context
+  ---
+  duration_ms: 5.665079
+  type: 'test'
+  ...
+# Subtest: serialized fixture opt-in cannot issue a native execution capability
+ok 10 - serialized fixture opt-in cannot issue a native execution capability
+  ---
+  duration_ms: 4.453757
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1364.578004

@@ -1,0 +1,23 @@
+// Disposable crash-test controller. Receives only its own private manifest.
+import {readFile} from 'node:fs/promises';
+import {Ledger} from '../../src/ledger.ts';
+import {CezarRuntime} from '../../src/cezar.ts';
+import {GitArtifacts} from '../../src/git.ts';
+import {Quality} from '../../src/quality.ts';
+import {NativeExecutionSupervisor} from '../../src/native-execution-supervisor.ts';
+import {NativeImplementation} from '../../src/native-implementation.ts';
+import {NativeVerification} from '../../src/native-verification.ts';
+import {NativeQa} from '../../src/native-qa.ts';
+import {authorizeNativeSyntheticFixture} from '../../src/native-synthetic-fixture.ts';
+import {installGraphAllocator} from './r2-graph-allocator.ts';
+const m=JSON.parse(await readFile(process.argv[2]!,'utf8'));
+if(m.contract!=='r3-flow-controller-v1'||!m.fixture.label.startsWith('ac-r3-flow-'))throw Error('R3_CONTROLLER_MANIFEST_REQUIRED');
+installGraphAllocator();
+const db=new Ledger(m.database),capability=await authorizeNativeSyntheticFixture(m.fixture),verifierKey=Buffer.from(m.verifierKey,'base64'),git=new GitArtifacts(m.repo),quality=new Quality(db,verifierKey,git);
+const supervisor=new NativeExecutionSupervisor(db,{...m.executionConfig,syntheticFixture:capability}),nativeImplementation=new NativeImplementation(db,m.repo,quality,[supervisor]),nativeVerification=new NativeVerification(db,quality,[supervisor],verifierKey),nativeQa=new NativeQa(db,quality,m.repo,m.qaRoot,m.qaContract,verifierKey);
+const runtime=new CezarRuntime(db,m.repo,m.project,{quality,git,verifierKey,qualityRevision:m.qualityRevision,targetRef:'refs/heads/protected',allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification},undefined,undefined,{nativeExecutions:[supervisor],nativeImplementation});
+await runtime.start();const interval=setInterval(()=>{void db.heartbeat(m.authority).catch(()=>{});},2000);
+const intent=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[m.intentId])).rows[0];await runtime.dispatch(intent,m.authority);
+process.stdout.write('R3_CONTROLLER_DISPATCHED\n');
+await new Promise(()=>{});
+clearInterval(interval);
