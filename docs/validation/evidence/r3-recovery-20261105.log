@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: R3 encrypted physical PG recovery preserves history/policies/vault and reimport dedupe while inactive
+ok 1 - R3 encrypted physical PG recovery preserves history/policies/vault and reimport dedupe while inactive
+  ---
+  duration_ms: 3957.925929
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4554.086222
