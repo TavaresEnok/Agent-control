@@ -1,3 +1,9 @@
+# R6 em execução — integração e provas finais locais
+
+Retomada autorizada. Equipe efetivamente iniciada: principal Sol6.1 e cinco subagentes nativos Terra6.1/Médio. Consulte [CONTINUACAO-R6-20261105.md](implementation/CONTINUACAO-R6-20261105.md). Matriz:111 requisitos,22 aceites delimitados; demais lacunas continuam abertas. Esta entrada prevalece sobre os checkpoints históricos. Preserve AGENTS.md, .codex/ e test.txt locais.
+
+---
+
 # R5 em execução — Sol principal e cinco Terra/Médio
 
 Equipe reduzida por autorização do usuário. Cinco subagentes Terra6.1/Médio confirmados; Sol anteriores interrompidos. Estado e pendências em [CONTINUACAO-R5-20261105.md](implementation/CONTINUACAO-R5-20261105.md). Preserve AGENTS.md, .codex/ e test.txt locais. Esta entrada prevalece sobre os checkpoints anteriores; missão ainda não concluída.
