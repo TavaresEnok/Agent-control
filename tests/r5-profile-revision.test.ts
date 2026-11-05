@@ -37,6 +37,14 @@ test('profile version and account rename are signed, conflict-safe and preserve 
   assert.deepEqual((await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project,revision])).rows[0].snapshot,before);
   assert.equal((await db.pool.query('SELECT profile_id FROM ac_capacity_grants WHERE id=$1',[grant.id])).rows[0].profile_id,source.id);
   assert.equal((await db.pool.query('SELECT source_profile_id FROM ac_profile_lineage WHERE new_profile_id=$1',[command.payload.newId])).rows[0].source_profile_id,source.id);
+  const distinct={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,newId:randomUUID()}};
+  assert.equal((await control.execute(principal,distinct,proof(distinct))).state,'applied');
+  const badCatalog={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,newId:randomUUID(),effort:'low' as const}};
+  await assert.rejects(control.execute(principal,badCatalog,proof(badCatalog)),/MODEL_EFFORT_NOT_IN_CATALOG/);
+  const collision={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID()};await assert.rejects(control.execute(principal,collision,proof(collision)),/PROFILE_ID_CONFLICT/);
+  const staleDigest={...command,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...command.payload,newId:randomUUID(),expectedDigest:'0'.repeat(64)}};
+  await assert.rejects(control.execute(principal,staleDigest,proof(staleDigest)),/ACCOUNT_PROFILE_REVISION_CONFLICT/);
+
   await assert.rejects(db.pool.query('DELETE FROM ac_profile_lineage WHERE new_profile_id=$1',[command.payload.newId]),/POLICY_REVISION_IMMUTABLE/);
   const rename={...base,intentId:randomUUID(),deliveryAttemptId:randomUUID(),action:'account.rename' as const,payload:{id:source.account_id,label:'Renamed fixture',expectedRevision:1}};
   await control.execute(principal,rename,proof(rename));const stale={...rename,intentId:randomUUID(),deliveryAttemptId:randomUUID()};await assert.rejects(control.execute(principal,stale,proof(stale)),/ACCOUNT_PROFILE_REVISION_CONFLICT/);
