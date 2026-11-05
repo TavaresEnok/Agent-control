@@ -1,0 +1,17 @@
+TAP version 13
+# {"fixture":"synthetic-native-graph","jobs":[{"id":"2e68a2b7-59dc-519e-a4ce-a9c39d3cf64b","role":"programmer"},{"id":"0c294b76-c4ad-4d77-9277-083757b96039","role":"reviewer"}],"writer":"neutralized","modelCalls":0,"capacity":"substituted","qa":"substituted","recovery":"not exercised"}
+# Subtest: synthetic physical native graph disabled
+ok 1 - synthetic physical native graph disabled
+  ---
+  duration_ms: 17369.753433
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 18709.949032
