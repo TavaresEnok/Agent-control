@@ -1,0 +1,4 @@
+# Synthetic privileged Docker-host lab only. Never grants Docker access operationally.
+FROM agent-control-ssh-lab:0.1.0
+USER root
+RUN apk add --no-cache docker-cli

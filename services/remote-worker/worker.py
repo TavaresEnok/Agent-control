@@ -2,6 +2,7 @@
 """Operation journal for controller-approved SSH tasks. No AI credentials or scheduler.
 This process boundary is not a hostile-code sandbox; deploy it as a restricted executor.
 """
+import remote_supervisor
 import argparse, fcntl, hashlib, importlib.util, json, os, pathlib, resource, signal, stat, subprocess, sys, time, uuid
 
 
@@ -75,6 +76,9 @@ def execute(config_path, operation):
             raise ValueError('INVALID_LOG_LIMIT')
         if type(max_seconds) is not int or not 1 <= max_seconds <= 3600:
             raise ValueError('INVALID_TIME_LIMIT')
+        if config.get('executionBackend') == 'docker':
+            remote_supervisor.execute(config, root, item, atomic)
+            return
         def limits():
             resource.setrlimit(resource.RLIMIT_FSIZE, (max_log, max_log))
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -135,6 +139,8 @@ def execute(config_path, operation):
 def observed(item):
     # Legacy or mismatched identities never justify reporting a live supervisor.
     item = dict(item)
+    if (item.get('stableGroup') or item.get('groupIntent')):
+        return item
     if item['state'] == 'running':
         try:
             origin = item['origin']
@@ -151,8 +157,17 @@ def observed(item):
 
 def rpc(config_path):
     config, root = load(config_path)
-    raw = sys.stdin.buffer.read(65537)
-    if len(raw) > 65536:
+    if config.get('executionBackend') == 'docker':
+        # Keep fencing held through request validation, journal mutations, recovery
+        # and admission. A stale request cannot pass a check then mutate later.
+        with remote_supervisor.authority(config, root, atomic):
+            return dispatch(config_path, config, root)
+    return dispatch(config_path, config, root)
+
+
+def dispatch(config_path, config, root):
+    raw = sys.stdin.buffer.read(98305)
+    if len(raw) > 98304:
         raise ValueError('REQUEST_TOO_LARGE')
     request = json.loads(raw)
     if not isinstance(request, dict) or request.get('schemaVersion') != 1:
@@ -160,6 +175,14 @@ def rpc(config_path):
     operation = str(uuid.UUID(request['operationId']))
     record = operation_path(root, operation)
     action = request.get('action')
+    if action == 'git-return':
+        if (request.get('projectId') not in config.get('gitReturnProjects', [])
+                or request.get('destinationRef') not in config.get('gitReturnRefs', {}).get(request.get('projectId'), [])):
+            raise ValueError('RETURN_FORBIDDEN')
+        spec = importlib.util.spec_from_file_location('return_helper', '/usr/local/lib/agent-control/remote_git_return.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.return_artifact(config, request)
     if action == 'git-export':
         # Only a fixed installed helper may implement this read-only action.
         spec = importlib.util.spec_from_file_location('remote_git', '/usr/local/lib/agent-control/remote_git.py')
@@ -180,7 +203,8 @@ def rpc(config_path):
             if item['state'] in ('completed', 'failed', 'canceled_confirmed'):
                 return item
             atomic(root / (operation + '.cancel.json'), {'operationId': operation, 'requestedAt': time.time()})
-            return {**observed(item), 'cancellationRequested': True}
+            item = remote_supervisor.recover(config, root, item, atomic) if (item.get('stableGroup') or item.get('groupIntent')) else observed(item)
+            return {**item, 'cancellationRequested': True}
     if action == 'inspect':
         if set(request) != {'schemaVersion', 'operationId', 'action'}:
             raise ValueError('INVALID_REQUEST')
@@ -188,7 +212,7 @@ def rpc(config_path):
             return {'schemaVersion': 1, 'operationId': operation, 'state': 'unknown'}
         item = json.loads(record.read_text())
         # Missing or reused identities are uncertainty, never proof of completion.
-        return observed(item)
+        return remote_supervisor.recover(config, root, item, atomic) if (item.get('stableGroup') or item.get('groupIntent')) else observed(item)
     if action != 'start' or set(request) != {'schemaVersion', 'operationId', 'action', 'projectId', 'taskId', 'root', 'epoch'}:
         raise ValueError('INVALID_REQUEST')
     project, task = request['projectId'], request['taskId']
@@ -211,7 +235,7 @@ def rpc(config_path):
                 prior = json.loads(record.read_text())
                 if prior['requestDigest'] != fingerprint:
                     raise ValueError('OPERATION_ID_CONFLICT')
-                return observed(prior)
+                return remote_supervisor.recover(config, root, prior, atomic) if (prior.get('stableGroup') or prior.get('groupIntent')) else observed(prior)
             maximum = config.get('maxConcurrent', 1)
             if type(maximum) is not int or not 1 <= maximum <= 32:
                 raise ValueError('INVALID_CONCURRENCY_LIMIT')

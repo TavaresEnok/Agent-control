@@ -1,0 +1,15 @@
+# R3 — supervisão remota durável
+
+Implementação opt-in `executionBackend: "docker"` no worker SSH; o caminho legado por processo permanece conservador. Requer imagem instalada `dockerImage`, `installationId` estável e `authorityEpoch` positivo na configuração confiável. O epoch da requisição é a lease da operação, não autoriza avançar autoridade. A configuração não é escrita por requisições. O socket Docker pertence somente ao executor SSH confiável, nunca ao contêiner da tarefa.
+
+O journal registra intenção com labels antes de criar, ID Docker imutável antes de iniciar e recibo de log com fsync antes de remover. Labels vinculam instalação, operação, lease e epoch da autoridade. O sucessor adquire o writer lock da operação e a autoridade antes de recuperar; remove somente o ID cujo inspect valida todas as labels. Após ausência confirmada e recibo durável, grava terminal. Perda do ACK de remoção preserva incerteza até replay confirmar ausência e hash. Uma intenção sem ID e sem contêiner encontrado permanece incerta: uma chamada create interrompida pode ainda concluir no daemon. Nunca se sinaliza PID histórico.
+
+`resourceAuthority` liga `resource_authority.authority/reservation/validate_group/release`: a autoridade compartilhada deve envolver a operação inteira, incluindo create/start/inspect/remove e journal; as chamadas internas são reentrantes. Configuração sem essa opção só aplica limites locais por contêiner, não capacidade física agregada entre diretórios. O helper e seu provisionamento são propriedade da frente R3-RESOURCES.
+
+Apenas o ensaio `tests/r3-remote-supervisor.py` cria o servidor SSH descartável, com socket Docker do laboratório e chave efêmera própria. Imagem do supervisor: `docker build -f deploy/Dockerfile.ssh-r3-lab -t ac-r3-remote-ssh:20261105 .`. Tarefa executada em contêiner diferente, rede desligada, filesystem raiz somente leitura e sem capabilities. O script remove somente IDs/labels da sua invocação; não usa prune. Nada foi instalado em serviço operacional.
+
+## Prova executada
+
+`python3 tests/r3-remote-supervisor.py` passou sem skips: SSH real; replay start após ACK descartado; supervisor morto com SIGKILL; descendente com setsid continua escrevendo após a morte; sucessor com authorityEpoch 2 cancela/remova o grupo original e confirma ausência; escrita para; configuração antiga epoch 1 recusada; replay conserva mesmo ID e hash. Falha injetada depois de uma remoção Docker física simula perda do ACK: primeira resposta incerta, sucessor confirma `failed` com mesmo recibo. Intenção sem ID/sem resultado segue incerta. ID adulterado para o servidor SSH resulta em incerteza e preserva o servidor.
+
+O teste cobre bancada sintética e chamadas públicas SSH ao worker, não implantação operacional nem o grafo Cezar completo. O helper Docker exige daemon confiável e o estado privado do executor não pode ser escrito pela tarefa. O transporte SSH ainda requer instalação/allowlists externas. `git-return` apenas encaminha à implementação separada de R3-DELIVERY após allowlists explícitas; não foi validado por este teste.
