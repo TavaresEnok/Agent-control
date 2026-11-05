@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: execution refuses a legacy blocked model before effects and reconciles existing jobs
+ok 1 - execution refuses a legacy blocked model before effects and reconciles existing jobs
+  ---
+  duration_ms: 8.141704
+  type: 'test'
+  ...
+# Subtest: planning refuses a legacy blocked model before resources but reconciles an existing call
+ok 2 - planning refuses a legacy blocked model before resources but reconciles an existing call
+  ---
+  duration_ms: 1.902757
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 895.745516
