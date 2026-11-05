@@ -111,17 +111,24 @@ export class RemoteOperations{
    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES(NULL,'remote.host.registered',$1)",[{projectId,hostId:host.id}]);
   });
  }
- async start(principal:string,request:{operationId:string;intentId:string;contextId:string;hostId:string;taskId:string},authority:Authority){
-  const input=z.object({operationId:Id,intentId:Id,contextId:Id,hostId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)}).strict().parse(request);
+ async start(principal:string,request:{operationId:string;intentId:string;contextId:string;hostId:string;taskId:string;workspaceId?:string},authority:Authority){
+  const input=z.object({operationId:Id,intentId:Id,contextId:Id,hostId:Id,taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),workspaceId:Id.optional()}).strict().parse(request);
   const admitted=await this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,input.contextId);
    if(input.contextId!==authority.contextId)throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
    await this.ledger.fence(c,authority);
    const host=(await c.query('SELECT * FROM ac_remote_hosts WHERE id=$1 AND project_id=$2 AND enabled FOR UPDATE',[input.hostId,context.project_id])).rows[0];
    if(!host||!host.allowed_tasks.includes(input.taskId))throw new Refusal('REMOTE_TASK_FORBIDDEN',403);
+   let workspaceRoot:string|undefined;
+   if(input.workspaceId){
+    const workspace=(await c.query("SELECT remote_receipt FROM ac_remote_development_workspaces WHERE id=$1 AND context_id=$2 AND intent_id=$3 AND host_id=$4 AND project_id=$5 AND state='prepared' FOR SHARE",[input.workspaceId,input.contextId,input.intentId,input.hostId,context.project_id])).rows[0];
+    if(!workspace)throw new Refusal('REMOTE_WORKSPACE_REQUIRED');
+    if(!(await c.query('SELECT 1 FROM ac_remote_development_implementations WHERE workspace_id=$1 AND operation_id=$2 AND task_id=$3',[input.workspaceId,input.operationId,input.taskId])).rowCount)throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_REQUIRED');
+    workspaceRoot=z.string().startsWith('/').max(500).parse(workspace.remote_receipt?.repository);
+   }
    const hash=digest(input);
    const prior=(await c.query('SELECT * FROM ac_remote_operations WHERE id=$1',[input.operationId])).rows[0];
-   if(prior){if(prior.request_digest!==hash)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');return {host,projectId:context.project_id,existing:prior};}
+   if(prior){if(prior.request_digest!==hash)throw new Refusal('REMOTE_OPERATION_ID_CONFLICT');return {host,projectId:context.project_id,workspaceRoot,existing:prior};}
    // A replay only reconciles the previously admitted operation; it cannot start new work.
    await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    const active=Number((await c.query("SELECT count(*) n FROM ac_remote_operations WHERE host_id=$1 AND state NOT IN ('completed','failed','canceled_confirmed')",[input.hostId])).rows[0].n);
@@ -130,17 +137,33 @@ export class RemoteOperations{
     [input.operationId,input.contextId,input.hostId,input.taskId,hash,authority.epoch,input.intentId]);
    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'remote.operation.registered',$2)",
     [input.contextId,{operationId:input.operationId,intentId:input.intentId,hostId:input.hostId,taskId:input.taskId}]);
-   return {host,projectId:context.project_id,existing:null};
+   return {host,projectId:context.project_id,workspaceRoot,existing:null};
   });
   if(admitted.existing)return this.reconcile(principal,input.operationId,authority);
   return this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);
    await this.ledger.assertIntentActive(c,authority.contextId,input.intentId);
    await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '30 seconds' WHERE context_id=$1",[authority.contextId]);
+   if(input.workspaceId){
+    // Prelock the physical account before the fresh quota/eligibility statement;
+    // collector exhaustion/disable cannot race the actual remote launch effect.
+    const locked=await c.query(`SELECT a.id FROM ac_remote_development_implementations i JOIN ac_capacity_grants g ON g.id=i.grant_id JOIN ac_accounts a ON a.id=g.account_id
+     WHERE i.workspace_id=$1 AND i.operation_id=$2 FOR SHARE OF a`,[input.workspaceId,input.operationId]);
+    if(!locked.rowCount)throw new Refusal('REMOTE_IMPLEMENTATION_BINDING_REQUIRED');
+    const eligible=await c.query(`SELECT 1 FROM ac_remote_development_implementations i JOIN ac_capacity_grants g ON g.id=i.grant_id JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id
+     JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=g.project_id
+     WHERE i.workspace_id=$1 AND i.operation_id=$2 AND i.task_id=$3 AND g.context_id=$4 AND g.intent_id=$5 AND g.manager_epoch=$6
+      AND g.state IN ('reserved','running') AND g.role='programmer' AND p.role='programmer' AND p.enabled AND a.enabled AND a.mode='synthetic'
+      AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available' FOR SHARE OF p`,
+     [input.workspaceId,input.operationId,input.taskId,input.contextId,input.intentId,authority.epoch]);
+    if(!eligible.rowCount)throw new Refusal('REMOTE_IMPLEMENTATION_START_NOT_ELIGIBLE');
+    await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=(SELECT grant_id FROM ac_remote_development_implementations WHERE workspace_id=$1 AND operation_id=$2) AND state='reserved'",[input.workspaceId,input.operationId]);
+   }
    // Lock across the authorized transport effect; any lost acknowledgement stays uncertain.
    const response=Reply.parse(await this.transport.exchange(admitted.host,{schemaVersion:1,action:'start',operationId:input.operationId,
-    projectId:admitted.projectId,taskId:input.taskId,root:admitted.host.remote_root,epoch:authority.epoch}));
+    projectId:admitted.projectId,taskId:input.taskId,root:admitted.workspaceRoot??admitted.host.remote_root,epoch:authority.epoch,...(input.workspaceId?{workspaceId:input.workspaceId}:{})}));
    if(response.operationId!==input.operationId)throw new Refusal('REMOTE_RECEIPT_ID_MISMATCH');
+   if(input.workspaceId&&(response.workspaceId!==input.workspaceId||response.root!==admitted.workspaceRoot))throw new Refusal('REMOTE_WORKSPACE_RECEIPT_MISMATCH');
    if(response.state==='unknown')throw new Refusal('REMOTE_START_UNCERTAIN');
    if(response.projectId!==admitted.projectId||response.taskId!==input.taskId||response.epoch!==authority.epoch)throw new Refusal('REMOTE_RECEIPT_SCOPE_MISMATCH');
    if(['completed','failed','canceled_confirmed'].includes(response.state)&&(response.exitCode===undefined||response.logSha256===undefined))throw new Refusal('REMOTE_TERMINAL_RECEIPT_INCOMPLETE');

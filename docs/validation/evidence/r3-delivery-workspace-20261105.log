@@ -1,0 +1,17 @@
+TAP version 13
+# {"proof":"r3-direct-remote-development","workspaceId":"06b6612a-b953-4fb1-aa8e-fc4d72a02a87","commit":"42e360fbee32a90e08180f4a6122052fb6ed40c4","tree":"3ac503e9b614e57f3ea0237aa7e18159cc30f8d3","source":"cd8b46ea19aebe3a0d8fe08d1396c679bf0228a5","writer":"real SSH Docker fixed executable","artifactRegistration":"Capacity+Quality APIs","untrackedExported":false,"sealedReplay":true,"qualityStatus":"not_reviewed"}
+# Subtest: R3 direct remote workspace uses one Docker writer, seals exact output, registers through real Capacity and Quality
+ok 1 - R3 direct remote workspace uses one Docker writer, seals exact output, registers through real Capacity and Quality
+  ---
+  duration_ms: 6671.076782
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7630.753316
