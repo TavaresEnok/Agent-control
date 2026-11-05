@@ -802,8 +802,8 @@
         "scope": "independently rerun at base Node22.23.3; combined 16 passed zero skips; substitutes as stated in review MD"
       }
     ],
-    "classification": "implementation_and_evidence_gap",
-    "missing": "Remote stable orphan group neutralization missing at base, R3 new primitive pending review",
+    "classification": "integration_evidence_missing",
+    "missing": "Bounded history and immutable remote orphan neutralization now independently proved for approved modules; full workflow entrypoint/fallback/recovery/intermediate crash matrix still requires composed integration verification.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
@@ -817,6 +817,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -995,7 +1000,14 @@
     "missing": "Independent rerun of authorized two-host SSH lab plus proof no IA credentials/login on targets pending; operational deployment is outside this criterion proof.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
+      }
+    ]
   },
   {
     "id": "RF-27",
@@ -1047,8 +1059,8 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "implementation_and_evidence_gap",
-    "missing": "Supervisor-death stable group proof pending R3; delayed Docker create timeout must stay uncertain",
+    "classification": "complete_slice_verification_pending",
+    "missing": "Independent real SSH primitive scenarios passed including supervisor death and uncertain delayed create; exact requirement acceptance awaits final integrated remote schema/worker version and delivery workspace-hook review.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
@@ -1057,6 +1069,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -1469,7 +1486,14 @@
     "missing": "Remote escaped descendant neutralization and successor shared-worktree physical matrix pending R3",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
-    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof"
+    "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
+    "review_deltas": [
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
+      }
+    ]
   },
   {
     "id": "RF-56",
@@ -1632,6 +1656,11 @@
         "version": "3ca18eae",
         "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
         "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -1674,8 +1703,8 @@
         "scope": "existing source inspected by filename/reference; historical success not independently rerun"
       }
     ],
-    "classification": "implementation_and_evidence_gap",
-    "missing": "Cross-dir remote authority transfer and resource authority epoch not yet implemented at base",
+    "classification": "integration_evidence_missing",
+    "missing": "Host-shared resource epoch and operation claims now fence across state dirs; full ownership/CAS/state transition proof across all components still requires final integration verification.",
     "external_dependency": null,
     "acceptance_recommendation": "not_accepted",
     "review_scope": "Requirement-specific static inspection and exact finite reruns documented in R3-REVIEW-RUNTIME.md; no inherited matrix status asserted as independent proof",
@@ -1689,6 +1718,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -2037,6 +2071,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -2078,6 +2117,11 @@
         "version": "3ca18eae",
         "result": "History module/migration/wiring approved for integration after independent PG3/3; numeric text-alias defect corrected; finite indexed pages, epoch+CAS, dirty/dependency audits and row-error isolation proven in bounded fixture",
         "scope": "Not full native graph or all failure windows; dependency-only eligibility may wait up to17 finite sweeps, no latency guarantee"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -2259,6 +2303,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -2380,6 +2429,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
@@ -2720,6 +2774,11 @@
         "version": "5add3b71",
         "result": "Aggregate resource helper approved integration after independent real Docker/cgroup17-group proof: shared CPU/memory/PIDs and admission; persistent epoch/operation claims and pending-create slots",
         "scope": "Trusted executor sameUID on Docker host systemd cgroupv2 with real PID/hierarchy; worker SSH combined proof separate"
+      },
+      {
+        "version": "6553ce5c + 46fc57af + 5add3b71",
+        "result": "Combined SSH/resource primitive approved after independent5-group physical rerun: immutable group supervisor death/setsid cleanup, ACK lost, cross-state-root/missing-journal claims refused, busy refusal retry, uncertain create, unrelated ID preserved",
+        "scope": "Public SSH worker not full Cezar; workspaceId Git hooks delegated product/delivery review; supported trusted host only"
       }
     ]
   },
