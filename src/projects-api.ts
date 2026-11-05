@@ -10,6 +10,7 @@ type ProjectGatewayOptions={projects:Projects;runtimes:ProjectRuntimes;defaultPr
  appFor:(runtime:CezarRuntime)=>{fetch:(request:Request)=>Response|Promise<Response>};
  projectAdmin?:(request:Request,principal:string)=>Promise<Response>;
  verifyConversationAccess?:(request:Request,principal:string,sessionId:string)=>Promise<boolean>;
+ workflowGraphs?:(request:Request,principal:string)=>Promise<Response>;
  projectEnvironments?:(request:Request,principal:string)=>Promise<Response>;
  installationAuthority?:(request:Request,principal:string)=>Promise<Response>;
 };
@@ -34,6 +35,7 @@ export function createProjectGateway(options:ProjectGatewayOptions){
     const matches=await options.verifyConversationAccess?.(request,principal,parsed.data)?await options.projects.conversationEntry(principal,parsed.data):[];
     return Response.json({matches},{headers:{'cache-control':'no-store'}});
    }
+   if((path==='/api/v1/ac/workflow-graphs'||path==='/api/v1/ac/workflow-graphs/validate')&&options.workflowGraphs)return options.workflowGraphs(request,principal);
    if(path==='/api/v1/ac/project-admin/environments' &&options.projectEnvironments)return options.projectEnvironments(request,principal);
    if(path==='/api/v1/ac/installation-authority'&&options.installationAuthority)return options.installationAuthority(request,principal);
    if((path==='/api/v1/ac/project-admin'||path==='/api/v1/ac/project-admin/remote-source'||path==='/api/v1/ac/project-admin/remote-return'||path==='/api/v1/ac/project-admin/remote-development')&&options.projectAdmin)return options.projectAdmin(request,principal);

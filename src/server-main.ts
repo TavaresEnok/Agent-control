@@ -13,6 +13,8 @@ import {HappierAuthRelay} from './auth-relay.ts';
 import {ProjectAdmin} from './project-admin.ts';
 import {ProjectEnvironments} from './project-environments.ts';
 import {createProjectEnvironmentApi} from './project-environments-api.ts';
+import {WorkflowGraphs} from './workflow-graph-service.ts';
+import {createWorkflowGraphApi} from './workflow-graph-api.ts';
 import {createProjectAdminApi} from './project-admin-api.ts';
 import {InstallationAuthority} from './installation-authority.ts';
 import {createInstallationAuthorityApi} from './installation-authority-api.ts';
@@ -144,6 +146,7 @@ async function main(){
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
    projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn),remoteDevelopment:configuredRemoteDevelopment(ledger,config.remoteDevelopment,(projectId,contextId)=>managerTransports.get(projectId)?.authority(contextId))})),
    verifyConversationAccess:(request,principal,sessionId)=>sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin),
+   workflowGraphs:createWorkflowGraphApi(new WorkflowGraphs(ledger,config.projectRoots,config.dataDirectory)),
    projectEnvironments:createProjectEnvironmentApi(new ProjectEnvironments(ledger,config.projectRoots,config.dataDirectory)),
    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),
    publicFetch:async request=>defaultApp.fetch(request),authenticate:async request=>{
