@@ -1,6 +1,6 @@
 import {DockerDaemon as FlowDockerDaemon} from '../src/sandbox-broker.ts';
 import {ProjectEnvironments} from '../src/project-environments.ts';
-import {provisionFlowResources,assertFlowResourceLimits,assertFlowResourceMembers,retireFlowResources,type FlowResourceEnvelope} from './fixtures/r3-flow-resources.ts';
+import {provisionFlowResources,assertFlowResourceLimits,assertFlowResourceMembers,retireFlowResources,snapshotFlowResources,type FlowResourceEnvelope} from './fixtures/r3-flow-resources.ts';
 import {measureCommandRequests,startCommittedEventProbe,assertEventReport} from './fixtures/r3-latency-probe.ts';
 import {test,mock} from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,6 +34,18 @@ import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {installGraphAllocator} from './fixtures/r2-graph-allocator.ts';
 import {cleanupGraphResources} from './fixtures/native-graph-cleanup.ts';
 
+function safeFlowFailure(error:unknown):Record<string,unknown>{
+ if(!error||typeof error!=='object')return {name:'NonError'};const value=error as {name?:unknown;code?:unknown;message?:unknown;actual?:unknown;expected?:unknown;errors?:unknown[]};
+ const result:Record<string,unknown>={name:typeof value.name==='string'&&/^[A-Za-z]+$/.test(value.name)?value.name:'Error'};
+ for(const field of ['code','message'] as const){const raw=value[field];if(typeof raw==='string'&&/^[A-Z][A-Z0-9_]{1,100}$/.test(raw))result[field]=raw;}
+ for(const field of ['actual','expected'] as const){const raw=value[field];if(raw===null||typeof raw==='boolean'||(typeof raw==='number'&&Number.isFinite(raw)))result[field]=raw;}
+ if(value.errors)result.causes=value.errors.slice(0,8).map(safeFlowFailure);return result;
+}
+async function flowRuntimeFailureCodes(area:string){
+ const result:{file:string;code:string}[]=[];try{for(const name of (await readdir(join(area,'repo/.ai/cezar/runs'))).filter(name=>/^[a-f0-9-]{36}\.ndjson$/.test(name)).slice(0,16)){
+  const lines=(await readFile(join(area,'repo/.ai/cezar/runs',name),'utf8')).split('\n');for(const line of lines.slice(-100)){if(!line)continue;const row=JSON.parse(line);for(const value of [row.message,row.error])if(typeof value==='string'&&/^[A-Z][A-Z0-9_]{1,100}$/.test(value))result.push({file:name,code:value});}
+ }}catch{}return result.slice(-32);
+}
 const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 async function until(check:()=>Promise<boolean>,reason:()=>string,ms=140000){const deadline=Date.now()+ms;while(Date.now()<deadline){if(await check())return;await sleep(250);}throw Error(reason());}
 
@@ -201,14 +213,15 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   const admissions=(await db.pool.query('SELECT state,count(*)::int n FROM ac_native_resource_admissions GROUP BY state')).rows;assert(admissions.length>0);evidence.resourceAdmissions=admissions;
   evidence.cancel={authenticated:'real Happier bearer → encrypted browser session → Origin cookie',signed:true,paused:true,controllerSigkill:true,successorEpoch:authority.epoch,physicallyRunningBeforeRequest:activeWorkers.length,confirmed:true,remainingGrants:live};console.log(JSON.stringify(evidence));
 
- }catch(error){primary=error;}finally{
+ }catch(error){primary=error;evidence.failure={primary:safeFlowFailure(error),runtimeCodes:await flowRuntimeFailureCodes(area)};if(resourceEnvelope)try{(evidence.failure as Record<string,unknown>).beforeCleanup=await snapshotFlowResources(resourceEnvelope);}catch(snapshotError){(evidence.failure as Record<string,unknown>).snapshotFailure=safeFlowFailure(snapshotError);}}finally{
   if(managerHeartbeat)clearInterval(managerHeartbeat);eventProbe?.stop();
   if(controller?.pid&&controller.exitCode===null&&controller.signalCode===null){controller.kill('SIGKILL');await new Promise(resolve=>controller!.once('exit',resolve));}
   endpoint?.close();const errors:unknown[]=[];try{await runtime?.close();}catch(e){errors.push(e);}
   try{const plans=(await db.pool.query('SELECT container_id FROM ac_native_planning_jobs')).rows;for(const j of plans)if(j.container_id){try{execFileSync('docker',['rm','-f',j.container_id],{stdio:'ignore'});}catch{}}
    const {DockerDaemon}=await import('../src/sandbox-broker.ts');const docker=new DockerDaemon();for(const j of (await db.pool.query('SELECT id FROM ac_native_qa_jobs')).rows){const c=await docker.inspect('ac-native-qa-'+j.id);if(c){assert.equal(c.Config.Labels['agent-control.job'],j.id);assert.equal(c.Image,image);if(c.State.Running)await docker.stop(c.Id);await docker.remove(c.Id);}}
    await cleanupGraphResources(db,image!);if(resourceEnvelope)evidence.resourceRetirement=await retireFlowResources(resourceEnvelope,area);
-  }catch(e){errors.push(e);}mock.restoreAll();try{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}catch(e){errors.push(e);}if(errors.length)throw new AggregateError(primary?[primary,...errors]:errors,'R3_FLOW_CLEANUP_FAILED');
+  }catch(e){errors.push(e);}mock.restoreAll();if(errors.length&&resourceEnvelope)try{(evidence.failure??={}) as Record<string,unknown>;(evidence.failure as Record<string,unknown>).afterCleanup=await snapshotFlowResources(resourceEnvelope);}catch(snapshotError){errors.push(snapshotError);}
+  try{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}catch(e){errors.push(e);}if(primary||errors.length){const failure={...evidence.failure as object,primary:primary?safeFlowFailure(primary):null,cleanup:errors.map(safeFlowFailure)};console.error('R4_FLOW_FAILURE '+JSON.stringify(failure));if(process.env.AC_R3_FLOW_EVIDENCE)await writeFile(process.env.AC_R3_FLOW_EVIDENCE.replace(/\.json$/,'.failure.json'),JSON.stringify({fixture:evidence.fixture,failure},null,2)+'\n');}if(errors.length)throw new AggregateError(primary?[primary,...errors]:errors,'R3_FLOW_CLEANUP_FAILED');
  }if(primary)throw primary;
  if(process.env.AC_R3_FLOW_EVIDENCE)await writeFile(process.env.AC_R3_FLOW_EVIDENCE,JSON.stringify(evidence,null,2)+'\n');
 });
