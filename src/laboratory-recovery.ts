@@ -8,7 +8,7 @@ import pg from 'pg';
 import {z} from 'zod';
 import {Ledger} from './ledger.ts';
 import {Refusal} from './contracts.ts';
-import {configureRecoveryInventory,requireRecoveryInventory,RecoveryCatalogCheckpoint,type RecoveryInventoryConfig} from './recovery-inventory.ts';
+import {configureRecoveryInventory,requireRecoveryInventory,RecoveryCatalogCheckpoint,type RecoveryInventoryConfig,type RecoveryInventoryCapability} from './recovery-inventory.ts';
 
 const exec=promisify(execFile),limit=32*1024*1024,scope='ac-r3-migration-disposable-recovery-v1';
 const sha=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
@@ -32,7 +32,7 @@ export async function backupLaboratoryDatabase(options:{containerId:string;sourc
  if(!/^ac_implementation_test_r3[a-z0-9_]+$/.test(name))throw new Refusal('RECOVERY_SOURCE_DATABASE_REQUIRED');
  if(resolve(options.directory)!==options.directory||await realpath(options.directory)!==options.directory)throw new Refusal('RECOVERY_DIRECTORY_REQUIRED');
  const info=await lstat(options.directory);if(!info.isDirectory()||(info.mode&0o077)!==0||info.uid!==process.getuid?.())throw new Refusal('RECOVERY_DIRECTORY_REQUIRED');
- const ledger=new Ledger(options.sourceUrl);let sourceInstallationId:string,catalogCheckpoint:z.infer<typeof RecoveryCatalogCheckpoint>|undefined;
+ const ledger=new Ledger(options.sourceUrl);let sourceInstallationId:string,catalogCheckpoint:z.infer<typeof RecoveryCatalogCheckpoint>|undefined,inventory:RecoveryInventoryCapability|undefined;
  try{
   if((await ledger.pool.query('SELECT enabled FROM ac_admission_control WHERE id=1')).rows[0]?.enabled!==false||
    (await ledger.pool.query('SELECT 1 FROM ac_managers WHERE lease_until>clock_timestamp()')).rowCount||
@@ -40,11 +40,17 @@ export async function backupLaboratoryDatabase(options:{containerId:string;sourc
    (await ledger.pool.query("SELECT 1 FROM ac_import_batches WHERE state='staging'")).rowCount)throw new Refusal('RECOVERY_SOURCE_MUST_BE_QUIESCENT_SYNTHETIC');
   sourceInstallationId=(await ledger.pool.query('SELECT id FROM ac_installation_identity')).rows[0].id;
   if(options.recoveryInventory)await configureRecoveryInventory(ledger,options.recoveryInventory);
-  const inventory=await ledger.tx(c=>requireRecoveryInventory(c,ledger));
-  if(inventory){if(inventory.config.installationId!==sourceInstallationId)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');catalogCheckpoint=await inventory.checkpoint();}
+  inventory=await ledger.tx(c=>requireRecoveryInventory(c,ledger));
+  if(inventory&&inventory.config.installationId!==sourceInstallationId)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
  }finally{await ledger.pool.end();}
  const snapshot=new pg.Client({connectionString:options.sourceUrl});await snapshot.connect();let dump:Buffer;let checkpoint:{snapshotId:string;capturedAt:string;artifacts?:{historySha256:string;vaultSha256:string;happierSha256?:string;happierCapturedAt?:string}};
- try{await snapshot.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');const cut=(await snapshot.query('SELECT pg_export_snapshot() id,clock_timestamp() captured_at')).rows[0];checkpoint={snapshotId:cut.id,capturedAt:cut.captured_at.toISOString()};
+ try{await snapshot.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+  const gate=(await snapshot.query('SELECT enabled,clock_timestamp() captured_at FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
+  if(gate?.enabled!==false)throw new Refusal('RECOVERY_SOURCE_MUST_BE_QUIESCENT_SYNTHETIC');
+  const policy=(await snapshot.query('SELECT * FROM ac_recovery_inventory_policy WHERE singleton FOR SHARE')).rows[0];
+  if(Boolean(policy?.required)!==Boolean(inventory)||(inventory&&(policy.source_installation_id!==inventory.config.installationId||policy.catalog_id!==inventory.config.catalogId||policy.manifest_hash!==inventory.config.manifestHash)))throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
+  if(inventory)catalogCheckpoint=await inventory.checkpoint();
+  const cut=(await snapshot.query('SELECT pg_export_snapshot() id')).rows[0];checkpoint={snapshotId:cut.id,capturedAt:gate.captured_at.toISOString()};
   dump=(await docker(options.containerId,['pg_dump','-U','postgres','-d',name,'-Fc','--snapshot='+cut.id])).stdout;await snapshot.query('COMMIT');}
  finally{await snapshot.end();}
  const key=randomBytes(32),nonce=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,nonce),header={scope,sourceDatabase:name,sourceInstallationId,sha256:sha(dump)};
