@@ -9,6 +9,7 @@ import {Operators,operatorMessage} from '../src/operator.ts';
 import {Projects} from '../src/projects.ts';
 import {projectRepositoryIdentity} from '../src/project-repository.ts';
 import {WorkflowGraphs} from '../src/workflow-graph-service.ts';
+import {parseWorkflowGraphCommand} from '../src/workflow-graph-contract.ts';
 test('signed graph saves and replays immutable revisions',async()=>{
  const url=process.env.AC_R5_GRAPH_DATABASE_URL;if(!url?.endsWith('/ac_r5_mobile_graph'))throw Error('DISPOSABLE_DATABASE_REQUIRED');
  const db=new Ledger(url);await db.migrate();const root=await mkdtemp('/tmp/ac-r5-graph-');const repo=join(root,'repo');
@@ -26,11 +27,14 @@ test('signed graph saves and replays immutable revisions',async()=>{
   const result=await service.save(principal,cmd,proof(cmd));assert.equal(result.revision,1);
   const replay={...cmd,deliveryAttemptId:randomUUID()};assert.deepEqual(await service.save(principal,replay,proof(replay)),result);
   assert.equal((await service.view(principal,projectId,'test')).revision,1);
-  assert.equal(JSON.parse(await readFile(join(repo,'.ai/cezar/workflows/test.yaml'),'utf8')).version,2);
+  assert.equal(JSON.parse(await readFile(join(repo,result.path),'utf8')).version,2);
   const stale={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
   await assert.rejects(service.save(principal,stale,proof(stale)),/WORKFLOW_REVISION_CONFLICT/);
   const pending={...cmd,intentId:randomUUID(),deliveryAttemptId:randomUUID(),payload:{...cmd.payload,name:'pending'}};
-  const pendingFile=join(repo,'.ai/cezar/workflows/pending.yaml');await writeFile(pendingFile,'foreign',{mode:0o600});
+  const pendingBytes=Buffer.from(JSON.stringify({version:2,name:'pending',...parseWorkflowGraphCommand(pending).payload.graph},null,2)+'\n');
+  const pendingHash=(await import('node:crypto')).createHash('sha256').update(pendingBytes).digest('hex');
+  const pendingDir=join(repo,'.ai/cezar/workflows/.managed/pending');await mkdir(pendingDir,{mode:0o700});
+  const pendingFile=join(pendingDir,`1-${pendingHash}.yaml`);await writeFile(pendingFile,'foreign',{mode:0o600});
   await assert.rejects(service.save(principal,pending,proof(pending)),/WORKFLOW_FILE_CONFLICT/);
   assert.equal((await db.pool.query('SELECT state FROM ac_workflow_graph_intents WHERE id=$1',[pending.intentId])).rows[0].state,'pending');
   await rm(pendingFile);assert.equal((await service.save(principal,pending,proof(pending))).revision,1);
@@ -38,7 +42,8 @@ test('signed graph saves and replays immutable revisions',async()=>{
   await db.pool.query(`CREATE FUNCTION ac_fixture_crash() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.name='crash' THEN RAISE EXCEPTION 'FIXTURE_CRASH'; END IF; RETURN NEW; END $$`);
   await db.pool.query('CREATE TRIGGER ac_fixture_crash BEFORE INSERT ON ac_workflow_graph_revisions FOR EACH ROW EXECUTE FUNCTION ac_fixture_crash()');
   await assert.rejects(service.save(principal,crash,proof(crash)),/FIXTURE_CRASH/);
-  assert.equal(JSON.parse(await readFile(join(repo,'.ai/cezar/workflows/crash.yaml'),'utf8')).version,2);
+  const crashItem=(await db.pool.query('SELECT desired_digest FROM ac_workflow_graph_intents WHERE id=$1',[crash.intentId])).rows[0];
+  assert.equal(JSON.parse(await readFile(join(repo,`.ai/cezar/workflows/.managed/crash/1-${crashItem.desired_digest}.yaml`),'utf8')).version,2);
   assert.equal((await db.pool.query('SELECT state FROM ac_workflow_graph_intents WHERE id=$1',[crash.intentId])).rows[0].state,'pending');
   await db.pool.query('DROP TRIGGER ac_fixture_crash ON ac_workflow_graph_revisions');await db.pool.query('DROP FUNCTION ac_fixture_crash()');
   assert.equal((await service.save(principal,crash,proof(crash))).revision,1);

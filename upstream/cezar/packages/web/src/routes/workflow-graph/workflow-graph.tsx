@@ -93,7 +93,7 @@ import { WorkflowsLoading } from '../workflows/workflows-loading'
 import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
 import { writeClipboard } from '@/lib/clipboard'
 import { useProjectScope } from '@/api/project-scope-context'
-import { managedWorkflow, saveManagedWorkflow, validateManagedWorkflow } from './managed-workflow'
+import { managedWorkflow, managedWorkflows, saveManagedWorkflow, validateManagedWorkflow } from './managed-workflow'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -241,6 +241,7 @@ function WorkflowGraphEditor() {
   const {projectId} = useProjectScope()
   const managed = useQuery({queryKey:['managed-workflow',projectId,routeName],enabled:!!projectId&&!!routeName,
     retry:false,queryFn:()=>managedWorkflow(projectId!,routeName!)})
+  const managedList = useQuery({queryKey:['managed-workflows',projectId],enabled:!!projectId,retry:false,queryFn:()=>managedWorkflows(projectId!)})
   const loadedRevision = useRef<{name:string;revision:number}|null>(null)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -322,7 +323,7 @@ function WorkflowGraphEditor() {
     // for the ~350ms before the debounced validation below re-runs against the new graph.
     setIssues([])
     setValidating(true)
-    if (routeName && !def) toast(`No workflow named “${routeName}” — starting a new one.`, { tone: 'danger' })
+    if (routeName && !def && !owned) toast(`No workflow named “${routeName}” — starting a new one.`, { tone: 'danger' })
     pendingFit.current = true
   }, [routeName, workflows.data, projectId, managed.data, managed.isPending, managed.isError])
 
@@ -575,6 +576,7 @@ function WorkflowGraphEditor() {
       setDirty(false)
       toast(`Saved ${res.path.split('/').pop() ?? res.path}`)
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflows })
+      void queryClient.invalidateQueries({ queryKey: ['managed-workflows',projectId] })
       if (res.name !== routeName) {
         loadedFor.current = res.name
         void navigate(`/workflows/${encodeURIComponent(res.name)}`)
@@ -672,6 +674,9 @@ function WorkflowGraphEditor() {
           }}
         >
           <option value="">New workflow</option>
+          <optgroup label="Managed workflows">
+            {managedList.data?.workflows.map(w=><option key={w.name} value={w.name}>{w.name}</option>)}
+          </optgroup>
           <optgroup label="This repo">
             {workflows.data?.workflows
               .filter((w) => w.source === 'file')

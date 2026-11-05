@@ -12,12 +12,13 @@ test('journal reconciliation accepts old or desired file and refuses foreign and
  try{
   const repo=join(root,'repo');await mkdir(repo,{mode:0o700});execFileSync('git',['init',repo],{stdio:'ignore'});await chmod(join(repo,'.git'),0o700);
   for(const p of ['.ai','.ai/cezar','.ai/cezar/workflows'])await mkdir(join(repo,p),{mode:0o700});
-  const identity=await projectRepositoryIdentity(repo),a=Buffer.from('first'),b=Buffer.from('second'),file=join(repo,'.ai/cezar/workflows/test.yaml');
-  await reconcileWorkflowFile(repo,identity,'test',null,hash(a),a);assert.deepEqual(await readFile(file),a);
-  await reconcileWorkflowFile(repo,identity,'test',null,hash(a),a);
+  const identity=await projectRepositoryIdentity(repo),a=Buffer.from('first'),b=Buffer.from('second');
+  const file=join(repo,`.ai/cezar/workflows/.managed/test/1-${hash(a)}.yaml`);
+  await reconcileWorkflowFile(repo,identity,'test',1,hash(a),a);assert.deepEqual(await readFile(file),a);
+  await reconcileWorkflowFile(repo,identity,'test',1,hash(a),a);
   await writeFile(file,'foreign',{mode:0o600});
-  await assert.rejects(reconcileWorkflowFile(repo,identity,'test',hash(a),hash(b),b),/WORKFLOW_FILE_CONFLICT/);
+  await assert.rejects(reconcileWorkflowFile(repo,identity,'test',1,hash(a),a),/WORKFLOW_FILE_CONFLICT/);
   await rm(file);await symlink(join(root,'outside'),file);
-  await assert.rejects(reconcileWorkflowFile(repo,identity,'test',null,hash(b),b),/WORKFLOW_FILESYSTEM_UNAVAILABLE/);
+  await assert.rejects(reconcileWorkflowFile(repo,identity,'test',1,hash(a),a),/WORKFLOW_FILESYSTEM_UNAVAILABLE/);
  }finally{await rm(root,{recursive:true,force:true});}
 });

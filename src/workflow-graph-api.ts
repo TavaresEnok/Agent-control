@@ -16,7 +16,7 @@ export function createWorkflowGraphApi(service:WorkflowGraphs,options:{bodyTimeo
   if(error instanceof z.ZodError||error instanceof SyntaxError)return c.json({error:'INVALID_CONTRACT'},400);
   return c.json({error:'INTERNAL_ERROR'},500);
  });
- app.get('/api/v1/ac/workflow-graphs',async c=>c.json(await service.view(c.env.principal,Id.parse(c.req.query('projectId')),c.req.query('name')??'')));
+ app.get('/api/v1/ac/workflow-graphs',async c=>{const projectId=Id.parse(c.req.query('projectId')),name=c.req.query('name');return c.json(name===undefined?await service.list(c.env.principal,projectId):await service.view(c.env.principal,projectId,name));});
  app.post('/api/v1/ac/workflow-graphs/validate',async c=>{
   if(!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(c.req.header('content-type')??''))return c.json({error:'UNSUPPORTED_MEDIA_TYPE'},415);
   if(!/^(?:identity)?$/i.test(c.req.header('content-encoding')??''))return c.json({error:'UNSUPPORTED_CONTENT_ENCODING'},415);

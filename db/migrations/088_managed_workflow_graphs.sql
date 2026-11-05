@@ -16,7 +16,7 @@ CREATE TABLE ac_workflow_graph_heads (
 CREATE TABLE ac_workflow_graph_intents (
  id uuid PRIMARY KEY, principal_id text NOT NULL, payload_digest text NOT NULL,
  project_id uuid NOT NULL REFERENCES ac_projects, name text NOT NULL, expected_revision integer NOT NULL,
- snapshot jsonb NOT NULL, repository_identity jsonb NOT NULL, old_digest text, desired_digest text NOT NULL,
+ snapshot jsonb NOT NULL, repository_identity jsonb NOT NULL, desired_digest text NOT NULL,
  desired_bytes bytea NOT NULL, state text NOT NULL CHECK(state IN ('pending','applied')),
  result jsonb, CHECK ((state='pending' AND result IS NULL) OR (state='applied' AND result IS NOT NULL))
 );
