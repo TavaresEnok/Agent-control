@@ -1,0 +1,12 @@
+# Equipe Codex nativa deste projeto — autorização de 05/11/2026.
+model = "gpt-6.1-sol"
+model_reasoning_effort = "medium"
+
+[features]
+multi_agent = true
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 5
+default_subagent_model = "gpt-6.1-terra"
+default_subagent_reasoning_effort = "medium"
