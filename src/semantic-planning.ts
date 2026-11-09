@@ -4,6 +4,7 @@ import type pg from 'pg';
 import {Id,Authority,Refusal,digest,canonical} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Capacity} from './capacity.ts';
+import {assertModelAllowed} from './model-policy.ts';
 import {ManagerPlan,ManagerPlans} from './planning.ts';
 import {managerPlanOutputJsonSchema} from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
@@ -84,6 +85,7 @@ export class SemanticPlanning{
    const grant=(await c.query(`SELECT g.*,p.model,p.effort,p.role profile_role,a.provider,a.mode,a.enabled account_enabled,p.enabled profile_enabled
     FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1 AND g.context_id=$2 FOR UPDATE OF g`,[grantId,input.contextId])).rows[0];
    if(!grant||grant.intent_id!==input.intentId||grant.role!=='manager'||grant.profile_role!=='manager'||(saved.grant_id&&saved.grant_id!==grant.id))throw new Refusal('PLANNING_GRANT_MISMATCH');
+   assertModelAllowed(grant.model);
    const profile=Profile.parse({id:grant.profile_id,accountId:grant.account_id,provider:grant.provider,model:grant.model,effort:grant.effort,mode:grant.mode});
    const reconcile=saved.state==='uncertain';
    const selectedId=saved.selected_executor_id??(saved.executor_id!==dispatcherId?saved.executor_id:null);

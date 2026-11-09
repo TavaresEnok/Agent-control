@@ -107,7 +107,7 @@ async function safeGit(cwd:string,args:string[]){
  return result.stdout.trim();
 }
 async function correctionOutput(cwd:string,correction:z.infer<typeof CorrectionSource>,outputPath:string,operationId:string){
- const result=await exec('/usr/bin/git',['-c','safe.directory='+cwd,'-c','core.hooksPath=/dev/null','-C',cwd,'show',`${correction.priorCommit}:${outputPath}`],
+ const result=await exec('/usr/bin/git',['-c','safe.directory='+cwd,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-C',cwd,'show',`${correction.priorCommit}:${outputPath}`],
   {encoding:'buffer',env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'},timeout:10000,maxBuffer:1000000});
  return `Synthetic corrected effect ${operationId}\nPrior content sha256 ${createHash('sha256').update(result.stdout).digest('hex')}\nDecision ${correction.decisionDigest}`;
 }

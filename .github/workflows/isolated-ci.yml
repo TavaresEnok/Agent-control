@@ -11,6 +11,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 tests/package_source_test.py
+      - run: python3 tests/remote_workspace_git_isolation_test.py
       - run: python3 scripts/package-source.py --commit "$GITHUB_SHA" --check
   contracts-and-postgres:
     runs-on: ubuntu-latest

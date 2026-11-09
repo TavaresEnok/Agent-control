@@ -188,13 +188,15 @@ def snapshot(config, request):
         else:
             # Only committed tracked changes are output. Untracked files stay
             # private; the adapter never adds them or sends their bytes.
-            if run(repo, ['diff', '--name-only', 'HEAD']) or run(repo, ['diff', '--cached', '--name-only']):
-                raise ValueError('WORKSPACE_UNCOMMITTED_CHANGES')
-            commit = run(repo, ['rev-parse', 'HEAD'])
-            tree = run(repo, ['rev-parse', 'HEAD^{tree}'])
-            run(repo, ['merge-base', '--is-ancestor', manifest['receipt']['commit'], commit])
+            with _helper.isolated_git(repo):
+                if run(repo, ['diff', '--name-only', 'HEAD']) or run(repo, ['diff', '--cached', '--name-only']):
+                    raise ValueError('WORKSPACE_UNCOMMITTED_CHANGES')
+                commit = run(repo, ['rev-parse', 'HEAD'])
+                tree = run(repo, ['rev-parse', 'HEAD^{tree}'])
+                run(repo, ['merge-base', '--is-ancestor', manifest['receipt']['commit'], commit])
             sealed = {'executionOperationId': execution, 'commit': commit, 'tree': tree, 'base': manifest['receipt']['commit']}
             atomic(sealed_path, sealed)
-        exported = _helper.export({'projects': {project: str(repo)}, 'gitExportProjects': [project]},
-                                 {'schemaVersion': 1, 'action': 'git-export', 'operationId': workspace_id, 'projectId': project, 'commit': commit, 'tree': tree})
+        with _helper.isolated_git(repo):
+            exported = _helper.export({'projects': {project: str(repo)}, 'gitExportProjects': [project]},
+                                     {'schemaVersion': 1, 'action': 'git-export', 'operationId': workspace_id, 'projectId': project, 'commit': commit, 'tree': tree})
         return {**exported, 'workspaceId': workspace_id, 'executionOperationId': execution, 'base': sealed['base'], 'reviewStatus': 'not_reviewed'}

@@ -1,3 +1,4 @@
+import {assertModelAllowed} from './model-policy.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile, lstat, realpath } from 'node:fs/promises';
@@ -351,7 +352,7 @@ export class EngineeringStages{
       AND o.id=$7 AND o.intent_id=$4 AND o.manager_epoch=$3 AND o.execution_attempt_id=$5 AND o.state='uncertain'
       AND i.parent_intent_id=$8 AND i.parent_unit_id=$9 AND i.run_id=$10 FOR UPDATE OF g,o`,
       [grant.id,authority.contextId,authority.epoch,intent.id,unit.attemptId,this.projectId,intent.operation_id,bound.parentIntentId,unit.id,unit.runId]);
-     if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');
+     if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');assertModelAllowed(eligible.rows[0].model);
      await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[grant.id]);
      const changed=await c.query("UPDATE ac_operations SET state='running',native_session_id=$2,handle=$3 WHERE id=$1 AND state='uncertain' AND manager_epoch=$4",[intent.operation_id,sessionId,{pid:processChild.pid,startTime,bootId,operationId:intent.operation_id,epoch:authority.epoch,synthetic:true},authority.epoch]);
      if(!changed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');
@@ -676,11 +677,11 @@ export class EngineeringStages{
       await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
       if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
       await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[grant.id]);
-      const eligible=await c.query(`SELECT g.id FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
+      const eligible=await c.query(`SELECT g.id,p.model FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
        JOIN ac_quota_observations q ON q.account_id=a.id WHERE g.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
-       AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p`,
+       AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=g.project_id) AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p`,
        [grant.id,authority.contextId,authority.epoch]);
-      if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');
+      if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');assertModelAllowed(eligible.rows[0].model);
       child=spawn(process.execPath,[verifierPath,snapshot.snapshot,intent.operation_id,node],
        {cwd:snapshot.snapshot,env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:temporary},stdio:['ignore','pipe','pipe'],detached:true});
       this.children.add(child);child.once('exit',()=>this.children.delete(child!));

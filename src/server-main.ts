@@ -145,7 +145,7 @@ async function main(){
    }catch(error){await runtime.close();throw error;}
   });
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
-   sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
+   sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
   const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId)});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;

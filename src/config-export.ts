@@ -59,7 +59,7 @@ function checkGraphProjections(dto:z.infer<typeof ConfigDto>){
   }if([...counts.values()].some(count=>count!==1))throw new Refusal('CONFIG_EXPORT_CORRUPT');
  }
 }
-export const UNSAFE_SEMANTIC_TEXT=/(?:https?:\/\/[^\s/]+@|[?&](?:token|password|key|secret)=|\bHOME=|-----BEGIN |\b(?:sk|xox[baprs])-|\b(?:gh[pousr]|github_pat)_|bearer\s+|(?:password|secret|token|credential)\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i;
+export const UNSAFE_SEMANTIC_TEXT=/(?:[a-z][a-z0-9+.-]*:\/\/[^\s/]+@|\bAKIA[0-9A-Z]{16}\b|\bASIA[0-9A-Z]{16}\b|\bAIza[\w-]{30,}|\bglpat-[\w-]{10,}|\bya29\.[\w-]{10,}|\beyJ[\w-]+\.[\w-]*\.|(?:api|access|secret|private|auth)[_-]?(?:key|token)\s*[=:]|\bx-api-key\s*:|\bauthorization\s*:|_(?:key|token|secret|password)\s*=|[?&](?:token|password|key|secret)=|\bHOME=|-----BEGIN |\b(?:sk|xox[baprs])-|\b(?:gh[pousr]|github_pat)_|bearer\s+|(?:password|secret|token|credential)\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i;
 function checkPortable(value:unknown){
  const walk=(v:unknown)=>{if(typeof v==='string'){if(v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');if(UNSAFE_SEMANTIC_TEXT.test(v))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');return;}if(Array.isArray(v)){for(const x of v)walk(x);return;}if(v&&typeof v==='object')for(const x of Object.values(v))walk(x);};walk(value);
 }

@@ -1,11 +1,14 @@
 """Read-only, bounded export of one configured repository commit over SSH."""
 import base64
+import contextlib
 import hashlib
 import os
 import pathlib
 import re
 import resource
+import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 
@@ -14,6 +17,46 @@ OID = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})\Z')
 ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LC_ALL': 'C',
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_TERMINAL_PROMPT': '0'}
+
+
+@contextlib.contextmanager
+def isolated_git(root):
+    """Run Git on a worker-written repository without reading its .git/config.
+
+    Local config can name programs (core.fsmonitor, filter.*), so only object
+    storage, refs, HEAD and the index are carried into a private GIT_DIR.
+    """
+    source = pathlib.Path(root) / '.git'
+    info = os.lstat(source)
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError('WORKSPACE_GIT_UNSAFE')
+    for name in ('objects', 'refs'):
+        if not stat.S_ISDIR(os.lstat(source / name).st_mode):
+            raise ValueError('WORKSPACE_GIT_UNSAFE')
+    if os.path.lexists(source / 'commondir') or os.path.lexists(source / 'objects' / 'info' / 'alternates'):
+        raise ValueError('WORKSPACE_GIT_UNSAFE')
+    config = (source / 'config').read_text(errors='replace').lower()
+    sha256 = re.search(r'objectformat\s*=\s*sha256', config) is not None
+    with tempfile.TemporaryDirectory(prefix='ac-git-') as private:
+        target = pathlib.Path(private)
+        (target / 'config').write_text('[core]\n\trepositoryformatversion = 1\n\tbare = false\n[extensions]\n\tobjectformat = sha256\n' if sha256 else '[core]\n\trepositoryformatversion = 0\n\tbare = false\n')
+        (target / 'objects').symlink_to(source / 'objects')
+        (target / 'refs').symlink_to(source / 'refs')
+        for name in ('HEAD', 'index', 'packed-refs', 'shallow'):
+            if os.path.lexists(source / name):
+                if not stat.S_ISREG(os.lstat(source / name).st_mode):
+                    raise ValueError('WORKSPACE_GIT_UNSAFE')
+                shutil.copyfile(source / name, target / name, follow_symlinks=False)
+        previous = {key: ENV.get(key) for key in ('GIT_DIR', 'GIT_WORK_TREE')}
+        ENV.update(GIT_DIR=str(target), GIT_WORK_TREE=str(root))
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    ENV.pop(key, None)
+                else:
+                    ENV[key] = value
 
 
 def git(root, args, **kwargs):

@@ -50,7 +50,7 @@ export class BrowserSessions{
  }
  /** Verify access to an existing encrypted Happier session, without receiving
   * any content key or creating a second conversation. No token is returned. */
- async verifyHappierSession(request:Request,principal:string,sessionId:string,upstreamOrigin:string){
+ async verifyHappierSession(request:Request,principal:string,sessionId:string,upstreamOrigin:string,requireOwner=false){
   if(!sessionId||sessionId.length>200)return false;
   try{
    const upstream=new URL(upstreamOrigin);
@@ -63,7 +63,9 @@ export class BrowserSessions{
    if(!response.ok)return false;
    const value:unknown=await response.json();
    return typeof value==='object'&&value!==null&&'session' in value&&typeof value.session==='object'&&value.session!==null&&
-    'id' in value.session&&value.session.id===sessionId&&'encryptionMode' in value.session&&value.session.encryptionMode==='e2ee';
+    'id' in value.session&&value.session.id===sessionId&&'encryptionMode' in value.session&&value.session.encryptionMode==='e2ee'&&
+    // The upstream sets accessLevel only on rows reached through a share.
+    !(requireOwner&&'accessLevel' in value.session&&value.session.accessLevel);
   }catch{return false;}
  }
  async revoke(request:Request){

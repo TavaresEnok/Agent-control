@@ -1,8 +1,8 @@
 import {Refusal} from './contracts.ts';
-/** Explicit historical aliases only. A provider prefix may use ':' or '/'. */
+/** Explicit historical aliases, with any provider prefix, tag, version or suffix. */
 export function modelDisabledByPolicy(model:string):boolean{
- const normalized=model.trim().toLowerCase().split(/[/:]/).at(-1)?.trim()??'';
- return normalized==='astra'||normalized==='gpt-6-astra'||normalized==='gpt-6.1-astra';
+ const aliases=['astra','gpt-6-astra','gpt-6.1-astra'];
+ return model.trim().toLowerCase().split(/[/:@]/).some(segment=>aliases.some(alias=>segment.trim()===alias||segment.trim().startsWith(alias+'-')));
 }
 export function assertModelAllowed(model:string){
  if(modelDisabledByPolicy(model))throw new Refusal('ModelDisabledByPolicy',403);

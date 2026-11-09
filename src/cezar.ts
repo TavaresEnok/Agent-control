@@ -1,3 +1,4 @@
+import {assertModelAllowed} from './model-policy.ts';
 import {workflowRuntimeParkingReason} from './workflow-generations.ts';
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {assertCurrentRuntimeBuild} from './local-workflow-runtime.ts';
@@ -1226,14 +1227,15 @@ export class CezarRuntime {
             // status in a fresh READ COMMITTED statement snapshot.
             await c.query(`SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id
               JOIN ac_operations o ON o.grant_id=g.id WHERE o.id=$1 FOR SHARE OF a`,[intent.operation_id]);
-            const eligible=await c.query(`SELECT g.id FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id
+            const eligible=await c.query(`SELECT g.id,p.model FROM ac_operations o JOIN ac_capacity_grants g ON g.id=o.grant_id
               JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
               JOIN ac_quota_observations q ON q.account_id=a.id
               WHERE o.id=$1 AND g.context_id=$2 AND g.manager_epoch=$3 AND g.state='reserved'
-              AND a.enabled AND p.enabled AND a.eligibility='documented_supported'
+              AND a.enabled AND p.enabled AND a.eligibility='documented_supported' AND EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=g.project_id)
               AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g`,
               [intent.operation_id,authority.contextId,authority.epoch]);
             if (!eligible.rowCount) throw new Refusal('GRANT_NOT_ELIGIBLE');
+            assertModelAllowed(eligible.rows[0].model);
             await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[eligible.rows[0].id]);
             child = spawn(process.execPath, [new URL('../scripts/synthetic-worker.mjs', import.meta.url).pathname, intent.operation_id], {
               cwd: spec.cwd, env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: spec.cwd,
