@@ -352,7 +352,7 @@ export class EngineeringStages{
       AND o.id=$7 AND o.intent_id=$4 AND o.manager_epoch=$3 AND o.execution_attempt_id=$5 AND o.state='uncertain'
       AND i.parent_intent_id=$8 AND i.parent_unit_id=$9 AND i.run_id=$10 FOR UPDATE OF g,o`,
       [grant.id,authority.contextId,authority.epoch,intent.id,unit.attemptId,this.projectId,intent.operation_id,bound.parentIntentId,unit.id,unit.runId]);
-     if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');assertModelAllowed(eligible.rows[0].model);
+     if(!eligible.rowCount)throw new Refusal('GRANT_NOT_ELIGIBLE');
      await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1",[grant.id]);
      const changed=await c.query("UPDATE ac_operations SET state='running',native_session_id=$2,handle=$3 WHERE id=$1 AND state='uncertain' AND manager_epoch=$4",[intent.operation_id,sessionId,{pid:processChild.pid,startTime,bootId,operationId:intent.operation_id,epoch:authority.epoch,synthetic:true},authority.epoch]);
      if(!changed.rowCount)throw new Refusal('OPERATION_RECONCILIATION_REQUIRED');

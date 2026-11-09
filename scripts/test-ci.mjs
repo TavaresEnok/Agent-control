@@ -21,6 +21,7 @@ const hostEffect=[
   /compose\.[a-z0-9-]+\.yml/,
   /remoteDevelopmentLab/,
   /AC_TEST_HAPPIER_URL/,
+  /\/tmp\/ac-close-base/,
 ];
 // These load the Happier boundary at runtime and need the built workspace packages.
 const happierWorkspaceBuilt=existsSync(join(root,'upstream/happier/packages/cli-common/dist/providers/index.js'));
