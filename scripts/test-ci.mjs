@@ -11,6 +11,8 @@ const root=resolve(import.meta.dirname,'..');
 const timeoutMs=Number(process.env.AC_CI_TEST_TIMEOUT_MS??180_000);
 const logDir=process.env.AC_CI_LOG_DIR?resolve(process.env.AC_CI_LOG_DIR):null;
 const listOnly=process.argv.includes('--list');
+// Opt-in: also run files that start their own Docker or SSH fixtures.
+const includeHost=process.env.AC_CI_INCLUDE_HOST==='1';
 const hostEffect=[
   /\bphysical\b/i,
   /['"`]docker['"`]/,
@@ -53,7 +55,7 @@ export async function classify(){
   const included=[],excluded=[];
   for(const name of names){
     const source=await readFile(join(root,'tests',name),'utf8');
-    const blocked=hostEffect.some(pattern=>pattern.test(name)||pattern.test(source))||(needsHappierBuild.has(name)&&!happierWorkspaceBuilt);
+    const blocked=(!includeHost&&hostEffect.some(pattern=>pattern.test(name)||pattern.test(source)))||source.includes('AC_TEST_HAPPIER_URL')||(needsHappierBuild.has(name)&&!happierWorkspaceBuilt);
     (blocked?excluded:included).push(name);
   }
   return {included,excluded};

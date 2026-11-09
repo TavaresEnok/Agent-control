@@ -10,6 +10,7 @@ import {Ledger} from '../src/ledger.ts';
 import {Capacity} from '../src/capacity.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {NativeImplementation} from '../src/native-implementation.ts';
+import {writeNativeSecretSnapshot} from '../src/native-execution-secret-snapshot.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
 import {NativeVerification,nativeReviewVerifierDigest} from '../src/native-verification.ts';
 import type {NativeQa} from '../src/native-qa.ts';
@@ -183,7 +184,7 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
     const writeFixture=process.env.AC_NATIVE_RETIREMENT_WRITABLE==='1'&&input.role==='programmer';
     const hostRoot=process.env.AC_NATIVE_RETIREMENT_HOST_ROOT;
     if(writeFixture&&(!physicalMode||hostRoot!=='/home/app/srv_projetos/workspace/agent-control-implementation/.state/native-dispatch-physical'))throw Error('ISOLATED_NATIVE_WRITABLE_ROOT_REQUIRED');
-    const dir=join(spool,input.jobId);await mkdir(dir,{mode:0o700});await mkdir(join(dir,'output'),{mode:0o700});await writeFile(join(dir,'request.json'),JSON.stringify(input),{mode:0o600});
+    const dir=join(spool,input.jobId);await mkdir(dir,{mode:0o700});await mkdir(join(dir,'output'),{mode:0o700});await writeNativeSecretSnapshot(join(dir,'redaction.enc'),input.jobId,keys.privateKey,['fixture-secret-snapshot']);await writeFile(join(dir,'request.json'),JSON.stringify(input),{mode:0o600});
     let output='fixture implementation complete';
     if(input.role==='programmer'){await options.git.snapshot(input.base,input.base,join(dir,'work'));
      for(const file of input.writePaths){await mkdir(join(dir,'work',dirname(file)),{recursive:true});await writeFile(join(dir,'work',file),`${file}\n`);}}

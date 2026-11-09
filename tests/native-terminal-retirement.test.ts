@@ -4,6 +4,7 @@ import {mkdtemp,mkdir,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {generateKeyPairSync,sign} from 'node:crypto';
+import {writeNativeSecretSnapshot} from '../src/native-execution-secret-snapshot.ts';
 import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
 import {canonical,digest} from '../src/contracts.ts';
 
@@ -13,7 +14,8 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
  const worker='a'.repeat(64),tools='b'.repeat(64),network='c'.repeat(64),provider='d'.repeat(64),executor='e'.repeat(64),fingerprint='f'.repeat(64);
  const input={jobId,intentId,grantId,sessionId,base:'a'.repeat(40),role:'reviewer',task:'review',writePaths:[],artifactId:'66666666-6666-4666-8666-666666666666',outputSchema:{},timeoutMs:900000};
  const physical={jobId,containerId:worker,toolsContainerId:tools,networkId:network,exitCode:1,workerExitCode:1,finishedAt:'2026-01-01T00:00:00Z',toolsFinishedAt:'2026-01-01T00:00:01Z'};
- const keys=generateKeyPairSync('ed25519'),payload={jobId,contextId,intentId,grantId,sessionId,epoch:1,inputDigest:digest(input),executorDigest:executor,physicalDigest:digest(physical),exitCode:1,workerExitCode:1};
+ const snapshotKeys=generateKeyPairSync('ed25519');await writeNativeSecretSnapshot(join(root,jobId,'redaction.enc'),jobId,snapshotKeys.privateKey,['fixture-secret-snapshot']);
+ const keys=snapshotKeys,payload={jobId,contextId,intentId,grantId,sessionId,epoch:1,inputDigest:digest(input),executorDigest:executor,physicalDigest:digest(physical),exitCode:1,workerExitCode:1};
  const receipt={payload,signature:sign(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),keys.privateKey).toString('hex')};
  const row={id:jobId,context_id:contextId,intent_id:intentId,grant_id:grantId,session_id:sessionId,role:'reviewer',input_digest:digest(input),executor_digest:executor,key_fingerprint:fingerprint,manager_epoch:1,grant_epoch:1,grant_state:'released',state:'failed',receipt,physical_receipt:physical,worker_id:worker,tools_id:tools,network_id:network,account_id:'account',profile_id:'profile',grant_account:'account',grant_profile:'profile',grant_intent:intentId,grant_context:contextId,grant_role:'reviewer',resource_kind:'model'};
  const labels={'agent-control.job':jobId,'agent-control.launch':digest(input),'agent-control.contract':'native-execution-v1'};
@@ -29,6 +31,7 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
   if(sql.startsWith('INSERT INTO ac_native_terminal_retirements')){saved={binding:args[1],state:'prepared',proof:null};return {rows:[]};}
   if(sql.startsWith('UPDATE ac_native_terminal_retirements')){saved={...saved,state:'removed',proof:args[1]};return {rows:[]};}
   if(sql.startsWith('INSERT INTO ac_audit'))return {rows:[]};
+  if(sql.startsWith('SELECT project_id FROM ac_contexts'))return {rows:[]};
   throw new Error('unexpected SQL '+sql);
  }};
  const supervisor:any=Object.create(NativeExecutionSupervisor.prototype);

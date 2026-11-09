@@ -9,6 +9,7 @@ import {Ledger} from '../src/ledger.ts';
 import {Capacity} from '../src/capacity.ts';
 import {Quality} from '../src/quality.ts';
 import {GitArtifacts} from '../src/git.ts';
+import {writeNativeSecretSnapshot} from '../src/native-execution-secret-snapshot.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
 import {NativeVerification,nativeReviewRequest,nativeReviewVerifierDigest} from '../src/native-verification.ts';
 import {digest} from '../src/contracts.ts';
@@ -41,7 +42,7 @@ test('stopped native fixture finalizes exact scoped Git code, registers high-ris
   const workerId='f'.repeat(64),toolsId='1'.repeat(64),network='2'.repeat(64),fingerprint=createHash('sha256').update(keys.publicKey.export({format:'der',type:'spki'})).digest('hex');
   await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'programmer','running',$14,$15,$16)`,[input.jobId,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),supervisor.executorDigest,fingerprint,digest(input),base,workerId,toolsId,network]);
-  const root=join(spool,input.jobId),work=join(root,'work');await mkdir(root,{mode:0o700});await mkdir(join(root,'output'),{mode:0o700});await artifacts.snapshot(base,base,work);
+  const root=join(spool,input.jobId),work=join(root,'work');await mkdir(root,{mode:0o700});await mkdir(join(root,'output'),{mode:0o700});await writeNativeSecretSnapshot(join(root,'redaction.enc'),input.jobId,keys.privateKey,['fixture-secret-snapshot']);await artifacts.snapshot(base,base,work);
   await writeFile(join(root,'request.json'),JSON.stringify(input),{mode:0o600});await writeFile(join(work,'src/example.ts'),'export const value = 2;\n');
   await writeFile(join(root,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:input.jobId,output:'synthetic turn result',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
   const physical=(id:string)=>({Id:id,Image:image,Config:{Labels:{'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':digest(input)}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:new Date().toISOString()}});

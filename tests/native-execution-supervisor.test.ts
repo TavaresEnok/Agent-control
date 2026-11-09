@@ -174,6 +174,7 @@ class ExecutionRecoveryMemory{
    const grant=this.tables.ac_capacity_grants?.find(row=>row.id===params[0]);if(!grant)return wrote(0);
    grant.state='released';grant.physical_receipt=params[1];return wrote(1);
   }
+  if(text.startsWith('SELECT project_id FROM ac_contexts WHERE id=$1'))return selected([]);
   throw Error('UNHANDLED_SQL '+text);
  }
 }

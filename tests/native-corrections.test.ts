@@ -10,6 +10,7 @@ import {Ledger} from '../src/ledger.ts';
 import {Capacity} from '../src/capacity.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {NativeImplementation,assertNativeCorrectionDistinct} from '../src/native-implementation.ts';
+import {writeNativeSecretSnapshot} from '../src/native-execution-secret-snapshot.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
 import {NativeVerification,nativeReviewVerifierDigest} from '../src/native-verification.ts';
 import type {NativeQa} from '../src/native-qa.ts';
@@ -135,7 +136,7 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
      if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
      else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
     });
-    const dir=join(spool,input.jobId);await mkdir(dir,{mode:0o700});await mkdir(join(dir,'output'),{mode:0o700});await writeFile(join(dir,'request.json'),JSON.stringify(input),{mode:0o600});
+    const dir=join(spool,input.jobId);await mkdir(dir,{mode:0o700});await mkdir(join(dir,'output'),{mode:0o700});await writeNativeSecretSnapshot(join(dir,'redaction.enc'),input.jobId,keys.privateKey,['fixture-secret-snapshot']);await writeFile(join(dir,'request.json'),JSON.stringify(input),{mode:0o600});
     let output='fixture implementation complete';
     if(input.role==='programmer'){
      const request=JSON.parse(input.task) as {correction?:{decisionDigest:string;priorCommit:string}};
