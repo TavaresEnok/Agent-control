@@ -59,8 +59,9 @@ function checkGraphProjections(dto:z.infer<typeof ConfigDto>){
   }if([...counts.values()].some(count=>count!==1))throw new Refusal('CONFIG_EXPORT_CORRUPT');
  }
 }
+export const UNSAFE_SEMANTIC_TEXT=/(?:https?:\/\/[^\s/]+@|[?&](?:token|password|key|secret)=|\bHOME=|-----BEGIN |\b(?:sk|xox[baprs])-|\b(?:gh[pousr]|github_pat)_|bearer\s+|(?:password|secret|token|credential)\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i;
 function checkPortable(value:unknown){
- const walk=(v:unknown)=>{if(typeof v==='string'){if(v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');if(/(?:https?:\/\/[^\s/]+@|[?&](?:token|password|key|secret)=|\bHOME=|-----BEGIN |\b(?:sk|ghp|github_pat|xox[baprs])-|bearer\s+|(?:password|secret|token|credential)\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i.test(v))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');return;}if(Array.isArray(v)){for(const x of v)walk(x);return;}if(v&&typeof v==='object')for(const x of Object.values(v))walk(x);};walk(value);
+ const walk=(v:unknown)=>{if(typeof v==='string'){if(v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');if(UNSAFE_SEMANTIC_TEXT.test(v))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');return;}if(Array.isArray(v)){for(const x of v)walk(x);return;}if(v&&typeof v==='object')for(const x of Object.values(v))walk(x);};walk(value);
 }
 const envelope=z.object({schemaVersion:z.literal(2),kind:z.literal('agent_control_config_encrypted'),algorithm:z.literal('aes-256-gcm'),nonce:z.string().regex(/^[a-f0-9]{24}$/),tag:z.string().regex(/^[a-f0-9]{32}$/),ciphertext:z.string().regex(/^[a-f0-9]*$/).max(MAX_BYTES*2)}).strict();
 /** Read-only projection. Never queries credentials, endpoints, private key files, or filesystem identity. */
