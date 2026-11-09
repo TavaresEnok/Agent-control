@@ -25,3 +25,18 @@ Nas três, o plano teve as tarefas `write-contributing` e `link-readme`, a segun
 ## Reprodução
 
 Exige `AC_TEST_DATABASE_URL` apontando para o banco `ac_implementation_test` em loopback, e `AC_REAL_INFERENCE_AUTHORIZED=1`. Execute com `node --import tsx scripts/real-planning-slice.ts`.
+
+## Codex real sob as restrições do container — 09/11/2026
+
+Com autorização do titular para copiar o login, a CLI Codex 0.166.0 rodou na imagem de planejamento com os limites do supervisor: raiz somente leitura, `cap_drop ALL`, `no-new-privileges`, sem repositório montado e rede `ac-native-provider`. Usou uma cópia do login em diretório `0700`, apagada ao final. O comando foi `codex exec` direto, não o worker assinado nem o `NativePlanningSupervisor`.
+
+| Verificação | Resultado |
+|---|---|
+| Acesso direto à internet | bloqueado, sem resolução de nome |
+| `example.com` pelo proxy | 403 |
+| `chatgpt.com` pelo proxy | túnel aceito |
+| Inferência com `gpt-5.6-luna` em `low` | recusada pelo provedor: limite de uso até 12/11/2026 |
+
+A chamada chegou ao provedor, mas **não houve resposta do modelo**, portanto a inferência em container segue sem prova.
+
+Para a ativação completa ainda faltam: liberar as travas da migração 042 e de `capacity.ts` por opt-in explícito, o pin de protocolo e uma avaliação RF-55 baseada em fonte oficial. Essa avaliação não pode ser registrada sem a fonte.
