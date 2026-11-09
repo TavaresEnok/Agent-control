@@ -12,3 +12,10 @@
 - Aguardar, revisar e integrar os resultados.
 - Se as ferramentas nativas não estiverem disponíveis,
   informar o bloqueio, sem usar alternativas.
+
+## Revisão independente com Claude
+
+- Autorizada pelo titular em 09/11/2026, enquanto o Codex estiver sem cota. Não substitui as regras acima para desenvolvimento via Codex.
+- Revisores: subagentes Claude Sonnet 5.5 (`claude-sonnet-5-5`), com esforço Médio, somente leitura, no máximo 5 simultâneos.
+- O revisor recebe o código e as evidências, nunca a conclusão do autor.
+- Registrar na matriz o modelo e a versão revisada, como "revisão independente por modelo Claude distinto". Não equivale a revisão humana ou de outro provedor; produção real continua exigindo revisão externa de segurança.
