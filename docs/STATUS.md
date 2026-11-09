@@ -21,7 +21,7 @@ Gateway autenticado, ledger PostgreSQL com permissões, épocas e leases, capaci
 
 ## O que falta
 
-- Gerente semântico e adaptadores de CLIs reais. `src/server-main.ts` sobe apenas o gateway administrativo.
+- Gerente semântico e adaptadores de CLIs reais no produto. `src/server-main.ts` sobe apenas o gateway administrativo. Há só uma [bancada de planejamento com modelo real](implementation/REAL-PLANNING-SLICE-20261109.md), fora do caminho de ativação.
 - Autenticação e inferência com contas reais, que dependem de autorização específica.
 - Revisão independente de autenticação, E2EE, SQL, fencing, execução e Git (AC-IMP-0007).
 - Broker de produção sem `docker.sock` montado em serviços de aplicação; a montagem atual é de laboratório.
