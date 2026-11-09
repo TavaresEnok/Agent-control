@@ -49,8 +49,9 @@ async function main(){
   process.exitCode=result.exitCode;
   return;
  }
- const descriptorCommand=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read','recovery'].includes(command);
- if(!path||!['initialize','inspect','operator-bootstrap','serve','vault-initialize','context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read','recovery'].includes(command)||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
+ const descriptorCommands=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read','recovery'];
+ const descriptorCommand=descriptorCommands.includes(command);
+ if(!path||!(descriptorCommand||['initialize','inspect','operator-bootstrap','serve','vault-initialize'].includes(command))||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
  // Inventory dry-run. The installation path is not opened. No ledger and no vault.
  if(command==='context-key-rotate-plan'){
   const {executeContextKeyRotatePlan}=await import('./context-vault-cli.ts');
@@ -146,7 +147,7 @@ async function main(){
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),config.happier.webOrigin,access,sessions,relay,quotaRegistry.adapters,undefined,async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},undefined,quotaRegistry,configurationControls.get(runtime.projectId));
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId)});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);

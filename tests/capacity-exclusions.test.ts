@@ -19,6 +19,7 @@ test('selectable synthetic profile has no exclusion', () => {
 test('closed reasons stay the documented set', () => {
   assert.deepEqual(CAPACITY_EXCLUSION_REASONS, [
     'profile_missing', 'access_removed', 'account_disabled', 'profile_disabled',
+    'model_disabled_by_policy', 'model_effort_not_in_catalog',
     'not_synthetic', 'ineligible', 'quota_exhausted', 'quota_unknown',
     'quota_rate_limited','authentication_required','provider_unreachable','provider_configuration_error','quota_disabled',
   ]);

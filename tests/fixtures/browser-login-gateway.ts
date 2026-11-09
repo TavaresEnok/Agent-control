@@ -19,6 +19,6 @@ const verify=async(request:Request)=>{
 const sessions=new BrowserSessions(ledger,randomBytes(32),verify,{origin:'http://127.0.0.1:18403',secure:false,maxAgeSeconds:3600});
 const relay=new HappierAuthRelay(sessions,{upstreamUrl:'http://127.0.0.1:18401',webUrl:'http://127.0.0.1:18400',publicServerUrl:'http://127.0.0.1:18401'});
 const access=async(principal:string,sessionId:string,request?:Request)=>request?sessions.verifyHappierSession(request,principal,sessionId,'http://127.0.0.1:18401'):false;
-const api=createApi(ledger,runtime,verify,()=>undefined,'http://127.0.0.1:18400',access,sessions,relay);
+const api=createApi(ledger,runtime,verify,()=>undefined,{happierWebUrl:'http://127.0.0.1:18400',verifySessionAccess:access,sessions,authRelay:relay});
 const server=serve({fetch:api.fetch,hostname:'127.0.0.1',port:18403},()=>console.log('BROWSER_LOGIN_FIXTURE_READY'));
 process.on('SIGTERM',()=>{server.close();void runtime.close().then(()=>ledger.close()).then(()=>process.exit(0));});

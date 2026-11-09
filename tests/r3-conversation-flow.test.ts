@@ -117,7 +117,7 @@ test('R3 encrypted conversation → admitted isolated plan → native graph → 
   evidence.scopedQuota={unknownModelUnavailable:true,models:models.map(row=>row.model).sort(),mode:'model',source:'deterministic fixture observation'};
   const verifyBearer=async(request:Request)=>{const authorization=request.headers.get('authorization');if(!authorization?.startsWith('Bearer '))return null;const response=await fetch(url+'/v1/account/profile',{headers:{authorization},signal:AbortSignal.timeout(5000)});if(!response.ok)return null;const identity=await response.json() as {id:string};return identity.id;};
   const origin='http://127.0.0.1:18889',browserSessions=new BrowserSessions(db,randomBytes(32),verifyBearer,{origin,secure:false,maxAgeSeconds:600});
-  const createProduct=()=>createApi(db,runtime!,verifyBearer,id=>id===context?authority:undefined,undefined,undefined,browserSessions);let product=createProduct();
+  const createProduct=()=>createApi(db,runtime!,verifyBearer,id=>id===context?authority:undefined,{sessions:browserSessions});let product=createProduct();
   const browserLogin=await product.request('/api/v1/ac/auth/session',{method:'POST',headers:{authorization:'Bearer '+token,origin}});assert.equal(browserLogin.status,200);
   const cookie=browserLogin.headers.get('set-cookie')!.split(';')[0];
 

@@ -54,7 +54,7 @@ test('RF36 signed typed configuration through actual Happier equals panel contro
  const app=createApi(ledger,runtime,async request=>{
   const authorization=request.headers.get('authorization');if(!authorization)return null;
   const response=await fetch(base+'/v1/account/profile',{headers:{authorization}});return response.ok?(await response.json() as {id:string}).id:null;
- },context=>registry.authority(context),undefined,undefined,undefined,undefined,[adapter],undefined,undefined,undefined,undefined,control);
+ },context=>registry.authority(context),{providerAdapters:[adapter],configurationControl:control});
  const panel=serve({fetch:app.fetch,hostname:'127.0.0.1',port:0});
  try{
   await new Promise<void>((ok,fail)=>{user.once('connect',ok);user.once('connect_error',fail)});

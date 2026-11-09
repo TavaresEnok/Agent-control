@@ -48,10 +48,28 @@ async function publicUi(path:string):Promise<Response|null>{
 }
 
 export type Authenticator = (request: Request) => Promise<string | null>;
+export type ApiOptions = {
+  happierWebUrl?: string;
+  verifySessionAccess?: (principal: string, sessionId: string, request?: Request) => Promise<boolean>;
+  sessions?: BrowserSessions;
+  authRelay?: HappierAuthRelay;
+  providerAdapters?: readonly ProviderAdapter[];
+  administrative?: AdministrativeOperations;
+  managerStatus?: (contextId: string) => Promise<unknown> | undefined;
+  semanticPlanning?: SemanticPlanning;
+  quotaRegistry?: {
+    configurationDigest: string;
+    reconcile(accountId?: string): Promise<number>;
+    report: { state: string; realActivation: 'blocked'; inferenceEnabled: false; registered: number };
+  };
+  configurationControl?: Control;
+};
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
-  manager: (contextId: string) => Authority | undefined, happierWebUrl = 'http://127.0.0.1:18400',
-  verifySessionAccess: (principal: string, sessionId: string, request?:Request) => Promise<boolean> = async () => false,
-  sessions?: BrowserSessions,authRelay?:HappierAuthRelay,providerAdapters:readonly ProviderAdapter[]=[],administrative?:AdministrativeOperations,managerStatus?:(contextId:string)=>Promise<unknown>|undefined,semanticPlanning?:SemanticPlanning,quotaRegistry?:{configurationDigest:string;reconcile(accountId?:string):Promise<number>;report:{state:string;realActivation:'blocked';inferenceEnabled:false;registered:number}},configurationControl?:Control) {
+  manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
+  const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
+    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl} = options;
+  const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
+  const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
   const control = configurationControl??new Control(ledger,providerAdapters,runtime.projectId,administrative,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
   if(control.ledger!==ledger)throw new Refusal('CONFIGURATION_LEDGER_MISMATCH');
@@ -86,7 +104,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
-    const owner=(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[runtime.projectId,c.get('principal')])).rowCount;
+    const owner=(await projectOwnership(c.get('principal'))).rowCount;
     if(!owner)throw new Refusal('PROJECT_FORBIDDEN',403);
     const registered=quotaRegistry?(await ledger.pool.query('SELECT count(*)::int n FROM ac_readonly_quota_registrations r JOIN ac_account_access x ON x.account_id=r.account_id JOIN ac_accounts a ON a.id=r.account_id WHERE x.project_id=$1 AND a.owner_id=$2 AND r.configuration_digest=$3',[runtime.projectId,c.get('principal'),quotaRegistry.configurationDigest])).rows[0].n:0;
     c.header('Cache-Control','no-store');return c.json({...quotaRegistry?.report??{state:'disabled',realActivation:'blocked',inferenceEnabled:false},registered});
@@ -115,7 +133,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     .get('/api/v1/ac/auth/status',c=>c.json({authenticated:true,principalId:c.get('principal')}))
     .get('/api/v1/ac/operator/identity',async c=>{
       const principal=c.get('principal');
-      const membership=await ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2',[runtime.projectId,principal]);
+      const membership=await projectMembership(principal);
       if(!membership.rowCount)throw new Refusal('PROJECT_FORBIDDEN',403);
       const installation=(await ledger.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
       if(!installation)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
@@ -247,8 +265,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     }
     const nativeRequest = new Request(url, c.req.raw);
     if (path.startsWith('/api/')) {
-      const membership = await ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2',
-        [runtime.projectId, c.get('principal')]);
+      const membership = await projectMembership(c.get('principal'));
       if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
     }
     if(path==='/api/v1/workspace/events')return managedWorkspaceStream(ledger,runtime,c.get('principal'),c.req.raw,async()=>{

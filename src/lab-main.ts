@@ -78,7 +78,7 @@ try{const info=await lstat(browserKeyPath);if(!info.isFile()||info.isSymbolicLin
 catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;browserKey=randomBytes(32);await writeFile(browserKeyPath,browserKey,{mode:0o600,flag:'wx'});}
 const sessions=new BrowserSessions(ledger,browserKey,verifyBearer,{origin:'http://127.0.0.1:18402',secure:false,maxAgeSeconds:86400});
 const api=createApi(ledger,runtime,verifyBearer,context=>managers.authority(context),
- 'http://127.0.0.1:18400',undefined,sessions,new HappierAuthRelay(sessions,{upstreamUrl:'http://127.0.0.1:18401',webUrl:'http://127.0.0.1:18400',publicServerUrl:'http://127.0.0.1:18401'}));
+ {happierWebUrl:'http://127.0.0.1:18400',sessions,authRelay:new HappierAuthRelay(sessions,{upstreamUrl:'http://127.0.0.1:18401',webUrl:'http://127.0.0.1:18400',publicServerUrl:'http://127.0.0.1:18401'})});
 const server = serve({ fetch: api.fetch, hostname: '127.0.0.1', port: 18402 }, () => console.log('ISOLATED_AGENT_CONTROL_READY'));
 let shuttingDown=false;
 const shutdown=()=>{

@@ -35,7 +35,7 @@ test('R3 quota durable container fixture, exact protocol, identity, unavailable 
   const config={state:'lab-synthetic' as const,contract:'ac-r3-quota-disposable-v1' as const,bindings:[binding],image,timeoutMs:1000};
   const registry=await configureCodexQuotaRegistry(db,config);
   await registry.collectors.bind(principal,project,{accountId:account,adapterId:registry.adapters[0].manifest.id,expectedRevision:0,minimumIntervalSeconds:1});
-  const app=createApi(db,{projectId:project,nativeExecutionReady:false} as CezarRuntime,async req=>req.headers.get('authorization')==='Bearer r3-owner'?principal:null,()=>undefined,undefined,undefined,undefined,undefined,registry.adapters,undefined,undefined,undefined,registry);
+  const app=createApi(db,{projectId:project,nativeExecutionReady:false} as CezarRuntime,async req=>req.headers.get('authorization')==='Bearer r3-owner'?principal:null,()=>undefined,{providerAdapters:registry.adapters,quotaRegistry:registry});
   assert.equal((await app.request('/api/v1/ac/quota-registry')).status,401);
   const report=await app.request('/api/v1/ac/quota-registry',{headers:{authorization:'Bearer r3-owner'}});
   assert.equal(report.status,200);assert.deepEqual(await report.json(),{...registry.report,registered:1});
