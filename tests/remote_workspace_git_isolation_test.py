@@ -62,6 +62,15 @@ class IsolatedSnapshotGit(unittest.TestCase):
             with workspace._helper.isolated_git(self.repo):
                 pass
 
+    def test_fifo_config_is_refused_without_blocking(self):
+        import os
+        config = self.repo / '.git' / 'config'
+        config.unlink()
+        os.mkfifo(config)
+        with self.assertRaisesRegex(ValueError, 'WORKSPACE_GIT_UNSAFE'):
+            with workspace._helper.isolated_git(self.repo):
+                pass
+
 
 if __name__ == '__main__':
     unittest.main()

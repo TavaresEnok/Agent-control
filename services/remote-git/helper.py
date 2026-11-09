@@ -35,7 +35,10 @@ def isolated_git(root):
             raise ValueError('WORKSPACE_GIT_UNSAFE')
     if os.path.lexists(source / 'commondir') or os.path.lexists(source / 'objects' / 'info' / 'alternates'):
         raise ValueError('WORKSPACE_GIT_UNSAFE')
-    config = (source / 'config').read_text(errors='replace').lower()
+    config_path = source / 'config'
+    if not stat.S_ISREG(os.lstat(config_path).st_mode) or os.lstat(config_path).st_size > 65536:
+        raise ValueError('WORKSPACE_GIT_UNSAFE')
+    config = config_path.read_text(errors='replace').lower()
     sha256 = re.search(r'objectformat\s*=\s*sha256', config) is not None
     with tempfile.TemporaryDirectory(prefix='ac-git-') as private:
         target = pathlib.Path(private)
@@ -44,7 +47,7 @@ def isolated_git(root):
         (target / 'refs').symlink_to(source / 'refs')
         for name in ('HEAD', 'index', 'packed-refs', 'shallow'):
             if os.path.lexists(source / name):
-                if not stat.S_ISREG(os.lstat(source / name).st_mode):
+                if not stat.S_ISREG(os.lstat(source / name).st_mode) or os.lstat(source / name).st_size > 64 * 1024 * 1024:
                     raise ValueError('WORKSPACE_GIT_UNSAFE')
                 shutil.copyfile(source / name, target / name, follow_symlinks=False)
         previous = {key: ENV.get(key) for key in ('GIT_DIR', 'GIT_WORK_TREE')}

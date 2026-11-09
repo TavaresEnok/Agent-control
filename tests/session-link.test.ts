@@ -25,7 +25,10 @@ test('Happier session linking requires same principal, confirmed E2EE and idempo
   for(const session of [{id:sessionId,encryptionMode:'plain'},{id:sessionId},{id:'wrong',encryptionMode:'e2ee'}]){
    reply={session};assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture'),false);
   }
-  reply={session:{id:sessionId,encryptionMode:'e2ee',accessLevel:'view'}};assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture',true),false);assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture'),true);reply={session:{id:sessionId,encryptionMode:'e2ee'}};assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture',true),true);
+  // Upstream shape: share is null for the owner and an object for a shared viewer.
+  reply={session:{id:sessionId,encryptionMode:'e2ee',share:{accessLevel:'view',canApprovePermissions:false}}};assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture',true),false);assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture'),true);
+  reply={session:{id:sessionId,encryptionMode:'e2ee'}};assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture',true),false);
+  reply={session:{id:sessionId,encryptionMode:'e2ee',share:null}};assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture',true),true);reply={session:{id:sessionId,encryptionMode:'e2ee'}};
   status=403;assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture'),false);status=200;
   verifyFailure=true;assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'https://happier.fixture'),false);verifyFailure=false;
   assert.equal(await sessions.verifyHappierSession(request,principal,sessionId,'http://public.fixture'),false);

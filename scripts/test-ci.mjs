@@ -22,6 +22,7 @@ const hostEffect=[
   /remoteDevelopmentLab/,
   /AC_TEST_HAPPIER_URL/,
   /\/tmp\/ac-close-base/,
+  /r4-notifications-cli-happier/,
 ];
 // These load the Happier boundary at runtime and need the built workspace packages.
 const happierWorkspaceBuilt=existsSync(join(root,'upstream/happier/packages/cli-common/dist/providers/index.js'));

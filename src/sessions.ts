@@ -64,8 +64,8 @@ export class BrowserSessions{
    const value:unknown=await response.json();
    return typeof value==='object'&&value!==null&&'session' in value&&typeof value.session==='object'&&value.session!==null&&
     'id' in value.session&&value.session.id===sessionId&&'encryptionMode' in value.session&&value.session.encryptionMode==='e2ee'&&
-    // The upstream sets accessLevel only on rows reached through a share.
-    !(requireOwner&&'accessLevel' in value.session&&value.session.accessLevel);
+    // The upstream returns share:null to the owner and a share object to everyone else.
+    (!requireOwner||('share' in value.session&&value.session.share===null));
   }catch{return false;}
  }
  async revoke(request:Request){
