@@ -23,7 +23,7 @@ O modo pessoal sobe: o gateway de teste ficou `personal_ready` com `executionEna
 |---|---|---|
 | `89d6bbbe` | `src/personal-manager-chat.ts`, Dockerfiles nativos, `src/engineering.ts`, painel | Tirou `--max-turns`, que o Claude não tem. Imagens de planejamento e execução passaram para Node Debian slim porque o ELF do Claude não roda no Alpine. Revisor não pode usar a mesma conta do programador. |
 | `d760d881` | `src/cezar.ts`, `src/native-execution-supervisor.ts`, `src/account-add.ts`, `src/personal-manager-chat.ts` | Vários provedores podem compartilhar a mesma imagem. Credenciais do Claude e do Grok vão para o caminho que cada CLI lê. O proxy do egress só entra com `AC_PERSONAL_EGRESS=1`. |
-| este commit | supervisores nativos, `src/semantic-planning.ts`, `docs/USO-PESSOAL.md` | No modo pessoal, planejamento e execução não exigem avaliação de elegibilidade nem o pin de protocolo do Codex. O reconciliador do planejamento reconhece Claude e Grok. O guia descreve o ELF do Codex, a base glibc e os arquivos de login. |
+| `b89281f2` | supervisores nativos, `src/semantic-planning.ts`, `docs/USO-PESSOAL.md` | No modo pessoal, planejamento e execução não exigem avaliação de elegibilidade nem o pin de protocolo do Codex. O reconciliador do planejamento reconhece Claude e Grok. O guia descreve o ELF do Codex, a base glibc e os arquivos de login. |
 
 ## O que não funciona ou não foi provado
 
