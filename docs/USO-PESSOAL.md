@@ -12,16 +12,26 @@ O comando inicializa o ledger, o operador, o cofre se estiver no arquivo, e o `n
 
 ### Imagens dos workers
 
-Os workers rodam o CLI de cada provedor dentro do contêiner. Ao preparar as imagens de planejamento e de execução, aponte os binários ELF do Claude e do Grok:
+O `claude` do host é um ELF dinâmico com glibc. A imagem Node Alpine não o executa (`no such file or directory` no interpretador). As imagens de planejamento e de execução usam Node Debian slim. O `grok` é estático e o Codex usado na imagem é o ELF musl do pacote npm, não o `codex.js`.
 
 ```bash
 export AC_NATIVE_CLAUDE_BIN=$(readlink -f $(which claude))
 export AC_NATIVE_GROK_BIN=$(readlink -f $(which grok))
-node scripts/prepare-native-planning-image.mjs /caminho/codex-elf <sha256-do-codex>
-node scripts/prepare-native-execution-image.mjs /caminho/codex-elf <sha256-do-codex>
+ELF=$(readlink -f $(which codex) | sed 's#/bin/codex$#/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex#')
+# se o sed não achar o arquivo, procure vendor/x86_64-unknown-linux-musl/bin/codex dentro de @openai/codex
+SHA=$(sha256sum "$ELF" | awk '{print $1}')
+node scripts/prepare-native-planning-image.mjs "$ELF" "$SHA"
+node scripts/prepare-native-execution-image.mjs "$ELF" "$SHA"
+node scripts/prepare-native-tools-image.mjs "$ELF" "$SHA"
+docker build -t ac-native-planning:personal <contexto-planning>
+docker build -t ac-native-execution:personal <contexto-execution>
+docker build -t ac-native-tools:personal <contexto-tools>
+export AC_NATIVE_PLANNING_IMAGE=$(docker image inspect ac-native-planning:personal --format '{{.Id}}')
+export AC_NATIVE_WORKER_IMAGE=$(docker image inspect ac-native-execution:personal --format '{{.Id}}')
+export AC_NATIVE_TOOLS_IMAGE=$(docker image inspect ac-native-tools:personal --format '{{.Id}}')
 ```
 
-O script do Codex exige o binário ELF público, não o wrapper Node do `npm`. Sem `AC_NATIVE_CLAUDE_BIN` ou `AC_NATIVE_GROK_BIN`, o gerente Claude e o programador Grok falham dentro do contêiner. Construa cada contexto com `docker build` e use os IDs `sha256:` nas variáveis acima.
+Confira com `docker run --rm --entrypoint /usr/local/bin/claude ac-native-planning:personal --version`.
 
 Para deixar no ar: `docker compose -f deploy/compose.personal.yml up -d`. O `restart: unless-stopped` sobe de novo depois de um reboot. O socket do Docker entra só no broker.
 
@@ -40,7 +50,15 @@ npm run gateway -- account-add /caminho/instalacao.json claude "Claude"
 npm run gateway -- account-add /caminho/instalacao.json grok "Grok"
 ```
 
-O comando mostra a URL e o código. Abra a URL, informe o código e conclua o login. Para importar um `auth.json` que já é seu: acrescente `--auth-file /caminho/auth.json`. O painel tem o botão **Adicionar conta** com o mesmo fluxo, mas no compose o contêiner do gateway não tem os CLIs. Rode `account-add` no host. Alternar contas quando a cota acaba pode violar os termos do provedor; a decisão é sua.
+O comando mostra a URL e o código. Abra a URL, informe o código e conclua o login. Para copiar um login que já é seu, sem movê-lo:
+
+```bash
+npm run gateway -- account-add <instalacao> claude Claude --auth-file "$HOME/.claude/.credentials.json"
+npm run gateway -- account-add <instalacao> grok Grok --auth-file "$HOME/.grok/auth.json"
+npm run gateway -- account-add <instalacao> codex Codex --auth-file "$HOME/.codex/auth.json"
+```
+
+O arquivo do Claude fica em `.credentials.json` da home da conta. O do Grok fica em `.grok/auth.json`. O painel também tem **Adicionar conta**. Esse botão executa o CLI no processo do gateway. A imagem `deploy/Dockerfile.personal` instala os CLIs; se você subir o gateway no host, o `account-add` acima já basta. Alternar contas quando a cota acaba pode violar os termos do provedor; a decisão é sua.
 
 ## Cadastrar o projeto e o primeiro pedido
 

@@ -111,7 +111,7 @@ export class SemanticPlanning{
    profile,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:Object.freeze({qualityRevision:input.qualityRevision,targetRef:input.targetRef,knownReferences:Object.freeze([input.sourceMessageRef,...input.knownReferences??[]])}),outputSchema:managerPlanOutputJsonSchema(),assertAuthorized};
   let outcome:Awaited<ReturnType<PlanningExecutor['execute']>>|null;
   try{await assertAuthorized();outcome=launch.reconcile?await executor.reconcile(invocation):await executor.execute(invocation);}
-  catch{throw new Refusal('PLANNING_RESULT_UNCERTAIN');}
+  catch(error){if(error instanceof Refusal)throw error;throw new Refusal('PLANNING_RESULT_UNCERTAIN');}
   if(!outcome)throw new Refusal('PLANNING_RESULT_UNCERTAIN');
   const output=z.string().parse(outcome.output),receipt=PlanningPhysicalReceipt.parse(outcome.receipt),p=receipt.payload;
   if(p.callId!==input.id||p.intentId!==input.intentId||p.contextId!==input.contextId||p.grantId!==grantId||p.profileId!==profile.id||p.sessionId!==call.session_id||p.epoch!==launch.epoch||p.executorDigest!==executor.digest||p.inputDigest!==inputDigest||p.profileDigest!==digest(profile)||p.outputDigest!==createHash('sha256').update(output).digest('hex')||!verify(null,planningReceiptMessage(p),entry.key,Buffer.from(receipt.signature,'hex')))throw new Refusal('PLANNING_RECEIPT_INVALID');

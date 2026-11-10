@@ -70,8 +70,11 @@ export class NativePlanningSupervisor{
   });
   if(identity.exists){const result=await this.reconcile(input);if(!result)throw new Refusal('PLANNING_RESULT_UNCERTAIN');return result;}
   assertModelAllowed(input.profile.model);
-  const assessment=(await new ProviderEligibility(this.ledger).view(identity.principal,identity.projectId,input.profile.accountId,1)).latest;
-  if(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.provider!==provider||assessment.authenticationMode!==(this.config.syntheticFixture?'synthetic':'subscription_oauth')||assessment.executionMode!==(this.config.syntheticFixture?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.config.executorDigest)throw new Refusal('NATIVE_PLANNING_NOT_ELIGIBLE');
+  const personal=Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+  if(!personal||this.config.syntheticFixture){
+   const assessment=(await new ProviderEligibility(this.ledger).view(identity.principal,identity.projectId,input.profile.accountId,1)).latest;
+   if(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.provider!==provider||assessment.authenticationMode!==(this.config.syntheticFixture?'synthetic':'subscription_oauth')||assessment.executionMode!==(this.config.syntheticFixture?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.config.executorDigest)throw new Refusal('NATIVE_PLANNING_NOT_ELIGIBLE');
+  }
   const authority={contextId:input.contextId,epoch:input.executionEpoch,instanceId:''};
   // Use the actual fenced manager instance, never an instance supplied by a model.
   const manager=(await this.ledger.pool.query('SELECT instance_id FROM ac_managers WHERE context_id=$1 AND epoch=$2',[input.contextId,input.executionEpoch])).rows[0];
@@ -79,20 +82,20 @@ export class NativePlanningSupervisor{
   await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(identity.principal,input.grantId,authority);
   await this.privateDirectory(this.config.hostRoot);const paths=this.paths(input.callId);
   const launch={schemaVersion:1,callId:input.callId,contextId:input.contextId,intentId:input.intentId,grantId:input.grantId,accountId:input.profile.accountId,profileId:input.profile.id,sessionId:input.sessionId,
-   epoch:input.executionEpoch,proxyUrl:'http://provider-egress:8080',providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
+   epoch:input.executionEpoch,...(await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount?{}:{proxyUrl:'http://provider-egress:8080' as const},providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
    model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(provider!=='codex'?{provider}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
   await this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);assertModelAllowed(input.profile.model);
    if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,{workerImage:this.config.imageId,toolsImage:this.config.imageId,providerNetworkId:this.config.providerNetwork},{projectId:identity.projectId,contextId:input.contextId});
-   else await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
+   else if(!await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'").then(r=>Boolean(r.rowCount)))await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
   });
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal:identity.principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.callId,names:[name]});
   // Journal uncertainty BEFORE touching Docker. If any acknowledgement is lost,
   // reconcile observes this same name; it never starts or creates a substitute.
   await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);assertModelAllowed(input.profile.model);
-   if(!this.config.syntheticFixture)await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
+   if(!this.config.syntheticFixture&&!await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'").then(r=>Boolean(r.rowCount)))await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
    await c.query("INSERT INTO ac_native_planning_jobs(id,grant_id,context_id,input_digest,launch_digest,container_name,state) VALUES($1,$2,$3,$4,$5,$6,'uncertain')",[input.callId,input.grantId,input.contextId,input.inputDigest,launchDigest,name]);});
   await mkdir(paths.root,{mode:0o700});for(const path of [paths.input,paths.output,paths.planning])await mkdir(path,{mode:0o700});
   await writeFile(join(paths.input,'launch.json'),JSON.stringify(signed),{mode:0o600,flag:'wx'});await writeFile(paths.key,this.publicKey,{mode:0o600,flag:'wx'});
@@ -305,7 +308,7 @@ export class NativePlanningSupervisor{
  private async reconcile(input:PlanningInvocation):Promise<{output:string;receipt:unknown}|null>{
   await input.assertAuthorized();
   if(this.config.syntheticFixture){const context=(await this.ledger.pool.query('SELECT project_id FROM ac_contexts WHERE id=$1',[input.contextId])).rows[0];assertNativeSyntheticFixture(this.config.syntheticFixture,{workerImage:this.config.imageId,toolsImage:this.config.imageId,providerNetworkId:this.config.providerNetwork},{projectId:context?.project_id,contextId:input.contextId});}
-  if(input.profile.provider!==(this.config.syntheticFixture?.provider??'codex')||input.profile.mode!==(this.config.syntheticFixture?'synthetic':'subscription_cli'))throw new Refusal('PLANNING_EXECUTOR_PROFILE_MISMATCH');const job=(await this.ledger.pool.query('SELECT * FROM ac_native_planning_jobs WHERE id=$1 AND grant_id=$2 AND context_id=$3',[input.callId,input.grantId,input.contextId])).rows[0];
+  if(input.profile.provider!==(this.config.syntheticFixture?.provider??this.config.provider??'codex')||input.profile.mode!==(this.config.syntheticFixture?'synthetic':'subscription_cli'))throw new Refusal('PLANNING_EXECUTOR_PROFILE_MISMATCH');const job=(await this.ledger.pool.query('SELECT * FROM ac_native_planning_jobs WHERE id=$1 AND grant_id=$2 AND context_id=$3',[input.callId,input.grantId,input.contextId])).rows[0];
   if(!job)return null;if(job.input_digest!==input.inputDigest)throw new Refusal('PLANNING_CALL_CONFLICT');
   const original=(await this.ledger.pool.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1',[input.callId])).rows[0];
   if(!original||original.grant_id!==input.grantId||original.intent_id!==input.intentId||original.context_id!==input.contextId||original.session_id!==input.sessionId||original.profile_id!==input.profile.id||Number(original.execution_epoch)!==input.executionEpoch||original.selected_executor_id!==this.config.id||original.selected_executor_digest!==this.config.executorDigest||original.selected_key_fingerprint!==this.keyFingerprint)throw new Refusal('PLANNING_CALL_CONFLICT');
