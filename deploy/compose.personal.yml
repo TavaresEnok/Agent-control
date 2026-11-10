@@ -1,0 +1,54 @@
+# Uso pessoal, um titular. Sobe de novo sozinho depois de um reboot.
+name: agent-control-personal
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ac
+      POSTGRES_PASSWORD: ${AC_PERSONAL_DB_PASSWORD:-personal-local-only}
+      POSTGRES_DB: agent_control
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ac -d agent_control"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  broker:
+    image: alpine/socat
+    restart: unless-stopped
+    # Uso pessoal: o socket real do Docker entra só no broker, como no laboratório.
+    # Os workers não recebem esse socket. Para um único titular isso é aceitável.
+    command: ["TCP-LISTEN:2375,fork,reuseaddr", "UNIX-CONNECT:/var/run/docker.sock"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+  gateway:
+    build: {context: .., dockerfile: deploy/Dockerfile.personal}
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["node", "--import", "tsx", "src/server-main.ts", "serve", "/data/installation.json"]
+    environment:
+      DOCKER_HOST: tcp://broker:2375
+    volumes:
+      - ..:/workspace
+      - ac-data:/data
+    depends_on:
+      db: {condition: service_healthy}
+      broker: {condition: service_started}
+  provider-egress:
+    build: {context: .., dockerfile: deploy/Dockerfile.provider-egress}
+    image: agent-control-provider-egress:0.1.0
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      provider: {aliases: [provider-egress]}
+      outbound: {}
+volumes:
+  pg-data:
+  ac-data:
+networks:
+  provider:
+    name: ac-native-provider
+    internal: true
+  outbound: {}

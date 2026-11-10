@@ -152,4 +152,5 @@ Se um provedor recusar por limite de uso, não é motivo para parar: siga com ou
 ## Registro de progresso
 <!-- Uma linha por marco: data, marco, commit, observação curta. -->
 - 2026-11-09 M0 31a5fa65 Base limpa; branch task/personal-activation. Executor Grok 4.7, sem subagentes nativos do Codex. PostgreSQL local em 127.0.0.1:54329.
-- 2026-11-09 M1 ativação pessoal opt-in. CHECK e triggers dormentes saem; trava nova só libera conta real com mode=personal. Fumaça: locked recusa habilitar subscription_cli; personal habilita conta e perfil e o registro de cota. Testes que esperavam o CHECK antigo ou a imutabilidade do modo foram ajustados.
+- 2026-11-09 M1 77946aca ativação pessoal opt-in. CHECK e triggers dormentes saem; trava nova só libera conta real com mode=personal. Fumaça: locked recusa habilitar subscription_cli; personal habilita conta e perfil e o registro de cota. Testes que esperavam o CHECK antigo ou a imutabilidade do modo foram ajustados.
+- 2026-11-09 M2–M8 neste commit: contas reais, bootstrap active, gerente na conversa, cota, compose pessoal e acabamento do painel. Login no navegador e imagens nativas continuam com o titular.

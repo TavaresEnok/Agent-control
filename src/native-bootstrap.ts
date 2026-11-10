@@ -29,25 +29,27 @@ export const NativeBootstrapBench=z.object({
  epoch:z.number().int().positive(),instanceId:z.uuid(),source:z.literal('authorized-endpoint'),
  accounts:z.array(AccountBinding).min(1).max(8),planningDigest:Hash,executionDigest:Hash,
 }).strict();
-export const NativeBootstrapConfigured=z.object({
- state:z.literal('configured'),contract:z.literal('native-bootstrap-configured-v1'),resources:NativeResourceConfiguration.optional(),projectId:z.uuid(),contextId:z.uuid(),
+const nativeBootstrapBody={
+ contract:z.literal('native-bootstrap-configured-v1'),resources:NativeResourceConfiguration.optional(),projectId:z.uuid(),contextId:z.uuid(),
  epoch:z.number().int().positive(),instanceId:z.uuid(),source:z.literal('authorized-endpoint'),
  accounts:z.array(AccountBinding).min(1).max(8),
  planning:z.object({id:Name,imageId:Image,executorDigest:Hash,signingKeyFile:privatePath,keyFingerprint:Hash,hostRoot:privatePath,accountRoot:privatePath}).strict(),
  execution:z.object({id:Name,workerImage:Image,toolsImage:Image,executorDigest:Hash,signingKeyFile:privatePath,keyFingerprint:Hash,
   hostRoot:privatePath,accountRoot:privatePath,providerNetworkId:Hash,workerEnv:z.array(Env).max(16),toolsEnv:z.array(Env).max(16)}).strict(),
  qa:NativeQaContract,qaDigest:Hash,review:z.object({signingKeyFile:privatePath,keyFingerprint:Hash,verifierDigest:Hash}).strict(),
-}).strict();
-export const NativeBootstrapConfig=z.discriminatedUnion('state',[NativeBootstrapDisabled,NativeBootstrapBench,NativeBootstrapConfigured]);
+};
+export const NativeBootstrapConfigured=z.object({state:z.literal('configured'),...nativeBootstrapBody}).strict();
+export const NativeBootstrapActive=z.object({state:z.literal('active'),...nativeBootstrapBody}).strict();
+export const NativeBootstrapConfig=z.discriminatedUnion('state',[NativeBootstrapDisabled,NativeBootstrapBench,NativeBootstrapConfigured,NativeBootstrapActive]);
 export type NativeBootstrapConfig=z.infer<typeof NativeBootstrapConfig>;
 
 export type NativeBootstrapReport={
- schemaVersion:1;state:'disabled'|'bench-ready'|'activation-blocked';executionEnabled:false;inferenceEnabled:false;
- realAccountsEnabled:false;adaptersComposed:boolean;ready:false;dormantGuard:'sql-042';capacityGuard:'intact';resources?:NativeResourceConfigurationReport;
+ schemaVersion:1;state:'disabled'|'bench-ready'|'activation-blocked'|'active';executionEnabled:boolean;inferenceEnabled:boolean;
+ realAccountsEnabled:boolean;adaptersComposed:boolean;ready:boolean;dormantGuard:'sql-042'|'personal';capacityGuard:'intact';resources?:NativeResourceConfigurationReport;
  reason?:'PROVIDER_RUNTIME_NOT_ACTIVATED'|'NATIVE_ACTIVATION_NOT_PERMITTED'|'BENCH_SUBSTITUTE_ONLY';
 };
 export type NativeBootstrapAttachment={
- projectId:string;state:'bench-ready'|'activation-blocked';executionEnabled:boolean;inferenceEnabled:boolean;
+ projectId:string;state:'bench-ready'|'activation-blocked'|'active';executionEnabled:boolean;inferenceEnabled:boolean;
  report:NativeBootstrapReport;resources?:NativeResourceAttachment;readSource?:(authority:Authority)=>Promise<string>;
  /** Present only for an injected bench. The runtime must not call these adapters. */
  benchAdapters?:{planning:CodexPlanningAdapter;execution:CodexExecutionAdapter};
@@ -56,6 +58,10 @@ export type NativeBootstrapAttachment={
 export function assertNativeBootstrapAttachment(projectId:string,attachment:NativeBootstrapAttachment,linked:{implementation?:boolean;executions?:number;planning?:number}={}){
  if(attachment.projectId!==projectId)throw new Refusal('NATIVE_BOOTSTRAP_PROJECT_MISMATCH',403);
  if(attachment.resources){assertNativeResourceAttachment(attachment.resources);if(attachment.report.resources!==attachment.resources.report)throw new Refusal('NATIVE_RESOURCE_ATTACHMENT_INVALID',403);}
+ if(attachment.state==='active'){
+  if(attachment.executionEnabled!==true||attachment.inferenceEnabled!==true||attachment.report.state!=='active')throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+  return;
+ }
  if(attachment.executionEnabled!==false||attachment.inferenceEnabled!==false)throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
  if(attachment.state==='activation-blocked'&&(linked.implementation||(linked.executions??0)>0||(linked.planning??0)>0))throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
 }
@@ -73,6 +79,12 @@ export function disabledNativeBootstrapReport():NativeBootstrapReport{return {..
 /** Disabled stays unwired. A configured report is attached as activation-blocked and cannot opt the runtime into execution. Bench stays on the injection path. */
 export function nativeBootstrapRuntimeAttachment(projectId:string,report:NativeBootstrapReport,resources?:NativeResourceAttachment):NativeBootstrapAttachment|undefined{
  if(report.state==='disabled')return undefined;
+ if(report.state==='active'){
+  if(!report.executionEnabled||!report.inferenceEnabled||!report.realAccountsEnabled)throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+  const active:NativeBootstrapAttachment={projectId,state:'active',executionEnabled:true,inferenceEnabled:true,report,...(resources?{resources}:{})};
+  assertNativeBootstrapAttachment(projectId,active);
+  return active;
+ }
  if(report.state!=='activation-blocked'||report.executionEnabled||report.inferenceEnabled||report.realAccountsEnabled||report.ready||report.adaptersComposed)
   throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
  if(Boolean(report.resources)!==Boolean(resources))throw new Refusal('NATIVE_BOOTSTRAP_RESOURCES_UNAVAILABLE',403);
@@ -90,6 +102,7 @@ export function nativeBootstrapSchemaError(value:{project:{id:string;repo:string
  const listed=value.managerTransport?.contexts.filter(item=>item.projectId===boot.projectId&&item.contextId===boot.contextId)??[];
  if(value.managerTransport&&listed.length!==1)return 'NATIVE_BOOTSTRAP_CONTEXT_MISMATCH';
  if(boot.state==='bench')return;
+ if(boot.state==='active'&&(value as {activation?:string}).activation!=='personal')return 'PERSONAL_ACTIVATION_REQUIRED';
  if(boot.planning.executorDigest!==nativePlanningExecutorDigest(boot.planning.imageId))return 'NATIVE_BOOTSTRAP_DIGEST_MISMATCH';
  if(boot.execution.executorDigest!==nativeExecutionExecutorDigest(boot.execution.workerImage,boot.execution.toolsImage))return 'NATIVE_BOOTSTRAP_DIGEST_MISMATCH';
  if(boot.qaDigest!==nativeQaContractDigest(boot.qa)||boot.review.verifierDigest!==nativeReviewVerifierDigest)return 'NATIVE_BOOTSTRAP_DIGEST_MISMATCH';
@@ -100,8 +113,10 @@ export function nativeBootstrapSchemaError(value:{project:{id:string;repo:string
  const inside=(path:string)=>path===value.dataDirectory||path.startsWith(value.dataDirectory+sep);
  const overlaps=(path:string,other:string)=>path===other||path.startsWith(other+sep)||other.startsWith(path+sep);
  if(paths.some(path=>!inside(path)||repos.some(repo=>overlaps(path,repo))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
- const roots=[boot.planning.hostRoot,boot.planning.accountRoot,boot.execution.hostRoot,boot.execution.accountRoot];
+ const sharedAccounts=boot.state==='active'&&boot.planning.accountRoot===boot.execution.accountRoot;
+ const roots=[boot.planning.hostRoot,boot.planning.accountRoot,boot.execution.hostRoot,...(sharedAccounts?[]:[boot.execution.accountRoot])];
  if(new Set(roots).size!==roots.length||roots.some((root,index)=>roots.some((other,otherIndex)=>otherIndex!==index&&overlaps(root,other))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
+ if(sharedAccounts&&[boot.planning.hostRoot,boot.execution.hostRoot].some(root=>overlaps(root,boot.planning.accountRoot)))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
  const keys=[boot.planning.signingKeyFile,boot.execution.signingKeyFile,boot.review.signingKeyFile];
  if(new Set(keys).size!==keys.length||keys.some(key=>roots.some(root=>overlaps(key,root))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
  if(value.contextVault&&[value.contextVault.directory,value.contextVault.masterFile].some(vault=>paths.some(path=>overlaps(path,vault))))return 'NATIVE_BOOTSTRAP_PATH_INVALID';
@@ -203,13 +218,15 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
    JOIN ac_memberships o ON o.project_id=x.project_id AND o.principal_id=$3 AND o.role='owner'
    WHERE m.context_id=$1 AND x.project_id=$2 AND NOT x.archived`,[boot.contextId,boot.projectId,config.project.owner]);
   const row=manager.rows[0];
-  if(manager.rows.length!==1||String(row?.instance_id)!==boot.instanceId||Number(row?.epoch)!==boot.epoch||String(row?.project_id)!==boot.projectId)
-   throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
   const accounts=await client.query(`SELECT a.id,a.mode,a.enabled,a.provider,a.resource_identity
    FROM ac_accounts a
    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=$2
    WHERE a.id = ANY($1::uuid[])`,[boot.accounts.map(account=>account.accountId),boot.projectId]);
-  const bound=boot.accounts.every(account=>accounts.rows.some(row=>String(row.id)===account.accountId&&String(row.provider)==='codex'&&String(row.resource_identity)==='codex:'+account.subjectDigest));
+  const personal=Boolean((await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+  const bound=boot.accounts.every(account=>accounts.rows.some(row=>{
+   const provider=String(row.provider);
+   return String(row.id)===account.accountId&&(provider==='codex'||(boot.state==='active'&&personal&&provider==='claude'))&&String(row.resource_identity)===provider+':'+account.subjectDigest;
+  }));
   if(accounts.rows.length!==boot.accounts.length||!bound)throw new Refusal('NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND',403);
   let resources:NativeResourceAttachment|undefined;
   if(boot.resources){
@@ -223,7 +240,15 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
    resources=await prepareNativeResourceAttachment(boot.resources,identity.rows[0].id,{protectedPaths});
   }
   const realEnabled=accounts.rows.some(account=>String(account.mode)!=='synthetic'&&account.enabled===true);
-  // Opt-in is not an activation permit. SQL 042 and Capacity stay in place; no account row is changed.
+  if(boot.state==='active'){
+   if(!personal)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+   const managerMatches=manager.rows.length===1&&String(row?.instance_id)===boot.instanceId&&Number(row?.epoch)===boot.epoch;
+   if(manager.rows.length>1||(manager.rows.length===1&&!managerMatches))throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
+   return {session,...(resources?{resources}:{}),report:{schemaVersion:1,state:'active',executionEnabled:true,inferenceEnabled:true,realAccountsEnabled:true,adaptersComposed:true,ready:true,dormantGuard:'personal',capacityGuard:'intact',...(resources?{resources:resources.report}:{})}};
+  }
+  if(manager.rows.length!==1||String(row?.instance_id)!==boot.instanceId||Number(row?.epoch)!==boot.epoch||String(row?.project_id)!==boot.projectId)
+   throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
+  // Configured opt-in is not an activation permit. Locked mode keeps real accounts dormant.
   return {session,...(resources?{resources}:{}),report:{...guards,state:'activation-blocked',adaptersComposed:false,...(resources?{resources:resources.report}:{}),reason:realEnabled?'PROVIDER_RUNTIME_NOT_ACTIVATED':'NATIVE_ACTIVATION_NOT_PERMITTED'}};
  }catch(error){await session.shutdown();throw error;}
  finally{for(const bytes of buffers)bytes.fill(0);}

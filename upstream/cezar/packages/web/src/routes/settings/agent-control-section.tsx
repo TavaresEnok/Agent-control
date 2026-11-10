@@ -57,7 +57,7 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  providerEligibility:providerEligibilityViewSchema,
  administrative:administrativeViewSchema,
  providerBindings:z.array(agentControlProviderBindingSchema),providerAdapters:z.array(agentControlProviderAdapterSchema),
- accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),mode:z.string(),quota_status:z.string(),quota_scope_mode:z.enum(['account','model']).optional(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean()})),
+ accounts:z.array(z.object({id:z.string(),label:z.string(),provider:z.string(),mode:z.string(),quota_status:z.string(),quota_scope_mode:z.enum(['account','model']).optional(),eligibility:z.string(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean(),exhausted_until:z.string().nullable().optional()})),
  profiles:z.array(z.object({id:z.string(),account_id:z.string(),model:z.string(),effort:z.string(),role:z.string(),quota_status:z.string().optional(),quota_scope_mode:z.enum(['account','model']).optional(),enabled:z.boolean(),revision:z.number().int().positive(),can_manage:z.boolean(),config_digest:z.string().regex(/^[a-f0-9]{64}$/).optional()})),
  catalog:z.array(catalogEntrySchema),
  policies:z.array(z.object({revision:z.number(),snapshot:policyEditorSchema.optional()})),
@@ -70,7 +70,8 @@ const resourcesSchema=z.object({nativeExecutionEnabled:z.boolean().optional(),in
  qaWaiver:qaWaiverViewSchema.optional(),
  plans:z.array(z.object({id:z.string().uuid(),run_id:z.string().uuid(),plan_revision:z.number(),state:z.string(),cancellation_state:z.enum(['requested','confirmed']).nullable()})),
  waits:z.array(capacityWaitSchema),
- grants:z.array(grantSchema)})
+ grants:z.array(grantSchema),
+ recentCommits:z.array(z.object({commit_id:z.string(),intent_id:z.string()})).optional()})
 async function request(path:string,body?:unknown,extraHeaders:Record<string,string>={}):Promise<unknown>{
  const response=await agentControlFetch(path,{method:body?'POST':'GET',headers:{...(body?{'content-type':'application/json'}:{}),...extraHeaders},
   body:body?JSON.stringify(body):undefined})
@@ -89,6 +90,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const cache=useQueryClient()
  const [conversationEntry]=useState(()=>conversationConfigurationEntry(window.location.search))
  const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[sessionId,setSessionId]=useState(conversationEntry.sessionId)
+ const [loginProvider,setLoginProvider]=useState<'codex'|'claude'>('codex'),[loginLabel,setLoginLabel]=useState(''),[loginState,setLoginState]=useState<{accountId?:string;url?:string;userCode?:string;state?:string;error?:string}|null>(null)
  const [accountMode,setAccountMode]=useState<'synthetic'|'subscription_cli'|'api'>('synthetic')
  const [accountProvider,setAccountProvider]=useState('synthetic'),[resourceIdentity,setResourceIdentity]=useState(''),[accountId,setAccountId]=useState<string|null>(null)
  const [eligibility,setEligibility]=useState<'documented_supported'|'requires_clarification'|'unsupported_for_mode'|'not_assessed'>('not_assessed')
@@ -144,7 +146,8 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const selectStyle='h-9 min-w-0 max-w-full rounded-md border border-input bg-card px-2 text-sm'
  return <div className="flex min-w-0 flex-col gap-6 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
   {conversationEntry.requested&&<p role="status">Configuração da conversa: {conversationEntry.sessionId||'identificador inválido'}. {contextId?'Revise e assine as alterações abaixo.':'Vincule esta conversa para configurar; nenhum outro contexto foi selecionado.'}</p>}
-  <SettingsField title="Agent Control" hint="Contas de laboratório, políticas publicadas e capacidade confirmada.">
+  <SettingsField title="Agent Control" hint="Contas, políticas e capacidade. Alternar contas para contornar limites pode violar os termos do provedor; a decisão é do titular.">
+   {data?.nativeExecutionEnabled&&<p role="status">Execução habilitada.</p>}
    <form className="flex flex-col gap-2" onSubmit={event=>{event.preventDefault();linkContext.mutate()}}>
     <label className="flex flex-col gap-1">Vincular conversa existente do Happier
      <Input aria-label="Identificador da sessão Happier" readOnly={conversationEntry.requested} value={sessionId} onChange={event=>setSessionId(event.target.value)} maxLength={200} required/>
@@ -232,10 +235,18 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </form>
   </SettingsField>}
   {data&&<>
-   <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Desabilitar impede novas concessões nos projetos que compartilham a conta; trabalhos já iniciados preservam seus recibos.">
+   <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Alternar contas para contornar limites pode violar os termos do provedor; a decisão é do titular.">
+    <form className="flex flex-col gap-2" onSubmit={async event=>{event.preventDefault();setLoginState(null);try{const value=z.object({accountId:z.string(),state:z.string(),url:z.string().optional(),userCode:z.string().optional()}).parse(await request('/api/v1/ac/personal/accounts',{provider:loginProvider,label:loginLabel}));setLoginState(value);setLoginLabel('');}catch(error){setLoginState({error:error instanceof Error?error.message:'ACCOUNT_ADD_FAILED'});}}}>
+     <label className="flex flex-col gap-1">Provedor<select aria-label="Provedor da conta" className={selectStyle} value={loginProvider} onChange={event=>setLoginProvider(z.enum(['codex','claude']).parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+     <label className="flex flex-col gap-1">Nome<Input aria-label="Nome da nova conta" value={loginLabel} onChange={event=>setLoginLabel(event.target.value)} required maxLength={100}/></label>
+     <Button type="submit" disabled={!loginLabel.trim()}>Adicionar conta</Button>
+     {loginState?.url&&<p>Abra {loginState.url} e informe o código {loginState.userCode??'quando ele aparecer'}.</p>}
+     {loginState?.state&&<p role="status">Conta {loginState.accountId}: {loginState.state}</p>}
+     {loginState?.error&&<p role="alert">{loginState.error}</p>}
+    </form>
     <ul className="flex flex-col gap-2">{data.accounts.map(a=><li key={a.id} className="break-words rounded-md border p-3">
-     <strong>{a.label}</strong> · {a.provider}<br/>{a.enabled?'Habilitada':'Desabilitada'} · {a.quota_status} · {a.eligibility}<br/>
-     {a.mode!=='synthetic'&&<p className="text-sm">Conta configurada; execução não ativada.</p>}
+     <strong>{a.label}</strong> · {a.provider}<br/>{a.enabled?'Ativa':'Desabilitada'} · {a.exhausted_until?`cota esgotada até ${a.exhausted_until}`:a.quota_status} · {a.eligibility}<br/>
+     {a.mode!=='synthetic'&&<p className="text-sm">{data.nativeExecutionEnabled?'Execução habilitada.':'Conta configurada; execução não ativada.'}</p>}
      {a.can_manage?<Button type="button" disabled={busy||(!a.enabled&&a.mode!=='synthetic')} onClick={()=>mutate.mutate({action:'account.state',payload:{id:a.id,enabled:!a.enabled,expectedRevision:a.revision}})}>
       {a.enabled?'Desabilitar conta':'Habilitar conta'}
      </Button>:<span className="text-xs">Gerenciada pelo titular da conta.</span>}
@@ -329,6 +340,9 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
     expectedContextRevision={data.templates.at(-1)?.revision??0} busy={busy} statusMessage={mutate.error?.message??null}
     onPublish={payload=>mutate.mutate({action:'project-template.publish',payload})}
     onApply={payload=>mutate.mutate({action:'project-template.apply',payload})}/>
+   {data.recentCommits&&data.recentCommits.length>0&&<SettingsField title="Commits recentes" hint="Últimos artefatos integrados neste projeto.">
+    <ul>{data.recentCommits.map(commit=><li key={commit.commit_id} className="break-all text-sm">{commit.commit_id}</li>)}</ul>
+   </SettingsField>}
    <SettingsField title="Concessões" hint="Processos incertos continuam consumindo capacidade até reconciliação.">
     <AgentControlCapacityWaits waits={data.waits} profiles={data.profiles} accounts={data.accounts}/>
     <ul className="flex flex-col gap-2">{data.grants.map(g=><li key={g.id} className="break-words rounded-md border p-3">

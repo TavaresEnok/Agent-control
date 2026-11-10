@@ -4,6 +4,8 @@ Página única do estado vigente. Mantenha-a curta: atualize este texto em vez d
 
 **Produto em implementação. Não homologado para piloto ou produção.** Arquitetura autorizada: Cezar + Happier + PostgreSQL.
 
+O modo pessoal está ativo como opt-in (`activation: personal` e `nativeBootstrap.state: active`). Sem esse opt-in, contas reais continuam bloqueadas. O guia de um titular está em [USO-PESSOAL.md](USO-PESSOAL.md).
+
 ## Requisitos
 
 Fonte: [TRACEABILITY.json](validation/TRACEABILITY.json), 111 requisitos e cenários.

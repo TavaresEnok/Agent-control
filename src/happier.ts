@@ -14,6 +14,8 @@ import {chatConfigurationHandler} from './chat-control.ts';
 import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
+import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {personalRepositoryContext} from './personal-runtime.ts';
 
 type Rpc = {
   onSocketConnect(socket: Socket): void; onSocketDisconnect(): void;
@@ -126,6 +128,8 @@ export class HappierEndpoint {
   private runtimeReady = false;
   private revision: number | undefined;
   private lastPendingAt = 0;
+  private readonly announced=new Map<string,string>();
+  private replanned=false;
   private pendingFailure: unknown;
   lastError: string | undefined;
   readonly transportEvents = new Set<string>();
@@ -133,7 +137,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
@@ -258,6 +262,12 @@ export class HappierEndpoint {
   async accept(raw: unknown) {
     if(this.options.transportOnly)throw new Refusal('EXECUTION_DISABLED');
     const q = UserRequest.parse(raw); await this.validateLink();
+    if(this.options.personalConversation){
+     const word=personalControlWord(q.text);
+     if(word==='stop'){await this.stopLatest();return {handled:true,result:{ok:true,canceled:true}};}
+     if(word==='approve'||word==='discard'){await this.resolveLatestProposal(word==='approve');return {handled:true,result:{ok:true}};}
+     if(classifyPersonalText(q.text)==='answer'){await this.answerDirect(q);return {handled:true,result:{ok:true,answered:true}};}
+    }
     const intentId = stableId(`${this.options.authority.contextId}\0${q.localId}`);
     const prior=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2 AND principal_id=$3',
       [intentId,this.options.authority.contextId,this.options.principal])).rows[0];
@@ -337,13 +347,14 @@ export class HappierEndpoint {
     // not a second scheduler; the same callId remains authoritative after failure.
     let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.socket.connected){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
     let result:z.infer<typeof managerPlanPublishedSchema>;
+    const contextText=this.options.personalConversation?await personalRepositoryContext(this.runtime.repo)+'\n\nPedido:\n'+record.content.text:record.content.text;
     try{result=managerPlanPublishedSchema.parse(await planner.plan(this.options.principal,{id:callId,intentId:intent.id,contextId:intent.context_id,
-      expectedRevision:revision,sourceMessageRef:payload.messageRef,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,text:record.content.text},this.options.authority));}
+      expectedRevision:revision,sourceMessageRef:payload.messageRef,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,text:contextText.slice(0,100000)},this.options.authority));}
     finally{clearInterval(timer);}
     await this.validateLink();
     const localId='proposal-'+callId;
     const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
-      message:{role:'assistant',content:[{type:'text',text:`Proposta de plano ${result.revision} preparada. A distribuição das tarefas depende da configuração de execução.`}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId}}};
+      message:{role:'assistant',content:[{type:'text',text:`Proposta de plano ${result.revision}. Responda aprovar para iniciar ou descartar para ignorar.`}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId,actions:['Aprovar','Descartar']}}};
     await this.ledger.tx(async c=>{
       await this.ledger.authorize(c,this.options.principal,intent.context_id);await this.ledger.fence(c,this.options.authority,true);
       await this.ledger.assertIntentActive(c,intent.context_id,intent.id);
@@ -357,6 +368,43 @@ export class HappierEndpoint {
       await this.insertAgentMessage(c,localId,message,0);
       await this.ledger.refreshPending(c,intent.context_id);
     });
+    if(this.options.personalConversation){
+     const project=(await this.ledger.pool.query('SELECT p.auto_approve_plans FROM ac_projects p JOIN ac_contexts x ON x.project_id=p.id WHERE x.id=$1',[intent.context_id])).rows[0];
+     if(project?.auto_approve_plans)await this.startProposal(result.revision,result.digest);
+    }
+  }
+  private async say(localId:string,text:string){
+   const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
+   await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.insertAgentMessage(c,localId,message,0);});
+  }
+  private async answerDirect(q:{localId:string;text:string}){
+   let answer='Não consegui consultar o modelo agora. Confira a conta do gerente e tente de novo.';
+   try{const {execFile}=await import('node:child_process');answer=await new Promise((resolve,reject)=>execFile('codex',['exec','--skip-git-repo-check',q.text.slice(0,4000)],{timeout:45000,maxBuffer:100000},(error,stdout)=>error?reject(error):resolve(String(stdout).trim().slice(0,4000))));if(!answer)answer='O gerente não devolveu texto.';}catch{/* the fallback stays */}
+   await this.say('answer-'+q.localId,answer);
+  }
+  private async stopLatest(){
+   const row=(await this.ledger.pool.query("SELECT id,plan_revision FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NULL AND state NOT IN ('done','failed','canceled','cancelled') ORDER BY created_at DESC LIMIT 1",[this.options.authority.contextId])).rows[0];
+   if(!row){await this.say('stop-none','Não há execução para parar.');return;}
+   await this.ledger.tx(async c=>{await this.ledger.fence(c,this.options.authority,true);
+    if(!(await c.query('SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1',[row.id])).rowCount){
+     await c.query('INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,$4)',[row.id,this.options.authority.contextId,this.options.principal,row.plan_revision]);
+     await c.query("UPDATE ac_intents SET state='cancellation_requested' WHERE id=$1",[row.id]);
+    }
+    await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[row.id]);
+   });
+   await this.say('stop-'+row.id,'Parada solicitada.');
+  }
+  private async startProposal(revision:number,proposalDigest:string){
+   const context=(await this.ledger.pool.query('SELECT policy_revision FROM ac_contexts WHERE id=$1',[this.options.authority.contextId])).rows[0];
+   await this.ledger.accept(this.options.principal,{schemaVersion:1,contextId:this.options.authority.contextId,intentId:randomUUID(),deliveryAttemptId:randomUUID(),policyRevision:context.policy_revision,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'approved:'+proposalDigest.slice(0,32),proposalRevision:revision,proposalDigest,native:true}},this.options.authority,'happier');
+  }
+  private async resolveLatestProposal(approve:boolean){
+   const row=(await this.ledger.pool.query("SELECT result FROM ac_semantic_planning_calls WHERE context_id=$1 AND state='published' ORDER BY id DESC LIMIT 1",[this.options.authority.contextId])).rows[0];
+   if(!row){await this.say('proposal-missing','Não há proposta para decidir.');return;}
+   const result=managerPlanPublishedSchema.parse(row.result);
+   if(!approve){await this.say('discard-'+result.revision,'Proposta descartada.');return;}
+   await this.startProposal(result.revision,result.digest);
+   await this.say('approve-'+result.revision,'Proposta aprovada. A execução começou.');
   }
   async tick() {
     if (!this.socket.connected) return;
@@ -444,6 +492,17 @@ export class HappierEndpoint {
       await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
         {entityId:run.id,source:'runtime',planRevision:intent.plan_revision,seq,status,
           reason:status==='failed'?'EXECUTION_FAILED':status==='waiting'?notificationReason(run.error):['cancelled','canceled'].includes(status)?'RECONCILIATION_REQUIRED':'NONE'});
+    }
+    if(this.options.personalConversation){
+     const children=(await this.ledger.pool.query('SELECT id,state FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NOT NULL',[this.options.authority.contextId])).rows;
+     for(const child of children){
+      const label=personalProgressLabel(String(child.state));
+      if(this.announced.get(child.id)===label)continue;
+      this.announced.set(child.id,label);
+      const text=label==='falhou'?(this.replanned?'A tarefa falhou de novo. Veja o erro nesta conversa.':'A tarefa falhou. O gerente tenta replanejar uma vez.'):'Tarefa '+label+'.';
+      if(label==='falhou')this.replanned=true;
+      await this.say('progress-'+child.id+'-'+label,text);
+     }
     }
     await this.flushNotifications();await this.deliverQueuedMessages();
     if (this.pendingFailure !== undefined) throw this.pendingFailure;

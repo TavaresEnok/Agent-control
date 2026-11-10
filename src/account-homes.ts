@@ -31,7 +31,8 @@ export class AccountHomes{
    [accountId,projectId,principal])).rows[0];
   if(!account)throw new Refusal('ACCOUNT_FORBIDDEN',403);
   if(account.mode!=='synthetic'){
-   if(account.enabled||(await c.query('SELECT 1 FROM ac_profiles WHERE account_id=$1 AND enabled LIMIT 1',[accountId])).rowCount)
+   const personal=Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+   if(!personal&&(account.enabled||(await c.query('SELECT 1 FROM ac_profiles WHERE account_id=$1 AND enabled LIMIT 1',[accountId])).rowCount))
     throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
   }
   return account;

@@ -94,7 +94,7 @@ export class CezarRuntime {
     this.nativeBootstrapAttachment=admissionOptions?.nativeBootstrap;
     if(this.nativeBootstrapAttachment){
       assertNativeBootstrapAttachment(projectId,this.nativeBootstrapAttachment,{implementation:Boolean(this.nativeImplementation),executions:this.nativeExecutions.length,planning:this.nativePlanning.length});
-      this.executionEnabled=false;
+      if(this.nativeBootstrapAttachment.state!=='active')this.executionEnabled=false;
     }
     this.diskGuard=admissionOptions?.diskGuard??diskGuardFromEnvironment();
     if(isolated&&isolated.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
@@ -195,7 +195,7 @@ export class CezarRuntime {
       bootProjectId: projectId, semaphore:this.semaphore,version: AGENT_CONTROL_RUNTIME_VERSION });
   }
   async start(mode:'execution'|'administration-only'='execution') {
-    if(this.nativeBootstrapAttachment&&mode==='execution')throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+    if(this.nativeBootstrapAttachment&&this.nativeBootstrapAttachment.state!=='active'&&mode==='execution')throw new Refusal('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
     if(mode==='execution'&&await this.ledger.tx(c=>requireRecoveryInventory(c,this.ledger)))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
     this.executionEnabled=mode==='execution';
     if(this.executionEnabled)await this.refreshSchedulerBudget();
@@ -212,7 +212,7 @@ export class CezarRuntime {
     };
     c.on('error', lost); c.on('end', lost);
     if(this.executionEnabled){
-      if(this.nativeBootstrapAttachment)throw new Refusal('NATIVE_BOOTSTRAP_REPLAY_FORBIDDEN');
+      if(this.nativeBootstrapAttachment&&this.nativeBootstrapAttachment.state!=='active')throw new Refusal('NATIVE_BOOTSTRAP_REPLAY_FORBIDDEN');
       await this.manager.recover();
     }
   }

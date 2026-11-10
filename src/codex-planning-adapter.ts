@@ -16,6 +16,7 @@ export class CodexPlanningFailure extends Refusal{
 export class CodexPlanningAdapter{
  constructor(private readonly runner:AgentRunner){if(runner.backend!=='codex')throw new Refusal('PLANNING_BACKEND_MISMATCH');}
  async generate(raw:z.input<typeof Input>,assertAuthorized:()=>Promise<void>,signal?:AbortSignal){
+  if(process.env.AC_DEBUG_QUOTA_EXHAUSTED==='1')throw new CodexPlanningFailure('PROVIDER_USAGE_LIMIT',null,null);
   const input=Input.parse(raw);if(signal?.aborted)throw new Refusal('PLANNING_CANCELED');
   await assertAuthorized();if(signal?.aborted)throw new Refusal('PLANNING_CANCELED');
   let usage:UsageWindowsObservation|null=null,usageObserved=false,failedTurn=false,completedTurn=false,observedTokens:number|null=null;

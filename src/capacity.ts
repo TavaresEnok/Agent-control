@@ -235,7 +235,7 @@ export class Capacity {
     const found = await c.query<{profile_id:string;model:string;catalog_valid:boolean;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number}>(
       `SELECT p.id profile_id,p.model,EXISTS(SELECT 1 FROM ac_model_catalog m WHERE m.provider=a.provider AND m.model=p.model AND p.effort=ANY(m.efforts) AND p.role=ANY(m.roles)) catalog_valid,a.mode,a.enabled account_enabled,p.enabled profile_enabled,a.eligibility,
         EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=$2) project_access,
-        ac_profile_quota_status(a.id,p.model) fresh_quota,
+        CASE WHEN a.exhausted_until>clock_timestamp() THEN 'exhausted' ELSE ac_profile_quota_status(a.id,p.model) END fresh_quota,
         a.id account_id,a.max_concurrent
         FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
         LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[])`, [ids, projectId]);
@@ -314,6 +314,7 @@ export class Capacity {
           JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=x.project_id
           JOIN ac_quota_observations q ON q.account_id=a.id
           WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled AND (a.mode='synthetic' OR ac_activation_personal())
+          AND (a.exhausted_until IS NULL OR a.exhausted_until<=clock_timestamp())
           AND (($2='programmer' AND p.role='programmer') OR ($2<>'programmer' AND p.role IN ('reviewer','qa','specialist','judge')))
           AND a.eligibility='documented_supported'
           AND ac_profile_quota_status(a.id,p.model)='available' LIMIT 1`,[selected.account_id,request.role])).rowCount;
@@ -339,9 +340,11 @@ export class Capacity {
           JOIN ac_account_access access ON access.account_id=oa.id AND access.project_id=ox.project_id
           JOIN ac_quota_observations oq ON oq.account_id=oa.id
           WHERE NOT ox.paused AND om.lease_until>clock_timestamp() AND oa.id<>a.id AND oa.enabled AND op.enabled AND (oa.mode='synthetic' OR ac_activation_personal())
+          AND (oa.exhausted_until IS NULL OR oa.exhausted_until<=clock_timestamp())
           AND ((w.role='programmer' AND op.role='programmer') OR (w.role<>'programmer' AND op.role IN ('reviewer','qa','specialist','judge')))
           AND oa.eligibility='documented_supported' AND ac_profile_quota_status(oa.id,op.model)='available') AS available) alternative
         WHERE w.resource_kind='model'  AND p.account_id=$1 AND p.enabled AND a.enabled AND (a.mode='synthetic' OR ac_activation_personal())
+        AND (a.exhausted_until IS NULL OR a.exhausted_until<=clock_timestamp())
         AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available'
         AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
         AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived

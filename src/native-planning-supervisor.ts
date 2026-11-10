@@ -16,6 +16,7 @@ import {digest,canonical,Refusal,type Authority} from './contracts.ts';
 import {planningReceiptMessage,PlanningPhysicalReceipt,type PlanningExecutor,type PlanningInvocation} from './semantic-planning.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
+import {isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
 export {nativePlanningExecutorDigest};
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),
@@ -23,7 +24,7 @@ const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.strin
 export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
 function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
- protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];syntheticFixture?:NativeSyntheticFixture};
+ protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude';syntheticFixture?:NativeSyntheticFixture};
 /** Fixed Docker supervisor, not a scheduler. No HTTP-controlled image, mount,
  * command, provider address or key. Construction alone performs no inference.
  * Runtime eligibility remains an independent mandatory gate. */
@@ -47,7 +48,7 @@ export class NativePlanningSupervisor{
   this.publicKey=createPublicKey(this.key).export({format:'pem',type:'spki'}).toString();
   this.keyFingerprint=createHash('sha256').update(createPublicKey(this.key).export({format:'der',type:'spki'})).digest('hex');
   this.docker=nativeDockerDaemon(config.socketPath,config.resourceEnvelope);
-  this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:config.syntheticFixture?.provider??'codex',mode:config.syntheticFixture?'synthetic':'subscription_cli',
+  this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:config.syntheticFixture?.provider??config.provider??'codex',mode:config.syntheticFixture?'synthetic':'subscription_cli',
    execute:(input:PlanningInvocation)=>this.execute(input),retire:(principal:string,authority:Authority,callId:string)=>this.cleanup(principal,authority,callId),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
  }
  private async privateDirectory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o7777)!==0o700||s.uid!==process.getuid?.()||await realpath(path)!==path)throw new Refusal('NATIVE_PLANNING_DIRECTORY_UNSAFE');}
@@ -55,7 +56,7 @@ export class NativePlanningSupervisor{
  private paths(id:string){z.uuid().parse(id);const root=join(this.config.hostRoot,id);return {root,input:join(root,'input'),output:join(root,'output'),planning:join(root,'planning'),key:join(root,'public-key.pem')};}
  private async execute(input:PlanningInvocation){
   await input.assertAuthorized();
-  const provider=this.config.syntheticFixture?.provider??'codex',mode=this.config.syntheticFixture?'synthetic':'subscription_cli';
+  const provider=this.config.syntheticFixture?.provider??this.config.provider??'codex',mode=this.config.syntheticFixture?'synthetic':'subscription_cli';
   const identity=await this.ledger.tx(async c=>{
    const call=(await c.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1 FOR UPDATE',[input.callId])).rows[0];
    if(!call||call.state!=='uncertain'||call.grant_id!==input.grantId||Number(call.execution_epoch)!==input.executionEpoch||call.input_digest!==input.inputDigest||call.selected_executor_id!==this.config.id||call.selected_executor_digest!==this.config.executorDigest)throw new Refusal('PLANNING_CALL_FENCED');
@@ -79,7 +80,7 @@ export class NativePlanningSupervisor{
   await this.privateDirectory(this.config.hostRoot);const paths=this.paths(input.callId);
   const launch={schemaVersion:1,callId:input.callId,contextId:input.contextId,intentId:input.intentId,grantId:input.grantId,accountId:input.profile.accountId,profileId:input.profile.id,sessionId:input.sessionId,
    epoch:input.executionEpoch,proxyUrl:'http://provider-egress:8080',providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
-   model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000};
+   model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(provider==='claude'?{provider:'claude' as const}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
   await this.ledger.tx(async c=>{
@@ -318,6 +319,7 @@ export class NativePlanningSupervisor{
   if(physical.State.Running||physical.State.Status==='created')return null;
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return null;
   const result=await this.terminalResult(input,physical.State.ExitCode);if(result.callId!==input.callId||result.exitCode!==physical.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('PLANNING_OUTPUT_INVALID');
+  if(isProviderLimit(result.failureCode))await noteProviderExhaustion(this.ledger,input.profile.accountId,result.usageWindows);
   const physicalReceipt={normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,nativeSessionId:result.nativeSessionId,jobId:input.callId,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,synthetic:Boolean(this.config.syntheticFixture),executorDigest:this.config.executorDigest};
   const payload={callId:input.callId,intentId:input.intentId,contextId:input.contextId,grantId:input.grantId,profileId:input.profile.id,sessionId:input.sessionId,epoch:input.executionEpoch,
    executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,profileDigest:digest(input.profile),outputDigest:createHash('sha256').update(result.output).digest('hex'),physicalDigest:digest(physicalReceipt),exitCode:result.exitCode};

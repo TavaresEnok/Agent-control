@@ -14,6 +14,7 @@
     "start": "node --import tsx src/lab-main.ts",
     "start:built": "node dist/src/lab-main.js",
     "gateway": "node --import tsx src/server-main.ts",
+    "personal:setup": "node scripts/personal-setup.mjs",
     "prebuild": "node scripts/prepare-build.mjs --before"
   },
   "dependencies": {

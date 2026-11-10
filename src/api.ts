@@ -63,11 +63,15 @@ export type ApiOptions = {
     report: { state: string; realActivation: 'blocked' | 'personal'; inferenceEnabled: false; registered: number };
   };
   configurationControl?: Control;
+  personalAccounts?: {
+    add(principal:string,input:{provider:string;label:string;authFile?:string}):Promise<unknown>;
+    status(principal:string,accountId:string):Promise<unknown>;
+  };
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
   const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
-    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl} = options;
+    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
@@ -102,6 +106,28 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (e instanceof z.ZodError || e instanceof SyntaxError) return c.json({ error: 'INVALID_CONTRACT' }, 400);
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
+  });
+  app.post('/api/v1/ac/personal/accounts',async c=>{
+    if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({provider:z.enum(['codex','claude']),label:z.string().min(1).max(100),authFile:z.string().optional()}).strict().parse(await c.req.json());
+    c.header('Cache-Control','no-store');
+    return c.json(await personalAccounts.add(c.get('principal'),input));
+  });
+  app.get('/api/v1/ac/personal/accounts/:id',async c=>{
+    if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const accountId=Id.parse(c.req.param('id'));
+    c.header('Cache-Control','no-store');
+    return c.json(await personalAccounts.status(c.get('principal'),accountId)??{accountId,state:'unknown'});
+  });
+  app.post('/api/v1/ac/personal/auto-approve',async c=>{
+    if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
+    await ledger.pool.query('UPDATE ac_projects SET auto_approve_plans=$2 WHERE id=$1',[runtime.projectId,input.enabled]);
+    c.header('Cache-Control','no-store');
+    return c.json({enabled:input.enabled});
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;

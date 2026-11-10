@@ -37,6 +37,8 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 - [Distribuição de fontes por commit](docs/operations/DISTRIBUTION.md)
 - [Diretriz recebida](docs/normative/DIRETRIZ_MESTRE_V1.md)
 
+Para uso pessoal de um único titular, com o modo `activation: personal`, o guia de instalação, pareamento, contas e o primeiro pedido está em [docs/USO-PESSOAL.md](docs/USO-PESSOAL.md). Sem esse opt-in o gateway continua administrativo e nenhuma conta real é usada.
+
 Uma mensagem comum do Happier é admitida pelo template sintético fixado. Isso não implementa ainda um gerente de IA que compreende e planeja solicitações arbitrárias. Os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos.
 
 

@@ -28,6 +28,21 @@ import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
+ if(command==='account-add'){
+  const [provider,label,flag,authFile]=extra;
+  if(!path||!provider||!label||(flag!==undefined&&flag!=='--auth-file')||(flag==='--auth-file'&&!authFile)||extra.length>(flag?4:2))throw Error('INVALID_INSTALLATION_COMMAND');
+  const config=await loadInstallation(path);
+  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+  try{const {addProviderAccount}=await import('./account-add.ts');console.log(JSON.stringify(await addProviderAccount(config,ledger,{provider,label,authFile})));}
+  finally{await ledger.close();}
+  return;
+ }
+ if(command==='native-setup'){
+  if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
+  const {nativeSetup}=await import('./native-setup.ts');
+  console.log(JSON.stringify(await nativeSetup(path)));
+  return;
+ }
  // Retention dry-run. One private descriptor. No installation, ledger, vault, provider CLI, or deletion.
  if(command==='retention-plan'){
   const {executeRetentionPlan}=await import('./retention-cli.ts');
@@ -71,7 +86,7 @@ async function main(){
  const configurationControls=new Map<string,Control>();
  const closeManagers=async()=>{const results=await Promise.allSettled([...managerTransports.values()].map(registry=>registry.close()));managerTransports.clear();if(results.some(result=>result.status==='rejected'))throw Error('MANAGER_TRANSPORT_SHUTDOWN_FAILED');};
  let bootstrapSession:{shutdown():Promise<unknown>}|undefined;
- let bootstrapReport:{state:string;executionEnabled:false;inferenceEnabled:false}|undefined;
+ let bootstrapReport:{state:string;executionEnabled:boolean;inferenceEnabled:boolean}|undefined;
  const shutdownBootstrap=async()=>{await bootstrapSession?.shutdown();};
  let runtimes:ProjectRuntimes|undefined,serving=false;
  try{
@@ -116,7 +131,9 @@ async function main(){
   const {prepareNativeBootstrap,nativeBootstrapRuntimeAttachment}=await import('./native-bootstrap.ts');
   const prepared=await prepareNativeBootstrap(config,{query:(sql,params)=>ledger.pool.query(sql,params as never[])});
   bootstrapSession=prepared.session;bootstrapReport=prepared.report;
-  if(prepared.report.executionEnabled||prepared.report.inferenceEnabled||prepared.report.realAccountsEnabled)throw Error('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+  if(prepared.report.state!=='active'&&(prepared.report.executionEnabled||prepared.report.inferenceEnabled||prepared.report.realAccountsEnabled))throw Error('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED');
+  if(prepared.report.state==='active'&&config.activation!=='personal')throw Error('PERSONAL_ACTIVATION_REQUIRED');
+  const personalRuntime=prepared.report.state==='active'?await (await import('./personal-runtime.ts')).composePersonalRuntime(config,ledger):undefined;
   const {configureCodexQuotaRegistry}=await import('./codex-quota-registry.ts');
   const quotaRegistry=await configureCodexQuotaRegistry(ledger,config.codexQuota??{state:'disabled'});
   await quotaRegistry.reconcile();
@@ -137,18 +154,18 @@ async function main(){
   const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
   runtimes=new ProjectRuntimes(async project=>{
    const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report,prepared.resources):undefined;
-   const runtime=new CezarRuntime(ledger,project.repo,project.id,undefined,undefined,undefined,nativeBootstrap?{nativeBootstrap}:undefined);
+   const runtime=new CezarRuntime(ledger,project.repo,project.id,project.id===config.project.id?personalRuntime?.engineering:undefined,undefined,undefined,{...(nativeBootstrap?{nativeBootstrap}:{}),...(project.id===config.project.id&&personalRuntime?{nativePlanning:personalRuntime.planning,nativeExecutions:personalRuntime.executions,nativeImplementation:personalRuntime.implementation}:{})});
    try{
-    await runtime.start('administration-only');
+    await runtime.start(project.id===config.project.id&&prepared.report.state==='active'?'execution':'administration-only');
     const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
-    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control);
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:project.id===config.project.id?personalRuntime?.semantic:undefined});
     configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
    }catch(error){await runtime.close();throw error;}
   });
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);return status?{...status,executionEnabled:false,semanticManagerEnabled:false}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId)});
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId))} :undefined});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
@@ -164,7 +181,7 @@ async function main(){
     if(principal&&!bearer)sessions.checkOrigin(request);
     return principal;
    }});
-  const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:false,inferenceEnabled:false,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
+  const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:prepared.report.state==='active'?'personal_ready':'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:prepared.report.executionEnabled,inferenceEnabled:prepared.report.inferenceEnabled,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
   serving=true;
   let closing=false;
   const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};

@@ -24,6 +24,7 @@ export class CodexExecutionFailure extends Refusal{
 export class CodexExecutionAdapter{
  constructor(private readonly runner:AgentRunner){if(runner.backend!=='codex')throw new Refusal('EXECUTION_BACKEND_MISMATCH');}
  async run(raw:z.input<typeof Input>,assertAuthorized:()=>Promise<void>,signal?:AbortSignal,knownSecrets:readonly string[]=[],externalAuth?:{accessToken:string;accountId:string;planType:string|null}){
+  if(process.env.AC_DEBUG_QUOTA_EXHAUSTED==='1')throw new CodexExecutionFailure('PROVIDER_USAGE_LIMIT',null,null);
   const input=Input.parse(raw);if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
   await assertAuthorized();if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
   let usage:UsageWindowsObservation|null=null,tokens:number|null=null,failed=false,completed=false,timedOut=false;
