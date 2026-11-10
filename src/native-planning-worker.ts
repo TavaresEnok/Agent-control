@@ -19,6 +19,8 @@ async function main(){
  initializeNativeWorkerEnvironment();
  const input=await readSignedWorkerLaunch(Launch,'agent-control:native-planning-launch:v1');
  if(input.proxyUrl)initializeNativeWorkerEnvironment(input.proxyUrl);
+ if(input.provider==='claude'){process.env.CLAUDE_CONFIG_DIR='/account';process.env.HOME='/tmp';}
+ else if(input.provider==='grok')process.env.HOME='/account';
  if(input.constraints.contextId!==input.contextId||input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_PLANNING_DIRECTORY');
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
