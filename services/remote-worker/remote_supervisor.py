@@ -145,7 +145,11 @@ def execute(config, root, item, atomic):
         raise ValueError('DOCKER_IMAGE_REQUIRED')
     mount = item['root'] if item.get('workspaceId') else config.get('dockerProjectRoots', {}).get(item['projectId'], item['root'])
     name = 'ac-remote-' + hashlib.sha256((config['installationId'] + '\0' + operation).encode()).hexdigest()
-    options = ['--name', name, '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+    # Explicit user: never inherit the image default. Default is the supervisor's own identity so project files stay accessible.
+    user = config.get('dockerUser', str(os.getuid()) + ':' + str(os.getgid()))
+    if not isinstance(user, str) or not re.fullmatch(r'[0-9]{1,10}:[0-9]{1,10}', user):
+        raise ValueError('DOCKER_USER_INVALID')
+    options = ['--name', name, '--user', user, '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                '--pids-limit', '64', '--memory', '128m', '--cpus', '0.5', '--log-opt', 'max-size=1m',
                '--mount', 'type=bind,src=' + mount + ',dst=/project', '--workdir', '/project',
                '--env', 'HOME=/project', '--env', 'PATH=/usr/local/bin:/usr/bin:/bin']

@@ -42,3 +42,24 @@ Cinco revisores Claude Sonnet 5.5, com esforço médio e somente leitura, audita
 - **Execução:** rede de provedor compartilhada entre jobs, proxy sem limite por origem, uso informado pelo worker e `docker create` remoto sem `--user`.
 - **Banco:** efeitos físicos dentro de transação em `cezar.ts`, `engineering.ts` e `sandbox-broker.ts`; CHECK `NOT VALID` da migração 063; ausência de trigger da máquina de estados de grants; conflito silencioso em `ac_events`.
 - **Git:** possível troca de arquivo entre a checagem e a leitura (TOCTOU) em `isolated_git`, sem reprodução; repositórios reftable e split-index ainda não suportados.
+
+## Rodada de correção de 10/11/2026 (sem commit; aguarda nova revisão)
+
+Revisor Claude Sonnet 5.5, somente leitura, reexaminou o filtro de exportação e achou bypasses verificados: JSON com aspas, `passwd`/`pwd`/`DB_PASS`, chaves AWS de 40 caracteres, JWT truncado, tokens Stripe/npm/SendGrid/Shopify/DigitalOcean/PyPI, webhooks, query strings assinadas, chaves SSH e PEM sem cabeçalho, blobs longos, homóglifos e fullwidth, e chaves de objeto não inspecionadas.
+
+| Item | Mudança | Prova |
+|---|---|---|
+| Filtro de exportação | NFKC, remoção de zero-width, dobra de homóglifos cirílicos/gregos, regras novas, recusa de base64/hex de 40+ caracteres que não seja digest SHA-1/256/512 exato, e chaves de objeto com nome de segredo e valor não vazio. | `tests/review-hardening.test.ts` (12/12 com o teste de pattern) |
+| `ac_events` | Conflito em `(run_id, seq)` com evento diferente agora recusa com `EVENT_SEQUENCE_CONFLICT` (409); repetição idêntica segue idempotente. | Typecheck; teste de PostgreSQL não executado (sem `AC_TEST_DATABASE_URL`) |
+| Migração 094 | `VALIDATE CONSTRAINT` do CHECK `NOT VALID` da 063 e trigger que impede sair de `released`, voltar a `reserved` e mudar identidade do grant. | Não executada: sem PostgreSQL neste executor |
+| `docker create` remoto | `--user` explícito (padrão: uid:gid do supervisor; `dockerUser` configurável, validado). | `py_compile`; prova física não repetida |
+| TOCTOU em `isolated_git` | Reconfere dev/inode/tipo de `.git`, `objects`, `refs` e `config` após o uso e recusa se mudaram. Detecta, não impede. | `tests/remote_workspace_git_isolation_test.py` 4/4 |
+
+Limitações do filtro: a regra de blob recusa segredos hex de 40, 64 ou 128 caracteres, pois são indistinguíveis de digests. Nenhum requisito foi aceito. Esta rodada ainda precisa de revisão por um revisor novo.
+
+## Não feito nesta rodada
+- **RF-34 e RNF-08** (redação por valor exato, chave de backup junto do arquivo, restore sem verificador, hashes sem sal no export v2): exigem mudança de formato e de modelo de chaves; precisam de decisão de desenho.
+- **Execução:** rede de provedor compartilhada entre jobs, proxy sem limite por origem e uso informado pelo worker: mudanças de arquitetura que dependem de prova com Docker real.
+- **Banco:** efeitos físicos dentro de transação (`cezar.ts`, `engineering.ts`, `sandbox-broker.ts`) exigem redesenho com intenção durável e testes em PostgreSQL.
+- **Limite de taxa pré-autenticação:** é configuração do proxy reverso, fora do repositório.
+- **T22:** exige navegador e UI; não executado.

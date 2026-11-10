@@ -59,9 +59,20 @@ function checkGraphProjections(dto:z.infer<typeof ConfigDto>){
   }if([...counts.values()].some(count=>count!==1))throw new Refusal('CONFIG_EXPORT_CORRUPT');
  }
 }
-export const UNSAFE_SEMANTIC_TEXT=/(?:https?:\/\/[^\s/]+@|[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@|\bAKIA[0-9A-Z]{16}\b|\bASIA[0-9A-Z]{16}\b|\bAIza[\w-]{30,}|\bglpat-[\w-]{10,}|\bya29\.[\w-]{10,}|\beyJ[\w-]+\.[\w-]*\.|(?:api|access|secret|private|auth)[_-]?(?:key|token)['"]?\s*[=:]\s*['"]?\S|\bx-api-key\s*:\s*\S|\bauthorization\s*:\s*(?:basic|bearer|token|digest)\s+\S|\b[a-z0-9_]*(?:api_key|access_key|_token|_secret|password)=\S|[a-z][a-z0-9+.-]*:\/\/:[^\s/@]+@|[?&](?:token|password|key|secret)=|\bHOME=|-----BEGIN |\b(?:sk|xox[baprs])-|\b(?:gh[pousr]|github_pat)_|bearer\s+|(?:password|secret|token|credential)\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i;
+const BASE_SECRET_SHAPES=/(?:https?:\/\/[^\s/]+@|[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@|\bAKIA[0-9A-Z]{16}\b|\bASIA[0-9A-Z]{16}\b|\bAIza[\w-]{30,}|\bglpat-[\w-]{10,}|\bya29\.[\w-]{10,}|\beyJ[\w-]{20,}|\beyJ[\w-]+\.[\w-]*\.|(?:api|access|secret|private|auth)[_\s-]?(?:key|token)['"]?\s*[=:]\s*['"]?\S|\bx-api-key\s*:\s*\S|\bauthorization\s*:\s*(?:basic|bearer|token|digest)\s+\S|\b[a-z0-9_]*(?:api_key|access_key|_token|_secret|password)=\S|[a-z][a-z0-9+.-]*:\/\/:[^\s/@]+@|[?&](?:token|password|key|secret)=|\bHOME=|-{3,}\s*BEGIN |\b(?:sk|xox[baprs])-|\b(?:gh[pousr]|github_pat)_|bearer\s+|(?:(?<![a-z])pass(?:w(?:or)?d)?|(?<![a-z])pwd|secret|token|credential)['"]?\s*[=:]|(?:^|[\s=])\/(?:home|root|Users)\/)/i;
+const EXTRA_SECRET_SHAPES=/(?:\bsk_(?:live|test)_|\bxapp-|\bnpm_[a-z0-9]{20,}|\bSG\.[\w-]{10,}|\bshp(?:at|ss|ca|pa)_|\bdop_v1_|\bpypi-|\bgh[pousr]-|hooks\.slack\.com\/services|discord(?:app)?\.com\/api\/webhooks|\bssh-(?:rsa|ed25519|dss)\b|\becdsa-sha2-|\bMII[a-z0-9+\/]{20,}|[?&](?:sig|signature|x-amz-signature|auth|code|access_token|api_key|apikey|client_secret)=)/i;
+export const UNSAFE_SEMANTIC_TEXT=new RegExp(BASE_SECRET_SHAPES.source+'|'+EXTRA_SECRET_SHAPES.source,'i');
+const ZERO_WIDTH=/[\u200B-\u200F\u2060\uFEFF\u00AD]/g;
+const CONFUSABLE:Record<string,string>={'а':'a','е':'e','о':'o','р':'p','с':'c','х':'x','у':'y','і':'i','ѕ':'s','ј':'j','ԁ':'d','ԛ':'q','ο':'o','α':'a','ρ':'p','ν':'v','ι':'i','κ':'k','τ':'t','υ':'u'};
+const SECRET_KEY_NAME=/^(?:pass(?:w(?:or)?d)?|pwd|api[_-]?key|secret|token|private[_-]?key|credential)$/i;
+const KNOWN_DIGEST=/^(?:[a-f0-9]{40}|[a-f0-9]{64}|[a-f0-9]{128})$/i;
+/** Refuse-first: NFKC + zero-width stripping defeat homoglyph tricks; long base64/hex runs are refused unless they are exact SHA-1/256/512 digests. */
+export function unsafeText(text:string){const t=text.normalize('NFKC').replace(ZERO_WIDTH,'').replace(/[\u0400-\u04FF\u0370-\u03FF]/g,ch=>CONFUSABLE[ch]??ch);
+ if(UNSAFE_SEMANTIC_TEXT.test(t))return true;
+ for(const run of t.match(/[A-Za-z0-9+\/_=-]{40,}/g)??[])if(!KNOWN_DIGEST.test(run))return true;
+ return false;}
 function checkPortable(value:unknown){
- const walk=(v:unknown)=>{if(typeof v==='string'){if(v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');if(UNSAFE_SEMANTIC_TEXT.test(v))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');return;}if(Array.isArray(v)){for(const x of v)walk(x);return;}if(v&&typeof v==='object')for(const x of Object.values(v))walk(x);};walk(value);
+ const walk=(v:unknown)=>{if(typeof v==='string'){if(v.startsWith('/'))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');if(unsafeText(v))throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');return;}if(Array.isArray(v)){for(const x of v)walk(x);return;}if(v&&typeof v==='object')for(const [k,x] of Object.entries(v)){if(SECRET_KEY_NAME.test(k.normalize('NFKC'))&&typeof x==='string'&&x.length)throw new Refusal('CONFIG_EXPORT_UNSAFE_SEMANTIC_TEXT');walk(x);}};walk(value);
 }
 const envelope=z.object({schemaVersion:z.literal(2),kind:z.literal('agent_control_config_encrypted'),algorithm:z.literal('aes-256-gcm'),nonce:z.string().regex(/^[a-f0-9]{24}$/),tag:z.string().regex(/^[a-f0-9]{32}$/),ciphertext:z.string().regex(/^[a-f0-9]*$/).max(MAX_BYTES*2)}).strict();
 /** Read-only projection. Never queries credentials, endpoints, private key files, or filesystem identity. */

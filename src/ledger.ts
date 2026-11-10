@@ -215,8 +215,15 @@ export class Ledger {
       await this.fence(c, authority, true);
       const bound = await c.query('SELECT 1 FROM ac_intents WHERE context_id=$1 AND run_id=$2 AND plan_revision=$3', [p.contextId, p.runId, p.planRevision]);
       if (!bound.rowCount) throw new Refusal('PROJECTION_SCOPE_MISMATCH');
-      await c.query('INSERT INTO ac_events VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(run_id,seq) DO NOTHING',
+      const inserted = await c.query('INSERT INTO ac_events VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(run_id,seq) DO NOTHING',
         [p.eventId, p.contextId, p.runId, p.planRevision, p.seq, p.status]);
+      if (!inserted.rowCount) {
+        // A replay must be byte-identical; a different event at the same sequence is a conflict, not a no-op.
+        const prior = await c.query('SELECT event_id, context_id, plan_revision, status FROM ac_events WHERE run_id=$1 AND seq=$2', [p.runId, p.seq]);
+        const r = prior.rows[0];
+        if (!r || r.event_id !== p.eventId || r.context_id !== p.contextId || Number(r.plan_revision) !== p.planRevision || r.status !== p.status)
+          throw new Refusal('EVENT_SEQUENCE_CONFLICT', 409);
+      }
     });
   }
   async close() { await this.pool.end(); }

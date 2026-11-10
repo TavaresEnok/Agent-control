@@ -40,6 +40,20 @@ def isolated_git(root):
         raise ValueError('WORKSPACE_GIT_UNSAFE')
     config = config_path.read_text(errors='replace').lower()
     sha256 = re.search(r'objectformat\s*=\s*sha256', config) is not None
+    def identity():
+        # Detect (not prevent) a worker swapping a checked path for a link or another inode while Git runs.
+        out = []
+        for name in ('', 'objects', 'refs', 'config'):
+            try:
+                item = os.lstat(source / name) if name else os.lstat(source)
+            except FileNotFoundError:
+                out.append(None)
+                continue
+            out.append((item.st_dev, item.st_ino, stat.S_IFMT(item.st_mode)))
+        if os.path.lexists(source / 'commondir') or os.path.lexists(source / 'objects' / 'info' / 'alternates'):
+            out.append('links')
+        return out
+    before = identity()
     with tempfile.TemporaryDirectory(prefix='ac-git-') as private:
         target = pathlib.Path(private)
         (target / 'config').write_text('[core]\n\trepositoryformatversion = 1\n\tbare = false\n[extensions]\n\tobjectformat = sha256\n' if sha256 else '[core]\n\trepositoryformatversion = 0\n\tbare = false\n')
@@ -54,6 +68,8 @@ def isolated_git(root):
         ENV.update(GIT_DIR=str(target), GIT_WORK_TREE=str(root))
         try:
             yield
+            if identity() != before:
+                raise ValueError('WORKSPACE_GIT_UNSAFE')
         finally:
             for key, value in previous.items():
                 if value is None:
