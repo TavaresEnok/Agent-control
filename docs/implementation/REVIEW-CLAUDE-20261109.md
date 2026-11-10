@@ -63,3 +63,22 @@ Limitações do filtro: a regra de blob recusa segredos hex de 40, 64 ou 128 car
 - **Banco:** efeitos físicos dentro de transação (`cezar.ts`, `engineering.ts`, `sandbox-broker.ts`) exigem redesenho com intenção durável e testes em PostgreSQL.
 - **Limite de taxa pré-autenticação:** é configuração do proxy reverso, fora do repositório.
 - **T22:** exige navegador e UI; não executado.
+
+## Revisão do modo pessoal de 10/11/2026
+
+Revisão independente por modelo Claude distinto: dois subagentes Claude Sonnet 5.5 (`claude-sonnet-5-5`), esforço médio, somente leitura, sobre `git diff bb59f745..cb9499f9`. Receberam o código e o contexto, não a conclusão do autor (Claude Fable 5.2, com commits do Grok 4.7). Não equivale a revisão humana nem de outro provedor; produção real continua exigindo revisão externa de segurança.
+
+| Achado | Gravidade | Tratamento (commit `e6360091`, salvo indicação) |
+|---|---|---|
+| Checkout gravável no worker com credenciais valia para todo programador, inclusive fora do modo pessoal; o programador Codex ficaria com um diretório vazio | alta | Limitado a programadores Claude e Grok no modo pessoal; os demais mantêm a separação original. |
+| Avaliador Claude com `Bash(git, ls)` ao lado das credenciais, sobre repositório não confiável | alta | Sem shell e sem `git` na imagem: `Read`, `Grep` e `Glob` sobre uma cópia sem `.git`, com o diff em arquivo. Só quando `/work` existe. |
+| `envMatches` aceitava qualquer `PATH` extra | média | Só o `PATH` padrão da imagem e versões numéricas. |
+| `ac_events` deixou de comparar status | alta | Volta a recusar status, contexto ou revisão diferentes na mesma sequência; ids de status determinísticos. O id não é comparado, por causa das linhas antigas. |
+| Entrega fechada para qualquer erro | média | Só recusas definitivas fecham; transitórias e erros desconhecidos seguem como antes. |
+| Replanejamento podia repetir depois de reinício pelo caminho das tarefas | média | Guarda única, lida do ledger. |
+| Espera de `MANAGER_ACTIVE` longa demais | baixa | 30 segundos. |
+| Chave e token lidos sem as checagens de arquivo privado; escrita não atômica; origem não restrita ao host | média | `readPrivateFile`, 32 bytes exatos, escrita por arquivo temporário e `rename`, origem local obrigatória. |
+| Varredura de reservas comparava por trecho do nome | média | Nomes exatos de contêiner. Os jobs dessas reservas não são alterados. |
+| `read-tree` falhava em silêncio | baixa | Registra `PERSONAL_CHECKOUT_NOT_UPDATED`; `core.fsmonitor` desligado. |
+
+Não tratado: `personal-connect` não é idempotente se o processo morrer entre criar a sessão e gravar a configuração; os jobs de reservas liberadas pela varredura ficam `uncertain` ou `running`; o modelo de plano pessoal não exige escopo de escrita declarado pelo operador (o gerente propõe os caminhos e o titular aprova); os workers Claude e Grok usam o login montado em `/account` sem proxy de saída por padrão. As correções acima não passaram por uma segunda revisão.

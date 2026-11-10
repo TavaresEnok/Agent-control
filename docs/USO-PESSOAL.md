@@ -2,6 +2,24 @@
 
 Um titular, no servidor, pelo Happier. Sem este opt-in o sistema continua bloqueado.
 
+## Ligar um repositório em um comando
+
+Com as imagens dos workers já construídas (seção "Imagens dos workers") e um banco PostgreSQL vazio só para este projeto:
+
+```bash
+npm run personal:project -- /caminho/do/repositorio --db postgresql://usuario:senha@127.0.0.1:5432/banco --label meuprojeto --import-logins
+```
+
+O comando cria `~/.agent-control/<label>/installation.json` (fora do repositório, modo `0600`), inicializa o ledger, registra as contas, ativa o runtime nativo e cria a conversa. `--import-logins` copia, sem mover, os logins que já existem no seu usuário (`~/.claude/.credentials.json`, `~/.grok/auth.json`, `~/.codex/auth.json`). Sem essa opção ele para e mostra os comandos `account-add` para um login novo por código; depois rode o mesmo comando de novo. Pode ser repetido sem duplicar nada.
+
+Depois, deixe os dois serviços permanentes (systemd do usuário; voltam depois de um reboot se `loginctl enable-linger $USER` estiver ativo):
+
+```bash
+npm run personal:services -- ~/.agent-control/meuprojeto/installation.json meuprojeto
+```
+
+Para remover: o mesmo comando com `--remove`. Os passos abaixo são o caminho manual, peça por peça.
+
 ## Instalar
 
 1. PostgreSQL e Docker no servidor.
@@ -35,7 +53,7 @@ Confira com `docker run --rm --entrypoint /usr/local/bin/claude ac-native-planni
 
 Para deixar no ar: `docker compose -f deploy/compose.personal.yml up -d`. O `restart: unless-stopped` sobe de novo depois de um reboot. O socket do Docker entra só no broker.
 
-O comando de QA roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. O padrão é `node --version`, que só prova que o contêiner sobe. Para um QA de verdade, exporte `AC_PERSONAL_QA_ARGV` antes do `personal:setup`, com um JSON cujo primeiro item é um executável absoluto, por exemplo `'["/usr/local/bin/node","--test"]'`. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
+O comando de QA roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. O padrão confere três coisas que não dependem de instalar nada: não há marcador de conflito de merge, todo `.json` é válido e todo `.js`, `.mjs` e `.cjs` passa em `node --check`. Para rodar os testes do projeto, exporte `AC_PERSONAL_QA_ARGV` antes do `personal:setup`, com um JSON cujo primeiro item é um executável absoluto, por exemplo `'["/usr/local/bin/node","--test"]'`. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
 
 Sempre que reconstruir uma imagem ou mudar o QA, rode `personal:setup` de novo e reinicie o gateway. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
 

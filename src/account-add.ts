@@ -48,6 +48,8 @@ export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{
  const provider=Provider.parse(raw.provider);
  const label=z.string().trim().min(1).max(100).parse(raw.label);
  const root=config.accountHomesDirectory;if(!root)throw new Refusal('ACCOUNT_HOMES_NOT_CONFIGURED',403);
+ // Create the private homes directory before any ledger write, so a missing directory cannot leave an account without a home.
+ await mkdir(root,{recursive:true,mode:0o700});
  await syncInstallationActivation(ledger,config.activation);
  const owner=config.project.owner,projectId=config.project.id;
  await ledger.pool.query('INSERT INTO ac_control_admins VALUES($1) ON CONFLICT DO NOTHING',[owner]);

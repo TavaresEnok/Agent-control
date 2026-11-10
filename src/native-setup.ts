@@ -11,6 +11,7 @@ import {nativeQaContractDigest,NativeQaContract} from './native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
 import {Templates} from './templates.ts';
+import {Capacity} from './capacity.ts';
 
 /**
  * Default personal QA. It runs in the tools image with no network and a read-only checkout, so it
@@ -84,6 +85,14 @@ export async function nativeSetup(path:string){
   const base=latest?QualityPolicy.parse(latest.snapshot):QualityPolicy.parse({schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false});
   if(base.verifierDigest!==nativeReviewVerifierDigest||base.qaVerifierDigest!==block.qaDigest)
    await new QualityPolicies(ledger).publish(config.project.owner,config.project.id,Number(latest?.revision??0),{...base,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:block.qaDigest});
+  // A new project has no capacity policy yet, and a conversation cannot be created without one: publish the
+  // obvious first one, each role served by the profiles the owner registered for it. An existing policy is left alone.
+  if(!(await ledger.pool.query('SELECT 1 FROM ac_policy_revisions WHERE project_id=$1 LIMIT 1',[config.project.id])).rowCount){
+   const profiles=(await ledger.pool.query(`SELECT p.id,p.role FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 AND p.enabled ORDER BY p.role,p.id`,[config.project.id])).rows;
+   const roles:Record<string,{regular:string[];emergency:string[]}>={};
+   for(const profile of profiles)(roles[String(profile.role)]??={regular:[],emergency:[]}).regular.push(String(profile.id));
+   if(roles.manager&&roles.programmer)await new Capacity(ledger).publish(config.project.owner,config.project.id,0,{schemaVersion:1,roles,maxEvaluatorsPerContext:2,maxProgrammersPerContext:2} as never);
+  }
   // Conversations plan against the latest quality revision, so move their templates forward with it.
   const qualityNow=Number((await ledger.pool.query('SELECT max(revision) r FROM ac_quality_policies WHERE project_id=$1',[config.project.id])).rows[0].r);
   const stale=(await ledger.pool.query(`SELECT t.context_id,t.revision,t.snapshot,t.published_by FROM ac_context_templates t JOIN ac_contexts x ON x.id=t.context_id

@@ -645,7 +645,8 @@ export class EngineeringStages{
     }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
     if((node==='review'||node==='judge')&&grant.account_id){
-     const programmer=(await this.ledger.pool.query("SELECT account_id FROM ac_capacity_grants WHERE intent_id=$1 AND role='programmer' AND account_id IS NOT NULL LIMIT 1",[intent.id])).rows[0];
+     // Real subscription accounts only: one synthetic fixture account legitimately plays every role.
+     const programmer=(await this.ledger.pool.query("SELECT g.account_id FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.intent_id=$1 AND g.role='programmer' AND a.mode<>'synthetic' LIMIT 1",[intent.id])).rows[0];
      if(programmer&&programmer.account_id===grant.account_id)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
     }
     if(nativeStage){
