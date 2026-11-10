@@ -1,3 +1,4 @@
+import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {GitArtifacts} from './git.ts';
@@ -46,7 +47,9 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const nativeVerification=new NativeVerification(ledger,quality,executions,reviewKey);
  const implementation=new NativeImplementation(ledger,config.project.repo,quality,executions);
  const semantic=new SemanticPlanning(ledger,planning.map(supervisor=>supervisor.executor));
- const engineering:EngineeringOptions={quality,git,verifierKey:reviewKey,nativeQa,nativeVerification};
+ const branch=execFileSync('/usr/bin/git',['-C',config.project.repo,'symbolic-ref','--short','HEAD'],{encoding:'utf8'}).trim();
+ if(!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch))throw new Error('PERSONAL_TARGET_UNRESOLVED');
+ const engineering:EngineeringOptions={quality,git,verifierKey:reviewKey,nativeQa,nativeVerification,allowedTargets:[`refs/heads/${branch}`]};
  const managerChat=new PersonalManagerChat(ledger,{imageId:boot.planning.imageId,accountRoot:boot.planning.accountRoot});
  return {planning,executions,implementation,semantic,engineering,managerChat};
 }
