@@ -19,11 +19,16 @@ const Rules=z.object({workerEntrypoint:z.array(z.string()).min(1),toolsEntrypoin
  workerMemory:z.number().int().positive(),toolsMemory:z.number().int().positive(),workerPids:z.number().int().positive(),toolsPids:z.number().int().positive(),
  workerNanoCpus:z.number().int().positive(),toolsNanoCpus:z.number().int().positive()}).strict();
 function exact(a:string[]|null,b:string[]){return JSON.stringify(a??[])===JSON.stringify(b);}
-/** Contract variables must match exactly; only the base image's own PATH/NODE_VERSION/YARN_VERSION defaults may be extra. */
+/**
+ * Contract variables must match exactly. The only extra entries tolerated are the pinned Node image's own defaults,
+ * and only with their default shape: the stock PATH and plain version numbers. Anything else is a mismatch.
+ */
+const IMAGE_DEFAULT_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 export function envMatches(actual:string[]|null,expected:string[]){
  const names=new Set(expected.map(entry=>entry.split('=')[0]));
- const imageDefaults=new Set(['PATH','NODE_VERSION','YARN_VERSION']);
- const got=(actual??[]).filter(entry=>{const name=entry.split('=')[0];return names.has(name)||!imageDefaults.has(name);});
+ const imageDefault=(entry:string)=>{const at=entry.indexOf('='),name=entry.slice(0,at),value=entry.slice(at+1);
+  return name==='PATH'?value===IMAGE_DEFAULT_PATH:(name==='NODE_VERSION'||name==='YARN_VERSION')&&/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value);};
+ const got=(actual??[]).filter(entry=>names.has(entry.split('=')[0]!)||!imageDefault(entry));
  return JSON.stringify([...got].sort())===JSON.stringify([...expected].sort());
 }
 function convert(c:Container){

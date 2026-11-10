@@ -218,12 +218,12 @@ export class Ledger {
       const inserted = await c.query('INSERT INTO ac_events VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(run_id,seq) DO NOTHING',
         [p.eventId, p.contextId, p.runId, p.planRevision, p.seq, p.status]);
       if (!inserted.rowCount) {
-        // The status tick re-projects the current status of a run every cycle with a fresh event id,
-        // and the status may advance while the sequence does not. A replay is therefore judged by the
-        // scope it belongs to: the same sequence under another context or plan revision is a conflict.
-        const prior = await c.query('SELECT context_id, plan_revision FROM ac_events WHERE run_id=$1 AND seq=$2', [p.runId, p.seq]);
+        // A replay must describe the same fact: same context, plan revision and status at that sequence. A different
+        // status at an existing sequence is a conflict, never a silent no-op. The event id is not compared, because
+        // the status projection is repeated every cycle and rows written before ids became deterministic differ.
+        const prior = await c.query('SELECT context_id, plan_revision, status FROM ac_events WHERE run_id=$1 AND seq=$2', [p.runId, p.seq]);
         const r = prior.rows[0];
-        if (!r || r.context_id !== p.contextId || Number(r.plan_revision) !== p.planRevision)
+        if (!r || r.context_id !== p.contextId || Number(r.plan_revision) !== p.planRevision || r.status !== p.status)
           throw new Refusal('EVENT_SEQUENCE_CONFLICT', 409);
       }
     });

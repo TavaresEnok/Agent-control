@@ -409,6 +409,10 @@ export class HappierEndpoint {
    await this.say('stop-'+row.id,'Parada solicitada.');
   }
   /** One corrective proposal per failed delivery, through the same encrypted conversation path. */
+  /** One automatic replan per conversation, remembered in the ledger so a restart does not ask again. */
+  private async replanAlreadyRequested(){
+   return Boolean((await this.ledger.pool.query(`SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->'payload'->>'localId' LIKE 'replan-%' LIMIT 1`,[this.options.authority.contextId])).rowCount);
+  }
   private async replan(parentIntentId:string,unitId:string){
    const parent=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2',[parentIntentId,this.options.authority.contextId])).rows[0];
    const revision=Number(parent?.command?.payload?.proposalRevision);
@@ -528,7 +532,7 @@ export class HappierEndpoint {
         await c.query(`UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3
           AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1)`, [intent.id, run.status, this.options.authority.contextId]);
         await this.ledger.refreshPending(c,this.options.authority.contextId); });
-      await this.ledger.event(this.options.principal, { schemaVersion: 1, eventId: randomUUID(), contextId: intent.context_id,
+      await this.ledger.event(this.options.principal, { schemaVersion: 1, eventId: stableId('run-status\0'+run.id+'\0'+seq+'\0'+run.status), contextId: intent.context_id,
         runId: run.id, planRevision: intent.plan_revision, seq, status: run.status }, this.options.authority);
       const status=notificationStatus(run.status);
       await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
@@ -543,7 +547,7 @@ export class HappierEndpoint {
       this.announced.set(child.id,label);
       const parent=String(child.parent_intent_id);
       if(label!=='falhou'){await this.say('progress-'+child.id+'-'+label,'Tarefa '+label+'.');continue;}
-      if(this.replanned.has(parent)){await this.say('progress-'+child.id+'-'+label,'A tarefa '+String(child.parent_unit_id)+' falhou de novo depois do replanejamento. Veja o erro no painel.');continue;}
+      if(this.replanned.size>0||await this.replanAlreadyRequested()){await this.say('progress-'+child.id+'-'+label,'A tarefa '+String(child.parent_unit_id)+' falhou de novo depois do replanejamento. Veja o erro no painel.');continue;}
       this.replanned.add(parent);
       await this.say('progress-'+child.id+'-'+label,'A tarefa '+String(child.parent_unit_id)+' falhou. Pedi ao gerente um plano corrigido.');
       await this.replan(parent,String(child.parent_unit_id)).catch(async()=>{await this.say('replan-failed-'+parent,'Não consegui pedir o replanejamento. Envie o pedido de novo com a correção.');});
@@ -556,7 +560,7 @@ export class HappierEndpoint {
       const id=String(plan.id);
       if(this.announced.get(id)==='falhou')continue;
       this.announced.set(id,'falhou');
-      const already=this.replanned.size>0||Boolean((await this.ledger.pool.query(`SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->'payload'->>'localId' LIKE 'replan-%' LIMIT 1`,[this.options.authority.contextId])).rowCount);
+      const already=this.replanned.size>0||await this.replanAlreadyRequested();
       if(already){await this.say('plan-failed-'+id,'O plano falhou de novo depois do replanejamento. Veja o diagnóstico no painel.');continue;}
       this.replanned.add(id);
       await this.say('plan-failed-'+id,'O plano falhou. Pedi ao gerente um plano corrigido.');
@@ -589,8 +593,11 @@ export class HappierEndpoint {
       } catch (error) {
         // Personal mode: a refused message must not stay claimed forever in the Happier queue
         // (it would show as "delivery uncertain" and need manual action). Say why and close the delivery.
-        if (!this.options.personalConversation) throw error;
-        const code = error instanceof Refusal ? error.code : 'ERRO_INTERNO';
+        // Only a definite product refusal is closed: it is raised before anything is recorded. Transient
+        // conditions and unknown errors keep the delivery claimed, as outside personal mode.
+        const transient=['STALE_MANAGER','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ADMISSION_CLOSED','HUMAN_PAUSED','MANAGER_RESTART_IN_PROGRESS'];
+        if (!this.options.personalConversation || !(error instanceof Refusal) || transient.includes(error.code)) throw error;
+        const code = error.code;
         await this.say('refused-' + pending.message.localId, 'Não consegui aceitar esta mensagem (' + code + '). Corrija a causa e envie de novo.');
         await this.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: this.socket, sessionId: this.options.sessionId, localId: pending.message.localId });
         await this.boundary.markPendingQueueV2DeliveryHandled({ token: this.options.token, sessionId: this.options.sessionId, localId: pending.message.localId });

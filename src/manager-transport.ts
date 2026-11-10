@@ -41,10 +41,10 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
    if(projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
    const allowed=(await ledger.pool.query("SELECT 1 FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id WHERE x.id=$1 AND x.project_id=$2 AND m.principal_id=$3 AND m.role='owner' AND NOT x.archived",[item.contextId,projectId,options.principal])).rowCount;
    if(!allowed)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
-   // After a crash or restart the previous lease is still live for a short while; wait for it instead of failing the whole service.
+   // After a crash or restart the previous lease is still live for at most 15 seconds; wait about twice that instead of failing the whole service.
    for(let attempt=0;;attempt++){
     try{await registry.startFromKeySource({...request,principal:options.principal},source);break;}
-    catch(error){if(!(error instanceof Refusal)||error.code!=='MANAGER_ACTIVE'||attempt>=60)throw error;await new Promise(done=>setTimeout(done,3000));}
+    catch(error){if(!(error instanceof Refusal)||error.code!=='MANAGER_ACTIVE'||attempt>=10)throw error;await new Promise(done=>setTimeout(done,3000));}
    }
   }
   return registry;

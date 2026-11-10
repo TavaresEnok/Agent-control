@@ -43,7 +43,7 @@ export async function releaseDeadPersonalGrants(ledger:Ledger){
  let released=0;
  for(const row of rows){
   const jobs=row.jobs as string[];
-  if(jobs.some(job=>names.some(name=>name.includes(job))))continue;
+  if(jobs.some(job=>['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-'].some(prefix=>names.includes(prefix+job))))continue;
   released+=Number((await ledger.pool.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2::jsonb WHERE id=$1 AND state<>'released'",
    [row.id,JSON.stringify({source:'personal-startup-sweep',containersAbsent:true,jobs})])).rowCount??0);
  }
@@ -61,9 +61,9 @@ class PersonalGitArtifacts extends GitArtifacts{
  override async cas(candidate:string,base:string,targetRef:string,operationId:string){
   const result=await super.cas(candidate,base,targetRef,operationId);
   if(result.status==='integrated')try{
-   const env={PATH:'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0'},git=(args:string[])=>execFileSync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',this.checkout,...args],{encoding:'utf8',env,timeout:20000,stdio:['ignore','pipe','ignore']}).trim();
+   const env={PATH:'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0'},git=(args:string[])=>execFileSync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=','-C',this.checkout,...args],{encoding:'utf8',env,timeout:20000,stdio:['ignore','pipe','ignore']}).trim();
    if(git(['rev-parse','--is-bare-repository'])==='false'&&git(['symbolic-ref','-q','HEAD'])===targetRef)git(['read-tree','-m','-u',base,candidate]);
-  }catch{/* the owner can run git status and reconcile by hand */}
+  }catch{console.error('PERSONAL_CHECKOUT_NOT_UPDATED: the branch moved but local files were left as they were; run git status in the repository.');}
   return result;
  }
 }

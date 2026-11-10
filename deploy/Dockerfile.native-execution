@@ -5,8 +5,6 @@ COPY native-execution-worker.mjs /opt/agent-control/dist/src/native-execution-wo
 COPY --chmod=0555 codex /usr/local/bin/codex
 # Optional claude/grok binaries (AC_NATIVE_CLAUDE_BIN, AC_NATIVE_GROK_BIN). The directory may be empty.
 COPY --chmod=0555 extra-bin/ /usr/local/bin/
-# git lets a Claude reviewer read the immutable artifact it is mounted with.
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /account /input /output /planning /runner && chmod 0555 /runner
 USER node
 WORKDIR /planning

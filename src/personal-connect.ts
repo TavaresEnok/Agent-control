@@ -1,19 +1,33 @@
 import {execFileSync} from 'node:child_process';
 import {randomBytes,randomUUID} from 'node:crypto';
-import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,readFile,rename,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import nacl from 'tweetnacl';
 import {Capacity} from './capacity.ts';
 import {ContextKeys,keyFingerprint} from './context-keys.ts';
 import {ContextVault} from './context-vault.ts';
 import {loadHappier} from './happier.ts';
-import {loadInstallation} from './installation.ts';
+import {loadInstallation,readPrivateFile} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {Templates} from './templates.ts';
 
 const b64=(bytes:Uint8Array)=>Buffer.from(bytes).toString('base64');
+/** A 32-byte secret in an owner-only regular file; created on first use and never accepted in any other shape. */
 async function privateBytes(path:string){
- try{return await readFile(path);}catch{const bytes=randomBytes(32);await writeFile(path,bytes,{mode:0o600,flag:'wx'});return bytes;}
+ let bytes:Buffer;
+ try{bytes=await readPrivateFile(path,64);}
+ catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;bytes=randomBytes(32);await writeFile(path,bytes,{mode:0o600,flag:'wx'});}
+ if(bytes.length!==32)throw new Error('PRIVATE_KEY_FILE_INVALID');
+ return bytes;
+}
+/** The conversation key and token only ever go to a Happier server on this host. */
+function localOrigin(origin:string){
+ if(!['127.0.0.1','localhost','[::1]'].includes(new URL(origin).hostname))throw new Error('HAPPIER_UPSTREAM_MUST_BE_LOCAL');
+ return origin;
+}
+async function writePrivate(path:string,content:string){
+ const temporary=path+'.'+randomUUID()+'.tmp';
+ await writeFile(temporary,content,{mode:0o600,flag:'wx'});await chmod(temporary,0o600);await rename(temporary,path);
 }
 
 /**
@@ -24,7 +38,7 @@ async function privateBytes(path:string){
 export async function personalConnect(path:string){
  const config=await loadInstallation(path);
  if(config.activation!=='personal')throw new Error('PERSONAL_ACTIVATION_REQUIRED');
- const origin=config.happier.upstreamOrigin;
+ const origin=localOrigin(config.happier.upstreamOrigin);
  const up=await fetch(origin+'/v1/account/profile',{signal:AbortSignal.timeout(5000)}).then(r=>r.status===401,()=>false);
  if(!up)return {state:'happier_required',next:'Suba o servidor Happier: npm run personal:happier -- '+path};
  // One secret is both the sign-in seed and the legacy conversation key, as in the Happier client.
@@ -37,7 +51,7 @@ export async function personalConnect(path:string){
  const authorization='Bearer '+token,json={authorization,'content-type':'application/json'};
  const profile=await (await fetch(origin+'/v1/account/profile',{headers:{authorization}})).json() as {id:string};
  const tokenFile=join(config.dataDirectory,'manager-token');
- await writeFile(tokenFile,token,{mode:0o600});
+ await writePrivate(tokenFile,token);
  const raw=JSON.parse(await readFile(path,'utf8')) as Record<string,any>;
  const existing=raw.managerTransport?.contexts?.find((item:{projectId:string})=>item.projectId===config.project.id);
  if(existing&&raw.managerTransport.principal===profile.id)return {state:'connected',principal:profile.id,sessionId:existing.sessionId,contextId:existing.contextId,refreshed:'token'};
@@ -73,7 +87,7 @@ export async function personalConnect(path:string){
   raw.managerTransport={principal:profile.id,tokenFile,machineId,contexts:[...(raw.managerTransport?.principal===profile.id?raw.managerTransport.contexts:[]),{projectId:config.project.id,...request}]};
   // The native bootstrap is bound to the conversation it serves.
   if(raw.nativeBootstrap&&raw.nativeBootstrap.projectId===config.project.id)raw.nativeBootstrap.contextId=raw.managerTransport.contexts.find((entry:{projectId:string})=>entry.projectId===config.project.id).contextId;
-  await writeFile(path,JSON.stringify(raw,null,2)+'\n',{mode:0o600});
+  await writePrivate(path,JSON.stringify(raw,null,2)+'\n');
   return {state:'connected',principal:profile.id,sessionId,contextId};
  }finally{await ledger.close();}
 }
@@ -87,8 +101,9 @@ export async function personalSay(path:string,text:string|undefined,waitSeconds=
  const config=await loadInstallation(path);
  const item=config.managerTransport?.contexts.find(context=>context.projectId===config.project.id);
  if(config.activation!=='personal'||!item||!config.managerTransport)throw new Error('PERSONAL_CONNECT_REQUIRED');
- const origin=config.happier.upstreamOrigin,secret=await readFile(join(config.dataDirectory,'happier-account.key'));
- const token=(await readFile(config.managerTransport.tokenFile,'utf8')).trim(),headers={authorization:'Bearer '+token,'content-type':'application/json'};
+ const origin=localOrigin(config.happier.upstreamOrigin),secret=await readPrivateFile(join(config.dataDirectory,'happier-account.key'),64);
+ if(secret.length!==32)throw new Error('PRIVATE_KEY_FILE_INVALID');
+ const token=(await readPrivateFile(config.managerTransport.tokenFile,16384)).toString('utf8').trim(),headers={authorization:'Bearer '+token,'content-type':'application/json'};
  const boundary=await loadHappier();
  const read=async()=>{
   const response=await fetch(origin+'/v1/sessions/'+item.sessionId+'/messages?scope=main&limit=150',{headers});

@@ -10,7 +10,7 @@ import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
-import {mkdir,lstat,realpath,writeFile,open,rename,cp} from 'node:fs/promises';
+import {mkdir,lstat,realpath,writeFile,open,rename,cp,rm} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {createPrivateKey,createPublicKey,sign,createHash,createHmac,randomBytes,verify} from 'node:crypto';
 import {z} from 'zod';
@@ -209,9 +209,18 @@ export class NativeExecutionSupervisor{
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   // A Claude reviewer reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
   const workerArtifact=input.role!=='programmer'&&personal&&this.config.provider==='claude'?join(p.root,'review-artifact'):undefined;
-  if(workerArtifact)await cp(p.work,workerArtifact,{recursive:true});
-  const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(input.role==='programmer'?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
-  const toolsWork=input.role==='programmer'?join(p.root,'tools-workspace'):p.work;
+  if(workerArtifact){
+   // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
+   await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
+   // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
+   const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
+   if(reviewed?.base_id){const change=await new GitArtifacts(this.config.repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
+  }
+  // Only the personal Claude and Grok programmers edit the checkout from the worker itself. Every other case keeps the
+  // original split: the credentialed worker has no /work and the tools container owns the checkout.
+  const workerOwnsCheckout=input.role==='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='grok');
+  const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(workerOwnsCheckout?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
+  const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):p.work;
   if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
   const toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
   const host=(networkId:string,mounts:typeof toolsMounts)=>({NetworkMode:networkId,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,Tmpfs:{'/tmp':'rw,nosuid,nodev,size=64m'},Binds:mounts.map(m=>m.source+':'+m.destination+(m.writable?':rw':':ro'))});
