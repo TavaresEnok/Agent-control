@@ -3,6 +3,7 @@ import {redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-r
 import type {AgentRunner,AgentRunSpec,AgentSession} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import {usageWindowsObservationSchema,type UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {Refusal} from './contracts.ts';
+import {extractJsonObject} from './claude-planning-adapter.ts';
 
 const Path=z.string().min(1).max(240).refine(path=>!path.startsWith('/')&&!path.includes('\\')&&
  !path.split('/').some(part=>!part||part==='.'||part==='..'||part==='.git'||part==='.ai')&&!/[\x00-\x1f*?\[\]{}]/.test(path));
@@ -36,7 +37,10 @@ export class ClaudeExecutionAdapter{
    executionEnvironment:input.environment,additionalDirectories:[],mcpServers:[],timeoutMs:input.timeoutMs,
    ...(input.outputSchema?{structuredOutputSchema:input.outputSchema}:{}),
    onUsageWindows:value=>{const parsed=usageWindowsObservationSchema.safeParse(value);if(parsed.success)usage=parsed.data;},
-   systemPrompt:instruction,userPrompt:JSON.stringify({role:input.role,request:redactSecrets(input.task,secrets),writePaths:input.writePaths,artifactCommit:input.artifactCommit??null})};
+   systemPrompt:input.outputSchema
+    ?instruction+' Reply with ONLY one JSON object, no prose and no code fences, matching this JSON Schema: '+JSON.stringify(input.outputSchema)
+    :instruction,userPrompt:JSON.stringify({role:input.role,request:redactSecrets(input.task,secrets),writePaths:input.writePaths,artifactCommit:input.artifactCommit??null}),
+   ...(input.role==='programmer'?{}:{allowedTools:['Read','Bash'],bashAllowlist:['git','ls']})};
   let session:AgentSession|undefined;let rejectStop!:(error:Error)=>void;
   const stopped=new Promise<never>((_,reject)=>{rejectStop=reject;});
   const stop=()=>{session?.interrupt();session?.hardStop?.();rejectStop(new Refusal(timedOut?'EXECUTION_TIMEOUT':'EXECUTION_CANCELED'));};
@@ -51,8 +55,10 @@ export class ClaudeExecutionAdapter{
    const result=await Promise.race([session.result,stopped]);
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
    if(failed||!completed)throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
-   if(Buffer.byteLength(result.text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
-   return {output:redactSecrets(result.text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
+   const extracted=input.outputSchema?extractJsonObject(result.text):undefined;
+   const text=extracted===undefined?result.text:JSON.stringify(extracted);
+   if(Buffer.byteLength(text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
+   return {output:redactSecrets(text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
   }catch(error){throw new ClaudeExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }
