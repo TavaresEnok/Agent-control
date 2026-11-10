@@ -236,6 +236,11 @@ async function assertNativeTemplate(c:pg.PoolClient,contextId:string,plan:Manage
  if(!selected)throw new Refusal('NATIVE_PLAN_TEMPLATE_REQUIRED');
  const template=Template.parse(selected.snapshot);
  if(digest(template)!==selected.digest)throw new Refusal('TEMPLATE_DIGEST_MISMATCH');
+ const personal=Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+ if(personal&&template.workflow==='semantic-proposal-v1'){
+  for(const task of plan.tasks)if(task.qualityRevision!==template.qualityRevision||task.targetRef!==template.targetRef)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
+  return;
+ }
  if(template.workflow!=='engineering-native-v1'||template.execution!=='plan')throw new Refusal('NATIVE_PLAN_TEMPLATE_REQUIRED');
  for(const task of plan.tasks){
   if(task.qualityRevision!==template.qualityRevision||task.targetRef!==template.targetRef)throw new Refusal('TEMPLATE_WORKFLOW_MISMATCH');
