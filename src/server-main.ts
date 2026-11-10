@@ -37,6 +37,14 @@ async function main(){
   finally{await ledger.close();}
   return;
  }
+ if(command==='personal-connect'){
+  if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
+  const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path)));return;
+ }
+ if(command==='say'||command==='chat-log'){
+  if(!path||(command==='say'?extra.length<1||extra.length>2:extra.length))throw Error('INVALID_INSTALLATION_COMMAND');
+  const {personalSay}=await import('./personal-connect.ts');await personalSay(path,command==='say'?extra[0]:undefined,extra[1]?Number(extra[1]):undefined);return;
+ }
  if(command==='native-setup'){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
   const {nativeSetup}=await import('./native-setup.ts');
@@ -188,4 +196,7 @@ async function main(){
   process.once('SIGTERM',close);process.once('SIGINT',close);
  }finally{if(!serving){try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{try{await workflowRegistration?.close();}finally{await ledger.close();}}}}}}
 }
-main().catch(()=>{console.error('INSTALLATION_COMMAND_FAILED: inspect private configuration, initialization and service availability; secrets are not logged.');process.exitCode=1;});
+main().catch(error=>{
+ // Only a refusal code or an upper-case error identifier is shown; free text may carry paths or secrets.
+ const raw=String((error as {code?:unknown})?.code??(error as Error)?.message??''),code=/^[A-Z][A-Z0-9_]{2,80}$/.test(raw)?raw:(error as Error)?.name==='ZodError'?'INVALID_CONFIGURATION_SHAPE':'UNCLASSIFIED';
+ console.error('INSTALLATION_COMMAND_FAILED ('+code+'): inspect private configuration, initialization and service availability; secrets are not logged.');process.exitCode=1;});

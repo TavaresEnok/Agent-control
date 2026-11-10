@@ -15,6 +15,7 @@
     "start:built": "node dist/src/lab-main.js",
     "gateway": "node --import tsx src/server-main.ts",
     "personal:setup": "node scripts/personal-setup.mjs",
+    "personal:happier": "node scripts/personal-happier.mjs",
     "prebuild": "node scripts/prepare-build.mjs --before"
   },
   "dependencies": {

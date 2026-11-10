@@ -17,6 +17,13 @@ import {Notifications,NotificationPolicy,notificationReason,notificationStatus} 
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 
+/** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
+function httpFailureSuffix(error:Error){
+ const e=error as {response?:{status?:number};config?:{method?:string;url?:string}};
+ if(!e.config?.url)return '';
+ let path='';try{path=new URL(e.config.url,'http://x').pathname.replace(/[^A-Za-z0-9/_.-]/g,'').slice(0,120);}catch{}
+ return ':'+String(e.response?.status??'no-response')+':'+String(e.config.method??'').toUpperCase()+' '+path;
+}
 type Rpc = {
   onSocketConnect(socket: Socket): void; onSocketDisconnect(): void;
   registerHandler?(method:string,handler:(data:unknown)=>Promise<unknown>):void;
@@ -241,7 +248,7 @@ export class HappierEndpoint {
         this.lastError = undefined;
       }).catch(async error => {
         const code = error instanceof Refusal ? error.code : error instanceof z.ZodError
-          ? 'CONTRACT_ERROR:' + error.issues.map(issue => issue.path.join('.')).join(',') : error instanceof Error ? error.name : 'UNKNOWN_ERROR';
+          ? 'CONTRACT_ERROR:' + error.issues.map(issue => issue.path.join('.')).join(',') : error instanceof Error ? error.name+httpFailureSuffix(error) : 'UNKNOWN_ERROR';
         if (code !== this.lastError) void this.ledger.pool.query(
           "INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.blocked',$2)",
           [this.options.authority.contextId, { code }]).catch(() => {});
@@ -523,6 +530,20 @@ export class HappierEndpoint {
       this.replanned.add(parent);
       await this.say('progress-'+child.id+'-'+label,'A tarefa '+String(child.parent_unit_id)+' falhou. Pedi ao gerente um plano corrigido.');
       await this.replan(parent,String(child.parent_unit_id)).catch(async()=>{await this.say('replan-failed-'+parent,'Não consegui pedir o replanejamento. Envie o pedido de novo com a correção.');});
+     }
+     // Native plans report failure on the plan intent itself; the task intents stay accepted.
+     // One automatic replan per conversation: a failed replanned plan is only reported.
+     const failedPlans=(await this.ledger.pool.query(`SELECT i.id FROM ac_intents i WHERE i.context_id=$1 AND i.parent_intent_id IS NULL AND i.command->>'action'='plan.start' AND i.state='failed'
+       AND NOT EXISTS(SELECT 1 FROM ac_plan_cancellations x WHERE x.intent_id=i.id) ORDER BY i.created_at`,[this.options.authority.contextId])).rows;
+     for(const plan of failedPlans){
+      const id=String(plan.id);
+      if(this.announced.get(id)==='falhou')continue;
+      this.announced.set(id,'falhou');
+      const already=this.replanned.size>0||Boolean((await this.ledger.pool.query(`SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->'payload'->>'localId' LIKE 'replan-%' LIMIT 1`,[this.options.authority.contextId])).rowCount);
+      if(already){await this.say('plan-failed-'+id,'O plano falhou de novo depois do replanejamento. Veja o diagnóstico no painel.');continue;}
+      this.replanned.add(id);
+      await this.say('plan-failed-'+id,'O plano falhou. Pedi ao gerente um plano corrigido.');
+      await this.replan(id,'do plano').catch(async()=>{await this.say('replan-failed-'+id,'Não consegui pedir o replanejamento. Envie o pedido de novo com a correção.');});
      }
     }
     await this.flushNotifications();await this.deliverQueuedMessages();

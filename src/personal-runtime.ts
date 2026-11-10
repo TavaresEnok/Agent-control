@@ -49,6 +49,24 @@ export async function releaseDeadPersonalGrants(ledger:Ledger){
  return released;
 }
 
+/**
+ * Integration moves the branch ref only. When that branch is the one checked out in the owner's
+ * repository, the files on disk would stay at the old commit and show up as staged reversals.
+ * A two-way read-tree brings index and working tree forward and refuses, changing nothing, if a
+ * local edit would be overwritten. Best effort: the integration itself has already succeeded.
+ */
+class PersonalGitArtifacts extends GitArtifacts{
+ constructor(private readonly checkout:string){super(checkout);}
+ override async cas(candidate:string,base:string,targetRef:string,operationId:string){
+  const result=await super.cas(candidate,base,targetRef,operationId);
+  if(result.status==='integrated')try{
+   const env={PATH:'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0'},git=(args:string[])=>execFileSync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-C',this.checkout,...args],{encoding:'utf8',env,timeout:20000,stdio:['ignore','pipe','ignore']}).trim();
+   if(git(['rev-parse','--is-bare-repository'])==='false'&&git(['symbolic-ref','-q','HEAD'])===targetRef)git(['read-tree','-m','-u',base,candidate]);
+  }catch{/* the owner can run git status and reconcile by hand */}
+  return result;
+ }
+}
+
 export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')return;
@@ -78,7 +96,7 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects}));
  }
  if(!planning.length||!executions.length)throw new Error('PERSONAL_RUNTIME_ACCOUNT_REQUIRED');
- const git=new GitArtifacts(config.project.repo);
+ const git=new PersonalGitArtifacts(config.project.repo);
  const quality=new Quality(ledger,reviewKey,git);
  const nativeQa=new NativeQa(ledger,quality,config.project.repo,boot.execution.hostRoot,boot.qa,reviewKey);
  const nativeVerification=new NativeVerification(ledger,quality,executions,reviewKey);
