@@ -4,7 +4,7 @@ Atualizado em 10/11/2026, branch `task/personal-activation`, sem push.
 
 ## Resumo
 
-O modo pessoal funciona de ponta a ponta com modelos reais. Um pedido escrito na conversa vira proposta do gerente (Claude Sonnet 5.5), é programado pelo Grok 4.7, revisado pelo Claude, passa pelo QA em contêiner e é integrado no branch do repositório, com aviso de cada etapa. Isso foi provado duas vezes pelo caminho real (servidor Happier local, gateway `serve`, fila cifrada) e seis vezes por um driver de teste que hospeda o mesmo runtime. Uma revisão independente achou dois defeitos graves de isolamento, já corrigidos. O que não foi provado: o aplicativo Happier, os serviços permanentes, um projeto real e um QA que rode os testes do projeto.
+O modo pessoal funciona de ponta a ponta com modelos reais. Um pedido escrito na conversa vira proposta do gerente (Claude Sonnet 5.5), é programado pelo Grok 4.7, revisado pelo Claude, passa pelo QA em contêiner e é integrado no branch do repositório, com aviso de cada etapa. Isso foi provado duas vezes pelo caminho real (servidor Happier local, gateway `serve`, fila cifrada) e seis vezes por um driver de teste que hospeda o mesmo runtime. Uma revisão independente achou dois defeitos graves de isolamento, já corrigidos. O que não foi provado: o aplicativo Happier, um projeto real e um QA que rode os testes do projeto.
 
 ## T1–T8
 
@@ -50,7 +50,7 @@ Depois dessas correções, um pedido real passou de novo pelo caminho completo: 
 ## O que não funciona ou não foi provado
 
 - **Login copiado não serve para um segundo projeto.** `--import-logins` copia o arquivo OAuth do Claude; a cópia e o original compartilham o mesmo token de renovação e, quando um renova, o outro morre ("OAuth session expired and could not be refreshed"). No segundo projeto de teste o gerente respondeu uma vez e o planejamento seguinte já falhou. Para cada projeto novo, faça um login próprio com `account-add` sem `--auth-file`. O projeto de teste original continua funcionando.
-- **Serviços permanentes.** `npm run personal:services` está pronto, mas não foi executado: o ambiente em que este trabalho rodou bloqueia a criação de serviços persistentes. Gateway e Happier do projeto de teste seguem em `tmux` (`ac-gateway`, `ac-happier`).
+- **Serviços permanentes.** Instalados pelo titular com `npm run personal:services` para o projeto de teste (`agent-control-happier-smoke` e `agent-control-gateway-smoke`, systemd do usuário, `enabled`, com linger). O gateway respondeu pela conversa depois da troca. Um reboot de verdade não foi testado.
 - **Aplicativo Happier.** O cliente web não está construído e o celular precisa alcançar o servidor por HTTPS. A conversa foi provada pelo terminal, com a mesma fila e a mesma cifra do aplicativo.
 - **QA.** O padrão agora verifica conflito de merge, JSON e sintaxe de JavaScript, sem instalar dependências. Rodar os testes do projeto exige `AC_PERSONAL_QA_ARGV` e uma imagem de tools que tenha as dependências; isso não foi exercitado.
 - **Suíte completa.** 462 testes: 364 passam, 34 são pulados e 64 falham. Das 64, 32 pedem ambiente que não existe aqui (banco descartável, controlador isolado, `sudo mount`). Das outras 32, 9 eram a regra do revisor e foram corrigidas (`467ac51d`). Ficam cerca de 20, quase todas de execução nativa sintética com Docker; uma delas (`native-multitask`) falha igual no commit `31a5fa65`, anterior ao modo pessoal, então não nasceu nesta rodada. As demais não foram triadas uma a uma.
@@ -60,7 +60,7 @@ Depois dessas correções, um pedido real passou de novo pelo caminho completo: 
 ## Ações do titular
 
 1. Ligar um projeto real: `npm run personal:project -- <repositório> --db <postgresql://...> --label <nome>`, depois `account-add` para Claude e Grok com login próprio (sem `--auth-file`) e o mesmo comando de novo.
-2. Instalar os serviços: `npm run personal:services -- ~/.agent-control/<nome>/installation.json <nome>`.
+2. Instalar os serviços do projeto novo: `npm run personal:services -- ~/.agent-control/<nome>/installation.json <nome>` (os do projeto de teste já estão instalados).
 3. Fazer backup de `happier-account.key`, do cofre e do PostgreSQL de cada projeto.
 4. Se quiser o aplicativo no celular: publicar o servidor Happier por um proxy HTTPS seu e restaurar a conta pela chave secreta.
 5. Decidir sobre o push do branch. Sobras de teste que podem ser apagadas: `~/.agent-control/smoke2`, o banco `ac_smoke2` e `/home/app/srv_projetos/workspace/ac-smoke2-repo`.
