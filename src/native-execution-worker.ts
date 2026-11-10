@@ -2,7 +2,7 @@ import {constants} from 'node:fs';
 import {waitForNativeLaunch} from './native-worker-gate.ts';
 import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
-import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth} from './native-worker-security.ts';
+import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {CodexExecutionAdapter,CodexExecutionFailure} from './codex-execution-adapter.ts';
@@ -26,14 +26,15 @@ async function main(){
  await waitForNativeLaunch();
  const input=await readSignedWorkerLaunch(Launch,'agent-control:native-execution-launch:v1','/input/launch.json','/runner/execution-public-key.pem');
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
- initializeNativeWorkerEnvironment(input.proxyUrl);
+ initializeNativeWorkerEnvironment(input.provider==='grok'||input.provider==='claude'?undefined:input.proxyUrl);
  const identified=input.provider==='claude'||input.provider==='grok'?null:await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
- const account=identified??{secrets:[] as string[],accessToken:'',accountId:input.accountId};
+ const secrets=identified?.secrets??await readMountedCredentialSecrets(input.provider??'codex');
+ const account=identified??{secrets,accessToken:'',accountId:input.accountId};
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_WORKER_DIRECTORY');
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;
  try{token=capability.toString('utf8').trim();if(!/^[A-Za-z0-9._~-]{32,512}$/.test(token))throw Error('INVALID_TOOL_CAPABILITY');}finally{capability.fill(0);}
  const home=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
- if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR=home;else if(input.provider==='grok')process.env.HOME=home;else process.env.CODEX_HOME=home;
+ if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
  let result:Awaited<ReturnType<CodexExecutionAdapter['run']>>|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
@@ -56,6 +57,6 @@ async function main(){
  const output=await open('/output/execution-result.json',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
  try{await output.writeFile(JSON.stringify({schemaVersion:1,jobId:input.jobId,output:result?.output??'',normalizedTokensUsed:result?.tokensUsed??failedUsage?.tokensUsed??null,
   usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0}));await output.sync();}finally{await output.close();}
- process.exitCode=failure?1:0;
+ process.exit(failure?1:0);
 }
 main().catch(()=>{console.error('NATIVE_EXECUTION_WORKER_FAILED');process.exitCode=1;});
