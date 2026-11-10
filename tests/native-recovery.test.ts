@@ -146,6 +146,7 @@ class PlanningRecoveryMemory{
    grant.state='released';grant.physical_receipt=params[1];return wrote(1);
   }
   if(text.startsWith('SELECT project_id FROM ac_contexts WHERE id=$1'))return selected([]);
+  if(text.includes('ac_installation_activation'))return selected([]); // locked installation
   throw Error('UNHANDLED_SQL '+text);
  }
 }

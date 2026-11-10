@@ -4,7 +4,7 @@ Atualizado em 10/11/2026, branch `task/personal-activation`, sem push.
 
 ## Resumo
 
-O modo pessoal funciona de ponta a ponta com modelos reais. Um pedido escrito na conversa vira proposta do gerente (Claude Sonnet 5.5), é programado pelo Grok 4.7, revisado pelo Claude, passa pelo QA em contêiner e é integrado no branch do repositório, com aviso de cada etapa. Isso foi provado duas vezes pelo caminho real (servidor Happier local, gateway `serve`, fila cifrada) e seis vezes por um driver de teste que hospeda o mesmo runtime. O que não foi provado: o aplicativo Happier no celular ou no navegador, e um QA mais forte que o padrão.
+O modo pessoal funciona de ponta a ponta com modelos reais. Um pedido escrito na conversa vira proposta do gerente (Claude Sonnet 5.5), é programado pelo Grok 4.7, revisado pelo Claude, passa pelo QA em contêiner e é integrado no branch do repositório, com aviso de cada etapa. Isso foi provado duas vezes pelo caminho real (servidor Happier local, gateway `serve`, fila cifrada) e seis vezes por um driver de teste que hospeda o mesmo runtime. Uma revisão independente achou dois defeitos graves de isolamento, já corrigidos. O que não foi provado: o aplicativo Happier, os serviços permanentes, um projeto real e um QA que rode os testes do projeto.
 
 ## T1–T8
 
@@ -36,25 +36,34 @@ Repositório descartável: `/home/app/srv_projetos/workspace/ac-smoke-repo`, bra
 | `00c09e46` | O cliente Happier embutido usava o serviço público como padrão em algumas chamadas; agora fica preso ao servidor da instalação. Mensagem recusada é respondida e fechada na fila. A proposta lista tarefas e arquivos; as etapas são anunciadas. `.ai/` sai do `git status`. |
 | `ac03b687` | A exportação de configuração recusava o campo `activation`. A ordem das recusas do modo bloqueado voltou a ser a original. Três testes que conferiam texto antigo foram atualizados. |
 
+## Segunda rodada (noite de 10/11/2026)
+
+| Commit | O que mudou |
+|---|---|
+| `e6360091` | Achados de dois revisores independentes (Claude Sonnet 5.5, somente leitura) corrigidos; detalhes em `docs/implementation/REVIEW-CLAUDE-20261109.md`. Os dois graves: o checkout gravável no worker com credenciais valia fora do modo pessoal, e o revisor tinha shell e `git` ao lado das credenciais. Novo QA padrão (conflito de merge, JSON e sintaxe de JavaScript). `personal:project` e `personal:services`. |
+| `467ac51d` | Projeto novo ganha a primeira política de capacidade; a pasta das contas é criada antes de gravar no ledger; a regra "revisor diferente do programador" vale só para contas reais (quebrava os fluxos sintéticos). |
+
+Depois dessas correções, um pedido real passou de novo pelo caminho completo: commit `2f2c65c` (`docs/j.md`), com revisor sem shell e o QA novo.
+
+`personal:project` foi exercitado num segundo repositório descartável, do arquivo de instalação até a conversa criada. O pedido real nele falhou no planejamento por causa do login copiado (ver abaixo).
+
 ## O que não funciona ou não foi provado
 
-- **Aplicativo Happier.** O cliente web não está construído (`upstream/happier/apps/ui/dist` não existe) e o celular precisa alcançar o servidor por HTTPS. A conversa foi provada pelo terminal, com a mesma fila e a mesma cifra que o aplicativo usa. Se a conta criada pelo `personal-connect` abre no aplicativo com a chave secreta, não foi testado.
-- **QA.** O padrão é `node --version`, que só prova que o contêiner sobe. `AC_PERSONAL_QA_ARGV` aceita outro comando; só foi exercitado com um comando que falha de propósito.
-- **Painel web do gateway e `account-add` pelo painel.** Não foram exercitados nesta rodada.
-- **Compose.** `deploy/compose.personal.yml` não foi usado e não inclui o servidor Happier. Gateway e Happier estão em sessões `tmux` (`ac-gateway`, `ac-happier`), que não voltam sozinhas depois de um reboot.
-- **Suíte completa.** Só rodei os 20 testes ligados ao que mudou. A suíte inteira não foi executada.
-- **Limpeza manual.** Antes de existir a liberação automática, liberei à mão quatro reservas de capacidade presas por execuções abortadas. As reservas antigas do Grok da madrugada foram liberadas pela varredura nova ao subir.
-- **Itens antigos fora desta rodada:** RF-34/RNF-08, limite por origem no proxy, uso informado pelo worker e revisão externa de segurança.
+- **Login copiado não serve para um segundo projeto.** `--import-logins` copia o arquivo OAuth do Claude; a cópia e o original compartilham o mesmo token de renovação e, quando um renova, o outro morre ("OAuth session expired and could not be refreshed"). No segundo projeto de teste o gerente respondeu uma vez e o planejamento seguinte já falhou. Para cada projeto novo, faça um login próprio com `account-add` sem `--auth-file`. O projeto de teste original continua funcionando.
+- **Serviços permanentes.** `npm run personal:services` está pronto, mas não foi executado: o ambiente em que este trabalho rodou bloqueia a criação de serviços persistentes. Gateway e Happier do projeto de teste seguem em `tmux` (`ac-gateway`, `ac-happier`).
+- **Aplicativo Happier.** O cliente web não está construído e o celular precisa alcançar o servidor por HTTPS. A conversa foi provada pelo terminal, com a mesma fila e a mesma cifra do aplicativo.
+- **QA.** O padrão agora verifica conflito de merge, JSON e sintaxe de JavaScript, sem instalar dependências. Rodar os testes do projeto exige `AC_PERSONAL_QA_ARGV` e uma imagem de tools que tenha as dependências; isso não foi exercitado.
+- **Suíte completa.** 462 testes: 364 passam, 34 são pulados e 64 falham. Das 64, 32 pedem ambiente que não existe aqui (banco descartável, controlador isolado, `sudo mount`). Das outras 32, 9 eram a regra do revisor e foram corrigidas (`467ac51d`). Ficam cerca de 20, quase todas de execução nativa sintética com Docker; uma delas (`native-multitask`) falha igual no commit `31a5fa65`, anterior ao modo pessoal, então não nasceu nesta rodada. As demais não foram triadas uma a uma.
+- **Itens da revisão não tratados:** `personal-connect` não é idempotente se morrer no meio; os jobs de reservas liberadas pela varredura ficam `uncertain`; os workers Claude e Grok usam o login montado sem proxy de saída por padrão. As correções da revisão não tiveram segunda revisão.
+- **Painel web, compose e itens antigos** (RF-34/RNF-08, limite por origem no proxy, revisão externa de segurança): sem mudança.
 
 ## Ações do titular
 
-1. Deixar os dois serviços permanentes (systemd ou compose), em vez de `tmux`:
-   - `npm run personal:happier -- /home/app/srv_projetos/workspace/ac-smoke-data/installation.json`
-   - `npm run gateway -- serve /home/app/srv_projetos/workspace/ac-smoke-data/installation.json`
-2. Para usar num projeto de verdade: criar outro arquivo de instalação apontando para o repositório, rodar `personal:setup`, `account-add` para cada conta e `personal-connect`.
-3. Fazer backup de `happier-account.key`, do cofre e do PostgreSQL.
+1. Ligar um projeto real: `npm run personal:project -- <repositório> --db <postgresql://...> --label <nome>`, depois `account-add` para Claude e Grok com login próprio (sem `--auth-file`) e o mesmo comando de novo.
+2. Instalar os serviços: `npm run personal:services -- ~/.agent-control/<nome>/installation.json <nome>`.
+3. Fazer backup de `happier-account.key`, do cofre e do PostgreSQL de cada projeto.
 4. Se quiser o aplicativo no celular: publicar o servidor Happier por um proxy HTTPS seu e restaurar a conta pela chave secreta.
-5. Revisar e decidir sobre o push do branch.
+5. Decidir sobre o push do branch. Sobras de teste que podem ser apagadas: `~/.agent-control/smoke2`, o banco `ac_smoke2` e `/home/app/srv_projetos/workspace/ac-smoke2-repo`.
 
 ## Custos e cotas
 
@@ -70,7 +79,6 @@ Repositório descartável: `/home/app/srv_projetos/workspace/ac-smoke-repo`, bra
 - O programador Grok roda com aprovação automática dentro do contêiner; o que ele entrega é conferido pelo supervisor, pelo revisor e pelo QA antes de integrar.
 - Antes do commit `00c09e46`, algumas chamadas do cliente Happier embutido iam para o serviço público padrão, com o identificador da sessão e um token que só vale no servidor local. Elas falhavam com 401.
 - Usar contas de assinatura em automação e alternar contas quando a cota acaba pode violar os termos do provedor. A decisão é do titular.
-- Não houve revisão independente das correções desta rodada.
 
 ## Como usar no dia a dia
 
