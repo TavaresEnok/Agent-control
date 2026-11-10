@@ -242,8 +242,6 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
   const realEnabled=accounts.rows.some(account=>String(account.mode)!=='synthetic'&&account.enabled===true);
   if(boot.state==='active'){
    if(!personal)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
-   const managerMatches=manager.rows.length===1&&String(row?.instance_id)===boot.instanceId&&Number(row?.epoch)===boot.epoch;
-   if(manager.rows.length>1||(manager.rows.length===1&&!managerMatches))throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
    return {session,...(resources?{resources}:{}),report:{schemaVersion:1,state:'active',executionEnabled:true,inferenceEnabled:true,realAccountsEnabled:true,adaptersComposed:true,ready:true,dormantGuard:'personal',capacityGuard:'intact',...(resources?{resources:resources.report}:{})}};
   }
   if(manager.rows.length!==1||String(row?.instance_id)!==boot.instanceId||Number(row?.epoch)!==boot.epoch||String(row?.project_id)!==boot.projectId)
