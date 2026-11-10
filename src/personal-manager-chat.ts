@@ -47,9 +47,10 @@ export class PersonalManagerChat{
  }
  private run(profile:ManagerProfile,prompt:string){
   const command=cli(profile.provider,profile.model,profile.effort,prompt);
+  const proxy=process.env.AC_PERSONAL_EGRESS==='1'?['--env','HTTPS_PROXY=http://provider-egress:8080','--env','HTTP_PROXY=http://provider-egress:8080','--env','NO_PROXY=']:[];
   const args=['run','--rm','--network',this.options.network??'ac-native-provider','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
    '--pids-limit','256','--memory','1g','--tmpfs','/tmp:rw,nosuid,nodev,size=64m','--workdir','/tmp',
-   '--env','HTTPS_PROXY=http://provider-egress:8080','--env','HTTP_PROXY=http://provider-egress:8080','--env','NO_PROXY=',
+   ...proxy,
    ...command.env.flatMap(item=>['--env',item]),
    '--mount','type=bind,src='+join(this.options.accountRoot,profile.accountId)+',dst=/account',
    '--entrypoint',command.bin,this.options.imageId,...command.args];

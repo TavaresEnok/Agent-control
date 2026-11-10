@@ -87,7 +87,7 @@ export class CezarRuntime {
     this.nativeImplementation=admissionOptions?.nativeImplementation;
     if(this.nativeImplementation&&(this.nativeImplementation.ledger!==ledger||this.nativeImplementation.repository!==repo||this.nativeImplementation.quality!==engineeringOptions?.quality))throw new Refusal('NATIVE_IMPLEMENTATION_CONFIGURATION_INVALID');
     this.nativeExecutions=Object.freeze([...(admissionOptions?.nativeExecutions??[])]);
-    if(this.nativeExecutions.length>32||this.nativeExecutions.some(s=>s.ledger!==ledger)||new Set(this.nativeExecutions.map(s=>s.executorDigest+'@'+s.keyFingerprint)).size!==this.nativeExecutions.length)throw new Refusal('NATIVE_EXECUTION_REGISTRY_INVALID');
+    if(this.nativeExecutions.length>32||this.nativeExecutions.some(s=>s.ledger!==ledger)||new Set(this.nativeExecutions.map(s=>s.executorDigest+'@'+s.keyFingerprint+'@'+s.scopeId)).size!==this.nativeExecutions.length)throw new Refusal('NATIVE_EXECUTION_REGISTRY_INVALID');
     const native=admissionOptions?.nativePlanning;this.nativePlanning=Object.freeze(native?(Array.isArray(native)?[...native]:[native as NativePlanningSupervisor]):[]);
     if(this.nativePlanning.some(supervisor=>supervisor.ledger!==ledger))throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
     if(this.nativePlanning.length>32||new Set(this.nativePlanning.map(supervisor=>supervisor.executor.id+'@'+supervisor.executor.digest)).size!==this.nativePlanning.length)throw new Refusal('PLANNING_EXECUTOR_REGISTRY_INVALID');

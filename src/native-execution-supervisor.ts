@@ -72,12 +72,13 @@ export async function retireNativePrivateNetwork(docker:Pick<DockerDaemon,'inspe
  * this supervisor; configured opt-in stays activation-blocked. */
 export class NativeExecutionSupervisor{
  readonly executorDigest:string;
+ readonly scopeId:string;
  supportsAccount(accountId:string){return this.subjects.has(accountId);}
  get keyFingerprint(){return this.fingerprint;}private readonly key;private readonly publicKey:string;private readonly fingerprint:string;
  private readonly subjects=new Map<string,string>();private readonly docker:DockerDaemon;private readonly user:string;
  private readonly effectTails=new Map<string,Promise<void>>();
  constructor(readonly ledger:Ledger,private readonly config:NativeExecutionSupervisorConfig,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){
-  z.string().regex(/^[a-z][a-z0-9._-]{0,99}$/).parse(config.id);
+  z.string().regex(/^[a-z][a-z0-9._-]{0,99}$/).parse(config.id);this.scopeId=config.id+'@'+(config.provider??'codex');
   for(const image of [config.workerImage,config.toolsImage])z.string().regex(/^sha256:[a-f0-9]{64}$/).parse(image);
   Hash.parse(config.providerNetworkId);
   if(config.syntheticFixture)assertNativeSyntheticFixture(config.syntheticFixture,config);

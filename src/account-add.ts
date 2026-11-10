@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
-import {copyFile, open} from 'node:fs/promises';
+import {copyFile, mkdir, open} from 'node:fs/promises';
 import {isAbsolute, resolve} from 'node:path';
 import {z} from 'zod';
 import {AccountHomes} from './account-homes.ts';
@@ -69,7 +69,8 @@ export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{
  sessions.set(accountId,login);
  if(raw.authFile){
   if(!isAbsolute(raw.authFile)||resolve(raw.authFile)!==raw.authFile)throw new Refusal('AUTH_FILE_INVALID',400);
-  const target=resolve(home,provider==='codex'?'auth.json':provider==='claude'?'credentials.json':'auth.json');
+  const target=provider==='grok'?resolve(home,'.grok','auth.json'):provider==='claude'?resolve(home,'.credentials.json'):resolve(home,'auth.json');
+  if(provider==='grok')await mkdir(resolve(home,'.grok'),{recursive:true,mode:0o700});
   await copyFile(raw.authFile,target);
   const file=await open(target,constants.O_RDONLY);
   try{await file.chmod(0o600);}finally{await file.close();}
