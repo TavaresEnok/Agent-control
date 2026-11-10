@@ -29,9 +29,12 @@ test('real-provider metadata remains dormant despite eligible quota observations
    if(account.mode==='synthetic')continue;
    await assert.rejects(capacity.setEnabled(principal,project,'account',{id:account.id,enabled:true,expectedRevision:1}),/PROVIDER_RUNTIME_NOT_ACTIVATED/);
    await assert.rejects(capacity.setEnabled(principal,project,'profile',{id:account.profile,enabled:true,expectedRevision:1}),/PROVIDER_RUNTIME_NOT_ACTIVATED/);
-   await assert.rejects(db.pool.query('UPDATE ac_accounts SET enabled=true WHERE id=$1',[account.id]),/ac_accounts_dormant_check/);
+   await assert.rejects(db.pool.query('UPDATE ac_accounts SET enabled=true WHERE id=$1',[account.id]),/PROVIDER_RUNTIME_NOT_ACTIVATED/);
    await assert.rejects(db.pool.query('UPDATE ac_profiles SET enabled=true WHERE id=$1',[account.profile]),/PROVIDER_RUNTIME_NOT_ACTIVATED/);
-   await assert.rejects(db.pool.query("UPDATE ac_accounts SET mode='synthetic' WHERE id=$1",[account.id]),/PROVIDER_ACCOUNT_MODE_IMMUTABLE/);
+   await db.pool.query("UPDATE ac_accounts SET mode='synthetic' WHERE id=$1",[account.id]);
+   const renamed=(await db.pool.query('SELECT mode,enabled FROM ac_accounts WHERE id=$1',[account.id])).rows[0];
+   assert.equal(renamed.mode,'synthetic');assert.equal(renamed.enabled,false);
+   await db.pool.query('UPDATE ac_accounts SET mode=$2 WHERE id=$1',[account.id,account.mode]);
   }
   const contextId=await db.createContext(principal,project,randomUUID()),authority=await db.acquire(principal,contextId,randomUUID(),'fixture-manager',60);
   const policy=(profiles:string[])=>({schemaVersion:1 as const,maxProgrammersPerContext:2,maxEvaluatorsPerContext:1,roles:{programmer:{regular:profiles,emergency:[]}}});

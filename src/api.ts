@@ -60,7 +60,7 @@ export type ApiOptions = {
   quotaRegistry?: {
     configurationDigest: string;
     reconcile(accountId?: string): Promise<number>;
-    report: { state: string; realActivation: 'blocked'; inferenceEnabled: false; registered: number };
+    report: { state: string; realActivation: 'blocked' | 'personal'; inferenceEnabled: false; registered: number };
   };
   configurationControl?: Control;
 };

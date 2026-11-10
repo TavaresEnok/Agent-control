@@ -19,13 +19,15 @@ export type CodexQuotaRegistryConfig=z.input<typeof CodexQuotaRegistryConfig>;
 export async function configureCodexQuotaRegistry(ledger:Ledger,raw:CodexQuotaRegistryConfig){
  const config=CodexQuotaRegistryConfig.parse(raw),adapters:ProviderAdapter[]=[];
  const supervisors:{accountId:string;supervisor:CodexQuotaDockerSupervisor}[]=[];
+ let personal=false;
  if(config.state!=='disabled'){
   if(new Set(config.bindings.map(b=>b.accountId)).size!==config.bindings.length)throw new Refusal('QUOTA_BINDING_DUPLICATE');
   await ledger.tx(async c=>{
+   personal=Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
    for(const binding of config.bindings){
     const account=(await c.query('SELECT * FROM ac_accounts WHERE id=$1 FOR UPDATE',[binding.accountId])).rows[0];
     if(!account||account.provider!=='codex'||account.resource_identity!=='codex:'+binding.subjectDigest)throw new Refusal('QUOTA_IDENTITY_UNBOUND');
-    if(config.state==='lab-synthetic'&&(account.mode!=='synthetic'||account.eligibility!=='documented_supported'))throw new Refusal('QUOTA_REAL_ACTIVATION_BLOCKED');
+    if(config.state==='lab-synthetic'&&!(personal&&account.mode!=='synthetic')&&(account.mode!=='synthetic'||account.eligibility!=='documented_supported'))throw new Refusal('QUOTA_REAL_ACTIVATION_BLOCKED');
     await c.query(`INSERT INTO ac_readonly_quota_registrations(account_id,subject_digest,configuration_digest,state) VALUES($1,$2,$3,$4)
      ON CONFLICT(account_id) DO UPDATE SET subject_digest=$2,configuration_digest=$3,state=$4,updated_at=clock_timestamp()`,[binding.accountId,binding.subjectDigest,digest(config),config.state]);
    }
@@ -39,6 +41,6 @@ export async function configureCodexQuotaRegistry(ledger:Ledger,raw:CodexQuotaRe
    probe:async input=>{const probe=probes.get(input.accountId);return probe?probe(input):{status:'unknown',ttlSeconds:30,remainingPercent:null,resetAt:null};}});
   }
  }
- return {configurationDigest:digest(config),report:{state:config.state,realActivation:'blocked' as const,inferenceEnabled:false as const,registered:config.state==='disabled'?0:config.bindings.length},adapters,collectors:new ProviderCollectors(ledger,adapters),
+ return {configurationDigest:digest(config),report:{state:config.state,realActivation:(personal?'personal':'blocked') as 'personal'|'blocked',inferenceEnabled:false as const,registered:config.state==='disabled'?0:config.bindings.length},adapters,collectors:new ProviderCollectors(ledger,adapters),
   reconcile:async(accountId?:string)=>{let stopped=0;for(const entry of supervisors)if(!accountId||accountId===entry.accountId)stopped+=await entry.supervisor.reconcilePending();return stopped;}};
 }

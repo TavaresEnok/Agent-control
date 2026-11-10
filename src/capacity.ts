@@ -59,6 +59,10 @@ export class Capacity {
     if (!(await c.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1', [principal])).rowCount)
       throw new Refusal('CONTROL_ADMIN_REQUIRED', 403);
   }
+  /** Same transaction as the account write. Missing row stays locked. */
+  private async personal(c: pg.PoolClient) {
+    return Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+  }
   async configure(principal: string, value: { programmingLimit: number; evaluationLimit: number; expectedRevision?: number; originalFallback?: {accountId:string;programmingLimit:number;evaluationLimit:number}|null }) {
     const input = z.object({ programmingLimit: z.number().int().min(1).max(128), evaluationLimit: z.number().int().min(1).max(128),
       expectedRevision:z.number().int().nonnegative().optional(),
@@ -90,8 +94,9 @@ export class Capacity {
     const a = AccountInput.parse(raw);
     await this.tx(async c => {
       await this.owner(c, principal, projectId);
+      const admit=a.mode==='synthetic'||await this.personal(c);
       await c.query('INSERT INTO ac_accounts(id,owner_id,provider,label,resource_identity,mode,eligibility,eligibility_source,max_concurrent,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
-        [a.id, principal, a.provider, a.label, a.resourceIdentity, a.mode, a.eligibility, a.eligibilitySource, a.maxConcurrent,a.mode==='synthetic']);
+        [a.id, principal, a.provider, a.label, a.resourceIdentity, a.mode, a.eligibility, a.eligibilitySource, a.maxConcurrent,admit]);
       await c.query('INSERT INTO ac_account_access VALUES($1,$2)', [a.id, projectId]);
     });
   }
@@ -115,7 +120,7 @@ export class Capacity {
           WHERE p.id=$1 AND a.owner_id=$2 AND x.project_id=$3 FOR UPDATE OF p`,[input.id,principal,projectId])).rows[0];
       if(!row)throw new Refusal('ACCOUNT_PROFILE_FORBIDDEN',403);
       if(row.revision!==input.expectedRevision)throw new Refusal('ACCOUNT_PROFILE_REVISION_CONFLICT');
-      if(input.enabled&&row.mode!=='synthetic')throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
+      if(input.enabled&&row.mode!=='synthetic'&&!await this.personal(c))throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
       await c.query(kind==='account'?'UPDATE ac_accounts SET enabled=$2,revision=revision+1 WHERE id=$1':
         'UPDATE ac_profiles SET enabled=$2,revision=revision+1 WHERE id=$1',[input.id,input.enabled]);
     });
@@ -145,7 +150,7 @@ export class Capacity {
       if(!source.account_enabled)throw new Refusal('ACCOUNT_DISABLED',409);
       if(!(await c.query('SELECT 1 FROM ac_model_catalog WHERE provider=(SELECT provider FROM ac_accounts WHERE id=$1) AND model=$2 AND $3=ANY(efforts) AND $4=ANY(roles)',[source.account_id,input.model,input.effort,input.role])).rowCount)throw new Refusal('MODEL_EFFORT_NOT_IN_CATALOG');
       if((await c.query('SELECT 1 FROM ac_profiles WHERE id=$1',[input.newId])).rowCount)throw new Refusal('PROFILE_ID_CONFLICT');
-      const inserted=await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING RETURNING id',[input.newId,source.account_id,input.model,input.effort,input.role,source.mode==='synthetic']);
+      const inserted=await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING RETURNING id',[input.newId,source.account_id,input.model,input.effort,input.role,source.mode==='synthetic'||await this.personal(c)]);
       if(!inserted.rowCount)throw new Refusal('PROFILE_ID_CONFLICT');
       await c.query('INSERT INTO ac_profile_lineage(new_profile_id,source_profile_id,source_digest,created_by) VALUES($1,$2,$3,$4)',[input.newId,input.sourceProfileId,input.expectedDigest,principal]);
     });
@@ -160,7 +165,7 @@ export class Capacity {
       if(!(await c.query(`SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider
         WHERE a.id=$1 AND m.model=$2 AND $3=ANY(m.efforts) AND $4=ANY(m.roles)`,[p.accountId,p.model,p.effort,p.role])).rowCount)
         throw new Refusal('MODEL_EFFORT_NOT_IN_CATALOG');
-      await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,$3,$4,$5,$6)', [p.id,p.accountId,p.model,p.effort,p.role,account.mode==='synthetic']);
+      await c.query('INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,$3,$4,$5,$6)', [p.id,p.accountId,p.model,p.effort,p.role,account.mode==='synthetic'||await this.personal(c)]);
     });
   }
   async observeQuota(principal: string, accountId: string, raw: z.input<typeof QuotaInput>) {
@@ -256,7 +261,7 @@ export class Capacity {
       if (old) {
         if (old.resource_kind!=='model'||old.request_digest !== hash) throw new Refusal('ATTEMPT_PAYLOAD_CONFLICT');
         if (Number(old.manager_epoch)!==authority.epoch) throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
-        if(!(await c.query("SELECT 1 FROM ac_accounts WHERE id=$1 AND mode='synthetic'",[old.account_id])).rowCount)
+        if(!(await c.query("SELECT 1 FROM ac_accounts WHERE id=$1 AND (mode='synthetic' OR ac_activation_personal())",[old.account_id])).rowCount)
           throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
         return old;
       }
@@ -280,9 +285,10 @@ export class Capacity {
       const ids = [...regular,...chain.emergency];
       const loaded = await this.chainFacts(c, ids, context.project_id);
       // Saturation is a later gate. This path never writes quota and never leaves the chain.
-      const choice = loaded.find(row => classifyProfileExclusion(row) === null && row.accountId && row.maxConcurrent != null);
+      const personal=await this.personal(c);
+      const choice = loaded.find(row => classifyProfileExclusion(row,{personal}) === null && row.accountId && row.maxConcurrent != null);
       if (!choice?.accountId || choice.maxConcurrent == null) {
-        const exclusions = orderedProfileExclusions(loaded);
+        const exclusions = orderedProfileExclusions(loaded,{personal});
         await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);
         return {blockedCode:'NO_ELIGIBLE_CAPACITY'};
       }
@@ -307,7 +313,7 @@ export class Capacity {
           JOIN ac_profiles p ON p.id=member.value::uuid JOIN ac_accounts a ON a.id=p.account_id
           JOIN ac_account_access access ON access.account_id=a.id AND access.project_id=x.project_id
           JOIN ac_quota_observations q ON q.account_id=a.id
-          WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled AND a.mode='synthetic'
+          WHERE NOT x.paused AND m.lease_until>clock_timestamp() AND a.id<>$1 AND a.enabled AND p.enabled AND (a.mode='synthetic' OR ac_activation_personal())
           AND (($2='programmer' AND p.role='programmer') OR ($2<>'programmer' AND p.role IN ('reviewer','qa','specialist','judge')))
           AND a.eligibility='documented_supported'
           AND ac_profile_quota_status(a.id,p.model)='available' LIMIT 1`,[selected.account_id,request.role])).rowCount;
@@ -332,10 +338,10 @@ export class Capacity {
           JOIN ac_profiles op ON op.id=member.value::uuid JOIN ac_accounts oa ON oa.id=op.account_id
           JOIN ac_account_access access ON access.account_id=oa.id AND access.project_id=ox.project_id
           JOIN ac_quota_observations oq ON oq.account_id=oa.id
-          WHERE NOT ox.paused AND om.lease_until>clock_timestamp() AND oa.id<>a.id AND oa.enabled AND op.enabled AND oa.mode='synthetic'
+          WHERE NOT ox.paused AND om.lease_until>clock_timestamp() AND oa.id<>a.id AND oa.enabled AND op.enabled AND (oa.mode='synthetic' OR ac_activation_personal())
           AND ((w.role='programmer' AND op.role='programmer') OR (w.role<>'programmer' AND op.role IN ('reviewer','qa','specialist','judge')))
           AND oa.eligibility='documented_supported' AND ac_profile_quota_status(oa.id,op.model)='available') AS available) alternative
-        WHERE w.resource_kind='model'  AND p.account_id=$1 AND p.enabled AND a.enabled AND a.mode='synthetic'
+        WHERE w.resource_kind='model'  AND p.account_id=$1 AND p.enabled AND a.enabled AND (a.mode='synthetic' OR ac_activation_personal())
         AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available'
         AND EXISTS(SELECT 1 FROM ac_account_access access WHERE access.account_id=a.id AND access.project_id=x.project_id)
         AND i.state NOT IN ('done','review','failed','canceled','cancelled') AND NOT x.paused AND NOT x.archived
@@ -367,7 +373,7 @@ export class Capacity {
             accountId:selected.account_id,profileId:selected.id,policyRevision:context.capacity_policy_revision,configRevision:config.revision,
             chain:emergency?'emergency':'regular',position:ids.indexOf(selected.id)+1,
             reason:preferred===selected.id?'sticky':ids.indexOf(selected.id)===0?'first_eligible':'fallback',
-            preferredProfileId:preferred??null,skippedCandidates:orderedProfileExclusions(loaded.slice(0,ids.indexOf(selected.id)))
+            preferredProfileId:preferred??null,skippedCandidates:orderedProfileExclusions(loaded.slice(0,ids.indexOf(selected.id)),{personal})
           })])).rows[0];
       if (!emergency) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,

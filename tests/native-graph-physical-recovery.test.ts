@@ -108,8 +108,20 @@ for(const waiverMode of ['disabled'] as const) test(`synthetic physical native g
    await writeFile(marker,JSON.stringify({url:fixture.url,principal,context,authority,supervisorConfig}),{mode:0o600,flag:'wx'});
   }
   // The database is disposable and contains synthetic identity metadata only.
-  await db.pool.query('ALTER TABLE ac_accounts DISABLE TRIGGER ac_dormant_provider_mode_guard');
-  await db.pool.query('ALTER TABLE ac_accounts DROP CONSTRAINT ac_accounts_dormant_check');
+  await db.pool.query(`DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='ac_dormant_provider_mode_guard' AND NOT tgisinternal) THEN
+      EXECUTE 'ALTER TABLE ac_accounts DISABLE TRIGGER ac_dormant_provider_mode_guard';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ac_accounts_dormant_check') THEN
+      ALTER TABLE ac_accounts DROP CONSTRAINT ac_accounts_dormant_check;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='ac_personal_provider_activation_guard' AND NOT tgisinternal) THEN
+      EXECUTE 'ALTER TABLE ac_accounts DISABLE TRIGGER ac_personal_provider_activation_guard';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='ac_personal_provider_profile_guard' AND NOT tgisinternal) THEN
+      EXECUTE 'ALTER TABLE ac_profiles DISABLE TRIGGER ac_personal_provider_profile_guard';
+    END IF;
+  END $$`);
   await db.pool.query("UPDATE ac_accounts SET provider='codex',mode='subscription_cli',resource_identity=$2 WHERE id=$1",[account,'codex:'+'c'.repeat(64)]);
   await db.pool.query(`INSERT INTO ac_provider_eligibility_assessments(account_id,revision,project_id,principal_id,request_digest,request_snapshot,provider,account_mode,plan,adapter_id,adapter_version,authentication_mode,execution_mode,source_url,status,reason,reviewed_at,valid_for_seconds,expires_at)
    VALUES($1,1,$2,$3,$4,'{}','codex','subscription_cli','fixture',$5,$6,'subscription_oauth','central_isolated_cli','https://example.invalid/fixture','documented_supported','synthetic fixture',now(),3600,now()+interval '3600 seconds')`,[account,project,principal,'a'.repeat(64),supervisorConfig.id,supervisor.executorDigest]);

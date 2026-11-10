@@ -39,10 +39,10 @@ export type ChainProfileFacts = {
  * Precedence matches the reserve gates: identity and sharing, then synthetic
  * mode (a dormant provider account is also disabled), then enablement,
  * eligibility, then a fresh quota status. */
-export function classifyProfileExclusion(facts: ChainProfileFacts): CapacityExclusionReason | null {
+export function classifyProfileExclusion(facts: ChainProfileFacts, options?: {personal?: boolean}): CapacityExclusionReason | null {
   if (!facts.profilePresent) return 'profile_missing';
   if (!facts.projectAccess) return 'access_removed';
-  if (facts.mode !== 'synthetic') return 'not_synthetic';
+  if (facts.mode !== 'synthetic' && !options?.personal) return 'not_synthetic';
   if (!facts.accountEnabled) return 'account_disabled';
   if (!facts.profileEnabled) return 'profile_disabled';
   if (facts.modelDisabled) return 'model_disabled_by_policy';
@@ -59,10 +59,10 @@ export function classifyProfileExclusion(facts: ChainProfileFacts): CapacityExcl
 }
 
 /** Chain order in, exclusion order out. A selectable profile is omitted. */
-export function orderedProfileExclusions(chain: readonly ChainProfileFacts[]): ProfileExclusion[] {
+export function orderedProfileExclusions(chain: readonly ChainProfileFacts[], options?: {personal?: boolean}): ProfileExclusion[] {
   const exclusions: ProfileExclusion[] = [];
   for (const facts of chain) {
-    const reason = classifyProfileExclusion(facts);
+    const reason = classifyProfileExclusion(facts, options);
     if (reason) exclusions.push({ profileId: facts.profileId, reason });
   }
   return exclusions;

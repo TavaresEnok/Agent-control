@@ -4,7 +4,7 @@
 import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
-import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory} from './installation.ts';
+import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
 import {createProjectGateway} from './projects-api.ts';
@@ -111,6 +111,7 @@ async function main(){
   // Serving does not silently migrate schemas or create projects/credentials.
   const registered=(await ledger.pool.query("SELECT 1 FROM ac_projects p JOIN ac_memberships m ON m.project_id=p.id JOIN ac_project_repositories r ON r.project_id=p.id WHERE p.id=$1 AND m.principal_id=$2 AND m.role='owner' AND r.repo=$3",[config.project.id,config.project.owner,config.project.repo])).rowCount;
   if(!registered)throw Error('INSTALLATION_NOT_INITIALIZED');
+  await syncInstallationActivation(ledger,config.activation);
   if(localWorkflowRuntime)workflowRegistration=await startWorkflowRuntimeRegistration(ledger,localWorkflowRuntime,[config.project,...config.projects],()=>console.error('WORKFLOW_RUNTIME_REGISTRATION_UNAVAILABLE'));
   const {prepareNativeBootstrap,nativeBootstrapRuntimeAttachment}=await import('./native-bootstrap.ts');
   const prepared=await prepareNativeBootstrap(config,{query:(sql,params)=>ledger.pool.query(sql,params as never[])});

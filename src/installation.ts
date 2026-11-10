@@ -24,6 +24,7 @@ const origin=()=>z.string().transform(value=>{
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
 const projectDefinition=z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200)}).strict();
 export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
+ activation:z.enum(['locked','personal']).default('locked'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
@@ -98,9 +99,17 @@ export async function sessionKey(config:Installation,create=false){
  if(create){try{await createPrivateFile(path,randomBytes(32));}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}}
  const key=await readPrivateFile(path,32);if(key.length!==32)throw new Refusal('INVALID_BROWSER_SESSION_KEY');return key;
 }
+/** Persist the installation opt-in. Locked is the default row from migration 095. */
+export async function syncInstallationActivation(ledger:Ledger,mode:Installation['activation']){
+ await ledger.tx(async c=>{
+  await c.query(`INSERT INTO ac_installation_activation(id,mode) VALUES(1,$1)
+   ON CONFLICT(id) DO UPDATE SET mode=EXCLUDED.mode`,[mode]);
+ });
+}
 export async function initializeInstallation(config:Installation,ledger:Ledger){
  await privateDirectory(config.dataDirectory);
  await ledger.migrate();
+ await syncInstallationActivation(ledger,config.activation);
  await new Projects(ledger).register([config.project,...config.projects],config.project.owner);
  const key=await sessionKey(config,true);key.fill(0);
  return {projectId:config.project.id,mode:config.mode};
