@@ -10,6 +10,7 @@ import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {nativeQaContractDigest,NativeQaContract} from './native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
+import {Templates} from './templates.ts';
 
 const Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
@@ -61,6 +62,11 @@ export async function nativeSetup(path:string){
   const base=latest?QualityPolicy.parse(latest.snapshot):QualityPolicy.parse({schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false});
   if(base.verifierDigest!==nativeReviewVerifierDigest||base.qaVerifierDigest!==block.qaDigest)
    await new QualityPolicies(ledger).publish(config.project.owner,config.project.id,Number(latest?.revision??0),{...base,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:block.qaDigest});
+  // Conversations plan against the latest quality revision, so move their templates forward with it.
+  const qualityNow=Number((await ledger.pool.query('SELECT max(revision) r FROM ac_quality_policies WHERE project_id=$1',[config.project.id])).rows[0].r);
+  const stale=(await ledger.pool.query(`SELECT t.context_id,t.revision,t.snapshot,t.published_by FROM ac_context_templates t JOIN ac_contexts x ON x.id=t.context_id
+   WHERE x.project_id=$1 AND NOT x.archived AND t.revision=(SELECT max(revision) FROM ac_context_templates WHERE context_id=t.context_id) AND (t.snapshot->>'qualityRevision')::int<>$2`,[config.project.id,qualityNow])).rows;
+  for(const row of stale)await new Templates(ledger).publish(String(row.published_by),String(row.context_id),Number(row.revision),{...row.snapshot,qualityRevision:qualityNow}).catch(()=>{});
   const raw=JSON.parse((await readFile(path,'utf8')).toString()) as Record<string,unknown>;
   raw.nativeBootstrap=block;
   await writeFile(path,JSON.stringify(raw,null,2)+'\n',{mode:0o600});

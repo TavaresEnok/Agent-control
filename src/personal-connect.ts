@@ -83,7 +83,7 @@ export async function personalConnect(path:string){
  * The message is encrypted with the owner's key and queued in Happier exactly as the app
  * does; the gateway (`serve`) picks it up. Then new conversation messages are printed.
  */
-export async function personalSay(path:string,text:string|undefined,waitSeconds=120,print:(line:string)=>void=console.log){
+export async function personalSay(path:string,text:string|undefined,waitSeconds=text===undefined?0:120,print:(line:string)=>void=console.log){
  const config=await loadInstallation(path);
  const item=config.managerTransport?.contexts.find(context=>context.projectId===config.project.id);
  if(config.activation!=='personal'||!item||!config.managerTransport)throw new Error('PERSONAL_CONNECT_REQUIRED');
@@ -108,11 +108,12 @@ export async function personalSay(path:string,text:string|undefined,waitSeconds=
   if(!sent.ok)throw new Error('HAPPIER_HTTP_'+sent.status);
  }else for(const message of await read())print((message.role==='user'?'você: ':'gerente: ')+message.text);
  const until=Date.now()+waitSeconds*1000;let quiet=0;
- while(text&&Date.now()<until){
+ // With a message: stop once the manager has gone quiet. Without one (chat-log N): follow for N seconds.
+ while(Date.now()<until){
   await new Promise(resolve=>setTimeout(resolve,2000));
   const fresh=(await read()).filter(message=>!seen.has(message.id));
   for(const message of fresh){seen.add(message.id);if(message.role!=='user')print('gerente: '+message.text);}
   quiet=fresh.some(message=>message.role!=='user')?1:quiet?quiet+1:0;
-  if(quiet>8)break;
+  if(text&&quiet>8)break;
  }
 }

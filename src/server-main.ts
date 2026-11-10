@@ -42,8 +42,8 @@ async function main(){
   const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path)));return;
  }
  if(command==='say'||command==='chat-log'){
-  if(!path||(command==='say'?extra.length<1||extra.length>2:extra.length))throw Error('INVALID_INSTALLATION_COMMAND');
-  const {personalSay}=await import('./personal-connect.ts');await personalSay(path,command==='say'?extra[0]:undefined,extra[1]?Number(extra[1]):undefined);return;
+  if(!path||(command==='say'?extra.length<1||extra.length>2:extra.length>1))throw Error('INVALID_INSTALLATION_COMMAND');
+  const {personalSay}=await import('./personal-connect.ts');await personalSay(path,command==='say'?extra[0]:undefined,command==='say'?(extra[1]?Number(extra[1]):undefined):(extra[0]?Number(extra[0]):undefined));return;
  }
  if(command==='native-setup'){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
@@ -87,6 +87,9 @@ async function main(){
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
+ // The embedded Happier client resolves some HTTP calls from its own configuration, whose default is the public
+ // Happier service. Pin it to this installation's server before that client is loaded, so nothing leaves the host.
+ process.env.HAPPIER_SERVER_URL=config.happier.upstreamOrigin;process.env.HAPPIER_LOCAL_SERVER_URL=config.happier.upstreamOrigin;delete process.env.HAPPIER_PUBLIC_SERVER_URL;
  const localWorkflowRuntime=command==='serve'?await prepareWorkflowRuntimeRegistration(config.workflowRuntime):undefined;
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token,localWorkflowRuntime?.identity);
  let workflowRegistration:Awaited<ReturnType<typeof startWorkflowRuntimeRegistration>>|undefined;

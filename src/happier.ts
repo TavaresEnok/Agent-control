@@ -365,8 +365,15 @@ export class HappierEndpoint {
     finally{clearInterval(timer);}
     await this.validateLink();
     const localId='proposal-'+callId;
+    // Personal mode: the owner decides from the conversation, so list what each task will touch.
+    let outline='';
+    if(this.options.personalConversation){
+     const saved=(await this.ledger.pool.query('SELECT snapshot FROM ac_manager_plans WHERE context_id=$1 AND revision=$2',[intent.context_id,result.revision])).rows[0];
+     const tasks=z.array(z.object({id:z.string(),writePaths:z.array(z.string()).default([]),dependsOn:z.array(z.string()).default([])}).passthrough()).safeParse(saved?.snapshot?.tasks);
+     if(tasks.success)outline='\n'+tasks.data.slice(0,30).map((task,index)=>`${index+1}. ${task.id}: ${task.writePaths.join(', ')||'sem arquivos declarados'}${task.dependsOn.length?' (depois de '+task.dependsOn.join(', ')+')':''}`).join('\n')+'\n';
+    }
     const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
-      message:{role:'assistant',content:[{type:'text',text:`Proposta de plano ${result.revision}. Responda aprovar para iniciar ou descartar para ignorar.`}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId,actions:['Aprovar','Descartar']}}};
+      message:{role:'assistant',content:[{type:'text',text:`Proposta de plano ${result.revision}.${outline} Responda aprovar para iniciar ou descartar para ignorar.`}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId,actions:['Aprovar','Descartar']}}};
     await this.ledger.tx(async c=>{
       await this.ledger.authorize(c,this.options.principal,intent.context_id);await this.ledger.fence(c,this.options.authority,true);
       await this.ledger.assertIntentActive(c,intent.context_id,intent.id);
@@ -506,6 +513,16 @@ export class HappierEndpoint {
         run=await this.runtime.observe(intent,this.options.authority);
       }
       if (!run) continue;
+      if(this.options.personalConversation){
+       // Native plans expose progress as run steps; the task intents never change state.
+       const labels:Record<string,string>={running:'em andamento',done:'concluída',failed:'falhou'};
+       for(const step of ((run as {steps?:{id:string;name:string;status:string;kind?:string}[]}).steps??[])){
+        const label=labels[step.status];if(!label||this.announced.get(run.id+'|'+step.id)===label)continue;
+        this.announced.set(run.id+'|'+step.id,label);
+        const name=step.kind==='check'?step.name+': programação':step.name;
+        await this.say('step-'+stableId(run.id+'|'+step.id+'|'+step.status),'Etapa '+name.slice(0,120)+' '+label+'.').catch(()=>{});
+       }
+      }
       const seq = Number(run.lastSeq ?? 0);
       await this.ledger.tx(async c => { await this.ledger.fence(c, this.options.authority, true);
         await c.query(`UPDATE ac_intents SET state=$2 WHERE id=$1 AND context_id=$3
@@ -565,8 +582,22 @@ export class HappierEndpoint {
     if (pending.deferredReason === 'runtime_activity_unknown') this.runtimeReady = false;
     if (pending.didMaterialize && pending.message?.localId) {
       const record = UserRecord.parse(this.boundary.decrypt(this.options.key, this.options.encryptionVariant??'legacy', this.boundary.decodeBase64(pending.message.content.c)));
-      const accepted = z.object({ ok: z.literal(true) }).passthrough().parse(await this.rpc.invokeLocal('session.userMessage.send',
-        { text: record.content.text, localId: pending.message.localId, meta: record.meta ?? {} }));
+      let accepted: unknown;
+      try {
+        accepted = z.object({ ok: z.literal(true) }).passthrough().parse(await this.rpc.invokeLocal('session.userMessage.send',
+          { text: record.content.text, localId: pending.message.localId, meta: record.meta ?? {} }));
+      } catch (error) {
+        // Personal mode: a refused message must not stay claimed forever in the Happier queue
+        // (it would show as "delivery uncertain" and need manual action). Say why and close the delivery.
+        if (!this.options.personalConversation) throw error;
+        const code = error instanceof Refusal ? error.code : 'ERRO_INTERNO';
+        await this.say('refused-' + pending.message.localId, 'Não consegui aceitar esta mensagem (' + code + '). Corrija a causa e envie de novo.');
+        await this.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: this.socket, sessionId: this.options.sessionId, localId: pending.message.localId });
+        await this.boundary.markPendingQueueV2DeliveryHandled({ token: this.options.token, sessionId: this.options.sessionId, localId: pending.message.localId });
+        this.runtimeReady = false;
+        return;
+      }
+      void accepted;
       await this.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: this.socket, sessionId: this.options.sessionId, localId: pending.message.localId });
       await this.boundary.markPendingQueueV2DeliveryHandled({ token: this.options.token, sessionId: this.options.sessionId, localId: pending.message.localId });
       this.runtimeReady = false;

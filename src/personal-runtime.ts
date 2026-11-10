@@ -1,3 +1,4 @@
+import {appendFileSync,readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -72,6 +73,8 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  if(!boot||boot.state!=='active')return;
  await renewPersonalQuota(ledger);
  await releaseDeadPersonalGrants(ledger);
+ // Worktrees and run records live under .ai/ in the owner's repository; keep them out of `git status` without touching tracked files.
+ try{const exclude=join(config.project.repo,'.git','info','exclude');const current=readFileSync(exclude,'utf8');if(!/^\.ai\/$/m.test(current))appendFileSync(exclude,(current.endsWith('\n')?'':'\n')+'.ai/\n');}catch{/* bare or unusual layout: nothing to hide */}
  setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');
