@@ -10,11 +10,11 @@ O modo pessoal sobe: o gateway de teste ficou `personal_ready` com `executionEna
 |---|---|---|---|
 | T1 | passou | Resposta na conversa: o README descreve um repositório descartável. `intents` do projeto continuaram em 0. | Claude Sonnet 5.5, esforço médio, dentro da imagem de planejamento. |
 | T2 | falhou | `ac_semantic_planning_calls.failure_code=PLANNING_OUTPUT_REJECTED`. Saída do worker começa com um JSON de `steps`, não com as tarefas do contrato. | O contêiner rodou. Nenhum commit em `/home/app/srv_projetos/workspace/ac-smoke-repo`. |
-| T3 | não provado | — | Não há plano executável para disparar duas tarefas. |
-| T4 | não provado de ponta a ponta | — | Há uma conta por papel. A troca de cota não foi reexecutada nesta rodada. |
-| T5 | não provado | — | Depende de uma execução que chegue ao QA. |
-| T6 | não provado | — | Não houve execução em andamento para interromper. |
-| T7 | não provado | — | O gateway ficou no ar; não foi reiniciado nem recebeu outra pergunta depois disso. |
+| T3 | bloqueado | — | Não há plano executável para disparar duas tarefas. |
+| T4 | bloqueado | — | Há uma conta por papel. A troca de cota não foi reexecutada nesta rodada. |
+| T5 | bloqueado | — | Depende de uma execução que chegue ao QA. |
+| T6 | bloqueado | — | Não houve execução em andamento para interromper. |
+| T7 | bloqueado | — | O gateway ficou no ar; não foi reiniciado nem recebeu outra pergunta depois disso. |
 | T8 | passou | Com as contas reais desabilitadas, `activation=locked` e `setEnabled` devolveram `PROVIDER_RUNTIME_NOT_ACTIVATED`. O modo pessoal foi restaurado em seguida. | Enquanto uma conta real está habilitada, o banco recusa voltar para `locked`. |
 
 ## Correções feitas
