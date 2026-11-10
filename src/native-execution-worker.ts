@@ -59,4 +59,4 @@ async function main(){
   usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0}));await output.sync();}finally{await output.close();}
  process.exit(failure?1:0);
 }
-main().catch(()=>{console.error('NATIVE_EXECUTION_WORKER_FAILED');process.exitCode=1;});
+main().catch(error=>{console.error('NATIVE_EXECUTION_WORKER_FAILED',error instanceof z.ZodError?'INVALID_LAUNCH_SHAPE':String((error as Error)?.message??'').replace(/[^A-Za-z0-9_ .:,/-]/g,'').slice(0,160));process.exitCode=1;});

@@ -10,7 +10,7 @@ import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
-import {mkdir,lstat,realpath,writeFile,open,rename} from 'node:fs/promises';
+import {mkdir,lstat,realpath,writeFile,open,rename,cp} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {createPrivateKey,createPublicKey,sign,createHash,createHmac,randomBytes,verify} from 'node:crypto';
 import {z} from 'zod';
@@ -207,7 +207,10 @@ export class NativeExecutionSupervisor{
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
-  const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(input.role==='programmer'?[{source:p.work,destination:'/work',writable:true}]:personal&&this.config.provider==='claude'?[{source:p.work,destination:'/work',writable:false}]:[])];
+  // A Claude reviewer reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
+  const workerArtifact=input.role!=='programmer'&&personal&&this.config.provider==='claude'?join(p.root,'review-artifact'):undefined;
+  if(workerArtifact)await cp(p.work,workerArtifact,{recursive:true});
+  const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(input.role==='programmer'?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
   const toolsWork=input.role==='programmer'?join(p.root,'tools-workspace'):p.work;
   if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
   const toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
