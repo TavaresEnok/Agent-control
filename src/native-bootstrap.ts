@@ -218,6 +218,9 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
    JOIN ac_memberships o ON o.project_id=x.project_id AND o.principal_id=$3 AND o.role='owner'
    WHERE m.context_id=$1 AND x.project_id=$2 AND NOT x.archived`,[boot.contextId,boot.projectId,config.project.owner]);
   const row=manager.rows[0];
+  // Outside personal activation the source is checked first, as before personal mode existed.
+  if(boot.state!=='active'&&(manager.rows.length!==1||String(row?.instance_id)!==boot.instanceId||Number(row?.epoch)!==boot.epoch||String(row?.project_id)!==boot.projectId))
+   throw new Refusal('NATIVE_BOOTSTRAP_SOURCE_UNAUTHORIZED',403);
   const accounts=await client.query(`SELECT a.id,a.mode,a.enabled,a.provider,a.resource_identity
    FROM ac_accounts a
    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=$2

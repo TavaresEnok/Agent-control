@@ -97,6 +97,7 @@ test('configured opt-in refuses bad keys, paths, sources and accounts before wri
    if(/\b(UPDATE|INSERT|DELETE|ALTER)\b/i.test(sql))throw new Error('EFFECT');
    if(sql.includes('ac_managers'))return {rows:[manager],rowCount:1};
    if(sql.includes('ac_accounts'))return {rows:accounts,rowCount:accounts.length};
+   if(sql.includes('ac_installation_activation'))return {rows:[],rowCount:0}; // locked installation
    throw new Error('UNEXPECTED_SQL');
   },
  });
@@ -239,12 +240,16 @@ test('bench injection composes explicit substitutes, authorizes the source and n
   assert.match(sourceText,/assertNativeBootstrapAttachment/);
   assert.match(sourceText,/NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED/);
   assert.match(sourceText,/readAuthorizedBootstrapSource/);
-  assert.match(sourceText,/if\(this\.nativeBootstrapAttachment\)throw new Refusal\('NATIVE_BOOTSTRAP_REPLAY_FORBIDDEN'\)/);
+  // Personal mode lets an active bootstrap run; any other attachment still refuses replay.
+  assert.match(sourceText,/if\(this\.nativeBootstrapAttachment&&this\.nativeBootstrapAttachment\.state!=='active'\)throw new Refusal\('NATIVE_BOOTSTRAP_REPLAY_FORBIDDEN'\)/);
   const server=await readFile(new URL('../src/server-main.ts',import.meta.url),'utf8');
   assert.match(server,/prepareNativeBootstrap/);
   assert.match(server,/nativeBootstrapRuntimeAttachment/);
-  assert.match(server,/start\('administration-only'\)/);
-  assert.match(server,/executionEnabled:false/);
+  // The gateway starts in execution mode only for the default project of an active (personal) bootstrap.
+  assert.match(server,/start\(project\.id===config\.project\.id&&prepared\.report\.state==='active'\?'execution':'administration-only'\)/);
+  // The ready line reports what the bootstrap decided; a non-active bootstrap that enables anything aborts the start.
+  assert.match(server,/executionEnabled:prepared\.report\.executionEnabled/);
+  assert.match(server,/prepared\.report\.state!=='active'&&\(prepared\.report\.executionEnabled\|\|prepared\.report\.inferenceEnabled\|\|prepared\.report\.realAccountsEnabled\)\)throw Error\('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED'\)/);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
@@ -452,6 +457,7 @@ test('configured resource attachment maps explicit database identity and keeps n
   const client={async query(sql:string){queries.push(sql);assert.match(sql,/^SELECT/);
    if(sql.includes('ac_managers'))return {rows:[{instance_id:env.instanceId,epoch:3,project_id:env.projectId}],rowCount:1};
    if(sql.includes('ac_accounts'))return {rows:[{id:env.accountId,mode:'subscription_cli',enabled:false,provider:'codex',resource_identity:'codex:'+hash('subject')}],rowCount:1};
+   if(sql.includes('ac_installation_activation'))return {rows:[],rowCount:0}; // locked installation
    if(sql.includes('ac_installation_identity'))return {rows:[{id:actualIdentity}],rowCount:1};throw Error('UNEXPECTED_QUERY');
   }};
   const prepared=await prepareNativeBootstrap(config,client);assert(prepared.resources);
