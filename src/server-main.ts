@@ -158,7 +158,7 @@ async function main(){
    try{
     await runtime.start(project.id===config.project.id&&prepared.report.state==='active'?'execution':'administration-only');
     const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
-    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:project.id===config.project.id?personalRuntime?.semantic:undefined});
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:project.id===config.project.id?personalRuntime?.semantic:undefined,managerChat:project.id===config.project.id?personalRuntime?.managerChat:undefined});
     configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
    }catch(error){await runtime.close();throw error;}
   });

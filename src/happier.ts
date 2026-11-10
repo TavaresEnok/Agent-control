@@ -129,7 +129,7 @@ export class HappierEndpoint {
   private revision: number | undefined;
   private lastPendingAt = 0;
   private readonly announced=new Map<string,string>();
-  private replanned=false;
+  private readonly replanned=new Set<string>();
   private pendingFailure: unknown;
   lastError: string | undefined;
   readonly transportEvents = new Set<string>();
@@ -137,7 +137,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
@@ -266,7 +266,12 @@ export class HappierEndpoint {
      const word=personalControlWord(q.text);
      if(word==='stop'){await this.stopLatest();return {handled:true,result:{ok:true,canceled:true}};}
      if(word==='approve'||word==='discard'){await this.resolveLatestProposal(word==='approve');return {handled:true,result:{ok:true}};}
-     if(classifyPersonalText(q.text)==='answer'){await this.answerDirect(q);return {handled:true,result:{ok:true,answered:true}};}
+     if(!q.localId.startsWith('replan-')){
+      // The manager model decides; keywords are only a fallback when no manager account answers.
+      const decision=await this.options.managerChat?.decide(q.text,await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;
+      const kind=decision?.kind??classifyPersonalText(q.text);
+      if(kind==='answer'){await this.say('answer-'+q.localId,decision?.answer||'Não consegui consultar o gerente agora. Confira as contas com papel de gerente no painel e tente de novo.');return {handled:true,result:{ok:true,answered:true}};}
+     }
     }
     const intentId = stableId(`${this.options.authority.contextId}\0${q.localId}`);
     const prior=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2 AND principal_id=$3',
@@ -377,11 +382,6 @@ export class HappierEndpoint {
    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
    await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.insertAgentMessage(c,localId,message,0);});
   }
-  private async answerDirect(q:{localId:string;text:string}){
-   let answer='Não consegui consultar o modelo agora. Confira a conta do gerente e tente de novo.';
-   try{const {execFile}=await import('node:child_process');answer=await new Promise((resolve,reject)=>execFile('codex',['exec','--skip-git-repo-check',q.text.slice(0,4000)],{timeout:45000,maxBuffer:100000},(error,stdout)=>error?reject(error):resolve(String(stdout).trim().slice(0,4000))));if(!answer)answer='O gerente não devolveu texto.';}catch{/* the fallback stays */}
-   await this.say('answer-'+q.localId,answer);
-  }
   private async stopLatest(){
    const row=(await this.ledger.pool.query("SELECT id,plan_revision FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NULL AND state NOT IN ('done','failed','canceled','cancelled') ORDER BY created_at DESC LIMIT 1",[this.options.authority.contextId])).rows[0];
    if(!row){await this.say('stop-none','Não há execução para parar.');return;}
@@ -393,6 +393,24 @@ export class HappierEndpoint {
     await c.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1',[row.id]);
    });
    await this.say('stop-'+row.id,'Parada solicitada.');
+  }
+  /** One corrective proposal per failed delivery, through the same encrypted conversation path. */
+  private async replan(parentIntentId:string,unitId:string){
+   const parent=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2',[parentIntentId,this.options.authority.contextId])).rows[0];
+   const revision=Number(parent?.command?.payload?.proposalRevision);
+   let original='';
+   if(Number.isSafeInteger(revision)){
+    const source=(await this.ledger.pool.query(`SELECT i.command FROM ac_semantic_planning_calls s JOIN ac_intents i ON i.id=s.intent_id
+      WHERE s.context_id=$1 AND s.state='published' AND (s.result->>'revision')::int=$2 LIMIT 1`,[this.options.authority.contextId,revision])).rows[0];
+    const localId=source?.command?.payload?.localId;
+    if(typeof localId==='string'){
+     const stored=(await this.ledger.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE id=$1 AND session_id=$2',[this.options.sessionId+'|'+localId,this.options.sessionId])).rows[0];
+     if(stored)original=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext))).content.text;
+    }
+   }
+   const text='Replanejamento automático. A tarefa "'+unitId+'" do plano '+(Number.isSafeInteger(revision)?revision:'anterior')+' falhou na execução, QA ou revisão. '+
+    'Proponha um plano corrigido que conclua o pedido original, considerando o que já pode ter sido integrado.\n\nPedido original:\n'+(original||'(indisponível)');
+   await this.accept({localId:'replan-'+parentIntentId,text:text.slice(0,100000)});
   }
   private async startProposal(revision:number,proposalDigest:string){
    const context=(await this.ledger.pool.query('SELECT policy_revision FROM ac_contexts WHERE id=$1',[this.options.authority.contextId])).rows[0];
@@ -494,14 +512,17 @@ export class HappierEndpoint {
           reason:status==='failed'?'EXECUTION_FAILED':status==='waiting'?notificationReason(run.error):['cancelled','canceled'].includes(status)?'RECONCILIATION_REQUIRED':'NONE'});
     }
     if(this.options.personalConversation){
-     const children=(await this.ledger.pool.query('SELECT id,state FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NOT NULL',[this.options.authority.contextId])).rows;
+     const children=(await this.ledger.pool.query('SELECT id,state,parent_intent_id,parent_unit_id FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NOT NULL',[this.options.authority.contextId])).rows;
      for(const child of children){
       const label=personalProgressLabel(String(child.state));
       if(this.announced.get(child.id)===label)continue;
       this.announced.set(child.id,label);
-      const text=label==='falhou'?(this.replanned?'A tarefa falhou de novo. Veja o erro nesta conversa.':'A tarefa falhou. O gerente tenta replanejar uma vez.'):'Tarefa '+label+'.';
-      if(label==='falhou')this.replanned=true;
-      await this.say('progress-'+child.id+'-'+label,text);
+      const parent=String(child.parent_intent_id);
+      if(label!=='falhou'){await this.say('progress-'+child.id+'-'+label,'Tarefa '+label+'.');continue;}
+      if(this.replanned.has(parent)){await this.say('progress-'+child.id+'-'+label,'A tarefa '+String(child.parent_unit_id)+' falhou de novo depois do replanejamento. Veja o erro no painel.');continue;}
+      this.replanned.add(parent);
+      await this.say('progress-'+child.id+'-'+label,'A tarefa '+String(child.parent_unit_id)+' falhou. Pedi ao gerente um plano corrigido.');
+      await this.replan(parent,String(child.parent_unit_id)).catch(async()=>{await this.say('replan-failed-'+parent,'Não consegui pedir o replanejamento. Envie o pedido de novo com a correção.');});
      }
     }
     await this.flushNotifications();await this.deliverQueuedMessages();

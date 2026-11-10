@@ -10,6 +10,7 @@ import {NativeQa} from './native-qa.ts';
 import {NativeVerification} from './native-verification.ts';
 import {Quality} from './quality.ts';
 import {SemanticPlanning} from './semantic-planning.ts';
+import {PersonalManagerChat} from './personal-manager-chat.ts';
 import type {EngineeringOptions} from './engineering.ts';
 
 /** Real Codex and Claude supervisors for an installation whose bootstrap is active. */
@@ -46,7 +47,8 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const implementation=new NativeImplementation(ledger,config.project.repo,quality,executions);
  const semantic=new SemanticPlanning(ledger,planning.map(supervisor=>supervisor.executor));
  const engineering:EngineeringOptions={quality,git,verifierKey:reviewKey,nativeQa,nativeVerification};
- return {planning,executions,implementation,semantic,engineering};
+ const managerChat=new PersonalManagerChat(ledger,{imageId:boot.planning.imageId,accountRoot:boot.planning.accountRoot});
+ return {planning,executions,implementation,semantic,engineering,managerChat};
 }
 
 const SKIP=new Set(['.git','node_modules','dist','.state']);
