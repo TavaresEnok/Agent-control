@@ -27,10 +27,33 @@ export async function renewPersonalQuota(ledger:Ledger){
   ON CONFLICT(account_id) DO UPDATE SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`);
 }
 
+/**
+ * Personal mode, at startup only. The runtime holds the exclusive repository lock, so a grant
+ * left reserved, running or uncertain by an earlier process is dead once none of its job
+ * containers exists any more. Without this, two crashed stages block an account for good.
+ * If Docker cannot be listed, nothing is released.
+ */
+export async function releaseDeadPersonalGrants(ledger:Ledger){
+ let names:string[];
+ try{names=execFileSync('docker',['ps','-a','--format','{{.Names}}'],{encoding:'utf8',timeout:15000}).split('\n').filter(Boolean);}catch{return 0;}
+ const rows=(await ledger.pool.query(`SELECT g.id,array_remove(array[pj.id::text,ej.id::text,qj.id::text],NULL) jobs FROM ac_capacity_grants g
+  LEFT JOIN ac_native_planning_jobs pj ON pj.grant_id=g.id LEFT JOIN ac_native_execution_jobs ej ON ej.grant_id=g.id LEFT JOIN ac_native_qa_jobs qj ON qj.grant_id=g.id
+  WHERE g.state<>'released' AND g.resource_kind='model' AND g.created_at<clock_timestamp()-interval '1 minute'`)).rows;
+ let released=0;
+ for(const row of rows){
+  const jobs=row.jobs as string[];
+  if(jobs.some(job=>names.some(name=>name.includes(job))))continue;
+  released+=Number((await ledger.pool.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2::jsonb WHERE id=$1 AND state<>'released'",
+   [row.id,JSON.stringify({source:'personal-startup-sweep',containersAbsent:true,jobs})])).rowCount??0);
+ }
+ return released;
+}
+
 export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')return;
  await renewPersonalQuota(ledger);
+ await releaseDeadPersonalGrants(ledger);
  setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');

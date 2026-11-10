@@ -19,7 +19,8 @@ const Rules=z.object({workerEntrypoint:z.array(z.string()).min(1),toolsEntrypoin
  workerMemory:z.number().int().positive(),toolsMemory:z.number().int().positive(),workerPids:z.number().int().positive(),toolsPids:z.number().int().positive(),
  workerNanoCpus:z.number().int().positive(),toolsNanoCpus:z.number().int().positive()}).strict();
 function exact(a:string[]|null,b:string[]){return JSON.stringify(a??[])===JSON.stringify(b);}
-function envMatches(actual:string[]|null,expected:string[]){
+/** Contract variables must match exactly; only the base image's own PATH/NODE_VERSION/YARN_VERSION defaults may be extra. */
+export function envMatches(actual:string[]|null,expected:string[]){
  const names=new Set(expected.map(entry=>entry.split('=')[0]));
  const imageDefaults=new Set(['PATH','NODE_VERSION','YARN_VERSION']);
  const got=(actual??[]).filter(entry=>{const name=entry.split('=')[0];return names.has(name)||!imageDefaults.has(name);});

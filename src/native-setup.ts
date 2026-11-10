@@ -48,7 +48,7 @@ export async function nativeSetup(path:string){
   const accounts=(await ledger.pool.query("SELECT id,provider,resource_identity FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 AND a.mode='subscription_cli' AND a.provider IN ('codex','claude','grok')",[config.project.id])).rows;
   if(!accounts.length)return {state:'account_required',directory:root,next:'Rode account-add para codex e claude antes de native-setup.'};
   const context=(await ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived ORDER BY created_at LIMIT 1',[config.project.id])).rows[0];
-  const qa=NativeQaContract.parse({schemaVersion:1,id:'personal-qa',image:images.tools,argv:['/usr/bin/node','--version'],environment:['PATH=/usr/local/bin:/usr/bin:/bin'],timeoutMs:120000,memoryBytes:268435456,pids:64,nanoCpus:500000000});
+  const qa=NativeQaContract.parse({schemaVersion:1,id:'personal-qa',image:images.tools,argv:['/usr/local/bin/node','--version'],environment:['PATH=/usr/local/bin:/usr/bin:/bin'],timeoutMs:120000,memoryBytes:268435456,pids:64,nanoCpus:500000000});
   const block={state:'active',contract:'native-bootstrap-configured-v1',projectId:config.project.id,contextId:context?.id??randomUUID(),epoch:1,instanceId:randomUUID(),source:'authorized-endpoint',
    accounts:accounts.map(account=>({accountId:account.id,subjectDigest:String(account.resource_identity).slice(account.provider.length+1)})),
    planning:{id:'personal-planning',imageId:images.planning,executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},

@@ -1,3 +1,4 @@
+import {envMatches} from './native-execution-docker-observation.ts';
 import {setQaSnapshotPermissions} from './native-qa-snapshot.ts';
 import {ReconciliationHistory} from './reconciliation-history.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
@@ -125,7 +126,7 @@ export class NativeQa{
   const binds=m.filter(x=>x.Type!=='tmpfs');
   if((job.container_id&&job.container_id!==physical.Id)||physical.Image!==this.contract.image||physical.Config.User!=='10001:10001'||physical.Config.WorkingDir!=='/work'||
    JSON.stringify(physical.Config.Entrypoint)!==JSON.stringify([this.contract.argv[0]])||JSON.stringify(physical.Config.Cmd??[])!==JSON.stringify(this.contract.argv.slice(1))||
-   JSON.stringify(physical.Config.Env??[])!==JSON.stringify(this.contract.environment)||physical.Config.Labels['agent-control.contract']!=='native-qa-v1'||physical.Config.Labels['agent-control.job']!==job.id||physical.Config.Labels['agent-control.request']!==job.request_digest||
+   !envMatches(physical.Config.Env??[],[...this.contract.environment])||physical.Config.Labels['agent-control.contract']!=='native-qa-v1'||physical.Config.Labels['agent-control.job']!==job.id||physical.Config.Labels['agent-control.request']!==job.request_digest||
    h.NetworkMode!=='none'||!h.ReadonlyRootfs||h.Privileged||!h.CapDrop?.includes('ALL')||!h.SecurityOpt?.some(s=>s==='no-new-privileges'||s==='no-new-privileges:true')||
    (namespaces.CapAdd?.length??0)>0||(namespaces.Devices?.length??0)>0||!['','private',undefined].includes(namespaces.PidMode)||!['','private',undefined].includes(namespaces.IpcMode)||
    h.Memory!==this.contract.memoryBytes||h.PidsLimit!==this.contract.pids||h.NanoCpus!==this.contract.nanoCpus||
