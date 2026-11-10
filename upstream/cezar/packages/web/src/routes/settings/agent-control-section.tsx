@@ -240,6 +240,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
      <label className="flex flex-col gap-1">Provedor<select aria-label="Provedor da conta" className={selectStyle} value={loginProvider} onChange={event=>setLoginProvider(z.enum(['codex','claude','grok']).parse(event.target.value))}><option value="claude">Claude</option><option value="grok">Grok</option><option value="codex">Codex</option></select></label>
      <label className="flex flex-col gap-1">Nome<Input aria-label="Nome da nova conta" value={loginLabel} onChange={event=>setLoginLabel(event.target.value)} required maxLength={100}/></label>
      <Button type="submit" disabled={!loginLabel.trim()}>Adicionar conta</Button>
+     <p className="text-xs text-muted-foreground">O login do CLI roda no processo do gateway. Se essa imagem não tiver os CLIs, use `npm run gateway -- account-add` no host.</p>
      {loginState?.url&&<p>Abra {loginState.url} e informe o código {loginState.userCode??'quando ele aparecer'}.</p>}
      {loginState?.state&&<p role="status">Conta {loginState.accountId}: {loginState.state}</p>}
      {loginState?.error&&<p role="alert">{loginState.error}</p>}

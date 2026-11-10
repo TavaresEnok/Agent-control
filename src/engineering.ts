@@ -644,6 +644,10 @@ export class EngineeringStages{
      }
     }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
+    if((node==='review'||node==='judge')&&grant.account_id){
+     const programmer=(await this.ledger.pool.query("SELECT account_id FROM ac_capacity_grants WHERE intent_id=$1 AND role='programmer' AND account_id IS NOT NULL LIMIT 1",[intent.id])).rows[0];
+     if(programmer&&programmer.account_id===grant.account_id)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
+    }
     if(nativeStage){
      const verified=node==='qa'?await this.options.nativeQa!.run(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running):await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);
      if(verified.status!=='passed')throw new Refusal('VERIFICATION_FAILED');

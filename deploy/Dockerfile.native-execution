@@ -1,5 +1,6 @@
 # Build context is produced by prepare-native-execution-image.mjs, never a home directory.
-FROM node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+# glibc base: the Claude CLI is a dynamic glibc ELF and does not run on the Alpine Node image.
+FROM node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
 COPY native-execution-worker.mjs /opt/agent-control/dist/src/native-execution-worker.mjs
 COPY --chmod=0555 codex /usr/local/bin/codex
 # Optional claude/grok binaries (AC_NATIVE_CLAUDE_BIN, AC_NATIVE_GROK_BIN). The directory may be empty.

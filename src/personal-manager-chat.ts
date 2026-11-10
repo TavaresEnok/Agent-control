@@ -27,8 +27,8 @@ export function parseManagerDecision(stdout:string):ManagerDecision{
 }
 
 function cli(provider:string,model:string,effort:string,prompt:string){
- if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,'--model',model,'--output-format','text','--max-turns','1']};
- if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',effort,'--output-format','plain','--cwd','/tmp','--no-plan']};
+ if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,'--model',model,'--effort',effort,'--output-format','text']};
+ if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',effort,'--output-format','plain','--cwd','/tmp','--no-plan','--always-approve']};
  return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account'],args:['exec','--skip-git-repo-check','--sandbox','read-only','--model',model,'-c','model_reasoning_effort='+effort,'-C','/tmp',prompt]};
 }
 
