@@ -15,9 +15,23 @@ import {PersonalManagerChat} from './personal-manager-chat.ts';
 import type {EngineeringOptions} from './engineering.ts';
 
 /** Real Codex and Claude supervisors for an installation whose bootstrap is active. */
+/**
+ * Personal mode has no external quota probe, so an account is available unless it
+ * recorded a provider limit (exhausted_until). Observations expire after an hour,
+ * so renew them for accounts that are not currently exhausted.
+ */
+export async function renewPersonalQuota(ledger:Ledger){
+ await ledger.pool.query(`INSERT INTO ac_quota_observations(account_id,status,source,observed_at,expires_at)
+  SELECT id,'available','personal://refresh',clock_timestamp(),clock_timestamp()+interval '1 hour' FROM ac_accounts
+  WHERE enabled AND mode='subscription_cli' AND (exhausted_until IS NULL OR exhausted_until<=clock_timestamp())
+  ON CONFLICT(account_id) DO UPDATE SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`);
+}
+
 export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')return;
+ await renewPersonalQuota(ledger);
+ setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');
  const executionPem=(await readPrivateFile(boot.execution.signingKeyFile)).toString('utf8');
