@@ -17,8 +17,8 @@ O `claude` do host é um ELF dinâmico com glibc. A imagem Node Alpine não o ex
 ```bash
 export AC_NATIVE_CLAUDE_BIN=$(readlink -f $(which claude))
 export AC_NATIVE_GROK_BIN=$(readlink -f $(which grok))
-ELF=$(readlink -f $(which codex) | sed 's#/bin/codex$#/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex#')
-# se o sed não achar o arquivo, procure vendor/x86_64-unknown-linux-musl/bin/codex dentro de @openai/codex
+# o ELF do Codex fica dentro do pacote npm; o `codex` do PATH é um script e é recusado
+ELF=$(find "$(npm root -g)/@openai" -type f -name codex -size +1M | head -1)
 SHA=$(sha256sum "$ELF" | awk '{print $1}')
 node scripts/prepare-native-planning-image.mjs "$ELF" "$SHA"
 node scripts/prepare-native-execution-image.mjs "$ELF" "$SHA"
@@ -35,9 +35,39 @@ Confira com `docker run --rm --entrypoint /usr/local/bin/claude ac-native-planni
 
 Para deixar no ar: `docker compose -f deploy/compose.personal.yml up -d`. O `restart: unless-stopped` sobe de novo depois de um reboot. O socket do Docker entra só no broker.
 
-## Parear o Happier
+O comando de QA roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. O padrão é `node --version`, que só prova que o contêiner sobe. Para um QA de verdade, exporte `AC_PERSONAL_QA_ARGV` antes do `personal:setup`, com um JSON cujo primeiro item é um executável absoluto, por exemplo `'["/usr/local/bin/node","--test"]'`. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
 
-Abra o painel do gateway e use o pareamento já existente do Happier. Vincule a conversa do projeto em Settings → Agent Control.
+Sempre que reconstruir uma imagem ou mudar o QA, rode `personal:setup` de novo e reinicie o gateway. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
+
+## Ligar a conversa (Happier)
+
+A conversa passa por um servidor Happier local. São três comandos, uma vez só:
+
+```bash
+npm run personal:happier -- <instalacao>          # servidor Happier; deixe rodando (tmux, systemd)
+npm run gateway -- personal-connect <instalacao>  # cria sua conta Happier, a conversa do projeto e o cofre
+npm run gateway -- serve <instalacao>             # o gateway; deixe rodando
+```
+
+Se o `yarn` reclamar de `.prisma/client`, rode uma vez `yarn -s generate:providers` em `upstream/happier/apps/server`.
+
+O `personal-connect` grava em `dataDirectory` o segredo da conta (`happier-account.key`) e o token. Faça backup desse arquivo: ele é a sua conta e a chave da conversa. Rodar o comando de novo só renova o token.
+
+### Conversar pelo terminal
+
+```bash
+npm run gateway -- say <instalacao> "o que este repositório faz?"
+npm run gateway -- say <instalacao> "crie docs/guia.md com ..."   # chega a proposta com as tarefas
+npm run gateway -- say <instalacao> aprovar                        # ou: descartar, pare
+npm run gateway -- chat-log <instalacao> 600                       # acompanha a conversa por 600 s
+npm run gateway -- chat-log <instalacao>                           # histórico
+```
+
+A mensagem é cifrada com a sua chave e entra na fila do Happier como no aplicativo. O gateway avisa cada etapa (programação, review, qa, integrate) e o resultado. Ao integrar no branch que está aberto no repositório, os arquivos no disco avançam junto; se você tiver uma edição local no mesmo arquivo, o disco não é tocado e o `git status` mostra a diferença.
+
+### Aplicativo Happier
+
+Para usar o aplicativo no celular ou o cliente web, ele precisa apontar para o seu servidor Happier (a porta de `happier.upstreamOrigin`, publicada por um proxy HTTPS ou túnel seu) e entrar com a mesma conta, restaurando-a pela chave secreta. Esse caminho não foi testado nesta rodada; o terminal acima foi.
 
 ## Adicionar contas
 
