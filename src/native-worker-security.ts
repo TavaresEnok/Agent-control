@@ -34,6 +34,15 @@ export async function readSignedWorkerLaunch<S extends z.ZodType>(schema:S,domai
   return payload;
  }finally{bytes.fill(0);}
 }
+/** Personal homes keep the credential file that account-add copied. The same walk is used by the worker so the snapshot tag matches. */
+export async function readMountedCredentialSecrets(provider:'codex'|'claude'|'grok',accountRoot='/account'){
+ const path=provider==='grok'?join(accountRoot,'.grok','auth.json'):provider==='claude'?join(accountRoot,'.credentials.json'):join(accountRoot,'auth.json');
+ const bytes=await readPrivateWorkerFile(path,65536);
+ try{
+  const strings=(value:unknown):string[]=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(strings):value&&typeof value==='object'?Object.values(value).flatMap(strings):[];
+  return strings(JSON.parse(bytes.toString('utf8'))).filter(value=>value.length>8);
+ }finally{bytes.fill(0);}
+}
 /** The subject is an account identifier digest, not an OAuth token or balance. */
 export async function assertCodexSubscriptionIdentity(expected:string,accountRoot='/account'){
  try{await lstat(join(accountRoot,'.codex/config.toml'));throw Error('CUSTOM_CODEX_CONFIG_FORBIDDEN');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
