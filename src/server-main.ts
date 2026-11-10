@@ -50,6 +50,11 @@ async function main(){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
   const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path)));return;
  }
+ if(command==='app-key'){
+  if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
+  const {personalAppKey}=await import('./personal-connect.ts');const key=await personalAppKey(path);
+  console.log('Servidor Happier: '+key.server+'\nChave secreta (Restaurar com chave secreta): '+key.secretKey+'\nGuarde esta chave: ela é a sua conta e a chave da conversa.');return;
+ }
  if(command==='say'||command==='chat-log'){
   if(!path||(command==='say'?extra.length<1||extra.length>2:extra.length>1))throw Error('INVALID_INSTALLATION_COMMAND');
   const {personalSay}=await import('./personal-connect.ts');await personalSay(path,command==='say'?extra[0]:undefined,command==='say'?(extra[1]?Number(extra[1]):undefined):(extra[0]?Number(extra[0]):undefined));return;

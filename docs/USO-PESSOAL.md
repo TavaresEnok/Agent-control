@@ -85,7 +85,21 @@ A mensagem é cifrada com a sua chave e entra na fila do Happier como no aplicat
 
 ### Aplicativo Happier
 
-Para usar o aplicativo no celular ou o cliente web, ele precisa apontar para o seu servidor Happier (a porta de `happier.upstreamOrigin`, publicada por um proxy HTTPS ou túnel seu) e entrar com a mesma conta, restaurando-a pela chave secreta. Esse caminho não foi testado nesta rodada; o terminal acima foi.
+O aplicativo é o Happier oficial: iOS na App Store, Android no Google Play, desktop (Windows, macOS, Linux) em happier.dev/download e web em cloud.happier.dev. Ele precisa alcançar o **seu** servidor Happier, que só escuta em `127.0.0.1` no servidor.
+
+1. Mostre a chave da conta (só no seu terminal; ela é a conta e a chave da conversa):
+   ```bash
+   npm run gateway -- app-key <instalacao>
+   ```
+   A saída traz o endereço do servidor (por exemplo `http://127.0.0.1:38343`) e a chave no formato `XXXXX-XXXXX-…`.
+2. Leve o servidor até o aparelho:
+   - **Computador (Windows):** abra um túnel SSH e deixe-o aberto: `ssh -N -L 38343:127.0.0.1:38343 usuario@servidor`.
+   - **Celular:** o celular não alcança `127.0.0.1` do servidor. Use uma rede privada como o Tailscale (instalado no servidor e no celular; no servidor, `tailscale serve --bg http://127.0.0.1:38343` publica em HTTPS só para a sua rede) ou um proxy HTTPS seu.
+3. No app, em **Servidor**, adicione o endereço (`http://127.0.0.1:38343` pelo túnel, ou o endereço HTTPS do Tailscale) e selecione-o.
+4. Escolha **Restaurar conta → Restaurar com chave secreta** e cole a chave.
+5. A conversa do projeto aparece na lista de sessões. Escreva nela como no terminal: pergunta, pedido, `aprovar`, `descartar`, `pare`.
+
+Este caminho segue a documentação do Happier, mas ainda não foi testado num aparelho de verdade.
 
 ## Adicionar contas
 

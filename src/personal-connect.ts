@@ -132,3 +132,16 @@ export async function personalSay(path:string,text:string|undefined,waitSeconds=
   if(text&&quiet>8)break;
  }
 }
+
+/** The account secret in the Happier app's "Restore with Secret Key" format (base32, groups of 5). Printed only to the owner's terminal. */
+export async function personalAppKey(path:string){
+ const config=await loadInstallation(path);
+ if(config.activation!=='personal')throw new Error('PERSONAL_ACTIVATION_REQUIRED');
+ const secret=await readPrivateFile(join(config.dataDirectory,'happier-account.key'),64);
+ if(secret.length!==32)throw new Error('PRIVATE_KEY_FILE_INVALID');
+ const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';let out='',buffer=0,bits=0;
+ for(const byte of secret){buffer=(buffer<<8)|byte;bits+=8;while(bits>=5){bits-=5;out+=alphabet[(buffer>>bits)&31];}buffer&=(1<<bits)-1;}
+ if(bits>0)out+=alphabet[(buffer<<(5-bits))&31];
+ secret.fill(0);
+ return {server:config.happier.upstreamOrigin,secretKey:out.match(/.{1,5}/g)!.join('-')};
+}
