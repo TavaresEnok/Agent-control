@@ -2,7 +2,7 @@ import {assertModelAllowed} from './model-policy.ts';
 import {redactNativeLogsOrWithhold,assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
 import {readNativeSecretSnapshot,writeNativeSecretSnapshot,quarantineNativeLegacyLog,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
-import {assertCodexSubscriptionIdentity} from './native-worker-security.ts';
+import {assertCodexSubscriptionIdentity,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
@@ -153,9 +153,10 @@ export class NativeExecutionSupervisor{
    LEFT JOIN ac_provider_eligibility_assessments e ON e.account_id=a.id AND e.revision=$2
    WHERE g.id=$1 AND g.state='uncertain' AND a.enabled AND p.enabled AND p.role=g.role AND a.provider=$5 AND a.mode=$6
     AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available'
-    AND (ac_activation_personal() OR (e.status='documented_supported' AND e.expires_at>clock_timestamp() AND e.adapter_id=$3 AND e.adapter_version=$4
-     AND e.revision=(SELECT max(revision) FROM ac_provider_eligibility_assessments WHERE account_id=a.id)))
-   FOR UPDATE OF g FOR SHARE OF a,p,q,e`,[input.grantId,job.eligibility_revision,this.config.id,this.executorDigest,this.config.syntheticFixture?.provider??this.config.provider??'codex',this.config.syntheticFixture?'synthetic':'subscription_cli'])).rows[0];
+   AND (ac_activation_personal() OR (e.status='documented_supported' AND e.expires_at>clock_timestamp() AND e.adapter_id=$3 AND e.adapter_version=$4
+    AND e.revision=(SELECT max(revision) FROM ac_provider_eligibility_assessments WHERE account_id=a.id)))
+   FOR UPDATE OF g FOR SHARE OF a,p,q`,[input.grantId,job.eligibility_revision,this.config.id,this.executorDigest,this.config.syntheticFixture?.provider??this.config.provider??'codex',this.config.syntheticFixture?'synthetic':'subscription_cli'])).rows[0];
+  if(grant?.account_id)await c.query('SELECT account_id FROM ac_provider_eligibility_assessments WHERE account_id=$1 AND revision=$2 FOR SHARE',[grant.account_id,job.eligibility_revision]);
   if(!grant||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==input.role||grant.context_id!==authority.contextId||
    grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||this.profileDigest(grant)!==job.profile_digest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   assertModelAllowed(grant.model);return fn();
@@ -172,13 +173,14 @@ export class NativeExecutionSupervisor{
    if(!this.config.syntheticFixture&&!await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'").then(r=>Boolean(r.rowCount)))await pinNativeProtocolForNewAttempt(c,{kind:'execution',jobId:input.jobId,executorDigest:this.executorDigest,model:grant.model,effort:grant.effort});
    return grant;
   });
-  const assessment=(await new ProviderEligibility(this.ledger).view(principal,g.project_id,g.account_id,1)).latest;
-  if(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.authenticationMode!==(this.config.syntheticFixture?'synthetic':'subscription_oauth')||assessment.executionMode!==(this.config.syntheticFixture?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.executorDigest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+  const personal=!this.config.syntheticFixture&&Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+  const assessment=personal?undefined:(await new ProviderEligibility(this.ledger).view(principal,g.project_id,g.account_id,1)).latest;
+  if(!personal&&(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.authenticationMode!==(this.config.syntheticFixture?'synthetic':'subscription_oauth')||assessment.executionMode!==(this.config.syntheticFixture?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.executorDigest))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(principal,input.grantId,authority);
   const envSecrets=[...this.config.workerEnv,...this.config.toolsEnv].flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
   let accountSecrets:string[]=[];
   const accountRoot=join(this.config.accountRoot,g.account_id);
-  if(!this.config.syntheticFixture)accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+  if(!this.config.syntheticFixture)accountSecrets=personal?await readMountedCredentialSecrets(this.config.provider??'codex',accountRoot):(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
   else{
    // Synthetic fixtures may opt into the production worker with synthetic
    // auth; older deterministic substitute workers have no auth file.
@@ -194,7 +196,7 @@ export class NativeExecutionSupervisor{
    if(!this.config.syntheticFixture&&!await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'").then(r=>Boolean(r.rowCount)))await pinNativeProtocolForNewAttempt(c,{kind:'execution',jobId:input.jobId,executorDigest:this.executorDigest,model:current.model,effort:current.effort});
    if(input.role==='programmer')await requireProjectEnvironmentLaunch(c,{intentId:input.intentId,base:input.base});
    await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,executor_digest,key_fingerprint,input_digest,base_id,role,account_id,profile_id,profile_digest,eligibility_revision,state)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'uncertain')`,[input.jobId,input.grantId,input.intentId,authority.contextId,authority.epoch,input.sessionId,this.executorDigest,this.fingerprint,hash,input.base,input.role,g.account_id,g.profile_id,this.profileDigest(g),assessment.revision]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'uncertain')`,[input.jobId,input.grantId,input.intentId,authority.contextId,authority.epoch,input.sessionId,this.executorDigest,this.fingerprint,hash,input.base,input.role,g.account_id,g.profile_id,this.profileDigest(g),assessment?.revision??1]);
    await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[input.grantId]);
    if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
    else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
@@ -205,8 +207,10 @@ export class NativeExecutionSupervisor{
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
-  const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false}];
-  const toolsMounts=[{source:p.work,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
+  const workerMounts=[{source:join(this.config.accountRoot,g.account_id),destination:'/account',writable:true},{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(input.role==='programmer'?[{source:p.work,destination:'/work',writable:true}]:[])];
+  const toolsWork=input.role==='programmer'?join(p.root,'tools-workspace'):p.work;
+  if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
+  const toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
   const host=(networkId:string,mounts:typeof toolsMounts)=>({NetworkMode:networkId,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,Tmpfs:{'/tmp':'rw,nosuid,nodev,size=64m'},Binds:mounts.map(m=>m.source+':'+m.destination+(m.writable?':rw':':ro'))});
   const started=await this.serialEffect(input.jobId,async()=>{
    const network=await this.effect(principal,authority,input,()=>this.docker.createPrivateNetwork('ac-native-exec-'+input.jobId,labels));
