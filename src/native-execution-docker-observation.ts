@@ -19,6 +19,12 @@ const Rules=z.object({workerEntrypoint:z.array(z.string()).min(1),toolsEntrypoin
  workerMemory:z.number().int().positive(),toolsMemory:z.number().int().positive(),workerPids:z.number().int().positive(),toolsPids:z.number().int().positive(),
  workerNanoCpus:z.number().int().positive(),toolsNanoCpus:z.number().int().positive()}).strict();
 function exact(a:string[]|null,b:string[]){return JSON.stringify(a??[])===JSON.stringify(b);}
+function envMatches(actual:string[]|null,expected:string[]){
+ const names=new Set(expected.map(entry=>entry.split('=')[0]));
+ const imageDefaults=new Set(['PATH','NODE_VERSION','YARN_VERSION']);
+ const got=(actual??[]).filter(entry=>{const name=entry.split('=')[0];return names.has(name)||!imageDefaults.has(name);});
+ return JSON.stringify([...got].sort())===JSON.stringify([...expected].sort());
+}
 function convert(c:Container){
  const h=c.HostConfig;
  return {id:c.Id,image:c.Image,user:c.Config.User,running:c.State.Running,privileged:h.Privileged,readOnlyRoot:h.ReadonlyRootfs,
@@ -42,7 +48,7 @@ export async function inspectNativeExecutionPair(read:(path:string)=>Promise<unk
   [tools,rules.toolsEntrypoint,rules.toolsCmd,rules.toolsEnv,rules.toolsWorkingDir,rules.toolsMemory,rules.toolsPids,rules.toolsNanoCpus]
  ] as const){
   const h=c.HostConfig;
-  if(c.State.Status!==rules.state||c.State.Running!==(rules.state==='running')||!exact(c.Config.Entrypoint,entry)||!exact(c.Config.Cmd,cmd)||!exact(c.Config.Env,env)||c.Config.WorkingDir!==cwd||
+  if(c.State.Status!==rules.state||c.State.Running!==(rules.state==='running')||!exact(c.Config.Entrypoint,entry)||!exact(c.Config.Cmd,cmd)||!envMatches(c.Config.Env,env)||c.Config.WorkingDir!==cwd||
    h.Memory!==memory||h.PidsLimit!==pids||h.NanoCpus!==cpu||Object.keys(h.PortBindings??{}).length!==0||
    c.Mounts.some(m=>m.Type!=='bind')||(h.CapAdd?.length??0)>0||(h.Devices?.length??0)>0||
    !['','private'].includes(h.PidMode)||!['','private'].includes(h.IpcMode)||h.SecurityOpt?.some(s=>s.startsWith('seccomp=unconfined')||s.startsWith('apparmor=unconfined'))||
