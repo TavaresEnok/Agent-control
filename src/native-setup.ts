@@ -9,6 +9,7 @@ import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {nativeQaContractDigest,NativeQaContract} from './native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
+import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
 
 const Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
@@ -53,6 +54,11 @@ export async function nativeSetup(path:string){
    planning:{id:'personal-planning',imageId:images.planning,executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},
    execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
    qa,qaDigest:nativeQaContractDigest(qa),review:{signingKeyFile:reviewKey.file,keyFingerprint:reviewKey.fingerprint,verifierDigest:nativeReviewVerifierDigest}};
+  // The QA stage refuses a policy whose QA verifier digest differs from this contract, so keep the latest revision in step with it.
+  const latest=(await ledger.pool.query('SELECT revision,snapshot FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[config.project.id])).rows[0];
+  const base=latest?QualityPolicy.parse(latest.snapshot):QualityPolicy.parse({schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false});
+  if(base.verifierDigest!==nativeReviewVerifierDigest||base.qaVerifierDigest!==block.qaDigest)
+   await new QualityPolicies(ledger).publish(config.project.owner,config.project.id,Number(latest?.revision??0),{...base,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:block.qaDigest});
   const raw=JSON.parse((await readFile(path,'utf8')).toString()) as Record<string,unknown>;
   raw.nativeBootstrap=block;
   await writeFile(path,JSON.stringify(raw,null,2)+'\n',{mode:0o600});
