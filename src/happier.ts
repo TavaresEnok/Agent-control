@@ -16,6 +16,7 @@ import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
+import {bindOwnerRequest} from './personal-owner-request.ts';
 
 /** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
 function httpFailureSuffix(error:Error){
@@ -227,6 +228,7 @@ export class HappierEndpoint {
     if (z.object({ id: z.string() }).passthrough().parse(profile).id !== this.options.principal)
       throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH', 403);
     this.bindNativeSource();
+    if(this.options.personalConversation){const unbind=bindOwnerRequest(this.options.authority.contextId,async intentId=>(await this.originalRequest(intentId)).text||undefined);this.lifecycle.signal.addEventListener('abort',unbind,{once:true});}
     this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
     this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateLink(),{signal:this.lifecycle.signal,timeoutMs:timeout});
     // Fetching authorized pages may take time; re-read current structured state before activating RPC.
@@ -413,9 +415,10 @@ export class HappierEndpoint {
   private async replanAlreadyRequested(){
    return Boolean((await this.ledger.pool.query(`SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->'payload'->>'localId' LIKE 'replan-%' LIMIT 1`,[this.options.authority.contextId])).rowCount);
   }
-  private async replan(parentIntentId:string,unitId:string){
-   const parent=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2',[parentIntentId,this.options.authority.contextId])).rows[0];
-   const revision=Number(parent?.command?.payload?.proposalRevision);
+  /** The owner's original words behind a plan intent or one of its task intents; empty when unavailable. */
+  private async originalRequest(intentId:string):Promise<{text:string;revision:number}>{
+   const row=(await this.ledger.pool.query('SELECT COALESCE(p.command,i.command) command FROM ac_intents i LEFT JOIN ac_intents p ON p.id=i.parent_intent_id WHERE i.id=$1 AND i.context_id=$2',[intentId,this.options.authority.contextId])).rows[0];
+   const revision=Number(row?.command?.payload?.proposalRevision);
    let original='';
    if(Number.isSafeInteger(revision)){
     const source=(await this.ledger.pool.query(`SELECT i.command FROM ac_semantic_planning_calls s JOIN ac_intents i ON i.id=s.intent_id
@@ -426,6 +429,10 @@ export class HappierEndpoint {
      if(stored)original=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext))).content.text;
     }
    }
+   return {text:original,revision};
+  }
+  private async replan(parentIntentId:string,unitId:string){
+   const {text:original,revision}=await this.originalRequest(parentIntentId);
    const text='Replanejamento automático. A tarefa "'+unitId+'" do plano '+(Number.isSafeInteger(revision)?revision:'anterior')+' falhou na execução, QA ou revisão. '+
     'Proponha um plano corrigido que conclua o pedido original, considerando o que já pode ter sido integrado.\n\nPedido original:\n'+(original||'(indisponível)');
    await this.accept({localId:'replan-'+parentIntentId,text:text.slice(0,100000)});
@@ -434,13 +441,21 @@ export class HappierEndpoint {
    const context=(await this.ledger.pool.query('SELECT policy_revision FROM ac_contexts WHERE id=$1',[this.options.authority.contextId])).rows[0];
    await this.ledger.accept(this.options.principal,{schemaVersion:1,contextId:this.options.authority.contextId,intentId:randomUUID(),deliveryAttemptId:randomUUID(),policyRevision:context.policy_revision,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'approved:'+proposalDigest.slice(0,32),proposalRevision:revision,proposalDigest,native:true}},this.options.authority,'happier');
   }
+  /** Decides the most recent proposal, once. A proposal already started or discarded is never decided again. */
   private async resolveLatestProposal(approve:boolean){
-   const row=(await this.ledger.pool.query("SELECT result FROM ac_semantic_planning_calls WHERE context_id=$1 AND state='published' ORDER BY id DESC LIMIT 1",[this.options.authority.contextId])).rows[0];
+   const context=this.options.authority.contextId;
+   const row=(await this.ledger.pool.query("SELECT result FROM ac_semantic_planning_calls WHERE context_id=$1 AND state='published' ORDER BY created_at DESC,id DESC LIMIT 1",[context])).rows[0];
    if(!row){await this.say('proposal-missing','Não há proposta para decidir.');return;}
    const result=managerPlanPublishedSchema.parse(row.result);
-   if(!approve){await this.say('discard-'+result.revision,'Proposta descartada.');return;}
+   const decided=(await this.ledger.pool.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->>'action'='plan.start' AND (command->'payload'->>'proposalRevision')::int=$2)
+     OR EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND kind='proposal.discarded' AND (detail->>'revision')::int=$2)`,[context,result.revision])).rowCount;
+   if(decided){await this.say('proposal-decided-'+randomUUID(),'A proposta '+result.revision+' já foi decidida. Não há proposta pendente.');return;}
+   if(!approve){
+    await this.ledger.pool.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'proposal.discarded',$2)",[context,{revision:result.revision}]);
+    await this.say('discard-'+result.revision,'Proposta '+result.revision+' descartada.');return;
+   }
    await this.startProposal(result.revision,result.digest);
-   await this.say('approve-'+result.revision,'Proposta aprovada. A execução começou.');
+   await this.say('approve-'+result.revision,'Proposta '+result.revision+' aprovada. A execução começou.');
   }
   async tick() {
     if (!this.socket.connected) return;

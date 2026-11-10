@@ -1,3 +1,4 @@
+import {ownerRequest} from './personal-owner-request.ts';
 import {randomUUID} from 'node:crypto';
 import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -163,7 +164,8 @@ export class NativeImplementation{
      await c.query('UPDATE ac_operations SET grant_id=$2 WHERE id=$1',[intent.operation_id,grant.id]);return {base:row.base_id,grantId:grant.id};
     });
     if(canceled||!this.active)throw new Refusal('STAGE_CANCELED');
-    const task=JSON.stringify({instruction:'Implement the authorized request within the frozen write paths. Tests and independent review are enforced by the controller. Do not approve, integrate, publish or deploy.',request:text,sourceRef:p.messageRef,writePaths:p.writePaths,base:frozen.base,...(correction?{correction:{taskId:correction.taskId,revision:correction.revision,priorCommit:correction.priorCommit,priorTree:correction.priorTree,priorArtifactId:correction.priorArtifactId,decisionDigest:correction.decisionDigest,failedEvidenceIds:correction.failedEvidenceIds}}:{})});
+    const asked=await ownerRequest(authority.contextId,intent.id);
+    const task=JSON.stringify({instruction:'Implement the authorized request within the frozen write paths. Tests and independent review are enforced by the controller. Do not approve, integrate, publish or deploy.'+(asked?' ownerRequest holds the owner\'s exact words for the whole plan: do the part that belongs to this task, exactly as asked, and nothing beyond it.':''),...(asked?{ownerRequest:asked}:{}),request:text,sourceRef:p.messageRef,writePaths:p.writePaths,base:frozen.base,...(correction?{correction:{taskId:correction.taskId,revision:correction.revision,priorCommit:correction.priorCommit,priorTree:correction.priorTree,priorArtifactId:correction.priorArtifactId,decisionDigest:correction.decisionDigest,failedEvidenceIds:correction.failedEvidenceIds}}:{})});
     try{await supervisor.start(owner,authority,{jobId:intent.operation_id,intentId:intent.id,grantId:frozen.grantId,sessionId:z.uuid().parse(spec.sessionId),base:frozen.base,role:'programmer',task,writePaths:p.writePaths});}
     catch(error){const exists=(await this.ledger.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE id=$1',[intent.operation_id])).rowCount;if(!exists){
       await this.ledger.tx(async c=>{await this.authorize(owner,authority,intent.id,true,c);
