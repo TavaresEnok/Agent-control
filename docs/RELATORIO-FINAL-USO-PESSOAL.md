@@ -43,7 +43,7 @@ Repositório descartável: `/home/app/srv_projetos/workspace/ac-smoke-repo`, bra
 - **Painel web do gateway e `account-add` pelo painel.** Não foram exercitados nesta rodada.
 - **Compose.** `deploy/compose.personal.yml` não foi usado e não inclui o servidor Happier. Gateway e Happier estão em sessões `tmux` (`ac-gateway`, `ac-happier`), que não voltam sozinhas depois de um reboot.
 - **Suíte completa.** Só rodei os 20 testes ligados ao que mudou. A suíte inteira não foi executada.
-- **Limpeza manual.** Antes de existir a liberação automática, liberei à mão sete reservas de capacidade presas por execuções abortadas. As reservas antigas do Grok da madrugada foram liberadas pela varredura nova ao subir.
+- **Limpeza manual.** Antes de existir a liberação automática, liberei à mão quatro reservas de capacidade presas por execuções abortadas. As reservas antigas do Grok da madrugada foram liberadas pela varredura nova ao subir.
 - **Itens antigos fora desta rodada:** RF-34/RNF-08, limite por origem no proxy, uso informado pelo worker e revisão externa de segurança.
 
 ## Ações do titular
