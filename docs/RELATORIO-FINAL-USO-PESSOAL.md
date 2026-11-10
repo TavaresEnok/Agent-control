@@ -4,7 +4,7 @@ Atualizado em 10/11/2026, branch `task/personal-activation`, sem push.
 
 ## Resumo
 
-O modo pessoal funciona de ponta a ponta com modelos reais. Um pedido escrito na conversa vira proposta do gerente (Claude Sonnet 5.5), é programado pelo Grok 4.7, revisado pelo Claude, passa pelo QA em contêiner e é integrado no branch do repositório, com aviso de cada etapa. Isso foi provado duas vezes pelo caminho real (servidor Happier local, gateway `serve`, fila cifrada) e seis vezes por um driver de teste que hospeda o mesmo runtime. Uma revisão independente achou dois defeitos graves de isolamento, já corrigidos. O que não foi provado: o aplicativo Happier, um projeto real e um QA que rode os testes do projeto.
+O modo pessoal funciona de ponta a ponta com modelos reais. Um pedido escrito na conversa vira proposta do gerente (Claude Sonnet 5.5), é programado pelo Grok 4.7, revisado pelo Claude, passa pelo QA em contêiner e é integrado no branch do repositório, com aviso de cada etapa. Isso foi provado duas vezes pelo caminho real (servidor Happier local, gateway `serve`, fila cifrada) e seis vezes por um driver de teste que hospeda o mesmo runtime. Uma revisão independente achou dois defeitos graves de isolamento, já corrigidos. O que não foi provado: o aplicativo Happier e um QA que rode os testes do projeto.
 
 ## T1–T8
 
@@ -47,13 +47,19 @@ Depois dessas correções, um pedido real passou de novo pelo caminho completo: 
 
 `personal:project` foi exercitado num segundo repositório descartável, do arquivo de instalação até a conversa criada. O pedido real nele falhou no planejamento por causa do login copiado (ver abaixo).
 
+## Terceira rodada (10/11/2026, noite)
+
+- O programador e o revisor passam a receber o texto do pedido do titular; o revisor rejeita o que divergir ou passar do pedido. Antes, os dois só viam o nome da tarefa e os arquivos, e o resultado podia sair diferente do pedido.
+- `aprovar` escolhia a proposta pelo maior id aleatório e chegou a reexecutar um plano antigo. Agora decide a proposta mais recente, uma vez só.
+- Projeto real ligado: `/home/app/projects/IspAgent` (clone de `TavaresEnok/IspAgent`), com logins próprios de Claude e Grok e serviços systemd `agent-control-*-ispagent`. Pedido real integrado no `master` local, sem push: commit `3ad0236`, só a seção "Status do projeto" no fim do README, como pedido.
+
 ## O que não funciona ou não foi provado
 
 - **Login copiado não serve para um segundo projeto.** `--import-logins` copia o arquivo OAuth do Claude; a cópia e o original compartilham o mesmo token de renovação e, quando um renova, o outro morre ("OAuth session expired and could not be refreshed"). No segundo projeto de teste o gerente respondeu uma vez e o planejamento seguinte já falhou. Para cada projeto novo, faça um login próprio com `account-add` sem `--auth-file`. O projeto de teste original continua funcionando.
 - **Serviços permanentes.** Instalados pelo titular com `npm run personal:services` para o projeto de teste (`agent-control-happier-smoke` e `agent-control-gateway-smoke`, systemd do usuário, `enabled`, com linger). O gateway respondeu pela conversa depois da troca. Um reboot de verdade não foi testado.
 - **Aplicativo Happier.** O cliente web não está construído e o celular precisa alcançar o servidor por HTTPS. A conversa foi provada pelo terminal, com a mesma fila e a mesma cifra do aplicativo.
 - **QA.** O padrão agora verifica conflito de merge, JSON e sintaxe de JavaScript, sem instalar dependências. Rodar os testes do projeto exige `AC_PERSONAL_QA_ARGV` e uma imagem de tools que tenha as dependências; isso não foi exercitado.
-- **Suíte completa.** 462 testes: 364 passam, 34 são pulados e 64 falham. Das 64, 32 pedem ambiente que não existe aqui (banco descartável, controlador isolado, `sudo mount`). Das outras 32, 9 eram a regra do revisor e foram corrigidas (`467ac51d`). Ficam cerca de 20, quase todas de execução nativa sintética com Docker; uma delas (`native-multitask`) falha igual no commit `31a5fa65`, anterior ao modo pessoal, então não nasceu nesta rodada. As demais não foram triadas uma a uma.
+- **Suíte completa.** 462 testes: 364 passam, 34 são pulados e 64 falham. Das 64, 32 pedem ambiente que não existe aqui (banco descartável, controlador isolado, `sudo mount`). As outras foram triadas: 9 eram a regra do revisor (corrigida em `467ac51d`); 1 era a ordem dos comandos no `server-main` (corrigida); 8 falham igual no commit `31a5fa65`, anterior ao modo pessoal, e cobrem o caminho bloqueado de laboratório (retirada de contêiner, reconciliação de cancelamento, correção nativa, cota R3, multitarefa e recuperação de planejamento, cuja fixture não tem o recibo de protocolo promovido). Esses 8 ficam como dívida anterior; o simulador de banco do teste de recuperação foi atualizado com as consultas novas e passou de 3 para 2 falhas.
 - **Itens da revisão não tratados:** `personal-connect` não é idempotente se morrer no meio; os jobs de reservas liberadas pela varredura ficam `uncertain`; os workers Claude e Grok usam o login montado sem proxy de saída por padrão. As correções da revisão não tiveram segunda revisão.
 - **Painel web, compose e itens antigos** (RF-34/RNF-08, limite por origem no proxy, revisão externa de segurança): sem mudança.
 

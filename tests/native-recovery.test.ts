@@ -147,14 +147,22 @@ class PlanningRecoveryMemory{
   }
   if(text.startsWith('SELECT project_id FROM ac_contexts WHERE id=$1'))return selected([]);
   if(text.includes('ac_installation_activation'))return selected([]); // locked installation
+  // Queries added to fence and launch after these recovery fixtures were written.
+  if(text.startsWith('SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE')){const context=this.tables.ac_contexts?.find(row=>row.id===params[0]);return selected(context?[{id:context.id}]:[]);}
+  if(text.includes('FROM ac_workflow_project_handoffs'))return selected([]); // no project handoff in progress
+  if(text.includes('ac_workflow_generations'))return selected([]); // no workflow generation for these intents
+  if(/^SELECT pg_advisory_xact_lock(_shared)?\(/.test(text))return selected([{locked:true}]); // single-threaded memory store
+  if(text.startsWith('SELECT domain_id FROM ac_installation_projects'))return selected([]); // project not bound to an installation domain
+  if(text.startsWith('SELECT * FROM ac_recovery_inventory_policy'))return selected([{singleton:true,required:false}]);
   throw Error('UNHANDLED_SQL '+text);
  }
 }
 function planningSubstituteLedger(){
  const memory=new PlanningRecoveryMemory();
- const client={query:(sql:string,params?:unknown[])=>memory.query(sql,params??[]),release(){}};
+ // Real pg clients return promises; production code may chain .then on a query.
+ const client={query:async(sql:string,params?:unknown[])=>memory.query(sql,params??[]),release(){}};
  const ledger=Object.create(Ledger.prototype) as Ledger;
- Object.assign(ledger,{pool:{query:(sql:string,params?:unknown[])=>memory.query(sql,params??[]),connect:async()=>client,end:async()=>{}}});
+ Object.assign(ledger,{pool:{query:async(sql:string,params?:unknown[])=>memory.query(sql,params??[]),connect:async()=>client,end:async()=>{}}});
  return {ledger,memory};
 }
 async function planningRecoveryOnSubstitute(){
