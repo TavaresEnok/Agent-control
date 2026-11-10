@@ -11,7 +11,7 @@ const Launch=z.object({schemaVersion:z.literal(1),callId:UUID,contextId:UUID,int
  epoch:z.number().int().positive(),proxyUrl:z.literal('http://provider-egress:8080').optional(),providerSubjectDigest:z.string().regex(/^[a-f0-9]{64}$/),executorDigest:z.string().regex(/^[a-f0-9]{64}$/),inputDigest:z.string().regex(/^[a-f0-9]{64}$/),
  model:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/),effort:z.enum(['low','medium','high']),sourceMessageRef:z.string().min(1).max(240),text:z.string().min(1).max(100000),
  constraints:z.object({contextId:UUID,qualityRevision:z.number().int().positive(),targetRef:z.string().max(240),knownReferences:z.array(z.string().max(240)).max(257)}).strict(),
- outputSchema:z.record(z.string(),z.unknown()),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude']).optional()}).strict();
+ outputSchema:z.record(z.string(),z.unknown()),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude','grok']).optional()}).strict();
 /** Worker-side only: the broker keeps the signing key and physical-operation
  * authority. This entrypoint cannot publish, approve, release grants or schedule. */
 async function main(){

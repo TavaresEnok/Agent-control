@@ -10,12 +10,14 @@ import {Refusal} from './contracts.ts';
 import {syncInstallationActivation, type Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 
-const Provider=z.enum(['codex','claude']);
-export type ProviderLogin={accountId:string;provider:'codex'|'claude';label:string;state:'pending'|'active'|'error';url?:string;userCode?:string};
+const Provider=z.enum(['codex','claude','grok']);
+export type ProviderLogin={accountId:string;provider:'codex'|'claude'|'grok';label:string;state:'pending'|'active'|'error';url?:string;userCode?:string};
 const sessions=new Map<string,ProviderLogin>();
+/** Test team only. The permanent roster in AGENTS.md stays Codex for manager and programmer. */
 const ROLES={
- codex:[{role:'manager' as const,model:'gpt-6.1-sol'},{role:'programmer' as const,model:'gpt-6.1-terra'}],
- claude:[{role:'reviewer' as const,model:'claude-sonnet-5-5'},{role:'qa' as const,model:'claude-sonnet-5-5'}],
+ codex:[] as {role:'manager'|'programmer'|'reviewer'|'qa';model:string}[],
+ claude:[{role:'manager' as const,model:'claude-sonnet-5-5'},{role:'reviewer' as const,model:'claude-sonnet-5-5'},{role:'qa' as const,model:'claude-sonnet-5-5'}],
+ grok:[{role:'programmer' as const,model:'grok-4.7'}],
 };
 
 export function providerLogin(accountId:string){return sessions.get(accountId)??null;}
@@ -28,10 +30,10 @@ function capture(accountId:string,chunk:Buffer){
  sessions.set(accountId,{...current,...(url?{url}:{}),...(userCode?{userCode}:{})});
 }
 
-function startDeviceLogin(provider:'codex'|'claude',home:string,accountId:string){
- const command=provider==='codex'?'codex':'claude';
- const args=provider==='codex'?['login','--device-auth']:['setup-token'];
- const child=spawn(command,args,{env:{...process.env,CODEX_HOME:home,CLAUDE_CONFIG_DIR:home},stdio:['ignore','pipe','pipe'],detached:true});
+function startDeviceLogin(provider:'codex'|'claude'|'grok',home:string,accountId:string){
+ const command=provider==='codex'?'codex':provider==='claude'?'claude':'grok';
+ const args=provider==='claude'?['setup-token']:['login','--device-auth'];
+ const child=spawn(command,args,{env:{...process.env,CODEX_HOME:home,CLAUDE_CONFIG_DIR:home,HOME:provider==='grok'?home:process.env.HOME},stdio:['ignore','pipe','pipe'],detached:true});
  child.stdout.on('data',(chunk:Buffer)=>capture(accountId,chunk));
  child.stderr.on('data',(chunk:Buffer)=>capture(accountId,chunk));
  child.on('error',()=>{const current=sessions.get(accountId);if(current)sessions.set(accountId,{...current,state:'error'});});
@@ -67,7 +69,7 @@ export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{
  sessions.set(accountId,login);
  if(raw.authFile){
   if(!isAbsolute(raw.authFile)||resolve(raw.authFile)!==raw.authFile)throw new Refusal('AUTH_FILE_INVALID',400);
-  const target=resolve(home,provider==='codex'?'auth.json':'credentials.json');
+  const target=resolve(home,provider==='codex'?'auth.json':provider==='claude'?'credentials.json':'auth.json');
   await copyFile(raw.authFile,target);
   const file=await open(target,constants.O_RDONLY);
   try{await file.chmod(0o600);}finally{await file.close();}

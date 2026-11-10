@@ -110,7 +110,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   app.post('/api/v1/ac/personal/accounts',async c=>{
     if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
     if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
-    const input=z.object({provider:z.enum(['codex','claude']),label:z.string().min(1).max(100),authFile:z.string().optional()}).strict().parse(await c.req.json());
+    const input=z.object({provider:z.enum(['codex','claude','grok']),label:z.string().min(1).max(100),authFile:z.string().optional()}).strict().parse(await c.req.json());
     c.header('Cache-Control','no-store');
     return c.json(await personalAccounts.add(c.get('principal'),input));
   });

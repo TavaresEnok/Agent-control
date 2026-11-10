@@ -225,7 +225,7 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
   const personal=Boolean((await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
   const bound=boot.accounts.every(account=>accounts.rows.some(row=>{
    const provider=String(row.provider);
-   return String(row.id)===account.accountId&&(provider==='codex'||(boot.state==='active'&&personal&&provider==='claude'))&&String(row.resource_identity)===provider+':'+account.subjectDigest;
+   return String(row.id)===account.accountId&&(provider==='codex'||(boot.state==='active'&&personal&&(provider==='claude'||provider==='grok')))&&String(row.resource_identity)===provider+':'+account.subjectDigest;
   }));
   if(accounts.rows.length!==boot.accounts.length||!bound)throw new Refusal('NATIVE_BOOTSTRAP_ACCOUNT_UNBOUND',403);
   let resources:NativeResourceAttachment|undefined;

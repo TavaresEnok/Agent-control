@@ -24,14 +24,14 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const subjects=(provider:string)=>boot.accounts.filter(account=>rows.some(row=>row.id===account.accountId&&row.provider===provider)).map(account=>({accountId:account.accountId,subjectDigest:account.subjectDigest}));
  const protectedRepositories=[config.project.repo,...config.projects.map(project=>project.repo)];
  const planning=[];
- for(const provider of ['codex','claude'] as const){
+ for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:boot.planning.executorDigest,imageId:boot.planning.imageId,
    hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects}));
  }
  const executions=[];
- for(const provider of ['codex','claude'] as const){
+ for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,

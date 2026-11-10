@@ -90,7 +90,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
  const cache=useQueryClient()
  const [conversationEntry]=useState(()=>conversationConfigurationEntry(window.location.search))
  const [selected,setSelected]=useState(''),[label,setLabel]=useState(''),[sessionId,setSessionId]=useState(conversationEntry.sessionId)
- const [loginProvider,setLoginProvider]=useState<'codex'|'claude'>('codex'),[loginLabel,setLoginLabel]=useState(''),[loginState,setLoginState]=useState<{accountId?:string;url?:string;userCode?:string;state?:string;error?:string}|null>(null)
+ const [loginProvider,setLoginProvider]=useState<'codex'|'claude'|'grok'>('claude'),[loginLabel,setLoginLabel]=useState(''),[loginState,setLoginState]=useState<{accountId?:string;url?:string;userCode?:string;state?:string;error?:string}|null>(null)
  const [accountMode,setAccountMode]=useState<'synthetic'|'subscription_cli'|'api'>('synthetic')
  const [accountProvider,setAccountProvider]=useState('synthetic'),[resourceIdentity,setResourceIdentity]=useState(''),[accountId,setAccountId]=useState<string|null>(null)
  const [eligibility,setEligibility]=useState<'documented_supported'|'requires_clarification'|'unsupported_for_mode'|'not_assessed'>('not_assessed')
@@ -237,7 +237,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
   {data&&<>
    <SettingsField title="Contas" hint="Cota sem observação válida aparece como unknown. Alternar contas para contornar limites pode violar os termos do provedor; a decisão é do titular.">
     <form className="flex flex-col gap-2" onSubmit={async event=>{event.preventDefault();setLoginState(null);try{const value=z.object({accountId:z.string(),state:z.string(),url:z.string().optional(),userCode:z.string().optional()}).parse(await request('/api/v1/ac/personal/accounts',{provider:loginProvider,label:loginLabel}));setLoginState(value);setLoginLabel('');}catch(error){setLoginState({error:error instanceof Error?error.message:'ACCOUNT_ADD_FAILED'});}}}>
-     <label className="flex flex-col gap-1">Provedor<select aria-label="Provedor da conta" className={selectStyle} value={loginProvider} onChange={event=>setLoginProvider(z.enum(['codex','claude']).parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+     <label className="flex flex-col gap-1">Provedor<select aria-label="Provedor da conta" className={selectStyle} value={loginProvider} onChange={event=>setLoginProvider(z.enum(['codex','claude','grok']).parse(event.target.value))}><option value="claude">Claude</option><option value="grok">Grok</option><option value="codex">Codex</option></select></label>
      <label className="flex flex-col gap-1">Nome<Input aria-label="Nome da nova conta" value={loginLabel} onChange={event=>setLoginLabel(event.target.value)} required maxLength={100}/></label>
      <Button type="submit" disabled={!loginLabel.trim()}>Adicionar conta</Button>
      {loginState?.url&&<p>Abra {loginState.url} e informe o código {loginState.userCode??'quando ele aparecer'}.</p>}

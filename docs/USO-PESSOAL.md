@@ -20,9 +20,11 @@ Abra o painel do gateway e use o pareamento já existente do Happier. Vincule a 
 
 Só contas que você possui.
 
+Neste teste o gerente e o revisor usam Claude Sonnet 5.5 em esforço médio. O programador usa Grok 4.7 em esforço médio. O QA permanece no Claude. A equipe permanente do `AGENTS.md` não muda.
+
 ```bash
-npm run gateway -- account-add /caminho/instalacao.json codex "Codex"
 npm run gateway -- account-add /caminho/instalacao.json claude "Claude"
+npm run gateway -- account-add /caminho/instalacao.json grok "Grok"
 ```
 
 O comando mostra a URL e o código. Abra a URL, informe o código e conclua o login. Para importar um `auth.json` que já é seu: acrescente `--auth-file /caminho/auth.json`. O painel tem o botão **Adicionar conta** com o mesmo fluxo. Alternar contas quando a cota acaba pode violar os termos do provedor; a decisão é sua.

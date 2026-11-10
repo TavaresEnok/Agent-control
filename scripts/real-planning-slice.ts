@@ -14,7 +14,7 @@ import {QualityPolicies} from '../src/quality-policy.ts';
 import {SemanticPlanning,planningReceiptMessage,type PlanningExecutor,type PlanningInvocation} from '../src/semantic-planning.ts';
 import {isolatedDatabase} from '../tests/fixtures/isolated-database.ts';
 
-const MODEL='claude-haiku-5-5',EFFORT='low',PROVIDER='claude-code-bench';
+const MODEL=process.env.AC_PLANNING_MODEL??'claude-haiku-5-5',EFFORT=process.env.AC_PLANNING_EFFORT??'low',PROVIDER='claude-code-bench';
 const base=process.env.AC_TEST_DATABASE_URL;
 if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
 if(process.env.AC_REAL_INFERENCE_AUTHORIZED!=='1')throw Error('REAL_INFERENCE_NOT_AUTHORIZED');

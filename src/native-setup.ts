@@ -44,7 +44,7 @@ export async function nativeSetup(path:string){
   return {state:'images_required',directory:root,next:'Exporte AC_NATIVE_PLANNING_IMAGE, AC_NATIVE_WORKER_IMAGE e AC_NATIVE_TOOLS_IMAGE (sha256:...) e rode native-setup de novo.'};
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
  try{
-  const accounts=(await ledger.pool.query("SELECT id,provider,resource_identity FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 AND a.mode='subscription_cli' AND a.provider IN ('codex','claude')",[config.project.id])).rows;
+  const accounts=(await ledger.pool.query("SELECT id,provider,resource_identity FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 AND a.mode='subscription_cli' AND a.provider IN ('codex','claude','grok')",[config.project.id])).rows;
   if(!accounts.length)return {state:'account_required',directory:root,next:'Rode account-add para codex e claude antes de native-setup.'};
   const context=(await ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived ORDER BY created_at LIMIT 1',[config.project.id])).rows[0];
   const qa=NativeQaContract.parse({schemaVersion:1,id:'personal-qa',image:images.tools,argv:['/usr/bin/node','--version'],environment:['PATH=/usr/local/bin:/usr/bin:/bin'],timeoutMs:120000,memoryBytes:268435456,pids:64,nanoCpus:500000000});

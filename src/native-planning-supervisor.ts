@@ -24,7 +24,7 @@ const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.strin
 export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
 function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
- protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude';syntheticFixture?:NativeSyntheticFixture};
+ protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude'|'grok';syntheticFixture?:NativeSyntheticFixture};
 /** Fixed Docker supervisor, not a scheduler. No HTTP-controlled image, mount,
  * command, provider address or key. Construction alone performs no inference.
  * Runtime eligibility remains an independent mandatory gate. */
@@ -80,7 +80,7 @@ export class NativePlanningSupervisor{
   await this.privateDirectory(this.config.hostRoot);const paths=this.paths(input.callId);
   const launch={schemaVersion:1,callId:input.callId,contextId:input.contextId,intentId:input.intentId,grantId:input.grantId,accountId:input.profile.accountId,profileId:input.profile.id,sessionId:input.sessionId,
    epoch:input.executionEpoch,proxyUrl:'http://provider-egress:8080',providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
-   model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(provider==='claude'?{provider:'claude' as const}:{})};
+   model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(provider!=='codex'?{provider}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
   await this.ledger.tx(async c=>{
