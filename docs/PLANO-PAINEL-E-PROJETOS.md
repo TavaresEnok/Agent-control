@@ -11,7 +11,7 @@ Atualize esta tabela a cada commit.
 | Fase | Assunto | Estado |
 |---|---|---|
 | 0 | Fechar o que já existe | limpeza feita (`76011327`, `0c6337a3`, `9d5284e7`, revisada e no ar); falta o teste no celular e um pedido real, que fica junto da prova da Fase 1 |
-| 1 | Conversar pelo painel | parte A (endpoints) com o Grok |
+| 1 | Conversar pelo painel | parte A pronta e provada com o Happier real (`52cd657d`, `9f461a5d`, correção `44500c74`); parte B (tela) com o Grok |
 | 2 | Vários projetos numa instalação | não começada |
 | 3 | Novo projeto pelo painel | não começada |
 | 4 | Projeto em outro servidor por SSH | não começada |
@@ -19,7 +19,7 @@ Atualize esta tabela a cada commit.
 | 6 | Avisos no celular e entrada sem o app Happier | não começada |
 | 7 | Fechamento | não começada |
 
-Último commit conferido: `9d5284e7` (limpeza do painel no ar em `https://agentcontrol.tokstiloesporte.com`).
+Último commit conferido: `44500c74` (leitura e envio da conversa pelo gateway, provados no IspAgent).
 
 ## Aonde queremos chegar
 
