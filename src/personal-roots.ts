@@ -102,7 +102,7 @@ async function main(){
   }
   if(action==='add'){
    const labelAt=rest.indexOf('--label'),label=labelAt<0?undefined:rest[labelAt+1];
-   const positionals=rest.filter((arg,index)=>arg!=='--label'&&index!==labelAt+1);
+   const positionals=rest.filter((arg,index)=>arg!=='--label'&&(labelAt<0||index!==labelAt+1));
    const folder=positionals[0];
    if(!folder||positionals.length!==1||(labelAt>=0&&!label)){console.log(usage);process.exit(1);}
    const result=await addPersonalRoot(file,folder,label);
