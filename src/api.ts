@@ -168,10 +168,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   app.post('/api/v1/ac/personal/messages',async c=>{
     if(!personalAccounts)return c.json({error:'NOT_FOUND'},404);
     const input=personalMessageInput.parse(await c.req.json());
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
     const claim=claimPersonalSend(panelSends,runtime.projectId,input.clientId);
     if(!claim.fresh){c.header('Cache-Control','no-store');return c.json({id:claim.id},202);}
     try{
-      if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
       await personalAccounts.sendMessage(c.get('principal'),{text:input.text,localId:claim.id});
     }catch(error){releasePersonalSend(panelSends,runtime.projectId,input.clientId,claim.id);throw error;}
     c.header('Cache-Control','no-store');
