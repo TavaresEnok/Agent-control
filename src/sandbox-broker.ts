@@ -75,7 +75,11 @@ export class DockerDaemon{
  async imagePresent(imageId:string){if(!/^sha256:[a-f0-9]{64}$/.test(imageId))throw new Refusal('DOCKER_IMAGE_INVALID');
   const r=await this.call('GET',`/v1.44/images/${imageId}/json`);if(r.status===200)return true;if(r.status===404)return false;throw new Refusal('DOCKER_UNCERTAIN');}
  async create(name:string,configuration:object){const r=await this.call('POST',`/v1.44/containers/create?name=${encodeURIComponent(name)}`,configuration);
-  if(r.status!==201)throw new Refusal('DOCKER_CREATE_UNCERTAIN');return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(r.body.toString('utf8'))).Id;}
+  if(r.status===201)return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(r.body.toString('utf8'))).Id;
+  // A received 4xx with a Docker error body proves this create did not happen. 409 means the name is already taken, which is not that proof.
+  if(r.status>=400&&r.status<500&&r.status!==409){let message:unknown;try{message=JSON.parse(r.body.toString('utf8')).message;}catch{message=undefined;}
+   if(typeof message==='string'&&message.length>0)throw new Refusal('DOCKER_CREATE_REFUSED');}
+  throw new Refusal('DOCKER_CREATE_UNCERTAIN');}
  async start(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/start`);if(r.status!==204)throw new Refusal('DOCKER_START_UNCERTAIN');}
  async stop(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/stop?t=3`);if(![204,304].includes(r.status))throw new Refusal('DOCKER_STOP_UNCERTAIN');}
  async remove(id:string){const r=await this.call('DELETE',`/v1.44/containers/${id}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}

@@ -73,7 +73,7 @@ export class SemanticPlanning{
   });
   const inputDigest=String(call.input_digest);
   if(call.state==='published'){await this.retireTerminalResult(principal,input,authority,call);return call.result;}
-  if(call.state==='rejected'){if(call.failure_code!=='NATIVE_IMAGE_MISSING')await this.retireTerminalResult(principal,input,authority,call);throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');}
+  if(call.state==='rejected'){if(call.failure_code!=='NATIVE_IMAGE_MISSING'&&call.failure_code!=='DOCKER_CREATE_REFUSED')await this.retireTerminalResult(principal,input,authority,call);throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');}
   if(call.state==='ready')return this.publish(principal,input,authority);
   let grantId:string=call.grant_id;
   if(!grantId){const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:call.attempt_id,intentId:input.intentId,contextId:input.contextId,role:'manager'},authority);grantId=grant.id;}
@@ -112,11 +112,15 @@ export class SemanticPlanning{
   let outcome:Awaited<ReturnType<PlanningExecutor['execute']>>|null;
   try{await assertAuthorized();outcome=launch.reconcile?await executor.reconcile(invocation):await executor.execute(invocation);}
   catch(error){
-   if(error instanceof Refusal&&error.code==='NATIVE_IMAGE_MISSING')await this.ledger.tx(async c=>{
+   if(error instanceof Refusal&&(error.code==='NATIVE_IMAGE_MISSING'||error.code==='DOCKER_CREATE_REFUSED'))await this.ledger.tx(async c=>{
     await this.authorize(c,principal,authority,input.intentId,true);
     const saved=(await c.query('SELECT state FROM ac_semantic_planning_calls WHERE id=$1 FOR UPDATE',[input.id])).rows[0];
-    const job=(await c.query('SELECT 1 FROM ac_native_planning_jobs WHERE id=$1',[input.id])).rowCount;
-    if(saved?.state==='uncertain'&&!job)await c.query("UPDATE ac_semantic_planning_calls SET state='rejected',failure_code='NATIVE_IMAGE_MISSING' WHERE id=$1",[input.id]);
+    const job=(await c.query('SELECT container_id FROM ac_native_planning_jobs WHERE id=$1',[input.id])).rows[0];
+    const grant=(await c.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[grantId])).rows[0];
+    const unstarted=grant?.state==='released'&&grant.physical_receipt?.executionStarted===false;
+    const imageMissing=error.code==='NATIVE_IMAGE_MISSING'&&saved?.state==='uncertain'&&!job;
+    const refused=error.code==='DOCKER_CREATE_REFUSED'&&saved?.state==='uncertain'&&job&&!job.container_id&&unstarted;
+    if(imageMissing||refused)await c.query("UPDATE ac_semantic_planning_calls SET state='rejected',failure_code=$2 WHERE id=$1",[input.id,error.code]);
    });
    if(error instanceof Refusal)throw error;throw new Refusal('PLANNING_RESULT_UNCERTAIN');
   }

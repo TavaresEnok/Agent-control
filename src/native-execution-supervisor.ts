@@ -8,7 +8,7 @@ import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {requireRecoveryInventory} from './recovery-inventory.ts';
-import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
+import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {mkdir,lstat,realpath,writeFile,open,rename,cp,rm} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
@@ -231,7 +231,8 @@ export class NativeExecutionSupervisor{
   if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
   const toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
   const host=(networkId:string,mounts:typeof toolsMounts)=>({NetworkMode:networkId,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,Tmpfs:{'/tmp':'rw,nosuid,nodev,size=64m'},Binds:mounts.map(m=>m.source+':'+m.destination+(m.writable?':rw':':ro'))});
-  const started=await this.serialEffect(input.jobId,async()=>{
+  let started:{network:string;tools:string;worker:string};
+  try{started=await this.serialEffect(input.jobId,async()=>{
    const network=await this.effect(principal,authority,input,()=>this.docker.createPrivateNetwork('ac-native-exec-'+input.jobId,labels));
    await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET network_id=$2 WHERE id=$1',[input.jobId,network]);
    const tools=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-tools-'+input.jobId,{Image:this.config.toolsImage,User:this.user,WorkingDir:'/work',Entrypoint:toolsEntrypoint,Cmd:[],Env:[...this.config.toolsEnv],Labels:labels,HostConfig:host(network,toolsMounts)}));
@@ -241,7 +242,24 @@ export class NativeExecutionSupervisor{
    // The CLI wrapper waits for a signed launch. No account is opened yet.
    await this.effect(principal,authority,input,()=>this.docker.start(tools));await this.effect(principal,authority,input,()=>this.docker.start(worker));
    return {network,tools,worker};
-  });
+  });}
+  catch(error){
+   if(!(error instanceof Refusal)||error.code!=='DOCKER_CREATE_REFUSED')throw error;
+   const released=await this.ledger.tx(async c=>{
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+    const row=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2 FOR UPDATE',[input.jobId,authority.contextId])).rows[0];
+    if(!row||row.state!=='uncertain'||row.worker_id||row.tools_id)return false;
+    if(row.network_id)await retireNativePrivateNetwork(this.docker,{networkId:row.network_id,providerNetworkId:this.config.providerNetworkId,jobId:input.jobId,inputDigest:row.input_digest});
+    let worker;let tools;try{worker=await this.docker.inspect('ac-native-worker-'+input.jobId);tools=await this.docker.inspect('ac-native-tools-'+input.jobId);}catch{return false;}
+    if(worker||tools)return false;
+    await cancelPreparedNativeResources(c,this.docker,input.jobId,input.grantId,authority);
+    const receipt={executionStarted:false,jobId:input.jobId,containerId:null,networkId:row.network_id??null,synthetic:Boolean(this.config.syntheticFixture),modelInference:false,reason:'docker_create_refused'};
+    const updated=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
+    return updated.rowCount===1;
+   });
+   if(!released)throw error;
+   throw error;
+  }
   const {network,tools,worker}=started;
   const physical=await this.docker.inspectPrivateNetwork(network);const address=physical?.Containers?.[tools]?.IPv4Address?.split('/')[0];
   const expected={jobId:input.jobId,launchDigest:hash,workerImage:this.config.workerImage,toolsImage:this.config.toolsImage,workerUser:this.user,toolsUser:this.user,providerNetwork:this.config.providerNetworkId,networkId:network,toolsAddress:address,workerMounts,toolsMounts,role:input.role,phase:'gated-running'};
@@ -766,5 +784,5 @@ export class NativeExecutionSupervisor{
   catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}
  }
 }
-function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
+function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_')&&error.code!=='DOCKER_CREATE_REFUSED';}
 export type NativeExecutionRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost'|'network_unproven';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};

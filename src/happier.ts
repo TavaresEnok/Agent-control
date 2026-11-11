@@ -594,7 +594,7 @@ export class HappierEndpoint {
         if(!['done','failed','canceled','cancelled'].includes(intent.state))try{await this.processSemanticProposal(intent);}catch(error){
           if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.id,source:'manager',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}
           if(error instanceof Refusal&&['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code)){capacityWait??=error;continue;}
-          if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED','NATIVE_IMAGE_MISSING'].includes(error.code)){
+          if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED','NATIVE_IMAGE_MISSING','DOCKER_CREATE_REFUSED'].includes(error.code)){
             const localId=(error.code==='NATIVE_IMAGE_MISSING'?'images-missing-':'proposal-failed-')+intent.id;
             const text=error.code==='NATIVE_IMAGE_MISSING'?nativeImagesRemovedNotice:'A geração da proposta falhou. Consulte o diagnóstico desta conversa antes de continuar.';
             const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal-failed'}}};

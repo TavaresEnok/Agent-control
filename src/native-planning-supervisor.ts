@@ -1,6 +1,6 @@
 import {assertModelAllowed} from './model-policy.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
-import {proveUncreatedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
+import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {constants} from 'node:fs';
 import {open,lstat,realpath,mkdir,writeFile} from 'node:fs/promises';
@@ -22,7 +22,7 @@ const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),
  usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
-function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
+function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_')&&error.code!=='DOCKER_CREATE_REFUSED';}
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
  protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude'|'grok';syntheticFixture?:NativeSyntheticFixture;
  /** false: registered only to reconcile calls it left uncertain (a replaced image); never launches new work. */
@@ -108,7 +108,8 @@ export class NativePlanningSupervisor{
   await mkdir(paths.root,{mode:0o700});for(const path of [paths.input,paths.output,paths.planning])await mkdir(path,{mode:0o700});
   await writeFile(join(paths.input,'launch.json'),JSON.stringify(signed),{mode:0o600,flag:'wx'});await writeFile(paths.key,this.publicKey,{mode:0o600,flag:'wx'});
   await input.assertAuthorized();
-  const id=await this.serialEffect(input.callId,()=>this.ledger.tx(async c=>{
+  let id:string;
+  try{id=await this.serialEffect(input.callId,()=>this.ledger.tx(async c=>{
    await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,input.contextId,input.intentId);
    await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
    const active=(await c.query(`SELECT g.state,a.enabled account_enabled,p.enabled profile_enabled,ac_profile_quota_status(a.id,p.model) status,q.expires_at>clock_timestamp() fresh
@@ -120,7 +121,19 @@ export class NativePlanningSupervisor{
    HostConfig:{NetworkMode:this.config.providerNetwork,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,
     Tmpfs:{'/tmp':'rw,nosuid,nodev,noexec,size=64m'},Binds:[join(this.config.accountRoot,input.profile.accountId)+':/account:rw',paths.input+':/input:ro',paths.output+':/output:rw',paths.planning+':/planning:ro',paths.key+':/runner/planning-public-key.pem:ro']}});
    await this.docker.start(id);return id;
-  }));
+  }));}
+  catch(error){
+   if(!(error instanceof Refusal)||error.code!=='DOCKER_CREATE_REFUSED')throw error;
+   const receipt={executionStarted:false,jobId:input.callId,containerId:null,synthetic:Boolean(this.config.syntheticFixture),modelInference:false,reason:'docker_create_refused'};
+   const released=await this.ledger.tx(async c=>{await this.ledger.authorize(c,identity.principal,input.contextId);await this.ledger.fence(c,authority,true);
+    const job=(await c.query('SELECT state,container_id FROM ac_native_planning_jobs WHERE id=$1 FOR UPDATE',[input.callId])).rows[0];
+    if(!job||job.state!=='uncertain'||job.container_id)return false;
+    await cancelPreparedNativeResources(c,this.docker,input.callId,input.grantId,authority);
+    const updated=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
+    return updated.rowCount===1;});
+   if(!released)throw new Refusal('PLANNING_RESULT_UNCERTAIN');
+   throw error;
+  }
   await this.ledger.pool.query('UPDATE ac_native_planning_jobs SET container_id=$2 WHERE id=$1',[input.callId,id]);
   await this.ledger.tx(async c=>{await c.query("UPDATE ac_native_planning_jobs SET state='running' WHERE id=$1 AND state='uncertain'",[input.callId]);await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='reserved'",[input.grantId]);});
   // One bounded observation window. Retries use only reconcile(), never start().

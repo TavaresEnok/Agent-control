@@ -104,7 +104,7 @@ export class NativeQa{
   try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);await setQaSnapshotPermissions(p.work,true);}
   catch(error){
    // This catch covers only preparation, before the first Docker request.
-   // A later create/start failure remains uncertain and is never freed here.
+   // A later lost create/start response remains uncertain. A received create refusal is freed below.
    const diagnostic=Buffer.from(JSON.stringify({source:'controller',error:'QA_PREPARATION_FAILED'}));
    const receipt={schemaVersion:1,jobId:stage.id,artifactId:artifact.id,grantId,sessionId:stage.session_id,contractDigest:this.verifierDigest,executionStarted:false,exitCode:-1,status:'missing_result',logSha256:createHash('sha256').update(diagnostic).digest('hex'),logsAvailable:false,synthetic:false,modelInference:false,failureCode:error instanceof Refusal?error.code:'QA_PREPARATION_FAILED'};
    await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
@@ -116,13 +116,27 @@ export class NativeQa{
    });return {state:'failed' as const,receipt};
   }
   const image=this.contract.image;
-  const id=await this.ledger.tx(async c=>{
+  let id:string;
+  try{id=await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);
    const job=(await c.query("SELECT * FROM ac_native_qa_jobs WHERE id=$1 AND state='uncertain' FOR UPDATE",[stage.id])).rows[0];if(!job||Number(job.manager_epoch)!==authority.epoch||job.request_digest!==hash)throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
    const id=await this.docker.create('ac-native-qa-'+stage.id,{Image:image,User:'10001:10001',WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment],Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':stage.id,'agent-control.request':hash},
     HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[p.work+':/work:ro']}});
    await this.docker.start(id);return id;
-  });
+  });}
+  catch(error){
+   // A received create refusal proves no container exists. A lost start response stays uncertain.
+   if(!(error instanceof Refusal)||error.code!=='DOCKER_CREATE_REFUSED')throw error;
+   const diagnostic=Buffer.from(JSON.stringify({source:'controller',error:'DOCKER_CREATE_REFUSED'}));
+   const receipt={schemaVersion:1,jobId:stage.id,artifactId:artifact.id,grantId,sessionId:stage.session_id,contractDigest:this.verifierDigest,executionStarted:false,exitCode:-1,status:'missing_result',logSha256:createHash('sha256').update(diagnostic).digest('hex'),logsAvailable:false,synthetic:false,modelInference:false,failureCode:'DOCKER_CREATE_REFUSED'};
+   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
+    const row=(await c.query("SELECT state,container_id FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE",[stage.id])).rows[0];
+    const grant=(await c.query('SELECT state FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
+    if(row?.state!=='uncertain'||row.container_id||grant?.state!=='uncertain')throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
+    await cancelPreparedNativeResources(c,this.docker,stage.id,grantId,authority);
+    await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
+   });return {state:'failed' as const,receipt};
+  }
   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);await c.query("UPDATE ac_native_qa_jobs SET container_id=$2,state='running' WHERE id=$1 AND state='uncertain'",[stage.id,id]);await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='uncertain'",[grantId]);});
   return {state:'running' as const};
  }
