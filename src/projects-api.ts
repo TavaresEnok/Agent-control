@@ -45,7 +45,7 @@ export function createProjectGateway(options:ProjectGatewayOptions){
    if(!id.safeParse(selected).success)return Response.json({error:'INVALID_PROJECT_ID'},{status:400});
    if(path==='/api/v1/ac/projects'&&request.method==='GET'){
     const projects=await options.projects.list(principal);
-    return Response.json({projects,selectedProjectId:projects.some(p=>p.id===selected)?selected:null},{headers:{'cache-control':'no-store'}});
+    return Response.json({projects,selectedProjectId:projects.some(p=>p.id===selected)?selected:null,primaryProjectId:options.defaultProjectId},{headers:{'cache-control':'no-store'}});
    }
    if(scoped&&scoped[1]!=='default'&&scoped[1]!==selected)throw new Refusal('PROJECT_FORBIDDEN',403);
    if((path==='/api/v1/projects'||/^\/api\/v1\/p\/[^/]+\/projects$/.test(path))&&request.method==='GET'){

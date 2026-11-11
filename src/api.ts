@@ -1,5 +1,5 @@
 import {listPersonalFolders,type PersonalFolderRoot} from './personal-folders.ts';
-import {createPersonalProject} from './personal-panel-projects.ts';
+import {archivePersonalProject,createPersonalProject} from './personal-panel-projects.ts';
 import {ownerRequest} from './personal-owner-request.ts';
 import {claimPersonalSend,parseConversationQuery,personalMessageInput,releasePersonalSend} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
@@ -150,6 +150,14 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
     const input=z.object({root:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),path:z.string().max(512).default(''),label:z.string().min(1).max(200)}).strict().parse(await c.req.json());
     const body=await createPersonalProject({installationPath:personalPanel.installationPath,roots:personalPanel.roots,rootId:input.root,relativePath:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label))});
+    if(body.restarting)personalPanel.scheduleRestart();
+    c.header('Cache-Control','no-store');
+    return c.json(body,202);
+  });
+  app.post('/api/v1/ac/personal/projects/:id/archive',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const body=await archivePersonalProject({installationPath:personalPanel.installationPath,projectId:Id.parse(c.req.param('id')),ledger,underSystemd:Boolean(process.env.INVOCATION_ID)});
     if(body.restarting)personalPanel.scheduleRestart();
     c.header('Cache-Control','no-store');
     return c.json(body,202);

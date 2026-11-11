@@ -1,5 +1,10 @@
+import {chmod,readFile,rename,writeFile} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import {dirname,join} from 'node:path';
 import {resolvePersonalFolder,type PersonalFolderRoot} from './personal-folders.ts';
 import {Refusal} from './contracts.ts';
+import {Installation,loadInstallation} from './installation.ts';
+import type {Ledger} from './ledger.ts';
 
 let personalProjectBusy=false;
 
@@ -30,4 +35,42 @@ export async function createPersonalProject(input:{
   if(error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/.test(error.message))throw new Refusal(error.message,error.message==='DATA_DIRECTORY_PATH_FORBIDDEN'||error.message==='PERSONAL_ACTIVATION_REQUIRED'?403:409);
   throw error;
  }finally{personalProjectBusy=false;}
+}
+
+/** Removes a secondary project from the installation and archives its contexts. Repository files and the Happier conversation stay. */
+export async function archivePersonalProject(input:{installationPath:string;projectId:string;ledger:Ledger;underSystemd:boolean}):Promise<PersonalProjectCreateResult>{
+ if(personalProjectBusy)throw new Refusal('PROJECT_CREATION_BUSY',409);
+ personalProjectBusy=true;
+ try{
+  const config=await loadInstallation(input.installationPath);
+  if(input.projectId===config.project.id)throw new Refusal('PRIMARY_PROJECT_FORBIDDEN',403);
+  const inFile=config.projects.some(project=>project.id===input.projectId);
+  const inDb=Boolean((await input.ledger.pool.query('SELECT 1 FROM ac_projects WHERE id=$1',[input.projectId])).rowCount);
+  if(!inFile&&!inDb)throw new Refusal('PROJECT_NOT_FOUND',404);
+  if(inFile){
+   const raw=JSON.parse(await readFile(input.installationPath,'utf8')) as {projects?:unknown;managerTransport?:Installation['managerTransport']};
+   raw.projects=config.projects.filter(project=>project.id!==input.projectId);
+   if(config.managerTransport)raw.managerTransport={...config.managerTransport,contexts:config.managerTransport.contexts.filter(item=>item.projectId!==input.projectId)};
+   if(!Installation.safeParse(raw).success)throw new Refusal('INVALID_INSTALLATION',409);
+   await backupArchive(input.installationPath);
+   await writePrivate(input.installationPath,JSON.stringify(raw,null,2)+'\n');
+  }
+  if(inDb)await input.ledger.tx(async client=>{
+   await client.query('UPDATE ac_contexts SET archived=true WHERE project_id=$1 AND NOT archived',[input.projectId]);
+   await client.query('DELETE FROM ac_project_repositories WHERE project_id=$1',[input.projectId]);
+  });
+  const restarting=input.underSystemd;
+  return {projectId:input.projectId,restarting,restartRequired:!restarting};
+ }finally{personalProjectBusy=false;}
+}
+
+async function backupArchive(installationPath:string){
+ const target=join(dirname(installationPath),'installation.json.before-archive');
+ try{await writeFile(target,await readFile(installationPath),{mode:0o600,flag:'wx'});}
+ catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+ await chmod(target,0o600);
+}
+async function writePrivate(path:string,content:string){
+ const temporary=path+'.'+randomUUID()+'.tmp';
+ await writeFile(temporary,content,{mode:0o600,flag:'wx'});await chmod(temporary,0o600);await rename(temporary,path);
 }
