@@ -225,6 +225,13 @@ export class ManagerRegistry{
   await this.assertPanelOwner(principal,entry);
   return entry.endpoint.readPanelConversation(after,limit);
  }
+ async enqueuePanelMessage(principal:string,text:string,localId:string){
+  const entry=this.panelEntry();
+  const enqueue=entry.endpoint?.enqueueOwnerMessage;
+  if(!enqueue)throw new Refusal('CONVERSATION_UNAVAILABLE',503);
+  await this.assertPanelOwner(principal,entry);
+  return enqueue(text,localId);
+ }
  /** Live read fence. A closed registry, a known authority error, or a stale ledger row is empty.
   * Does not start an endpoint, load a key, dispose the entry or replay work. */
  async boundAuthority(contextId:string):Promise<Authority|undefined>{

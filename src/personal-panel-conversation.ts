@@ -17,6 +17,31 @@ export function parseConversationQuery(raw: {after?: string; limit?: string}): {
   });
 }
 
+export const personalMessageInput = z.object({
+  text: z.string().min(1).max(8000),
+  clientId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+}).strict();
+
+/** Stable Happier local id for one panel send. A repeated clientId keeps this id. */
+export function personalPanelLocalId(clientId: string) {
+  return 'panel-' + clientId;
+}
+
+/** Records the first send for a clientId. A second call is the same entry and must not send again. */
+export function claimPersonalSend(seen: Map<string, string>, projectId: string, clientId: string): {id: string; fresh: boolean} {
+  const key = projectId + '\0' + clientId;
+  const id = personalPanelLocalId(clientId);
+  const previous = seen.get(key);
+  if (previous) return {id: previous, fresh: false};
+  seen.set(key, id);
+  return {id, fresh: true};
+}
+
+export function releasePersonalSend(seen: Map<string, string>, projectId: string, clientId: string, id: string) {
+  const key = projectId + '\0' + clientId;
+  if (seen.get(key) === id) seen.delete(key);
+}
+
 /** One visible row, or null when the decrypted record is not owner/manager text. */
 export function panelMessageFromRecord(id: string, createdAtMs: number, record: unknown): PanelMessage | null {
   if (!Number.isFinite(createdAtMs) || !record || typeof record !== 'object') return null;

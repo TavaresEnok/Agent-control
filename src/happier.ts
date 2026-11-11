@@ -149,7 +149,9 @@ export async function readPanelTranscript(baseUrl: string, sessionId: string, to
       if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
       return response.json();
     }, options.timeoutMs ?? 10000, options.signal);
-    return HistoryPage.parse(data);
+    const parsed = HistoryPage.safeParse(data);
+    if (!parsed.success) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+    return parsed.data;
   };
   const visible = (message: {id: string; seq: number; createdAt: number; content: unknown}) => {
     const row = panelMessageFromRecord(message.id, message.createdAt, decryptHistoryContent(boundary, key, variant, message.content));
@@ -754,6 +756,27 @@ export class HappierEndpoint {
     if (this.lifecycle.signal.aborted) throw new Refusal('MANAGER_STOPPED');
     await this.validateLink();
     return readPanelTranscript(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, this.options.encryptionVariant ?? 'legacy', () => this.validateLink(), {after, limit, signal: this.lifecycle.signal, timeoutMs: this.options.transportTimeoutMs ?? 10000});
+  }
+  private async postSession(path: string, body: unknown): Promise<number> {
+    const response = await boundedNetwork(async signal => fetch(new URL(path, this.options.baseUrl), {
+      method: 'POST', headers: {authorization: 'Bearer ' + this.options.token, 'content-type': 'application/json'},
+      body: JSON.stringify(body), redirect: 'error', signal,
+    }), this.options.transportTimeoutMs ?? 10000, this.lifecycle.signal);
+    await response.body?.cancel().catch(() => {});
+    return response.status;
+  }
+  /** Queue the text as the owner, the way the Happier app does, so receivePending accepts it.
+   * A rejected queue falls back to accept() and a transcript copy of the same ciphertext. */
+  async enqueueOwnerMessage(text: string, localId: string): Promise<void> {
+    if (this.lifecycle.signal.aborted) throw new Refusal('MANAGER_STOPPED');
+    await this.validateLink();
+    const ciphertext = this.seal({role: 'user', content: {type: 'text', text}});
+    const queued = await this.postSession('/v2/sessions/' + encodeURIComponent(this.options.sessionId) + '/pending', {ciphertext, localId});
+    if (queued === 200 || queued === 409) return;
+    if (queued !== 400 && queued !== 401 && queued !== 403 && queued !== 404) throw new Refusal('OWNER_MESSAGE_NOT_QUEUED');
+    await this.accept({text, localId});
+    const mirrored = await this.postSession('/v2/sessions/' + encodeURIComponent(this.options.sessionId) + '/messages', {ciphertext, localId});
+    if (mirrored !== 200 && mirrored !== 409 && mirrored !== 400) throw new Refusal('OWNER_MESSAGE_NOT_RECORDED');
   }
   close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.socket.disconnect(); }
 }
