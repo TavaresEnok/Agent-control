@@ -19,6 +19,7 @@ import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
 import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { Link } from '@/lib/project-router'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -162,11 +163,13 @@ function scrollAncestors(el: HTMLElement): Array<[Element, number]> {
 
 export function Composer(props: ComposerProps) {
   if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') {
-    const runId = typeof window === 'undefined' ? undefined : window.location.pathname.match(/\/tasks\/([a-f0-9-]{36})(?:\/|$)/)?.[1]
-    return <div role="status" data-testid="canonical-happier-conversation" className="p-4 text-sm">
-      A conversa oficial está no Happier.
-      {runId && <a className="ml-2 underline" href={`/api/v1/ac/runs/${runId}/conversation`}>Abrir conversa deste contexto</a>}
-    </div>
+    return (
+      <div role="status" data-testid="canonical-happier-conversation" className="p-4 text-sm">
+        <Button asChild variant="outline">
+          <Link to="/conversa">Falar com o gerente</Link>
+        </Button>
+      </div>
+    )
   }
   return <NativeComposer {...props} />
 }
