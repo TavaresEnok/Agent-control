@@ -175,6 +175,10 @@ class ExecutionRecoveryMemory{
    grant.state='released';grant.physical_receipt=params[1];return wrote(1);
   }
   if(text.startsWith('SELECT project_id FROM ac_contexts WHERE id=$1'))return selected([]);
+  if(text.startsWith('SELECT repo FROM ac_project_repositories WHERE project_id=$1')){
+   const row=this.tables.ac_project_repositories?.find(item=>item.project_id===params[0]);
+   return row?selected([{repo:row.repo}]):selected([]);
+  }
   throw Error('UNHANDLED_SQL '+text);
  }
 }
@@ -192,6 +196,7 @@ async function executionRecoveryOnSubstitute(){
  const project=randomUUID(),principal='exec-recover-'+randomUUID(),account=randomUUID(),profile=randomUUID(),context=randomUUID(),instance=randomUUID(),intent=randomUUID(),operation=randomUUID();
  const subject='a'.repeat(64);
  memory.insert('ac_projects',{id:project});memory.insert('ac_memberships',{project_id:project,principal_id:principal,role:'owner'});
+ memory.insert('ac_project_repositories',{project_id:project,repo});
  memory.insert('ac_contexts',{id:context,project_id:project,paused:false,archived:false});
  memory.insert('ac_managers',{context_id:context,instance_id:instance,epoch:1,lease_until:Date.now()+60_000});
  memory.insert('ac_admission_control',{id:1,enabled:true});
@@ -437,6 +442,7 @@ test('native execution recovery stops running tools after the worker exits and k
  for(const path of [repo,spool,accounts]){await mkdir(path,{mode:0o700});await chmod(path,0o700);}
  const project=randomUUID(),principal='exec-tools-'+randomUUID(),account=randomUUID(),profile=randomUUID(),context=randomUUID(),instance=randomUUID(),intent=randomUUID();
  memory.insert('ac_projects',{id:project});memory.insert('ac_memberships',{project_id:project,principal_id:principal,role:'owner'});
+ memory.insert('ac_project_repositories',{project_id:project,repo});
  memory.insert('ac_contexts',{id:context,project_id:project,paused:false,archived:false});
  memory.insert('ac_managers',{context_id:context,instance_id:instance,epoch:1,lease_until:Date.now()+60_000});
  memory.insert('ac_admission_control',{id:1,enabled:true});
@@ -494,6 +500,7 @@ test('native execution recovery interrupts an in-flight create or start and lets
  for(const path of [repo,spool,accounts]){await mkdir(path,{mode:0o700});await chmod(path,0o700);}
  const project=randomUUID(),principal='exec-boundary-'+randomUUID(),account=randomUUID(),profile=randomUUID(),context=randomUUID(),instance=randomUUID(),intent=randomUUID();
  memory.insert('ac_projects',{id:project});memory.insert('ac_memberships',{project_id:project,principal_id:principal,role:'owner'});
+ memory.insert('ac_project_repositories',{project_id:project,repo});
  memory.insert('ac_contexts',{id:context,project_id:project,paused:false,archived:false});
  memory.insert('ac_managers',{context_id:context,instance_id:instance,epoch:1,lease_until:Date.now()+60_000});
  memory.insert('ac_admission_control',{id:1,enabled:true});

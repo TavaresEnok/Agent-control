@@ -40,7 +40,7 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
  if(v.role!=='programmer'&&(!v.artifactId||!v.outputSchema||v.writePaths.length))c.addIssue({code:'custom',message:'READONLY_ARTIFACT_REQUIRED'});
 });
 type Input=z.infer<typeof NativeExecutionRequest>;
-export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository:string;
+export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
  workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture};
 export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null};
@@ -83,8 +83,9 @@ export class NativeExecutionSupervisor{
   Hash.parse(config.providerNetworkId);
   if(config.syntheticFixture)assertNativeSyntheticFixture(config.syntheticFixture,config);
   const uid=process.getuid?.(),gid=process.getgid?.();if(!uid||!gid)throw new Refusal('NATIVE_WORKER_NON_ROOT_REQUIRED');this.user=`${uid}:${gid}`;
-  if([config.hostRoot,config.accountRoot,config.repository,...config.protectedRepositories].some(p=>resolve(p)!==p)||
-   [config.accountRoot,config.repository,...config.protectedRepositories].some(p=>p===config.hostRoot||p.startsWith(config.hostRoot+sep)||config.hostRoot.startsWith(p+sep))||[config.repository,...config.protectedRepositories].some(p=>p===config.accountRoot||p.startsWith(config.accountRoot+sep)||config.accountRoot.startsWith(p+sep)))throw new Refusal('NATIVE_EXECUTION_PATH_INVALID');
+  const repositories=[...(config.repository?[config.repository]:[]),...config.protectedRepositories];
+  if([config.hostRoot,config.accountRoot,...repositories].some(p=>resolve(p)!==p)||
+   [config.accountRoot,...repositories].some(p=>p===config.hostRoot||p.startsWith(config.hostRoot+sep)||config.hostRoot.startsWith(p+sep))||repositories.some(p=>p===config.accountRoot||p.startsWith(config.accountRoot+sep)||config.accountRoot.startsWith(p+sep)))throw new Refusal('NATIVE_EXECUTION_PATH_INVALID');
   this.config=Object.freeze({...config,workerEnv:Object.freeze([...config.workerEnv]),toolsEnv:Object.freeze([...config.toolsEnv]),protectedRepositories:Object.freeze([...config.protectedRepositories]),accountSubjects:Object.freeze(config.accountSubjects.map(x=>Object.freeze({...x})))});
   for(const item of config.accountSubjects){Id.parse(item.accountId);Hash.parse(item.subjectDigest);if(this.subjects.has(item.accountId))throw new Refusal('NATIVE_EXECUTION_ACCOUNT_DUPLICATE');this.subjects.set(item.accountId,item.subjectDigest);}
   this.key=createPrivateKey(config.signingKeyPem);if(this.key.asymmetricKeyType!=='ed25519')throw new Refusal('NATIVE_EXECUTION_KEY_INVALID');
@@ -104,8 +105,7 @@ export class NativeExecutionSupervisor{
  private async identity(c:pg.PoolClient,principal:string,authority:Authority,input:Input){
   const context=await this.scope(c,principal,authority,input);
   const provider=this.config.syntheticFixture?.provider??this.config.provider??'codex',mode=this.config.syntheticFixture?'synthetic':'subscription_cli';
-  const registered=(await c.query('SELECT repo FROM ac_project_repositories WHERE project_id=$1',[context.project_id])).rows[0];
-  if(registered?.repo!==this.config.repository)throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');
+  await this.jobRepository(c,String(context.project_id));
   await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
   const g=(await c.query(`SELECT g.*,a.provider,a.mode,a.enabled account_enabled,a.eligibility,a.resource_identity,p.enabled profile_enabled,p.model,p.effort,p.role profile_role
    FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id AND p.account_id=a.id
@@ -201,8 +201,9 @@ export class NativeExecutionSupervisor{
    if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
    else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
   });
+  const repository=await this.jobRepository(this.ledger.pool,String(g.project_id));
   const p=this.paths(input.jobId);await mkdir(p.root,{mode:0o700});await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
-  await new GitArtifacts(this.config.repository).snapshot(input.base,input.base,p.work);
+  await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
   await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});const token=randomBytes(32).toString('hex');
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
@@ -214,7 +215,7 @@ export class NativeExecutionSupervisor{
    await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
    // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
    const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
-   if(reviewed?.base_id){const change=await new GitArtifacts(this.config.repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
+   if(reviewed?.base_id){const change=await new GitArtifacts(repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
   }
   // Only the personal Claude and Grok programmers edit the checkout from the worker itself. Every other case keeps the
   // original split: the credentialed worker has no /work and the tools container owns the checkout.
@@ -501,8 +502,24 @@ export class NativeExecutionSupervisor{
   return {state:'reconciled' as const};
  }
  private async validateReplay(principal:string,authority:Authority,input:Input,row:Record<string,any>){
-  await this.ledger.tx(c=>this.scope(c,principal,authority,input,true));
+  await this.ledger.tx(async c=>{const context=await this.scope(c,principal,authority,input,true);await this.jobRepository(c,String(context.project_id));});
   if(row.context_id!==authority.contextId||row.intent_id!==input.intentId||row.grant_id!==input.grantId||row.session_id!==input.sessionId||row.input_digest!==digest(input)||row.executor_digest!==this.executorDigest||row.key_fingerprint!==this.fingerprint||Number(row.manager_epoch)>authority.epoch)throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+ }
+ /** Checkout registered for the job's project. Compared after realpath.
+  * config.repository, when present, is an extra pin: only that checkout is valid. */
+ private async jobRepository(c:pg.Pool|pg.PoolClient,projectId:string){
+  const registered=(await c.query('SELECT repo FROM ac_project_repositories WHERE project_id=$1',[projectId])).rows[0];
+  if(typeof registered?.repo!=='string'||!registered.repo)throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');
+  let resolved:string;try{resolved=await realpath(registered.repo);}catch{throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');}
+  const allowed=new Set<string>();
+  for(const candidate of this.config.protectedRepositories){try{allowed.add(await realpath(candidate));}catch{/* an unresolvable entry grants nothing */}}
+  if(this.config.repository){
+   let pinned:string;try{pinned=await realpath(this.config.repository);}catch{throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');}
+   if(resolved!==pinned)throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');
+   allowed.add(pinned);
+  }
+  if(!allowed.has(resolved))throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');
+  return resolved;
  }
  private async readResult(input:Input,exitCode:number){
   const p=this.paths(input.jobId);await this.directory(p.root);await this.directory(p.output);
@@ -592,10 +609,11 @@ export class NativeExecutionSupervisor{
   const artifact=NativeArtifactIdentity.parse(outcome.artifact);
   const secrets=await readNativeArtifactSecrets(this.paths(jobId).secretSnapshot,jobId,this.key);
   await new GitArtifacts(this.paths(jobId).work).assertNoNewArtifactSecrets(artifact.commit,artifact.base,secrets);
-  const revision=await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,false);
+  const revision=await this.ledger.tx(async c=>{const context=await this.scope(c,principal,authority,input,false);
    const contract=(await c.query('SELECT quality_revision,target_ref,digest FROM ac_execution_contracts WHERE intent_id=$1',[input.intentId])).rows[0];
    if(!contract||contract.digest!==digest({qualityRevision:contract.quality_revision,targetRef:contract.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
-   const identity=await new GitArtifacts(this.config.repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
+   const repository=await this.jobRepository(c,String(context.project_id));
+   const identity=await new GitArtifacts(repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
    if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');return contract.quality_revision;
   });
   const hash=digest({domain:'artifact-v1',intentId:input.intentId,commit:artifact.commit}),id=`${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
