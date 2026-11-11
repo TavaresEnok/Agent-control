@@ -20,6 +20,7 @@ import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
+import { ConversaRoute } from './routes/conversa'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
@@ -293,6 +294,9 @@ export interface PageTitleContext {
 
 const PAGE_TITLE_ROUTES = [
   { pattern: '/', pageLabel: 'Tasks' },
+  ...(import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
+    ? [{ pattern: '/conversa', pageLabel: 'Conversa' }]
+    : []),
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
   // but it goes through the same table, because the browser title is one mechanism.
   { pattern: '/tasks', pageLabel: 'All tasks' },
@@ -337,6 +341,9 @@ export const AppRoutes = memo(function AppRoutes() {
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
         <Route index element={<TasksOverviewRoute />} />
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
+          <Route path="conversa" element={<ConversaRoute />} />
+        )}
         <Route path="new" element={<NewTaskProjectRoute />} />
 
         <Route
