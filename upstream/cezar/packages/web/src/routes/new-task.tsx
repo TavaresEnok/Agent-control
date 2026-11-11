@@ -145,7 +145,28 @@ function saveScheduleRecovery(key: string, request: DeferredCreateInput | null) 
  * key matches `GET /api/launch-key`, and only prefills otherwise — `handleDeepLink()` in
  * web/app.js, verbatim (see new-task-autostart.ts for the verified semantics).
  */
+function ManagedNewTaskRedirect() {
+  const [search] = useSearchParams()
+  const navigate = useNavigate()
+  const draftProjectId = useProjectScope().projectId
+  const sent = useRef(false)
+  useEffect(() => {
+    if (sent.current) return
+    sent.current = true
+    const linked = parseNewTaskParams(search).ref
+    const typed = linked !== '' ? linked : readDraft(draftProjectId).text
+    const text = typed.slice(0, 8000)
+    navigate(text.trim() ? { pathname: '/conversa', search: `?texto=${encodeURIComponent(text)}` } : '/conversa', { replace: true })
+  }, [draftProjectId, navigate, search])
+  return <p role="status" className="p-4 text-sm text-muted-foreground">Abrindo a conversa…</p>
+}
+
 export function NewTaskRoute() {
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return <ManagedNewTaskRedirect />
+  return <NewTaskRouteScreen />
+}
+
+function NewTaskRouteScreen() {
   const [search] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
