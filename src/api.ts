@@ -1,3 +1,4 @@
+import {listPersonalFolders,type PersonalFolderRoot} from './personal-folders.ts';
 import {ownerRequest} from './personal-owner-request.ts';
 import {claimPersonalSend,parseConversationQuery,personalMessageInput,releasePersonalSend} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
@@ -102,11 +103,12 @@ export type ApiOptions = {
     readConversation(principal:string,query:{after?:string;limit:number}):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
     sendMessage(principal:string,input:{text:string;localId:string}):Promise<void>;
   };
+  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[]};
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
   const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
-    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts} = options;
+    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
@@ -141,6 +143,12 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (e instanceof z.ZodError || e instanceof SyntaxError) return c.json({ error: 'INVALID_CONTRACT' }, 400);
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
+  });
+  app.get('/api/v1/ac/personal/folders',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    c.header('Cache-Control','no-store');
+    return c.json(await listPersonalFolders({roots:personalPanel.roots,projectRepos:personalPanel.projectRepos,root:c.req.query('root'),path:c.req.query('path')}));
   });
   app.post('/api/v1/ac/personal/accounts',async c=>{
     if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
