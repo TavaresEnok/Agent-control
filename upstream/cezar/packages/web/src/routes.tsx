@@ -295,7 +295,10 @@ export interface PageTitleContext {
 const PAGE_TITLE_ROUTES = [
   { pattern: '/', pageLabel: 'Tasks' },
   ...(import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
-    ? [{ pattern: '/conversa', pageLabel: 'Conversa' }]
+    ? [
+        { pattern: '/conversa', pageLabel: 'Conversa' },
+        { pattern: '/tarefas', pageLabel: 'Tarefas' },
+      ]
     : []),
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
   // but it goes through the same table, because the browser title is one mechanism.
@@ -340,9 +343,19 @@ export const AppRoutes = memo(function AppRoutes() {
   return (
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
-        <Route index element={<TasksOverviewRoute />} />
+        <Route
+          index
+          element={
+            import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
+              ? <ScopedNavigate to="/conversa" replace />
+              : <TasksOverviewRoute />
+          }
+        />
         {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
           <Route path="conversa" element={<ConversaRoute />} />
+        )}
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
+          <Route path="tarefas" element={<TasksOverviewRoute />} />
         )}
         <Route path="new" element={<NewTaskProjectRoute />} />
 

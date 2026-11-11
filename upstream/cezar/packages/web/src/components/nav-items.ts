@@ -2,6 +2,7 @@ import {
   GitBranchIcon,
   InboxIcon,
   ListChecksIcon,
+  MessageSquareIcon,
   SettingsIcon,
   SparklesIcon,
   WorkflowIcon,
@@ -57,6 +58,17 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]
 
+/** Managed panel only. Cezar's `NAV_ITEMS` stay untouched when the flag is off. */
+function listedNavItems(): readonly NavItem[] {
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED !== '1') return NAV_ITEMS
+  return [
+    { to: '/conversa', label: 'Conversa', icon: MessageSquareIcon, match: ['/', '/conversa'] },
+    ...NAV_ITEMS.map((item) => item.to === '/'
+      ? { ...item, to: '/tarefas', match: ['/tarefas', '/tasks', '/compare'] }
+      : item),
+  ]
+}
+
 /** What `/api/health` says exists. All default to `false` — see `visibleNavItems`. */
 export type NavAvailability = {
   /** `forge` non-null — a recognized remote (spec §"GitHub tab (forge tab)", #1412). */
@@ -90,7 +102,7 @@ export function visibleNavItems({
   automations = false,
   tracker,
 }: NavAvailability = {}): NavItem[] {
-  return NAV_ITEMS.filter((item) =>
+  return listedNavItems().filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
     && (item.automations ? automations : true)
@@ -118,7 +130,7 @@ function inArea(pathname: string, prefix: string): boolean {
  */
 export function activeNavPath(pathname: string): string | null {
   let best: { to: string; length: number } | null = null
-  for (const item of NAV_ITEMS) {
+  for (const item of listedNavItems()) {
     for (const prefix of item.match) {
       if (inArea(pathname, prefix) && (best === null || prefix.length > best.length)) {
         best = { to: item.to, length: prefix.length }
@@ -131,5 +143,5 @@ export function activeNavPath(pathname: string): string | null {
 /** The nav item that owns `pathname` — the mobile top bar titles itself from this. */
 export function activeNavItem(pathname: string): NavItem | null {
   const to = activeNavPath(pathname)
-  return NAV_ITEMS.find((item) => item.to === to) ?? null
+  return listedNavItems().find((item) => item.to === to) ?? null
 }
