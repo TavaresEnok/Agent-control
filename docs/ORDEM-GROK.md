@@ -1,65 +1,80 @@
-# Ordem para o Grok — Fase 2, parte A: runtime para vários projetos
+# Ordem para o Grok — desvio da Fase 2: imagens apagadas sem travar a conversa
 
 Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto**.
 
 ---
 
-Você é o programador do Agent Control. O gerente leu e aprovou o seu levantamento em `docs/implementation/FASE2-LEVANTAMENTO.md`. O desenho aprovado é **um supervisor por provedor, compartilhado; Git, QA, implementação e verificação por projeto**.
+Você é o programador do Agent Control. Leia `docs/PLANO-PAINEL-E-PROJETOS.md` ("Regras fixas").
 
-Faça agora **os passos 1 a 4 da seção 6** do levantamento, nesta ordem. Os passos 5 a 8 (conversa e `--add`) ficam para a parte B.
+## O que aconteceu
 
-## Passos
+Entre 15:47 e 16:46 de hoje, as imagens Docker do Agent Control foram apagadas do servidor por uma limpeza geral (`docker image prune -a` ou `docker system prune -a`). As imagens de planejamento, execução e ferramentas sumiram, junto com o cache de build.
 
-1. **O repositório vem do job, no supervisor de execução** (`src/native-execution-supervisor.ts`).
-   - Troque o uso fixo de `config.repository` pelo `repo` de `ac_project_repositories` do projeto do contexto. Isso vale na admissão (`identity`), no snapshot, no diff de revisão, no import e em **toda recuperação** (`reconcileRegistered`, `registerArtifact` e o que mais usar o repositório).
-   - **Cerca obrigatória:** o caminho resolvido tem que estar na lista de repositórios permitidos da instalação (`protectedRepositories`: `config.project.repo` e `config.projects[].repo`), comparado depois de `realpath`. Fora da lista: `NATIVE_EXECUTION_REPOSITORY_MISMATCH`, como hoje.
-   - O worker só monta o repositório do job, nunca outro.
-   - Se `config.repository` ainda for passado (modo `locked` e testes antigos), continue aceitando, mas como **restrição extra**: com ele presente, só aquele repositório vale. O modo `locked` não pode mudar de comportamento.
-2. **Compor o runtime por projeto com os mesmos supervisores** (`src/personal-runtime.ts`, `src/server-main.ts`).
-   - `composePersonalRuntime` cria os supervisores de planejamento e de execução **uma vez**.
-   - Para cada projeto (`config.project` e `config.projects[]`) cria `PersonalGitArtifacts`, `Quality`, `NativeQa`, `NativeImplementation`, `NativeVerification` e `allowedTargets`, com o HEAD daquele repositório, e o `.git/info/exclude`.
-   - Em `serve`, cada projeto que tiver repositório registrado e o runtime pessoal ativo sobe em `execution`, com a própria engenharia.
-   - Projeto sem conversa ou sem política continua subindo, mas sem execução (como hoje em `administration-only`), sem derrubar os outros.
-   - `managerChat` e `semantic` são comuns.
-3. **QA e implementação continuam por checkout.** Confira que o QA e a implementação do projeto A recusam um intent do projeto B.
-4. **O relato da equipe usa o repositório do intent** (`src/personal-team-feed.ts`, chamada em `src/server-main.ts`).
-   - O `git diff` do relato busca o repositório por intent → contexto → `ac_project_repositories`.
-   - Se não achar, não mostra os arquivos, em vez de usar outro repositório.
+Um pedido chegou e o gerente tentou criar o contêiner de planejamento. A imagem não existia, o Docker recusou e `DockerDaemon.create` (`src/sandbox-broker.ts:74`) lançou `DOCKER_CREATE_UNCERTAIN`. A chamada `ac_semantic_planning_calls` 559f7ee8 ficou `uncertain` para sempre:
 
-## Teste essencial (um só, de isolamento)
+- o contêiner nunca existiu;
+- o grant foi liberado pela varredura de início do modo pessoal (`releaseDeadPersonalGrants`, `physical_receipt.source='personal-startup-sweep'`, `containersAbsent:true`);
+- `reconcile` do supervisor de planejamento (`src/native-planning-supervisor.ts`, por volta da linha 310) devolve `null` quando o contêiner não existe;
+- a recuperação (`recover`, por volta da linha 216) preserva `terminal_evidence_missing`.
 
-Com PostgreSQL de teste, prove que um job cujo contexto pertence ao projeto B:
+A conversa inteira do IspAgent está parada atrás dela: "reconciliação necessária". O gerente já fez duas coisas:
 
-- nunca é admitido, recuperado nem importado com o repositório de A;
-- e que um repositório fora da lista permitida é recusado.
+- **Reconstruiu as imagens e rodou `personal:setup`.**
+- **Fez o commit `e9873500`:** o setup guarda as imagens de planejamento substituídas em `nativeBootstrap.planning.retiredImageIds`, e o runtime registra um supervisor inativo (`active:false`) para cada uma. Ele só reconcilia; nunca lança trabalho novo. A instalação do IspAgent já tem a imagem antiga nessa lista, e o erro `PLANNING_EXECUTOR_PROFILE_MISMATCH` sumiu.
 
-Reaproveite os testes e fixtures que já existem para o supervisor de execução (procure em `tests/` por `NativeExecutionSupervisor`). Não suba Docker de verdade: use o executor sintético ou o caminho de fixture que esses testes já usam.
+O banco tem uma trava (`SEMANTIC_PLANNING_IMMUTABLE`) que impede editar a identidade da chamada. **Não contorne nem desligue gatilhos do banco.**
 
-O banco de teste está em `AC_TEST_DATABASE_URL`, já definido no ambiente desta execução. É o banco descartável `ac_implementation_test`; os testes criam bancos isolados a partir dele. Rode só os arquivos de teste ligados ao que você mudou.
+## O que fazer
 
-Depois de cada passo:
+1. **Conferir a imagem antes de criar** (planejamento, execução e QA).
+   - Antes do `create` de cada contêiner nativo, confira que a imagem existe (`GET /images/<id>/json` pelo mesmo socket).
+   - Se não existir, a falha é **definitiva e sem efeito**:
+     - recuse com `NATIVE_IMAGE_MISSING` antes de registrar o job como `uncertain`;
+     - libere o grant como não iniciado (`executionStarted:false`, como os caminhos de `released_unstarted` já fazem).
+   - Na conversa, o titular deve ler: "As imagens do Agent Control foram apagadas do Docker. Rode `npm run personal:images -- <instalação.json>` e reinicie o gateway." Procure como os bloqueios viram mensagem em `src/notifications.ts` e `notificationReason`.
+2. **Resposta definitiva do Docker no create não é "incerta".**
+   - Em `DockerDaemon.create`, uma resposta HTTP recebida com status 4xx e corpo de erro do Docker prova que o contêiner **não** foi criado. Isso vale em especial para 404 "No such image" e 400.
+   - Lance um código próprio (`DOCKER_CREATE_REFUSED`) e trate-o nos supervisores como não iniciado.
+   - Continuam incertos: 409 (o nome já existe), 5xx, timeout e resposta perdida.
+3. **Encerrar a chamada que nunca começou** (modo pessoal, só planejamento).
+   - Condições, todas juntas:
+     - o job de planejamento está `uncertain`;
+     - `container_id` é nulo;
+     - o contêiner está ausente em duas consultas;
+     - o grant está `released`, com `physical_receipt.source='personal-startup-sweep'` e `containersAbsent:true`.
+   - Nessas condições, o supervisor grava um recibo terminal **assinado** de falha, com `exitCode` diferente de 0, `failureCode` `NATIVE_CONTAINER_NEVER_STARTED` e o mesmo formato dos outros recibos.
+   - Assim `SemanticPlanning` marca a chamada como `rejected` (`PLANNING_EXECUTOR_FAILED`), a intenção termina como falha e a fila da conversa anda. Isso vale também para o supervisor inativo (`active:false`).
+   - O planejamento não tem efeito no repositório, por isso isso é seguro só para planejamento. **Não** aplique a execução nem a QA.
+   - Confira que o pedido cancelado do IspAgent (intenção 94bafe26, `cancellation_requested`) termina depois disso.
+4. **`npm run personal:images -- <instalação.json>`**, num script novo `scripts/personal-images.mjs` com a entrada no `package.json`.
+   - Faz o que `docs/USO-PESSOAL.md` (seção das imagens) manda: `prepare-native-*-image.mjs`, os três `docker build` com as tags `ac-native-{planning,execution,tools}:personal`, os ids exportados e `personal:setup`.
+   - No fim, diz para reiniciar o gateway (`systemctl --user restart agent-control-gateway-<nome>`).
+   - Atualize essa seção de `docs/USO-PESSOAL.md` para apontar o comando novo.
 
-- `npm run typecheck` sai 0;
-- rode os testes existentes do supervisor de execução, do QA e da implementação que funcionarem com esse banco;
-- diga quais já falhavam antes da sua mudança (compare com `git stash` não é permitido; use `git show HEAD:<arquivo>` para ler a versão anterior, se precisar).
+## Teste essencial
+
+Um teste com PostgreSQL de teste (`AC_TEST_DATABASE_URL` já está no ambiente) para o item 3:
+
+- a chamada nas condições acima termina `rejected` com recibo válido;
+- **a mesma chamada sem o recibo da varredura pessoal continua `uncertain`.**
+
+Para os itens 1 e 2, basta um teste do `create` com um Docker falso respondendo 404 e outro respondendo 409.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você só pode editar arquivos em `src/` e `tests/`.
+- Você pode editar arquivos em `src/`, `tests/` e `scripts/`, além de `package.json` e `docs/USO-PESSOAL.md`.
 - No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
-- Qualquer outro comando encerra a execução. O gerente reinicia o gateway e faz a prova real.
+- Não rode Docker, o script novo nem o gateway. O gerente faz isso.
 
 ## Regras
 
-- Sem push. Não toque em `docs/PROMPT-GROK-*.md` nem em `docs/PROXIMA-ORDEM.md`.
-- Um commit por passo (1, 2, 3 e 4), com o teste junto do passo 1. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude. O autor já está no ambiente.
-- O IspAgent sozinho tem que continuar funcionando depois de cada passo.
-- O modo `locked` não muda.
-- Se travar em algo por mais de 15 minutos, pare e relate.
+- Sem push. O modo `locked` não muda: o item 3 só vale com `activation:'personal'`. Os itens 1 e 2 podem valer para todos, porque só deixam uma recusa definitiva ser tratada como definitiva.
+- Um commit por item. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
+- Se travar por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
 - Os hashes dos commits e uma linha sobre cada um.
-- Cada lugar em que o supervisor passou a resolver o repositório pelo job (arquivo:linha).
-- O resultado do typecheck e dos testes, separando o que já falhava antes.
+- Onde cada regra nova foi posta (arquivo:linha).
+- O resultado do typecheck e dos testes.
 - O que não conferiu.

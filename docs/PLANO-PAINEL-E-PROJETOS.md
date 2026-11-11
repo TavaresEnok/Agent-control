@@ -12,7 +12,7 @@ Atualize esta tabela a cada commit.
 |---|---|---|
 | 0 | Fechar o que já existe | limpeza feita (`76011327`, `0c6337a3`, `9d5284e7`, revisada e no ar); falta o teste no celular e um pedido real, que fica junto da prova da Fase 1 |
 | 1 | Conversar pelo painel | **pronta e provada** pelo celular simulado no endereço público: pergunta, pedido → proposta → Aprovar → integrado no IspAgent (`4e71540`), Parar com confirmação. Commits `db24662b`…`5f3657fb`. Pendência pequena: o painel tenta o WebSocket `/api/v1/ws` e recebe 403 (ruído no console) |
-| 2 | Vários projetos numa instalação | levantamento aprovado (`ae323766`, desenho: um supervisor por provedor, repositório vindo do job); parte A (runtime, passos 1–4) com o Grok |
+| 2 | Vários projetos numa instalação | parte A revisada (`121373ec`…`caf42dc1`), prova real bloqueada: as imagens Docker foram apagadas por uma limpeza do servidor e um planejamento ficou travado. Desvio com o Grok: conferir a imagem antes de criar, encerrar planejamento que nunca começou, `personal:images` (executor inativo para imagens antigas já em `e9873500`) |
 | 3 | Novo projeto pelo painel | não começada |
 | 4 | Projeto em outro servidor por SSH | não começada |
 | 5 | QA que roda os testes do projeto | não começada |
