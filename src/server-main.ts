@@ -198,7 +198,8 @@ async function main(){
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)]}:undefined;
+  let stopGateway=()=>{};
+  const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
   const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
@@ -219,6 +220,7 @@ async function main(){
   serving=true;
   let closing=false;
   const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
+  stopGateway=close;
   process.once('SIGTERM',close);process.once('SIGINT',close);
  }finally{if(!serving){try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{try{await workflowRegistration?.close();}finally{await ledger.close();}}}}}}
 }

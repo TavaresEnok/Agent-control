@@ -1,4 +1,5 @@
 import {listPersonalFolders,type PersonalFolderRoot} from './personal-folders.ts';
+import {createPersonalProject} from './personal-panel-projects.ts';
 import {ownerRequest} from './personal-owner-request.ts';
 import {claimPersonalSend,parseConversationQuery,personalMessageInput,releasePersonalSend} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
@@ -103,7 +104,7 @@ export type ApiOptions = {
     readConversation(principal:string,query:{after?:string;limit:number}):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
     sendMessage(principal:string,input:{text:string;localId:string}):Promise<void>;
   };
-  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[]};
+  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;scheduleRestart:()=>void};
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
@@ -143,6 +144,15 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if (e instanceof z.ZodError || e instanceof SyntaxError) return c.json({ error: 'INVALID_CONTRACT' }, 400);
     // Do not disclose SQL, paths, tokens or raw upstream errors.
     return c.json({ error: 'INTERNAL_ERROR' }, 500);
+  });
+  app.post('/api/v1/ac/personal/projects',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({root:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),path:z.string().max(512).default(''),label:z.string().min(1).max(200)}).strict().parse(await c.req.json());
+    const body=await createPersonalProject({installationPath:personalPanel.installationPath,roots:personalPanel.roots,rootId:input.root,relativePath:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label))});
+    if(body.restarting)personalPanel.scheduleRestart();
+    c.header('Cache-Control','no-store');
+    return c.json(body,202);
   });
   app.get('/api/v1/ac/personal/folders',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
