@@ -464,3 +464,147 @@ export async function createRemotePersonalProject(input: {
   return {projectId: created.projectId, restarting, restartRequired: !restarting};
  });
 }
+
+const pendingRef = /^refs\/heads\/agent-control\/[0-9]{8}-[0-9]{4}-[0-9a-f]{7}$/;
+const PendingRecord = z.object({
+ id: z.uuid(), projectId: z.uuid(), hostId: z.uuid(), commit: z.string().regex(commitId), ref: z.string().regex(pendingRef),
+ pushed: z.boolean(), told: z.enum(['none', 'failed', 'sent']),
+}).strict();
+type PendingPush = z.infer<typeof PendingRecord>;
+type RemoteRegistry = {dataDirectory: string; projects: readonly {id: string; repo: string}[]};
+let remoteRegistry: RemoteRegistry | undefined;
+const repoLocks = new Map<string, Promise<unknown>>();
+
+export function registerPersonalRemote(registry: RemoteRegistry) {
+ remoteRegistry = {dataDirectory: resolve(registry.dataDirectory), projects: registry.projects.map(project => ({id: project.id, repo: project.repo}))};
+}
+
+function pendingPath(dataDirectory: string) { return join(resolve(dataDirectory), 'remote-pending.json'); }
+async function readPending(dataDirectory: string): Promise<PendingPush[]> {
+ try { return z.array(PendingRecord).max(100).parse(JSON.parse(await readFile(pendingPath(dataDirectory), 'utf8'))); }
+ catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw new Refusal('REMOTE_FILE_INVALID', 503); }
+}
+async function writePending(dataDirectory: string, pending: readonly PendingPush[]) {
+ await writePrivate(pendingPath(dataDirectory), JSON.stringify(pending, null, 2) + '\n');
+}
+function withRepo<T>(repo: string, work: () => Promise<T>): Promise<T> {
+ const previous = repoLocks.get(repo) ?? Promise.resolve();
+ const run = previous.then(work, work);
+ repoLocks.set(repo, run.then(() => undefined, () => undefined));
+ return run;
+}
+async function git(repo: string, args: string[], env: NodeJS.ProcessEnv) {
+ return run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', '-C', repo, ...args], {encoding: 'utf8', timeout: 60000, env});
+}
+async function isAncestor(repo: string, older: string, newer: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+ try { await git(repo, ['merge-base', '--is-ancestor', older, newer], env); return true; }
+ catch (error) { if ((error as {code?: unknown}).code === 1) return false; throw error; }
+}
+async function lookupRemote(checkout: string) {
+ const registry = remoteRegistry;
+ if (!registry) return undefined;
+ let real: string;
+ try { real = await realpath(checkout); } catch { return undefined; }
+ let projectId: string | undefined;
+ for (const project of registry.projects) {
+  if ((await realpath(project.repo).catch(() => project.repo)) === real) { projectId = project.id; break; }
+ }
+ if (!projectId) return undefined;
+ const record = (await readRemoteProjects(registry.dataDirectory)).find(item => item.projectId === projectId);
+ const host = record ? (await readHosts(registry.dataDirectory)).find(item => item.id === record.hostId) : undefined;
+ if (!record || !host) return undefined;
+ return {projectId, record, host, repo: real, dataDirectory: registry.dataDirectory};
+}
+
+/** Fetch the recorded branch and move the copy only when that is a fast-forward. A divergence changes nothing. */
+async function fastForward(repo: string, host: PersonalSshHost, record: PersonalRemoteProject, dataDirectory: string): Promise<'current' | 'forward' | 'diverged'> {
+ if (!branchName.test(record.branch) || record.branch.split('/').includes('..')) throw new Refusal('REPOSITORY_BRANCH_REQUIRED', 409);
+ const env = gitEnv(dataDirectory);
+ await git(repo, ['fetch', '--no-tags', remoteGitUrl(host, record.path), `refs/heads/${record.branch}`], env);
+ if (await isAncestor(repo, 'FETCH_HEAD', 'HEAD', env)) return 'current';
+ if (!await isAncestor(repo, 'HEAD', 'FETCH_HEAD', env)) return 'diverged';
+ await git(repo, ['merge', '--ff-only', 'FETCH_HEAD'], env);
+ return 'forward';
+}
+
+export async function syncRemoteBeforeRequest(repo: string): Promise<{proceed: true} | {proceed: false; text: string}> {
+ const found = await lookupRemote(repo);
+ if (!found) return {proceed: true};
+ try {
+  const outcome = await withRepo(found.repo, () => fastForward(found.repo, found.host, found.record, found.dataDirectory));
+  if (outcome === 'diverged') return {proceed: false, text: `O branch no servidor ${found.host.label} divergiu. Não mexi na cópia.`};
+  return {proceed: true};
+ } catch { return {proceed: false, text: `Não consegui buscar ${found.host.label}. Não comecei o pedido.`}; }
+}
+
+async function markPush(dataDirectory: string, id: string, pushed: boolean) {
+ await exclusive(async () => {
+  const all = await readPending(dataDirectory);
+  await writePending(dataDirectory, all.map(item => item.id === id ? {...item, pushed, told: pushed ? 'none' : item.told === 'failed' ? 'failed' : 'none'} : item));
+ });
+}
+
+/** Retries every push that did not land. The same refspec is safe to repeat and no other ref is accepted. */
+export async function retryPendingRemotePushes(): Promise<void> {
+ const registry = remoteRegistry;
+ if (!registry) return;
+ const dataDirectory = registry.dataDirectory;
+ for (const item of await readPending(dataDirectory)) {
+  if (item.pushed) continue;
+  const project = registry.projects.find(entry => entry.id === item.projectId);
+  const record = (await readRemoteProjects(dataDirectory)).find(entry => entry.projectId === item.projectId);
+  const host = (await readHosts(dataDirectory)).find(entry => entry.id === item.hostId);
+  if (!project || !record || !host) continue;
+  let repo: string;
+  try { repo = await realpath(project.repo); } catch { continue; }
+  let refspec: string;
+  try { refspec = pushRefspec(item.commit, item.ref); } catch { continue; }
+  try {
+   await withRepo(repo, () => git(repo, ['push', '--', remoteGitUrl(host, record.path), refspec], gitEnv(dataDirectory)));
+   await markPush(dataDirectory, item.id, true);
+  } catch { await markPush(dataDirectory, item.id, false); }
+ }
+}
+
+/** Records the agent-control ref before the network call, so a failure leaves a pending push and keeps the integration. */
+export async function pushIntegratedRemote(checkout: string, commit: string): Promise<void> {
+ const found = await lookupRemote(checkout);
+ if (!found || !commitId.test(commit)) return;
+ await exclusive(async () => {
+  const pending = await readPending(found.dataDirectory);
+  if (pending.some(item => item.projectId === found.projectId && item.commit === commit)) return;
+  if (pending.length >= 100) throw new Refusal('REMOTE_PENDING_FULL', 409);
+  const ref = agentControlPushRef(commit, new Date());
+  pushRefspec(commit, ref);
+  await writePending(found.dataDirectory, [...pending, {id: randomUUID(), projectId: found.projectId, hostId: found.host.id, commit, ref, pushed: false, told: 'none'}]);
+ });
+ await retryPendingRemotePushes();
+}
+
+export async function remotePushNotices(projectId: string): Promise<{id: string; told: 'failed' | 'sent'; text: string}[]> {
+ const registry = remoteRegistry;
+ if (!registry || !z.uuid().safeParse(projectId).success) return [];
+ const hosts = await readHosts(registry.dataDirectory);
+ const notices: {id: string; told: 'failed' | 'sent'; text: string}[] = [];
+ for (const item of await readPending(registry.dataDirectory)) {
+  if (item.projectId !== projectId) continue;
+  const told = item.pushed ? 'sent' as const : 'failed' as const;
+  if (item.told === told) continue;
+  const label = hosts.find(host => host.id === item.hostId)?.label ?? 'servidor';
+  const text = item.pushed
+   ? `Resultado enviado para ${label}: branch ${item.ref.slice('refs/heads/'.length)}`
+   : `Não consegui enviar para ${label}; vou tentar de novo.`;
+  notices.push({id: item.id, told, text});
+ }
+ return notices;
+}
+
+export async function markRemotePushNotice(id: string, told: 'failed' | 'sent') {
+ const registry = remoteRegistry;
+ if (!registry || !z.uuid().safeParse(id).success) return;
+ const dataDirectory = registry.dataDirectory;
+ await exclusive(async () => {
+  const all = await readPending(dataDirectory);
+  await writePending(dataDirectory, all.map(item => item.id === id && (item.pushed ? 'sent' : 'failed') === told ? {...item, told} : item));
+ });
+}

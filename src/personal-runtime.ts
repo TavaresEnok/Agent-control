@@ -4,6 +4,7 @@ import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {GitArtifacts} from './git.ts';
+import {assertSshOutsideMountRoots,pushIntegratedRemote,registerPersonalRemote,retryPendingRemotePushes} from './personal-ssh.ts';
 import type {Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
@@ -61,10 +62,13 @@ class PersonalGitArtifacts extends GitArtifacts{
  constructor(private readonly checkout:string){super(checkout);}
  override async cas(candidate:string,base:string,targetRef:string,operationId:string){
   const result=await super.cas(candidate,base,targetRef,operationId);
-  if(result.status==='integrated')try{
-   const env={PATH:'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0'},git=(args:string[])=>execFileSync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=','-C',this.checkout,...args],{encoding:'utf8',env,timeout:20000,stdio:['ignore','pipe','ignore']}).trim();
-   if(git(['rev-parse','--is-bare-repository'])==='false'&&git(['symbolic-ref','-q','HEAD'])===targetRef)git(['read-tree','-m','-u',base,candidate]);
-  }catch{console.error('PERSONAL_CHECKOUT_NOT_UPDATED: the branch moved but local files were left as they were; run git status in the repository.');}
+  if(result.status==='integrated'){
+   try{
+    const env={PATH:'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_TERMINAL_PROMPT:'0'},git=(args:string[])=>execFileSync('/usr/bin/git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=','-C',this.checkout,...args],{encoding:'utf8',env,timeout:20000,stdio:['ignore','pipe','ignore']}).trim();
+    if(git(['rev-parse','--is-bare-repository'])==='false'&&git(['symbolic-ref','-q','HEAD'])===targetRef)git(['read-tree','-m','-u',base,candidate]);
+   }catch{console.error('PERSONAL_CHECKOUT_NOT_UPDATED: the branch moved but local files were left as they were; run git status in the repository.');}
+   try{await pushIntegratedRemote(this.checkout,result.commit);}catch{console.error('REMOTE_PUSH_FAILED: the integration stands; the push stays pending.');}
+  }
   return result;
  }
 }
@@ -73,6 +77,8 @@ export type PersonalProjectRuntime={engineering:EngineeringOptions;implementatio
 export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')return;
+ registerPersonalRemote({dataDirectory:config.dataDirectory,projects:[config.project,...config.projects].map(project=>({id:project.id,repo:project.repo}))});
+ assertSshOutsideMountRoots(join(config.dataDirectory,'ssh'),[boot.planning.hostRoot,boot.planning.accountRoot,boot.execution.hostRoot,boot.execution.accountRoot]);
  await renewPersonalQuota(ledger);
  await releaseDeadPersonalGrants(ledger);
  setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
@@ -125,6 +131,7 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  await bind(config.project.repo,config.project.id,true);
  for(const project of config.projects){if(project.id!==config.project.id)await bind(project.repo,project.id,false);}
  if(!byProject.has(config.project.id))throw new Error('PERSONAL_TARGET_UNRESOLVED');
+ await retryPendingRemotePushes().catch(()=>{console.error('REMOTE_PUSH_RETRY_FAILED');});
  return {planning,executions,semantic,managerChat,byProject};
 }
 

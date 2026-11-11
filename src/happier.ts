@@ -18,6 +18,7 @@ import {classifyPersonalText,personalControlWord,personalProgressLabel} from './
 import {panelMessageFromRecord,type PanelPage} from './personal-panel-conversation.ts';
 import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
+import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 
 /** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
@@ -368,6 +369,8 @@ export class HappierEndpoint {
       const kind=decision?.kind??classifyPersonalText(q.text);
       if(kind==='answer'){await this.say('answer-'+q.localId,decision?.answer||'Não consegui consultar o gerente agora. Confira as contas com papel de gerente no painel e tente de novo.');return {handled:true,result:{ok:true,answered:true}};}
      }
+     const remote=await syncRemoteBeforeRequest(this.runtime.repo);
+     if(!remote.proceed){await this.say('remote-fetch-'+q.localId,remote.text);return {handled:true,result:{ok:true}};}
     }
     const intentId = stableId(`${this.options.authority.contextId}\0${q.localId}`);
     const prior=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1 AND context_id=$2 AND principal_id=$3',
@@ -679,6 +682,12 @@ export class HappierEndpoint {
       const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(()=>null);
       if(message)await this.say(message.id,message.text).catch(()=>{});
       this.announced.set('team|'+job.id,job.state);
+     }
+    }
+    if(this.options.personalConversation){
+     for(const notice of await remotePushNotices(this.runtime.projectId)){
+      await this.say('remote-push-'+notice.id+'-'+notice.told,notice.text);
+      await markRemotePushNotice(notice.id,notice.told);
      }
     }
     if(this.options.personalConversation){
