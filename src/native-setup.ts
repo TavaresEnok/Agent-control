@@ -17,7 +17,7 @@ function retiredPlanning(previous:unknown,current:string):{retiredImageIds?:stri
 import {nativeQaContractDigest,NativeQaContract} from './native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
-import {Templates} from './templates.ts';
+import {publishFirstPersonalPolicies,refreshPersonalTemplates,shareProjectAccounts} from './personal-policies.ts';
 import {Capacity} from './capacity.ts';
 
 /**
@@ -101,10 +101,15 @@ export async function nativeSetup(path:string){
    if(roles.manager&&roles.programmer)await new Capacity(ledger).publish(config.project.owner,config.project.id,0,{schemaVersion:1,roles,maxEvaluatorsPerContext:2,maxProgrammersPerContext:2} as never);
   }
   // Conversations plan against the latest quality revision, so move their templates forward with it.
-  const qualityNow=Number((await ledger.pool.query('SELECT max(revision) r FROM ac_quality_policies WHERE project_id=$1',[config.project.id])).rows[0].r);
-  const stale=(await ledger.pool.query(`SELECT t.context_id,t.revision,t.snapshot,t.published_by FROM ac_context_templates t JOIN ac_contexts x ON x.id=t.context_id
-   WHERE x.project_id=$1 AND NOT x.archived AND t.revision=(SELECT max(revision) FROM ac_context_templates WHERE context_id=t.context_id) AND (t.snapshot->>'qualityRevision')::int<>$2`,[config.project.id,qualityNow])).rows;
-  for(const row of stale)await new Templates(ledger).publish(String(row.published_by),String(row.context_id),Number(row.revision),{...row.snapshot,qualityRevision:qualityNow}).catch(()=>{});
+  await refreshPersonalTemplates(ledger,config.project.id);
+  // Other projects on this installation share the same accounts and get their own first policies.
+  for(const project of config.projects){
+   if(project.id===config.project.id)continue;
+   if(!(await ledger.pool.query('SELECT 1 FROM ac_projects WHERE id=$1',[project.id])).rowCount)continue;
+   await shareProjectAccounts(ledger,config.project.owner,config.project.id,project.id);
+   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,{qaVerifierDigest:block.qaDigest});
+   await refreshPersonalTemplates(ledger,project.id);
+  }
   const raw=JSON.parse((await readFile(path,'utf8')).toString()) as Record<string,unknown>;
   raw.nativeBootstrap=block;
   await writeFile(path,JSON.stringify(raw,null,2)+'\n',{mode:0o600});
