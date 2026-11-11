@@ -47,6 +47,24 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
     catch(error){if(!(error instanceof Refusal)||error.code!=='MANAGER_ACTIVE'||attempt>=10)throw error;await new Promise(done=>setTimeout(done,3000));}
    }
   }
+  if(personal?.transportOnly===false){
+   // Personal mode: the Happier client does not reconnect by itself, and a restarted Happier server (or a network blip)
+   // would leave the conversation dead until the gateway restarts. Watch each context and restart its manager from the
+   // vault; the old lease expires in 15 seconds, so a restart that still finds it live is retried on the next check.
+   const watched=contexts.map(({projectId:_,...request})=>request),active=registry;let checking=false;
+   const watchdog=setInterval(()=>{if(checking)return;checking=true;void (async()=>{
+    for(const request of watched){
+     const state=await active.status(request.contextId).then(value=>value.state,()=>'revoked');
+     if(state==='running'||state==='starting')continue;
+     await active.restartFromKeySource({...request,principal:options.principal},source).then(
+      ()=>console.error('MANAGER_RECONNECTED '+request.contextId),
+      error=>{if(!(error instanceof Refusal)||!['MANAGER_ACTIVE','MANAGER_RESTART_IN_PROGRESS'].includes(error.code))console.error('MANAGER_RECONNECT_FAILED ('+(error instanceof Refusal?error.code:'UNCLASSIFIED')+') '+request.contextId);});
+    }
+   })().finally(()=>{checking=false;});},15000);
+   watchdog.unref?.();
+   const close=registry.close.bind(registry);
+   registry.close=async()=>{clearInterval(watchdog);return close();};
+  }
   return registry;
  }catch(error){await registry?.close();throw error;}finally{raw.fill(0);}
 }

@@ -18,6 +18,7 @@
     "personal:project": "node scripts/personal-project.mjs",
     "personal:happier": "node scripts/personal-happier.mjs",
     "personal:services": "node scripts/personal-services.mjs",
+    "personal:public": "node scripts/personal-public.mjs",
     "prebuild": "node scripts/prepare-build.mjs --before"
   },
   "dependencies": {
