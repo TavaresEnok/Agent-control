@@ -1,49 +1,74 @@
-# Ordem para o Grok — Fase 0, passo de limpeza do painel
+# Ordem para o Grok — Fase 1, parte A: ler e enviar a conversa pelo gateway
 
-Escrita pelo gerente (Claude) em 11/11/2026. Abra o Grok com `cd /home/app/projects/agent-control && grok -m grok-4.7 --effort medium` e cole tudo abaixo da linha.
+Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço médio.
 
 ---
 
-Você é o programador do Agent Control. O roteiro está em `docs/PLANO-PAINEL-E-PROJETOS.md`. Leia as seções "Decisões já tomadas", "Regras fixas" e "Fase 0" antes de começar. Faça **só este passo**. Quando terminar, pare e escreva o relatório pedido no fim.
+Você é o programador do Agent Control. O roteiro está em `docs/PLANO-PAINEL-E-PROJETOS.md`. Leia "Decisões já tomadas", "Regras fixas" e "Fase 1". Faça **só os passos 1.1 e 1.2**. A tela é a parte B, numa próxima ordem.
 
 ## Contexto
 
-O painel é a página web do Cezar, servida pelo gateway do IspAgent em `https://agentcontrol.tokstiloesporte.com`. O código da página está em `upstream/cezar/packages/web/src`. No Agent Control ela roda com `import.meta.env.VITE_AGENT_CONTROL_MANAGED==='1'`; veja como `components/composer/composer.tsx` e `app.tsx` usam isso. Hoje o painel só lê: os pedidos ainda passam pela conversa do Happier.
+- O titular conversa com o gerente numa sessão do Happier, cifrada. A ponte entre essa conversa e o Agent Control está em `src/happier.ts`:
+  - `accept()` recebe a mensagem do titular e decide se é pergunta, pedido ou palavra de controle (`aprovar`, `descartar`, `pare`, `equipe`);
+  - `say()` escreve as respostas;
+  - `receivePending()` busca as mensagens novas do titular;
+  - `recoverHistory()` lê o histórico.
+- O gateway do modo pessoal monta essa ponte em `src/managers.ts` e `src/manager-transport.ts`. As rotas do painel ficam em `src/api.ts`, e as rotas pessoais já existentes usam `personalAccounts`.
+- O login do painel já existe: as rotas em `/api/v1/ac/...` recebem o `principal` autenticado. Siga o padrão das rotas vizinhas.
 
 ## O que fazer
 
-Toda mudança na página vale **só quando `VITE_AGENT_CONTROL_MANAGED==='1'`**. Fora disso, o Cezar continua igual.
+1. **`GET /api/v1/ac/personal/conversation?after=<cursor>&limit=<n>`** — mensagens da conversa do projeto em ordem, decifradas:
+   - formato `{messages:[{id,role:'owner'|'manager',text,createdAt}],next:<cursor|null>}`;
+   - `limit` padrão 50, máximo 200;
+   - sem `after`, traz as mais recentes.
 
-1. **Tirar a dica de assumir a sessão.** Em `routes/task-thread/run-header.tsx` e `routes/task-thread/run-actions.ts` há a dica "claude --resume" (`resumeHint`) e o "Open in…" para continuar a sessão num terminal. No Agent Control isso não funciona: o trabalho roda em workers isolados. Esconda os dois.
-2. **Tirar o seletor de agente e modelo da caixa de continuar.** Na tela da tarefa aparece um seletor claude/opus que não tem efeito: quem escolhe o modelo é o Agent Control. Esconda o seletor. Não mexa no resto da caixa; ela será trocada na Fase 1.
-3. **Parar os erros 403 inofensivos.** A página chama `GET /api/v1/star-count`, `GET /api/v1/workspace/agent-profiles` (e `.../fallback-policy`) e a atualização de skills. O gateway recusa e aparecem erros. Em `src/api.ts`, no bloco que já responde as chamadas de controle da página (procure `seenRuns` e as respostas de `read`/`unread`, `telemetry` e `ui-state`), responda esses **GET** com o formato vazio que o cliente espera. Os tipos estão em `upstream/cezar/packages/web/src/api/client.ts`. Considere também a variante com `/api/v1/p/<projeto>/…`. A atualização de skills pode responder "nada a atualizar" se for só consulta. Qualquer escrita de verdade continua recusada.
+   Reaproveite a leitura e a decifragem que a ponte já usa. Não invente outro jeito de decifrar. Mensagens que não são texto (eventos internos) ficam de fora.
+2. **`POST /api/v1/ac/personal/messages`** com `{text, clientId}`:
+   - `text` com 1 a 8000 caracteres;
+   - `clientId` com 8 a 64 caracteres em `[A-Za-z0-9_-]`;
+   - a mensagem entra pelo **mesmo caminho** de uma mensagem do app, para que o app Happier também a veja e a ponte a processe como hoje.
 
-## Como verificar
+   Primeiro investigue se a mensagem pode ser gravada como do titular na sessão do Happier, com a chave e o token que o gateway já tem, e depois apanhada por `receivePending`. Se puder, faça assim.
 
-- `npm run typecheck` sai 0.
-- Rode os testes que existirem para os arquivos que você mudou. Não rode a suíte inteira.
-- `VITE_AGENT_CONTROL_MANAGED=1 npm --prefix upstream/cezar run build:web` sai 0.
-- Reinicie o gateway com `systemctl --user restart agent-control-gateway-ispagent` e confira:
-  - `curl -s -o /dev/null -w '%{http_code}\n' https://agentcontrol.tokstiloesporte.com/manifest.webmanifest` dá 200;
-  - `curl -s -o /dev/null -w '%{http_code}\n' https://agentcontrol.tokstiloesporte.com/v1/account/profile` dá 401 (o Happier continua no ar).
-- Não é preciso abrir a página logado; o gerente confere a tela.
+   Se não puder, chame `accept()` do transporte do contexto com `localId` derivado do `clientId` e escreva o texto do titular na conversa, para ele aparecer no histórico. Escreva no relatório qual caminho usou e por quê.
+
+   O mesmo `clientId` enviado duas vezes não pode gerar dois pedidos: devolva o mesmo resultado. A resposta é `202 {id}`.
+
+Regras das duas rotas:
+
+- só existem com `personalAccounts`, isto é, no modo pessoal;
+- exigem login;
+- valem só para o contexto do projeto deste gateway;
+- nunca devolvem chave, token nem texto cifrado.
+
+## Teste essencial (um arquivo em `tests/`)
+
+Um teste que **não precise de PostgreSQL** e cubra:
+
+- as duas rotas recusam sem login;
+- as duas rotas não existem fora do modo pessoal;
+- o mesmo `clientId` duas vezes resulta numa entrada só.
+
+Se a rota depender do banco, isole a parte que valida e deduplica numa função pura e teste essa função. Rode com `npx tsx --test tests/<arquivo>`.
+
+## Permissões nesta execução (não tem tela)
+
+- Você só pode editar arquivos em `src/` e `tests/`, com suas ferramentas de arquivo.
+- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
+- Qualquer outro comando encerra a execução. O build, o restart do gateway e a prova real ficam com o gerente.
 
 ## Regras
 
-- Sem push e sem reescrever o histórico. Não toque em `docs/PROMPT-GROK-*.md` nem em `docs/PROXIMA-ORDEM.md`.
-- Não mude o modo `locked` nem nada fora do modo pessoal ou gerenciado.
-- Sem testes de tela ou de texto.
-- Um commit por item (1, 2 e 3), com autor e committer `Enok Tavares <migration@localhost>`:
+- Sem push. Não toque em `docs/PROMPT-GROK-*.md` nem em `docs/PROXIMA-ORDEM.md`. Não mude nada do modo `locked`.
+- Commits pequenos (um para a leitura, um para o envio, o teste junto do código que ele cobre).
+- Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude. O autor já está no ambiente; não rode `git config`.
+- Nenhum segredo em código, log ou commit.
+- Se não achar um caminho em 15 minutos, pare e relate o que descobriu.
 
-  ```
-  GIT_AUTHOR_NAME="Enok Tavares" GIT_AUTHOR_EMAIL="migration@localhost" GIT_COMMITTER_NAME="Enok Tavares" GIT_COMMITTER_EMAIL="migration@localhost" git commit -m "<frase curta>"
-  ```
-
-- Nenhum segredo em commit ou log.
-- Se travar por algo que só o titular pode fazer, descreva a ação exata e pare. Não fique mais de 15 minutos sem progresso: se não achar o caminho, pare e relate.
-
-## Relatório final (escreva no chat)
+## Relatório final
 
 - Os hashes dos commits e uma linha sobre cada um.
-- A saída resumida de cada verificação acima (comando e resultado).
-- O que você não conseguiu fazer ou não conferiu.
+- O caminho escolhido no envio e por quê.
+- O resultado de `npm run typecheck` e do teste.
+- O que não conferiu.
