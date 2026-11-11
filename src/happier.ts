@@ -139,6 +139,7 @@ export class HappierEndpoint {
   private lastPendingAt = 0;
   private readonly announced=new Map<string,string>();
   private teamModelsAt=0;
+  private readonly titled=new Set<string>();
   private readonly replanned=new Set<string>();
   private pendingFailure: unknown;
   lastError: string | undefined;
@@ -574,6 +575,18 @@ export class HappierEndpoint {
       await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
         {entityId:run.id,source:'runtime',planRevision:intent.plan_revision,seq,status,
           reason:status==='failed'?'EXECUTION_FAILED':status==='waiting'?notificationReason(run.error):['cancelled','canceled'].includes(status)?'RECONCILIATION_REQUIRED':'NONE'});
+    }
+    if(this.options.personalConversation){
+     // Cockpit titles: a plan run is named "Intent <id>" (admission checks that task text); show the owner's words.
+     for(const run of this.runtime.store.listRuns()){
+      const match=/^Intent ([0-9a-f-]{36})$/.exec(String(run.title??''));
+      if(!match||this.titled.has(run.id))continue;
+      this.titled.add(run.id);
+      const own=(await this.ledger.pool.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2',[match[1],this.options.authority.contextId])).rowCount;
+      const text=own?(await this.originalRequest(match[1]).catch(()=>({text:''}))).text:'';
+      const line=String(text??'').trim().split('\n')[0]!.trim();
+      if(line){this.runtime.store.updateRun(run.id,{title:line.length>90?line.slice(0,90).trimEnd()+'…':line});this.runtime.store.flush({throwOnError:false});}
+     }
     }
     if(this.options.personalConversation&&this.options.teamFeedRoot){
      // Once per process, retried at most once a minute; the profile list rarely changes.

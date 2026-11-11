@@ -41,7 +41,14 @@ const installTags='<link rel="manifest" href="/manifest.webmanifest" /><meta nam
   '<meta name="apple-mobile-web-app-title" content="Agent Control" /><link rel="apple-touch-icon" href="/pwa/icon-180.png" />';
 // A plan run is titled "Intent <id>" because admission checks that exact task text. In the cockpit,
 // show the owner's own request instead (personal mode binds it; elsewhere the title stays).
+function localNativeRequest(url:URL,raw:Request){
+  const local=new URL(url.pathname+url.search,'http://127.0.0.1');
+  const headers=new Headers(raw.headers);headers.set('host','127.0.0.1');headers.delete('origin');
+  return new Request(local,{method:raw.method,headers,signal:raw.signal});
+}
+const seenRuns=new Map<string,string>();
 async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T):Promise<T>{
+  const id=(run as {id?:unknown}).id;if(typeof id==='string'&&seenRuns.has(id))run={...run,seenAt:seenRuns.get(id)};
   const match=typeof run.title==='string'?/^Intent ([0-9a-f-]{36})$/.exec(run.title):null;
   if(!match)return run;
   const row=(await ledger.pool.query('SELECT context_id FROM ac_intents WHERE id=$1',[match[1]]).catch(()=>({rows:[]}))).rows[0];
@@ -309,7 +316,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     // The cockpit is read-only. Its bookkeeping calls change nothing in the project and are answered
     // here, so the page does not retry them in a loop; every real mutation still goes through Happier.
     const plain=new URL(c.req.url).pathname.replace(/^\/api\/v1\/p\/[^/]+/,'/api/v1');
-    if(c.req.method==='POST'&&(/^\/api\/v1\/runs\/[a-f0-9-]{36}\/read$/.test(plain)||/^\/api\/v1\/telemetry\/[a-z-]+$/.test(plain)))return c.body(null,204);
+    // "Read" marks live in this process only; the page needs the receipt back or it retries forever.
+    const read=/^\/api\/v1\/runs\/([a-f0-9-]{36})\/(read|unread)$/.exec(plain);
+    if(c.req.method==='POST'&&read){const at=read[2]==='read'?new Date().toISOString():undefined;if(at)seenRuns.set(read[1]!,at);else seenRuns.delete(read[1]!);return c.json({id:read[1],seenAt:at??null});}
+    if(c.req.method==='POST'&&/^\/api\/v1\/telemetry\/[a-z-]+$/.test(plain))return c.body(null,204);
     // View preferences are kept by the browser for the session; echo them instead of storing them.
     if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){const text=await c.req.text();if(text.length>65536)return c.json({error:'UI_STATE_TOO_LARGE'},413);
      try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}}
@@ -322,7 +332,9 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       if (![runtime.projectId, 'default'].includes(scoped[1])) throw new Refusal('PROJECT_FORBIDDEN', 403);
       path = '/api/v1' + scoped[2]; url.pathname = path;
     }
-    const nativeRequest = new Request(url, c.req.raw);
+    // Behind the public proxy the Host is the public name; the embedded Cezar only answers its own
+    // machine (DNS-rebinding guard). Only GETs reach it, already authenticated above.
+    const nativeRequest = localNativeRequest(url, c.req.raw);
     const membership = await projectMembership(c.get('principal'));
     if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
     if(path==='/api/v1/workspace/events')return managedWorkspaceStream(ledger,runtime,c.get('principal'),c.req.raw,async()=>{
@@ -360,7 +372,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const body = z.object({ projects: z.array(z.object({ id: z.string() }).passthrough()), bootProject: z.string(), projectsDir: z.string() }).parse(await native.json());
       return c.json({ ...body, projects: body.projects.filter(project => project.id === runtime.projectId) });
     }
-    if (!path.startsWith('/api/') && !/^\/(terminal|mcp|ws)(?:\/|$)/.test(path)) return runtime.native.fetch(c.req.raw);
+    if (!path.startsWith('/api/') && !/^\/(terminal|mcp|ws)(?:\/|$)/.test(path)) return runtime.native.fetch(localNativeRequest(new URL(c.req.url), c.req.raw));
     return c.json({ error: 'INGRESS_DISABLED' }, 403);
   });
   return family;
