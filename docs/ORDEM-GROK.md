@@ -1,72 +1,97 @@
-# Ordem para o Grok — Fase 2, parte B: segundo projeto na mesma instalação
+# Ordem para o Grok — Fase 3: novo projeto pelo painel
 
-Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto**.
+Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço médio.
 
 ---
 
-Você é o programador do Agent Control. A parte A (runtime para vários projetos) está provada ao vivo: o IspAgent integrou `ac1052c` com supervisor compartilhado e repositório vindo do job.
+Você é o programador do Agent Control. Leia `docs/PLANO-PAINEL-E-PROJETOS.md` ("Decisões já tomadas", "Regras fixas" e "Fase 3").
 
-Faça agora **os passos 5 a 7 da seção 6** de `docs/implementation/FASE2-LEVANTAMENTO.md`. O passo 8 (dois pedidos ao mesmo tempo) é a prova do gerente.
+A Fase 2 está provada ao vivo: a instalação do IspAgent tem dois projetos ("ispagent" e "segundo"), cada um com a própria conversa, e os dois rodaram ao mesmo tempo. O "segundo" foi acrescentado por `npm run personal:project -- --add`, que chama `addPersonalProject` (`src/personal-project-add.ts`).
 
-## Passos
+Agora o titular deve conseguir fazer isso **pelo painel**.
 
-5. **Uma conversa por projeto, na mesma conta Happier** (`src/personal-connect.ts`, `src/native-setup.ts`). Para cada projeto da instalação (`config.project` e `config.projects[]`) sem contexto ativo:
-   - cria a sessão Happier, o contexto, o template com o branch atual daquele repositório e a entrada em `managerTransport.contexts`;
-   - dá acesso às contas já existentes (`ac_account_access`; procure `shareAccount` ou equivalente);
-   - publica a primeira política de capacidade e a de qualidade daquele projeto.
+## Decisões do gerente
 
-   Regras:
-   - **Não** crie outra máquina Happier, outro token nem outra chave de conta.
-   - Tire o retorno precoce que hoje só olha o projeto principal.
-   - Rodar de novo não duplica nada.
-   - O título da sessão no app deve ser o nome do projeto, para o titular distinguir as conversas.
-6. **O painel escolhe o projeto pelo cabeçalho que já envia** (`x-agent-control-project` ou `/api/v1/p/<id>/`). Confira, sem mudar o que já funciona, que:
-   - `/api/v1/ac/personal/conversation` e `/api/v1/ac/personal/messages` chegam ao registro do projeto certo;
-   - com o cabeçalho de A, nunca se lê nem se escreve a conversa de B.
+- **Quais pastas o painel mostra:** só as raízes que o dono liberar em `projectRoots` da instalação. O schema é `ProjectRoot` em `src/project-admin.ts:15`; hoje a lista está vazia. Nada fora dessas raízes aparece.
+- **Como o projeto novo passa a valer:** a lista de repositórios permitidos dos supervisores é fixa no processo, de propósito: é a cerca de segurança. Por isso não se acrescenta projeto a quente.
+  - Depois de criar, o gateway responde e **encerra sozinho**. O systemd (`Restart=always`, 5 s) o sobe de novo já com o projeto. Isso só vale quando ele roda sob systemd (variável `INVOCATION_ID` presente) e no modo pessoal.
+  - Sem systemd, ele não encerra: responde `restartRequired:true` e o painel diz para reiniciar o gateway.
 
-   Se faltar algo, corrija. Se precisar, ajuste o painel para mandar o cabeçalho também nessas rotas: a Conversa usa `agentControlFetch`.
-7. **`npm run personal:project -- --add <instalação.json> <repositório> --label <nome>`**, com a lógica num módulo que a Fase 3 vai chamar pelo painel.
-   - O comando:
-     - acrescenta o projeto a `projects[]` da instalação (um id novo, o repositório em caminho absoluto e real);
-     - registra o projeto, o dono e o repositório no **banco que já existe** (`ac_projects`, `ac_memberships`, `ac_project_repositories`);
-     - executa o passo 5 para ele;
-     - e diz para reiniciar o gateway (`systemctl --user restart agent-control-gateway-<nome>`).
-   - O comando não cria banco nem copia login.
-   - Ele recusa:
-     - repositório que não é Git ou não tem branch;
-     - repositório que já está na instalação;
-     - caminho dentro do diretório de dados;
-     - repositório de outra instalação.
-   - Faça backup de `installation.json` antes de reescrever (`installation.json.before-add-<label>`).
-   - **Antes de mexer no `installation.json`**, confira se a validação de `nativeBootstrap` (`nativeBootstrapSchemaError` em `src/native-bootstrap.ts`) aceita o repositório novo em `projects[]`.
-   - Atualize `docs/USO-PESSOAL.md` ("Mais um projeto no mesmo app") para o comando novo.
+## O que fazer
+
+1. **`npm run personal:roots -- <instalação.json> list|add|remove ...`** (`scripts/personal-roots.mjs` e a entrada no `package.json`).
+   - `add <caminho> [--label nome]`:
+     - grava a raiz em `projectRoots`, com o caminho real, absoluto e existente;
+     - o `id` é derivado do nome;
+     - faz backup `installation.json.before-roots`.
+   - `add` recusa:
+     - o diretório de dados;
+     - `/`;
+     - o home inteiro;
+     - caminho com link simbólico no meio.
+   - `remove <id>` tira a raiz.
+   - Valide com o schema `Installation` antes de gravar.
+   - No fim, diz para reiniciar o gateway.
+2. **`GET /api/v1/ac/personal/folders?root=<id>&path=<relativo>`** (modo pessoal, só para o dono).
+   - Sem `root`, devolve as raízes `{roots:[{id,label}]}`.
+   - Com `root`, devolve `{root,path,folders:[{name,path,git:boolean,project:boolean}]}`:
+     - só subpastas diretas, em ordem alfabética, no máximo 500;
+     - sem as que começam com `.`;
+     - `git` diz se a pasta é a raiz de um repositório Git com branch;
+     - `project` diz se a pasta já é um projeto da instalação.
+   - Recuse `..`, caminho absoluto e qualquer caminho cujo `realpath` saia da raiz (link simbólico para fora) com `PROJECT_PATH_FORBIDDEN`.
+   - Nunca devolva conteúdo de arquivo.
+3. **`POST /api/v1/ac/personal/projects`** com `{root, path, label}`.
+   - Resolve o caminho com as mesmas regras do item 2 e chama `addPersonalProject`.
+   - Para isso, o gateway precisa conhecer o caminho do próprio `installation.json`: `server-main` já o recebe.
+   - Pasta que não é Git: `NOT_A_GIT_REPOSITORY`, e o painel explica que é preciso rodar `git init` e fazer um commit.
+   - Responde `202 {projectId, restarting}` e só então, se for o caso, agenda o encerramento (1 s depois).
+   - Dois pedidos ao mesmo tempo: o segundo recebe `409 PROJECT_CREATION_BUSY`.
+4. **`POST /api/v1/ac/personal/projects/:id/archive`**.
+   - Tira o projeto de `projects[]` e de `managerTransport.contexts`, com backup antes, e arquiva os contextos dele no banco, como o produto já faz ao arquivar.
+   - Não apaga nenhum arquivo do repositório nem a conversa do Happier.
+   - Recuse arquivar o projeto principal (`config.project`).
+   - Mesmo esquema de reinício do item 3.
+5. **Tela "Novo projeto"** no painel gerenciado (`upstream/cezar/packages/web/src`, só com `VITE_AGENT_CONTROL_MANAGED==='1'`).
+   - Rota `/novo-projeto`, com link no menu (depois de "Conversa") e onde a página lista os projetos.
+   - Na tela:
+     - escolher a raiz e navegar nas pastas, com o caminho clicável;
+     - pastas Git com um selo "Git", e pastas que já são projeto com "já é projeto";
+     - botão "Usar esta pasta", com o campo nome preenchido com o nome da pasta, e "Criar".
+   - Sem raízes, a tela explica o comando `npm run personal:roots -- <instalação.json> add <pasta>`.
+   - Depois de criar:
+     - mostra "Reiniciando o painel…";
+     - consulta `/api/v1/ac/projects` a cada 2 s, por até 60 s, até o projeto aparecer;
+     - seleciona o projeto do mesmo jeito que o seletor de projetos da página faz;
+     - abre `/conversa`.
+   - Nas configurações do projeto, ou num menu do projeto, um botão "Arquivar projeto", com confirmação, que não aparece para o principal.
 
 ## Teste essencial
 
-Um teste com PostgreSQL (`AC_TEST_DATABASE_URL` já está no ambiente) do módulo do passo 7 com um repositório Git temporário:
+- Um teste do item 2, sem banco se puder, com pastas temporárias. Ele confere que são recusados:
+  - `..`;
+  - caminho absoluto;
+  - link simbólico para fora da raiz.
 
-- registra o projeto, dá acesso às contas e publica as políticas;
-- rodar duas vezes não duplica;
-- um caminho que não é Git é recusado.
-
-Faça o Happier ser uma dependência injetável e use um falso no teste.
+  E que um link simbólico para dentro da raiz é aceito.
+- Um teste do item 3 com `addPersonalProject` injetado, que confere o `409` com dois pedidos ao mesmo tempo.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você pode editar arquivos em `src/`, `tests/`, `scripts/`, `upstream/cezar/packages/web/src/` e `docs/USO-PESSOAL.md`.
+- Você pode editar arquivos em `src/`, `tests/`, `scripts/` e `upstream/cezar/packages/web/src/`, além de `package.json` e `docs/USO-PESSOAL.md`.
 - No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
-- Não rode o script real, o gateway nem o Docker. O gerente faz a prova.
+- Não rode o gateway, o build da página, o Docker nem os scripts reais. O gerente faz a prova.
 
 ## Regras
 
 - Sem push. O modo `locked` não muda.
-- Um commit por passo. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
-- O IspAgent sozinho continua funcionando.
+- Um commit por item. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
+- Textos da tela em português, curtos.
 - Se travar por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
 - Os hashes dos commits e uma linha sobre cada um.
-- O comando exato que o gerente deve rodar para adicionar um repositório de teste.
-- O resultado do typecheck e do teste.
+- Os comandos que o gerente deve rodar para liberar as raízes `/home/app/projects` e `/home/app/srv_projetos/workspace`.
+- O resultado dos typechecks e dos testes.
 - O que não conferiu.

@@ -12,14 +12,14 @@ Atualize esta tabela a cada commit.
 |---|---|---|
 | 0 | Fechar o que já existe | limpeza feita (`76011327`, `0c6337a3`, `9d5284e7`, revisada e no ar); falta o teste no celular e um pedido real, que fica junto da prova da Fase 1 |
 | 1 | Conversar pelo painel | **pronta e provada** pelo celular simulado no endereço público: pergunta, pedido → proposta → Aprovar → integrado no IspAgent (`4e71540`), Parar com confirmação. Commits `db24662b`…`5f3657fb`. Pendência pequena: o painel tenta o WebSocket `/api/v1/ws` e recebe 403 (ruído no console) |
-| 2 | Vários projetos numa instalação | parte A **provada** ao vivo no IspAgent (`ac1052c`) depois do desvio das imagens apagadas (`92747859`…`e3bb7d51`, `personal:images`); parte B (conversa por projeto e `--add`) com o Grok |
-| 3 | Novo projeto pelo painel | não começada |
+| 2 | Vários projetos numa instalação | **pronta e provada**: `--add` acrescentou o repositório "segundo" à instalação do IspAgent (sem banco nem login novos); os dois pedidos rodaram ao mesmo tempo na mesma conta Grok e Claude, cada um integrado só no próprio repositório (IspAgent `12a0f09`, segundo `cf46f54`). Commits `c2845797`, `3836cc60`, `b2910a31` |
+| 3 | Novo projeto pelo painel | com o Grok: raízes liberadas pelo dono (`personal:roots`), navegação, criar e arquivar; o gateway reinicia sozinho pelo systemd para carregar o projeto |
 | 4 | Projeto em outro servidor por SSH | não começada |
 | 5 | QA que roda os testes do projeto | não começada |
 | 6 | Avisos no celular e entrada sem o app Happier | não começada |
 | 7 | Fechamento | não começada |
 
-Último commit conferido: `e3bb7d51` (runtime de vários projetos e recuperação de imagens apagadas, provados no IspAgent).
+Último commit conferido: `b2910a31` (dois projetos na mesma instalação, provados ao vivo).
 
 ## Aonde queremos chegar
 
