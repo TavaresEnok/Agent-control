@@ -182,11 +182,14 @@ export class NativePlanningSupervisor{
   });
   if(!row)return {state:'not_applicable' as const};
   if(row.selected_key_fingerprint!==this.keyFingerprint)throw new Refusal('PLANNING_EXECUTOR_KEY_MISMATCH');
-  const stopped=await this.stop(principal,authority,callId);if(stopped.state!=='stop_requested')return {state:'uncertain' as const};
+  const stopped=await this.stop(principal,authority,callId);
   const input:PlanningInvocation={callId,intentId:row.intent_id,contextId:row.context_id,grantId:row.grant_id,sessionId:row.session_id,
    executionEpoch:Number(row.execution_epoch),inputDigest:row.input_digest,profile:{id:row.profile_id,accountId:row.account_id,provider:row.provider,mode:row.mode,model:row.model,effort:row.effort},
    sourceMessageRef:'message:cancel-observation',text:'',constraints:{qualityRevision:1,targetRef:'refs/heads/cancel-observation',knownReferences:[]},outputSchema:{},assertAuthorized:async()=>{}};
-  const outcome=await this.observe(principal,authority,input);if(!outcome)return {state:'uncertain' as const};
+  // A missing container is not a stop. observe seals a personal call that never started; any other absence stays uncertain.
+  let outcome:{output:string;receipt:unknown}|null;
+  try{outcome=await this.observe(principal,authority,input);}catch(error){if(stopped.state!=='stop_requested'&&dockerUncertain(error))return {state:'uncertain' as const};throw error;}
+  if(!outcome)return {state:'uncertain' as const};
   const receipt=PlanningPhysicalReceipt.parse(outcome.receipt),p=receipt.payload;
   if(p.callId!==callId||p.contextId!==row.context_id||p.intentId!==row.intent_id||p.grantId!==row.grant_id||p.profileId!==row.profile_id||p.sessionId!==row.session_id||p.epoch!==Number(row.execution_epoch)||p.executorDigest!==this.config.executorDigest||p.inputDigest!==row.input_digest||p.profileDigest!==digest(input.profile)||!verify(null,planningReceiptMessage(p),createPublicKey(this.key),Buffer.from(receipt.signature,'hex')))throw new Refusal('PLANNING_RECEIPT_INVALID');
   await this.ledger.tx(async c=>{
@@ -326,6 +329,34 @@ export class NativePlanningSupervisor{
    return {state:'container_removed',privateFilesRetained:true};
   });
  }
+ /** Personal mode only. A startup sweep already released the grant; this signs the failure without rewriting that receipt. */
+ private async sealPersonalNeverStarted(input:PlanningInvocation):Promise<{output:string;receipt:unknown}|null>{
+  if(this.config.syntheticFixture)return null;
+  const name='ac-native-plan-'+input.callId;
+  return this.ledger.tx(async c=>{
+   const owner=(await c.query('SELECT principal_id FROM ac_semantic_planning_calls WHERE id=$1',[input.callId])).rows[0];
+   if(!owner)return null;
+   await this.ledger.authorize(c,owner.principal_id,input.contextId);
+   const live=(await c.query('SELECT instance_id,epoch FROM ac_managers WHERE context_id=$1 AND lease_until>clock_timestamp()',[input.contextId])).rows[0];
+   if(!live||!Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount))return null;
+   await this.ledger.fence(c,{contextId:input.contextId,epoch:Number(live.epoch),instanceId:live.instance_id},true);
+   const load=async()=>(await c.query(`SELECT j.state,j.container_id,j.container_name,j.input_digest,g.state grant_state,g.physical_receipt,s.state call_state,s.session_id,s.profile_id,s.execution_epoch,s.intent_id,s.selected_executor_id,s.selected_executor_digest,s.selected_key_fingerprint
+    FROM ac_native_planning_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_semantic_planning_calls s ON s.id=j.id
+    WHERE j.id=$1 AND j.grant_id=$2 AND j.context_id=$3 FOR UPDATE OF j,g,s`,[input.callId,input.grantId,input.contextId])).rows[0];
+   const eligible=(row:Record<string,any>|undefined)=>Boolean(row&&row.call_state==='uncertain'&&row.state==='uncertain'&&!row.container_id&&row.container_name===name&&row.grant_state==='released'&&row.physical_receipt?.source==='personal-startup-sweep'&&row.physical_receipt?.containersAbsent===true&&row.input_digest===input.inputDigest&&row.intent_id===input.intentId&&row.session_id===input.sessionId&&row.profile_id===input.profile.id&&Number(row.execution_epoch)===input.executionEpoch&&row.selected_executor_id===this.config.id&&row.selected_executor_digest===this.config.executorDigest&&row.selected_key_fingerprint===this.keyFingerprint);
+   const job=await load();if(!eligible(job))return null;
+   let first:Awaited<ReturnType<DockerDaemon['inspect']>>;let second:Awaited<ReturnType<DockerDaemon['inspect']>>;
+   try{first=await this.docker.inspect(name);}catch(error){if(dockerUncertain(error))return null;throw error;}
+   if(first)return null;
+   try{second=await this.docker.inspect(name);}catch(error){if(dockerUncertain(error))return null;throw error;}
+   if(second||!eligible(await load()))return null;
+   const output='',payload={callId:input.callId,intentId:input.intentId,contextId:input.contextId,grantId:input.grantId,profileId:input.profile.id,sessionId:input.sessionId,epoch:input.executionEpoch,
+    executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,profileDigest:digest(input.profile),outputDigest:createHash('sha256').update(output).digest('hex'),physicalDigest:digest(job.physical_receipt),exitCode:1,failureCode:'NATIVE_CONTAINER_NEVER_STARTED'};
+   const receipt={payload,signature:sign(null,planningReceiptMessage(payload),this.key).toString('hex')};
+   const updated=await c.query("UPDATE ac_native_planning_jobs SET state='failed',receipt=$2 WHERE id=$1 AND state='uncertain' AND container_id IS NULL",[input.callId,receipt]);
+   return updated.rowCount===1?{output,receipt}:null;
+  });
+ }
  private async reconcile(input:PlanningInvocation):Promise<{output:string;receipt:unknown}|null>{
   await input.assertAuthorized();
   if(this.config.syntheticFixture){const context=(await this.ledger.pool.query('SELECT project_id FROM ac_contexts WHERE id=$1',[input.contextId])).rows[0];assertNativeSyntheticFixture(this.config.syntheticFixture,{workerImage:this.config.imageId,toolsImage:this.config.imageId,providerNetworkId:this.config.providerNetwork},{projectId:context?.project_id,contextId:input.contextId});}
@@ -334,11 +365,17 @@ export class NativePlanningSupervisor{
   const original=(await this.ledger.pool.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1',[input.callId])).rows[0];
   if(!original||original.grant_id!==input.grantId||original.intent_id!==input.intentId||original.context_id!==input.contextId||original.session_id!==input.sessionId||original.profile_id!==input.profile.id||Number(original.execution_epoch)!==input.executionEpoch||original.selected_executor_id!==this.config.id||original.selected_executor_digest!==this.config.executorDigest||original.selected_key_fingerprint!==this.keyFingerprint)throw new Refusal('PLANNING_CALL_CONFLICT');
   if(['completed','failed'].includes(job.state)){
-   const receipt=PlanningPhysicalReceipt.parse(job.receipt),result=await this.terminalResult(input,receipt.payload.exitCode);
+   const receipt=PlanningPhysicalReceipt.parse(job.receipt);
+   if(receipt.payload.failureCode==='NATIVE_CONTAINER_NEVER_STARTED'){
+    const empty=createHash('sha256').update('').digest('hex');
+    if(receipt.payload.exitCode===0||receipt.payload.outputDigest!==empty||!verify(null,planningReceiptMessage(receipt.payload),createPublicKey(this.key),Buffer.from(receipt.signature,'hex')))throw new Refusal('PLANNING_RESULT_CONFLICT');
+    return {output:'',receipt};
+   }
+   const result=await this.terminalResult(input,receipt.payload.exitCode);
    if(!verify(null,planningReceiptMessage(receipt.payload),createPublicKey(this.key),Buffer.from(receipt.signature,'hex'))||receipt.payload.outputDigest!==createHash('sha256').update(result.output).digest('hex')||receipt.payload.exitCode!==result.exitCode)throw new Refusal('PLANNING_RESULT_CONFLICT');
    return {output:result.output,receipt};
   }
-  const physical=await this.docker.inspect(job.container_name);if(!physical)return null;
+  const physical=await this.docker.inspect(job.container_name);if(!physical)return this.sealPersonalNeverStarted(input);
   this.inspectExpected(physical,job,input.profile.accountId);
   if(physical.State.Running||physical.State.Status==='created')return null;
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return null;

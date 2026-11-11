@@ -16,7 +16,7 @@ const Profile=z.object({id:Id,accountId:Id,provider:z.string().min(1).max(80),mo
  effort:z.enum(['low','medium','high']),mode:z.enum(['synthetic','subscription_cli'])}).strict();
 export const PlanningPhysicalReceipt=z.object({payload:z.object({callId:Id,intentId:Id,contextId:Id,grantId:Id,profileId:Id,sessionId:Id,
  epoch:z.number().int().positive(),executorDigest:Hash,inputDigest:Hash,profileDigest:Hash,outputDigest:Hash,physicalDigest:Hash,
- exitCode:z.number().int()}).strict(),signature:z.string().regex(/^[a-f0-9]{128}$/)}).strict();
+ exitCode:z.number().int(),failureCode:z.string().min(1).max(120).optional()}).strict(),signature:z.string().regex(/^[a-f0-9]{128}$/)}).strict();
 export const planningReceiptMessage=(payload:z.infer<typeof PlanningPhysicalReceipt>['payload'])=>Buffer.from('agent-control:semantic-planning-receipt:v1\n'+canonical(payload));
 export type PlanningInvocation={callId:string;intentId:string;contextId:string;grantId:string;sessionId:string;executionEpoch:number;inputDigest:string;
  profile:z.infer<typeof Profile>;sourceMessageRef:string;text:string;constraints:{qualityRevision:number;targetRef:string;knownReferences:readonly string[]};outputSchema:unknown;assertAuthorized:()=>Promise<void>};
@@ -142,7 +142,11 @@ export class SemanticPlanning{
    await this.authorize(c,principal,authority,input.intentId,true);
    const saved=(await c.query('SELECT * FROM ac_semantic_planning_calls WHERE id=$1 FOR UPDATE',[input.id])).rows[0];
    const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1',[grantId])).rows[0];
-   if(!grant||grant.state!=='released'||grant.resource_kind!=='model'||grant.role!=='manager'||grant.profile_id!==profile.id||grant.account_id!==profile.accountId||grant.context_id!==input.contextId||grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==launch.epoch||!grant.physical_receipt||grant.physical_receipt.jobId!==input.id||grant.physical_receipt.exitCode!==p.exitCode||!Number.isFinite(Date.parse(grant.physical_receipt.finishedAt))||String(grant.physical_receipt.finishedAt).startsWith('0001-')||!/^[a-f0-9]{64}$/.test(grant.physical_receipt.containerId??'')||digest(grant.physical_receipt)!==p.physicalDigest)throw new Refusal('PLANNING_PHYSICAL_RESULT_UNCONFIRMED');
+   const sweep=grant?.physical_receipt?.source==='personal-startup-sweep'&&grant.physical_receipt?.containersAbsent===true;
+   const personal=Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+   const neverStarted=Boolean(personal&&sweep&&p.exitCode!==0&&p.failureCode==='NATIVE_CONTAINER_NEVER_STARTED');
+   const containerConfirmed=Boolean(grant?.physical_receipt&&grant.physical_receipt.jobId===input.id&&grant.physical_receipt.exitCode===p.exitCode&&Number.isFinite(Date.parse(grant.physical_receipt.finishedAt))&&!String(grant.physical_receipt.finishedAt).startsWith('0001-')&&/^[a-f0-9]{64}$/.test(grant.physical_receipt.containerId??''));
+   if(!grant||grant.state!=='released'||grant.resource_kind!=='model'||grant.role!=='manager'||grant.profile_id!==profile.id||grant.account_id!==profile.accountId||grant.context_id!==input.contextId||grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==launch.epoch||!grant.physical_receipt||digest(grant.physical_receipt)!==p.physicalDigest||(!neverStarted&&!containerConfirmed))throw new Refusal('PLANNING_PHYSICAL_RESULT_UNCONFIRMED');
    if(saved.state==='ready'||saved.state==='published'||saved.state==='rejected'){if(digest(saved.receipt)!==digest(receipt))throw new Refusal('PLANNING_RESULT_CONFLICT');return;}
    if(saved.state!=='uncertain'||saved.grant_id!==grantId)throw new Refusal('PLANNING_CALL_FENCED');
    await c.query('UPDATE ac_semantic_planning_calls SET state=$2,proposal=$3,receipt=$4,failure_code=$5 WHERE id=$1',[input.id,failure?'rejected':'ready',proposal??null,receipt,failure??null]);
