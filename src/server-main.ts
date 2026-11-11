@@ -165,7 +165,7 @@ async function main(){
   const {configureCodexQuotaRegistry}=await import('./codex-quota-registry.ts');
   const quotaRegistry=await configureCodexQuotaRegistry(ledger,config.codexQuota??{state:'disabled'});
   await quotaRegistry.reconcile();
-  if(config.activation==='personal'){const {registerStageReporter}=await import('./personal-team-feed.ts');registerStageReporter(ledger.pool,{executionHost:join(config.dataDirectory,'native','execution-host'),repo:config.project.repo});}
+  if(config.activation==='personal'){const {registerStageReporter}=await import('./personal-team-feed.ts');registerStageReporter(ledger.pool,{executionHost:join(config.dataDirectory,'native','execution-host')});}
   const nativeHome=join(config.dataDirectory,'cezar');await privateDirectory(nativeHome);
   process.env.CEZ_HOME=nativeHome;
   for(const name of ['CEZ_AUTONAME','CEZ_AUTOMATIONS','CEZ_SKILLS_AUTO_UPDATE','CEZ_TELEMETRY'])process.env[name]='0';

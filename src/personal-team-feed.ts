@@ -8,9 +8,9 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {z} from 'zod';
 
-export type TeamFeedOptions={executionHost:string;repo:string};
+export type TeamFeedOptions={executionHost:string;repo?:string;pool?:pg.Pool};
 export type TeamMessage={id:string;text:string};
-type Job={id:string;kind:'planning'|'programmer'|'qa'|'reviewer'|'judge'|'specialist';state:string;provider:string|null;model:string|null;effort:string|null;receipt:any;base:string|null};
+type Job={id:string;kind:'planning'|'programmer'|'qa'|'reviewer'|'judge'|'specialist';state:string;provider:string|null;model:string|null;effort:string|null;receipt:any;base:string|null;intentId?:string|null};
 
 const ROLE:Record<Job['kind'],string>={planning:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor',judge:'Juiz',specialist:'Especialista'};
 const Uuid=z.uuid();
@@ -18,13 +18,13 @@ const Uuid=z.uuid();
 export async function teamJobs(pool:pg.Pool,contextId:string,limit=40):Promise<Job[]>{
  const rows=(await pool.query(`
   SELECT * FROM (
-   SELECT j.id::text,'planning' kind,j.state,a.provider,p.model,p.effort,j.receipt,NULL base,j.created_at FROM ac_native_planning_jobs j
+   SELECT j.id::text,'planning' kind,j.state,a.provider,p.model,p.effort,j.receipt,NULL base,NULL::uuid "intentId",j.created_at FROM ac_native_planning_jobs j
     JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=p.account_id WHERE j.context_id=$1
    UNION ALL
-   SELECT j.id::text,j.role,j.state,a.provider,p.model,p.effort,j.receipt,j.base_id,j.created_at FROM ac_native_execution_jobs j
+   SELECT j.id::text,j.role,j.state,a.provider,p.model,p.effort,j.receipt,j.base_id,j.intent_id,j.created_at FROM ac_native_execution_jobs j
     JOIN ac_profiles p ON p.id=j.profile_id JOIN ac_accounts a ON a.id=j.account_id WHERE j.context_id=$1
    UNION ALL
-   SELECT j.id::text,'qa',j.state,NULL,NULL,NULL,j.receipt,NULL,j.created_at FROM ac_native_qa_jobs j WHERE j.context_id=$1
+   SELECT j.id::text,'qa',j.state,NULL,NULL,NULL,j.receipt,NULL,j.intent_id,j.created_at FROM ac_native_qa_jobs j WHERE j.context_id=$1
   ) x ORDER BY created_at DESC LIMIT $2`,[contextId,limit])).rows;
  return rows.reverse() as Job[];
 }
@@ -47,6 +47,13 @@ export function dockerLogText(bytes:Buffer){
 async function qaLog(root:string,id:string){
  if(!Uuid.safeParse(id).success)return '';
  try{return dockerLogText(await readFile(join(root,id,'qa-logs.bin')));}catch{return '';}
+}
+async function intentRepository(pool:pg.Pool,intentId:string){
+ if(!Uuid.safeParse(intentId).success)return;
+ try{
+  const row=(await pool.query(`SELECT r.repo FROM ac_intents i JOIN ac_contexts c ON c.id=i.context_id JOIN ac_project_repositories r ON r.project_id=c.project_id WHERE i.id=$1`,[intentId])).rows[0];
+  return typeof row?.repo==='string'&&row.repo?row.repo:undefined;
+ }catch{return;}
 }
 function changedFiles(repo:string,base:string,commit:string):Promise<string>{
  return new Promise(done=>execFile('git',['-C',repo,'diff','--numstat',base,commit],{timeout:10000,maxBuffer:1<<20},(error,stdout)=>{
@@ -74,7 +81,8 @@ export async function teamMessage(job:Job,options:TeamFeedOptions):Promise<TeamM
  const result=await workerResult(options.executionHost,job.id);
  if(job.kind==='programmer'){
   const artifact=job.receipt?.payload?.artifact;
-  const files=artifact?.base&&artifact?.commit?await changedFiles(options.repo,artifact.base,artifact.commit):'';
+  const repo=job.intentId&&options.pool?await intentRepository(options.pool,job.intentId):undefined;
+  const files=artifact?.base&&artifact?.commit&&repo?await changedFiles(repo,artifact.base,artifact.commit):'';
   const said=result?.output?clip(result.output,900):'';
   return {id,text:ok
    ?`${name} terminou.${said?'\n«'+said+'»':''}${artifact?.commit?`\nCommit ${String(artifact.commit).slice(0,7)}${files?' — arquivos: '+files:''}.`:''}`
@@ -94,7 +102,8 @@ export async function teamStatus(pool:pg.Pool,contextId:string,options:TeamFeedO
  const names:Record<string,string>={manager:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor'};
  const team=profiles.map(p=>`• ${names[p.role]}: ${p.provider} · ${p.model} · ${p.effort}`).join('\n');
  const recent=await teamJobs(pool,contextId,6);
- const last=(await Promise.all(recent.map(job=>teamMessage(job,options)))).filter(Boolean).map(m=>'• '+m!.text.split('\n')[0]).join('\n');
+ const feed={...options,pool};
+ const last=(await Promise.all(recent.map(job=>teamMessage(job,feed)))).filter(Boolean).map(m=>'• '+m!.text.split('\n')[0]).join('\n');
  return `Equipe:\n${team||'• nenhuma conta ativa'}\n• QA: script automático do projeto (sem modelo)\n\nÚltimas atividades:\n${last||'• nada ainda'}`;
 }
 
@@ -122,7 +131,7 @@ export function registerStageReporter(pool:pg.Pool,options:TeamFeedOptions){
    :(await pool.query(`SELECT j.id::text,j.role kind,j.state,a.provider,p.model,p.effort,j.receipt,j.base_id base FROM ac_native_execution_jobs j
       JOIN ac_profiles p ON p.id=j.profile_id JOIN ac_accounts a ON a.id=j.account_id WHERE j.intent_id=$1 AND j.role=$2 ORDER BY j.created_at DESC LIMIT 1`,
       [intentId,node==='implement'?'programmer':node==='review'?'reviewer':node])).rows[0];
-  return row?(await teamMessage(row as Job,options))?.text??null:null;
+  return row?(await teamMessage({...(row as Job),intentId},{...options,pool}))?.text??null:null;
  };
 }
 export async function stageReport(intentId:string,node:string){

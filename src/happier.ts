@@ -674,7 +674,7 @@ export class HappierEndpoint {
      // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
      for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
       if(this.announced.get('team|'+job.id)===job.state)continue;
-      const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(()=>null);
+      const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(()=>null);
       if(message)await this.say(message.id,message.text).catch(()=>{});
       this.announced.set('team|'+job.id,job.state);
      }

@@ -1,8 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {dockerLogText,teamMessage} from '../src/personal-team-feed.ts';
 import {personalControlWord} from '../src/personal-conversation.ts';
@@ -31,6 +32,32 @@ test('each role reports who ran it and what it produced',async()=>{
  const running=await teamMessage({...base,id:programmer,kind:'programmer',state:'running',receipt:null},{executionHost:root,repo});
  assert.equal(running!.id,'team-'+programmer+'-running');
  assert.equal(await teamMessage({...base,id:'../x',kind:'reviewer',state:'completed',receipt:{}},{executionHost:root,repo}).then(m=>m!.text),'Revisor (claude · claude-sonnet-5-5 · medium) não concluiu a revisão.');
+});
+
+test('the programmer report diffs only the intent repository',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'team-repo-')),repoA=join(root,'a'),repoB=join(root,'b');
+ const prepare=async(repo:string,file:string)=>{
+  await mkdir(repo);
+  execFileSync('git',['init','-q','-b','main',repo],{stdio:'ignore'});
+  execFileSync('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@invalid','commit','--allow-empty','-m','base'],{stdio:'ignore'});
+  const base=execFileSync('git',['-C',repo,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
+  await writeFile(join(repo,file),file+'\n');
+  execFileSync('git',['-C',repo,'add',file],{stdio:'ignore'});
+  execFileSync('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@invalid','commit','-m','change'],{stdio:'ignore'});
+  return {base,commit:execFileSync('git',['-C',repo,'rev-parse','HEAD'],{encoding:'utf8'}).trim()};
+ };
+ try{
+  const a=await prepare(repoA,'only-a.txt'),b=await prepare(repoB,'only-b.txt'),intent=randomUUID();
+  const job={id:randomUUID(),kind:'programmer' as const,state:'completed',provider:'grok',model:'grok-4.7',effort:'medium',base:null,intentId:intent,receipt:{payload:{artifact:{base:b.base,commit:b.commit}}}};
+  const pool=(repo?:string)=>({query:async()=>({rows:repo?[{repo}]:[]})}) as never;
+  const shown=await teamMessage(job,{executionHost:root,repo:repoA,pool:pool(repoB)});
+  assert.match(shown!.text,/only-b\.txt/);
+  assert.doesNotMatch(shown!.text,/only-a\.txt/);
+  const hidden=await teamMessage({...job,receipt:{payload:{artifact:{base:a.base,commit:a.commit}}}},{executionHost:root,repo:repoA,pool:pool()});
+  assert.match(hidden!.text,/Commit /);
+  assert.doesNotMatch(hidden!.text,/arquivos/);
+  assert.doesNotMatch(hidden!.text,/only-a\.txt/);
+ }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('equipe and status ask for the team panel',()=>{
