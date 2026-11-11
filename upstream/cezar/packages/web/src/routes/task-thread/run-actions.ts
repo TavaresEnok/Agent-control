@@ -71,6 +71,8 @@ export function resumeCommand(runner: Runner | undefined, sessionId: string): st
  *  has its own worktree, because the resume only makes sense from in there. Absent for an id
  *  `resumeCommand` refuses (#431), exactly as for a run that never recorded a session. */
 export function resumeHint(run: RunRecord): string | undefined {
+  // Workers are isolated; a pasted `claude --resume` cannot take the session over.
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return undefined
   if (isRunActive(run.status) || run.worktreeLifecycle?.activeOperationId) return undefined
   const sessionId = lastSessionId(run)
   if (sessionId === undefined) return undefined
@@ -89,6 +91,7 @@ export function resumeHint(run: RunRecord): string | undefined {
  *  and would otherwise offer to attach a second CLI to the transcript the engine is driving.
  *  Those picks launch a fresh CLI in the worktree instead — what the server does too. */
 export function cliTargetResumes(run: RunRecord, targetId: string): boolean {
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return false
   const runner = cliTargetRunner(targetId)
   if (!runner) return false
   if (isRunActive(run.status) || run.worktreeLifecycle?.activeOperationId) return false
@@ -138,7 +141,7 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
   return {
     finish: !gated && (run.status === 'waiting' || run.status === 'review'),
     continueRun: !gated && !active && hasSession,
-    terminal: !gated && !active && hasSession,
+    terminal: import.meta.env.VITE_AGENT_CONTROL_MANAGED !== '1' && !gated && !active && hasSession,
     notes: true,
     archive: !active,
     pin: !run.archived,

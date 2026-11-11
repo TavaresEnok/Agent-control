@@ -270,8 +270,11 @@ function RunHeaderView({
               actions={
                 <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
                   <TaskItemActions run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
-                  {/* Terminal is folded into the Open in… menu to save room. */}
-                  <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
+                  {/* Terminal is folded into the Open in… menu to save room. Isolated workers
+                      have no local session to hand to a terminal, so the managed panel hides it. */}
+                  {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? null : (
+                    <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
+                  )}
                 </div>
               }
               continuationEngine={continuationEngine}
