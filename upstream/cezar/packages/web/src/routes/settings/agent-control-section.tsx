@@ -22,6 +22,7 @@ import {AgentControlProviderCollectors} from './agent-control-provider-collector
 import {AgentControlObservability} from './agent-control-observability'
 import {AgentControlImportPreview} from './agent-control-import-preview'
 import {AgentControlProjectAdmin} from './agent-control-project-admin'
+import {AgentControlArchiveProject} from './agent-control-archive-project'
 import {AgentControlDiagnostics} from './agent-control-diagnostics'
 import {AgentControlRemoteSources} from './agent-control-remote-sources'
 import {AgentControlProviderEligibility,providerEligibilityViewSchema} from './agent-control-provider-eligibility'
@@ -174,6 +175,7 @@ function ScopedAgentControlSection({projectId}:{projectId:string|null}){
    </div>}
   </SettingsField>
   <Button variant="outline" disabled={busy} onClick={()=>{void request('/api/v1/ac/auth/logout',{}).then(()=>window.location.reload())}}>Sair deste navegador</Button>
+  {projectId ? <AgentControlArchiveProject projectId={projectId} /> : null}
   <AgentControlQuotaRegistry/>
   <AgentControlInstallationAuthority/>
   <AgentControlImportPreview/>

@@ -336,7 +336,12 @@ export function ProjectGroups({
 
   return (
     <div data-slot="project-group-list">
-      <div className="mb-1 flex justify-end">
+      <div className="mb-1 flex justify-end gap-1">
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? (
+          <Link to="/novo-projeto" data-slot="new-personal-project" className="flex h-7 items-center rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+            Novo projeto
+          </Link>
+        ) : null}
         <button
           type="button"
           data-slot="project-folder-create"

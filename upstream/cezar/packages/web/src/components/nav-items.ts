@@ -1,4 +1,5 @@
 import {
+  FolderPlusIcon,
   GitBranchIcon,
   InboxIcon,
   ListChecksIcon,
@@ -63,6 +64,7 @@ function listedNavItems(): readonly NavItem[] {
   if (import.meta.env.VITE_AGENT_CONTROL_MANAGED !== '1') return NAV_ITEMS
   return [
     { to: '/conversa', label: 'Conversa', icon: MessageSquareIcon, match: ['/', '/conversa'] },
+    { to: '/novo-projeto', label: 'Novo projeto', icon: FolderPlusIcon, match: ['/novo-projeto'] },
     ...NAV_ITEMS.map((item) => item.to === '/'
       ? { ...item, to: '/tarefas', match: ['/tarefas', '/tasks', '/compare'] }
       : item),

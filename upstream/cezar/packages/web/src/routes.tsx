@@ -21,6 +21,7 @@ import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
 import { ConversaRoute } from './routes/conversa'
+import { NovoProjetoRoute } from './routes/novo-projeto'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
@@ -297,6 +298,7 @@ const PAGE_TITLE_ROUTES = [
   ...(import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
     ? [
         { pattern: '/conversa', pageLabel: 'Conversa' },
+        { pattern: '/novo-projeto', pageLabel: 'Novo projeto' },
         { pattern: '/tarefas', pageLabel: 'Tarefas' },
       ]
     : []),
@@ -353,6 +355,9 @@ export const AppRoutes = memo(function AppRoutes() {
         />
         {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
           <Route path="conversa" element={<ConversaRoute />} />
+        )}
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
+          <Route path="novo-projeto" element={<NovoProjetoRoute />} />
         )}
         {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
           <Route path="tarefas" element={<TasksOverviewRoute />} />
