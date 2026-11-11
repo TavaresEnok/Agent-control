@@ -54,6 +54,10 @@ npm run personal:roots -- ~/.agent-control/ispagent/installation.json remove pro
 
 `add` grava o caminho real e absoluto. Recusa `/`, a home inteira, o diretório de dados e um caminho com link simbólico no meio. O arquivo anterior fica em `installation.json.before-roots`. No fim, reinicie o gateway com o comando que ele imprimir.
 
+### Projeto em outro servidor
+
+No painel, em "Novo projeto", escolha "Outro servidor (SSH)". Copie a chave pública para o `~/.ssh/authorized_keys` do usuário nesse servidor. Informe host, porta e usuário, confira o fingerprint e confirme. Navegue até a pasta e crie. A cópia fica neste servidor. O resultado volta no branch `agent-control/…` do outro servidor. O branch principal de lá não muda.
+
 ## Instalar
 
 1. PostgreSQL e Docker no servidor.
