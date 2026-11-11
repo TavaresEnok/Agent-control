@@ -111,3 +111,21 @@ export async function teamModelsMetadata(pool:pg.Pool,metadata:Record<string,unk
  if(current?.currentModelId===TEAM_MODEL_ID&&current.availableModels?.[0]?.description===description)return null;
  return {...metadata,sessionModelsV1:state,acpSessionModelsV1:state};
 }
+
+// The Cezar cockpit shows one text per step. In personal mode that text becomes the role's own report
+// (who ran it, what it said or found) instead of a generic marker. Set once by the personal gateway.
+let stageReporter:((intentId:string,node:string)=>Promise<string|null>)|undefined;
+export function registerStageReporter(pool:pg.Pool,options:TeamFeedOptions){
+ stageReporter=async(intentId,node)=>{
+  const row=node==='qa'
+   ?(await pool.query(`SELECT j.id::text,'qa' kind,j.state,NULL provider,NULL model,NULL effort,j.receipt,NULL base FROM ac_native_qa_jobs j WHERE j.intent_id=$1 ORDER BY j.created_at DESC LIMIT 1`,[intentId])).rows[0]
+   :(await pool.query(`SELECT j.id::text,j.role kind,j.state,a.provider,p.model,p.effort,j.receipt,j.base_id base FROM ac_native_execution_jobs j
+      JOIN ac_profiles p ON p.id=j.profile_id JOIN ac_accounts a ON a.id=j.account_id WHERE j.intent_id=$1 AND j.role=$2 ORDER BY j.created_at DESC LIMIT 1`,
+      [intentId,node==='implement'?'programmer':node==='review'?'reviewer':node])).rows[0];
+  return row?(await teamMessage(row as Job,options))?.text??null:null;
+ };
+}
+export async function stageReport(intentId:string,node:string){
+ if(!stageReporter)return null;
+ return stageReporter(intentId,node).catch(()=>null);
+}

@@ -1,3 +1,4 @@
+import {ownerRequest} from './personal-owner-request.ts';
 import {serverTiming} from './request-timing.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {AdministrativeOperations} from './administrative-operations.ts';
@@ -30,8 +31,31 @@ import {resolve,sep} from 'node:path';
 
 // Only immutable public UI files are served without a session. Never delegate an
 // unauthenticated request to the embedded server, which owns privileged routes.
+// Lets a phone install the cockpit as an app (home-screen icon, full screen). No service worker:
+// the cockpit needs the server anyway, and nothing private is cached.
+const manifest=JSON.stringify({name:'Agent Control',short_name:'Agent Control',start_url:'/',scope:'/',display:'standalone',
+  background_color:'#000000',theme_color:'#000000',icons:[{src:'/pwa/icon-192.png',sizes:'192x192',type:'image/png'},
+  {src:'/pwa/icon-512.png',sizes:'512x512',type:'image/png'},{src:'/pwa/icon-512.png',sizes:'512x512',type:'image/png',purpose:'maskable'}]});
+const installTags='<link rel="manifest" href="/manifest.webmanifest" /><meta name="theme-color" content="#000000" />'+
+  '<meta name="apple-mobile-web-app-capable" content="yes" /><meta name="mobile-web-app-capable" content="yes" />'+
+  '<meta name="apple-mobile-web-app-title" content="Agent Control" /><link rel="apple-touch-icon" href="/pwa/icon-180.png" />';
+// A plan run is titled "Intent <id>" because admission checks that exact task text. In the cockpit,
+// show the owner's own request instead (personal mode binds it; elsewhere the title stays).
+async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T):Promise<T>{
+  const match=typeof run.title==='string'?/^Intent ([0-9a-f-]{36})$/.exec(run.title):null;
+  if(!match)return run;
+  const row=(await ledger.pool.query('SELECT context_id FROM ac_intents WHERE id=$1',[match[1]]).catch(()=>({rows:[]}))).rows[0];
+  const text=row?await ownerRequest(String(row.context_id),match[1]):undefined;
+  if(!text)return run;
+  const line=text.trim().split('\n')[0]!.trim();
+  return {...run,title:line.length>90?line.slice(0,90).trimEnd()+'…':line};
+}
 async function publicUi(path:string):Promise<Response|null>{
   let file:string, type:string;
+  if(path==='/manifest.webmanifest')return new Response(manifest,{headers:{'content-type':'application/manifest+json','cache-control':'no-cache','x-content-type-options':'nosniff'}});
+  if(/^\/pwa\/icon-(?:180|192|512)\.png$/.test(path)){
+    try{return new Response(await readFile(resolve('deploy',path.slice(1))),{headers:{'content-type':'image/png','cache-control':'max-age=86400','x-content-type-options':'nosniff'}});}catch{return null;}
+  }
   if(path==='/icon.svg'){file='icon.svg';type='image/svg+xml';}
   else if(/^\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|woff2|png|svg)$/.test(path)){
     file=path.slice(1);const ext=file.split('.').pop();
@@ -43,7 +67,8 @@ async function publicUi(path:string):Promise<Response|null>{
     const root=await realpath(resolve('upstream/cezar/packages/cezar/web/dist'));
     const actual=await realpath(resolve(root,file));
     if(!actual.startsWith(root+sep))return null;
-    return new Response(await readFile(actual),{headers:{'content-type':type,'cache-control':'no-cache','x-content-type-options':'nosniff'}});
+    const body=file==='index.html'?(await readFile(actual,'utf8')).replace('</head>',installTags+'</head>'):await readFile(actual);
+    return new Response(body,{headers:{'content-type':type,'cache-control':'no-cache','x-content-type-options':'nosniff'}});
   }catch{return null;}
 }
 
@@ -281,6 +306,14 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   // Cezar is embedded, never exposed as a second private-port API.
   family.all('*', async c => {
     if (c.req.header('upgrade')) return c.json({ error: 'INGRESS_DISABLED' }, 403);
+    // The cockpit is read-only. Its bookkeeping calls change nothing in the project and are answered
+    // here, so the page does not retry them in a loop; every real mutation still goes through Happier.
+    const plain=new URL(c.req.url).pathname.replace(/^\/api\/v1\/p\/[^/]+/,'/api/v1');
+    if(c.req.method==='POST'&&(/^\/api\/v1\/runs\/[a-f0-9-]{36}\/read$/.test(plain)||/^\/api\/v1\/telemetry\/[a-z-]+$/.test(plain)))return c.body(null,204);
+    // View preferences are kept by the browser for the session; echo them instead of storing them.
+    if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){const text=await c.req.text();if(text.length>65536)return c.json({error:'UI_STATE_TOO_LARGE'},413);
+     try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}}
+    if(c.req.method==='GET'&&/^\/api\/v1\/runs\/[a-f0-9-]{36}\/(?:drafts|history-context)$/.test(plain))return c.json(plain.endsWith('drafts')?{drafts:[]}:{});
     if (c.req.method !== 'GET') return c.json({ error: 'CANONICAL_HAPPIER_REQUIRED' }, 403);
     const url = new URL(c.req.url);
     let path = url.pathname;
@@ -303,7 +336,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const allowed = await ledger.pool.query(`SELECT i.run_id FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
         JOIN ac_memberships m ON m.project_id=x.project_id WHERE x.project_id=$1 AND m.principal_id=$2`, [runtime.projectId, c.get('principal')]);
       const ids = new Set(allowed.rows.map(row => row.run_id));
-      return c.json(runtime.store.listRuns().filter(run => ids.has(run.id)));
+      return c.json(await Promise.all(runtime.store.listRuns().filter(run => ids.has(run.id)).map(run=>ownerTitled(ledger,run))));
     }
     const run = path.match(/^\/api\/v1\/runs\/([a-f0-9-]{36})(?:\/(events|history|diff|layouts|usage|dispatch|todos|git\/status|changes))?$/);
     if (run) {
@@ -313,6 +346,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
         const scope=await ledger.authorize(db,c.get('principal'),bound.rows[0].context_id,false);
         if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
       });
+      if(!run[2]){
+        const native=await runtime.native.fetch(nativeRequest);
+        if(!native.ok||!native.headers.get('content-type')?.includes('json'))return native;
+        return c.json(await ownerTitled(ledger,await native.json() as {title?:unknown}),native.status as 200);
+      }
       return runtime.native.fetch(nativeRequest);
     }
     if (/^\/api\/v1\/(health|capabilities|ui-state|repo|config|open-targets|workflows(?:\/[^/]+)?|providers(?:\/status)?|models|telemetry\/consent|workspace\/(ui-state|config|events|capabilities))$/.test(path))

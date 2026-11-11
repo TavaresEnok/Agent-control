@@ -117,6 +117,16 @@ O aplicativo é o Happier oficial: iOS na App Store, Android no Google Play, des
 
 Este caminho segue a documentação do Happier, mas ainda não foi testado num aparelho de verdade.
 
+### Painel no celular (Cezar)
+
+O gateway serve a tela do Cezar presa ao projeto: as execuções, o fluxo de cada uma (programar, revisar, QA, integrar), o relato de cada papel e os commits. Ela é só de leitura: os pedidos, `aprovar` e `pare` continuam pela conversa do Happier. Para abrir no celular e instalar como app:
+
+```bash
+npm run personal:cockpit -- ~/.agent-control/meuprojeto/installation.json painel.seudominio.com
+```
+
+Precisa de um registro DNS A próprio (diferente do Happier) e do Happier já publicado (`personal:public`). O script cria o site no Caddy, aponta a instalação para o endereço HTTPS e reinicia o gateway. No celular: abra o endereço, toque em "Entrar pelo Happier", depois em "Autorizar no aplicativo Happier", aprove no app e volte; no menu do navegador use "Adicionar à tela inicial". Cada projeto tem o próprio painel.
+
 ## Adicionar contas
 
 Só contas que você possui.

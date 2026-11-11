@@ -19,7 +19,8 @@
     "personal:happier": "node scripts/personal-happier.mjs",
     "personal:services": "node scripts/personal-services.mjs",
     "personal:public": "node scripts/personal-public.mjs",
-    "prebuild": "node scripts/prepare-build.mjs --before"
+    "prebuild": "node scripts/prepare-build.mjs --before",
+    "personal:cockpit": "node scripts/personal-cockpit.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

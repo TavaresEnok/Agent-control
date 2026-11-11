@@ -1,3 +1,4 @@
+import {stageReport} from './personal-team-feed.ts';
 import {ownerRequest} from './personal-owner-request.ts';
 import {randomUUID} from 'node:crypto';
 import {execFile,spawn} from 'node:child_process';
@@ -199,6 +200,7 @@ export class NativeImplementation{
      const row=(await this.ledger.pool.query('SELECT g.physical_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id WHERE j.id=$1',[intent.operation_id])).rows[0];
      const tokens=row?.physical_receipt?.normalizedTokensUsed;
      const text=`Native artifact prepared for independent QA and review: ${artifact.commit_id}`;
+     const report=await stageReport(intent.id,'implement');if(report)onEvent?.({type:'text',text:report});
      if(Number.isSafeInteger(tokens)&&tokens>=0)onEvent?.({type:'token-usage',tokensUsed:tokens});onEvent?.({type:'text',text});onEvent?.({type:'done'});
      return {text,toolCalls:[],tokensUsed:Number.isSafeInteger(tokens)&&tokens>=0?tokens:0};
     }

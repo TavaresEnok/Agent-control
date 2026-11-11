@@ -1,3 +1,4 @@
+import {stageReport} from './personal-team-feed.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -724,6 +725,7 @@ export class EngineeringStages{
     }finally{if(monitor)clearInterval(monitor);stop(child);await rm(temporary,{recursive:true,force:true});}
     }
    }
+   const report=await stageReport(intent.id,node);if(report)onEvent?.({type:'text',text:report});
    const text=`Synthetic ${node} completed for artifact ${artifact.id}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});
    return {text,toolCalls:[],tokensUsed:0};
   })();
