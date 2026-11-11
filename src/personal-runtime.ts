@@ -1,3 +1,4 @@
+import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {appendFileSync,readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
@@ -88,6 +89,10 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
   if(!accountSubjects.length)continue;
   planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:boot.planning.executorDigest,imageId:boot.planning.imageId,
    hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects}));
+  // A rebuilt image changes the executor identity; a call left uncertain under the old one is reconciled only by it.
+  for(const imageId of (boot.planning.retiredImageIds??[]).filter(id=>id!==boot.planning.imageId))
+   planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:nativePlanningExecutorDigest(imageId),imageId,active:false,
+    hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects}));
  }
  const executions:NativeExecutionSupervisor[]=[];
  for(const provider of ['codex','claude','grok'] as const){

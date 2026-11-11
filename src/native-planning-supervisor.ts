@@ -24,7 +24,9 @@ const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.strin
 export type NativeRecovery={state:'uncertain'|'released_unstarted'|'acknowledged';interval:'docker_response_lost'|'before_terminal_evidence'|'network_or_container_remains'|'supervisor_identity'|'proven_not_started'|'terminal_evidence_missing'|'ack_lost';grant:'preserved'|'released';removed:string[];replayed:false;receipt?:unknown};
 function dockerUncertain(error:unknown){return error instanceof Refusal&&error.code.startsWith('DOCKER_');}
 export type NativePlanningSupervisorConfig={id:string;executorDigest:string;imageId:string;hostRoot:string;accountRoot:string;
- protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude'|'grok';syntheticFixture?:NativeSyntheticFixture};
+ protectedRepositories:readonly string[];signingKeyPem:string;socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;providerNetwork:string;accountSubjects:readonly {accountId:string;subjectDigest:string}[];provider?:'codex'|'claude'|'grok';syntheticFixture?:NativeSyntheticFixture;
+ /** false: registered only to reconcile calls it left uncertain (a replaced image); never launches new work. */
+ active?:boolean};
 /** Fixed Docker supervisor, not a scheduler. No HTTP-controlled image, mount,
  * command, provider address or key. Construction alone performs no inference.
  * Runtime eligibility remains an independent mandatory gate. */
@@ -48,7 +50,7 @@ export class NativePlanningSupervisor{
   this.publicKey=createPublicKey(this.key).export({format:'pem',type:'spki'}).toString();
   this.keyFingerprint=createHash('sha256').update(createPublicKey(this.key).export({format:'der',type:'spki'})).digest('hex');
   this.docker=nativeDockerDaemon(config.socketPath,config.resourceEnvelope);
-  this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:config.syntheticFixture?.provider??config.provider??'codex',mode:config.syntheticFixture?'synthetic':'subscription_cli',
+  this.executor=Object.freeze({id:config.id,digest:config.executorDigest,publicKey:createPublicKey(this.key).export({format:'der',type:'spki'}).toString('base64'),provider:config.syntheticFixture?.provider??config.provider??'codex',mode:config.syntheticFixture?'synthetic':'subscription_cli',...(config.active===false?{active:false}:{}),
    execute:(input:PlanningInvocation)=>this.execute(input),retire:(principal:string,authority:Authority,callId:string)=>this.cleanup(principal,authority,callId),reconcile:(input:PlanningInvocation)=>this.reconcile(input)});
  }
  private async privateDirectory(path:string){const s=await lstat(path);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o7777)!==0o700||s.uid!==process.getuid?.()||await realpath(path)!==path)throw new Refusal('NATIVE_PLANNING_DIRECTORY_UNSAFE');}

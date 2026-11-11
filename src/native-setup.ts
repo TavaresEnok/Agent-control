@@ -7,6 +7,13 @@ import {Ledger} from './ledger.ts';
 import {loadInstallation} from './installation.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
+/** Keeps the replaced planning images so a call left uncertain under one of them can still be reconciled. */
+function retiredPlanning(previous:unknown,current:string):{retiredImageIds?:string[]}{
+ const old=(previous as {state?:string;planning?:{imageId?:string;retiredImageIds?:string[]}}|undefined);
+ if(old?.state!=='active'||!old.planning?.imageId)return {};
+ const ids=[...(old.planning.retiredImageIds??[]),old.planning.imageId].filter((id,i,all)=>id!==current&&all.indexOf(id)===i).slice(-8);
+ return ids.length?{retiredImageIds:ids}:{};
+}
 import {nativeQaContractDigest,NativeQaContract} from './native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
@@ -77,7 +84,7 @@ export async function nativeSetup(path:string){
   const qa=NativeQaContract.parse({schemaVersion:1,id:'personal-qa',image:images.tools,argv:qaArgv,environment:['PATH=/usr/local/bin:/usr/bin:/bin'],timeoutMs:120000,memoryBytes:268435456,pids:64,nanoCpus:500000000});
   const block={state:'active',contract:'native-bootstrap-configured-v1',projectId:config.project.id,contextId:config.managerTransport?.contexts.find(item=>item.projectId===config.project.id)?.contextId??context?.id??randomUUID(),epoch:1,instanceId:randomUUID(),source:'authorized-endpoint',
    accounts:accounts.map(account=>({accountId:account.id,subjectDigest:String(account.resource_identity).slice(account.provider.length+1)})),
-   planning:{id:'personal-planning',imageId:images.planning,executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},
+   planning:{id:'personal-planning',imageId:images.planning,...retiredPlanning(config.nativeBootstrap,images.planning!),executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},
    execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
    qa,qaDigest:nativeQaContractDigest(qa),review:{signingKeyFile:reviewKey.file,keyFingerprint:reviewKey.fingerprint,verifierDigest:nativeReviewVerifierDigest}};
   // The QA stage refuses a policy whose QA verifier digest differs from this contract, so keep the latest revision in step with it.
