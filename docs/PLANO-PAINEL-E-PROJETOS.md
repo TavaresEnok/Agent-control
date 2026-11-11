@@ -13,8 +13,8 @@ Atualize esta tabela a cada commit.
 | 0 | Fechar o que já existe | limpeza feita (`76011327`, `0c6337a3`, `9d5284e7`, revisada e no ar); falta o teste no celular e um pedido real, que fica junto da prova da Fase 1 |
 | 1 | Conversar pelo painel | **pronta e provada** pelo celular simulado no endereço público: pergunta, pedido → proposta → Aprovar → integrado no IspAgent (`4e71540`), Parar com confirmação. Commits `db24662b`…`5f3657fb`. Pendência pequena: o painel tenta o WebSocket `/api/v1/ws` e recebe 403 (ruído no console) |
 | 2 | Vários projetos numa instalação | **pronta e provada**: `--add` acrescentou o repositório "segundo" à instalação do IspAgent (sem banco nem login novos); os dois pedidos rodaram ao mesmo tempo na mesma conta Grok e Claude, cada um integrado só no próprio repositório (IspAgent `12a0f09`, segundo `cf46f54`). Commits `c2845797`, `3836cc60`, `b2910a31` |
-| 3 | Novo projeto pelo painel | código pronto (`a4a8462c`…`802e74cb`, correções `4dc9c82b`, `0d787374`); projeto criado pela tela no celular simulado e carregado após reinício. **Falta:** o pedido no projeto novo falhou às 19:30 porque as duas chamadas ao Claude (revisor e gerente) saíram com código 1 e sem resposta (`EXECUTION_NATIVE_FAILED`, `PLANNING_NATIVE_EXECUTION_FAILED`); suspeita: limite ou login da conta Claude. Investigar e repetir o pedido |
-| 4 | Projeto em outro servidor por SSH | não começada |
+| 3 | Novo projeto pelo painel | **pronta e provada**: projeto criado pela tela no celular simulado (pasta liberada `workspace`), gateway reiniciou sozinho e um pedido nele integrou `cb119fb`. A falha anterior foi o limite de uso da assinatura Claude naquele momento. Commits `a4a8462c`…`802e74cb`, correções `4dc9c82b`, `0d787374` |
+| 4 | Projeto em outro servidor por SSH | com o Grok (esforço alto); servidor SSH de teste em contêiner pronto para a prova |
 | 5 | QA que roda os testes do projeto | não começada |
 | 6 | Avisos no celular e entrada sem o app Happier | não começada |
 | 7 | Fechamento | não começada |
