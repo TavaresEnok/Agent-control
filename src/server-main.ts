@@ -27,6 +27,16 @@ import {bootstrapRecoveryInventory} from './recovery-bootstrap.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
+/** The primary project keeps today's active-bootstrap gate. Any other project
+ * stays administration-only until it has a conversation and a policy, and a miss does not stop its siblings. */
+async function personalProjectMayExecute(ledger:Ledger,projectId:string,primary:boolean){
+ if(primary)return true;
+ const ready=await ledger.pool.query(`SELECT 1 FROM ac_project_repositories r WHERE r.project_id=$1
+  AND EXISTS (SELECT 1 FROM ac_contexts x WHERE x.project_id=r.project_id AND NOT x.archived)
+  AND (EXISTS (SELECT 1 FROM ac_policy_revisions p WHERE p.project_id=r.project_id)
+    OR EXISTS (SELECT 1 FROM ac_quality_policies q WHERE q.project_id=r.project_id))`,[projectId]);
+ return Boolean(ready.rowCount);
+}
 async function main(){
  const [command,path,...extra]=process.argv.slice(2);
  // Retention planning must be dispatched before any installation file is opened.
@@ -173,11 +183,15 @@ async function main(){
   const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
   runtimes=new ProjectRuntimes(async project=>{
    const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report,prepared.resources):undefined;
-   const runtime=new CezarRuntime(ledger,project.repo,project.id,project.id===config.project.id?personalRuntime?.engineering:undefined,undefined,undefined,{...(nativeBootstrap?{nativeBootstrap}:{}),...(project.id===config.project.id&&personalRuntime?{nativePlanning:personalRuntime.planning,nativeExecutions:personalRuntime.executions,nativeImplementation:personalRuntime.implementation}:{})});
+   // Execution follows an active personal bootstrap and that project's own checkout.
+   // A project without a conversation or a policy stays administration-only.
+   const bound=personalRuntime?.byProject.get(project.id);
+   const execute=Boolean(bound&&prepared.report.state==='active'&&await personalProjectMayExecute(ledger,project.id,project.id===config.project.id));
+   const runtime=new CezarRuntime(ledger,project.repo,project.id,execute&&bound?bound.engineering:undefined,undefined,undefined,{...(nativeBootstrap?{nativeBootstrap}:{}),...(execute&&bound&&personalRuntime?{nativePlanning:personalRuntime.planning,nativeExecutions:personalRuntime.executions,nativeImplementation:bound.implementation}:{})});
    try{
-    await runtime.start(project.id===config.project.id&&prepared.report.state==='active'?'execution':'administration-only');
+    await runtime.start(execute?'execution':'administration-only');
     const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
-    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:project.id===config.project.id?personalRuntime?.semantic:undefined,managerChat:project.id===config.project.id?personalRuntime?.managerChat:undefined});
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat});
     configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
    }catch(error){await runtime.close();throw error;}
   });

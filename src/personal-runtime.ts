@@ -68,13 +68,12 @@ class PersonalGitArtifacts extends GitArtifacts{
  }
 }
 
+export type PersonalProjectRuntime={engineering:EngineeringOptions;implementation:NativeImplementation};
 export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')return;
  await renewPersonalQuota(ledger);
  await releaseDeadPersonalGrants(ledger);
- // Worktrees and run records live under .ai/ in the owner's repository; keep them out of `git status` without touching tracked files.
- try{const exclude=join(config.project.repo,'.git','info','exclude');const current=readFileSync(exclude,'utf8');if(!/^\.ai\/$/m.test(current))appendFileSync(exclude,(current.endsWith('\n')?'':'\n')+'.ai/\n');}catch{/* bare or unusual layout: nothing to hide */}
  setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');
@@ -83,33 +82,45 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const rows=(await ledger.pool.query('SELECT id,provider FROM ac_accounts WHERE id = ANY($1::uuid[])',[boot.accounts.map(account=>account.accountId)])).rows;
  const subjects=(provider:string)=>boot.accounts.filter(account=>rows.some(row=>row.id===account.accountId&&row.provider===provider)).map(account=>({accountId:account.accountId,subjectDigest:account.subjectDigest}));
  const protectedRepositories=[config.project.repo,...config.projects.map(project=>project.repo)];
- const planning=[];
+ const planning:NativePlanningSupervisor[]=[];
  for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   planning.push(new NativePlanningSupervisor(ledger,{id:boot.planning.id+'-'+provider,executorDigest:boot.planning.executorDigest,imageId:boot.planning.imageId,
    hostRoot:boot.planning.hostRoot,accountRoot:boot.planning.accountRoot,protectedRepositories,signingKeyPem:planningPem,providerNetwork:'ac-native-provider',provider,accountSubjects}));
  }
- const executions=[];
+ const executions:NativeExecutionSupervisor[]=[];
  for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,
-   hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,repository:config.project.repo,protectedRepositories,signingKeyPem:executionPem,
+   hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,
    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects}));
  }
  if(!planning.length||!executions.length)throw new Error('PERSONAL_RUNTIME_ACCOUNT_REQUIRED');
- const git=new PersonalGitArtifacts(config.project.repo);
- const quality=new Quality(ledger,reviewKey,git);
- const nativeQa=new NativeQa(ledger,quality,config.project.repo,boot.execution.hostRoot,boot.qa,reviewKey);
- const nativeVerification=new NativeVerification(ledger,quality,executions,reviewKey);
- const implementation=new NativeImplementation(ledger,config.project.repo,quality,executions);
  const semantic=new SemanticPlanning(ledger,planning.map(supervisor=>supervisor.executor));
- const branch=execFileSync('/usr/bin/git',['-C',config.project.repo,'symbolic-ref','--short','HEAD'],{encoding:'utf8'}).trim();
- if(!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch))throw new Error('PERSONAL_TARGET_UNRESOLVED');
- const engineering:EngineeringOptions={quality,git,verifierKey:reviewKey,nativeQa,nativeVerification,allowedTargets:[`refs/heads/${branch}`]};
  const managerChat=new PersonalManagerChat(ledger,{imageId:boot.planning.imageId,accountRoot:boot.planning.accountRoot});
- return {planning,executions,implementation,semantic,engineering,managerChat};
+ const byProject=new Map<string,PersonalProjectRuntime>();
+ // One shared supervisor pair. Git, QA, implementation and verification stay on each checkout.
+ const bind=async(repo:string,projectId:string,primary:boolean)=>{
+  try{
+   // Worktrees and run records live under .ai/; keep them out of `git status` without touching tracked files.
+   try{const exclude=join(repo,'.git','info','exclude');const current=readFileSync(exclude,'utf8');if(!/^\.ai\/$/m.test(current))appendFileSync(exclude,(current.endsWith('\n')?'':'\n')+'.ai/\n');}catch{/* bare or unusual layout: nothing to hide */}
+   const git=new PersonalGitArtifacts(repo);
+   const quality=new Quality(ledger,reviewKey,git);
+   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,boot.qa,reviewKey);
+   const nativeVerification=new NativeVerification(ledger,quality,executions,reviewKey);
+   const implementation=new NativeImplementation(ledger,repo,quality,executions);
+   const branch=execFileSync('/usr/bin/git',['-C',repo,'symbolic-ref','--short','HEAD'],{encoding:'utf8'}).trim();
+   if(!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch))throw new Error('PERSONAL_TARGET_UNRESOLVED');
+   const engineering:EngineeringOptions={quality,git,verifierKey:reviewKey,nativeQa,nativeVerification,allowedTargets:[`refs/heads/${branch}`]};
+   byProject.set(projectId,{engineering,implementation});
+  }catch(error){if(primary)throw error;}
+ };
+ await bind(config.project.repo,config.project.id,true);
+ for(const project of config.projects){if(project.id!==config.project.id)await bind(project.repo,project.id,false);}
+ if(!byProject.has(config.project.id))throw new Error('PERSONAL_TARGET_UNRESOLVED');
+ return {planning,executions,semantic,managerChat,byProject};
 }
 
 const SKIP=new Set(['.git','node_modules','dist','.state']);

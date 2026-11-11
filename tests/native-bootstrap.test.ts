@@ -245,8 +245,10 @@ test('bench injection composes explicit substitutes, authorizes the source and n
   const server=await readFile(new URL('../src/server-main.ts',import.meta.url),'utf8');
   assert.match(server,/prepareNativeBootstrap/);
   assert.match(server,/nativeBootstrapRuntimeAttachment/);
-  // The gateway starts in execution mode only for the default project of an active (personal) bootstrap.
-  assert.match(server,/start\(project\.id===config\.project\.id&&prepared\.report\.state==='active'\?'execution':'administration-only'\)/);
+  // Execution follows an active personal bootstrap. Other projects need their own checkout binding.
+  assert.match(server,/prepared\.report\.state==='active'/);
+  assert.match(server,/start\(execute\?'execution':'administration-only'\)/);
+  assert.doesNotMatch(server,/start\(project\.id===config\.project\.id&&prepared\.report\.state==='active'\?'execution':'administration-only'\)/);
   // The ready line reports what the bootstrap decided; a non-active bootstrap that enables anything aborts the start.
   assert.match(server,/executionEnabled:prepared\.report\.executionEnabled/);
   assert.match(server,/prepared\.report\.state!=='active'&&\(prepared\.report\.executionEnabled\|\|prepared\.report\.inferenceEnabled\|\|prepared\.report\.realAccountsEnabled\)\)throw Error\('NATIVE_BOOTSTRAP_ACTIVATION_BLOCKED'\)/);
