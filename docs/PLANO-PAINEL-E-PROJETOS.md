@@ -2,13 +2,15 @@
 
 Criado em 11/11/2026, branch `task/personal-activation`. Este é o roteiro até o fim. Siga as fases em ordem e não pule nenhuma.
 
+Quem faz: o Grok programa, um passo por vez, com a ordem em `docs/ORDEM-GROK.md`; o Claude é gerente e revisor (veja `AGENTS.md`).
+
 ## Onde paramos
 
 Atualize esta tabela a cada commit.
 
 | Fase | Assunto | Estado |
 |---|---|---|
-| 0 | Fechar o que já existe | em andamento: falta o teste no celular |
+| 0 | Fechar o que já existe | em andamento: limpeza do painel com o Grok (`docs/ORDEM-GROK.md`); falta o teste no celular |
 | 1 | Conversar pelo painel | não começada |
 | 2 | Vários projetos numa instalação | não começada |
 | 3 | Novo projeto pelo painel | não começada |
@@ -48,7 +50,7 @@ Não reabra estas decisões sem um motivo novo.
 - Commits com `GIT_AUTHOR_NAME="Enok Tavares" GIT_AUTHOR_EMAIL="migration@localhost"` (o mesmo para o committer), terminando com `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Nada de compra de créditos. Nenhum segredo (chave da conta Happier, logins, chave SSH) em commit, log ou mensagem.
 - Serviços systemd novos ou alterados são instalados pelo titular (`npm run personal:services`).
-- A página do Cezar é editada em `upstream/cezar/packages/web/src` e construída com `npm --prefix upstream/cezar/packages/web run build`, que gera `upstream/cezar/packages/cezar/web/dist`. Faça o commit do código e do build juntos.
+- A página do Cezar é editada em `upstream/cezar/packages/web/src` e construída com `VITE_AGENT_CONTROL_MANAGED=1 npm --prefix upstream/cezar run build:web`, que gera `upstream/cezar/packages/cezar/web/dist`. O build fica fora do git: faça o commit só do código e reinicie o gateway (`systemctl --user restart agent-control-gateway-ispagent`) para servir a página nova.
 - Revisão independente segue o `AGENTS.md`: Claude Sonnet 5.5, esforço médio, somente leitura, até 5 revisores. O revisor recebe o código, não a conclusão. Registre como "revisão independente por modelo Claude distinto".
 
 ## Testes: só o essencial
