@@ -73,10 +73,13 @@ O `personal-connect` grava em `dataDirectory` o segredo da conta (`happier-accou
 
 ### Conversar pelo terminal
 
+A conversa mostra cada papel pelo nome, com provedor, modelo e esforço: o gerente montando o plano, o programador começando e terminando (com o que ele disse, o commit e os arquivos alterados), o resultado do QA e o veredito do revisor com os apontamentos. O histórico fica na própria conversa, então aparece também no app.
+
 ```bash
 npm run gateway -- say <instalacao> "o que este repositório faz?"
 npm run gateway -- say <instalacao> "crie docs/guia.md com ..."   # chega a proposta com as tarefas
 npm run gateway -- say <instalacao> aprovar                        # ou: descartar, pare
+npm run gateway -- say <instalacao> equipe                         # quem é gerente, programador e revisor, e o que cada um fez por último
 npm run gateway -- chat-log <instalacao> 600                       # acompanha a conversa por 600 s
 npm run gateway -- chat-log <instalacao>                           # histórico
 ```
@@ -98,7 +101,7 @@ O aplicativo é o Happier oficial: iOS na App Store, Android no Google Play, des
    - **Celular, sem subdomínio:** o celular não alcança `127.0.0.1` do servidor. Use uma rede privada como o Tailscale (instalado no servidor e no celular; no servidor, `tailscale serve --bg http://127.0.0.1:38343` publica em HTTPS só para a sua rede) ou um proxy HTTPS seu.
 3. No app, em **Servidor**, adicione o endereço (`http://127.0.0.1:38343` pelo túnel, ou o endereço HTTPS do Tailscale) e selecione-o.
 4. Escolha **Restaurar conta → Restaurar com chave secreta** e cole a chave.
-5. A conversa do projeto aparece na lista de sessões. Escreva nela como no terminal: pergunta, pedido, `aprovar`, `descartar`, `pare`.
+5. A conversa do projeto aparece na lista de sessões. Escreva nela como no terminal: pergunta, pedido, `aprovar`, `descartar`, `pare`, `equipe`.
 
 Este caminho segue a documentação do Happier, mas ainda não foi testado num aparelho de verdade.
 

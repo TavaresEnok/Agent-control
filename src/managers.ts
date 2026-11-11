@@ -225,7 +225,7 @@ export function administrativeEndpointDispatcher(registry:ManagerRegistry,servic
  return async(contextId:string,raw:unknown)=>service.execute(await registry.administrativeCapability(contextId,service),raw);
 }
 export function happierEndpointFactory(ledger:Ledger,runtime:CezarRuntime,boundary:HappierBoundary,
- options:{baseUrl:string;token:string;machineId:string;transportOnly?:boolean;configurationControl?:Control;semanticPlanning?:SemanticPlanning;personalConversation?:boolean;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
+ options:{baseUrl:string;token:string;machineId:string;transportOnly?:boolean;configurationControl?:Control;semanticPlanning?:SemanticPlanning;personalConversation?:boolean;teamFeedRoot?:string;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>}):ManagerEndpointFactory{
  const configurationControl=options.configurationControl??new Control(ledger,[],runtime.projectId,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
  return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,configurationControl,principal:input.principal,sessionId:input.sessionId,
   authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant});

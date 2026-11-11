@@ -15,6 +15,7 @@ import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {teamJobs,teamMessage,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 
@@ -145,7 +146,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
@@ -273,11 +274,14 @@ export class HappierEndpoint {
     const q = UserRequest.parse(raw); await this.validateLink();
     if(this.options.personalConversation){
      const word=personalControlWord(q.text);
+     if(word==='team'){await this.say('team-status-'+q.localId,this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}):'O painel da equipe não está configurado nesta instalação.');return {handled:true,result:{ok:true}};}
      if(word==='stop'){await this.stopLatest();return {handled:true,result:{ok:true,canceled:true}};}
      if(word==='approve'||word==='discard'){await this.resolveLatestProposal(word==='approve');return {handled:true,result:{ok:true}};}
      if(!q.localId.startsWith('replan-')){
       // The manager model decides; keywords are only a fallback when no manager account answers.
-      const decision=await this.options.managerChat?.decide(q.text,await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;
+      // The manager also knows its own team, so "who is the reviewer?" gets the real answer.
+      const team=this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(()=>''):'';
+      const decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;
       const kind=decision?.kind??classifyPersonalText(q.text);
       if(kind==='answer'){await this.say('answer-'+q.localId,decision?.answer||'Não consegui consultar o gerente agora. Confira as contas com papel de gerente no painel e tente de novo.');return {handled:true,result:{ok:true,answered:true}};}
      }
@@ -553,6 +557,15 @@ export class HappierEndpoint {
       await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
         {entityId:run.id,source:'runtime',planRevision:intent.plan_revision,seq,status,
           reason:status==='failed'?'EXECUTION_FAILED':status==='waiting'?notificationReason(run.error):['cancelled','canceled'].includes(status)?'RECONCILIATION_REQUIRED':'NONE'});
+    }
+    if(this.options.personalConversation&&this.options.teamFeedRoot){
+     // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
+     for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
+      if(this.announced.get('team|'+job.id)===job.state)continue;
+      const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(()=>null);
+      if(message)await this.say(message.id,message.text).catch(()=>{});
+      this.announced.set('team|'+job.id,job.state);
+     }
     }
     if(this.options.personalConversation){
      const children=(await this.ledger.pool.query('SELECT id,state,parent_intent_id,parent_unit_id FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NOT NULL',[this.options.authority.contextId])).rows;

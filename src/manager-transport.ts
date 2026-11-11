@@ -1,5 +1,5 @@
 import {realpath} from 'node:fs/promises';
-import {resolve,sep} from 'node:path';
+import {join,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {readPrivateFile,type Installation} from './installation.ts';
@@ -35,7 +35,7 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
   if(!identity)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
   const source=new ContextVault(ledger,identity.id,config.contextVault.directory,config.contextVault.masterFile,repositories);
   registry=new ManagerRegistry(ledger,runtime.projectId,happierEndpointFactory(ledger,runtime,await loadHappier(),{
-   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,managerChat:personal?.managerChat}));
+   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,managerChat:personal?.managerChat}));
   for(const item of contexts){
    const {projectId,...request}=item;
    if(projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
