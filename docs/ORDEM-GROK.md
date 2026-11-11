@@ -1,61 +1,65 @@
-# Ordem para o Grok — Fase 2, passo 0: levantamento (sem mudar código)
+# Ordem para o Grok — Fase 2, parte A: runtime para vários projetos
 
 Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto**.
 
 ---
 
-Você é o programador do Agent Control. O roteiro está em `docs/PLANO-PAINEL-E-PROJETOS.md`; leia "Decisões já tomadas" e "Fase 2". O objetivo da Fase 2 é **uma instalação com vários projetos que executam ao mesmo tempo**, com as mesmas contas (um login de Claude e um de Grok para todos).
+Você é o programador do Agent Control. O gerente leu e aprovou o seu levantamento em `docs/implementation/FASE2-LEVANTAMENTO.md`. O desenho aprovado é **um supervisor por provedor, compartilhado; Git, QA, implementação e verificação por projeto**.
 
-Hoje só `config.project` executa: `config.projects[]` sobe em `administration-only`.
+Faça agora **os passos 1 a 4 da seção 6** do levantamento, nesta ordem. Os passos 5 a 8 (conversa e `--add`) ficam para a parte B.
 
-Neste passo você **não muda código**. Você escreve um levantamento que o gerente vai usar para decidir o desenho.
+## Passos
 
-## O que levantar
+1. **O repositório vem do job, no supervisor de execução** (`src/native-execution-supervisor.ts`).
+   - Troque o uso fixo de `config.repository` pelo `repo` de `ac_project_repositories` do projeto do contexto. Isso vale na admissão (`identity`), no snapshot, no diff de revisão, no import e em **toda recuperação** (`reconcileRegistered`, `registerArtifact` e o que mais usar o repositório).
+   - **Cerca obrigatória:** o caminho resolvido tem que estar na lista de repositórios permitidos da instalação (`protectedRepositories`: `config.project.repo` e `config.projects[].repo`), comparado depois de `realpath`. Fora da lista: `NATIVE_EXECUTION_REPOSITORY_MISMATCH`, como hoje.
+   - O worker só monta o repositório do job, nunca outro.
+   - Se `config.repository` ainda for passado (modo `locked` e testes antigos), continue aceitando, mas como **restrição extra**: com ele presente, só aquele repositório vale. O modo `locked` não pode mudar de comportamento.
+2. **Compor o runtime por projeto com os mesmos supervisores** (`src/personal-runtime.ts`, `src/server-main.ts`).
+   - `composePersonalRuntime` cria os supervisores de planejamento e de execução **uma vez**.
+   - Para cada projeto (`config.project` e `config.projects[]`) cria `PersonalGitArtifacts`, `Quality`, `NativeQa`, `NativeImplementation`, `NativeVerification` e `allowedTargets`, com o HEAD daquele repositório, e o `.git/info/exclude`.
+   - Em `serve`, cada projeto que tiver repositório registrado e o runtime pessoal ativo sobe em `execution`, com a própria engenharia.
+   - Projeto sem conversa ou sem política continua subindo, mas sem execução (como hoje em `administration-only`), sem derrubar os outros.
+   - `managerChat` e `semantic` são comuns.
+3. **QA e implementação continuam por checkout.** Confira que o QA e a implementação do projeto A recusam um intent do projeto B.
+4. **O relato da equipe usa o repositório do intent** (`src/personal-team-feed.ts`, chamada em `src/server-main.ts`).
+   - O `git diff` do relato busca o repositório por intent → contexto → `ac_project_repositories`.
+   - Se não achar, não mostra os arquivos, em vez de usar outro repositório.
 
-Leia o código e responda, com arquivo e linha, em `docs/implementation/FASE2-LEVANTAMENTO.md`:
+## Teste essencial (um só, de isolamento)
 
-1. **Tudo o que hoje está preso a um único projeto ou repositório no modo pessoal.**
-   - Comece por `src/personal-runtime.ts` (`composePersonalRuntime`), `src/server-main.ts` (as condições `project.id===config.project.id`, por volta das linhas 157–200), `src/managers.ts`, `src/manager-transport.ts`, `src/happier.ts`, `src/personal-team-feed.ts` (`registerStageReporter`), `src/personal-connect.ts`, `src/native-bootstrap.ts` e `scripts/personal-*.mjs`.
-   - Para cada ponto, diga se ele precisa ser **por projeto** ou pode ficar **comum à instalação**.
-2. **Como os supervisores pegam trabalho.**
-   - Em `NativePlanningSupervisor`, `NativeExecutionSupervisor`, `NativeQa`, `NativeImplementation` e `NativeVerification`:
-     - de qual tabela cada um lê;
-     - se o filtro é por projeto, por contexto ou por nada;
-     - o que o `id` do supervisor controla (leases, recibos, nomes de contêiner).
-   - Responda claramente: **se existirem dois `NativeExecutionSupervisor` do mesmo provedor, um para cada repositório, um deles pode pegar o job do outro projeto?**
-   - Como o job sabe a qual repositório pertence (a linha do job tem projeto, contexto ou intenção que leve ao repositório?).
-3. **Capacidade e cotas.**
-   - Como `ac_capacity_grants`, as políticas de capacidade e o limite de simultaneidade funcionam hoje: por projeto ou por conta?
-   - O que acontece com duas execuções de projetos diferentes na mesma conta do Grok?
-4. **Conversa e Happier.**
-   - Quantas conversas, máquinas e transportes do gerente existem por projeto hoje.
-   - O que muda para ter uma conversa por projeto na mesma conta Happier.
-   - As rotas do painel `/api/v1/ac/personal/*` (em `src/api.ts` e `src/managers.ts`, `panelEntry`) recusam quando há mais de uma conversa rodando: como elas devem escolher o projeto (o painel já manda `x-agent-control-project` ou `/api/v1/p/<id>/`; veja `src/projects-api.ts`).
-5. **Banco.**
-   - As tabelas `ac_*` já separam tudo por projeto ou contexto?
-   - Há alguma tabela ou chave única que suponha um projeto só?
-6. **Proposta de desenho**, em passos pequenos, cada um com:
-   - os arquivos que mexe;
-   - o risco;
-   - a prova mínima.
+Com PostgreSQL de teste, prove que um job cujo contexto pertence ao projeto B:
 
-   Prefira o desenho que **não duplique supervisores do mesmo provedor**, se um supervisor por provedor puder atender vários repositórios com segurança (o repositório vindo do job). Se não puder, explique por quê.
-7. **Riscos para o modo `locked`**, que não pode mudar.
+- nunca é admitido, recuperado nem importado com o repositório de A;
+- e que um repositório fora da lista permitida é recusado.
+
+Reaproveite os testes e fixtures que já existem para o supervisor de execução (procure em `tests/` por `NativeExecutionSupervisor`). Não suba Docker de verdade: use o executor sintético ou o caminho de fixture que esses testes já usam.
+
+O banco de teste está em `AC_TEST_DATABASE_URL`, já definido no ambiente desta execução. É o banco descartável `ac_implementation_test`; os testes criam bancos isolados a partir dele. Rode só os arquivos de teste ligados ao que você mudou.
+
+Depois de cada passo:
+
+- `npm run typecheck` sai 0;
+- rode os testes existentes do supervisor de execução, do QA e da implementação que funcionarem com esse banco;
+- diga quais já falhavam antes da sua mudança (compare com `git stash` não é permitido; use `git show HEAD:<arquivo>` para ler a versão anterior, se precisar).
 
 ## Permissões nesta execução (não tem tela)
 
-- Você só pode escrever o arquivo `docs/implementation/FASE2-LEVANTAMENTO.md`.
-- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git log`, `git show`, `git add docs/implementation/FASE2-LEVANTAMENTO.md`, `git commit -m "..."`, `rg`, `ls`.
-- Use suas ferramentas de arquivo para ler.
+- Você só pode editar arquivos em `src/` e `tests/`.
+- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
+- Qualquer outro comando encerra a execução. O gerente reinicia o gateway e faz a prova real.
 
 ## Regras
 
-- Não altere nenhum arquivo de código.
-- Seja exato: cite arquivo:linha e diga "não sei" quando não tiver certeza, em vez de supor.
-- Um commit só, com o levantamento. A mensagem é uma frase em inglês, sem linha `Co-Authored-By` do Claude. O autor já está no ambiente.
+- Sem push. Não toque em `docs/PROMPT-GROK-*.md` nem em `docs/PROXIMA-ORDEM.md`.
+- Um commit por passo (1, 2, 3 e 4), com o teste junto do passo 1. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude. O autor já está no ambiente.
+- O IspAgent sozinho tem que continuar funcionando depois de cada passo.
+- O modo `locked` não muda.
+- Se travar em algo por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
-- O hash do commit.
-- A resposta curta à pergunta do item 2 (sim ou não, e por quê).
-- O desenho que você recomenda, em 5 linhas.
+- Os hashes dos commits e uma linha sobre cada um.
+- Cada lugar em que o supervisor passou a resolver o repositório pelo job (arquivo:linha).
+- O resultado do typecheck e dos testes, separando o que já falhava antes.
+- O que não conferiu.
