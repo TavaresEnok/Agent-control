@@ -93,6 +93,12 @@ export class NativePlanningSupervisor{
    if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,{workerImage:this.config.imageId,toolsImage:this.config.imageId,providerNetworkId:this.config.providerNetwork},{projectId:identity.projectId,contextId:input.contextId});
    else if(!await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'").then(r=>Boolean(r.rowCount)))await pinNativeProtocolForNewAttempt(c,{kind:'planning',jobId:input.callId,executorDigest:this.config.executorDigest,model:input.profile.model,effort:input.profile.effort});
   });
+  if(!(await this.docker.imagePresent(this.config.imageId))){
+   const receipt={executionStarted:false,jobId:input.callId,containerId:null,synthetic:Boolean(this.config.syntheticFixture),modelInference:false,reason:'native_image_missing'};
+   await this.ledger.tx(async c=>{await this.ledger.authorize(c,identity.principal,input.contextId);await this.ledger.fence(c,authority,true);
+    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);});
+   throw new Refusal('NATIVE_IMAGE_MISSING');
+  }
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal:identity.principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.callId,names:[name]});
   // Journal uncertainty BEFORE touching Docker. If any acknowledgement is lost,
   // reconcile observes this same name; it never starts or creates a substitute.

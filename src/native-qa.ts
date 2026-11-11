@@ -83,6 +83,12 @@ export class NativeQa{
    if(!eligible)throw new Refusal('NATIVE_QA_GRANT_MISMATCH');return false;
   });
   if(previous)return this.reconcile(principal,authority,stage.id);
+  if(!(await this.docker.imagePresent(this.contract.image))){
+   const receipt={executionStarted:false,jobId:stage.id,containerId:null,synthetic:false,modelInference:false,reason:'native_image_missing'};
+   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
+    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[grantId,receipt]);});
+   throw new Refusal('NATIVE_IMAGE_MISSING');
+  }
   await this.diskGuard?.assertAdmission();const root=await lstat(this.root);if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==process.getuid?.()||(root.mode&0o7777)!==0o700||await realpath(this.root)!==this.root)throw new Refusal('NATIVE_QA_ROOT_UNSAFE');
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId,grantId,jobId:stage.id,names:['ac-native-qa-'+stage.id],isCanceled});
   await this.ledger.tx(async c=>{

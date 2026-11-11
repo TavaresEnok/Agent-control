@@ -13,7 +13,7 @@ import { managerPlanPublishedSchema } from '../upstream/cezar/packages/contract/
 import {chatConfigurationHandler} from './chat-control.ts';
 import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
-import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
+import {Notifications,NotificationPolicy,nativeImagesRemovedNotice,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
 import {panelMessageFromRecord,type PanelPage} from './personal-panel-conversation.ts';
 import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
@@ -339,6 +339,7 @@ export class HappierEndpoint {
           [this.options.authority.contextId, { code }]).catch(() => {});
         this.lastError = code;
         if (['STALE_MANAGER','CONTEXT_FORBIDDEN','PROJECT_RUNTIME_MISMATCH','CONTEXT_KEY_UNAUTHORIZED','SESSION_CONTEXT_MISMATCH'].includes(this.lastError)) this.close();
+        else if(code==='NATIVE_IMAGE_MISSING'){try{await this.say('native-images-missing',nativeImagesRemovedNotice);await this.deliverQueuedMessages();}catch{}}
         else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(code)){
           // Critical controller blockers do not wait for the completion window.
           // Failure to publish preserves the same encrypted outbox for retry.
@@ -593,9 +594,10 @@ export class HappierEndpoint {
         if(!['done','failed','canceled','cancelled'].includes(intent.state))try{await this.processSemanticProposal(intent);}catch(error){
           if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.id,source:'manager',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}
           if(error instanceof Refusal&&['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code)){capacityWait??=error;continue;}
-          if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED'].includes(error.code)){
-            const localId='proposal-failed-'+intent.id;
-            const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text:'A geração da proposta falhou. Consulte o diagnóstico desta conversa antes de continuar.'}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal-failed'}}};
+          if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED','NATIVE_IMAGE_MISSING'].includes(error.code)){
+            const localId=(error.code==='NATIVE_IMAGE_MISSING'?'images-missing-':'proposal-failed-')+intent.id;
+            const text=error.code==='NATIVE_IMAGE_MISSING'?nativeImagesRemovedNotice:'A geração da proposta falhou. Consulte o diagnóstico desta conversa antes de continuar.';
+            const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal-failed'}}};
             await this.ledger.tx(async c=>{
               await this.ledger.authorize(c,this.options.principal,intent.context_id);await this.ledger.fence(c,this.options.authority,true);await this.ledger.assertIntentActive(c,intent.context_id,intent.id);
               const callId=stableId('semantic-proposal-v1\0'+intent.id);

@@ -71,6 +71,9 @@ export class DockerDaemon{
  }
  async inspect(name:string):Promise<Inspected|null>{const r=await this.call('GET',`/v1.44/containers/${encodeURIComponent(name)}/json`);
   if(r.status===404)return null;if(r.status!==200)throw new Refusal('DOCKER_UNCERTAIN');return Inspect.parse(JSON.parse(r.body.toString('utf8')));}
+ /** Same socket as create. 404 is definitive absence; any other failure stays uncertain. */
+ async imagePresent(imageId:string){if(!/^sha256:[a-f0-9]{64}$/.test(imageId))throw new Refusal('DOCKER_IMAGE_INVALID');
+  const r=await this.call('GET',`/v1.44/images/${imageId}/json`);if(r.status===200)return true;if(r.status===404)return false;throw new Refusal('DOCKER_UNCERTAIN');}
  async create(name:string,configuration:object){const r=await this.call('POST',`/v1.44/containers/create?name=${encodeURIComponent(name)}`,configuration);
   if(r.status!==201)throw new Refusal('DOCKER_CREATE_UNCERTAIN');return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(r.body.toString('utf8'))).Id;}
  async start(id:string){const r=await this.call('POST',`/v1.44/containers/${id}/start`);if(r.status!==204)throw new Refusal('DOCKER_START_UNCERTAIN');}

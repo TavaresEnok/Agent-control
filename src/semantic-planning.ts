@@ -73,7 +73,7 @@ export class SemanticPlanning{
   });
   const inputDigest=String(call.input_digest);
   if(call.state==='published'){await this.retireTerminalResult(principal,input,authority,call);return call.result;}
-  if(call.state==='rejected'){await this.retireTerminalResult(principal,input,authority,call);throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');}
+  if(call.state==='rejected'){if(call.failure_code!=='NATIVE_IMAGE_MISSING')await this.retireTerminalResult(principal,input,authority,call);throw new Refusal(call.failure_code??'PLANNING_OUTPUT_REJECTED');}
   if(call.state==='ready')return this.publish(principal,input,authority);
   let grantId:string=call.grant_id;
   if(!grantId){const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:call.attempt_id,intentId:input.intentId,contextId:input.contextId,role:'manager'},authority);grantId=grant.id;}
@@ -111,7 +111,15 @@ export class SemanticPlanning{
    profile,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:Object.freeze({qualityRevision:input.qualityRevision,targetRef:input.targetRef,knownReferences:Object.freeze([input.sourceMessageRef,...input.knownReferences??[]])}),outputSchema:managerPlanOutputJsonSchema(),assertAuthorized};
   let outcome:Awaited<ReturnType<PlanningExecutor['execute']>>|null;
   try{await assertAuthorized();outcome=launch.reconcile?await executor.reconcile(invocation):await executor.execute(invocation);}
-  catch(error){if(error instanceof Refusal)throw error;throw new Refusal('PLANNING_RESULT_UNCERTAIN');}
+  catch(error){
+   if(error instanceof Refusal&&error.code==='NATIVE_IMAGE_MISSING')await this.ledger.tx(async c=>{
+    await this.authorize(c,principal,authority,input.intentId,true);
+    const saved=(await c.query('SELECT state FROM ac_semantic_planning_calls WHERE id=$1 FOR UPDATE',[input.id])).rows[0];
+    const job=(await c.query('SELECT 1 FROM ac_native_planning_jobs WHERE id=$1',[input.id])).rowCount;
+    if(saved?.state==='uncertain'&&!job)await c.query("UPDATE ac_semantic_planning_calls SET state='rejected',failure_code='NATIVE_IMAGE_MISSING' WHERE id=$1",[input.id]);
+   });
+   if(error instanceof Refusal)throw error;throw new Refusal('PLANNING_RESULT_UNCERTAIN');
+  }
   if(!outcome)throw new Refusal('PLANNING_RESULT_UNCERTAIN');
   const output=z.string().parse(outcome.output),receipt=PlanningPhysicalReceipt.parse(outcome.receipt),p=receipt.payload;
   if(p.callId!==input.id||p.intentId!==input.intentId||p.contextId!==input.contextId||p.grantId!==grantId||p.profileId!==profile.id||p.sessionId!==call.session_id||p.epoch!==launch.epoch||p.executorDigest!==executor.digest||p.inputDigest!==inputDigest||p.profileDigest!==digest(profile)||p.outputDigest!==createHash('sha256').update(output).digest('hex')||!verify(null,planningReceiptMessage(p),entry.key,Buffer.from(receipt.signature,'hex')))throw new Refusal('PLANNING_RECEIPT_INVALID');

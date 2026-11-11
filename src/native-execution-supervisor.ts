@@ -190,6 +190,12 @@ export class NativeExecutionSupervisor{
   assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
   await this.diskGuard?.assertAdmission();
   await this.directory(this.config.hostRoot);
+  if(!(await this.docker.imagePresent(this.config.workerImage))||!(await this.docker.imagePresent(this.config.toolsImage))){
+   const receipt={executionStarted:false,jobId:input.jobId,containerId:null,networkId:null,synthetic:Boolean(this.config.syntheticFixture),modelInference:false,reason:'native_image_missing'};
+   await this.ledger.tx(async c=>{await this.identity(c,principal,authority,input);
+    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);});
+   throw new Refusal('NATIVE_IMAGE_MISSING');
+  }
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
   // Commit the uncertainty before files, Docker networks or processes exist.
   await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);assertModelAllowed(current.model);

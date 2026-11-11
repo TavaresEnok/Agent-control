@@ -17,6 +17,8 @@ const Acknowledgement=z.object({ok:z.literal(true),id:z.string().min(1).max(200)
 export type OutgoingMessage={id:string;ciphertext:string;localId:string};
 
 export function notificationStatus(status:string):z.infer<typeof Status>{const parsed=Status.safeParse(status);return parsed.success?parsed.data:'unknown';}
+/** Shown when a native image was removed before any container existed. */
+export const nativeImagesRemovedNotice='As imagens do Agent Control foram apagadas do Docker. Rode `npm run personal:images -- <instalação.json>` e reinicie o gateway.';
 export function notificationReason(value:unknown):z.infer<typeof Reason>{
  const code=value instanceof Refusal?value.code:typeof value==='string'?value:'';
  for(const reason of Reason.options)if(reason!=='NONE'&&code.includes(reason))return reason;
