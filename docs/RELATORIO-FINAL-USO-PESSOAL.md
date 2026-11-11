@@ -53,6 +53,10 @@ Depois dessas correções, um pedido real passou de novo pelo caminho completo: 
 - `aprovar` escolhia a proposta pelo maior id aleatório e chegou a reexecutar um plano antigo. Agora decide a proposta mais recente, uma vez só.
 - Projeto real ligado: `/home/app/projects/IspAgent` (clone de `TavaresEnok/IspAgent`), com logins próprios de Claude e Grok e serviços systemd `agent-control-*-ispagent`. Pedido real integrado no `master` local, sem push: commit `3ad0236`, só a seção "Status do projeto" no fim do README, como pedido.
 
+## Publicação para o app (11/11/2026)
+
+O Happier do IspAgent está publicado em `https://agentcontrol.tokstiloesporte.com` pelo Caddy do servidor (`/home/app/infra/caddy/sites/happier-ispagent.caddy`). O certificado foi emitido, a API responde, o WebSocket abre (101) e o cadastro anônimo está fechado. Os outros sites do Caddy seguem respondendo; `portaldocliente.ajustconsulting.com.br` dá 502 porque o serviço dele em `127.0.0.1:8010` não está rodando, o que não tem relação com esta mudança. O login pelo app no celular ainda não foi testado.
+
 ## O que não funciona ou não foi provado
 
 - **Login copiado não serve para um segundo projeto.** `--import-logins` copia o arquivo OAuth do Claude; a cópia e o original compartilham o mesmo token de renovação e, quando um renova, o outro morre ("OAuth session expired and could not be refreshed"). No segundo projeto de teste o gerente respondeu uma vez e o planejamento seguinte já falhou. Para cada projeto novo, faça um login próprio com `account-add` sem `--auth-file`. O projeto de teste original continua funcionando.
