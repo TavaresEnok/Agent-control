@@ -15,7 +15,7 @@ import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
-import {teamJobs,teamMessage,teamStatus} from './personal-team-feed.ts';
+import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 
@@ -138,6 +138,7 @@ export class HappierEndpoint {
   private revision: number | undefined;
   private lastPendingAt = 0;
   private readonly announced=new Map<string,string>();
+  private teamModelsAt=0;
   private readonly replanned=new Set<string>();
   private pendingFailure: unknown;
   lastError: string | undefined;
@@ -335,6 +336,22 @@ export class HappierEndpoint {
     if(!stored||stored.session_id!==this.options.sessionId)throw new Refusal('CHAT_MESSAGE_CONFLICT');
     const decoded=this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext));
     if(decoded===null||digest(decoded)!==digest(value))throw new Refusal('CHAT_MESSAGE_CONFLICT');
+  }
+  // Shows the team in the app's model picker instead of the Claude catalog: read the current metadata,
+  // add the team list and write it back at that version (a concurrent change only costs a retry).
+  private async publishTeamModels(){
+   for(let attempt=0;attempt<3;attempt++){
+    const response=await fetch(this.options.baseUrl+'/v2/sessions/'+encodeURIComponent(this.options.sessionId),{headers:{authorization:'Bearer '+this.options.token},redirect:'error',signal:AbortSignal.timeout(8000)});
+    if(!response.ok)throw new Error('session '+response.status);
+    const body=z.object({session:z.object({metadata:z.string(),metadataVersion:z.number()}).passthrough()}).passthrough().parse(await response.json());
+    const current=this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(body.session.metadata));
+    if(!current||typeof current!=='object')throw new Error('metadata unreadable');
+    const next=await teamModelsMetadata(this.ledger.pool,current as Record<string,unknown>);
+    if(!next)return;
+    const written=z.object({result:z.string()}).passthrough().parse(await this.ack('update-metadata',{sid:this.options.sessionId,metadata:this.seal(next),expectedVersion:body.session.metadataVersion}));
+    if(written.result==='success')return;
+    if(written.result!=='version-mismatch')throw new Error('write '+written.result);
+   }
   }
   async ack(event: string, data: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => this.socket.timeout(8000).emit(event, data,
@@ -559,6 +576,8 @@ export class HappierEndpoint {
           reason:status==='failed'?'EXECUTION_FAILED':status==='waiting'?notificationReason(run.error):['cancelled','canceled'].includes(status)?'RECONCILIATION_REQUIRED':'NONE'});
     }
     if(this.options.personalConversation&&this.options.teamFeedRoot){
+     // Once per process, retried at most once a minute; the profile list rarely changes.
+     if(this.teamModelsAt>=0&&Date.now()-this.teamModelsAt>60000){this.teamModelsAt=Date.now();await this.publishTeamModels().then(()=>{this.teamModelsAt=-1;},error=>{console.error(JSON.stringify({event:"TEAM_MODELS_NOT_PUBLISHED",error:String(error?.code??error?.message??error)}));});}
      // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
      for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
       if(this.announced.get('team|'+job.id)===job.state)continue;

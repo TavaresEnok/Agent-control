@@ -36,3 +36,12 @@ test('each role reports who ran it and what it produced',async()=>{
 test('equipe and status ask for the team panel',()=>{
  assert.equal(personalControlWord(' Equipe '),'team');assert.equal(personalControlWord('status'),'team');assert.equal(personalControlWord('aprovar'),'approve');
 });
+
+test('the app model picker lists the team, once',async()=>{
+ const {teamModelsMetadata}=await import('../src/personal-team-feed.ts');
+ const pool={query:async()=>({rows:[{role:'manager',model:'claude-sonnet-5-5',effort:'medium'},{role:'programmer',model:'grok-4.7',effort:'medium'}]})} as any;
+ const next=await teamModelsMetadata(pool,{name:'ispagent',flavor:'claude'},1);
+ assert.equal(next!.name,'ispagent');
+ assert.deepEqual(next!.sessionModelsV1,{v:1,provider:'claude',updatedAt:1,currentModelId:'agent-control-team',availableModels:[{id:'agent-control-team',name:'Equipe Agent Control',description:'Gerente claude-sonnet-5-5 medium · Programador grok-4.7 medium'}]});
+ assert.equal(await teamModelsMetadata(pool,next!,2),null);
+});

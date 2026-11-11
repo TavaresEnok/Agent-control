@@ -97,3 +97,17 @@ export async function teamStatus(pool:pg.Pool,contextId:string,options:TeamFeedO
  const last=(await Promise.all(recent.map(job=>teamMessage(job,options)))).filter(Boolean).map(m=>'• '+m!.text.split('\n')[0]).join('\n');
  return `Equipe:\n${team||'• nenhuma conta ativa'}\n• QA: script automático do projeto (sem modelo)\n\nÚltimas atividades:\n${last||'• nada ainda'}`;
 }
+
+// The app's model picker reads `sessionModelsV1` from the session metadata. A Claude-flavored session
+// would otherwise list Claude's own catalog, which this conversation ignores; show the real team instead.
+export const TEAM_MODEL_ID='agent-control-team';
+export async function teamModelsMetadata(pool:pg.Pool,metadata:Record<string,unknown>,now=Date.now()){
+ const profiles=(await pool.query(`SELECT p.role,p.model,p.effort FROM ac_profiles p WHERE p.enabled AND p.role IN ('manager','programmer','reviewer')
+  ORDER BY array_position(ARRAY['manager','programmer','reviewer'],p.role)`)).rows;
+ const names:Record<string,string>={manager:'Gerente',programmer:'Programador',reviewer:'Revisor'};
+ const description=profiles.map(p=>`${names[p.role]} ${p.model} ${p.effort}`).join(' · ')||'sem contas ativas';
+ const state={v:1,provider:'claude',updatedAt:now,currentModelId:TEAM_MODEL_ID,availableModels:[{id:TEAM_MODEL_ID,name:'Equipe Agent Control',description}]};
+ const current=metadata.sessionModelsV1 as {availableModels?:{description?:string}[];currentModelId?:string}|undefined;
+ if(current?.currentModelId===TEAM_MODEL_ID&&current.availableModels?.[0]?.description===description)return null;
+ return {...metadata,sessionModelsV1:state,acpSessionModelsV1:state};
+}
