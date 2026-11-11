@@ -7,6 +7,7 @@ import {Installation,loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeBootstrapSchemaError} from './native-bootstrap.ts';
 import {personalConnect,type PersonalHappierClient} from './personal-connect.ts';
+import {isPersonalRemoteCheckout} from './personal-ssh.ts';
 import {Projects} from './projects.ts';
 
 export type PersonalProjectAddResult={projectId:string;label:string;repository:string;restart:string};
@@ -31,7 +32,8 @@ export async function addPersonalProject(installationPath:string,repository:stri
  if(existing&&(existing.id===config.project.id||(config.managerTransport?.contexts??[]).some(item=>item.projectId===existing!.id)))
   throw new Error('REPOSITORY_ALREADY_IN_INSTALLATION');
  const data=await realpath(config.dataDirectory);
- if(repo===data||repo.startsWith(data+sep)||data.startsWith(repo+sep))throw new Error('DATA_DIRECTORY_PATH_FORBIDDEN');
+ // A remote project is a clone under dataDirectory/remote/<name>. The data directory still must not sit inside the clone.
+ if(repo===data||data.startsWith(repo+sep)||(repo.startsWith(data+sep)&&!isPersonalRemoteCheckout(data,repo)))throw new Error('DATA_DIRECTORY_PATH_FORBIDDEN');
  const project=existing??{id:randomUUID(),label:clean,repo,owner:config.project.owner};
  const candidate=existing?config:{...config,projects:[...config.projects,project]};
  const schema=nativeBootstrapSchemaError(candidate);

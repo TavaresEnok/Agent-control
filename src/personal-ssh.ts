@@ -1,11 +1,12 @@
 import {execFile} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
-import {chmod, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {join, resolve, sep} from 'node:path';
 import {promisify} from 'node:util';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {privateDirectory} from './installation.ts';
+import {withPersonalProjectCreation} from './personal-panel-projects.ts';
 
 const run = promisify(execFile);
 const hostName = /^(?=.{1,253}$)(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])$/;
@@ -289,8 +290,11 @@ export async function removePersonalHost(dataDirectory: string, id: string): Pro
   const hosts = await readHosts(dataDirectory);
   const host = hosts.find(item => item.id === id);
   if (!host) throw new Refusal('HOST_NOT_FOUND', 404);
+  if ((await readRemoteProjects(dataDirectory)).some(item => item.hostId === id)) throw new Refusal('HOST_IN_USE', 409);
+  const remaining = hosts.filter(item => item.id !== id);
   const token = knownHostToken(host.host, host.port);
-  await writeHosts(dataDirectory, hosts.filter(item => item.id !== id));
+  await writeHosts(dataDirectory, remaining);
+  if (remaining.some(item => knownHostToken(item.host, item.port) === token)) return;
   await writeKnownHostLines(dataDirectory, (await readKnownHostLines(dataDirectory)).filter(item => !lineMatchesToken(item, token)));
  });
 }
@@ -299,4 +303,164 @@ export async function removePersonalHost(dataDirectory: string, id: string): Pro
 export function personalSshPaths(dataDirectory: string) {
  const root = resolve(dataDirectory);
  return {directory: join(root, 'ssh'), identityFile: join(root, 'ssh', 'id_ed25519'), knownHosts: join(root, 'ssh', 'known_hosts')};
+}
+
+const branchName = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/;
+const RemoteProjectRecord = z.object({
+ projectId: z.uuid(), hostId: z.uuid(),
+ path: z.string().refine(value => { try { assertRemotePath(value); return true; } catch { return false; } }),
+ branch: z.string().regex(branchName).refine(value => !value.split('/').includes('..')),
+}).strict();
+export type PersonalRemoteProject = z.infer<typeof RemoteProjectRecord>;
+
+/**
+ * Fixed remote listing. The path is the only variable and it is already single-quoted,
+ * because SSH joins its arguments into one shell command. At most 500 names, and none that start with ".".
+ */
+const remoteFolderScript = `set -eu
+dir=$1
+test -d "$dir"
+find "$dir" -mindepth 1 -maxdepth 1 -type d -name '[!.]*' -print | head -n 500 | while IFS= read -r entry
+do
+ name=\${entry##*/}
+ if test -d "$entry/.git" || test -f "$entry/.git"; then printf '%s\\t1\\n' "$name"; else printf '%s\\t0\\n' "$name"; fi
+done
+`;
+
+export function remoteFolderCommand(path: string): string {
+ return `sh -c ${shellSingleQuote(remoteFolderScript)} -- ${shellSingleQuote(assertRemotePath(path))}`;
+}
+
+function projectsPath(dataDirectory: string) { return join(resolve(dataDirectory), 'remote-projects.json'); }
+
+async function readRemoteProjects(dataDirectory: string): Promise<PersonalRemoteProject[]> {
+ try { return z.array(RemoteProjectRecord).max(32).parse(JSON.parse(await readFile(projectsPath(dataDirectory), 'utf8'))); }
+ catch (error) {
+  if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+  throw new Refusal('REMOTE_FILE_INVALID', 503);
+ }
+}
+async function writeRemoteProjects(dataDirectory: string, projects: readonly PersonalRemoteProject[]) {
+ await writePrivate(projectsPath(dataDirectory), JSON.stringify(projects, null, 2) + '\n');
+}
+
+function gitEnv(dataDirectory: string): NodeJS.ProcessEnv {
+ const paths = personalSshPaths(dataDirectory);
+ return {PATH: '/usr/bin:/bin', HOME: '/nonexistent', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
+  GIT_SSH_COMMAND: gitSshCommand(paths.knownHosts, paths.identityFile)};
+}
+function remoteGitUrl(host: PersonalSshHost, path: string): string {
+ const encoded = assertRemotePath(path).split('/').map(part => encodeURIComponent(part)).join('/');
+ return `ssh://${host.user}@${host.host}:${host.port}${encoded}`;
+}
+function checkoutDirectoryName(label: string): string {
+ const name = label.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+ if (!/^[A-Za-z0-9._-]{1,60}$/.test(name)) throw new Refusal('LABEL_INVALID', 400);
+ return name;
+}
+function rethrowAdd(error: unknown): never {
+ if (error instanceof Refusal) throw error;
+ if (error instanceof Error && /^[A-Z][A-Z0-9_]{2,80}$/.test(error.message))
+  throw new Refusal(error.message, error.message === 'DATA_DIRECTORY_PATH_FORBIDDEN' || error.message === 'PERSONAL_ACTIVATION_REQUIRED' ? 403 : 409);
+ throw error;
+}
+async function projectIdForRepository(installationPath: string, repository: string): Promise<string | undefined> {
+ try {
+  const raw = JSON.parse(await readFile(installationPath, 'utf8')) as {project?: {id?: unknown; repo?: unknown}; projects?: {id?: unknown; repo?: unknown}[]};
+  const real = await realpath(repository);
+  for (const project of [raw.project, ...(raw.projects ?? [])]) {
+   if (!project || typeof project.repo !== 'string' || typeof project.id !== 'string') continue;
+   const repoReal = await realpath(project.repo).catch(() => project.repo);
+   if (repoReal === real) return project.id;
+  }
+ } catch { return undefined; }
+ return undefined;
+}
+async function rememberRemote(dataDirectory: string, record: PersonalRemoteProject) {
+ await exclusive(async () => {
+  const hosts = await readHosts(dataDirectory);
+  if (!hosts.some(item => item.id === record.hostId)) throw new Refusal('HOST_NOT_FOUND', 404);
+  const current = await readRemoteProjects(dataDirectory);
+  if (current.some(item => item.projectId === record.projectId || (item.hostId === record.hostId && item.path === record.path))) return;
+  if (current.length >= 32) throw new Refusal('HOST_LIMIT', 409);
+  await writeRemoteProjects(dataDirectory, [...current, record]);
+ });
+}
+
+async function sshCommand(dataDirectory: string, host: PersonalSshHost, command: string): Promise<string> {
+ const paths = personalSshPaths(dataDirectory);
+ return (await run('ssh', [...sshOptionArgs(paths.knownHosts, paths.identityFile), '-p', String(host.port), `${host.user}@${host.host}`, command],
+  {encoding: 'utf8', timeout: 20000, env: {PATH: '/usr/bin:/bin'}})).stdout;
+}
+
+export async function listRemoteFolders(dataDirectory: string, hostId: string, path: string) {
+ const clean = assertRemotePath(path);
+ if (!z.uuid().safeParse(hostId).success) throw new Refusal('HOST_NOT_FOUND', 404);
+ const host = (await readHosts(dataDirectory)).find(item => item.id === hostId);
+ if (!host) throw new Refusal('HOST_NOT_FOUND', 404);
+ let stdout = '';
+ try { stdout = await sshCommand(dataDirectory, host, remoteFolderCommand(clean)); }
+ catch { throw new Refusal('SSH_FAILED', 503); }
+ const folders: {name: string; path: string; git: boolean}[] = [];
+ for (const line of stdout.split('\n')) {
+  if (!line) continue;
+  const match = /^([^\t/]+)\t([01])$/.exec(line);
+  if (!match || match[1] === '.' || match[1] === '..' || match[1].startsWith('.')) continue;
+  const child = `${clean.replace(/\/+$/, '')}/${match[1]}`;
+  try { assertRemotePath(child); } catch { continue; }
+  if (folders.length >= 500) break;
+  folders.push({name: match[1], path: child, git: match[2] === '1'});
+ }
+ folders.sort((left, right) => left.name.localeCompare(right.name, 'en'));
+ return {host: host.id, path: clean, folders};
+}
+
+/**
+ * Clones over SSH into `<dataDirectory>/remote/<label>`, records where it came from,
+ * then attaches the copy with the same module a local folder uses.
+ */
+export async function createRemotePersonalProject(input: {
+ dataDirectory: string; installationPath: string; hostId: string; path: string; label: string; underSystemd: boolean;
+ addPersonalProject: (installationPath: string, repository: string, label: string) => Promise<{projectId: string}>;
+}): Promise<{projectId: string; restarting: boolean; restartRequired: boolean}> {
+ const path = assertRemotePath(input.path);
+ const label = cleanLabel(input.label);
+ if (!z.uuid().safeParse(input.hostId).success) throw new Refusal('HOST_NOT_FOUND', 404);
+ return withPersonalProjectCreation(async () => {
+  const host = (await readHosts(input.dataDirectory)).find(item => item.id === input.hostId);
+  if (!host) throw new Refusal('HOST_NOT_FOUND', 404);
+  if ((await readRemoteProjects(input.dataDirectory)).some(item => item.hostId === host.id && item.path === path)) throw new Refusal('REPOSITORY_ALREADY_IN_INSTALLATION', 409);
+  const name = checkoutDirectoryName(label);
+  const root = join(resolve(input.dataDirectory), 'remote');
+  await mkdir(root, {recursive: true, mode: 0o700});
+  await chmod(root, 0o700);
+  const dest = join(root, name);
+  if (!isPersonalRemoteCheckout(input.dataDirectory, dest)) throw new Refusal('LABEL_INVALID', 400);
+  try { await lstat(dest); throw new Refusal('CHECKOUT_EXISTS', 409); }
+  catch (error) { if (error instanceof Refusal) throw error; if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  try {
+   await run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', 'clone', '--', remoteGitUrl(host, path), dest],
+    {encoding: 'utf8', timeout: 120000, env: gitEnv(input.dataDirectory)});
+  } catch { await rm(dest, {recursive: true, force: true}).catch(() => undefined); throw new Refusal('SSH_FAILED', 503); }
+  let branch = '';
+  try {
+   branch = (await run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-C', dest, 'symbolic-ref', '--short', 'HEAD'],
+    {encoding: 'utf8', timeout: 15000, env: {PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0'}})).stdout.trim();
+  } catch { branch = ''; }
+  if (!branchName.test(branch) || branch.split('/').includes('..')) {
+   await rm(dest, {recursive: true, force: true}).catch(() => undefined);
+   throw new Refusal('REPOSITORY_BRANCH_REQUIRED', 409);
+  }
+  let created: {projectId: string};
+  try { created = await input.addPersonalProject(input.installationPath, dest, label); }
+  catch (error) {
+   const kept = await projectIdForRepository(input.installationPath, dest);
+   if (kept) await rememberRemote(input.dataDirectory, {projectId: kept, hostId: host.id, path, branch}).catch(() => undefined);
+   else await rm(dest, {recursive: true, force: true}).catch(() => undefined);
+   rethrowAdd(error);
+  }
+  await rememberRemote(input.dataDirectory, {projectId: created.projectId, hostId: host.id, path, branch});
+  const restarting = input.underSystemd;
+  return {projectId: created.projectId, restarting, restartRequired: !restarting};
+ });
 }

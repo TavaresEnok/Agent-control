@@ -7,8 +7,8 @@ import {join} from 'node:path';
 import {Refusal} from '../src/contracts.ts';
 import {
  agentControlPushRef, assertRemotePath, assertSshOutsideMountRoots, bindSourceReaches, confirmPersonalHost,
- fingerprintOfKey, gitSshCommand, identitiesFromKeyscan, matchConfirmedFingerprint, personalSshPaths,
- pushRefspec, removePersonalHost, shellSingleQuote, sshOptionArgs, type ScannedIdentity,
+ fingerprintOfKey, gitSshCommand, identitiesFromKeyscan, isPersonalRemoteCheckout, matchConfirmedFingerprint,
+ personalSshPaths, pushRefspec, remoteFolderCommand, removePersonalHost, shellSingleQuote, sshOptionArgs, type ScannedIdentity,
 } from '../src/personal-ssh.ts';
 
 const keyA = 'AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl';
@@ -76,6 +76,18 @@ test('a changed server identity is refused and known_hosts keeps the confirmed k
   assert.equal((await readFile(personalSshPaths(directory).knownHosts, 'utf8')).trim(), '');
   assert.deepEqual(JSON.parse(await readFile(join(directory, 'remote-hosts.json'), 'utf8')), []);
  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
+test('the remote folder command quotes the path and refuses traversal', () => {
+ const command = remoteFolderCommand('/home/user/my proj');
+ assert.equal(command.endsWith(" -- '/home/user/my proj'"), true);
+ assert.equal(command.slice(0, command.lastIndexOf(" -- ")).includes('/home/user/my proj'), false);
+ assert.equal(command.includes("name=${entry##*/}"), true);
+ assert.throws(() => remoteFolderCommand('/home/../etc'), (error: unknown) => error instanceof Refusal && error.code === 'REMOTE_PATH_FORBIDDEN');
+ assert.equal(isPersonalRemoteCheckout('/data', '/data/remote/proj'), true);
+ assert.equal(isPersonalRemoteCheckout('/data', '/data/inside'), false);
+ assert.equal(isPersonalRemoteCheckout('/data', '/data/remote/a/b'), false);
+ assert.equal(isPersonalRemoteCheckout('/data', '/data/ssh'), false);
 });
 
 test('ssh key directory is outside the worker, tools and qa bind roots', () => {

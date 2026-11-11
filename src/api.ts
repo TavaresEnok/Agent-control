@@ -1,5 +1,6 @@
 import {listPersonalFolders,type PersonalFolderRoot} from './personal-folders.ts';
 import {archivePersonalProject,createPersonalProject} from './personal-panel-projects.ts';
+import {confirmPersonalHost,createRemotePersonalProject,listRemoteFolders,personalSshStatus,removePersonalHost,scanPersonalHost} from './personal-ssh.ts';
 import {ownerRequest} from './personal-owner-request.ts';
 import {claimPersonalSend,parseConversationQuery,personalMessageInput,releasePersonalSend} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
@@ -104,7 +105,7 @@ export type ApiOptions = {
     readConversation(principal:string,query:{after?:string;limit:number}):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
     sendMessage(principal:string,input:{text:string;localId:string}):Promise<void>;
   };
-  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;scheduleRestart:()=>void};
+  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;scheduleRestart:()=>void};
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
@@ -167,6 +168,48 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
     c.header('Cache-Control','no-store');
     return c.json(await listPersonalFolders({roots:personalPanel.roots,projectRepos:personalPanel.projectRepos,root:c.req.query('root'),path:c.req.query('path')}));
+  });
+  app.get('/api/v1/ac/personal/ssh',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    c.header('Cache-Control','no-store');
+    return c.json(await personalSshStatus(personalPanel.dataDirectory));
+  });
+  app.post('/api/v1/ac/personal/ssh/scan',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({host:z.string().min(1).max(253),port:z.number().int().min(1).max(65535),user:z.string().min(1).max(32)}).strict().parse(await c.req.json());
+    c.header('Cache-Control','no-store');
+    return c.json(await scanPersonalHost(input.host,input.port,input.user));
+  });
+  app.post('/api/v1/ac/personal/ssh/hosts',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({host:z.string().min(1).max(253),port:z.number().int().min(1).max(65535),user:z.string().min(1).max(32),label:z.string().min(1).max(200),fingerprint:z.string().min(1).max(80)}).strict().parse(await c.req.json());
+    c.header('Cache-Control','no-store');
+    return c.json(await confirmPersonalHost(personalPanel.dataDirectory,input),201);
+  });
+  app.delete('/api/v1/ac/personal/ssh/hosts/:id',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await removePersonalHost(personalPanel.dataDirectory,Id.parse(c.req.param('id')));
+    c.header('Cache-Control','no-store');
+    return c.json({removed:true});
+  });
+  app.get('/api/v1/ac/personal/ssh/folders',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    c.header('Cache-Control','no-store');
+    return c.json(await listRemoteFolders(personalPanel.dataDirectory,c.req.query('host')??'',c.req.query('path')??''));
+  });
+  app.post('/api/v1/ac/personal/ssh/projects',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({host:z.uuid(),path:z.string().min(1).max(401),label:z.string().min(1).max(200)}).strict().parse(await c.req.json());
+    const body=await createRemotePersonalProject({dataDirectory:personalPanel.dataDirectory,installationPath:personalPanel.installationPath,hostId:input.host,path:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label))});
+    if(body.restarting)personalPanel.scheduleRestart();
+    c.header('Cache-Control','no-store');
+    return c.json(body,202);
   });
   app.post('/api/v1/ac/personal/accounts',async c=>{
     if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);

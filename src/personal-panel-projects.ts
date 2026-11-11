@@ -10,6 +10,14 @@ let personalProjectBusy=false;
 
 export type PersonalProjectCreateResult={projectId:string;restarting:boolean;restartRequired:boolean};
 
+/** One project create or archive at a time. The remote clone uses the same lock. */
+export async function withPersonalProjectCreation<T>(work:()=>Promise<T>):Promise<T>{
+ if(personalProjectBusy)throw new Refusal('PROJECT_CREATION_BUSY',409);
+ personalProjectBusy=true;
+ try{return await work();}
+ finally{personalProjectBusy=false;}
+}
+
 /**
  * Resolves a folder inside an allowed root and attaches it with the phase 2 module.
  * A second call while the first has not finished is refused. The process restart,
@@ -23,25 +31,23 @@ export async function createPersonalProject(input:{
  if(!root)throw new Refusal('PROJECT_ROOT_FORBIDDEN',403);
  const label=input.label.trim();
  if(label.length<1||label.length>200||/[\u0000-\u001f\u007f]/.test(label))throw new Refusal('LABEL_INVALID',400);
- if(personalProjectBusy)throw new Refusal('PROJECT_CREATION_BUSY',409);
- personalProjectBusy=true;
- try{
-  const repository=await resolvePersonalFolder(root,input.relativePath);
-  const created=await input.addPersonalProject(input.installationPath,repository,label);
-  const restarting=input.underSystemd;
-  return {projectId:created.projectId,restarting,restartRequired:!restarting};
- }catch(error){
-  if(error instanceof Refusal)throw error;
-  if(error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/.test(error.message))throw new Refusal(error.message,error.message==='DATA_DIRECTORY_PATH_FORBIDDEN'||error.message==='PERSONAL_ACTIVATION_REQUIRED'?403:409);
-  throw error;
- }finally{personalProjectBusy=false;}
+ return withPersonalProjectCreation(async()=>{
+  try{
+   const repository=await resolvePersonalFolder(root,input.relativePath);
+   const created=await input.addPersonalProject(input.installationPath,repository,label);
+   const restarting=input.underSystemd;
+   return {projectId:created.projectId,restarting,restartRequired:!restarting};
+  }catch(error){
+   if(error instanceof Refusal)throw error;
+   if(error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/.test(error.message))throw new Refusal(error.message,error.message==='DATA_DIRECTORY_PATH_FORBIDDEN'||error.message==='PERSONAL_ACTIVATION_REQUIRED'?403:409);
+   throw error;
+  }
+ });
 }
 
 /** Removes a secondary project from the installation and archives its contexts. Repository files and the Happier conversation stay. */
 export async function archivePersonalProject(input:{installationPath:string;projectId:string;ledger:Ledger;underSystemd:boolean}):Promise<PersonalProjectCreateResult>{
- if(personalProjectBusy)throw new Refusal('PROJECT_CREATION_BUSY',409);
- personalProjectBusy=true;
- try{
+ return withPersonalProjectCreation(async()=>{
   const config=await loadInstallation(input.installationPath);
   if(input.projectId===config.project.id)throw new Refusal('PRIMARY_PROJECT_FORBIDDEN',403);
   const inFile=config.projects.some(project=>project.id===input.projectId);
@@ -61,7 +67,7 @@ export async function archivePersonalProject(input:{installationPath:string;proj
   });
   const restarting=input.underSystemd;
   return {projectId:input.projectId,restarting,restartRequired:!restarting};
- }finally{personalProjectBusy=false;}
+ });
 }
 
 async function backupArchive(installationPath:string){
