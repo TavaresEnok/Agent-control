@@ -1,61 +1,61 @@
-# Ordem para o Grok — Fase 1, parte B: a tela "Conversa" no painel
+# Ordem para o Grok — Fase 2, passo 0: levantamento (sem mudar código)
 
-Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço médio.
+Escrita pelo gerente (Claude) em 11/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto**.
 
 ---
 
-Você é o programador do Agent Control. O roteiro está em `docs/PLANO-PAINEL-E-PROJETOS.md`; leia "Fase 1". A parte A está pronta e foi provada com o Happier real:
+Você é o programador do Agent Control. O roteiro está em `docs/PLANO-PAINEL-E-PROJETOS.md`; leia "Decisões já tomadas" e "Fase 2". O objetivo da Fase 2 é **uma instalação com vários projetos que executam ao mesmo tempo**, com as mesmas contas (um login de Claude e um de Grok para todos).
 
-- **`GET /api/v1/ac/personal/conversation?after=<cursor>&limit=<n>`** devolve `{messages:[{id,role:'owner'|'manager',text,createdAt}],next}`. Sem `after`, traz as mais recentes. Com `after=<next>`, traz só as novas.
-- **`POST /api/v1/ac/personal/messages`** com `{text,clientId}` devolve `202 {id}`. O mesmo `clientId` nunca gera dois pedidos. O gerente responde na mesma conversa em alguns segundos; um pedido de mudança vira uma "Proposta de plano N" em texto.
+Hoje só `config.project` executa: `config.projects[]` sobe em `administration-only`.
 
-Agora faça a tela. Tudo o que você mudar vale **só quando `import.meta.env.VITE_AGENT_CONTROL_MANAGED==='1'`**. Fora disso, o Cezar continua igual. O código está em `upstream/cezar/packages/web/src`.
+Neste passo você **não muda código**. Você escreve um levantamento que o gerente vai usar para decidir o desenho.
 
-## O que fazer
+## O que levantar
 
-1. **Rota nova `/conversa`**, só no painel gerenciado, registrada em `routes.tsx`. Tela de conversa pensada primeiro para o celular:
-   - **Mensagens:** lista com "Você" à direita e "Gerente" à esquerda, com a hora. Mostre as quebras de linha do texto; não interprete HTML.
-   - **Atualização:** a cada 3 s, só com `after=<next>`. Pause quando a aba não está visível.
-   - **Rolagem:** desce sozinha só se a pessoa já estava no fim.
-   - **Caixa de texto e botão Enviar:** Enter envia; Shift+Enter quebra a linha.
-     - Gere o `clientId` com `crypto.randomUUID()` sem hífens, um por mensagem.
-     - Se o envio falhar por rede, o botão "Tentar de novo" reusa o **mesmo** `clientId`.
-     - Mostre a mensagem enviada como "enviando…" até ela aparecer na leitura.
-   - **Botões rápidos** acima da caixa: **Aprovar**, **Descartar**, **Parar** e **Equipe**. Eles enviam os textos `aprovar`, `descartar`, `pare` e `equipe`. **Descartar** e **Parar** pedem confirmação antes.
-   - **Erros:** 401 leva ao login, como o resto da página. Outros erros aparecem numa linha discreta, sem travar a tela.
+Leia o código e responda, com arquivo e linha, em `docs/implementation/FASE2-LEVANTAMENTO.md`:
 
-   Use os componentes e estilos que a página já tem (botões, campo de texto, cores do tema claro e escuro), e o mesmo jeito das outras chamadas `/api/v1/ac/...` da página (veja `components/auth/agent-control-auth-gate.tsx`).
-2. **Navegação:**
-   - acrescente "Conversa" no menu principal do painel gerenciado, também no celular, como primeiro item;
-   - a página inicial do painel gerenciado (`/`) abre a Conversa;
-   - a lista de tarefas continua acessível pelo menu.
-3. **Caixa da tarefa:** em `components/composer/composer.tsx`, troque o aviso "A conversa oficial está no Happier" e o link `/api/v1/ac/runs/<id>/conversation` por um botão "Falar com o gerente", que leva a `/conversa`.
-4. **"Nova tarefa":** no painel gerenciado, a tela de nova tarefa (`routes/new-task.tsx`) leva para `/conversa` com o texto digitado já na caixa. Pode ser por `?texto=`. A Conversa lê esse parâmetro uma vez e o limpa da URL.
+1. **Tudo o que hoje está preso a um único projeto ou repositório no modo pessoal.**
+   - Comece por `src/personal-runtime.ts` (`composePersonalRuntime`), `src/server-main.ts` (as condições `project.id===config.project.id`, por volta das linhas 157–200), `src/managers.ts`, `src/manager-transport.ts`, `src/happier.ts`, `src/personal-team-feed.ts` (`registerStageReporter`), `src/personal-connect.ts`, `src/native-bootstrap.ts` e `scripts/personal-*.mjs`.
+   - Para cada ponto, diga se ele precisa ser **por projeto** ou pode ficar **comum à instalação**.
+2. **Como os supervisores pegam trabalho.**
+   - Em `NativePlanningSupervisor`, `NativeExecutionSupervisor`, `NativeQa`, `NativeImplementation` e `NativeVerification`:
+     - de qual tabela cada um lê;
+     - se o filtro é por projeto, por contexto ou por nada;
+     - o que o `id` do supervisor controla (leases, recibos, nomes de contêiner).
+   - Responda claramente: **se existirem dois `NativeExecutionSupervisor` do mesmo provedor, um para cada repositório, um deles pode pegar o job do outro projeto?**
+   - Como o job sabe a qual repositório pertence (a linha do job tem projeto, contexto ou intenção que leve ao repositório?).
+3. **Capacidade e cotas.**
+   - Como `ac_capacity_grants`, as políticas de capacidade e o limite de simultaneidade funcionam hoje: por projeto ou por conta?
+   - O que acontece com duas execuções de projetos diferentes na mesma conta do Grok?
+4. **Conversa e Happier.**
+   - Quantas conversas, máquinas e transportes do gerente existem por projeto hoje.
+   - O que muda para ter uma conversa por projeto na mesma conta Happier.
+   - As rotas do painel `/api/v1/ac/personal/*` (em `src/api.ts` e `src/managers.ts`, `panelEntry`) recusam quando há mais de uma conversa rodando: como elas devem escolher o projeto (o painel já manda `x-agent-control-project` ou `/api/v1/p/<id>/`; veja `src/projects-api.ts`).
+5. **Banco.**
+   - As tabelas `ac_*` já separam tudo por projeto ou contexto?
+   - Há alguma tabela ou chave única que suponha um projeto só?
+6. **Proposta de desenho**, em passos pequenos, cada um com:
+   - os arquivos que mexe;
+   - o risco;
+   - a prova mínima.
 
-## Testes
-
-Não escreva testes de tela. Verificação:
-
-- `npm --prefix upstream/cezar/packages/web run typecheck` sai 0;
-- `npm run typecheck` sai 0.
-
-O gerente faz o build, abre a página no celular simulado e faz a prova real.
+   Prefira o desenho que **não duplique supervisores do mesmo provedor**, se um supervisor por provedor puder atender vários repositórios com segurança (o repositório vindo do job). Se não puder, explique por quê.
+7. **Riscos para o modo `locked`**, que não pode mudar.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você só pode editar arquivos em `upstream/cezar/packages/web/src/`, com suas ferramentas de arquivo.
-- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `rg`, `ls`.
-- Qualquer outro comando encerra a execução.
+- Você só pode escrever o arquivo `docs/implementation/FASE2-LEVANTAMENTO.md`.
+- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento: `git status`, `git log`, `git show`, `git add docs/implementation/FASE2-LEVANTAMENTO.md`, `git commit -m "..."`, `rg`, `ls`.
+- Use suas ferramentas de arquivo para ler.
 
 ## Regras
 
-- Sem push. Não toque em `docs/PROMPT-GROK-*.md` nem em `docs/PROXIMA-ORDEM.md`.
-- Um commit por item (1, 2, 3 e 4). Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude. O autor já está no ambiente; não rode `git config`.
-- Textos da tela em português, curtos.
-- Se não achar um caminho em 15 minutos, pare e relate.
+- Não altere nenhum arquivo de código.
+- Seja exato: cite arquivo:linha e diga "não sei" quando não tiver certeza, em vez de supor.
+- Um commit só, com o levantamento. A mensagem é uma frase em inglês, sem linha `Co-Authored-By` do Claude. O autor já está no ambiente.
 
 ## Relatório final
 
-- Os hashes dos commits e uma linha sobre cada um.
-- O resultado dos dois typecheck.
-- O que não conferiu.
+- O hash do commit.
+- A resposta curta à pergunta do item 2 (sim ou não, e por quê).
+- O desenho que você recomenda, em 5 linhas.

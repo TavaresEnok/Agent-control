@@ -11,15 +11,15 @@ Atualize esta tabela a cada commit.
 | Fase | Assunto | Estado |
 |---|---|---|
 | 0 | Fechar o que já existe | limpeza feita (`76011327`, `0c6337a3`, `9d5284e7`, revisada e no ar); falta o teste no celular e um pedido real, que fica junto da prova da Fase 1 |
-| 1 | Conversar pelo painel | parte A pronta e provada com o Happier real (`52cd657d`, `9f461a5d`, correção `44500c74`); parte B (tela) com o Grok |
-| 2 | Vários projetos numa instalação | não começada |
+| 1 | Conversar pelo painel | **pronta e provada** pelo celular simulado no endereço público: pergunta, pedido → proposta → Aprovar → integrado no IspAgent (`4e71540`), Parar com confirmação. Commits `db24662b`…`5f3657fb`. Pendência pequena: o painel tenta o WebSocket `/api/v1/ws` e recebe 403 (ruído no console) |
+| 2 | Vários projetos numa instalação | passo 0 (levantamento, sem código) com o Grok, esforço alto |
 | 3 | Novo projeto pelo painel | não começada |
 | 4 | Projeto em outro servidor por SSH | não começada |
 | 5 | QA que roda os testes do projeto | não começada |
 | 6 | Avisos no celular e entrada sem o app Happier | não começada |
 | 7 | Fechamento | não começada |
 
-Último commit conferido: `44500c74` (leitura e envio da conversa pelo gateway, provados no IspAgent).
+Último commit conferido: `5f3657fb` (tela Conversa no ar e provada).
 
 ## Aonde queremos chegar
 
