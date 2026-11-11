@@ -130,7 +130,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     canContinue,
     reason: continuation.reason,
     providerPending: continuation.providerPending,
-    pills: (
+    // The managed panel does not send this pick; Agent Control chooses the model.
+    pills: import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? null : (
       <div data-slot="follow-up-engine" className="flex flex-wrap items-center gap-1.5">
         {/* Shown when there is a choice to make: more than one runner, or more than one login for
             one of them. A host with neither sees no pill, exactly as before. */}
