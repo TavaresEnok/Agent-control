@@ -70,7 +70,7 @@ async function publicUi(path:string):Promise<Response|null>{
   else if(/^\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|woff2|png|svg)$/.test(path)){
     file=path.slice(1);const ext=file.split('.').pop();
     type=({js:'text/javascript',css:'text/css',woff2:'font/woff2',png:'image/png',svg:'image/svg+xml'} as Record<string,string>)[ext!];
-  }else if(path==='/'||/^\/(?:tasks|p|settings)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)){
+  }else if(path==='/'||/^\/(?:tasks|p|settings|conversa|tarefas|novo-projeto|new)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)){
     file='index.html';type='text/html; charset=utf-8';
   }else return null;
   try{
