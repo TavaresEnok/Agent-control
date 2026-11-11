@@ -38,36 +38,29 @@ O app não abre projeto novo sozinho: "nova sessão" numa pasta pede um daemon d
 2. Crie um arquivo de instalação fora do repositório, modo `0600`, com `activation` igual a `personal`, `accountHomesDirectory` dentro de `dataDirectory`, o `databaseUrl` e o bloco `happier`.
 3. `npm run personal:setup -- /caminho/instalacao.json`
 
-O comando inicializa o ledger, o operador, o cofre se estiver no arquivo, e o `native-setup`. Se as imagens nativas ainda não existirem, exporte `AC_NATIVE_PLANNING_IMAGE`, `AC_NATIVE_WORKER_IMAGE` e `AC_NATIVE_TOOLS_IMAGE` (`sha256:...`) e rode `npm run gateway -- native-setup /caminho/instalacao.json` de novo.
+O comando inicializa o ledger, o operador, o cofre se estiver no arquivo, e o `native-setup`. Se as imagens nativas ainda não existirem, rode `npm run personal:images -- /caminho/instalacao.json` (seção abaixo) e reinicie o gateway com o comando que ele imprimir.
 
 ### Imagens dos workers
 
 O `claude` do host é um ELF dinâmico com glibc. A imagem Node Alpine não o executa (`no such file or directory` no interpretador). As imagens de planejamento e de execução usam Node Debian slim. O `grok` é estático e o Codex usado na imagem é o ELF musl do pacote npm, não o `codex.js`.
 
 ```bash
-export AC_NATIVE_CLAUDE_BIN=$(readlink -f $(which claude))
-export AC_NATIVE_GROK_BIN=$(readlink -f $(which grok))
-# o ELF do Codex fica dentro do pacote npm; o `codex` do PATH é um script e é recusado
-ELF=$(find "$(npm root -g)/@openai" -type f -name codex -size +1M | head -1)
-SHA=$(sha256sum "$ELF" | awk '{print $1}')
-node scripts/prepare-native-planning-image.mjs "$ELF" "$SHA"
-node scripts/prepare-native-execution-image.mjs "$ELF" "$SHA"
-node scripts/prepare-native-tools-image.mjs "$ELF" "$SHA"
-docker build -t ac-native-planning:personal <contexto-planning>
-docker build -t ac-native-execution:personal <contexto-execution>
-docker build -t ac-native-tools:personal <contexto-tools>
-export AC_NATIVE_PLANNING_IMAGE=$(docker image inspect ac-native-planning:personal --format '{{.Id}}')
-export AC_NATIVE_WORKER_IMAGE=$(docker image inspect ac-native-execution:personal --format '{{.Id}}')
-export AC_NATIVE_TOOLS_IMAGE=$(docker image inspect ac-native-tools:personal --format '{{.Id}}')
+npm run personal:images -- <instalação.json>
+```
+
+O comando faz a sequência que antes era manual: acha o ELF do Codex em `$(npm root -g)/@openai` (o `codex` do PATH é um script e é recusado), usa `AC_NATIVE_CLAUDE_BIN` e `AC_NATIVE_GROK_BIN` se já estiverem exportados, roda `prepare-native-planning-image.mjs`, `prepare-native-execution-image.mjs` e `prepare-native-tools-image.mjs`, constrói as tags `ac-native-planning:personal`, `ac-native-execution:personal` e `ac-native-tools:personal`, exporta os três ids e roda `personal:setup`. No fim ele imprime o reinício do gateway. O nome do serviço é o diretório da instalação, ou o segundo argumento, o mesmo de `personal:services`:
+
+```bash
+systemctl --user restart agent-control-gateway-<nome>
 ```
 
 Confira com `docker run --rm --entrypoint /usr/local/bin/claude ac-native-planning:personal --version`.
 
 Para deixar no ar: `docker compose -f deploy/compose.personal.yml up -d`. O `restart: unless-stopped` sobe de novo depois de um reboot. O socket do Docker entra só no broker.
 
-O comando de QA roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. O padrão confere três coisas que não dependem de instalar nada: não há marcador de conflito de merge, todo `.json` é válido e todo `.js`, `.mjs` e `.cjs` passa em `node --check`. Para rodar os testes do projeto, exporte `AC_PERSONAL_QA_ARGV` antes do `personal:setup`, com um JSON cujo primeiro item é um executável absoluto, por exemplo `'["/usr/local/bin/node","--test"]'`. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
+O comando de QA roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. O padrão confere três coisas que não dependem de instalar nada: não há marcador de conflito de merge, todo `.json` é válido e todo `.js`, `.mjs` e `.cjs` passa em `node --check`. Para rodar os testes do projeto, exporte `AC_PERSONAL_QA_ARGV` antes do `personal:images`, com um JSON cujo primeiro item é um executável absoluto, por exemplo `'["/usr/local/bin/node","--test"]'`. O comando repassa essa variável ao `personal:setup`. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
 
-Sempre que reconstruir uma imagem ou mudar o QA, rode `personal:setup` de novo e reinicie o gateway. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
+Sempre que reconstruir uma imagem ou mudar o QA, rode `npm run personal:images -- <instalação.json>` de novo e reinicie o gateway com o comando impresso. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
 
 ## Ligar a conversa (Happier)
 
