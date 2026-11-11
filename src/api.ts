@@ -324,6 +324,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(c.req.method==='PUT'&&plain==='/api/v1/workspace/ui-state'){const text=await c.req.text();if(text.length>65536)return c.json({error:'UI_STATE_TOO_LARGE'},413);
      try{return c.json(JSON.parse(text||'{}'));}catch{return c.json({error:'UI_STATE_INVALID'},400);}}
     if(c.req.method==='GET'&&/^\/api\/v1\/runs\/[a-f0-9-]{36}\/(?:drafts|history-context)$/.test(plain))return c.json(plain.endsWith('drafts')?{drafts:[]}:{});
+    // The managed page polls these and only needs a quiet empty answer. Writes stay refused below.
+    if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/star-count')return c.json({available:false,url:'https://github.com/open-mercato/cezar'});
+    if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/workspace/agent-profiles')return c.json({editable:false,profiles:[],profileCapableProviders:[],selections:{},defaults:{}});
+    if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/workspace/agent-profiles/fallback-policy')return c.json({enabled:false,candidates:[],revision:0,incarnation:null,revocation:null});
+    if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/workspace/skills-update')return c.json({status:'current',available:false,autoUpdateEnabled:false,inherited:false,checkedAt:null,updatedAt:null,scopes:[],needsUpgradeNotes:false});
     if (c.req.method !== 'GET') return c.json({ error: 'CANONICAL_HAPPIER_REQUIRED' }, 403);
     const url = new URL(c.req.url);
     let path = url.pathname;
