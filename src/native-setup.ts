@@ -14,33 +14,12 @@ function retiredPlanning(previous:unknown,current:string):{retiredImageIds?:stri
  const ids=[...(old.planning.retiredImageIds??[]),old.planning.imageId].filter((id,i,all)=>id!==current&&all.indexOf(id)===i).slice(-8);
  return ids.length?{retiredImageIds:ids}:{};
 }
-import {nativeQaContractDigest,NativeQaContract} from './native-qa-contract.ts';
+import {nativeQaContractDigest} from './native-qa-contract.ts';
+import {defaultPersonalQaContract} from './personal-qa-config.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
 import {publishFirstPersonalPolicies,refreshPersonalTemplates,shareProjectAccounts} from './personal-policies.ts';
 import {Capacity} from './capacity.ts';
-
-/**
- * Default personal QA. It runs in the tools image with no network and a read-only checkout, so it
- * cannot install dependencies; it checks what needs none: no merge-conflict markers, every JSON
- * file parses and every plain JavaScript file passes `node --check`. Owners with a real test
- * command set AC_PERSONAL_QA_ARGV instead.
- */
-export const defaultPersonalQaScript=[
- "const fs=require('fs'),path=require('path'),cp=require('child_process');",
- "const skip=new Set(['.git','node_modules','dist','build','vendor','.ai']);let bad=0,seen=0;",
- "const fail=(file,why)=>{bad++;console.log('QA_FAIL '+file+': '+why);};",
- "(function walk(dir){for(const entry of fs.readdirSync(dir,{withFileTypes:true})){",
- " const file=path.join(dir,entry.name);",
- " if(entry.isDirectory()){if(!skip.has(entry.name))walk(file);continue;}",
- " if(!entry.isFile()||fs.statSync(file).size>1048576||++seen>20000)continue;",
- " const text=fs.readFileSync(file,'utf8');if(text.includes('\\u0000'))continue;",
- " if(/^(<{7} |>{7} )/m.test(text))fail(file,'merge conflict marker');",
- " if(/\\.json$/.test(entry.name)&&!/^(tsconfig|jsconfig)[^/]*\\.json$/.test(entry.name)&&!/[\\\\/]\\.vscode[\\\\/]/.test(file)){try{JSON.parse(text);}catch(error){fail(file,'invalid JSON');}}",
- " if(/\\.(js|mjs|cjs)$/.test(entry.name)){const run=cp.spawnSync(process.execPath,['--check',file],{encoding:'utf8'});if(run.status!==0)fail(file,'syntax error');}",
- "}})('/work');",
- "console.log('QA files checked: '+seen+', failures: '+bad);process.exit(bad?1:0);",
-].join('\n');
 
 const Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
@@ -79,9 +58,9 @@ export async function nativeSetup(path:string){
   const accounts=(await ledger.pool.query("SELECT id,provider,resource_identity FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 AND a.mode='subscription_cli' AND a.provider IN ('codex','claude','grok')",[config.project.id])).rows;
   if(!accounts.length)return {state:'account_required',directory:root,next:'Rode account-add para codex e claude antes de native-setup.'};
   const context=(await ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived ORDER BY created_at LIMIT 1',[config.project.id])).rows[0];
-  // The owner may set the QA command (a JSON array with an absolute executable), run in the tools image without network over a read-only checkout.
-  const qaArgv=process.env.AC_PERSONAL_QA_ARGV?z.array(z.string()).min(1).parse(JSON.parse(process.env.AC_PERSONAL_QA_ARGV)):['/usr/local/bin/node','-e',defaultPersonalQaScript];
-  const qa=NativeQaContract.parse({schemaVersion:1,id:'personal-qa',image:images.tools,argv:qaArgv,environment:['PATH=/usr/local/bin:/usr/bin:/bin'],timeoutMs:120000,memoryBytes:268435456,pids:64,nanoCpus:500000000});
+  // Projects without qa/<id>.json keep this contract. AC_PERSONAL_QA_ARGV still replaces its argv.
+  const qaArgv=process.env.AC_PERSONAL_QA_ARGV?z.array(z.string()).min(1).parse(JSON.parse(process.env.AC_PERSONAL_QA_ARGV)):undefined;
+  const qa=defaultPersonalQaContract(images.tools!,qaArgv);
   const block={state:'active',contract:'native-bootstrap-configured-v1',projectId:config.project.id,contextId:config.managerTransport?.contexts.find(item=>item.projectId===config.project.id)?.contextId??context?.id??randomUUID(),epoch:1,instanceId:randomUUID(),source:'authorized-endpoint',
    accounts:accounts.map(account=>({accountId:account.id,subjectDigest:String(account.resource_identity).slice(account.provider.length+1)})),
    planning:{id:'personal-planning',imageId:images.planning,...retiredPlanning(config.nativeBootstrap,images.planning!),executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},
