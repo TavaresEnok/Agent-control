@@ -1,6 +1,6 @@
 # Ordem para o Grok — Fase 0, passo de limpeza do painel
 
-Escrita pelo gerente (Claude) em 11/11/2026. Cole tudo abaixo no Grok, aberto em `/home/app/projects/agent-control`.
+Escrita pelo gerente (Claude) em 11/11/2026. Abra o Grok com `cd /home/app/projects/agent-control && grok -m grok-4.7 --effort medium` e cole tudo abaixo da linha.
 
 ---
 
