@@ -18,7 +18,7 @@ const b64=(bytes:Uint8Array)=>Buffer.from(bytes).toString('base64');
 async function privateBytes(path:string){
  let bytes:Buffer;
  try{bytes=await readPrivateFile(path,64);}
- catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;bytes=randomBytes(32);await writeFile(path,bytes,{mode:0o600,flag:'wx'});}
+ catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;bytes=randomBytes(32);await writeFile(path,bytes,{mode:0o600,flag:'wx'});await chmod(path,0o600);}
  if(bytes.length!==32)throw new Error('PRIVATE_KEY_FILE_INVALID');
  return bytes;
 }

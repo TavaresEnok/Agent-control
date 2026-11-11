@@ -7,6 +7,10 @@
 // --share-happier uses the Happier server and account of an installation that already has one, so this
 // project shows up as one more conversation in the same app (same server address, same secret key).
 //
+// --add attaches another repository to an installation that already exists (same database, same logins,
+// same Happier account). It does not create a database or copy a login.
+//   npm run personal:project -- --add <instalação.json> <repositório> --label <nome>
+//
 // --import-logins copies (never moves) the CLI logins that already exist in this user's home
 // (~/.claude/.credentials.json, ~/.grok/auth.json, ~/.codex/auth.json). Without it the script stops
 // after writing the installation file and prints the account-add commands for a device login.
@@ -20,6 +24,13 @@ import {basename,join,resolve,sep} from 'node:path';
 import net from 'node:net';
 
 const args=process.argv.slice(2),flag=name=>{const i=args.indexOf(name);return i<0?undefined:args[i+1];};
+if(args[0]==='--add'){
+ const file=args[1],repo=args[2],label=flag('--label');
+ if(!file||!repo||!label||file.startsWith('--')||repo.startsWith('--')){console.log('Uso: npm run personal:project -- --add <instalação.json> <repositório> --label <nome>');process.exit(1);}
+ const root=resolve(import.meta.dirname,'..');
+ const result=spawnSync(process.execPath,['--import','tsx','src/personal-project-add.ts',file,repo,'--label',label],{cwd:root,stdio:'inherit'});
+ process.exit(result.status??1);
+}
 const repoArg=args[0]&&!args[0].startsWith('--')?args[0]:undefined,db=flag('--db'),importLogins=args.includes('--import-logins'),shareFrom=flag('--share-happier');
 if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>]');process.exit(repoArg||db?1:0);}
 const root=resolve(import.meta.dirname,'..'),repo=await realpath(resolve(repoArg));

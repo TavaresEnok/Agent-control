@@ -22,13 +22,23 @@ Para remover: o mesmo comando com `--remove`. Os passos abaixo são o caminho ma
 
 ### Mais um projeto no mesmo app
 
-Para o novo projeto aparecer como mais uma conversa no app que você já usa (mesmo servidor, mesma chave), passe a instalação que roda o Happier:
+Para o outro repositório aparecer como mais uma conversa no app que você já usa (mesmo banco, mesmos logins, mesma conta Happier, mesmo token e a mesma máquina):
 
 ```bash
-npm run personal:project -- /caminho/do/outro --db postgresql://.../banco_novo --label outro --share-happier ~/.agent-control/ispagent/installation.json
+npm run personal:project -- --add ~/.agent-control/ispagent/installation.json /caminho/do/outro --label outro
 ```
 
-Ele copia a chave da conta e usa o mesmo Happier; `personal:services` instala só o gateway desse projeto. Cada projeto continua com o próprio banco e os próprios logins, porque um login copiado de outro projeto expira quando o outro renova o token.
+O comando acrescenta o projeto em `projects[]` com um id novo e o caminho absoluto do repositório, registra o projeto, o dono e o repositório no banco que já existe, dá acesso às contas desse dono e publica a primeira política de capacidade e a de qualidade. Em seguida abre a conversa na mesma conta. O título da sessão no app é o nome passado em `--label`.
+
+Antes de reescrever `installation.json`, o comando confere se `nativeBootstrap` aceita o repositório em `projects[]`. O arquivo anterior fica ao lado, em `installation.json.before-add-<label>`. Rodar de novo não duplica.
+
+O comando recusa um caminho que não é Git ou não tem branch, um repositório que já está nesta instalação, um caminho dentro do diretório de dados e um repositório que pertence a outra instalação.
+
+No fim ele pede o reinício do gateway que já está no ar. O nome do serviço é o diretório da instalação (o `basename` de `dataDirectory`), o mesmo critério de `personal:services`:
+
+```bash
+systemctl --user restart agent-control-gateway-<nome>
+```
 
 O app não abre projeto novo sozinho: "nova sessão" numa pasta pede um daemon do Happier na máquina, e o Agent Control não roda um. Por isso a máquina "agent-control" aparece offline. As conversas dos projetos ligados aqui funcionam mesmo assim.
 
