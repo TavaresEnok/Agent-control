@@ -1,4 +1,5 @@
 import {ownerRequest} from './personal-owner-request.ts';
+import {parseConversationQuery} from './personal-panel-conversation.ts';
 import {serverTiming} from './request-timing.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {AdministrativeOperations} from './administrative-operations.ts';
@@ -98,6 +99,7 @@ export type ApiOptions = {
   personalAccounts?: {
     add(principal:string,input:{provider:string;label:string;authFile?:string}):Promise<unknown>;
     status(principal:string,accountId:string):Promise<unknown>;
+    readConversation(principal:string,query:{after?:string;limit:number}):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
   };
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
@@ -152,6 +154,14 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     const accountId=Id.parse(c.req.param('id'));
     c.header('Cache-Control','no-store');
     return c.json(await personalAccounts.status(c.get('principal'),accountId)??{accountId,state:'unknown'});
+  });
+  app.get('/api/v1/ac/personal/conversation',async c=>{
+    if(!personalAccounts)return c.json({error:'NOT_FOUND'},404);
+    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const query=parseConversationQuery({after:c.req.query('after'),limit:c.req.query('limit')});
+    c.header('Cache-Control','no-store');
+    const page=await personalAccounts.readConversation(c.get('principal'),query);
+    return c.json({messages:page.messages.map(message=>({id:message.id,role:message.role,text:message.text,createdAt:message.createdAt})),next:page.next});
   });
   app.post('/api/v1/ac/personal/auto-approve',async c=>{
     if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);

@@ -5,6 +5,7 @@ import {serve} from '@hono/node-server';
 import {z} from 'zod';
 import {join} from 'node:path';
 import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
+import {Refusal} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
 import {createProjectGateway} from './projects-api.ts';
@@ -183,7 +184,7 @@ async function main(){
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId))} :undefined});
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);}} :undefined});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);

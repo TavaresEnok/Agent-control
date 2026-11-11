@@ -15,6 +15,7 @@ import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {panelMessageFromRecord,type PanelPage} from './personal-panel-conversation.ts';
 import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
@@ -85,6 +86,17 @@ async function boundedNetwork<T>(operation:(signal:AbortSignal)=>Promise<T>,time
   finally{clearTimeout(timer);parent?.removeEventListener('abort',aborted);}
 }
 
+function decryptHistoryContent(boundary: HappierBoundary, key: Uint8Array, variant: EncryptionVariant, content: unknown): unknown {
+  const envelope = z.object({ t: z.literal('encrypted'), c: z.string() }).parse(typeof content === 'string' ? JSON.parse(content) : content);
+  const decrypted = boundary.decrypt(key, variant, boundary.decodeBase64(envelope.c));
+  if (decrypted === null) throw new Refusal('INVALID_HISTORY_CIPHERTEXT');
+  return decrypted;
+}
+const HistoryPage = z.object({
+  messages: z.array(z.object({ id: z.string(), seq: z.number().int().nonnegative(), createdAt: z.number().int().nonnegative(), content: z.unknown() }).passthrough()),
+  hasMore: z.boolean(), nextBeforeSeq: z.number().int().positive().nullable(), nextAfterSeq: z.number().int().nonnegative().nullable().optional(),
+}).passthrough();
+
 // Read only the linked session using Happier's native backward cursor. Never silently
 // present a truncated or non-progressing traversal as a complete history.
 export async function recoverHistory(baseUrl: string, sessionId: string, token: string,
@@ -112,16 +124,82 @@ export async function recoverHistory(baseUrl: string, sessionId: string, token: 
     if (!result.hasMore) {
       if (result.nextBeforeSeq !== null) throw new Refusal('HISTORY_CURSOR_INVALID');
       await authorize();
-      return messages.reverse().map(message => {
-        const envelope = z.object({ t: z.literal('encrypted'), c: z.string() }).parse(typeof message.content === 'string' ? JSON.parse(message.content) : message.content);
-        const decrypted = boundary.decrypt(key, variant, boundary.decodeBase64(envelope.c));
-        if (decrypted === null) throw new Refusal('INVALID_HISTORY_CIPHERTEXT');
-        return decrypted;
-      });
+      return messages.reverse().map(message => decryptHistoryContent(boundary, key, variant, message.content));
     }
     if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
       throw new Refusal('HISTORY_CURSOR_INVALID');
     before = result.nextBeforeSeq;
+  }
+  throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
+}
+
+/** Panel page of the same session history. Decrypts with the bridge key; drops non-text events.
+ * Without `after`, the newest window. `next` is the sequence cursor for a later poll. */
+export async function readPanelTranscript(baseUrl: string, sessionId: string, token: string, key: Uint8Array, boundary: HappierBoundary,
+  variant: EncryptionVariant, authorize: () => Promise<void>, options: {after?: string; limit: number; signal?: AbortSignal; timeoutMs?: number; fetchPage?: typeof fetch}): Promise<PanelPage> {
+  const fetchPage = options.fetchPage ?? fetch;
+  const load = async (query: {before?: number; after?: number}) => {
+    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
+    url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
+    if (query.before !== undefined) url.searchParams.set('beforeSeq', String(query.before));
+    if (query.after !== undefined) url.searchParams.set('afterSeq', String(query.after));
+    await authorize();
+    const data = await boundedNetwork(async signal => {
+      const response = await fetchPage(url, {headers: {authorization: 'Bearer ' + token}, signal, redirect: 'error'});
+      if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+      return response.json();
+    }, options.timeoutMs ?? 10000, options.signal);
+    return HistoryPage.parse(data);
+  };
+  const visible = (message: {id: string; seq: number; createdAt: number; content: unknown}) => {
+    const row = panelMessageFromRecord(message.id, message.createdAt, decryptHistoryContent(boundary, key, variant, message.content));
+    return row ? {row, seq: message.seq} : null;
+  };
+  if (options.after === undefined) {
+    const kept: {row: PanelPage['messages'][number]; seq: number}[] = [];
+    let before: number | undefined, high: number | undefined;
+    for (let page = 0; page < 100; page++) {
+      const result = await load({before});
+      let previous = before ?? Infinity;
+      for (const message of result.messages) {
+        if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
+        previous = message.seq;
+        if (high === undefined) high = message.seq;
+        const item = visible(message);
+        if (!item) continue;
+        kept.push(item);
+        if (kept.length === options.limit) break;
+      }
+      if (kept.length === options.limit || !result.hasMore) {
+        if (!result.hasMore && result.nextBeforeSeq !== null && kept.length < options.limit) throw new Refusal('HISTORY_CURSOR_INVALID');
+        break;
+      }
+      if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
+        throw new Refusal('HISTORY_CURSOR_INVALID');
+      before = result.nextBeforeSeq;
+      if (page === 99) throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
+    }
+    return {messages: kept.reverse().map(item => item.row), next: high === undefined ? null : String(high)};
+  }
+  const kept: PanelPage['messages'] = [];
+  let cursor = Number(options.after), high: number | undefined;
+  for (let page = 0; page < 100; page++) {
+    const result = await load({after: cursor});
+    let previous = cursor;
+    for (const message of result.messages) {
+      if (message.seq <= previous) throw new Refusal('HISTORY_ORDER_INVALID');
+      previous = message.seq; high = message.seq;
+      const item = visible(message);
+      if (!item) continue;
+      kept.push(item.row);
+      if (kept.length === options.limit) return {messages: kept, next: String(message.seq)};
+    }
+    if (!result.hasMore) {
+      if (result.nextAfterSeq != null) throw new Refusal('HISTORY_CURSOR_INVALID');
+      return {messages: kept, next: high === undefined ? options.after : String(high)};
+    }
+    if (!result.messages.length || result.nextAfterSeq == null || result.nextAfterSeq <= cursor) throw new Refusal('HISTORY_CURSOR_INVALID');
+    cursor = result.nextAfterSeq;
   }
   throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
 }
@@ -671,5 +749,11 @@ export class HappierEndpoint {
     }
   }
   connectionState(): 'connected'|'disconnected' {return this.socket.connected?'connected':'disconnected';}
+  /** Same key and history read as the bridge. The caller already checked the project owner. */
+  async readPanelConversation(after: string | undefined, limit: number): Promise<PanelPage> {
+    if (this.lifecycle.signal.aborted) throw new Refusal('MANAGER_STOPPED');
+    await this.validateLink();
+    return readPanelTranscript(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, this.options.encryptionVariant ?? 'legacy', () => this.validateLink(), {after, limit, signal: this.lifecycle.signal, timeoutMs: this.options.transportTimeoutMs ?? 10000});
+  }
   close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.socket.disconnect(); }
 }

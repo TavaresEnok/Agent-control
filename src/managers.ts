@@ -22,7 +22,9 @@ export type ManagerStart=z.input<typeof Start>;
 export type ManagerKeyRequest=Omit<ManagerStart,'key'>;
 /** load transfers ownership of its returned buffer to the registry. */
 export type ManagerKeySource={load(input:ManagerKeyRequest):Promise<Uint8Array>};
-export type ManagedEndpoint={start():Promise<void>;close():void|Promise<void>;lastError?:string;connectionState?(): 'connected'|'disconnected'};
+export type ManagedEndpoint={start():Promise<void>;close():void|Promise<void>;lastError?:string;connectionState?(): 'connected'|'disconnected';
+ readPanelConversation?(after:string|undefined,limit:number):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
+ enqueueOwnerMessage?(text:string,localId:string):Promise<void>};
 export type ManagerEndpointInput=Omit<z.infer<typeof Start>,'key'> & {authority:Authority;key:Uint8Array};
 export type ManagerEndpointFactory=(input:ManagerEndpointInput)=>ManagedEndpoint|Promise<ManagedEndpoint>;
 type Entry={input:z.infer<typeof Start>;signature:string;key:Uint8Array;state:'starting'|'running'|'stopping';
@@ -200,6 +202,28 @@ export class ManagerRegistry{
  async close(){
   this.closed=true;for(const guard of this.keyLoads.values())guard.abort();for(const guard of this.restarts.values())guard.abort();const results=await Promise.allSettled([...this.entries.values()].map(entry=>this.dispose(entry)));
   if(results.some(result=>result.status==='rejected'))throw new Refusal('MANAGER_SHUTDOWN_CLEANUP_REQUIRED');
+ }
+ /** The one running conversation of this project. A second context is refused rather than guessed. */
+ private panelEntry(){
+  if(this.closed)throw new Refusal('CONVERSATION_UNAVAILABLE',503);
+  const running=[...this.entries.values()].filter(entry=>entry.state==='running'&&!entry.cancelled&&entry.authority&&entry.endpoint
+   &&!invalidAuthorityErrors.has(entry.endpoint.lastError??''));
+  if(running.length!==1)throw new Refusal('CONVERSATION_UNAVAILABLE',503);
+  return running[0]!;
+ }
+ private async assertPanelOwner(principal:string,entry:Entry){
+  await this.validate(entry,entry.authority);
+  await this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,entry.input.contextId,false);
+   if(context.project_id!==this.projectId||context.role!=='owner')throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+  });
+  if(this.closed||this.entries.get(entry.input.contextId)!==entry||entry.state!=='running'||entry.cancelled)throw new Refusal('CONVERSATION_UNAVAILABLE',503);
+ }
+ async readPanelConversation(principal:string,after:string|undefined,limit:number){
+  const entry=this.panelEntry();
+  if(!entry.endpoint?.readPanelConversation)throw new Refusal('CONVERSATION_UNAVAILABLE',503);
+  await this.assertPanelOwner(principal,entry);
+  return entry.endpoint.readPanelConversation(after,limit);
  }
  /** Live read fence. A closed registry, a known authority error, or a stale ledger row is empty.
   * Does not start an endpoint, load a key, dispose the entry or replay work. */
