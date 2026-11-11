@@ -42,6 +42,18 @@ systemctl --user restart agent-control-gateway-<nome>
 
 O app não abre projeto novo sozinho: "nova sessão" numa pasta pede um daemon do Happier na máquina, e o Agent Control não roda um. Por isso a máquina "agent-control" aparece offline. As conversas dos projetos ligados aqui funcionam mesmo assim.
 
+### Pastas que o painel pode abrir
+
+O painel só lista pastas dentro das raízes gravadas em `projectRoots`. Nada fora delas aparece.
+
+```bash
+npm run personal:roots -- ~/.agent-control/ispagent/installation.json list
+npm run personal:roots -- ~/.agent-control/ispagent/installation.json add /caminho/da/pasta --label projetos
+npm run personal:roots -- ~/.agent-control/ispagent/installation.json remove projetos
+```
+
+`add` grava o caminho real e absoluto. Recusa `/`, a home inteira, o diretório de dados e um caminho com link simbólico no meio. O arquivo anterior fica em `installation.json.before-roots`. No fim, reinicie o gateway com o comando que ele imprimir.
+
 ## Instalar
 
 1. PostgreSQL e Docker no servidor.

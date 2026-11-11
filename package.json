@@ -17,6 +17,7 @@
     "personal:setup": "node scripts/personal-setup.mjs",
     "personal:images": "node scripts/personal-images.mjs",
     "personal:project": "node scripts/personal-project.mjs",
+    "personal:roots": "node scripts/personal-roots.mjs",
     "personal:happier": "node scripts/personal-happier.mjs",
     "personal:services": "node scripts/personal-services.mjs",
     "personal:public": "node scripts/personal-public.mjs",
