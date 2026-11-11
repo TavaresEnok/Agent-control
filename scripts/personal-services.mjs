@@ -14,7 +14,8 @@ const root=resolve(import.meta.dirname,'..'),units=join(homedir(),'.config/syste
 const systemctl=(...a)=>execFileSync('systemctl',['--user',...a],{stdio:'inherit'});
 const happier=`agent-control-happier-${name}.service`,gateway=`agent-control-gateway-${name}.service`;
 if(remove){
- for(const unit of [gateway,happier]){try{systemctl('disable','--now',unit);}catch{}await rm(join(units,unit),{force:true});}
+ const ownsHappier=!await readFile(join(config.dataDirectory,'happier-shared-from'),'utf8').then(()=>true,()=>false);
+ for(const unit of ownsHappier?[gateway,happier]:[gateway]){try{systemctl('disable','--now',unit);}catch{}await rm(join(units,unit),{force:true});}
  systemctl('daemon-reload');console.log(JSON.stringify({removed:[gateway,happier]}));process.exit(0);
 }
 if(config.activation!=='personal')throw Error('PERSONAL_ACTIVATION_REQUIRED');
@@ -33,8 +34,11 @@ UMask=0077
 [Install]
 WantedBy=default.target
 `;
+// A project that shares another installation's Happier only gets a gateway, started after that Happier.
+const sharedFrom=await readFile(join(config.dataDirectory,'happier-shared-from'),'utf8').then(t=>t.trim(),()=>null);
+const happierUnit=sharedFrom?`agent-control-happier-${basename(dirname(sharedFrom)).replace(/[^A-Za-z0-9_-]/g,'-')}.service`:happier;
 await mkdir(units,{recursive:true});
-await writeFile(join(units,happier),unit('Agent Control: Happier server',`${process.execPath} ${join(root,'scripts/personal-happier.mjs')} ${file}`));
-await writeFile(join(units,gateway),unit('Agent Control: gateway',`${process.execPath} --import tsx ${join(root,'src/server-main.ts')} serve ${file}`,`After=${happier}\nWants=${happier}`));
-systemctl('daemon-reload');systemctl('enable','--now',happier);systemctl('enable','--now',gateway);
-console.log(JSON.stringify({installed:[happier,gateway],logs:`journalctl --user -u ${gateway} -f`}));
+if(!sharedFrom)await writeFile(join(units,happier),unit('Agent Control: Happier server',`${process.execPath} ${join(root,'scripts/personal-happier.mjs')} ${file}`));
+await writeFile(join(units,gateway),unit('Agent Control: gateway',`${process.execPath} --import tsx ${join(root,'src/server-main.ts')} serve ${file}`,`After=${happierUnit}\nWants=${happierUnit}`));
+systemctl('daemon-reload');if(!sharedFrom)systemctl('enable','--now',happier);systemctl('enable','--now',gateway);
+console.log(JSON.stringify({installed:sharedFrom?[gateway]:[happier,gateway],happier:happierUnit,logs:`journalctl --user -u ${gateway} -f`}));

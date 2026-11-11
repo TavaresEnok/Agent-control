@@ -2,7 +2,10 @@
 // It writes a private installation file outside the repository, initializes the ledger, registers the
 // provider accounts, prepares the native runtime and creates the project conversation.
 //
-//   npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins]
+//   npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>]
+//
+// --share-happier uses the Happier server and account of an installation that already has one, so this
+// project shows up as one more conversation in the same app (same server address, same secret key).
 //
 // --import-logins copies (never moves) the CLI logins that already exist in this user's home
 // (~/.claude/.credentials.json, ~/.grok/auth.json, ~/.codex/auth.json). Without it the script stops
@@ -17,8 +20,8 @@ import {basename,join,resolve,sep} from 'node:path';
 import net from 'node:net';
 
 const args=process.argv.slice(2),flag=name=>{const i=args.indexOf(name);return i<0?undefined:args[i+1];};
-const repoArg=args[0]&&!args[0].startsWith('--')?args[0]:undefined,db=flag('--db'),importLogins=args.includes('--import-logins');
-if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins]');process.exit(repoArg||db?1:0);}
+const repoArg=args[0]&&!args[0].startsWith('--')?args[0]:undefined,db=flag('--db'),importLogins=args.includes('--import-logins'),shareFrom=flag('--share-happier');
+if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>]');process.exit(repoArg||db?1:0);}
 const root=resolve(import.meta.dirname,'..'),repo=await realpath(resolve(repoArg));
 const git=(...a)=>execFileSync('git',['-C',repo,...a],{encoding:'utf8'}).trim();
 if(git('rev-parse','--is-inside-work-tree')!=='true'||await realpath(git('rev-parse','--show-toplevel'))!==repo)throw Error('REPOSITORY_ROOT_REQUIRED');
@@ -32,6 +35,13 @@ const capture=(command,argv,env={})=>{const result=spawnSync(command,argv,{cwd:r
 const freePort=()=>new Promise(done=>{const server=net.createServer();server.listen(0,'127.0.0.1',()=>{const {port}=server.address();server.close(()=>done(port));});});
 const exists=path=>access(path).then(()=>true,()=>false);
 
+let shared;
+if(shareFrom){
+ const file=resolve(shareFrom),owner=JSON.parse(await readFile(file,'utf8'));
+ if(owner.activation!=='personal'||!await exists(join(owner.dataDirectory,'happier-account.key')))throw Error('SHARED_HAPPIER_NOT_CONNECTED: rode personal-connect na instalação '+file);
+ if(await exists(join(owner.dataDirectory,'happier-shared-from')))throw Error('SHARED_HAPPIER_MUST_BE_THE_OWNER: use a instalação que roda o Happier');
+ shared={file,happier:owner.happier,key:await readFile(join(owner.dataDirectory,'happier-account.key'))};
+}
 await mkdir(data,{recursive:true,mode:0o700});
 if(!await exists(installation)){
  let owner='';try{owner=git('config','user.email');}catch{}
@@ -39,7 +49,13 @@ if(!await exists(installation)){
  await writeFile(installation,JSON.stringify({schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:db,dataDirectory:data,accountHomesDirectory:join(data,'accounts'),
   project:{id:randomUUID(),label,repo,owner:owner||process.env.USER||'owner'},
   http:{listen:'127.0.0.1',port,publicOrigin:`http://127.0.0.1:${port}`},
-  happier:{upstreamOrigin:`http://127.0.0.1:${happierPort}`,webOrigin:`http://127.0.0.1:${happierPort}`,publicServerOrigin:`http://127.0.0.1:${port}`}},null,2)+'\n',{mode:0o600,flag:'wx'});
+  happier:shared?{upstreamOrigin:shared.happier.upstreamOrigin,webOrigin:shared.happier.webOrigin,publicServerOrigin:`http://127.0.0.1:${port}`}:{upstreamOrigin:`http://127.0.0.1:${happierPort}`,webOrigin:`http://127.0.0.1:${happierPort}`,publicServerOrigin:`http://127.0.0.1:${port}`}},null,2)+'\n',{mode:0o600,flag:'wx'});
+ if(shared){
+  // Same account: the same secret signs in and opens the conversations, so the app sees every project.
+  await writeFile(join(data,'happier-account.key'),shared.key,{mode:0o600,flag:'wx'});
+  await writeFile(join(data,'happier-shared-from'),shared.file+'\n',{mode:0o600,flag:'wx'});
+  say('usando o Happier de '+shared.file);
+ }
  say('instalação criada: '+installation);
 }else say('instalação existente: '+installation);
 const config=JSON.parse(await readFile(installation,'utf8'));
@@ -77,6 +93,8 @@ say('criando a conversa do projeto');
 const origin=JSON.parse(await readFile(installation,'utf8')).happier.upstreamOrigin;
 const up=()=>fetch(origin+'/v1/account/profile',{signal:AbortSignal.timeout(2000)}).then(r=>r.status===401,()=>false);
 let server;
+const sharedFrom=await readFile(join(data,'happier-shared-from'),'utf8').then(t=>t.trim(),()=>null);
+if(sharedFrom&&!await up())throw Error('SHARED_HAPPIER_NOT_RUNNING: suba o Happier de '+sharedFrom);
 if(!await up()){
  server=spawn(process.execPath,['scripts/personal-happier.mjs',installation],{cwd:root,stdio:'ignore',detached:true});
  for(let i=0;i<90&&!await up();i++)await new Promise(done=>setTimeout(done,1000));
@@ -85,7 +103,13 @@ if(!await up()){
 try{run('node',gateway('personal-connect',installation));}
 finally{if(server)try{process.kill(-server.pid,'SIGTERM');}catch{}}
 
-console.log(`
+if(sharedFrom)console.log(`
+Pronto. Este projeto usa o Happier de ${sharedFrom}: no app ele aparece como mais uma conversa
+no mesmo servidor e com a mesma chave. Falta só o serviço do gateway:
+  npm run personal:services -- ${installation} ${label}
+Depois converse:
+  npm run gateway -- say ${installation} "o que este repositório faz?"`);
+else console.log(`
 Pronto. Deixe os dois serviços rodando:
   npm run personal:services -- ${installation} ${label}     (systemd, volta depois de um reboot)
 ou, em dois terminais:

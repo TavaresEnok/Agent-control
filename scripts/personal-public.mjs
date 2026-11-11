@@ -23,6 +23,7 @@ const sites=process.env.AC_CADDY_SITES??'/home/app/infra/caddy/sites',container=
 const step=line=>console.log('» '+line);
 const exists=path=>access(path).then(()=>true,()=>false);
 
+if(await exists(join(config.dataDirectory,'happier-shared-from')))throw Error('SHARED_HAPPIER: esta instalação usa o Happier de '+(await readFile(join(config.dataDirectory,'happier-shared-from'),'utf8')).trim()+'; publique aquela.');
 // 1. The conversation must exist before sign-up closes.
 if(!config.managerTransport?.contexts?.length||!await exists(join(config.dataDirectory,'happier-account.key')))
  throw Error('PERSONAL_CONNECT_REQUIRED: rode antes npm run gateway -- personal-connect '+file);

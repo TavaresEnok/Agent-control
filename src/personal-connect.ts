@@ -57,6 +57,9 @@ export async function personalConnect(path:string){
  if(existing&&raw.managerTransport.principal===profile.id)return {state:'connected',principal:profile.id,sessionId:existing.sessionId,contextId:existing.contextId,refreshed:'token'};
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
  try{
+  // Check what the conversation needs before touching Happier, so a project without accounts leaves no empty session in the app.
+  const ready=(await ledger.pool.query('SELECT (SELECT count(*) FROM ac_policy_revisions WHERE project_id=$1)::int policies,(SELECT count(*) FROM ac_quality_policies WHERE project_id=$1)::int quality',[config.project.id])).rows[0];
+  if(!ready?.policies||!ready?.quality)return {state:'accounts_required',next:'Registre as contas (account-add) e rode node scripts/personal-setup.mjs '+path+' antes de criar a conversa.'};
   const boundary=await loadHappier(),seal=(value:unknown)=>boundary.encodeBase64(boundary.encrypt(secret,'legacy',value));
   const machineId=randomUUID();
   const machine=await fetch(origin+'/v1/machines',{method:'POST',headers:json,body:JSON.stringify({id:machineId,

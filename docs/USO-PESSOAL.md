@@ -20,6 +20,18 @@ npm run personal:services -- ~/.agent-control/meuprojeto/installation.json meupr
 
 Para remover: o mesmo comando com `--remove`. Os passos abaixo são o caminho manual, peça por peça.
 
+### Mais um projeto no mesmo app
+
+Para o novo projeto aparecer como mais uma conversa no app que você já usa (mesmo servidor, mesma chave), passe a instalação que roda o Happier:
+
+```bash
+npm run personal:project -- /caminho/do/outro --db postgresql://.../banco_novo --label outro --share-happier ~/.agent-control/ispagent/installation.json
+```
+
+Ele copia a chave da conta e usa o mesmo Happier; `personal:services` instala só o gateway desse projeto. Cada projeto continua com o próprio banco e os próprios logins, porque um login copiado de outro projeto expira quando o outro renova o token.
+
+O app não abre projeto novo sozinho: "nova sessão" numa pasta pede um daemon do Happier na máquina, e o Agent Control não roda um. Por isso a máquina "agent-control" aparece offline. As conversas dos projetos ligados aqui funcionam mesmo assim.
+
 ## Instalar
 
 1. PostgreSQL e Docker no servidor.
