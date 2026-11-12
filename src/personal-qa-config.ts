@@ -104,7 +104,8 @@ export function personalQaContractFromConfig(projectId:string,image:string,confi
  };
  return NativeQaContract.parse({schemaVersion:1,id:'personal-qa-'+projectId,image,argv:absolute(config.test),
   ...(config.prepare?{prepareArgv:absolute(config.prepare)}:{}),environment:[...personalQaCacheEnvironment],
-  timeoutMs:config.timeoutSeconds*1000,memoryBytes:268435456,pids:64,nanoCpus:500000000});
+  // Installing and testing a real project needs more room than the default syntax check.
+  timeoutMs:config.timeoutSeconds*1000,memoryBytes:2147483648,pids:256,nanoCpus:2000000000});
 }
 
 const imageLookup=promisify(execFile);
