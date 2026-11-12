@@ -117,8 +117,9 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
   const keys=generateKeyPairSync('ed25519'),modelImage='sha256:'+'a'.repeat(64);
   const supervisor=new NativeExecutionSupervisor(db,{id:'fixture-model-native',workerImage:modelImage,toolsImage:modelImage,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'b'.repeat(64),accountSubjects:[{accountId:account,subjectDigest:'c'.repeat(64)}],workerEnv:[],toolsEnv:[]});
   const physical=new Map<string,{Id:string;Image:string;Config:{Labels:Record<string,string>};State:{Status:string;Running:boolean;ExitCode:number;FinishedAt:string}}>();
-  Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async()=>null,removePrivateNetwork:async()=>{},stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
-   remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);}}});
+  Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async()=>null,removePrivateNetwork:async()=>{},stop:async()=>{},
+   remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);},
+   logs:async()=>{const payload=Buffer.from('synthetic native log\n'),header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(payload.length,4);return Buffer.concat([header,payload]);}}});
   let mode:'correct'|'limit'|'infra'='correct',openProgrammers=0,maxProgrammers=0,parallelArrivals=0;
   const show=(commit:string,path:string)=>{try{return execFileSync('git',['-C',repo,'show',`${commit}:${path}`],{encoding:'utf8'});}catch{return '';}};
   Object.defineProperty(supervisor,'start',{value:async(_principal:string,a:typeof authority,raw:unknown)=>{

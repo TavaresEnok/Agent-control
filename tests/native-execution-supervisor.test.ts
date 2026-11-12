@@ -46,7 +46,15 @@ test('native execution retains uncertain capacity, fences takeover and replays o
   const labels={'agent-control.job':input.jobId,'agent-control.launch':hash,'agent-control.contract':'native-execution-v1'};
   const physical=(id:string)=>({Id:id,Image:image,Config:{Labels:labels},State:{Status:'running',Running:true,ExitCode:0,FinishedAt:'0001-01-01T00:00:00Z'}});
   const worker=physical(workerId),tools=physical(toolsId);let stops=0;
-  const docker={inspect:async(name:string)=>name.startsWith('ac-native-worker-')?worker:tools,stop:async(id:string)=>{stops++;const p=id===workerId?worker:tools;p.State={Status:'exited',Running:false,ExitCode:137,FinishedAt:new Date().toISOString()};}};
+  const containers=new Map<string,any>([['ac-native-worker-'+input.jobId,worker],[workerId,worker],['ac-native-tools-'+input.jobId,tools],[toolsId,tools]]);
+  const docker={
+   inspect:async(name:string)=>containers.get(name)??null,
+   stop:async(id:string)=>{stops++;const p=id===workerId?worker:tools;p.State={Status:'exited',Running:false,ExitCode:137,FinishedAt:new Date().toISOString()};},
+   logs:async()=>Buffer.from('synthetic native log\n'),
+   remove:async(id:string)=>{for(const [name,item] of [...containers])if(item?.Id===id)containers.delete(name);},
+   inspectPrivateNetwork:async()=>null,
+   removePrivateNetwork:async()=>{},
+  };
   Object.defineProperty(supervisor,'docker',{value:docker});
   assert.deepEqual(await supervisor.reconcile(principal,authority,input),{state:'running'});
   await assert.rejects(supervisor.reconcile(principal,authority,{...input,task:'collision'}),/NATIVE_EXECUTION_REPLAY_MISMATCH/);
@@ -179,14 +187,46 @@ class ExecutionRecoveryMemory{
    const row=this.tables.ac_project_repositories?.find(item=>item.project_id===params[0]);
    return row?selected([{repo:row.repo}]):selected([]);
   }
+  // Queries added to fence, launch and protocol pin after this memory fixture was written.
+  if(text.startsWith('SELECT id FROM ac_contexts WHERE id=$1 FOR UPDATE')){const context=this.tables.ac_contexts?.find(row=>row.id===params[0]);return selected(context?[{id:context.id}]:[]);}
+  if(text.includes('FROM ac_workflow_project_handoffs'))return selected([]);
+  if(text.includes('ac_workflow_generations'))return selected([]);
+  if(/^SELECT pg_advisory_xact_lock(_shared)?\(/.test(text))return selected([{locked:true}]);
+  if(text.startsWith('SELECT domain_id FROM ac_installation_projects'))return selected([]);
+  if(text.startsWith('SELECT * FROM ac_recovery_inventory_policy'))return selected([{singleton:true,required:false}]);
+  if(text.includes('ac_installation_activation'))return selected([]);
+  if(text.startsWith('SELECT * FROM ac_native_protocol_attempt_pins')){
+   const pin=this.tables.ac_native_protocol_attempt_pins?.find(row=>row.kind===params[0]&&row.job_id===params[1]);
+   return pin?selected([pin]):selected([]);
+  }
+  if(text.includes('FROM ac_native_protocol_promotions'))return selected([{id:'00000000-0000-4000-8000-000000000001',protocol:'codex-app-server-initialize-model-list-v1',executor_digest:params[0],kind:params[1],models:[{model:'fixture-model',efforts:['low','medium','high']}]}]);
+  if(text.startsWith('INSERT INTO ac_native_protocol_attempt_pins')){
+   this.insert('ac_native_protocol_attempt_pins',{kind:params[0],job_id:params[1],executor_digest:params[2],receipt_id:params[3],model:params[4],effort:params[5]});
+   return wrote(1);
+  }
+  if(text.includes('FROM ac_intents i JOIN ac_contexts x')){
+   const intent=this.tables.ac_intents?.find(row=>row.id===params[0]);
+   const context=this.tables.ac_contexts?.find(row=>row.id===intent?.context_id);
+   return intent&&context?selected([{context_id:intent.context_id,project_id:context.project_id,parent_id:intent.parent_intent_id??intent.id}]):selected([]);
+  }
+  if(text.startsWith('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE')){
+   const project=this.tables.ac_projects?.find(row=>row.id===params[0]);
+   return project?selected([{id:project.id}]):selected([]);
+  }
+  if(text.includes('ac_project_environment_heads'))return selected([]);
+  if(text.startsWith('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants')){
+   const grant=this.tables.ac_capacity_grants?.find(row=>row.id===params[0]);
+   return grant?selected([{id:grant.account_id}]):selected([]);
+  }
   throw Error('UNHANDLED_SQL '+text);
  }
 }
 function executionSubstituteLedger(){
  const memory=new ExecutionRecoveryMemory();
- const client={query:(sql:string,params?:unknown[])=>memory.query(sql,params??[]),release(){}};
+ // Real pg clients return promises; production code chains .then on a query.
+ const client={query:async(sql:string,params?:unknown[])=>memory.query(sql,params??[]),release(){}};
  const ledger=Object.create(Ledger.prototype) as Ledger;
- Object.assign(ledger,{pool:{query:(sql:string,params?:unknown[])=>memory.query(sql,params??[]),connect:async()=>client,end:async()=>{}}});
+ Object.assign(ledger,{pool:{query:async(sql:string,params?:unknown[])=>memory.query(sql,params??[]),connect:async()=>client,end:async()=>{}}});
  return {ledger,memory};
 }
 async function executionRecoveryOnSubstitute(){
@@ -507,9 +547,12 @@ test('native execution recovery interrupts an in-flight create or start and lets
  memory.insert('ac_intents',{id:intent,context_id:context,principal_id:principal});
  const authority=Authority.parse({contextId:context,instanceId:instance,epoch:1});
  const keys=generateKeyPairSync('ed25519'),image='sha256:'+'c'.repeat(64);
- const config={id:'codex-native-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:'/no-operational-docker.sock',accountSubjects:[{accountId:account,subjectDigest:'a'.repeat(64)}],workerEnv:[],toolsEnv:[]};
+ const codexAccount='fixture-codex-account',subject=digest({provider:'codex',subject:codexAccount});
+ const config={id:'codex-native-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:'/no-operational-docker.sock',accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[]};
  const supervisor=new NativeExecutionSupervisor(db,config,{assertAdmission:async()=>{}});
  (supervisor as unknown as {identity:(client:unknown,principal:string,authority:unknown,input:{grantId:string})=>Promise<Record<string,unknown>>}).identity=async(_client,_principal,_authority,input)=>memory.one('ac_capacity_grants',input.grantId);
+ const codexHome=join(accounts,account,'.codex');await mkdir(codexHome,{recursive:true,mode:0o700});await chmod(join(accounts,account),0o700);await chmod(codexHome,0o700);
+ const authPath=join(codexHome,'auth.json');await writeFile(authPath,JSON.stringify({auth_mode:'chatgpt',tokens:{account_id:codexAccount,access_token:'fixture-access-token',refresh_token:'fixture-refresh-token'}}),{mode:0o600});await chmod(authPath,0o600);
  const containers=new Map<string,any>(),networks=new Map<string,any>();let creates=0,starts=0,phase='idle',inspectsDuringHold=0;let mode:'hold-network'|'hold-start'|'hold-start-running'='hold-network';const removed:string[]=[];
  let open:(value?:unknown)=>void=()=>{},fail:(error?:unknown)=>void=()=>{},entered=()=>{};
  let barrier=new Promise((resolve,reject)=>{open=resolve;fail=reject;});
@@ -523,6 +566,7 @@ test('native execution recovery interrupts an in-flight create or start and lets
   stop:async()=>{throw new Refusal('DOCKER_STOP_UNEXPECTED');},
   remove:async(id:string)=>{removed.push(id);for(const [name,item] of containers)if(item?.Id===id)containers.set(name,null);},
   createPrivateNetwork:async()=>{creates++;if(mode==='hold-network'){phase='network-held';entered();await barrier;throw new Refusal('DOCKER_NETWORK_UNCERTAIN');}const id=nextId();networks.set(id,null);return id;},
+  imagePresent:async()=>true,
   create:async(name:string,configuration:any)=>{creates++;const id=nextId();containers.set(name,{Id:id,Image:configuration.Image,Config:{Labels:configuration.Labels},State:{...createdState}});return id;},
   start:async(id:string)=>{starts++;const found=[...containers.values()].find(item=>item?.Id===id);
    if(mode==='hold-start'||mode==='hold-start-running'){phase='start-held';entered();await barrier;if(mode==='hold-start-running'&&found)found.State={Status:'running',Running:true,ExitCode:0,FinishedAt:'0001-01-01T00:00:00Z',StartedAt:new Date().toISOString(),Pid:9};throw new Refusal('DOCKER_START_UNCERTAIN');}

@@ -154,6 +154,32 @@ class PlanningRecoveryMemory{
   if(/^SELECT pg_advisory_xact_lock(_shared)?\(/.test(text))return selected([{locked:true}]); // single-threaded memory store
   if(text.startsWith('SELECT domain_id FROM ac_installation_projects'))return selected([]); // project not bound to an installation domain
   if(text.startsWith('SELECT * FROM ac_recovery_inventory_policy'))return selected([{singleton:true,required:false}]);
+  if(text.startsWith('SELECT * FROM ac_native_protocol_attempt_pins')){
+   const pin=this.tables.ac_native_protocol_attempt_pins?.find(row=>row.kind===params[0]&&row.job_id===params[1]);
+   return pin?selected([pin]):selected([]);
+  }
+  if(text.includes('FROM ac_native_protocol_promotions')){
+   const promotion=this.tables.ac_native_protocol_promotions?.find(row=>row.executor_digest===params[0]&&row.revoked!==true);
+   const receipt=this.tables.ac_native_protocol_receipts?.find(row=>row.id===promotion?.receipt_id&&row.executor_digest===params[0]&&row.kind===params[1]);
+   return receipt?selected([{...receipt}]):selected([]);
+  }
+  if(text.startsWith('INSERT INTO ac_native_protocol_attempt_pins')){
+   this.insert('ac_native_protocol_attempt_pins',{kind:params[0],job_id:params[1],executor_digest:params[2],receipt_id:params[3],model:params[4],effort:params[5]});
+   return wrote(1);
+  }
+  if(text.startsWith('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants')){
+   const grant=this.tables.ac_capacity_grants?.find(row=>row.id===params[0]);
+   return grant?selected([{id:grant.account_id}]):selected([]);
+  }
+  if(text.startsWith('UPDATE ac_native_planning_jobs SET container_id=$2')){
+   const job=this.tables.ac_native_planning_jobs?.find(row=>row.id===params[0]);if(!job)return wrote(0);job.container_id=params[1];return wrote(1);
+  }
+  if(text.startsWith("UPDATE ac_native_planning_jobs SET state='running'")){
+   const job=this.tables.ac_native_planning_jobs?.find(row=>row.id===params[0]&&row.state==='uncertain');if(!job)return wrote(0);job.state='running';return wrote(1);
+  }
+  if(text.startsWith("UPDATE ac_capacity_grants SET state='running'")){
+   const grant=this.tables.ac_capacity_grants?.find(row=>row.id===params[0]&&row.state==='reserved');if(!grant)return wrote(0);grant.state='running';return wrote(1);
+  }
   throw Error('UNHANDLED_SQL '+text);
  }
 }
@@ -455,6 +481,9 @@ test('native planning recovery interrupts an in-flight create or start and lets 
  const config={id:'codex-native-planning',executorDigest:nativePlanningExecutorDigest(imageId),imageId,hostRoot:spool,accountRoot:accounts,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetwork:'ac-native-provider',accountSubjects:[{accountId:account,subjectDigest:subject}]};
  const supervisor=new NativePlanningSupervisor(db,config);
  const fingerprint=createHash('sha256').update(Buffer.from(supervisor.executor.publicKey,'base64')).digest('hex');
+ const protocolReceipt=randomUUID();
+ memory.insert('ac_native_protocol_receipts',{id:protocolReceipt,executor_digest:supervisor.executor.digest,kind:'planning',protocol:'codex-app-server-initialize-model-list-v1',models:[{model:'fixture-model',efforts:['low','medium','high']}]});
+ memory.insert('ac_native_protocol_promotions',{executor_digest:supervisor.executor.digest,receipt_id:protocolReceipt,revoked:false});
  const containers=new Map<string,any>();let creates=0,starts=0,phase='idle',inspectsDuringHold=0;let mode:'hold-create'|'hold-start'|'hold-start-running'='hold-create';const removed:string[]=[];
  let open:(value?:unknown)=>void=()=>{},fail:(error?:unknown)=>void=()=>{},entered=()=>{};
  let barrier=new Promise((resolve,reject)=>{open=resolve;fail=reject;});
@@ -468,6 +497,7 @@ test('native planning recovery interrupts an in-flight create or start and lets 
  };
  let sequence=0;const nextId=()=>`${(++sequence).toString(16).padStart(2,'0')}${'ab'.repeat(31)}`;
  const docker={
+  imagePresent:async()=>true,
   inspect:async(name:string)=>{if(phase==='create-held'||phase==='start-held')inspectsDuringHold++;const slot=containers.get(name);return slot??null;},
   stop:async()=>{throw new Refusal('DOCKER_STOP_UNEXPECTED');},
   remove:async(id:string)=>{removed.push(id);for(const [name,slot] of containers)if(slot?.Id===id)containers.set(name,null);},
