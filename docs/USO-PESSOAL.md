@@ -168,6 +168,22 @@ npm run gateway -- pair <instalação.json>
 
 O comando imprime um código de 8 caracteres, válido por 10 minutos e de uso único. No painel, "Entrar com código" abre a sessão do dono. "Entrar pelo Happier" continua disponível. Depois de cinco códigos errados em um minuto, a entrada espera um minuto.
 
+### Entrar com usuário e senha
+
+No servidor, com o gateway parado ou em outro terminal:
+
+```bash
+npm run gateway -- password <instalação.json> <usuário>
+```
+
+O comando pede a senha duas vezes e não a mostra. Ele grava só o hash em `panel-login.json`, no diretório de dados da instalação, com modo `0600`. O usuário tem de 3 a 40 caracteres (`a-z`, `0-9`, `.`, `_` e `-`) e não diferencia maiúsculas. A senha tem de 12 a 200 caracteres. No painel, o formulário aparece primeiro, com o botão "Entrar". "Entrar com código" e "Entrar pelo Happier" ficam abaixo. A sessão deste login dura 30 dias. Depois de cinco erros em um minuto, aquele endereço espera um minuto.
+
+Se a variável `AC_PANEL_PASSWORD` já existir, o comando usa esse valor e não pergunta. Para apagar a credencial:
+
+```bash
+npm run gateway -- password <instalação.json> --remove
+```
+
 ### Avisos no celular
 
 Na Conversa, o sino pede permissão e inscreve o aparelho em "Ativar avisos neste aparelho". "Enviar teste" manda "Teste do Agent Control". O aviso abre a conversa do projeto. No iPhone, os avisos só chegam com o painel instalado na tela inicial (iOS 16.4 ou mais novo); fora do app instalado a tela explica isso. O service worker não guarda páginas nem respostas da API.
