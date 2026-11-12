@@ -22,4 +22,10 @@ test('the gateway serves a service worker with push handlers and no fetch handle
  assert.equal(text.includes("addEventListener('notificationclick'"),true);
  assert.equal(text.includes('/pwa/icon-192.png'),true);
  assert.equal(text.includes('showNotification'),true);
+ const panelPath=new Function(`${text.slice(text.indexOf('function panelPath'),text.indexOf('self.addEventListener'))} return panelPath;`)() as (value:unknown)=>string;
+ assert.equal(panelPath('/conversa'),'/conversa');
+ assert.equal(panelPath('//evil'),'/');
+ assert.equal(panelPath('/\\evil'),'/');
+ assert.equal(panelPath('/a//b'),'/');
+ assert.equal(panelPath('https://evil.example/path'),'/');
 });

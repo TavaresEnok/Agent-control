@@ -84,9 +84,14 @@ async function loadSent(directory:string){
  return sentFileSchema.parse(value).ids;
 }
 function cleanLabel(label:string){return label.replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,80);}
+const pushHosts=new Set(['fcm.googleapis.com','updates.push.services.mozilla.com','web.push.apple.com']);
 function httpsEndpoint(value:string){
- const url=new URL(value);
- return url.protocol==='https:'&&url.username===''&&url.password==='';
+ let url:URL;
+ try{url=new URL(value);}catch{return false;}
+ if(url.protocol!=='https:'||url.username!==''||url.password!==''||url.port!=='')return false;
+ const host=url.hostname;
+ if(pushHosts.has(host))return true;
+ return host.endsWith('.notify.windows.com')&&!host.endsWith('..notify.windows.com')&&host.split('.').length>3;
 }
 function statusCode(error:unknown){
  if(error instanceof WebPushError)return error.statusCode;
@@ -138,7 +143,7 @@ export async function deliverPersonalPush(dataDirectory:string,notice:PersonalPu
  const directory=await pushDirectory(dataDirectory);
  const prepared=await exclusive(directory,async()=>{
   const keys=await loadKeys(directory);
-  const subscriptions=await loadSubscriptions(directory);
+  const subscriptions=(await loadSubscriptions(directory)).filter(item=>httpsEndpoint(item.endpoint));
   const ids=await loadSent(directory);
   const key=sentKey(notice);
   if(ids.includes(key)||subscriptions.length===0)return null;

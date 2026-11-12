@@ -7,6 +7,7 @@ import {Installation,loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeBootstrapSchemaError} from './native-bootstrap.ts';
 import {personalConnect,type PersonalHappierClient} from './personal-connect.ts';
+import {assertRepositoryInsideRoot} from './personal-folders.ts';
 import {isPersonalRemoteCheckout} from './personal-ssh.ts';
 import {Projects} from './projects.ts';
 
@@ -17,9 +18,10 @@ export type PersonalProjectAddResult={projectId:string;label:string;repository:s
  * Same database, same logins, same Happier account, token and machine.
  * Phase 3 calls this from the panel. A second run does not create another project.
  */
-export async function addPersonalProject(installationPath:string,repository:string,label:string,options?:{happier?:PersonalHappierClient}):Promise<PersonalProjectAddResult>{
+export async function addPersonalProject(installationPath:string,repository:string,label:string,options?:{happier?:PersonalHappierClient;insideRoot?:string}):Promise<PersonalProjectAddResult>{
  const clean=cleanLabel(label);
  const repo=await canonicalRepository(repository);
+ if(options?.insideRoot)await assertRepositoryInsideRoot(options.insideRoot,repo);
  const config=await loadInstallation(installationPath);
  if(config.activation!=='personal')throw new Error('PERSONAL_ACTIVATION_REQUIRED');
  const service=basename(config.dataDirectory).replace(/[^A-Za-z0-9_-]/g,'-');
@@ -46,6 +48,7 @@ export async function addPersonalProject(installationPath:string,repository:stri
   const row=(await ledger.pool.query('SELECT project_id FROM ac_project_repositories WHERE repo=$1',[repo])).rows[0] as {project_id:string}|undefined;
   const known=new Set([config.project.id,...config.projects.map(item=>item.id),project.id]);
   if(row&&!known.has(String(row.project_id)))throw new Error('REPOSITORY_OF_ANOTHER_INSTALLATION');
+  if(options?.insideRoot)await assertRepositoryInsideRoot(options.insideRoot,repo);
   await backupInstallation(installationPath,clean);
   if(!existing){
    const raw=JSON.parse(await readFile(installationPath,'utf8')) as {projects?:Installation['project'][]};

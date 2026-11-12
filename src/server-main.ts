@@ -213,10 +213,6 @@ async function main(){
   const pairCodeLogin=config.activation==='personal'?async(request:Request)=>{
    sessions.checkOrigin(request);
    const input=z.object({code:z.string().min(1).max(40)}).strict().parse(await request.json());
-   const {redeemPairCode,pairClientIp}=await import('./personal-pair.ts');
-   const verdict=await redeemPairCode(config.dataDirectory,input.code,Date.now(),pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address')));
-   if(verdict==='limited')return Response.json({error:'PAIR_CODE_LIMIT'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
-   if(verdict!=='accepted')return Response.json({error:'PAIR_CODE_INVALID'},{status:401,headers:{'cache-control':'no-store'}});
    if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);
    const raw=await readPrivateFile(config.managerTransport.tokenFile,16384);
    try{
@@ -227,6 +223,11 @@ async function main(){
     // The Happier account the installation talks through must own the primary project in the ledger.
     const owns=principal?(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,principal])).rowCount:0;
     if(!principal||!owns)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    // Spend the code only after the token and the owner check both succeed.
+    const {redeemPairCode,pairClientIp}=await import('./personal-pair.ts');
+    const verdict=await redeemPairCode(config.dataDirectory,input.code,Date.now(),pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address')));
+    if(verdict==='limited')return Response.json({error:'PAIR_CODE_LIMIT'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
+    if(verdict!=='accepted')return Response.json({error:'PAIR_CODE_INVALID'},{status:401,headers:{'cache-control':'no-store'}});
     const issuedHeaders=new Headers(request.headers);issuedHeaders.set('authorization','Bearer '+token);
     return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}));
    }finally{raw.fill(0);}

@@ -64,6 +64,13 @@ function normalizeRelative(path:string){
  return trimmed;
 }
 function insideRoot(root:string,candidate:string){return candidate===root||candidate.startsWith(root+sep);}
+/** Second check at registration: the canonical path must still sit inside the root. */
+export async function assertRepositoryInsideRoot(root:string,repository:string){
+ let rootReal:string,repoReal:string;
+ try{rootReal=await realpath(root);repoReal=await realpath(repository);}
+ catch{throw new Error('PROJECT_PATH_FORBIDDEN');}
+ if(!insideRoot(rootReal,repoReal))throw new Error('PROJECT_PATH_FORBIDDEN');
+}
 async function canonicalRepos(repos:readonly string[]){
  const paths=new Set<string>();
  for(const repo of repos){try{paths.add(await realpath(repo));}catch{paths.add(repo);}}

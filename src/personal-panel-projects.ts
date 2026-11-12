@@ -25,7 +25,7 @@ export async function withPersonalProjectCreation<T>(work:()=>Promise<T>):Promis
  */
 export async function createPersonalProject(input:{
  installationPath:string;roots:readonly PersonalFolderRoot[];rootId:string;relativePath:string;label:string;underSystemd:boolean;
- addPersonalProject:(installationPath:string,repository:string,label:string)=>Promise<{projectId:string}>;
+ addPersonalProject:(installationPath:string,repository:string,label:string,insideRoot:string)=>Promise<{projectId:string}>;
 }):Promise<PersonalProjectCreateResult>{
  const root=input.roots.find(item=>item.id===input.rootId);
  if(!root)throw new Refusal('PROJECT_ROOT_FORBIDDEN',403);
@@ -34,12 +34,12 @@ export async function createPersonalProject(input:{
  return withPersonalProjectCreation(async()=>{
   try{
    const repository=await resolvePersonalFolder(root,input.relativePath);
-   const created=await input.addPersonalProject(input.installationPath,repository,label);
+   const created=await input.addPersonalProject(input.installationPath,repository,label,root.path);
    const restarting=input.underSystemd;
    return {projectId:created.projectId,restarting,restartRequired:!restarting};
   }catch(error){
    if(error instanceof Refusal)throw error;
-   if(error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/.test(error.message))throw new Refusal(error.message,error.message==='DATA_DIRECTORY_PATH_FORBIDDEN'||error.message==='PERSONAL_ACTIVATION_REQUIRED'?403:409);
+   if(error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/.test(error.message))throw new Refusal(error.message,error.message==='DATA_DIRECTORY_PATH_FORBIDDEN'||error.message==='PERSONAL_ACTIVATION_REQUIRED'||error.message==='PROJECT_PATH_FORBIDDEN'?403:409);
    throw error;
   }
  });

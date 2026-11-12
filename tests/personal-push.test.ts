@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {Refusal} from '../src/contracts.ts';
 import {deliverPersonalPush, listPersonalPush, personalPushSubject, sendPersonalPushTest, subscribePersonalPush, unsubscribePersonalPush, type PersonalPushSender} from '../src/personal-push.ts';
 
-const endpoint=(n:number)=>`https://push.example.test/device-${n}`;
+const endpoint=(n:number)=>`https://fcm.googleapis.com/device-${n}`;
 const keys={p256dh:'A'.repeat(40),auth:'B'.repeat(24)};
 
 async function directory(){
@@ -69,11 +69,17 @@ test('the installation keeps at most twenty subscriptions and the test notice us
  const root=await directory();
  const bodies:string[]=[];
  try{
+  for(const allowed of ['https://updates.push.services.mozilla.com/wpush/v2/1','https://web.push.apple.com/Q','https://wns.notify.windows.com/w/?token=1']){
+   const saved=await subscribePersonalPush(root,{endpoint:allowed,keys});
+   assert.equal(await unsubscribePersonalPush(root,saved.id),true);
+  }
   for(let index=0;index<20;index++)await subscribePersonalPush(root,{endpoint:endpoint(index),keys},`a${index}`);
   await assert.rejects(subscribePersonalPush(root,{endpoint:endpoint(20),keys}),(error:unknown)=>error instanceof Refusal&&error.code==='SUBSCRIPTION_LIMIT');
   await sendPersonalPushTest(root,async(_subscription,payload)=>{bodies.push(payload);});
   assert.equal(bodies.length,20);
   assert.equal(JSON.parse(bodies[0]!).body,'Teste do Agent Control');
-  await assert.rejects(subscribePersonalPush(root,{endpoint:'http://push.example.test/no',keys}),(error:unknown)=>error instanceof Refusal&&error.code==='INVALID_CONTRACT');
+  for(const blocked of ['http://fcm.googleapis.com/no','https://push.example.test/device','https://fcm.googleapis.com:8443/wp','https://user:pass@fcm.googleapis.com/wp','https://fcm.googleapis.com.evil.example/wp','https://notify.windows.com/w','https://wns.notify.windows.com.evil.example/w']){
+   await assert.rejects(subscribePersonalPush(root,{endpoint:blocked,keys}),(error:unknown)=>error instanceof Refusal&&error.code==='INVALID_CONTRACT');
+  }
  }finally{await rm(root,{recursive:true,force:true});}
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,symlink,realpath,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {listPersonalFolders} from '../src/personal-folders.ts';
+import {assertRepositoryInsideRoot,listPersonalFolders} from '../src/personal-folders.ts';
 
 test('personal folder listing refuses escape paths and accepts a symlink that stays inside',async()=>{
  const parent=await realpath(await mkdtemp(join(tmpdir(),'ac-folders-')));
@@ -23,5 +23,20 @@ test('personal folder listing refuses escape paths and accepts a symlink that st
   assert.equal(accepted.path,'inbound');
   assert.equal(accepted.folders.some(folder=>folder.name==='inside-only'),true);
   assert.equal(accepted.folders.some(folder=>folder.name==='outside-only'),false);
+ }finally{await rm(parent,{recursive:true,force:true});}
+});
+
+test('a later realpath check still refuses a path that has left the root',async()=>{
+ const parent=await realpath(await mkdtemp(join(tmpdir(),'ac-inside-')));
+ const root=join(parent,'root'),sibling=join(parent,'root-evil'),outside=join(parent,'outside');
+ await mkdir(join(root,'project'),{recursive:true});
+ await mkdir(sibling,{recursive:true});
+ await mkdir(outside,{recursive:true});
+ await symlink(outside,join(root,'escape'));
+ try{
+  await assertRepositoryInsideRoot(root,join(root,'project'));
+  await assert.rejects(assertRepositoryInsideRoot(root,sibling),/PROJECT_PATH_FORBIDDEN/);
+  await assert.rejects(assertRepositoryInsideRoot(root,join(root,'escape')),/PROJECT_PATH_FORBIDDEN/);
+  await assert.rejects(assertRepositoryInsideRoot(root,join(root,'missing')),/PROJECT_PATH_FORBIDDEN/);
  }finally{await rm(parent,{recursive:true,force:true});}
 });

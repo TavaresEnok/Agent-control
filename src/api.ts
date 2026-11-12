@@ -162,7 +162,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
     await requireInstallationOwner(c.get('principal'));
     const input=z.object({root:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),path:z.string().max(512).default(''),label:z.string().min(1).max(200)}).strict().parse(await c.req.json());
-    const body=await createPersonalProject({installationPath:personalPanel.installationPath,roots:personalPanel.roots,rootId:input.root,relativePath:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label))});
+    const body=await createPersonalProject({installationPath:personalPanel.installationPath,roots:personalPanel.roots,rootId:input.root,relativePath:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label,insideRoot)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label,{insideRoot}))});
     if(body.restarting)personalPanel.scheduleRestart();
     c.header('Cache-Control','no-store');
     return c.json(body,202);
