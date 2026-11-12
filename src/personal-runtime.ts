@@ -47,7 +47,7 @@ export async function releaseDeadPersonalGrants(ledger:Ledger){
  let released=0;
  for(const row of rows){
   const jobs=row.jobs as string[];
-  if(jobs.some(job=>['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-','ac-native-qa-prepare-'].some(prefix=>names.includes(prefix+job))))continue;
+  if(jobs.some(job=>['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-','ac-native-qa-prepare-','ac-native-qa-db-'].some(prefix=>names.includes(prefix+job))))continue;
   released+=Number((await ledger.pool.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2::jsonb WHERE id=$1 AND state<>'released'",
    [row.id,JSON.stringify({source:'personal-startup-sweep',containersAbsent:true,jobs})])).rowCount??0);
  }

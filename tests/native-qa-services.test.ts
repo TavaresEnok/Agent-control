@@ -8,7 +8,7 @@ import {test} from 'node:test';
 import {canonical,digest} from '../src/contracts.ts';
 import {defaultPersonalQaContract,parsePersonalQaConfig,personalQaContractFromConfig} from '../src/personal-qa-config.ts';
 import {nativeQaContractDigest} from '../src/native-qa-contract.ts';
-import {redactQaDatabaseSecrets,withNativeQaDatabase} from '../src/native-qa-database.ts';
+import {redactQaDatabaseSecrets,removeNativeQaService,withNativeQaDatabase} from '../src/native-qa-database.ts';
 import {assertCompleteQaLogs} from '../src/native-qa.ts';
 import {DockerDaemon} from '../src/sandbox-broker.ts';
 
@@ -111,5 +111,23 @@ test('a QA service creates an internal network, waits for postgres, tests, and r
   await assert.rejects(withNativeQaDatabase(fake.docker,randomUUID(),service,{memoryBytes:268435456,pids:64,nanoCpus:500000000},async()=>{fake.events.push('test');throw Error('boom');},line=>logs.push(line)));
   assert.deepEqual(fake.events,['network','database','start','wait','test','stop','remove-database','remove-network']);
   assert.equal(logs.join('\n').includes(password),false);
+ }finally{await fake.close();}
+});
+
+test('an orphaned QA database and its internal network are removed by job name',async()=>{
+ const fake=await fakeDocker(),jobId=randomUUID();
+ try{
+  await fake.docker.createQaNetwork('ac-native-qa-net-'+jobId,{'agent-control.contract':'native-qa-net-v1','agent-control.job':jobId});
+  const created=await fake.docker.create('ac-native-qa-db-'+jobId,{Image:'postgres:16-alpine'});
+  await fake.docker.start(created);
+  const network=await fake.docker.inspectQaNetwork('ac-native-qa-net-'+jobId);
+  assert.equal(network?.Internal,true);
+  fake.events.length=0;
+  await removeNativeQaService(fake.docker,jobId);
+  assert.deepEqual(fake.events,['stop','remove-database','remove-network']);
+  assert.equal(await fake.docker.inspect('ac-native-qa-db-'+jobId),null);
+  assert.equal(await fake.docker.inspectQaNetwork('ac-native-qa-net-'+jobId),null);
+  await removeNativeQaService(fake.docker,jobId);
+  assert.equal(await fake.docker.inspect('ac-native-qa-db-'+jobId),null);
  }finally{await fake.close();}
 });

@@ -346,6 +346,13 @@ export class NativeQa{
   });
   return {state:status==='passed'?'completed' as const:'failed' as const,receipt};
  }
+ private async releaseIdleQaService(jobId:string){
+  if(!this.contract.services)return;
+  const test=await this.docker.inspect('ac-native-qa-'+jobId);
+  if(test?.State.Running)return;
+  if(this.contract.prepareArgv){const prepare=await this.docker.inspect('ac-native-qa-prepare-'+jobId);if(prepare?.State.Running)return;}
+  await removeNativeQaService(this.docker,jobId);
+ }
  /** Remove only the exact stopped QA container after durable logs and evidence. */
  async retire(principal:string,authority:Authority,id:string){
   z.uuid().parse(id);
@@ -401,6 +408,7 @@ export class NativeQa{
     if(this.contract.prepareArgv){const prep=await this.docker.inspect('ac-native-qa-prepare-'+id);if(prep){if(prep.State.Running)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');await this.docker.remove(prep.Id);}}
    }
    if(await this.docker.inspect(verified.job.container_id)||await this.docker.inspect('ac-native-qa-'+id))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+   if(this.contract.services)await removeNativeQaService(this.docker,id);
    // Restore traversal only after physical absence is confirmed, and before
    // committing retirement so a crash retries this idempotent step.
    await setQaSnapshotPermissions(this.paths(id).work,false);
@@ -434,9 +442,15 @@ export class NativeQa{
         await c.query("INSERT INTO ac_native_qa_retirements(job_id,identity,state,proof) VALUES($1,$2,'removed',$3) ON CONFLICT (job_id) DO UPDATE SET state='removed',proof=EXCLUDED.proof",
          [job.id,{jobId:job.id,containerId:job.container_id,contractDigest:job.contract_digest,reason:'qa_contract_replaced'},{containerAbsent:true}]);});
       }
+      await removeNativeQaService(this.docker,job.id);
       continue;
      }
-     if(job.contract_digest!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
+     if(job.contract_digest!==this.verifierDigest){
+      const stale=await this.docker.inspect('ac-native-qa-'+job.id);
+      if(!stale?.State.Running)await removeNativeQaService(this.docker,job.id);
+      throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
+     }
+     await this.releaseIdleQaService(job.id);
      if(['requested','confirmed'].includes(job.cancellation_state))await this.stop(principal,authority,job.id,'canceled');
      const result=await this.reconcile(principal,authority,job.id);
      if(result.state==='completed'||result.state==='failed'){
