@@ -15,11 +15,11 @@ Atualize esta tabela a cada commit.
 | 2 | Vários projetos numa instalação | **pronta e provada**: `--add` acrescentou o repositório "segundo" à instalação do IspAgent (sem banco nem login novos); os dois pedidos rodaram ao mesmo tempo na mesma conta Grok e Claude, cada um integrado só no próprio repositório (IspAgent `12a0f09`, segundo `cf46f54`). Commits `c2845797`, `3836cc60`, `b2910a31` |
 | 3 | Novo projeto pelo painel | **pronta e provada**: projeto criado pela tela no celular simulado (pasta liberada `workspace`), gateway reiniciou sozinho e um pedido nele integrou `cb119fb`. A falha anterior foi o limite de uso da assinatura Claude naquele momento. Commits `a4a8462c`…`802e74cb`, correções `4dc9c82b`, `0d787374` |
 | 4 | Projeto em outro servidor por SSH | **pronta e provada** com servidor SSH de teste (contêiner local): identidade conferida e fixada, pastas remotas listadas, `..` recusado, projeto criado como cópia local, pedido integrado e enviado ao branch `agent-control/20261111-2344-6788309` do servidor (main intacto); identidade trocada recusada. Commits `b8e9d8e0`…`217488cc`. Falta só o titular testar com um servidor real dele |
-| 5 | QA que roda os testes do projeto | com o Grok: configuração por projeto, preparo com rede e teste sem rede |
-| 6 | Avisos no celular e entrada sem o app Happier | não começada |
+| 5 | QA que roda os testes do projeto | código pronto (`232d163e`…`dacd7249`, correções `b578d741`, `eb546e78`); QA do IspAgent configurado (51 testes da API sem banco). **Provado:** pedido que quebra teste foi reprovado com o teste na conversa. **Falta:** confirmar pedido normal integrado (pnpm agora com `package-import-method=copy`, porque hardlinks causavam `NATIVE_QA_SNAPSHOT_UNSAFE`) |
+| 6 | Avisos no celular e entrada sem o app Happier | código pronto (`37e1d090`…`02573d12`); `/sw.js` no ar; código errado dá 401 e reuso dá 401. **Defeito aberto:** código válido responde 403 `PROJECT_OWNER_REQUIRED` (a sessão criada pelo código não é reconhecida como dona). Falta corrigir e testar push no celular |
 | 7 | Fechamento | não começada |
 
-Último commit conferido: `217488cc` (projeto remoto por SSH provado).
+Último commit conferido: `02573d12`.
 
 ## Aonde queremos chegar
 
