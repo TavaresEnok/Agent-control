@@ -108,8 +108,8 @@ function ManagedAuthentication({children}:{children:ReactNode}){
     {config.error&&<p role="alert">Não foi possível consultar a configuração de acesso.</p>}
     {config.data?.passwordLogin===true?<>
      <form className="flex flex-col gap-2" onSubmit={event=>{void enterWithPassword(event)}}>
-      <Input aria-label="Usuário" name="username" value={user} onChange={event=>setUser(event.target.value)} autoComplete="username" autoCapitalize="none" maxLength={40} required/>
-      <Input aria-label="Senha" name="password" type="password" value={password} onChange={event=>setPassword(event.target.value)} autoComplete="current-password" maxLength={200} required/>
+      <Input aria-label="Usuário" placeholder="Usuário" name="username" value={user} onChange={event=>setUser(event.target.value)} autoComplete="username" autoCapitalize="none" maxLength={40} required/>
+      <Input aria-label="Senha" placeholder="Senha" name="password" type="password" value={password} onChange={event=>setPassword(event.target.value)} autoComplete="current-password" maxLength={200} required/>
       <Button type="submit" disabled={busy}>Entrar</Button>
      </form>
      <button type="button" className="text-left underline" onClick={()=>setCodeLogin(value=>!value)}>Entrar com código</button>
