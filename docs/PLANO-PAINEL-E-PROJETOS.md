@@ -213,6 +213,6 @@ Itens deixados de fora de propósito:
 | # | Melhoria | Estado |
 |---|---|---|
 | M1 | Cara própria do painel (nome, cor, menu enxuto) e fim dos avisos que poluem | **feita** (`7d4da904`…`f007429c`), conferida no celular simulado, zero erros no console; restam palavras em inglês na lista lateral do Cezar |
-| M2 | QA com os testes que usam banco (banco de teste temporário numa rede interna sem internet) | com o Grok |
-| M3 | Corrigir os 8 testes antigos do modo bloqueado | não começada |
-| M4 | Tirar o Happier: conversa e login no próprio Agent Control (levantamento primeiro) | não começada |
+| M2 | QA com os testes que usam banco | **feita e provada**: banco PostgreSQL temporário numa rede interna sem internet a cada QA; suíte completa da API do IspAgent (369 testes) passou e o pedido integrou `dcbcd5a`, sem sobras. Correções no caminho: OpenSSL na imagem (`6cdbc57c`), banco preservado até o fim do job (`bb0d98ab`), um só caminho inicia o teste (`a1febba2`) |
+| M3 | Corrigir os testes antigos | **feita**: simulações de teste atualizadas, só em `tests/`; 5 arquivos, 17 testes passam (merge `b205b0e5`). Ficam de fora os que pedem ambiente inexistente aqui (controlador isolado, bancos R3) |
+| M4 | Tirar o Happier | levantamento aprovado; implementação com o Grok no worktree `ac-wt/m4` |
