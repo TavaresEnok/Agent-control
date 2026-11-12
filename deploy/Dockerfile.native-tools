@@ -2,7 +2,8 @@
 FROM node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 COPY native-tools-worker.mjs /opt/agent-control/dist/src/native-tools-worker.mjs
 COPY --chmod=0555 codex /usr/local/bin/codex
-RUN mkdir -p /work /runner && chmod 0555 /runner
+# OpenSSL for project test stacks that load it at run time (Prisma's query engine, for instance).
+RUN apk add --no-cache openssl && mkdir -p /work /runner && chmod 0555 /runner
 USER node
 WORKDIR /work
 ENTRYPOINT ["node", "/opt/agent-control/dist/src/native-tools-worker.mjs"]
