@@ -197,10 +197,19 @@ O arquivo do Claude fica em `.credentials.json` da home da conta. O do Grok fica
 
 O projeto do arquivo de instalação já entra no ledger. Na conversa, publique o fluxo "Gerente planeja a solicitação" e uma política de revisão. Escreva o pedido, por exemplo "crie CONTRIBUTING.md e referencie no README". Antes de planejar, o gerente decide se a mensagem é pergunta (responde na conversa) ou pedido de mudança (devolve a proposta). Se uma tarefa falhar, o gerente recebe o pedido original e propõe um plano corrigido uma vez. Responda `aprovar` ou `descartar`. A aprovação automática, desligada por padrão, é `POST /api/v1/ac/personal/auto-approve` com `{"enabled":true}`.
 
-## Logs, backup e atualização
+## Backup
+
+O backup leva a chave da conta Happier, os logins, a chave SSH, o cofre, o banco e o resto do diretório de dados (sem `native/`, `qa-cache/` nem `remote/`). Ele contém segredos. Guarde-o fora do servidor e fora do repositório.
+
+```bash
+npm run personal:backup -- ~/.agent-control/meuprojeto/installation.json /caminho/vazio
+npm run personal:restore-check -- /caminho/vazio/agent-control-meuprojeto-AAAAMMDD-HHMM
+```
+
+O destino tem que ser uma pasta vazia, fora do diretório de dados e fora dos repositórios dos projetos. O comando cria dentro dela `agent-control-<label>-<AAAAMMDD-HHMM>`. `personal:restore-check` só confere o `MANIFEST.txt` e se o `database.dump` é legível. Não restaura nada.
+
+## Logs e atualização
 
 Logs do gateway: `docker compose -f deploy/compose.personal.yml logs -f gateway`.
-
-Backup: `npm run gateway -- vault-backup /caminho/instalacao.json <destino>` e `pg_dump` da base. Guarde os dois fora do repositório.
 
 Atualizar: `git pull` no servidor, `npm install`, suba o compose de novo. Não use `git push --force`.
