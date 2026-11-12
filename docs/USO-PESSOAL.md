@@ -229,3 +229,7 @@ O destino tem que ser uma pasta vazia, fora do diretório de dados e fora dos re
 Logs do gateway: `docker compose -f deploy/compose.personal.yml logs -f gateway`.
 
 Atualizar: `git pull` no servidor, `npm install`, suba o compose de novo. Não use `git push --force`.
+
+## Servidor SSH com usuário e senha
+
+Em "Novo projeto" → "Outro servidor (SSH)" → "Adicionar servidor", informe host, porta, usuário e senha, toque em "Conferir identidade" e depois em "Confirmar e conectar". A senha é usada uma única vez, só depois de você confirmar a identidade do servidor, para instalar a chave do Agent Control no `~/.ssh/authorized_keys` desse usuário; ela não é guardada. As conexões seguintes usam a chave. Cinco senhas erradas bloqueiam novas tentativas naquele servidor por 10 minutos. Quem preferir pode usar "Prefiro colar a chave eu mesmo" e confirmar sem senha.

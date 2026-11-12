@@ -98,6 +98,8 @@ function RemoteServerProject() {
   const [port, setPort] = useState('22')
   const [user, setUser] = useState('')
   const [fingerprint, setFingerprint] = useState('')
+  const [password, setPassword] = useState('')
+  const [showKey, setShowKey] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loadError, setLoadError] = useState('')
@@ -225,12 +227,29 @@ function RemoteServerProject() {
       }
       const saved = hostSchema.parse(body)
       setHosts((current) => [...(current ?? []).filter((item) => item.id !== saved.id), saved])
+      const installedWithPassword = Boolean(password)
+      if (password) {
+        // The password installs this installation's key once; it is cleared here and never stored.
+        const typed = password
+        setPassword('')
+        const installed = await agentControlFetch(`/api/v1/ac/personal/ssh/hosts/${saved.id}/install-key`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password: typed }),
+        })
+        if (!installed.ok) {
+          const code = errorCode(await installed.json().catch(() => ({})))
+          setError(code === 'SSH_PASSWORD_REJECTED' ? 'Senha recusada pelo servidor.' : code === 'SSH_PASSWORD_LIMIT' ? 'Muitas tentativas. Espere 10 minutos.' : remoteError(code))
+          return
+        }
+      }
       setAdding(false)
       setHost('')
       setPort('22')
       setUser('')
       setFingerprint('')
       openHost(saved)
+      if (installedWithPassword) setNotice('Conectado. A senha não foi guardada.')
     } catch {
       setError('Não foi possível continuar.')
     } finally {
@@ -273,9 +292,14 @@ function RemoteServerProject() {
 
   return (
     <>
-      <p>Adicione esta chave ao `~/.ssh/authorized_keys` do usuário no outro servidor</p>
-      {publicKey ? <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs">{publicKey}</pre> : null}
-      <Button type="button" variant="outline" className="min-h-11 w-fit" disabled={!publicKey || busy} onClick={() => { void copyKey() }}>Copiar</Button>
+      <button type="button" className="w-fit text-sm underline" onClick={() => setShowKey((open) => !open)}>Prefiro colar a chave eu mesmo</button>
+      {showKey ? (
+        <>
+          <p>Adicione esta chave ao `~/.ssh/authorized_keys` do usuário no outro servidor e confirme sem senha.</p>
+          {publicKey ? <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs">{publicKey}</pre> : null}
+          <Button type="button" variant="outline" className="min-h-11 w-fit" disabled={!publicKey || busy} onClick={() => { void copyKey() }}>Copiar</Button>
+        </>
+      ) : null}
       {hosts ? (
         <ul className="flex flex-col gap-1">
           {hosts.map((item) => (
@@ -301,9 +325,12 @@ function RemoteServerProject() {
           <label className="flex flex-col gap-1">Usuário
             <Input aria-label="Usuário" value={user} maxLength={32} onChange={(event) => { formStamp.current += 1; setUser(event.target.value); setFingerprint('') }} />
           </label>
+          <label className="flex flex-col gap-1">Senha
+            <Input aria-label="Senha" type="password" autoComplete="off" value={password} maxLength={200} onChange={(event) => setPassword(event.target.value)} />
+          </label>
           <Button type="button" variant="outline" className="min-h-11 w-fit" disabled={busy} onClick={() => { void scan() }}>Conferir identidade</Button>
           {fingerprint ? <p className="break-all">Identidade: {fingerprint}</p> : null}
-          {fingerprint ? <Button type="button" className="min-h-11 w-fit" disabled={busy} onClick={() => { void confirm() }}>Confirmar</Button> : null}
+          {fingerprint ? <Button type="button" className="min-h-11 w-fit" disabled={busy} onClick={() => { void confirm() }}>{password ? 'Confirmar e conectar' : 'Confirmar'}</Button> : null}
         </>
       ) : null}
       {selected ? (

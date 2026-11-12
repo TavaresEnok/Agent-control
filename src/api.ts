@@ -207,6 +207,15 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     c.header('Cache-Control','no-store');
     return c.json(await confirmPersonalHost(personalPanel.dataDirectory,input),201);
   });
+  app.post('/api/v1/ac/personal/ssh/hosts/:id/install-key',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    const input=z.object({password:z.string().min(1).max(200)}).strict().parse(await c.req.json());
+    const {installKeyWithPassword}=await import('./personal-ssh.ts');
+    await installKeyWithPassword(personalPanel.dataDirectory,Id.parse(c.req.param('id')),input.password);
+    c.header('Cache-Control','no-store');
+    return c.json({installed:true});
+  });
   app.delete('/api/v1/ac/personal/ssh/hosts/:id',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
     await requireInstallationOwner(c.get('principal'));

@@ -417,6 +417,64 @@ async function sshCommand(dataDirectory: string, host: PersonalSshHost, command:
   {encoding: 'utf8', timeout: 20000, env: {PATH: '/usr/bin:/bin'}})).stdout;
 }
 
+/** Options for the one connection that authenticates with the owner's password. Same isolation, no key, no batch mode. */
+export function passwordSshArgs(knownHosts: string): string[] {
+ return ['-F', '/dev/null', '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'StrictHostKeyChecking=yes',
+  '-o', `UserKnownHostsFile=${knownHosts}`, '-o', 'UpdateHostKeys=no', '-o', 'PubkeyAuthentication=no',
+  '-o', 'PreferredAuthentications=password,keyboard-interactive', '-o', 'NumberOfPasswordPrompts=1', '-o', 'ConnectTimeout=15',
+  '-o', 'ProxyCommand=none', '-o', 'ProxyJump=none', '-o', 'ForwardAgent=no', '-o', 'VerifyHostKeyDNS=no', '-o', 'PermitLocalCommand=no'];
+}
+
+const installablePublicKey = /^ssh-ed25519 [A-Za-z0-9+/=]+( [A-Za-z0-9@._-]+)?$/;
+/** Fixed remote command: create ~/.ssh and authorized_keys, append the key once. */
+export function installKeyRemoteCommand(publicKey: string): string {
+ const key = publicKey.trim();
+ if (!installablePublicKey.test(key)) throw new Refusal('SSH_KEY_INVALID', 503);
+ const script = 'set -eu\numask 077\nmkdir -p "$HOME/.ssh"\nchmod 700 "$HOME/.ssh"\ntouch "$HOME/.ssh/authorized_keys"\nchmod 600 "$HOME/.ssh/authorized_keys"\ngrep -qxF -- "$1" "$HOME/.ssh/authorized_keys" || printf \'%s\\n\' "$1" >> "$HOME/.ssh/authorized_keys"\n';
+ return `sh -c ${shellSingleQuote(script)} -- ${shellSingleQuote(key)}`;
+}
+
+const installFailures = new Map<string, number[]>();
+/**
+ * Uses the owner's password once, only after the host identity was confirmed and pinned, to install this
+ * installation's public key. The password goes to sshpass through file descriptor 3: never an argument,
+ * never the environment, never written anywhere. Later connections use the key.
+ */
+export async function installKeyWithPassword(dataDirectory: string, hostId: string, password: string, now = Date.now()): Promise<void> {
+ if (!z.uuid().safeParse(hostId).success) throw new Refusal('HOST_NOT_FOUND', 404);
+ if (!password || password.length > 200) throw new Refusal('SSH_PASSWORD_REJECTED', 401);
+ const recent = (installFailures.get(hostId) ?? []).filter(at => now - at < 10 * 60_000);
+ if (recent.length >= 5) throw new Refusal('SSH_PASSWORD_LIMIT', 409);
+ const host = (await readHosts(dataDirectory)).find(item => item.id === hostId);
+ if (!host) throw new Refusal('HOST_NOT_FOUND', 404);
+ const {publicKey} = await ensurePersonalSshKey(dataDirectory);
+ const paths = personalSshPaths(dataDirectory);
+ const secret = Buffer.from(password + '\n', 'utf8');
+ const {spawn} = await import('node:child_process');
+ const outcome = await new Promise<{code: number | null; stderr: string}>(done => {
+  const child = spawn('/usr/bin/sshpass', ['-d', '3', '/usr/bin/ssh', ...passwordSshArgs(paths.knownHosts), '-p', String(host.port),
+   `${host.user}@${host.host.toLowerCase()}`, '--', installKeyRemoteCommand(publicKey)],
+   {stdio: ['ignore', 'ignore', 'pipe', 'pipe'], env: {PATH: '/usr/bin:/bin'}, timeout: 30000});
+  let stderr = '';
+  child.stderr!.on('data', chunk => { if (stderr.length < 4000) stderr += String(chunk); });
+  const channel = child.stdio[3] as import('node:stream').Writable;
+  channel.on('error', () => {});
+  channel.end(secret, () => secret.fill(0));
+  child.on('error', () => done({code: -1, stderr: ''}));
+  child.on('close', code => done({code, stderr}));
+ });
+ secret.fill(0);
+ if (outcome.code !== 0) {
+  // sshpass exit 5: wrong password. Host key problems come from ssh itself. Never echo the server's text.
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(outcome.stderr)) throw new Refusal('HOST_KEY_CHANGED', 409);
+  if (outcome.code === 5 || /Permission denied/i.test(outcome.stderr)) { installFailures.set(hostId, [...recent, now]); throw new Refusal('SSH_PASSWORD_REJECTED', 401); }
+  throw new Refusal('SSH_FAILED', 503);
+ }
+ installFailures.delete(hostId);
+ try { await sshCommand(dataDirectory, host, 'true'); }
+ catch { throw new Refusal('SSH_KEY_INSTALL_FAILED', 503); }
+}
+
 /** An archived project no longer pulls from or pushes to its server; the host can then be removed. */
 export async function forgetRemoteProject(dataDirectory: string, projectId: string): Promise<void> {
  await exclusive(async () => {
