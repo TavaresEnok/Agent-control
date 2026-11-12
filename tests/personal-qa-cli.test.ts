@@ -32,6 +32,7 @@ test('personal:qa set validates, writes mode 600 and tells the owner to restart'
   assert.equal((await stat(join(env.data,'qa',env.id+'.json'))).mode&0o777,0o600);
   const saved=await readPersonalQaConfig(env.data,env.id);
   assert.deepEqual(saved?.test,['corepack','pnpm','--filter','@ispagent/shared','test']);
+  assert.equal(saved?.services,undefined);
   const shown=await runPersonalQaCli([env.file,'IspAgent','show']);
   assert.match(shown[0]??'',/@ispagent\/shared/);
   const cleared=await runPersonalQaCli([env.file,'IspAgent','clear']);
@@ -40,5 +41,22 @@ test('personal:qa set validates, writes mode 600 and tells the owner to restart'
   assert.equal(await readPersonalQaConfig(env.data,env.id),null);
   const again=await runPersonalQaCli([env.file,'IspAgent','show']);
   assert.match(again[0]??'',/QA padrão/);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('personal:qa set stores a postgres service and refuses an invalid one',async()=>{
+ const env=await installation();
+ try{
+  await assert.rejects(()=>runPersonalQaCli([env.file,'IspAgent','set','--test','["npm","test"]','--services','not-json']),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+  await assert.rejects(()=>runPersonalQaCli([env.file,'IspAgent','set','--test','["npm","test"]','--services','{"postgres":{"image":"postgres:18-alpine","database":"qa_test"}}']),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+  await assert.rejects(()=>runPersonalQaCli([env.file,'IspAgent','set','--test','["npm","test"]','--services','{"postgres":{"image":"postgres:16-alpine","database":"qa_test","password":"secret"}}']),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+  const lines=await runPersonalQaCli([env.file,'IspAgent','set','--test','["npm","test"]','--services','{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}']);
+  assert.match(lines.at(-1)??'',/Reinicie o gateway/);
+  const saved=await readPersonalQaConfig(env.data,env.id);
+  assert.deepEqual(saved?.services,{postgres:{image:'postgres:16-alpine',database:'qa_test'}});
+  assert.equal(JSON.stringify(saved).includes('password'),false);
+  const shown=await runPersonalQaCli([env.file,'IspAgent','show']);
+  assert.match(shown[0]??'',/postgres:16-alpine/);
+  assert.equal((shown[0]??'').includes('password'),false);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });

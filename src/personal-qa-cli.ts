@@ -4,7 +4,7 @@ import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {clearPersonalQaConfig,parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig,type PersonalQaConfig} from './personal-qa-config.ts';
 
-const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> show|set|clear\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600]';
+const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> show|set|clear\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600] [--services \'{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}\']';
 
 function flag(args:string[],name:string){const index=args.indexOf(name);return index<0?undefined:args[index+1];}
 
@@ -15,6 +15,7 @@ function project(config:Installation,token:string){
 }
 
 function jsonArg(value:string){try{return JSON.parse(value);}catch{throw new Refusal('QA_CONFIG_NOT_A_LIST');}}
+function servicesArg(value:string){try{return JSON.parse(value);}catch{throw new Refusal('QA_SERVICES_INVALID');}}
 
 function restart(config:Installation){
  return `Reinicie o gateway para aplicar o QA: systemctl --user restart agent-control-gateway-${basename(config.dataDirectory)}`;
@@ -32,10 +33,14 @@ export async function runPersonalQaCli(argv:string[]){
  if(action==='clear'){await clearPersonalQaConfig(config.dataDirectory,selected.id);return ['QA do projeto removido. O padrão volta a valer.',restart(config)];}
  const testFlag=flag(rest,'--test');
  if(!testFlag||testFlag.startsWith('--'))throw new Refusal('QA_USAGE');
- const prepareFlag=flag(rest,'--prepare'),timeoutFlag=flag(rest,'--timeout');
+ const prepareFlag=flag(rest,'--prepare'),timeoutFlag=flag(rest,'--timeout'),servicesFlag=flag(rest,'--services');
  const input:Record<string,unknown>={test:jsonArg(testFlag)};
  if(prepareFlag!==undefined)input.prepare=jsonArg(prepareFlag);
  if(timeoutFlag!==undefined)input.timeoutSeconds=Number(timeoutFlag);
+ if(rest.includes('--services')){
+  if(servicesFlag===undefined||servicesFlag.startsWith('--'))throw new Refusal('QA_SERVICES_INVALID');
+  input.services=servicesArg(servicesFlag);
+ }
  const parsed:PersonalQaConfig=parsePersonalQaConfig(input);
  const path=await writePersonalQaConfig(config.dataDirectory,selected.id,parsed);
  return ['QA gravado em '+path,restart(config)];
@@ -50,6 +55,7 @@ const messages:Record<string,string>={
  QA_PROJECT_AMBIGUOUS:'Há mais de um projeto com esse label.',
  QA_CONFIG_INVALID:'A configuração de QA é inválida.',
  QA_CONFIG_TEST_REQUIRED:'O comando de teste é obrigatório.',
+ QA_SERVICES_INVALID:'O serviço de QA é inválido. Por enquanto só postgres, com imagem postgres:15-alpine, postgres:16-alpine ou postgres:17-alpine.',
 };
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  runPersonalQaCli(process.argv.slice(2)).then(lines=>{for(const line of lines)console.log(line);},error=>{

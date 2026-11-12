@@ -96,6 +96,14 @@ npm run personal:qa -- <instalação.json> IspAgent set --prepare '["corepack","
 npm run personal:qa -- <instalação.json> <projeto> clear
 ```
 
+Para um teste que precisa de PostgreSQL, `set` aceita `--services` com um objeto JSON, não texto de shell. A imagem é `postgres:15-alpine`, `postgres:16-alpine` ou `postgres:17-alpine`.
+
+```bash
+npm run personal:qa -- <instalação.json> IspAgent set --prepare '["corepack","pnpm","install","--frozen-lockfile"]' --test '["corepack","pnpm","test"]' --services '{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}'
+```
+
+O preparo continua na rede padrão do Docker, sem banco. O teste entra só numa rede interna, sem porta publicada, com um Postgres efêmero. O nome do banco é o do JSON. O usuário e a senha nascem em cada execução, e a senha não entra no contrato nem no digest. O digest guarda a imagem e o nome do banco. O teste lê `QA_DATABASE_URL`. No fim, o contêiner do banco e a rede são removidos. Sem `--services`, o teste segue sem rede e o digest do contrato não muda.
+
 `AC_PERSONAL_QA_ARGV` ainda substitui o comando dos projetos que não têm arquivo. O arquivo do projeto prevalece. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
 
 Sempre que reconstruir uma imagem ou mudar o QA, rode `npm run personal:images -- <instalação.json>` de novo e reinicie o gateway com o comando impresso. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
