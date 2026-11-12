@@ -202,6 +202,8 @@ export function createTopicSocket(url?: string): TopicSocket {
 let shared: TopicSocket | null = null
 
 export function subscribeTopic(topic: string, listener: TopicListener, onUnavailable?: () => void): () => void {
+  // The managed gateway refuses `/api/v1/ws` with 403. Do not open it, and do not retry.
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return () => {}
   shared ??= createTopicSocket()
   return shared.subscribe(topic, listener, onUnavailable)
 }

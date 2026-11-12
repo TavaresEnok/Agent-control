@@ -1152,6 +1152,8 @@ export const FORGE_RECHECK_MS = 30_000
  * actions long after GitHub answered (#1412). Re-read only while a recognized forge is unconfirmed.
  */
 export function healthRecheckInterval(health: HealthResponse | undefined): number | false {
+  // Managed panel has no `/api/v1/ws` health topic, so the shell re-reads on a timer.
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return 5_000
   // Only an explicit remote answer polls — the same fail-closed read as useHealthSubscription.
   if (health?.capabilities?.localHandoff !== false) return false
   return health.forge != null && health.forge.available !== true ? FORGE_RECHECK_MS : false

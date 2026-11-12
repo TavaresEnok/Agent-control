@@ -289,7 +289,7 @@ export function TerminalPane({
 
     const topic = session.topic
     if (topic === null) return () => { running = false }
-    if (transport === 'local' && !socketRefused) {
+    if (transport === 'local' && !socketRefused && import.meta.env.VITE_AGENT_CONTROL_MANAGED !== '1') {
       // The topic carries a cursor and nothing else; this is the "there is more" bell.
       const release = subscribeTopic(topic, safePull, () => setSocketRefused(true))
       return () => {

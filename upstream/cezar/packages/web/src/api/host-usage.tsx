@@ -348,7 +348,7 @@ function useHostFrames(writer: HostUsageWriter, enabled: boolean): void {
   const topicUnavailable = useHostTopicUnavailable()
 
   useEffect(() => {
-    if (!store || !enabled || transport !== 'local') return
+    if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' || !store || !enabled || transport !== 'local') return
     return subscribeTopic(
       'host',
       (data) => {
@@ -368,7 +368,7 @@ function useHostFrames(writer: HostUsageWriter, enabled: boolean): void {
   const polled = useQuery({
     queryKey: [...workspaceQueryKeys.hostUsage, 'poll'],
     queryFn: ({ signal }) => getWorkspaceHostUsage({ signal }),
-    enabled: store !== null && enabled && transport === 'local' && topicUnavailable,
+    enabled: store !== null && enabled && transport === 'local' && (topicUnavailable || import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'),
     refetchInterval: HOST_USAGE_POLL_MS,
     staleTime: 0,
     retry: false,
