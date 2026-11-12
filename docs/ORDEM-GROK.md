@@ -1,53 +1,48 @@
-# Ordem para o Grok — Fase 7, parte A: backup e restauração
+# Ordem para o Grok — Fase 7, parte B: correções da revisão independente
 
-Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço médio.
+Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto** (segurança).
 
 ---
 
-Você é o programador do Agent Control. Leia `docs/PLANO-PAINEL-E-PROJETOS.md` ("Fase 7").
+Você é o programador do Agent Control. Dois revisores independentes leram o código das Fases 1 a 6. Os achados estão em `docs/implementation/REVISAO-CLAUDE-20261112.md`. Nenhum é alto.
 
-## O que fazer
+Corrija **todos os itens da tabela "Achados a corrigir"** (S1 a S5 e P1 a P7), com a correção indicada em cada linha. Pontos do gerente:
 
-1. **`npm run personal:backup -- <instalação.json> <pasta-destino>`** (`scripts/personal-backup.mjs` e a entrada no `package.json`). Cria `<pasta-destino>/agent-control-<label>-<AAAAMMDD-HHMM>/` (pasta 700) com:
-   - **banco:** `database.dump`, feito com `docker exec <contêiner> pg_dump -Fc` quando o banco estiver no contêiner `ac-personal-pg`. Descubra o contêiner pela porta do `databaseUrl` (`docker ps --format` com a porta publicada). Se não for um contêiner, use `pg_dump` local. A senha vai por `PGPASSWORD` no ambiente do processo, nunca em argumento nem em log;
-   - **arquivos da instalação:** uma cópia de `installation.json` e de `<dataDirectory>` **sem** `native/` (cópias de trabalho grandes e descartáveis), **sem** `qa-cache/` e **sem** `remote/` (as cópias remotas são refeitas por `git clone`);
-   - **contas:** as pastas de contas (`accountHomesDirectory`) entram, porque têm os logins;
-   - **o que entra obrigatoriamente:** `happier-account.key`, `vault`, `vault-master`, `ssh/`, `push/`, `qa/`, `remote-hosts.json` e `remote-projects.json` (o que existir);
-   - **Happier:** o diretório de dados do Happier da instalação, se for dela (`happier/`);
-   - **conferência:** um `MANIFEST.txt` com o sha256 de cada arquivo e um `RESTAURAR.md` curto com os passos.
+- **S1:** as opções valem para todo `ssh`, `ssh-keyscan` (onde couber), clone, fetch e push. Atualize o teste que compara as opções.
+- **S2:** o teste é obrigatório: confirmar o mesmo host:porta com outro usuário e uma chave diferente tem que dar `HOST_KEY_CHANGED` e manter o `known_hosts` intacto.
+- **P1:** a rota HTTP `POST /api/v1/ac/personal/accounts` deixa de aceitar `authFile`. O campo é recusado pelo schema estrito. A CLI `account-add` continua aceitando.
+- **P2:**
+  - o limite passa a ser **por IP**, no máximo 5 erros por minuto por IP;
+  - o IP vem do primeiro valor de `x-forwarded-for`, que o Caddy da instalação põe, ou do endereço da conexão;
+  - mantenha um teto global alto: 100 erros por minuto;
+  - o teste: um IP bloqueado não bloqueia outro.
+- **P3:** crie um helper que exige dono do **projeto principal** (`config.project.id`, já disponível em `personalPanel`) e use-o nas rotas que mexem na instalação inteira:
+  - pastas e projetos (criar e arquivar);
+  - SSH;
+  - push;
+  - contas.
 
-   Recusas:
-   - destino dentro de `dataDirectory`;
-   - destino dentro de algum repositório de projeto;
-   - destino que já existe e não está vazio.
+  As rotas de conversa continuam por projeto.
+- **P7:** `src/server-main.ts` pode ser editado agora, só no `pairCodeLogin`.
 
-   Tudo com modo 600 ou 700. No fim, imprime o caminho e o tamanho.
-2. **`npm run personal:restore-check -- <pasta-do-backup>`** confere o `MANIFEST.txt` (todos os sha256 batem) e diz se o `database.dump` é legível, com `pg_restore --list` dentro do contêiner, por stdin. Não restaura nada.
-3. **`docs/USO-PESSOAL.md`:** uma seção "Backup", com os dois comandos e o aviso de que o backup contém segredos (chave da conta Happier, logins, chave SSH) e deve ficar fora do servidor.
+## Testes
 
-## Teste essencial
-
-O teste do item 1 roda sem Docker, com um `dataDirectory` falso em pasta temporária e o dump injetável. Confere que:
-
-- `native/`, `qa-cache/` e `remote/` ficam de fora;
-- os segredos entram, com modo 600;
-- o manifest bate;
-- destino dentro de `dataDirectory` é recusado.
+Um teste para S2 e um para P2. Para os outros, atualize os testes existentes que mudarem. Rode só os arquivos ligados.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você pode editar arquivos em `src/`, `tests/` e `scripts/`, além de `package.json` e `docs/USO-PESSOAL.md`.
-- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
-- Não rode os scripts reais, o Docker nem o gateway. O gerente faz a prova.
-- Não mexa em `src/server-main.ts`.
+- Você pode editar arquivos em `src/`, `tests/` e `upstream/cezar/packages/web/src/`.
+- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
+- Não rode o gateway, o ssh nem o Docker.
 
 ## Regras
 
-- Sem push. Um commit por item. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
+- Sem push. O modo `locked` não muda.
+- Commits pequenos: um para S1 a S5, um para P1 a P3 e um para P4 a P7. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
 - Se travar por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
-- Os hashes dos commits e uma linha sobre cada um.
-- O resultado do typecheck e do teste.
+- Os hashes dos commits e, para cada achado, onde ficou a correção (arquivo:linha).
+- O resultado do typecheck e dos testes.
 - O que não conferiu.
