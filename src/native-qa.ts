@@ -393,6 +393,20 @@ export class NativeQa{
    for(const job of jobs){
     await this.ledger.heartbeat(authority);
     try{
+     // A job from a replaced QA contract cannot be judged again, but once it and its stage are terminal
+     // the only work left is removing its container, which does not depend on the contract.
+     if(job.contract_digest!==this.verifierDigest&&['completed','failed'].includes(job.state)&&job.stage_state==='completed'){
+      if(job.container_id){
+       const physical=await this.docker.inspect(job.container_id);
+       if(physical?.State.Running)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
+       if(physical)await this.docker.remove(physical.Id);
+       if(await this.docker.inspect(job.container_id))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
+       await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
+        await c.query("INSERT INTO ac_native_qa_retirements(job_id,identity,state,proof) VALUES($1,$2,'removed',$3) ON CONFLICT (job_id) DO UPDATE SET state='removed',proof=EXCLUDED.proof",
+         [job.id,{jobId:job.id,containerId:job.container_id,contractDigest:job.contract_digest,reason:'qa_contract_replaced'},{containerAbsent:true}]);});
+      }
+      continue;
+     }
      if(job.contract_digest!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
      if(['requested','confirmed'].includes(job.cancellation_state))await this.stop(principal,authority,job.id,'canceled');
      const result=await this.reconcile(principal,authority,job.id);

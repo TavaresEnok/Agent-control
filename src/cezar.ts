@@ -779,7 +779,12 @@ export class CezarRuntime {
         await this.remote!.reconcileCancellationRequests(principal,authority);
         await service.reconcile(authority,runId=>{this.manager.cancel(runId);});
     });
-    if(reconciliationErrors.length)throw new AggregateError(reconciliationErrors,'CANCELLATION_RECONCILIATION_FAILED');
+    if(reconciliationErrors.length){
+      // Only identifiers and codes: the cause names the failing job without any payload.
+      const describe=(value:unknown,depth=0):string=>value instanceof Refusal?value.code:value instanceof AggregateError&&depth<3?value.message+'['+value.errors.map(inner=>describe(inner,depth+1)).join('; ')+']':value instanceof Error?value.name+': '+value.message.slice(0,200)+((value as Error&{cause?:unknown}).cause&&depth<3?' <- '+describe((value as Error&{cause?:unknown}).cause,depth+1):''):String(value).slice(0,200);
+      for(const item of reconciliationErrors as Error[]){const cause=(item as Error&{cause?:unknown}).cause;console.error('RECONCILIATION_FAILED',item.message,describe(cause));}
+      throw new AggregateError(reconciliationErrors,'CANCELLATION_RECONCILIATION_FAILED');
+    }
   }
   /** Read an already persisted run while admission is paused. This cannot start a run. */
   async observe(intent:Intent,authority:Authority){
