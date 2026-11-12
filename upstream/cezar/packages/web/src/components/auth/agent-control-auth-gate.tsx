@@ -1,7 +1,8 @@
-import {useEffect,useRef,useState,type ReactNode} from 'react'
+import {useEffect,useRef,useState,type FormEvent,type ReactNode} from 'react'
 import {useQuery} from '@tanstack/react-query'
 import {z} from 'zod'
 import {Button} from '@/components/ui/button'
+import {Input} from '@/components/ui/input'
 import {createTerminalPairingAuthentication,applyTerminalAuthRequestExpiry,openTerminalProvisioningResponse,buildTerminalConnectLinks,nacl} from '@agent-control/happier-browser-auth'
 const Config=z.discriminatedUnion('enabled',[z.object({enabled:z.literal(false)}),z.object({enabled:z.literal(true),webUrl:z.string().url(),serverUrl:z.string().url()})])
 const Status=z.object({authenticated:z.literal(true),principalId:z.string()})
@@ -28,6 +29,7 @@ function ManagedAuthentication({children}:{children:ReactNode}){
  }})
  const config=useQuery({queryKey:['ac-auth-config'],retry:false,queryFn:async()=>Config.parse(await json('/api/v1/ac/auth/config'))})
  const [links,setLinks]=useState<{webUrl:string;mobileUrl:string}|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('')
+ const [codeLogin,setCodeLogin]=useState(false),[code,setCode]=useState('')
  const current=useRef<AbortController|null>(null)
  useEffect(()=>()=>{current.current?.abort()},[])
  async function login(){
@@ -65,6 +67,20 @@ function ManagedAuthentication({children}:{children:ReactNode}){
   }catch(cause){if(!controller.signal.aborted)setError(cause instanceof Error?cause.message:'LOGIN_FAILED')}
   finally{pair?.secretKey.fill(0);claim?.fill(0);pairing?.secret.fill(0);if(current.current===controller){current.current=null;setBusy(false);setLinks(null)}}
  }
+ async function enterWithCode(event:FormEvent){
+  event.preventDefault()
+  if(busy)return
+  setBusy(true);setError('')
+  try{
+   const response=await fetch('/api/v1/ac/auth/code',{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({code}),cache:'no-store'})
+   if(response.status===429){setError('Muitas tentativas. Espere um minuto.');return}
+   if(!response.ok){setError('Código inválido ou vencido.');return}
+   const verified=await auth.refetch()
+   if(!verified.data?.authenticated)throw Error('BROWSER_SESSION_UNCONFIRMED')
+   setCode('')
+  }catch(cause){setError(cause instanceof Error?cause.message:'LOGIN_FAILED')}
+  finally{setBusy(false)}
+ }
  if(auth.data?.authenticated)return children
  return <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">
   <section className="flex w-full max-w-md flex-col gap-4 rounded-xl border bg-card p-6 shadow-sm">
@@ -74,6 +90,12 @@ function ManagedAuthentication({children}:{children:ReactNode}){
     {config.data?.enabled===false&&<p role="status">O login precisa ser configurado nesta instalação.</p>}
     {config.error&&<p role="alert">Não foi possível consultar a configuração de acesso.</p>}
     <Button disabled={busy||config.data?.enabled!==true} onClick={()=>{void login()}}>Entrar pelo Happier</Button>
+    <button type="button" className="text-left underline" onClick={()=>setCodeLogin(value=>!value)}>Entrar com código</button>
+    {codeLogin&&<form className="flex flex-col gap-2" onSubmit={event=>{void enterWithCode(event)}}>
+     <p>Gere o código no servidor com npm run gateway -- pair {'<instalação.json>'}</p>
+     <Input aria-label="Código" value={code} onChange={event=>setCode(event.target.value)} autoComplete="one-time-code" maxLength={8} required/>
+     <Button type="submit" disabled={busy}>Entrar</Button>
+    </form>}
     {links&&<div className="flex flex-col gap-3">
      <a className="underline" href={links.webUrl} target="_blank" rel="noopener noreferrer">Autorizar no Happier</a>
      {links.mobileUrl.includes('server=')&&<a className="underline" href={links.mobileUrl}>Autorizar no aplicativo Happier</a>}

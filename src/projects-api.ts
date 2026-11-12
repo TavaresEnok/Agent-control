@@ -18,7 +18,7 @@ const id=z.uuid();
 const publicRequest=(request:Request)=>{
  const path=new URL(request.url).pathname;
  return request.method==='GET'&&(path==='/'||path==='/icon.svg'||path==='/manifest.webmanifest'||path==='/sw.js'||/^\/pwa\/icon-(?:180|192|512)\.png$/.test(path)||path.startsWith('/assets/')||/^\/(?:tasks|p|settings|conversa|tarefas|novo-projeto|new)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)||path==='/api/v1/ac/auth/config')||
- request.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim','/api/v1/ac/auth/session'].includes(path);
+ request.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim','/api/v1/ac/auth/session','/api/v1/ac/auth/code'].includes(path);
 };
 /** Mount in front of the existing authenticated gateway. Selection never grants access. */
 export function createProjectGateway(options:ProjectGatewayOptions){

@@ -110,11 +110,12 @@ export type ApiOptions = {
     sendMessage(principal:string,input:{text:string;localId:string}):Promise<void>;
   };
   personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;scheduleRestart:()=>void};
+  pairCodeLogin?:(request:Request)=>Promise<Response>;
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
   const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
-    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel} = options;
+    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
@@ -133,6 +134,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(c.req.path==='/api/v1/ac/auth/config'&&c.req.method==='GET'){c.header('Cache-Control','no-store');return c.json(authRelay?.config??{enabled:false});}
     if(authRelay&&c.req.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim'].includes(c.req.path))return next();
     if(c.req.path==='/api/v1/ac/auth/session'&&c.req.method==='POST'&&sessions)return next();
+    if(c.req.path==='/api/v1/ac/auth/code'&&c.req.method==='POST')return next();
     const authenticationStarted=performance.now();
     const bearer=c.req.raw.headers.get('authorization');
     let principal:string|null|undefined;
@@ -329,6 +331,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     .post('/api/v1/ac/auth/session',async c=>{
       if(!sessions)throw new Refusal('INGRESS_DISABLED',403);const started=performance.now();
       try{return await sessions.issue(c.req.raw);}finally{c.set('authenticationMs',performance.now()-started);}
+    })
+    .post('/api/v1/ac/auth/code',async c=>{
+      if(!pairCodeLogin)return c.json({error:'NOT_FOUND'},404);
+      return pairCodeLogin(c.req.raw);
     })
     .post('/api/v1/ac/auth/logout',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.revoke(c.req.raw);})
     .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: runtime.executionMode }))
