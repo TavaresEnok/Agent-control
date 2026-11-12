@@ -1,48 +1,58 @@
-# Ordem para o Grok — Fase 7, parte B: correções da revisão independente
+# Ordem para o Grok — login com usuário e senha no painel
 
-Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto** (segurança).
+Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto** (é autenticação pública).
 
 ---
 
-Você é o programador do Agent Control. Dois revisores independentes leram o código das Fases 1 a 6. Os achados estão em `docs/implementation/REVISAO-CLAUDE-20261112.md`. Nenhum é alto.
+Você é o programador do Agent Control. O titular quer entrar no painel com usuário e senha, sem gerar código nem aprovar no app. A entrada por código (`src/personal-pair.ts`, `pairCodeLogin` em `src/server-main.ts`, `POST /api/v1/ac/auth/code`) já cria a sessão do navegador para o dono do projeto principal e tem limite de tentativas por IP. Siga exatamente o mesmo caminho de sessão e de limite.
 
-Corrija **todos os itens da tabela "Achados a corrigir"** (S1 a S5 e P1 a P7), com a correção indicada em cada linha. Pontos do gerente:
+Tudo vale só no modo pessoal (`activation:'personal'`).
 
-- **S1:** as opções valem para todo `ssh`, `ssh-keyscan` (onde couber), clone, fetch e push. Atualize o teste que compara as opções.
-- **S2:** o teste é obrigatório: confirmar o mesmo host:porta com outro usuário e uma chave diferente tem que dar `HOST_KEY_CHANGED` e manter o `known_hosts` intacto.
-- **P1:** a rota HTTP `POST /api/v1/ac/personal/accounts` deixa de aceitar `authFile`. O campo é recusado pelo schema estrito. A CLI `account-add` continua aceitando.
-- **P2:**
-  - o limite passa a ser **por IP**, no máximo 5 erros por minuto por IP;
-  - o IP vem do primeiro valor de `x-forwarded-for`, que o Caddy da instalação põe, ou do endereço da conexão;
-  - mantenha um teto global alto: 100 erros por minuto;
-  - o teste: um IP bloqueado não bloqueia outro.
-- **P3:** crie um helper que exige dono do **projeto principal** (`config.project.id`, já disponível em `personalPanel`) e use-o nas rotas que mexem na instalação inteira:
-  - pastas e projetos (criar e arquivar);
-  - SSH;
-  - push;
-  - contas.
+## O que fazer
 
-  As rotas de conversa continuam por projeto.
-- **P7:** `src/server-main.ts` pode ser editado agora, só no `pairCodeLogin`.
+1. **Credencial** (`src/personal-password.ts`), em `<dataDirectory>/panel-login.json` (600): `{user, salt, hash, params, updatedAt}`.
+   - Hash com `crypto.scrypt`: N=2^15, r=8, p=1, 64 bytes, sal aleatório de 16 bytes.
+   - Usuário: `^[a-z0-9._-]{3,40}$`, sem diferenciar maiúsculas.
+   - Senha: de 12 a 200 caracteres.
+   - Comparação com `timingSafeEqual`. Para usuário inexistente, calcule um hash falso, para não revelar pelo tempo de resposta se o usuário existe.
+2. **`npm run gateway -- password <instalação.json> [usuário]`** (`src/server-main.ts`, junto de `pair`).
+   - Pede a senha **duas vezes sem eco**, pelo terminal (`readline` com saída silenciada), ou lê de `AC_PANEL_PASSWORD` se essa variável existir.
+   - Grava a credencial, imprime só "Senha gravada para <usuário>." e nunca imprime a senha.
+   - Com `--remove`, apaga a credencial.
+3. **`POST /api/v1/ac/auth/password {user,password}`**, pública, no mesmo esquema de `/auth/code`:
+   - confere a origem com `checkOrigin`;
+   - limite por IP (o mesmo de `personal-pair`, com contador próprio): 5 erros por minuto por IP e teto global de 100;
+   - resposta **igual** para usuário e senha errados: `401 LOGIN_INVALID`;
+   - em caso de sucesso, a sessão do dono como no código.
+4. **Sessão de 30 dias**, só para o login por senha, se `BrowserSessions` permitir uma duração por sessão. Se não permitir, acrescente esse parâmetro sem mudar o padrão das outras entradas. O cookie continua `HttpOnly`, `Secure` e `SameSite=Strict`.
+5. **Tela de login** (`upstream/cezar/packages/web/src/components/auth/agent-control-auth-gate.tsx`, painel gerenciado):
+   - quando houver credencial gravada, o formulário de usuário e senha aparece **primeiro**, com o botão "Entrar";
+   - "Entrar com código" e "Entrar pelo Happier" ficam como links abaixo;
+   - `GET /api/v1/ac/auth/config` passa a informar `{passwordLogin:true|false}`;
+   - os campos têm `autocomplete="username"` e `autocomplete="current-password"`, para o gerenciador de senhas do celular preencher;
+   - mensagens: "Usuário ou senha incorretos." e "Muitas tentativas. Espere um minuto.".
+6. **`docs/USO-PESSOAL.md`:** uma seção "Entrar com usuário e senha", com o comando.
 
-## Testes
+## Testes essenciais
 
-Um teste para S2 e um para P2. Para os outros, atualize os testes existentes que mudarem. Rode só os arquivos ligados.
+- A senha certa entra, e a errada e o usuário inexistente dão a mesma resposta.
+- Um IP bloqueado não bloqueia outro.
+- O arquivo não contém a senha.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você pode editar arquivos em `src/`, `tests/` e `upstream/cezar/packages/web/src/`.
+- Você pode editar arquivos em `src/`, `tests/` e `upstream/cezar/packages/web/src/`, além de `docs/USO-PESSOAL.md`.
 - No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
-- Não rode o gateway, o ssh nem o Docker.
+- Não rode o gateway, o build nem o comando real.
 
 ## Regras
 
-- Sem push. O modo `locked` não muda.
-- Commits pequenos: um para S1 a S5, um para P1 a P3 e um para P4 a P7. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
+- Sem push. O modo `locked` não muda. Nenhuma senha ou hash em log.
+- Commits pequenos, um por item ou dois itens ligados. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
 - Se travar por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
-- Os hashes dos commits e, para cada achado, onde ficou a correção (arquivo:linha).
-- O resultado do typecheck e dos testes.
+- Os hashes dos commits e uma linha sobre cada um.
+- O resultado dos typechecks e dos testes.
 - O que não conferiu.
