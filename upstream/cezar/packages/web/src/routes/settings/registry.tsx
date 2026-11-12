@@ -183,8 +183,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- global scope (`/settings/global/…`) — the user and the machine, in mockup order -----
   {
     id: 'appearance',
-    title: 'Appearance',
-    description: 'Theme, accent and density.',
+    title: import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Aparência' : 'Appearance',
+    description: import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Tema, cor e densidade.' : 'Theme, accent and density.',
     icon: PaletteIcon,
     component: AppearanceSection,
     scope: 'global',
@@ -268,6 +268,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  * entirely, and so does everything belonging to the OTHER scope. The two areas are rendered by
  * the same shell, so this filter is the only thing keeping them apart.
  */
+const MANAGED_SETTINGS = new Set<SettingsSectionId>(['agent-control', 'appearance'])
+
 export function visibleSettingsSections(
   scope: SettingsScope,
   capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
@@ -276,6 +278,7 @@ export function visibleSettingsSections(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
+      (import.meta.env.VITE_AGENT_CONTROL_MANAGED !== '1' || MANAGED_SETTINGS.has(section.id)) &&
       !(capabilities?.singleProject === true && section.id === 'projects'),
   )
 }

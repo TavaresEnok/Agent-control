@@ -528,6 +528,7 @@ function SidebarContent({
         ) : null}
       </div>
 
+      {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? null : (
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
         <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
@@ -550,12 +551,15 @@ function SidebarContent({
         </Button>
         {singleProject ? null : <AddProjectMenu />}
       </div>
+      )}
 
       {/* The first of the two top-level doors; `AllTasksLink` is the other. They share one skin
           (SIDEBAR_SECTION_LINK_CLASS) because they stack directly against each other. */}
-      <div className="shrink-0 px-1.5">
-        <DashboardLink onNavigate={onNavigate} />
-      </div>
+      {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? null : (
+        <div className="shrink-0 px-1.5">
+          <DashboardLink onNavigate={onNavigate} />
+        </div>
+      )}
       {projectGroups ? (
         <>
           {/* PINNED above the scroller, not the first row inside it. It is about every group
@@ -564,9 +568,11 @@ function SidebarContent({
               what stops it reading as an unusually-worded project. Only in a multi-project
               workspace: with one project the page would be that project's own Tasks table
               wearing a second name. */}
-          <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
-            <AllTasksLink onNavigate={onNavigate} />
-          </div>
+          {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? null : (
+            <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
+              <AllTasksLink onNavigate={onNavigate} />
+            </div>
+          )}
           {/* Step 3.3: one collapsible group per registered project — nav + task list per group.
               The whole area scrolls as one (per the sidebar mockup); collapsed groups are one row. */}
           <div
@@ -779,8 +785,8 @@ function GlobalSettingsLink({
       <RouterLink
         to="/settings/global"
         data-slot="global-settings-link"
-        aria-label="Global settings"
-        title="Global settings"
+        aria-label={import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Configurações' : 'Global settings'}
+        title={import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Configurações' : 'Global settings'}
         onClick={onNavigate}
       >
         <SettingsIcon className="size-4" aria-hidden="true" />

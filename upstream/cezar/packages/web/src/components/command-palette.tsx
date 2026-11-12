@@ -700,6 +700,7 @@ export const TaskItem = React.memo(function TaskItem({
 })
 
 function PaletteContent({ close }: { close: () => void }) {
+  const managed = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
   const navigate = useNavigate()
   // The UNSCOPED twin, for the handful of targets that live outside every project (`/tasks`).
   const routerNavigate = useRouterNavigate()
@@ -798,6 +799,7 @@ function PaletteContent({ close }: { close: () => void }) {
         {/* First, headless, and the row an empty query pre-selects: opening ⌘K and pressing
             Enter starts a task. It used to sit ninth in Views with a duplicate down in Actions;
             one authoritative row at the top is what "New task" being the default means. */}
+        {managed ? null : (
         <CommandGroup>
           <CommandItem
             value="new task"
@@ -810,6 +812,7 @@ function PaletteContent({ close }: { close: () => void }) {
             <CommandShortcut>C</CommandShortcut>
           </CommandItem>
         </CommandGroup>
+        )}
 
         {/* Only in the DEFAULT view. Once you type, splitting tasks by read-state is noise: it
             floats a section of near-misses above the exact match you are looking for, purely
@@ -828,7 +831,7 @@ function PaletteContent({ close }: { close: () => void }) {
           {/* The one GLOBAL view, listed first because it is the only row here that is not
               about the project you are standing in. Multi-project only, matching the sidebar:
               with one project it would be that project's own Tasks page under another name. */}
-          {multiProject ? (
+          {!managed && multiProject ? (
             <CommandItem
               value="view All tasks"
               data-slot="palette-view"
@@ -865,13 +868,13 @@ function PaletteContent({ close }: { close: () => void }) {
               2026-10-13) — the one view the scoped nav items cannot express, so it is its own
               row, through the unscoped navigate. */}
           <CommandItem
-            value="view global settings"
+            value={managed ? 'view aparência configurações' : 'view global settings'}
             data-slot="palette-view"
             data-nav-to="/settings/global"
             onSelect={() => goGlobal('/settings/global')}
           >
             <SettingsIcon aria-hidden="true" />
-            Global settings
+            {managed ? 'Aparência' : 'Global settings'}
           </CommandItem>
         </CommandGroup>
 
@@ -943,7 +946,7 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandItem>
         </CommandGroup>
 
-        {orderedSkills.length > 0 ? (
+        {!managed && orderedSkills.length > 0 ? (
           <CommandGroup heading="Skills">
             {orderedSkills.map((skill) => (
               <CommandItem

@@ -1,6 +1,6 @@
 import {AgentControlSection} from './routes/settings/agent-control-section'
 import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
-import { lazy, memo, Suspense } from 'react'
+import { lazy, memo, Suspense, type ReactNode } from 'react'
 import {
   matchPath,
   Navigate,
@@ -24,6 +24,7 @@ import { ConversaRoute } from './routes/conversa'
 import { NovoProjetoRoute } from './routes/novo-projeto'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
+import { ManagedUnavailable } from './components/managed-unavailable'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
 import { SkillsLoading } from './routes/skills-loading'
 import { UnknownProjectRoute } from './routes/unknown-project'
@@ -210,7 +211,9 @@ function ProjectScopeRoute() {
           Project-local queries and mount-time state must instead start from the project the URL
           now names. Key the child boundary (not the provider, whose unmount resets API scope). */}
       <ProjectWebhookNotifications key={`webhooks:${projectId}`} projectId={projectId} />
-      <Outlet key={projectId} />
+      <ManagedSurfaceGate>
+        <Outlet key={projectId} />
+      </ManagedSurfaceGate>
     </ProjectScopeProvider>
   )
 }
@@ -226,6 +229,17 @@ function ProjectScopeRoute() {
  * Keying on the project makes the swap a real unmount/mount, so the draft, the pickers and the
  * deep-link capture all start from the project the URL now names.
  */
+/** Inbox, Git, GitHub, Tracker, Automations, Skills and Workflows stay out of the managed panel. */
+const MANAGED_BLOCKED_PATH = /^\/(inbox|git|github|tracker|automations|skills|workflows)(\/|$)/
+
+function ManagedSurfaceGate({ children }: { children: ReactNode }) {
+  const path = stripProjectPrefix(useLocation().pathname)
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && MANAGED_BLOCKED_PATH.test(path)) {
+    return <ManagedUnavailable />
+  }
+  return children
+}
+
 function NewTaskProjectRoute() {
   const { projectId = '' } = useParams()
   return <NewTaskRoute key={projectId} />
@@ -315,7 +329,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
   { pattern: '/workflows/*', pageLabel: 'Workflows' },
-  { pattern: '/settings/*', pageLabel: 'Settings' },
+  { pattern: '/settings/*', pageLabel: import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Configurações' : 'Settings' },
 ] as const
 
 /** Browser-title context from the project-relative route map; raw ids are lookup keys only. */
