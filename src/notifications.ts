@@ -77,14 +77,15 @@ export class Notifications{
    return {duplicate:false,queued:true};
   });
  }
- async flush(principal:string,authority:Authority,sessionId:string,seal:(value:unknown)=>string){
-  return this.ledger.tx(async c=>{
+ async flush(principal:string,authority:Authority,sessionId:string,seal:(value:unknown)=>string,onText?:(localId:string,text:string)=>void){
+  const result=await this.ledger.tx(async c=>{
    await this.scope(c,principal,authority,sessionId);
    const items=(await c.query<Item>(`SELECT n.* FROM ac_notification_items n WHERE n.context_id=$1 AND n.session_id=$2 AND n.message_id IS NULL AND NOT n.superseded
     AND (n.kind='blocker' OR EXISTS(SELECT 1 FROM ac_notification_items due WHERE due.context_id=n.context_id AND due.session_id=n.session_id
       AND due.kind='completion' AND due.message_id IS NULL AND NOT due.superseded AND due.available_at<=clock_timestamp()))
     ORDER BY CASE WHEN n.kind='blocker' THEN 0 ELSE 1 END,n.created_at,n.id LIMIT $3 FOR UPDATE OF n`,[authority.contextId,sessionId,this.policy.maxBatchSize*2])).rows;
    let messages=0,observations=0;
+   const notes:{localId:string;text:string}[]=[];
    for(const type of ['blocker','completion'] as const){
     const group=items.filter(item=>item.kind===type).slice(0,this.policy.maxBatchSize);if(!group.length)continue;
     const localId='notice-'+randomUUID(),id=sessionId+'|'+localId;
@@ -94,10 +95,13 @@ export class Notifications{
     await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4)',[id,sessionId,ciphertext,type==='blocker'?50:0]);
     await c.query('UPDATE ac_notification_items SET message_id=$2 WHERE id=ANY($1::text[]) AND message_id IS NULL',[group.map(item=>item.id),id]);
     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'notifications.batched',$2)",[authority.contextId,{kind:type,count:group.length,messageId:id,epoch:authority.epoch}]);
+    notes.push({localId,text});
     messages++;observations+=group.length;
    }
-   return {messages,observations};
+   return {messages,observations,notes};
   });
+  if(result.messages)for(const note of result.notes)onText?.(note.localId,note.text);
+  return {messages:result.messages,observations:result.observations};
  }
  /** ACK loss retries the same immutable ciphertext/localId. A missing or
   * negative ACK is not delivery. The provider's id/seq form an immutable receipt. */

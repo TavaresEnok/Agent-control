@@ -10,6 +10,15 @@ const {generateVAPIDKeys, sendNotification, WebPushError}=createRequire(import.m
 
 /** Generic contact for the push service. Never the installation owner's email. */
 export const personalPushSubject='mailto:agent-control@localhost';
+
+/** Whether a personal-mode manager message should wake the phone. Pure: the same text and flag always decide the same way. */
+export function personalPushBody(text:string,ownerQuestionReply:boolean):string|null{
+ const trimmed=text.trim();
+ const line=trimmed.split('\n')[0]?.trim()??'';
+ const notify=trimmed.startsWith('Proposta de plano')||text.includes('execução concluída')||text.includes('falhou')||trimmed.startsWith('Atenção')||ownerQuestionReply;
+ if(!notify)return null;
+ return line.length>140?line.slice(0,140):line;
+}
 const subscriptionLimit=20;
 const sentLimit=400;
 const chains=new Map<string,Promise<unknown>>();

@@ -15,6 +15,7 @@ import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,nativeImagesRemovedNotice,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import {panelMessageFromRecord,type PanelPage} from './personal-panel-conversation.ts';
 import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
@@ -229,7 +230,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
@@ -444,7 +445,7 @@ export class HappierEndpoint {
   }
   private async flushNotifications(){
     await this.validateLink();
-    return this.notifications.flush(this.options.principal,this.options.authority,this.options.sessionId,this.seal);
+    return this.notifications.flush(this.options.principal,this.options.authority,this.options.sessionId,this.seal,(localId,text)=>{this.notePersonalPush(localId,text);});
   }
   private async deliverQueuedMessages(){
     return this.notifications.deliver(this.options.principal,this.options.authority,this.options.sessionId,
@@ -480,8 +481,9 @@ export class HappierEndpoint {
      const tasks=z.array(z.object({id:z.string(),writePaths:z.array(z.string()).default([]),dependsOn:z.array(z.string()).default([])}).passthrough()).safeParse(saved?.snapshot?.tasks);
      if(tasks.success)outline='\n'+tasks.data.slice(0,30).map((task,index)=>`${index+1}. ${task.id}: ${task.writePaths.join(', ')||'sem arquivos declarados'}${task.dependsOn.length?' (depois de '+task.dependsOn.join(', ')+')':''}`).join('\n')+'\n';
     }
+    const proposalText=`Proposta de plano ${result.revision}.${outline} Responda aprovar para iniciar ou descartar para ignorar.`;
     const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
-      message:{role:'assistant',content:[{type:'text',text:`Proposta de plano ${result.revision}.${outline} Responda aprovar para iniciar ou descartar para ignorar.`}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId,actions:['Aprovar','Descartar']}}};
+      message:{role:'assistant',content:[{type:'text',text:proposalText}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:'proposal',callId,actions:['Aprovar','Descartar']}}};
     await this.ledger.tx(async c=>{
       await this.ledger.authorize(c,this.options.principal,intent.context_id);await this.ledger.fence(c,this.options.authority,true);
       await this.ledger.assertIntentActive(c,intent.context_id,intent.id);
@@ -495,6 +497,7 @@ export class HappierEndpoint {
       await this.insertAgentMessage(c,localId,message,0);
       await this.ledger.refreshPending(c,intent.context_id);
     });
+    this.notePersonalPush(localId,proposalText);
     if(this.options.personalConversation){
      const project=(await this.ledger.pool.query('SELECT p.auto_approve_plans FROM ac_projects p JOIN ac_contexts x ON x.project_id=p.id WHERE x.id=$1',[intent.context_id])).rows[0];
      if(project?.auto_approve_plans)await this.startProposal(result.revision,result.digest);
@@ -503,6 +506,16 @@ export class HappierEndpoint {
   private async say(localId:string,text:string){
    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
    await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.insertAgentMessage(c,localId,message,0);});
+   this.notePersonalPush(localId,text);
+  }
+  /** Schedules a phone alert after the conversation write. A send failure is logged and never blocks the bridge. */
+  private notePersonalPush(localId:string,text:string){
+   if(!this.options.personalConversation||!this.options.deliverPersonalPush)return;
+   const body=personalPushBody(text,localId.startsWith('answer-'));
+   if(body===null)return;
+   const deliver=this.options.deliverPersonalPush;
+   const notice:PersonalPushNotice={messageId:localId,title:this.options.projectLabel||'Agent Control',body,url:'/p/'+this.runtime.projectId+'/conversa'};
+   void Promise.resolve().then(()=>deliver(notice)).catch(()=>{console.error(JSON.stringify({event:'PERSONAL_PUSH_FAILED'}));});
   }
   private async stopLatest(){
    const row=(await this.ledger.pool.query("SELECT id,plan_revision FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NULL AND state NOT IN ('done','failed','canceled','cancelled') ORDER BY created_at DESC LIMIT 1",[this.options.authority.contextId])).rows[0];
@@ -612,6 +625,7 @@ export class HappierEndpoint {
               await this.insertAgentMessage(c,localId,message,50);
               await this.ledger.refreshPending(c,intent.context_id);
             });
+            this.notePersonalPush(localId,text);
             continue;
           }
           if(error instanceof Refusal&&['PLANNING_RESULT_UNCERTAIN','PLANNING_CONTEXT_BUSY','PLANNING_RECEIPT_INVALID','PLANNING_SOURCE_MISSING','PLANNING_SOURCE_MISMATCH','QUALITY_POLICY_CONFLICT','MANAGER_PLAN_REVISION_CONFLICT'].includes(error.code)){

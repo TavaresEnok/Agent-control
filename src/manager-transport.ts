@@ -10,12 +10,13 @@ import type {Control} from './control.ts';
 import type {Ledger} from './ledger.ts';
 import type {CezarRuntime} from './cezar.ts';
 import {assertManagerTransportAllowed} from './native-bootstrap.ts';
+import {deliverPersonalPush,type PersonalPushNotice} from './personal-push.ts';
 
 /** Optional configured transport only. Cezar still owns dispatch; no model login,
  * inference or account activation occurs during bootstrap. Human signed typed
  * configuration RPCs remain available after the transport starts. A bench
  * bootstrap cannot open this transport: substitutes are injected by the caller. */
-export async function startConfiguredManagerTransport(config:Installation,ledger:Ledger,runtime:CezarRuntime,configurationControl?:Control,personal?:{transportOnly?:boolean;semanticPlanning?:import('./semantic-planning.ts').SemanticPlanning;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat}):Promise<ManagerRegistry|undefined>{
+export async function startConfiguredManagerTransport(config:Installation,ledger:Ledger,runtime:CezarRuntime,configurationControl?:Control,personal?:{transportOnly?:boolean;semanticPlanning?:import('./semantic-planning.ts').SemanticPlanning;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;dataDirectory?:string;projectLabel?:string}):Promise<ManagerRegistry|undefined>{
  assertManagerTransportAllowed(config);
  const options=config.managerTransport;if(!options)return;
  const contexts=options.contexts.filter(item=>item.projectId===runtime.projectId);if(!contexts.length)return;
@@ -34,8 +35,10 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
   const identity=(await ledger.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
   if(!identity)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
   const source=new ContextVault(ledger,identity.id,config.contextVault.directory,config.contextVault.masterFile,repositories);
+  const pushDirectory=personal?.transportOnly===false?personal.dataDirectory:undefined;
+  const personalPush=pushDirectory?(notice:PersonalPushNotice)=>deliverPersonalPush(pushDirectory,notice):undefined;
   registry=new ManagerRegistry(ledger,runtime.projectId,happierEndpointFactory(ledger,runtime,await loadHappier(),{
-   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,managerChat:personal?.managerChat}));
+   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,deliverPersonalPush:personalPush}));
   for(const item of contexts){
    const {projectId,...request}=item;
    if(projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
