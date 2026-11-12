@@ -84,7 +84,19 @@ Confira com `docker run --rm --entrypoint /usr/local/bin/claude ac-native-planni
 
 Para deixar no ar: `docker compose -f deploy/compose.personal.yml up -d`. O `restart: unless-stopped` sobe de novo depois de um reboot. O socket do Docker entra só no broker.
 
-O comando de QA roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. O padrão confere três coisas que não dependem de instalar nada: não há marcador de conflito de merge, todo `.json` é válido e todo `.js`, `.mjs` e `.cjs` passa em `node --check`. Para rodar os testes do projeto, exporte `AC_PERSONAL_QA_ARGV` antes do `personal:images`, com um JSON cujo primeiro item é um executável absoluto, por exemplo `'["/usr/local/bin/node","--test"]'`. O comando repassa essa variável ao `personal:setup`. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
+Um projeto sem arquivo de QA continua com o comando de hoje: roda na imagem de tools, sem rede, sobre uma cópia somente leitura do commit. Confere três coisas que não dependem de instalar nada: não há marcador de conflito de merge, todo `.json` é válido e todo `.js`, `.mjs` e `.cjs` passa em `node --check`.
+
+Para rodar o preparo e os testes de um projeto, grave listas de argumentos. O primeiro item de cada lista é um destes nomes, resolvido no `PATH` da imagem: `npm`, `npx`, `pnpm`, `corepack`, `yarn`, `node`, `make` ou `sh`. Não é texto de shell. O preparo é opcional. Ele roda com a rede padrão do Docker, sem credencial e sem a conta de IA, numa cópia gravável do commit. O cache de dependências fica em `<dataDirectory>/qa-cache/<id>` e entra no contêiner em `/cache`. O teste roda em seguida, sem rede, na mesma cópia. O tempo fica entre 30 e 1800 segundos. Se o preparo falha, o QA falha com `QA_PREPARE_FAILED`. As últimas 40 linhas da saída aparecem na conversa.
+
+`<projeto>` é o label ou o id. `set` grava o arquivo com modo 600. No fim, reinicie o gateway.
+
+```bash
+npm run personal:qa -- <instalação.json> <projeto> show
+npm run personal:qa -- <instalação.json> IspAgent set --prepare '["corepack","pnpm","install","--frozen-lockfile"]' --test '["corepack","pnpm","--filter","@ispagent/shared","test"]' --timeout 600
+npm run personal:qa -- <instalação.json> <projeto> clear
+```
+
+`AC_PERSONAL_QA_ARGV` ainda substitui o comando dos projetos que não têm arquivo. O arquivo do projeto prevalece. Se o QA falhar, a tarefa é corrigida uma vez e, se falhar de novo, o gerente propõe um plano novo, uma única vez.
 
 Sempre que reconstruir uma imagem ou mudar o QA, rode `npm run personal:images -- <instalação.json>` de novo e reinicie o gateway com o comando impresso. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
 

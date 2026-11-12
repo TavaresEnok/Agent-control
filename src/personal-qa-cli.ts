@@ -1,0 +1,59 @@
+import {basename,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {Refusal} from './contracts.ts';
+import {loadInstallation,type Installation} from './installation.ts';
+import {clearPersonalQaConfig,parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig,type PersonalQaConfig} from './personal-qa-config.ts';
+
+const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> show|set|clear\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600]';
+
+function flag(args:string[],name:string){const index=args.indexOf(name);return index<0?undefined:args[index+1];}
+
+function project(config:Installation,token:string){
+ const hits=[config.project,...config.projects].filter(item=>item.id===token||item.label===token);
+ if(hits.length!==1)throw new Refusal(hits.length?'QA_PROJECT_AMBIGUOUS':'QA_PROJECT_NOT_FOUND');
+ return hits[0]!;
+}
+
+function jsonArg(value:string){try{return JSON.parse(value);}catch{throw new Refusal('QA_CONFIG_NOT_A_LIST');}}
+
+function restart(config:Installation){
+ return `Reinicie o gateway para aplicar o QA: systemctl --user restart agent-control-gateway-${basename(config.dataDirectory)}`;
+}
+
+/** show prints the file, set validates and writes it mode 600, clear deletes it. */
+export async function runPersonalQaCli(argv:string[]){
+ const [file,token,action,...rest]=argv;
+ if(!file||!token||!action||file.startsWith('--')||token.startsWith('--')||!['show','set','clear'].includes(action))throw new Refusal('QA_USAGE');
+ const config=await loadInstallation(file),selected=project(config,token);
+ if(action==='show'){
+  const saved=await readPersonalQaConfig(config.dataDirectory,selected.id);
+  return saved?[JSON.stringify(saved,null,2)]:['QA padrão: este projeto não tem arquivo de configuração. A verificação de conflito, JSON e sintaxe continua valendo.'];
+ }
+ if(action==='clear'){await clearPersonalQaConfig(config.dataDirectory,selected.id);return ['QA do projeto removido. O padrão volta a valer.',restart(config)];}
+ const testFlag=flag(rest,'--test');
+ if(!testFlag||testFlag.startsWith('--'))throw new Refusal('QA_USAGE');
+ const prepareFlag=flag(rest,'--prepare'),timeoutFlag=flag(rest,'--timeout');
+ const input:Record<string,unknown>={test:jsonArg(testFlag)};
+ if(prepareFlag!==undefined)input.prepare=jsonArg(prepareFlag);
+ if(timeoutFlag!==undefined)input.timeoutSeconds=Number(timeoutFlag);
+ const parsed:PersonalQaConfig=parsePersonalQaConfig(input);
+ const path=await writePersonalQaConfig(config.dataDirectory,selected.id,parsed);
+ return ['QA gravado em '+path,restart(config)];
+}
+
+const messages:Record<string,string>={
+ QA_USAGE:usage,
+ QA_CONFIG_NOT_A_LIST:'O comando tem que ser uma lista JSON de argumentos, não um texto de shell.',
+ QA_COMMAND_NOT_ALLOWED:'O primeiro item tem que ser npm, npx, pnpm, corepack, yarn, node, make ou sh.',
+ QA_TIMEOUT_OUT_OF_RANGE:'O tempo tem que ser um inteiro de 30 a 1800 segundos.',
+ QA_PROJECT_NOT_FOUND:'Projeto não encontrado. Use o label ou o id.',
+ QA_PROJECT_AMBIGUOUS:'Há mais de um projeto com esse label.',
+ QA_CONFIG_INVALID:'A configuração de QA é inválida.',
+ QA_CONFIG_TEST_REQUIRED:'O comando de teste é obrigatório.',
+};
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+ runPersonalQaCli(process.argv.slice(2)).then(lines=>{for(const line of lines)console.log(line);},error=>{
+  const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'QA_CONFIG_FAILED';
+  console.error(messages[code]??code);process.exit(1);
+ });
+}

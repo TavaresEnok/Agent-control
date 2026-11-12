@@ -128,5 +128,6 @@ ou, em dois terminais:
   npm run gateway -- serve ${installation}
 Depois converse:
   npm run gateway -- say ${installation} "o que este repositório faz?"
-QA: o padrão confere conflitos de merge, JSON e sintaxe de JavaScript. Para rodar os testes do projeto,
-exporte AC_PERSONAL_QA_ARGV e rode de novo: node scripts/personal-setup.mjs ${installation}`);
+QA: o padrão confere conflitos de merge, JSON e sintaxe de JavaScript. Para rodar os testes do projeto:
+  npm run personal:qa -- ${installation} ${label} set --test '["npm","test"]'
+Depois reinicie o gateway.`);
