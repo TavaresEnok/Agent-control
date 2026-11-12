@@ -204,14 +204,12 @@ async function main(){
   process.env.CEZ_DRY_RUN='1';
   const {CezarRuntime}=await import('./cezar.ts'),{createApi}=await import('./api.ts');
   const key=await sessionKey(config);
-  const verify=async(request:Request)=>{
-   const authorization=request.headers.get('authorization');if(!authorization?.startsWith('Bearer '))return null;
-   try{
-    const response=await fetch(config.happier.upstreamOrigin+'/v1/account/profile',{headers:{authorization},redirect:'error',signal:AbortSignal.timeout(5000)});
-    if(!response.ok)return null;return z.object({id:z.string().min(1).max(200)}).parse(await response.json()).id;
-   }catch{return null;}
-  };
-  const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
+  const {happierProfileVerifier,personalCodeLogin,personalPasswordLogin}=await import('./personal-login.ts');
+  const verifyBearer=happierProfileVerifier(config.happier.upstreamOrigin);
+  const localTransport=config.managerTransport?.transport==='local';
+  // A direct Happier bearer does not open the panel while transport is local. Old cookies still use verifyBearer.
+  const verify=localTransport?async()=>null:verifyBearer;
+  const sessions=new BrowserSessions(ledger,key,verifyBearer,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
   runtimes=new ProjectRuntimes(async project=>{
    const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report,prepared.resources):undefined;
    // Execution follows an active personal bootstrap and that project's own checkout.
@@ -228,51 +226,11 @@ async function main(){
   });
   const access=async(principal:string,sessionId:string,request?:Request)=>request?
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
-  const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
+  const relay=localTransport?undefined:new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
   let stopGateway=()=>{};
   const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,dataDirectory:config.dataDirectory,projectId:config.project.id,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
-  const pairCodeLogin=config.activation==='personal'?async(request:Request)=>{
-   sessions.checkOrigin(request);
-   const input=z.object({code:z.string().min(1).max(40)}).strict().parse(await request.json());
-   if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);
-   const raw=await readPrivateFile(config.managerTransport.tokenFile,16384);
-   try{
-    const token=raw.toString('utf8').trim();
-    if(!token||/[\s\x00-\x1f\x7f]/.test(token))throw new Refusal('MANAGER_TOKEN_INVALID',400);
-    const headers=new Headers();headers.set('authorization','Bearer '+token);
-    const principal=await verify(new Request(config.http.publicOrigin+'/',{headers}));
-    // The Happier account the installation talks through must own the primary project in the ledger.
-    const owns=principal?(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,principal])).rowCount:0;
-    if(!principal||!owns)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
-    // Spend the code only after the token and the owner check both succeed.
-    const {redeemPairCode,pairClientIp}=await import('./personal-pair.ts');
-    const verdict=await redeemPairCode(config.dataDirectory,input.code,Date.now(),pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address')));
-    if(verdict==='limited')return Response.json({error:'PAIR_CODE_LIMIT'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
-    if(verdict!=='accepted')return Response.json({error:'PAIR_CODE_INVALID'},{status:401,headers:{'cache-control':'no-store'}});
-    const issuedHeaders=new Headers(request.headers);issuedHeaders.set('authorization','Bearer '+token);
-    return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}));
-   }finally{raw.fill(0);}
-  }:undefined;
-  const passwordLogin=config.activation==='personal'?async(request:Request)=>{
-   sessions.checkOrigin(request);
-   const input=z.object({user:z.string().min(1).max(40),password:z.string().min(1).max(200)}).strict().parse(await request.json());
-   if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);
-   const raw=await readPrivateFile(config.managerTransport.tokenFile,16384);
-   try{
-    const token=raw.toString('utf8').trim();
-    if(!token||/[\s\x00-\x1f\x7f]/.test(token))throw new Refusal('MANAGER_TOKEN_INVALID',400);
-    const headers=new Headers();headers.set('authorization','Bearer '+token);
-    const principal=await verify(new Request(config.http.publicOrigin+'/',{headers}));
-    const owns=principal?(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,principal])).rowCount:0;
-    if(!principal||!owns)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
-    const {verifyPanelLogin,panelLoginDenied,panelSessionSeconds}=await import('./personal-password.ts');
-    const {pairClientIp}=await import('./personal-pair.ts');
-    const verdict=await verifyPanelLogin(config.dataDirectory,input.user,input.password,Date.now(),pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address')));
-    if(verdict!=='accepted')return panelLoginDenied(verdict);
-    const issuedHeaders=new Headers(request.headers);issuedHeaders.set('authorization','Bearer '+token);
-    return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}),panelSessionSeconds);
-   }finally{raw.fill(0);}
-  }:undefined;
+  const pairCodeLogin=config.activation==='personal'?personalCodeLogin(config,ledger,sessions,verifyBearer):undefined;
+  const passwordLogin=config.activation==='personal'?personalPasswordLogin(config,ledger,sessions,verifyBearer):undefined;
   const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
