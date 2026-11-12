@@ -13,7 +13,7 @@ it.each(['keypair','pairing'])('restores login and wipes partial secrets when %s
  mock.pair.mockImplementation(()=>{if(failure==='keypair')throw Error('ENTROPY_UNAVAILABLE');return {secretKey:secret,publicKey:new Uint8Array(32)}})
  mock.authentication.mockImplementation(()=>{throw Error('PAIRING_ENTROPY_UNAVAILABLE')})
  const request=vi.fn(async(path:string)=>path.endsWith('/status')?new Response('{}',{status:401}):
-  Response.json({enabled:true,webUrl:'https://chat.example',serverUrl:'https://happier.example'}))
+  Response.json({enabled:true,webUrl:'https://chat.example',serverUrl:'https://happier.example',passwordLogin:false}))
  vi.stubGlobal('fetch',request)
  const cache=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})
  render(<QueryClientProvider client={cache}><AgentControlAuthGate><p>Private cockpit</p></AgentControlAuthGate></QueryClientProvider>)
