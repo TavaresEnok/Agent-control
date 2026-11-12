@@ -212,7 +212,7 @@ Itens deixados de fora de propósito:
 
 | # | Melhoria | Estado |
 |---|---|---|
-| M1 | Cara própria do painel (nome, cor, menu enxuto) e fim dos avisos que poluem | com o Grok |
-| M2 | QA com os testes que usam banco (banco de teste temporário numa rede interna sem internet) | não começada |
+| M1 | Cara própria do painel (nome, cor, menu enxuto) e fim dos avisos que poluem | **feita** (`7d4da904`…`f007429c`), conferida no celular simulado, zero erros no console; restam palavras em inglês na lista lateral do Cezar |
+| M2 | QA com os testes que usam banco (banco de teste temporário numa rede interna sem internet) | com o Grok |
 | M3 | Corrigir os 8 testes antigos do modo bloqueado | não começada |
 | M4 | Tirar o Happier: conversa e login no próprio Agent Control (levantamento primeiro) | não começada |

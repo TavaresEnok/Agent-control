@@ -1,49 +1,58 @@
-# Ordem para o Grok — melhoria 1: cara própria do painel e fim dos avisos que poluem
+# Ordem para o Grok — melhoria 2: QA com banco de teste temporário
 
-Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço médio.
+Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto** (mexe no isolamento do QA).
 
 ---
 
-Você é o programador do Agent Control. O painel é a página web do Cezar (`upstream/cezar/packages/web/src`) com as telas do Agent Control por cima. Tudo o que você mudar vale **só quando `import.meta.env.VITE_AGENT_CONTROL_MANAGED==='1'`**. Fora disso, o Cezar continua igual.
+Você é o programador do Agent Control. O QA por projeto (Fase 5) está em `src/personal-qa-config.ts` e `src/native-qa.ts`:
 
-## O que fazer
+- o **preparo** roda com rede, sem credenciais, com as dependências num cache por projeto em `/cache`;
+- o **teste** roda **sem rede** (`NetworkMode:'none'`).
 
-1. **Nome e marca.** No painel gerenciado, o nome visível é sempre "Agent Control": título da aba, topo do menu, tela de entrada e qualquer "Cezar" visível ao usuário. O texto de licença e de créditos pode continuar.
-2. **Cor própria.** Troque o acento verde-limão por um azul próprio (`#4F8CFF`, com texto escuro `#0B1220` sobre o botão), usando os tokens de `styles/index.css` (`--primary`, `--primary-foreground` e os de foco e anel). Faça isso num seletor que só vale no painel gerenciado. Por exemplo, uma classe `ac-managed` no `<html>`, posta em `main.tsx` quando a variável for `'1'`. Confira o tema claro e o escuro. Ajuste também o `theme_color` do manifest em `src/api.ts`.
-3. **Menu enxuto.**
-   - No painel gerenciado, o menu mostra só, nesta ordem: **Conversa**, **Tarefas**, **Novo projeto** e **Configurações**.
-   - Esconda Inbox, Git, GitHub, Tracker, Automations, Skills e Workflows do menu e da paleta de comandos.
-   - Se alguém abrir uma dessas rotas direto, a página mostra "Não disponível no Agent Control" com um link para a Conversa.
-   - Rótulos em português.
-   - Nas Configurações, deixe só as seções do Agent Control (procure `agent-control-section` e `registry.tsx`) e as de aparência e tema.
-4. **Sem aviso de falha durante o reinício.** Na Conversa (`routes/conversa.tsx`):
-   - uma falha de leitura isolada não mostra nada;
-   - a partir de 3 falhas seguidas aparece "Reconectando…", discreto;
-   - "Não foi possível atualizar." só aparece depois de 30 s sem sucesso;
-   - a primeira leitura bem-sucedida limpa tudo.
-5. **Sem a conexão em tempo real recusada.**
-   - No painel gerenciado, a página não abre o WebSocket `/api/v1/ws`, que o gateway recusa com 403 de propósito. Veja `app.tsx`, `GlobalEventsProvider` e onde a URL do WebSocket é montada.
-   - As telas que dependiam dele continuam funcionando pela consulta periódica que já existe. Se alguma ficar sem atualização, use uma consulta a cada 5 s só nela.
+No IspAgent, os testes da API que usam PostgreSQL ficam de fora por falta de banco. O titular quer que eles rodem.
 
-## Verificação
+## Desenho (decidido pelo gerente)
 
-- `npm --prefix upstream/cezar/packages/web run typecheck` sai 0.
-- `npm run typecheck` sai 0.
-- Sem testes de tela. O gerente confere no celular simulado.
+- **Configuração por projeto:** ganha um campo opcional `services`, por enquanto só `postgres`, no formato `{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}`. A imagem tem que ser uma destas: `postgres:15-alpine`, `postgres:16-alpine` ou `postgres:17-alpine`.
+- **Quando há `services`, cada execução de QA:**
+  1. cria uma **rede Docker interna** própria (`Internal: true`, sem acesso à internet), com nome `ac-native-qa-net-<jobId>`;
+  2. sobe o contêiner `ac-native-qa-db-<jobId>` com a imagem pedida, só nessa rede:
+     - sem portas publicadas;
+     - usuário, senha e banco gerados na hora (senha aleatória, nunca em log);
+     - com `tmpfs` para os dados;
+     - com limites de memória e de PIDs;
+  3. espera o banco aceitar conexões, com `pg_isready` dentro do contêiner do banco, por no máximo 60 s;
+  4. roda o **teste** ligado só a essa rede interna, em vez de `none`, com a variável `QA_DATABASE_URL=postgresql://<usuário>:<senha>@ac-native-qa-db-<jobId>:5432/<banco>` acrescentada ao ambiente;
+  5. no `finally`, sempre remove o contêiner do banco e a rede.
+- **A reconciliação e a aposentadoria do QA** (`reconcileContext` e `retire` em `src/native-qa.ts`) passam a remover também o banco e a rede órfãos de um job, por nome, se o gateway cair no meio.
+- **O preparo continua igual:** rede padrão, sem banco.
+- **Sem `services`, nada muda:** mesmo contrato e mesmo digest.
+- **O digest do contrato inclui `services`**, com a imagem e o banco, mas não a senha, que é por execução.
+- **`npm run personal:qa -- … set`** ganha `--services '<json>'`.
+
+## Testes essenciais
+
+Sem Docker de verdade, com o Docker falso que os testes do QA já usam:
+
+- com `services`, a ordem é criar a rede interna, subir o banco, esperar, testar e remover os dois;
+- a rede é criada com `Internal:true`;
+- a senha não aparece no contrato, no digest nem no log;
+- um projeto sem `services` mantém o digest de hoje.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você pode editar arquivos em `upstream/cezar/packages/web/src/` e em `src/api.ts`.
-- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `rg`, `ls`.
-- Não pesquise na internet nem rode outros comandos. Se faltar informação, procure no código com `rg`.
+- Você pode editar arquivos em `src/`, `tests/` e `scripts/`, além de `docs/USO-PESSOAL.md`.
+- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
+- Não pesquise na internet. Não rode Docker nem o gateway: o gerente prova no IspAgent.
 
 ## Regras
 
-- Sem push. Um commit por item. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
+- Sem push. O modo `locked` não muda.
+- Um commit por parte (contrato, execução, reconciliação, comando). Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
 - Se travar por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
 - Os hashes dos commits.
-- Os typechecks.
+- Os testes.
 - O que não conferiu.
