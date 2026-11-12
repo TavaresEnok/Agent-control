@@ -22,7 +22,8 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
  const containers=new Map([[worker,{Id:worker,Image:'worker',Config:{Labels:labels},State:{Running:false,Status:'exited',FinishedAt:physical.finishedAt,ExitCode:1}}],[tools,{Id:tools,Image:'tools',Config:{Labels:labels},State:{Running:false,Status:'exited',FinishedAt:physical.toolsFinishedAt,ExitCode:0}}]]);
  let canceled=true;
  let net:any={Id:network,Name:'ac-native-exec-'+jobId,Internal:true,Labels:labels,Containers:{}},saved:any,loseAck=true;
- const docker={inspect:async(id:string)=>containers.get(id==='ac-native-worker-'+jobId?worker:id==='ac-native-tools-'+jobId?tools:id),logs:async(id:string)=>Buffer.from(id===worker?'worker log':'tools log'),remove:async(id:string)=>{containers.delete(id);if(loseAck){loseAck=false;throw new Error('lost ack');}},inspectPrivateNetwork:async()=>net,removePrivateNetwork:async()=>{net=undefined;}};
+ const frame=(text:string)=>{const payload=Buffer.from(text),header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(payload.length,4);return Buffer.concat([header,payload]);};
+ const docker={inspect:async(id:string)=>containers.get(id==='ac-native-worker-'+jobId?worker:id==='ac-native-tools-'+jobId?tools:id),logs:async(id:string)=>frame(id===worker?'worker log':'tools log'),remove:async(id:string)=>{containers.delete(id);if(loseAck){loseAck=false;throw new Error('lost ack');}},inspectPrivateNetwork:async()=>net,removePrivateNetwork:async()=>{net=undefined;}};
  const client={query:async(sql:string,args:any[])=>{
   if(sql.includes('FROM ac_native_execution_jobs j JOIN'))return {rows:[row]};
   if(sql.startsWith('SELECT 1 FROM ac_plan_cancellations'))return {rowCount:canceled?1:0,rows:[]};
@@ -41,7 +42,7 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
   await assert.rejects(supervisor.retireTerminal('owner',{contextId,epoch:1},jobId),/NATIVE_RETIREMENT_EVIDENCE_MISSING/);
   assert.equal(containers.size,2);assert.equal(Boolean(saved),false);canceled=false;
   await assert.rejects(supervisor.retireTerminal('owner',{contextId,epoch:1},jobId),/lost ack/);
-  assert.equal(saved.state,'prepared');assert.equal((await readFile(join(root,jobId,'worker-terminal.log'))).toString(),'worker log');
+  assert.equal(saved.state,'prepared');const archived=await readFile(join(root,jobId,'worker-terminal.log'));assert.equal(archived[0],1);assert.equal(archived.readUInt32BE(4),Buffer.byteLength('worker log'));assert.equal(archived.subarray(8).toString(),'worker log');
   assert.deepEqual(await supervisor.retireTerminal('owner',{contextId,epoch:2},jobId),{state:'removed'});
   assert.equal(saved.state,'removed');assert.equal(containers.size,0);assert.equal(net,undefined);
   assert.deepEqual(await supervisor.retireTerminal('owner',{contextId,epoch:2},jobId),{state:'removed'});

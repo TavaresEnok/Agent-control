@@ -152,7 +152,7 @@ for(const waiverMode of ['disabled','valid','missing','mismatch','ambiguous'] as
   const networks=new Map<string,Record<string,unknown>>();
   let lostRetirementAck=false;
   const physicalDocker=physicalMode?new DockerDaemon():undefined;
-  if(!physicalMode)Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async(id:string)=>networks.get(id)??null,removePrivateNetwork:async(id:string)=>{networks.delete(id);},stop:async()=>{},logs:async()=>Buffer.from('synthetic native log\n'),
+  if(!physicalMode)Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async(id:string)=>networks.get(id)??null,removePrivateNetwork:async(id:string)=>{networks.delete(id);},stop:async()=>{},logs:async()=>{const payload=Buffer.from('synthetic native log\n'),header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(payload.length,4);return Buffer.concat([header,payload]);},
    remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);
     if(process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1'&&!lostRetirementAck){lostRetirementAck=true;throw new Refusal('DOCKER_REMOVE_UNCERTAIN');}}}});
   if(physicalMode&&process.env.AC_NATIVE_RETIREMENT_ACK_LOST==='1'){
