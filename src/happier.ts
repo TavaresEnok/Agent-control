@@ -16,7 +16,7 @@ import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,nativeImagesRemovedNotice,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
 import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
-import {panelMessageFromRecord,type PanelPage} from './personal-panel-conversation.ts';
+import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
 import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
@@ -205,6 +205,46 @@ export async function readPanelTranscript(baseUrl: string, sessionId: string, to
     }
     if (!result.messages.length || result.nextAfterSeq == null || result.nextAfterSeq <= cursor) throw new Refusal('HISTORY_CURSOR_INVALID');
     cursor = result.nextAfterSeq;
+  }
+  throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
+}
+
+/** Entire linked transcript, oldest first. Pages arrive newest-first and are reversed only after the cursor ends.
+ * The importer runs this before the installation switches to local transport. */
+export async function readImportTranscript(baseUrl: string, sessionId: string, token: string, key: Uint8Array, boundary: HappierBoundary,
+  variant: EncryptionVariant, authorize: () => Promise<void>, options: {signal?: AbortSignal; timeoutMs?: number; fetchPage?: typeof fetch; pageLimit?: number} = {}): Promise<PanelMessage[]> {
+  const fetchPage = options.fetchPage ?? fetch;
+  const pageLimit = options.pageLimit ?? 10000;
+  const kept: PanelMessage[] = [];
+  let before: number | undefined;
+  for (let page = 0; page < pageLimit; page++) {
+    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
+    url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
+    if (before !== undefined) url.searchParams.set('beforeSeq', String(before));
+    await authorize();
+    const data = await boundedNetwork(async signal => {
+      const response = await fetchPage(url, {headers: {authorization: 'Bearer ' + token}, signal, redirect: 'error'});
+      if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+      return response.json();
+    }, options.timeoutMs ?? 10000, options.signal);
+    const parsed = HistoryPage.safeParse(data);
+    if (!parsed.success) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
+    const result = parsed.data;
+    let previous = before ?? Infinity;
+    for (const message of result.messages) {
+      if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
+      previous = message.seq;
+      const row = panelMessageFromRecord(message.id, message.createdAt, decryptHistoryContent(boundary, key, variant, message.content));
+      if (row) kept.push(row);
+    }
+    if (!result.hasMore) {
+      if (result.nextBeforeSeq !== null) throw new Refusal('HISTORY_CURSOR_INVALID');
+      await authorize();
+      return kept.reverse();
+    }
+    if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
+      throw new Refusal('HISTORY_CURSOR_INVALID');
+    before = result.nextBeforeSeq;
   }
   throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
 }

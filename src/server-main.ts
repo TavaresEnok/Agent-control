@@ -87,6 +87,11 @@ async function main(){
   if(!path||extra.some(item=>item!=='--local'))throw Error('INVALID_INSTALLATION_COMMAND');
   const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path,undefined,{local})));return;
  }
+ if(command==='import-conversation'){
+  if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
+  const {importPersonalConversation}=await import('./import-conversation.ts');
+  console.log(JSON.stringify(await importPersonalConversation(path)));return;
+ }
  if(command==='app-key'){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
   const {personalAppKey}=await import('./personal-connect.ts');const key=await personalAppKey(path);
