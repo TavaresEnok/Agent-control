@@ -68,6 +68,8 @@ export function ConversaRoute() {
   const [syncError, setSyncError] = useState('')
   const [sendError, setSendError] = useState('')
   const cursor = useRef<string | null>(null)
+  const readFailures = useRef(0)
+  const readFailedAt = useRef<number | null>(null)
   const messagesRef = useRef(messages)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -90,6 +92,21 @@ export function ConversaRoute() {
     setPending((current) => dropEchoed(messages, current))
   }, [messages])
 
+  const noteReadFailure = useCallback(() => {
+    readFailures.current += 1
+    if (readFailedAt.current === null) readFailedAt.current = Date.now()
+    const quietFor = Date.now() - readFailedAt.current
+    if (quietFor >= 30_000) setSyncError('Não foi possível atualizar.')
+    else if (readFailures.current >= 3) setSyncError('Reconectando…')
+    else setSyncError('')
+  }, [])
+
+  const noteReadSuccess = useCallback(() => {
+    readFailures.current = 0
+    readFailedAt.current = null
+    setSyncError('')
+  }, [])
+
   const pull = useCallback(async () => {
     if (document.visibilityState === 'hidden' || busy.current) return
     busy.current = true
@@ -104,19 +121,19 @@ export function ConversaRoute() {
         return
       }
       if (!response.ok) {
-        setSyncError('Não foi possível atualizar.')
+        noteReadFailure()
         return
       }
       const page = pageSchema.parse(await response.json())
       if (page.next) cursor.current = page.next
       setMessages((current) => after ? mergeMessages(current, page.messages) : page.messages)
-      setSyncError('')
+      noteReadSuccess()
     } catch {
-      if (mounted.current) setSyncError('Não foi possível atualizar.')
+      if (mounted.current) noteReadFailure()
     } finally {
       busy.current = false
     }
-  }, [queryClient])
+  }, [noteReadFailure, noteReadSuccess, queryClient])
 
   useEffect(() => {
     mounted.current = true
