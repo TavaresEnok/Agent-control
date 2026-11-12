@@ -42,10 +42,12 @@ export async function importPersonalConversation(path: string, overrides: {
         const messages = await readImportTranscript(config.happier.upstreamOrigin, item.sessionId, token, key, boundary, item.encryptionVariant, authorize, {fetchPage: overrides.fetchPage});
         for (const message of messages) {
           const saved = await ledger.pool.query(
-            `INSERT INTO ac_personal_messages(id,context_id,role,text,local_id,accepted) VALUES($1,$2,$3,$4,$5,true)
-             ON CONFLICT (context_id, local_id) DO NOTHING RETURNING id`,
-            [personalMessageId(item.contextId, message.id), item.contextId, message.role, message.text, message.id]);
-          if (saved.rows.length) inserted++; else existing++;
+            // Keep the original time; a row imported earlier without it is corrected, nothing else changes.
+            `INSERT INTO ac_personal_messages(id,context_id,role,text,local_id,accepted,created_at) VALUES($1,$2,$3,$4,$5,true,$6)
+             ON CONFLICT (context_id, local_id) DO UPDATE SET created_at=EXCLUDED.created_at WHERE ac_personal_messages.created_at<>EXCLUDED.created_at
+             RETURNING (xmax = 0) AS inserted`,
+            [personalMessageId(item.contextId, message.id), item.contextId, message.role, message.text, message.id, message.createdAt]);
+          if (saved.rows[0]?.inserted) inserted++; else existing++;
         }
       } finally { key?.fill(0); }
     }
