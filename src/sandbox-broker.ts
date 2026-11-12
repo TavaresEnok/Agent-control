@@ -103,6 +103,42 @@ export class DockerDaemon{
   const r=await this.call('GET',`/v1.44/networks/${id}`);if(r.status===404)return null;
   if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return JSON.parse(r.body.toString('utf8'));
  }
+ /** QA-only internal network. Execution networks keep their own name check. */
+ async createQaNetwork(name:string,labels:Record<string,string>){
+  if(!/^ac-native-qa-net-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('POST','/v1.44/networks/create',{Name:name,CheckDuplicate:true,Driver:'bridge',Internal:true,Attachable:false,Labels:labels});
+  if(r.status!==201)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+  return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(r.body.toString('utf8'))).Id;
+ }
+ async inspectQaNetwork(name:string):Promise<{Id:string;Name:string;Internal:boolean}|null>{
+  if(!/^ac-native-qa-net-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('GET',`/v1.44/networks/${encodeURIComponent(name)}`);if(r.status===404)return null;
+  if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+  return z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Name:z.string(),Internal:z.boolean()}).passthrough().parse(JSON.parse(r.body.toString('utf8')));
+ }
+ async removeQaNetwork(name:string){
+  if(!/^ac-native-qa-net-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('DELETE',`/v1.44/networks/${encodeURIComponent(name)}`);if(![204,404].includes(r.status))throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+ }
+ /** Readiness probe only. The command cannot carry the database password. */
+ async execPgIsReady(container:string,user:string,database:string){
+  if(!/^ac-native-qa-db-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(container))throw new Refusal('DOCKER_CONTAINER_INVALID');
+  if(!/^u[a-f0-9]{16}$/.test(user)||!/^[a-z][a-z0-9_]{0,62}$/.test(database))throw new Refusal('DOCKER_EXEC_INVALID');
+  const created=await this.call('POST',`/v1.44/containers/${encodeURIComponent(container)}/exec`,{AttachStdout:false,AttachStderr:false,Tty:false,Cmd:['pg_isready','-h','127.0.0.1','-p','5432','-U',user,'-d',database]});
+  if(created.status!==201)throw new Refusal('DOCKER_EXEC_UNCERTAIN');
+  const execId=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/)}).passthrough().parse(JSON.parse(created.body.toString('utf8'))).Id;
+  const started=await this.call('POST',`/v1.44/exec/${execId}/start`,{Detach:true});
+  if(![200,204].includes(started.status))throw new Refusal('DOCKER_EXEC_UNCERTAIN');
+  const deadline=Date.now()+5000;
+  for(;;){
+   const inspected=await this.call('GET',`/v1.44/exec/${execId}/json`);
+   if(inspected.status!==200)throw new Refusal('DOCKER_EXEC_UNCERTAIN');
+   const body=z.object({Running:z.boolean(),ExitCode:z.number().int().nullable()}).passthrough().parse(JSON.parse(inspected.body.toString('utf8')));
+   if(!body.Running&&body.ExitCode!==null)return body.ExitCode;
+   if(Date.now()>=deadline)throw new Refusal('DOCKER_EXEC_UNCERTAIN');
+   await new Promise(resolve=>setTimeout(resolve,200));
+  }
+ }
 }
 export type SandboxBrokerConfig={hostRoot:string;probeHostPath:string;probeSha256:string;implementationPath?:string;implementationSha256?:string;diskPolicy?:DiskAdmissionPolicy;
  verificationPath?:string;verificationSha256?:string;verifierPath?:string;verifierSha256?:string;

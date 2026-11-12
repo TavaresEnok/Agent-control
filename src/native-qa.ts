@@ -14,6 +14,7 @@ import {GitArtifacts} from './git.ts';
 import {Quality,VerificationReceipt,type ArtifactRow} from './quality.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
+import {provisionNativeQaDatabase,redactQaDatabaseSecrets,removeNativeQaService} from './native-qa-database.ts';
 import {NativeQaContract as NativeQaSchema,nativeQaContractDigest,type NativeQaContract as NativeQaValue} from './native-qa-contract.ts';
 export const NativeQaContract=NativeQaSchema;
 export type NativeQaContract=NativeQaValue;
@@ -43,12 +44,27 @@ export class NativeQa{
   socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope,cacheRoot?:string){
   if(quality.ledger!==ledger||key.byteLength<32||resolve(root)!==root||resolve(repository)!==repository||root===repository||root.startsWith(repository+sep)||repository.startsWith(root+sep))throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
   this.contract=Object.freeze(NativeQaContract.parse(structuredClone(contract)));Object.freeze(this.contract.argv);Object.freeze(this.contract.environment);if(this.contract.prepareArgv)Object.freeze(this.contract.prepareArgv);
+  if(this.contract.services){Object.freeze(this.contract.services);Object.freeze(this.contract.services.postgres);}
   if(this.contract.prepareArgv){if(!cacheRoot||resolve(cacheRoot)!==cacheRoot)throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');this.cacheRoot=cacheRoot;}
   else if(cacheRoot)throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
   this.verifierDigest=nativeQaContractDigest(this.contract);this.key=Buffer.from(key);this.docker=nativeDockerDaemon(socketPath,resourceEnvelope);
  }
  /** Configured QA writes the checkout, so it runs as the gateway user. The default contract stays uid 10001. */
  private qaUser(){return this.contract.prepareArgv?`${process.getuid?.()??10001}:${process.getgid?.()??10001}`:'10001:10001';}
+ private testNetwork(jobId:string){return this.contract.services?`ac-native-qa-net-${jobId}`:'none';}
+ private async qaDatabaseEnv(jobId:string){
+  const postgres=this.contract.services?.postgres;if(!postgres)return [] as string[];
+  const url=await provisionNativeQaDatabase(this.docker,jobId,postgres,{memoryBytes:this.contract.memoryBytes,pids:this.contract.pids,nanoCpus:this.contract.nanoCpus},()=>{});
+  return [`QA_DATABASE_URL=${url}`];
+ }
+ /** The password is per run, so inspect checks the shape and never records the value. */
+ private databaseUrlAcceptable(jobId:string,env:readonly string[]){
+  const urls=env.filter(entry=>entry.startsWith('QA_DATABASE_URL='));
+  if(!this.contract.services)return urls.length===0;
+  if(urls.length!==1)return false;
+  const match=/^postgresql:\/\/(u[a-f0-9]{16}):([a-f0-9]{36})@ac-native-qa-db-([0-9a-f-]{36}):5432\/([a-z][a-z0-9_]{0,62})$/.exec(urls[0]!.slice('QA_DATABASE_URL='.length));
+  return Boolean(match&&match[3]===jobId&&match[4]===this.contract.services.postgres.database);
+ }
  private async ensureProjectCache(){
   const cache=this.cacheRoot;if(!cache||cache===this.repository||cache.startsWith(this.repository+sep)||cache===this.root||cache.startsWith(this.root+sep)||this.root.startsWith(cache+sep)||this.repository.startsWith(cache+sep))throw new Refusal('NATIVE_QA_CACHE_UNSAFE');
   await mkdir(cache,{recursive:true,mode:0o700});await chmod(cache,0o700);
@@ -65,8 +81,10 @@ export class NativeQa{
   const directory=await open(this.paths(jobId).area,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{await directory.sync();}finally{await directory.close();}
  }
  private async failUnstarted(principal:string,authority:Authority,job:Record<string,any>,failureCode:string,exitCode:number,logs:Buffer){
+  if(this.contract.services)await removeNativeQaService(this.docker,job.id).catch(()=>{});
   let stored=logs.length?logs:this.frameQaText(failureCode);
   try{assertCompleteQaLogs(stored);}catch{stored=this.frameQaText((stored.toString('utf8').split('\n').filter(Boolean).slice(-40).join('\n'))||failureCode);}
+  if(this.contract.services)stored=redactQaDatabaseSecrets(stored);
   await this.writeQaLog(job.id,stored);
   const receipt={schemaVersion:1,jobId:job.id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,contractDigest:this.verifierDigest,executionStarted:exitCode!==-1,exitCode,status:failureCode==='QA_CANCELED'?'canceled':'failed',logSha256:createHash('sha256').update(stored).digest('hex'),logsAvailable:true,synthetic:false,modelInference:false,failureCode};
   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
@@ -86,11 +104,11 @@ export class NativeQa{
    Labels:{'agent-control.contract':'native-qa-prepare-v1','agent-control.job':jobId,'agent-control.request':hash},
    HostConfig:{ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
  }
- private preparedTestSpec(jobId:string,hash:string){
+ private preparedTestSpec(jobId:string,hash:string,extraEnv:readonly string[]=[]){
   const work=this.paths(jobId).work;
-  return {Image:this.contract.image,User:this.qaUser(),WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment],
+  return {Image:this.contract.image,User:this.qaUser(),WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment,...extraEnv],
    Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':jobId,'agent-control.request':hash},
-   HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
+   HostConfig:{NetworkMode:this.testNetwork(jobId),ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
  }
  private async rememberContainer(principal:string,authority:Authority,job:Record<string,any>,containerId:string){
   const updated=await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
@@ -110,13 +128,18 @@ export class NativeQa{
   const policy=QualityPolicy.parse(row?.snapshot);if(digest(policy)!==row.digest||(policy.qaVerifierDigest??policy.verifierDigest)!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
  }
  async run(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,artifact:ArtifactRow,isCanceled:()=>boolean){
-  if(isCanceled())throw new Refusal('STAGE_CANCELED');
-  let status=await this.start(principal,authority,intent.id,stage,grantId,artifact,isCanceled);
-  while(status.state!=='completed'&&status.state!=='failed'){
-   if(isCanceled()){await this.stop(principal,authority,stage.id,'canceled');throw new Refusal('STAGE_CANCELED');}
-   await new Promise(resolve=>setTimeout(resolve,1000));status=await this.reconcile(principal,authority,stage.id);
+  try{
+   if(isCanceled())throw new Refusal('STAGE_CANCELED');
+   let status=await this.start(principal,authority,intent.id,stage,grantId,artifact,isCanceled);
+   while(status.state!=='completed'&&status.state!=='failed'){
+    if(isCanceled()){await this.stop(principal,authority,stage.id,'canceled');throw new Refusal('STAGE_CANCELED');}
+    await new Promise(resolve=>setTimeout(resolve,1000));status=await this.reconcile(principal,authority,stage.id);
+   }
+   return await this.record(principal,authority,stage.id);
+  }finally{
+   // The database stays up while the test container is running. A lost cleanup is retried by reconciliation.
+   if(this.contract.services){try{const test=await this.docker.inspect('ac-native-qa-'+stage.id);if(!test?.State.Running)await removeNativeQaService(this.docker,stage.id);}catch{/* retry on the next reconciliation */}}
   }
-  return this.record(principal,authority,stage.id);
  }
  async start(principal:string,authority:Authority,intentId:string,stage:{id:string;session_id:string},grantId:string,artifact:ArtifactRow,isCanceled?:()=>boolean){
   z.uuid().parse(stage.id);z.uuid().parse(stage.session_id);z.uuid().parse(grantId);
@@ -143,14 +166,14 @@ export class NativeQa{
    throw new Refusal('NATIVE_IMAGE_MISSING');
   }
   await this.diskGuard?.assertAdmission();const root=await lstat(this.root);if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==process.getuid?.()||(root.mode&0o7777)!==0o700||await realpath(this.root)!==this.root)throw new Refusal('NATIVE_QA_ROOT_UNSAFE');
-  await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId,grantId,jobId:stage.id,names:['ac-native-qa-'+stage.id,...(this.contract.prepareArgv?['ac-native-qa-prepare-'+stage.id]:[])],isCanceled});
+  await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId,grantId,jobId:stage.id,names:['ac-native-qa-'+stage.id,...(this.contract.prepareArgv?['ac-native-qa-prepare-'+stage.id]:[]),...(this.contract.services?['ac-native-qa-db-'+stage.id]:[])],isCanceled});
   await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);
    const s=(await c.query('SELECT state,attempt_id,manager_epoch FROM ac_stage_operations WHERE id=$1 FOR UPDATE',[stage.id])).rows[0];
    const g=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
    if(s?.state!=='registered'||Number(s.manager_epoch)!==authority.epoch||g?.state!=='reserved'||g.attempt_id!==s.attempt_id||g.intent_id!==intentId||g.role!=='qa'||Number(g.manager_epoch)!==authority.epoch)throw new Refusal('NATIVE_QA_GRANT_MISMATCH');
    await c.query(`INSERT INTO ac_native_qa_jobs(id,context_id,intent_id,artifact_id,grant_id,session_id,manager_epoch,request_digest,contract_digest,state,deadline_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uncertain',clock_timestamp()+$10::int*interval '1 millisecond')`,[stage.id,authority.contextId,intentId,artifact.id,grantId,stage.session_id,authority.epoch,hash,this.verifierDigest,this.contract.timeoutMs*(this.contract.prepareArgv?2:1)]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uncertain',clock_timestamp()+$10::int*interval '1 millisecond')`,[stage.id,authority.contextId,intentId,artifact.id,grantId,stage.session_id,authority.epoch,hash,this.verifierDigest,this.contract.timeoutMs*(this.contract.prepareArgv?2:1)+(this.contract.services?60000:0)]);
    await c.query("UPDATE ac_stage_operations SET state='uncertain',grant_id=$2 WHERE id=$1",[stage.id,grantId]);await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[grantId]);
   });
   const p=this.paths(stage.id);
@@ -175,18 +198,21 @@ export class NativeQa{
     await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='uncertain'",[grantId]);});
    return {state:'running' as const};
   }
+  let extra:string[]=[];
+  if(this.contract.services){try{extra=await this.qaDatabaseEnv(stage.id);}catch(error){if(error instanceof Refusal&&error.code==='QA_DATABASE_NOT_READY')return this.failUnstarted(principal,authority,{id:stage.id,artifact_id:artifact.id,grant_id:grantId,session_id:stage.session_id,intent_id:intentId},'QA_DATABASE_NOT_READY',1,this.frameQaText('QA_DATABASE_NOT_READY'));throw error;}}
   const image=this.contract.image;
   let id:string;
   try{id=await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);
    const job=(await c.query("SELECT * FROM ac_native_qa_jobs WHERE id=$1 AND state='uncertain' FOR UPDATE",[stage.id])).rows[0];if(!job||Number(job.manager_epoch)!==authority.epoch||job.request_digest!==hash)throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
-   const id=await this.docker.create('ac-native-qa-'+stage.id,{Image:image,User:'10001:10001',WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment],Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':stage.id,'agent-control.request':hash},
-    HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[p.work+':/work:ro']}});
+   const id=await this.docker.create('ac-native-qa-'+stage.id,{Image:image,User:'10001:10001',WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment,...extra],Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':stage.id,'agent-control.request':hash},
+    HostConfig:{NetworkMode:this.testNetwork(stage.id),ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[p.work+':/work:ro']}});
    await this.docker.start(id);return id;
   });}
   catch(error){
    // A received create refusal proves no container exists. A lost start response stays uncertain.
    if(!(error instanceof Refusal)||error.code!=='DOCKER_CREATE_REFUSED')throw error;
+   if(extra.length)await removeNativeQaService(this.docker,stage.id).catch(()=>{});
    const diagnostic=Buffer.from(JSON.stringify({source:'controller',error:'DOCKER_CREATE_REFUSED'}));
    const receipt={schemaVersion:1,jobId:stage.id,artifactId:artifact.id,grantId,sessionId:stage.session_id,contractDigest:this.verifierDigest,executionStarted:false,exitCode:-1,status:'missing_result',logSha256:createHash('sha256').update(diagnostic).digest('hex'),logsAvailable:false,synthetic:false,modelInference:false,failureCode:'DOCKER_CREATE_REFUSED'};
    await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
@@ -208,8 +234,8 @@ export class NativeQa{
   const bindsMatch=prepared?binds.length===2&&workBind?.Source===this.paths(job.id).work&&workBind?.RW===true&&cacheBind?.Source===this.cacheRoot&&cacheBind?.RW===true:binds.length===1&&binds[0]!.Source===this.paths(job.id).work&&binds[0]!.Destination==='/work'&&!binds[0]!.RW;
   if((job.container_id&&job.container_id!==physical.Id)||physical.Image!==this.contract.image||physical.Config.User!==this.qaUser()||physical.Config.WorkingDir!=='/work'||
    JSON.stringify(physical.Config.Entrypoint)!==JSON.stringify([this.contract.argv[0]])||JSON.stringify(physical.Config.Cmd??[])!==JSON.stringify(this.contract.argv.slice(1))||
-   !envMatches(physical.Config.Env??[],[...this.contract.environment])||physical.Config.Labels['agent-control.contract']!=='native-qa-v1'||physical.Config.Labels['agent-control.job']!==job.id||physical.Config.Labels['agent-control.request']!==job.request_digest||
-   h.NetworkMode!=='none'||!h.ReadonlyRootfs||h.Privileged||!h.CapDrop?.includes('ALL')||!h.SecurityOpt?.some(s=>s==='no-new-privileges'||s==='no-new-privileges:true')||
+   !this.databaseUrlAcceptable(job.id,physical.Config.Env??[])||!envMatches(this.contract.services?(physical.Config.Env??[]).filter(entry=>!entry.startsWith('QA_DATABASE_URL=')):physical.Config.Env??[],[...this.contract.environment])||physical.Config.Labels['agent-control.contract']!=='native-qa-v1'||physical.Config.Labels['agent-control.job']!==job.id||physical.Config.Labels['agent-control.request']!==job.request_digest||
+   h.NetworkMode!==this.testNetwork(job.id)||!h.ReadonlyRootfs||h.Privileged||!h.CapDrop?.includes('ALL')||!h.SecurityOpt?.some(s=>s==='no-new-privileges'||s==='no-new-privileges:true')||
    (namespaces.CapAdd?.length??0)>0||(namespaces.Devices?.length??0)>0||!['','private',undefined].includes(namespaces.PidMode)||!['','private',undefined].includes(namespaces.IpcMode)||
    h.Memory!==this.contract.memoryBytes||h.PidsLimit!==this.contract.pids||h.NanoCpus!==this.contract.nanoCpus||
    !bindsMatch||m.some(x=>x.Type==='tmpfs'&&x.Destination!=='/tmp'))throw new Refusal('NATIVE_QA_CONTAINER_MISMATCH');
@@ -224,6 +250,8 @@ export class NativeQa{
   });
  }
  private async launchPreparedTest(principal:string,authority:Authority,job:Record<string,any>){
+  let extra:string[]=[];
+  if(this.contract.services){try{extra=await this.qaDatabaseEnv(job.id);}catch(error){if(error instanceof Refusal&&error.code==='QA_DATABASE_NOT_READY')return this.failUnstarted(principal,authority,job,'QA_DATABASE_NOT_READY',1,this.frameQaText('QA_DATABASE_NOT_READY'));throw error;}}
   let id:string;
   try{id=await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,job.intent_id,false);
@@ -232,7 +260,7 @@ export class NativeQa{
    await this.policy(c,artifact);
    const saved=(await c.query("SELECT * FROM ac_native_qa_jobs WHERE id=$1 AND state IN ('uncertain','running') FOR UPDATE",[job.id])).rows[0];
    if(!saved||saved.container_id||Number(saved.manager_epoch)!==authority.epoch||saved.request_digest!==job.request_digest)throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
-   const created=await this.docker.create('ac-native-qa-'+job.id,this.preparedTestSpec(job.id,job.request_digest));
+   const created=await this.docker.create('ac-native-qa-'+job.id,this.preparedTestSpec(job.id,job.request_digest,extra));
    await this.docker.start(created);return created;
   });}
   catch(error){
@@ -244,7 +272,7 @@ export class NativeQa{
   if(prep&&!prep.State.Running)await this.docker.remove(prep.Id).catch(()=>{});
   return 'launched' as const;
  }
- /** Advance a configured QA job from the prepare container to the network-less test container. */
+ /** Advance a configured QA job from the prepare container to the test container. */
  private async stepPrepare(principal:string,authority:Authority,job:Record<string,any>):Promise<{state:'running'|'failed'|'uncertain';receipt?:any}|'launched'|undefined>{
   const test=await this.docker.inspect('ac-native-qa-'+job.id);
   if(test){await this.rememberContainer(principal,authority,job,test.Id);return 'launched';}
@@ -297,7 +325,8 @@ export class NativeQa{
   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical)return {state:'uncertain' as const};this.inspect(physical,job);
   if(physical.State.Running){const started=Date.parse(String((physical.State as {StartedAt?:string}).StartedAt??''));if(job.deadline_elapsed||(this.contract.prepareArgv&&Number.isFinite(started)&&Date.now()-started>this.contract.timeoutMs))await this.stop(principal,authority,id,'timeout');return {state:'running' as const};}
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return {state:'uncertain' as const};
-  const {logs,logsAvailable}=await collectQaLogs(()=>this.docker.logs(physical.Id,this.contract.prepareArgv?40:undefined));
+  const collected=await collectQaLogs(()=>this.docker.logs(physical.Id,this.contract.prepareArgv?40:undefined));
+  const logs=this.contract.services&&collected.logsAvailable?redactQaDatabaseSecrets(collected.logs):collected.logs,logsAvailable=collected.logsAvailable;
   const logSha256=createHash('sha256').update(logs).digest('hex');
   const pending=join(this.paths(id).area,'qa-logs-'+randomUUID()+'.pending');
   const file=await open(pending,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
