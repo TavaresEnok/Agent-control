@@ -1,5 +1,6 @@
-// Installs two systemd user services (Happier server and gateway) for one installation file, so they
-// restart on failure and come back after a reboot (needs `loginctl enable-linger <user>` once).
+// Installs systemd user services for one installation file, so they restart on failure and come back
+// after a reboot (needs `loginctl enable-linger <user>` once). Happier transport installs the Happier
+// server and the gateway. Local transport installs only the gateway and does not stop an existing Happier unit.
 // Usage: npm run personal:services -- <instalação.json> [nome]      remove: ... --remove
 import {execFileSync} from 'node:child_process';
 import {mkdir,writeFile,rm,readFile} from 'node:fs/promises';
@@ -35,10 +36,13 @@ UMask=0077
 WantedBy=default.target
 `;
 // A project that shares another installation's Happier only gets a gateway, started after that Happier.
+// Local transport also gets only a gateway, and it does not order itself after Happier or disable that unit.
 const sharedFrom=await readFile(join(config.dataDirectory,'happier-shared-from'),'utf8').then(t=>t.trim(),()=>null);
+const localTransport=config.managerTransport?.transport==='local';
 const happierUnit=sharedFrom?`agent-control-happier-${basename(dirname(sharedFrom)).replace(/[^A-Za-z0-9_-]/g,'-')}.service`:happier;
+const withHappier=!sharedFrom&&!localTransport;
 await mkdir(units,{recursive:true});
-if(!sharedFrom)await writeFile(join(units,happier),unit('Agent Control: Happier server',`${process.execPath} ${join(root,'scripts/personal-happier.mjs')} ${file}`));
-await writeFile(join(units,gateway),unit('Agent Control: gateway',`${process.execPath} --import tsx ${join(root,'src/server-main.ts')} serve ${file}`,`After=${happierUnit}\nWants=${happierUnit}`));
-systemctl('daemon-reload');if(!sharedFrom)systemctl('enable','--now',happier);systemctl('enable','--now',gateway);
-console.log(JSON.stringify({installed:sharedFrom?[gateway]:[happier,gateway],happier:happierUnit,logs:`journalctl --user -u ${gateway} -f`}));
+if(withHappier)await writeFile(join(units,happier),unit('Agent Control: Happier server',`${process.execPath} ${join(root,'scripts/personal-happier.mjs')} ${file}`));
+await writeFile(join(units,gateway),unit('Agent Control: gateway',`${process.execPath} --import tsx ${join(root,'src/server-main.ts')} serve ${file}`,localTransport?'':`After=${happierUnit}\nWants=${happierUnit}`));
+systemctl('daemon-reload');if(withHappier)systemctl('enable','--now',happier);systemctl('enable','--now',gateway);
+console.log(JSON.stringify({installed:withHappier?[happier,gateway]:[gateway],...(localTransport?{}:{happier:happierUnit}),logs:`journalctl --user -u ${gateway} -f`}));

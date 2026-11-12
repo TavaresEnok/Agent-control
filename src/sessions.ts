@@ -33,19 +33,34 @@ export class BrowserSessions{
    [idDigest,principal,ciphertext.toString('base64'),nonce.toString('base64'),cipher.getAuthTag().toString('base64'),maxAgeSeconds]);
   return new Response(JSON.stringify({state:'authenticated'}),{status:200,headers:{'content-type':'application/json','cache-control':'no-store','set-cookie':this.cookieValue(id,maxAgeSeconds)}});
  }
+ /** Personal login with no Happier bearer. The cookie names the principal; nothing is sent upstream. */
+ async issuePrincipal(request:Request,principal:string,maxAgeSeconds=this.options.maxAgeSeconds){
+  if(!Number.isInteger(maxAgeSeconds)||maxAgeSeconds<60||maxAgeSeconds>2592000)throw Error('INVALID_BROWSER_SESSION_CONFIG');
+  const origin=request.headers.get('origin');if(origin&&origin!==this.options.origin)throw new Refusal('CROSS_ORIGIN_FORBIDDEN',403);
+  if(!principal||principal.length>200)throw new Refusal('AUTH_REQUIRED',401);
+  const id=randomBytes(32).toString('base64url');
+  await this.ledger.pool.query(`INSERT INTO ac_browser_sessions(id_digest,principal_id,token_ciphertext,nonce,tag,expires_at)
+   VALUES($1,$2,NULL,NULL,NULL,clock_timestamp()+$3*interval '1 second')`,[this.idHash(id),principal,maxAgeSeconds]);
+  return new Response(JSON.stringify({state:'authenticated'}),{status:200,headers:{'content-type':'application/json','cache-control':'no-store','set-cookie':this.cookieValue(id,maxAgeSeconds)}});
+ }
  private async credential(request:Request){
   const id=this.cookie(request);if(!id)return null;
   const row=(await this.ledger.pool.query('SELECT * FROM ac_browser_sessions WHERE id_digest=$1 AND NOT revoked AND expires_at>clock_timestamp()',[this.idHash(id)])).rows[0];
   if(!row)return null;
+  if(row.token_ciphertext==null||row.nonce==null||row.tag==null){
+   if(row.token_ciphertext==null&&row.nonce==null&&row.tag==null)return {authorization:null,principal:row.principal_id as string};
+   return null;
+  }
   try{
    const decipher=createDecipheriv('aes-256-gcm',this.key,Buffer.from(row.nonce,'base64'));
    decipher.setAAD(Buffer.from(row.id_digest+'\0'+row.principal_id));decipher.setAuthTag(Buffer.from(row.tag,'base64'));
    const authorization=Buffer.concat([decipher.update(Buffer.from(row.token_ciphertext,'base64')),decipher.final()]).toString('utf8');
-   return {authorization,principal:row.principal_id as string};
+   return {authorization:authorization as string,principal:row.principal_id as string};
   }catch{return null;}
  }
  async authenticate(request:Request){
   const value=await this.credential(request);if(!value)return null;
+  if(value.authorization==null)return value.principal;
   try{const verified=await this.verifyBearer(new Request(this.options.origin+'/',{headers:{authorization:value.authorization}}));
    return verified===value.principal?verified:null;}catch{return null;}
  }

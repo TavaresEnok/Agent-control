@@ -103,8 +103,8 @@ function ManagedAuthentication({children}:{children:ReactNode}){
   <section className="flex w-full max-w-md flex-col gap-4 rounded-xl border bg-card p-6 shadow-sm">
    <h1 className="text-xl font-semibold">Agent Control</h1>
    {auth.isPending||config.isPending?<p role="status">Verificando sua sessão…</p>:<>
-    {config.data?.passwordLogin!==true&&<p>Entre com sua conta do Happier para acessar o cockpit. Sua conversa continua no Happier.</p>}
-    {config.data?.enabled===false&&config.data?.passwordLogin!==true&&<p role="status">O login precisa ser configurado nesta instalação.</p>}
+    {config.data?.enabled===true&&config.data.passwordLogin!==true&&<p>Entre com sua conta do Happier para acessar o cockpit. Sua conversa continua no Happier.</p>}
+    {config.data?.enabled===false&&config.data.passwordLogin!==true&&<p role="status">O login precisa ser configurado nesta instalação.</p>}
     {config.error&&<p role="alert">Não foi possível consultar a configuração de acesso.</p>}
     {config.data?.passwordLogin===true?<>
      <form className="flex flex-col gap-2" onSubmit={event=>{void enterWithPassword(event)}}>
@@ -114,7 +114,7 @@ function ManagedAuthentication({children}:{children:ReactNode}){
      </form>
      <button type="button" className="text-left underline" onClick={()=>setCodeLogin(value=>!value)}>Entrar com código</button>
     </>:<>
-     <Button disabled={busy||config.data?.enabled!==true} onClick={()=>{void login()}}>Entrar pelo Happier</Button>
+     {config.data?.enabled===true&&<Button disabled={busy} onClick={()=>{void login()}}>Entrar pelo Happier</Button>}
      <button type="button" className="text-left underline" onClick={()=>setCodeLogin(value=>!value)}>Entrar com código</button>
     </>}
     {codeLogin&&<form className="flex flex-col gap-2" onSubmit={event=>{void enterWithCode(event)}}>
@@ -122,7 +122,7 @@ function ManagedAuthentication({children}:{children:ReactNode}){
      <Input aria-label="Código" value={code} onChange={event=>setCode(event.target.value)} autoComplete="one-time-code" maxLength={8} required/>
      <Button type="submit" disabled={busy}>Entrar</Button>
     </form>}
-    {config.data?.passwordLogin===true&&<button type="button" className="text-left underline" disabled={busy||config.data?.enabled!==true} onClick={()=>{void login()}}>Entrar pelo Happier</button>}
+    {config.data?.enabled===true&&config.data.passwordLogin===true&&<button type="button" className="text-left underline" disabled={busy} onClick={()=>{void login()}}>Entrar pelo Happier</button>}
     {links&&<div className="flex flex-col gap-3">
      <a className="underline" href={links.webUrl} target="_blank" rel="noopener noreferrer">Autorizar no Happier</a>
      {links.mobileUrl.includes('server=')&&<a className="underline" href={links.mobileUrl}>Autorizar no aplicativo Happier</a>}

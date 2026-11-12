@@ -2,7 +2,7 @@
 // It writes a private installation file outside the repository, initializes the ledger, registers the
 // provider accounts, prepares the native runtime and creates the project conversation.
 //
-//   npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>]
+//   npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>] [--local]
 //
 // --share-happier uses the Happier server and account of an installation that already has one, so this
 // project shows up as one more conversation in the same app (same server address, same secret key).
@@ -32,7 +32,7 @@ if(args[0]==='--add'){
  process.exit(result.status??1);
 }
 const repoArg=args[0]&&!args[0].startsWith('--')?args[0]:undefined,db=flag('--db'),importLogins=args.includes('--import-logins'),shareFrom=flag('--share-happier');
-if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>]');process.exit(repoArg||db?1:0);}
+if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>] [--local]');process.exit(repoArg||db?1:0);}
 const root=resolve(import.meta.dirname,'..'),repo=await realpath(resolve(repoArg));
 const git=(...a)=>execFileSync('git',['-C',repo,...a],{encoding:'utf8'}).trim();
 if(git('rev-parse','--is-inside-work-tree')!=='true'||await realpath(git('rev-parse','--show-toplevel'))!==repo)throw Error('REPOSITORY_ROOT_REQUIRED');
@@ -101,20 +101,33 @@ if(registered.state==='account_required'){
 }
 
 say('criando a conversa do projeto');
+const storedTransport=JSON.parse(await readFile(installation,'utf8')).managerTransport?.transport;
+const useLocal=args.includes('--local')||storedTransport==='local';
 const origin=JSON.parse(await readFile(installation,'utf8')).happier.upstreamOrigin;
 const up=()=>fetch(origin+'/v1/account/profile',{signal:AbortSignal.timeout(2000)}).then(r=>r.status===401,()=>false);
 let server;
 const sharedFrom=await readFile(join(data,'happier-shared-from'),'utf8').then(t=>t.trim(),()=>null);
-if(sharedFrom&&!await up())throw Error('SHARED_HAPPIER_NOT_RUNNING: suba o Happier de '+sharedFrom);
-if(!await up()){
- server=spawn(process.execPath,['scripts/personal-happier.mjs',installation],{cwd:root,stdio:'ignore',detached:true});
- for(let i=0;i<90&&!await up();i++)await new Promise(done=>setTimeout(done,1000));
- if(!await up()){try{process.kill(-server.pid,'SIGTERM');}catch{}throw Error('HAPPIER_SERVER_DID_NOT_START');}
+if(!useLocal){
+ if(sharedFrom&&!await up())throw Error('SHARED_HAPPIER_NOT_RUNNING: suba o Happier de '+sharedFrom);
+ if(!await up()){
+  server=spawn(process.execPath,['scripts/personal-happier.mjs',installation],{cwd:root,stdio:'ignore',detached:true});
+  for(let i=0;i<90&&!await up();i++)await new Promise(done=>setTimeout(done,1000));
+  if(!await up()){try{process.kill(-server.pid,'SIGTERM');}catch{}throw Error('HAPPIER_SERVER_DID_NOT_START');}
+ }
 }
-try{run('node',gateway('personal-connect',installation));}
+try{run('node',gateway('personal-connect',installation,...(useLocal?['--local']:[])),images);}
 finally{if(server)try{process.kill(-server.pid,'SIGTERM');}catch{}}
 
-if(sharedFrom)console.log(`
+if(useLocal)console.log(`
+Pronto. A conversa fica no banco desta instalação; o processo Happier não é necessário.
+  npm run personal:services -- ${installation} ${label}
+  npm run gateway -- serve ${installation}
+Depois converse:
+  npm run gateway -- say ${installation} "o que este repositório faz?"
+QA: o padrão confere conflitos de merge, JSON e sintaxe de JavaScript. Para rodar os testes do projeto:
+  npm run personal:qa -- ${installation} ${label} set --test '["npm","test"]'
+Depois reinicie o gateway.`);
+else if(sharedFrom)console.log(`
 Pronto. Este projeto usa o Happier de ${sharedFrom}: no app ele aparece como mais uma conversa
 no mesmo servidor e com a mesma chave. Falta só o serviço do gateway:
   npm run personal:services -- ${installation} ${label}

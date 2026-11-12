@@ -196,6 +196,67 @@ npm run gateway -- password <instalação.json> --remove
 
 Na Conversa, o sino pede permissão e inscreve o aparelho em "Ativar avisos neste aparelho". "Enviar teste" manda "Teste do Agent Control". O aviso abre a conversa do projeto. No iPhone, os avisos só chegam com o painel instalado na tela inicial (iOS 16.4 ou mais novo); fora do app instalado a tela explica isso. O service worker não guarda páginas nem respostas da API.
 
+## Conversar sem o Happier
+
+O campo opcional `managerTransport.transport` escolhe onde a conversa fica. Sem o campo, ou com `"happier"`, vale a seção anterior, igual a hoje. `"local"` grava a conversa na tabela `ac_personal_messages`. Só uma instalação com `activation` `personal` aceita `"local"`. O bloco `happier`, o `tokenFile` e o `machineId` continuam no JSON; o transporte local não lê o token nem a máquina.
+
+Instalação nova:
+
+```bash
+npm run personal:project -- <repositório> --db <postgresql://...> --local
+```
+
+Numa instalação que já existe:
+
+```bash
+npm run gateway -- personal-connect <instalação.json> --local
+```
+
+`npm run personal:services -- <instalação.json>` sobe só o gateway. Não desliga um unit Happier que já exista. Não apague `happier-account.key`, o SQLite do Happier nem o bloco `happier`.
+
+No painel, a senha e o código emitem o cookie sem consultar o Happier. "Entrar pelo Happier" não aparece. `GET /api/v1/ac/auth/config` responde `enabled: false`.
+
+### Passar uma conversa que já está no Happier
+
+Rode o importador **antes** de gravar `"local"`, com o Happier ainda no ar. Ele copia cada contexto de `managerTransport.contexts`, na ordem cronológica, sem abrir pedido novo. Rodar de novo não duplica. Se o transporte já estiver `local`, a repetição continua válida, mas o lugar dela é antes da troca.
+
+O banco precisa das migrações `db/migrations/097_personal_messages.sql` e `098_browser_session_local.sql`. O `serve` não as aplica. Não use `initialize` numa instalação já em uso para obtê-las: esse comando também registra o projeto pelo `project.owner`, que pode não ser o principal do Happier.
+
+No exemplo em que o diretório de dados se chama `ispagent`, os units são `agent-control-gateway-ispagent` e `agent-control-happier-ispagent`. Troque o nome se o diretório for outro.
+
+```bash
+npm run personal:backup -- <instalação.json> /caminho/vazio
+npm run gateway -- import-conversation <instalação.json>
+```
+
+Confira, ainda com o painel no Happier, a contagem e uma frase conhecida. A tabela `ac_personal_messages` tem de bater com essa contagem.
+
+No JSON, grave `"transport": "local"` dentro de `managerTransport`. Não apague `happier`, `tokenFile`, `machineId`, a chave nem o SQLite.
+
+```bash
+systemctl --user restart agent-control-gateway-ispagent
+```
+
+Faça um pedido curto no painel. A linha do titular entra na tabela, o gerente responde, e o Happier não precisa responder.
+
+Antes de parar o Happier, procure nas outras instalações um arquivo `happier-shared-from` apontando para esta. Se não houver:
+
+```bash
+systemctl --user disable --now agent-control-happier-ispagent
+```
+
+Não use `npm run personal:services -- <instalação.json> --remove`: esse comando também para o gateway.
+
+### Voltar ao Happier
+
+Enquanto a chave e o SQLite continuam no disco:
+
+1. Grave `"transport": "happier"`, ou retire a chave `transport` (o padrão é `happier`).
+2. `systemctl --user enable --now agent-control-happier-ispagent`
+3. `systemctl --user restart agent-control-gateway-ispagent`
+
+O histórico antigo continua no SQLite. O que foi escrito só na tabela nova não volta sozinho para o Happier. Se não houve conversa nova depois do corte, a volta é o histórico anterior. Não há reexportação. O Caddy de `personal:public` deixa de ver o Happier em `/v1`; isso não derruba o painel. Não recrie o site.
+
 ## Adicionar contas
 
 Só contas que você possui.

@@ -4,6 +4,7 @@ import {Authority,Id,Refusal,digest} from './contracts.ts';
 import {ContextKeys,keyFingerprint,type EncryptionVariant} from './context-keys.ts';
 import {Ledger} from './ledger.ts';
 import {HappierEndpoint,type HappierBoundary} from './happier.ts';
+import {LocalConversationTransport} from './conversation-transport.ts';
 import {Control} from './control.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {SemanticPlanning} from './semantic-planning.ts';
@@ -260,4 +261,13 @@ export function happierEndpointFactory(ledger:Ledger,runtime:CezarRuntime,bounda
  const configurationControl=options.configurationControl??new Control(ledger,[],runtime.projectId,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
  return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,configurationControl,principal:input.principal,sessionId:input.sessionId,
   authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant});
+}
+/** Personal transcript in Postgres. The boundary is never used: local start does not seal or decrypt. */
+export function localEndpointFactory(ledger:Ledger,runtime:CezarRuntime,
+ options:Parameters<typeof happierEndpointFactory>[3]):ManagerEndpointFactory{
+ const configurationControl=options.configurationControl??new Control(ledger,[],runtime.projectId,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
+ const boundary=new Proxy({} as HappierBoundary,{get(){throw new Refusal('LOCAL_CIPHERTEXT_UNAVAILABLE');}});
+ return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,configurationControl,principal:input.principal,sessionId:input.sessionId,
+  authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant},
+  new LocalConversationTransport({ledger,contextId:input.authority.contextId,principal:input.principal}));
 }
