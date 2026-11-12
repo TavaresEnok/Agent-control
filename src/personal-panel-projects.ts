@@ -65,6 +65,7 @@ export async function archivePersonalProject(input:{installationPath:string;proj
    await client.query('UPDATE ac_contexts SET archived=true WHERE project_id=$1 AND NOT archived',[input.projectId]);
    await client.query('DELETE FROM ac_project_repositories WHERE project_id=$1',[input.projectId]);
   });
+  await (await import('./personal-ssh.ts')).forgetRemoteProject(config.dataDirectory,input.projectId);
   const restarting=input.underSystemd;
   return {projectId:input.projectId,restarting,restartRequired:!restarting};
  });

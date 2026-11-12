@@ -417,6 +417,15 @@ async function sshCommand(dataDirectory: string, host: PersonalSshHost, command:
   {encoding: 'utf8', timeout: 20000, env: {PATH: '/usr/bin:/bin'}})).stdout;
 }
 
+/** An archived project no longer pulls from or pushes to its server; the host can then be removed. */
+export async function forgetRemoteProject(dataDirectory: string, projectId: string): Promise<void> {
+ await exclusive(async () => {
+  const projects = await readRemoteProjects(dataDirectory);
+  const kept = projects.filter(project => project.projectId !== projectId);
+  if (kept.length !== projects.length) await writeRemoteProjects(dataDirectory, kept);
+ });
+}
+
 export async function listRemoteFolders(dataDirectory: string, hostId: string, path: string) {
  const clean = assertRemotePath(path);
  if (!z.uuid().safeParse(hostId).success) throw new Refusal('HOST_NOT_FOUND', 404);
