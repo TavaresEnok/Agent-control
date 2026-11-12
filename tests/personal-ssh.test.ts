@@ -49,10 +49,16 @@ test('a changed server identity is refused and known_hosts keeps the confirmed k
  const same = identitiesFromKeyscan(`[server.example]:2222 ssh-ed25519 ${keyA}\n# comment\n`, 'server.example', 2222);
  assert.equal(matchConfirmedFingerprint(same, shown).key, keyA);
  const options = sshOptionArgs('/data/ssh/known_hosts', '/data/ssh/id_ed25519');
- assert.deepEqual(options, ['-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=/data/ssh/known_hosts',
-  '-o', 'IdentitiesOnly=yes', '-o', 'IdentityFile=/data/ssh/id_ed25519', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15']);
+ assert.deepEqual(options, ['-F', '/dev/null', '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'StrictHostKeyChecking=yes',
+  '-o', 'UserKnownHostsFile=/data/ssh/known_hosts', '-o', 'UpdateHostKeys=no', '-o', 'IdentitiesOnly=yes',
+  '-o', 'IdentityFile=/data/ssh/id_ed25519', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+  '-o', 'ProxyCommand=none', '-o', 'ProxyJump=none', '-o', 'ForwardAgent=no', '-o', 'VerifyHostKeyDNS=no',
+  '-o', 'PermitLocalCommand=no']);
  const command = gitSshCommand('/data/ssh/known_hosts', '/data/ssh/id_ed25519');
- assert.equal(command.includes('StrictHostKeyChecking=yes'), true);
+ assert.equal(command.startsWith('ssh -F /dev/null '), true);
+ for (const flag of ['GlobalKnownHostsFile=/dev/null', 'StrictHostKeyChecking=yes', 'UpdateHostKeys=no', 'ProxyCommand=none',
+  'ProxyJump=none', 'ForwardAgent=no', 'VerifyHostKeyDNS=no', 'PermitLocalCommand=no', 'IdentitiesOnly=yes', 'BatchMode=yes'])
+  assert.equal(command.includes(flag), true);
  assert.equal(command.includes("UserKnownHostsFile='/data/ssh/known_hosts'"), true);
  assert.equal(command.includes("IdentityFile='/data/ssh/id_ed25519'"), true);
  const directory = await realpath(await mkdtemp(join(tmpdir(), 'ac-ssh-')));
@@ -103,4 +109,29 @@ test('ssh key directory is outside the worker, tools and qa bind roots', () => {
  assert.throws(() => assertSshOutsideMountRoots(ssh, [data]), (error: unknown) => error instanceof Refusal && error.code === 'SSH_KEY_MOUNT_OVERLAP');
  assert.equal(shellSingleQuote(`/home/a b`), `'/home/a b'`);
  assert.equal(shellSingleQuote(`/home/a'b`), `'/home/a'\\''b'`);
+});
+
+test('the same host and port with another user and a different key is refused and the pin stays', async () => {
+ const directory = await realpath(await mkdtemp(join(tmpdir(), 'ac-ssh-pin-')));
+ await chmod(directory, 0o700);
+ const scan = async (host: string, _port: number) => {
+  assert.equal(host, 'server.example');
+  return [scanned('[server.example]:2222', keyB)];
+ };
+ try {
+  const saved = await confirmPersonalHost(directory, {host: 'Server.Example', port: 2222, user: 'deploy', label: 'Lab', fingerprint: fingerprint(keyB)}, scan);
+  assert.equal(saved.host, 'server.example');
+  const pinned = await readFile(personalSshPaths(directory).knownHosts, 'utf8');
+  assert.equal(pinned, `[server.example]:2222 ssh-ed25519 ${keyB}\n`);
+  const sameKey = await confirmPersonalHost(directory, {host: 'SERVER.EXAMPLE', port: 2222, user: 'other', label: 'Outra', fingerprint: fingerprint(keyB)}, scan);
+  assert.equal(sameKey.host, 'server.example');
+  assert.equal(sameKey.user, 'other');
+  assert.equal(await readFile(personalSshPaths(directory).knownHosts, 'utf8'), pinned);
+  await assert.rejects(confirmPersonalHost(directory, {host: 'server.example', port: 2222, user: 'third', label: 'Terceira', fingerprint: fingerprint(keyA)},
+   async () => [scanned('[server.example]:2222', keyA)]),
+   (error: unknown) => error instanceof Refusal && error.code === 'HOST_KEY_CHANGED');
+  assert.equal(await readFile(personalSshPaths(directory).knownHosts, 'utf8'), pinned);
+  const hosts = JSON.parse(await readFile(join(directory, 'remote-hosts.json'), 'utf8')) as {user: string}[];
+  assert.deepEqual(hosts.map(item => item.user), ['deploy', 'other']);
+ } finally { await rm(directory, {recursive: true, force: true}); }
 });

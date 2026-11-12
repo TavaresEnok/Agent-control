@@ -52,16 +52,25 @@ export function shellSingleQuote(value: string): string {
  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Options on every SSH and Git call after the owner has confirmed the server. No extra identity is offered. */
+/**
+ * Options on every ssh invocation, and on clone, fetch and push through GIT_SSH_COMMAND.
+ * ssh-keyscan has no matching flags; its call stays limited to -T, -p and -t.
+ * No user or system config, no extra known_hosts file, no proxy, no agent and no host-key rewrite.
+ */
 export function sshOptionArgs(knownHosts: string, identityFile: string): string[] {
- return ['-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${knownHosts}`, '-o', 'IdentitiesOnly=yes',
-  '-o', `IdentityFile=${identityFile}`, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'];
+ return ['-F', '/dev/null', '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'StrictHostKeyChecking=yes',
+  '-o', `UserKnownHostsFile=${knownHosts}`, '-o', 'UpdateHostKeys=no', '-o', 'IdentitiesOnly=yes',
+  '-o', `IdentityFile=${identityFile}`, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+  '-o', 'ProxyCommand=none', '-o', 'ProxyJump=none', '-o', 'ForwardAgent=no', '-o', 'VerifyHostKeyDNS=no',
+  '-o', 'PermitLocalCommand=no'];
 }
 
 export function gitSshCommand(knownHosts: string, identityFile: string): string {
- return ['ssh', '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${shellSingleQuote(knownHosts)}`,
-  '-o', 'IdentitiesOnly=yes', '-o', `IdentityFile=${shellSingleQuote(identityFile)}`,
-  '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'].join(' ');
+ return ['ssh', '-F', '/dev/null', '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'StrictHostKeyChecking=yes',
+  '-o', `UserKnownHostsFile=${shellSingleQuote(knownHosts)}`, '-o', 'UpdateHostKeys=no', '-o', 'IdentitiesOnly=yes',
+  '-o', `IdentityFile=${shellSingleQuote(identityFile)}`, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+  '-o', 'ProxyCommand=none', '-o', 'ProxyJump=none', '-o', 'ForwardAgent=no', '-o', 'VerifyHostKeyDNS=no',
+  '-o', 'PermitLocalCommand=no'].join(' ');
 }
 
 /** OpenSSH SHA256 fingerprint of the raw key blob, without base64 padding. */
@@ -74,8 +83,9 @@ export function fingerprintOfKey(key: string): string {
 }
 
 export function knownHostToken(host: string, port: number): string {
- if (!hostName.test(host) || host.includes('..') || !Number.isInteger(port) || port < 1 || port > 65535) throw new Refusal('HOST_INVALID', 400);
- return port === 22 ? host : `[${host}]:${port}`;
+ const name = host.trim().toLowerCase();
+ if (!hostName.test(name) || name.includes('..') || !Number.isInteger(port) || port < 1 || port > 65535) throw new Refusal('HOST_INVALID', 400);
+ return port === 22 ? name : `[${name}]:${port}`;
 }
 
 export function identitiesFromKeyscan(output: string, host: string, port: number): ScannedIdentity[] {
@@ -209,7 +219,8 @@ async function writeHosts(dataDirectory: string, hosts: readonly PersonalSshHost
 
 function lineMatchesToken(line: string, token: string) {
  const field = line.split(' ')[0] ?? '';
- return field.split(',').includes(token);
+ const wanted = token.toLowerCase();
+ return field.split(',').some(item => item.toLowerCase() === wanted);
 }
 async function readKnownHostLines(dataDirectory: string): Promise<string[]> {
  try { return (await readFile(knownHostsPath(dataDirectory), 'utf8')).split('\n').filter(line => line.length > 0); }
@@ -221,17 +232,18 @@ async function writeKnownHostLines(dataDirectory: string, lines: readonly string
 }
 
 export async function scanHostIdentities(host: string, port: number): Promise<ScannedIdentity[]> {
- knownHostToken(host, port);
+ const name = host.trim().toLowerCase();
+ knownHostToken(name, port);
  let stdout = '';
  try {
-  stdout = (await run('ssh-keyscan', ['-T', '15', '-p', String(port), '-t', 'ed25519,ecdsa,rsa', host],
+  stdout = (await run('ssh-keyscan', ['-T', '15', '-p', String(port), '-t', 'ed25519,ecdsa,rsa', name],
    {encoding: 'utf8', timeout: 20000, env: {PATH: '/usr/bin:/bin'}})).stdout;
  } catch (error) {
   const recovered = (error as {stdout?: string}).stdout;
   if (typeof recovered !== 'string' || !recovered.trim()) throw new Refusal('HOST_IDENTITY_UNAVAILABLE', 503);
   stdout = recovered;
  }
- const found = identitiesFromKeyscan(stdout, host, port);
+ const found = identitiesFromKeyscan(stdout, name, port);
  if (!found.length) throw new Refusal('HOST_IDENTITY_UNAVAILABLE', 503);
  return found;
 }
@@ -244,7 +256,7 @@ export async function personalSshStatus(dataDirectory: string) {
 
 export async function scanPersonalHost(host: string, port: number, user: string) {
  if (!userName.test(user)) throw new Refusal('HOST_INVALID', 400);
- const identity = preferredIdentity(await scanHostIdentities(host, port));
+ const identity = preferredIdentity(await scanHostIdentities(host.trim().toLowerCase(), port));
  return {fingerprint: identity.fingerprint};
 }
 
@@ -255,11 +267,12 @@ function cleanLabel(label: string) {
 }
 
 /**
- * Writes the host and exactly one known_hosts line. The line is the key scanned again now,
- * and only when its fingerprint is the one the owner confirmed. A changed key updates nothing.
+ * Writes the host and, only when this host and port have no pin yet, one known_hosts line.
+ * Another user of the same host and port must present the same fingerprint.
+ * A different key is HOST_KEY_CHANGED and no line is removed.
  */
 export async function confirmPersonalHost(dataDirectory: string, input: {host: string; port: number; user: string; label: string; fingerprint: string}, scan: Scan = scanHostIdentities): Promise<PersonalSshHost> {
- const host = input.host.trim();
+ const host = input.host.trim().toLowerCase();
  const user = input.user.trim();
  const label = cleanLabel(input.label);
  const token = knownHostToken(host, input.port);
@@ -269,15 +282,27 @@ export async function confirmPersonalHost(dataDirectory: string, input: {host: s
  const line = `${identity.hostField} ${identity.type} ${identity.key}`;
  return exclusive(async () => {
   const hosts = await readHosts(dataDirectory);
-  if (hosts.some(item => item.host === host && item.port === input.port && item.user === user)) throw new Refusal('HOST_ALREADY_PRESENT', 409);
+  if (hosts.some(item => item.host.toLowerCase() === host && item.port === input.port && item.user === user)) throw new Refusal('HOST_ALREADY_PRESENT', 409);
+  const pinned = hosts.find(item => item.host.toLowerCase() === host && item.port === input.port);
+  if (pinned && pinned.fingerprint !== identity.fingerprint) throw new Refusal('HOST_KEY_CHANGED', 409);
+  const lines = await readKnownHostLines(dataDirectory);
+  const existing = lines.find(item => lineMatchesToken(item, token));
+  if (existing) {
+   const key = existing.split(' ')[2] ?? '';
+   let pinnedFingerprint = '';
+   try { pinnedFingerprint = fingerprintOfKey(key); } catch { pinnedFingerprint = ''; }
+   if (pinnedFingerprint !== identity.fingerprint) throw new Refusal('HOST_KEY_CHANGED', 409);
+  }
   if (hosts.length >= 32) throw new Refusal('HOST_LIMIT', 409);
   const record: PersonalSshHost = {id: randomUUID(), label, host, port: input.port, user, fingerprint: identity.fingerprint};
-  const lines = (await readKnownHostLines(dataDirectory)).filter(item => !lineMatchesToken(item, token));
-  lines.push(line);
-  await writeKnownHostLines(dataDirectory, lines);
+  const added = !existing;
+  if (added) {
+   lines.push(line);
+   await writeKnownHostLines(dataDirectory, lines);
+  }
   try { await writeHosts(dataDirectory, [...hosts, record]); }
   catch (error) {
-   await writeKnownHostLines(dataDirectory, lines.filter(item => item !== line)).catch(() => undefined);
+   if (added) await writeKnownHostLines(dataDirectory, lines.filter(item => item !== line)).catch(() => undefined);
    throw error;
   }
   return record;
@@ -351,7 +376,7 @@ function gitEnv(dataDirectory: string): NodeJS.ProcessEnv {
 }
 function remoteGitUrl(host: PersonalSshHost, path: string): string {
  const encoded = assertRemotePath(path).split('/').map(part => encodeURIComponent(part)).join('/');
- return `ssh://${host.user}@${host.host}:${host.port}${encoded}`;
+ return `ssh://${host.user}@${host.host.toLowerCase()}:${host.port}${encoded}`;
 }
 function checkoutDirectoryName(label: string): string {
  const name = label.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
@@ -376,20 +401,19 @@ async function projectIdForRepository(installationPath: string, repository: stri
  } catch { return undefined; }
  return undefined;
 }
-async function rememberRemote(dataDirectory: string, record: PersonalRemoteProject) {
- await exclusive(async () => {
-  const hosts = await readHosts(dataDirectory);
-  if (!hosts.some(item => item.id === record.hostId)) throw new Refusal('HOST_NOT_FOUND', 404);
-  const current = await readRemoteProjects(dataDirectory);
-  if (current.some(item => item.projectId === record.projectId || (item.hostId === record.hostId && item.path === record.path))) return;
-  if (current.length >= 32) throw new Refusal('HOST_LIMIT', 409);
-  await writeRemoteProjects(dataDirectory, [...current, record]);
- });
+/** Caller holds the host-list lock, so removal cannot pass between this check and the write. */
+async function rememberRemoteLocked(dataDirectory: string, record: PersonalRemoteProject) {
+ const hosts = await readHosts(dataDirectory);
+ if (!hosts.some(item => item.id === record.hostId)) throw new Refusal('HOST_NOT_FOUND', 404);
+ const current = await readRemoteProjects(dataDirectory);
+ if (current.some(item => item.projectId === record.projectId || (item.hostId === record.hostId && item.path === record.path))) return;
+ if (current.length >= 32) throw new Refusal('HOST_LIMIT', 409);
+ await writeRemoteProjects(dataDirectory, [...current, record]);
 }
 
 async function sshCommand(dataDirectory: string, host: PersonalSshHost, command: string): Promise<string> {
  const paths = personalSshPaths(dataDirectory);
- return (await run('ssh', [...sshOptionArgs(paths.knownHosts, paths.identityFile), '-p', String(host.port), `${host.user}@${host.host}`, command],
+ return (await run('ssh', [...sshOptionArgs(paths.knownHosts, paths.identityFile), '-p', String(host.port), `${host.user}@${host.host.toLowerCase()}`, command],
   {encoding: 'utf8', timeout: 20000, env: {PATH: '/usr/bin:/bin'}})).stdout;
 }
 
@@ -452,14 +476,27 @@ export async function createRemotePersonalProject(input: {
    throw new Refusal('REPOSITORY_BRANCH_REQUIRED', 409);
   }
   let created: {projectId: string};
-  try { created = await input.addPersonalProject(input.installationPath, dest, label); }
-  catch (error) {
+  try {
+   created = await exclusive(async () => {
+    const hostNow = (await readHosts(input.dataDirectory)).find(item => item.id === host.id);
+    if (!hostNow) throw new Refusal('HOST_NOT_FOUND', 404);
+    const linked = await readRemoteProjects(input.dataDirectory);
+    if (linked.some(item => item.hostId === hostNow.id && item.path === path)) throw new Refusal('REPOSITORY_ALREADY_IN_INSTALLATION', 409);
+    try {
+     const added = await input.addPersonalProject(input.installationPath, dest, label);
+     await rememberRemoteLocked(input.dataDirectory, {projectId: added.projectId, hostId: hostNow.id, path, branch});
+     return added;
+    } catch (error) {
+     const kept = await projectIdForRepository(input.installationPath, dest);
+     if (kept) await rememberRemoteLocked(input.dataDirectory, {projectId: kept, hostId: hostNow.id, path, branch}).catch(() => undefined);
+     throw error;
+    }
+   });
+  } catch (error) {
    const kept = await projectIdForRepository(input.installationPath, dest);
-   if (kept) await rememberRemote(input.dataDirectory, {projectId: kept, hostId: host.id, path, branch}).catch(() => undefined);
-   else await rm(dest, {recursive: true, force: true}).catch(() => undefined);
+   if (!kept) await rm(dest, {recursive: true, force: true}).catch(() => undefined);
    rethrowAdd(error);
   }
-  await rememberRemote(input.dataDirectory, {projectId: created.projectId, hostId: host.id, path, branch});
   const restarting = input.underSystemd;
   return {projectId: created.projectId, restarting, restartRequired: !restarting};
  });
@@ -494,7 +531,8 @@ function withRepo<T>(repo: string, work: () => Promise<T>): Promise<T> {
  return run;
 }
 async function git(repo: string, args: string[], env: NodeJS.ProcessEnv) {
- return run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', '-C', repo, ...args], {encoding: 'utf8', timeout: 60000, env});
+ return run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', '-c', 'protocol.allow=never',
+  '-c', 'protocol.ssh.allow=always', '-c', 'submodule.recurse=false', '-C', repo, ...args], {encoding: 'utf8', timeout: 60000, env});
 }
 async function isAncestor(repo: string, older: string, newer: string, env: NodeJS.ProcessEnv): Promise<boolean> {
  try { await git(repo, ['merge-base', '--is-ancestor', older, newer], env); return true; }
@@ -520,7 +558,7 @@ async function lookupRemote(checkout: string) {
 async function fastForward(repo: string, host: PersonalSshHost, record: PersonalRemoteProject, dataDirectory: string): Promise<'current' | 'forward' | 'diverged'> {
  if (!branchName.test(record.branch) || record.branch.split('/').includes('..')) throw new Refusal('REPOSITORY_BRANCH_REQUIRED', 409);
  const env = gitEnv(dataDirectory);
- await git(repo, ['fetch', '--no-tags', remoteGitUrl(host, record.path), `refs/heads/${record.branch}`], env);
+ await git(repo, ['fetch', '--no-tags', '--no-recurse-submodules', remoteGitUrl(host, record.path), `refs/heads/${record.branch}`], env);
  if (await isAncestor(repo, 'FETCH_HEAD', 'HEAD', env)) return 'current';
  if (!await isAncestor(repo, 'HEAD', 'FETCH_HEAD', env)) return 'diverged';
  await git(repo, ['merge', '--ff-only', 'FETCH_HEAD'], env);
