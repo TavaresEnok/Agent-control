@@ -1,3 +1,4 @@
+import {refreshPersonalTemplates} from './personal-policies.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {appendFileSync,readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
@@ -124,6 +125,8 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
    const cacheRoot=qaContract.prepareArgv?resolve(join(config.dataDirectory,'qa-cache',projectId)):undefined;
    const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot);
    await syncPersonalQaPolicy(ledger,owner,projectId,nativeQa.verifierDigest);
+   // A new QA contract publishes a new quality revision; live conversation templates must follow it.
+   await refreshPersonalTemplates(ledger,projectId);
    const nativeVerification=new NativeVerification(ledger,quality,executions,reviewKey);
    const implementation=new NativeImplementation(ledger,repo,quality,executions);
    const branch=execFileSync('/usr/bin/git',['-C',repo,'symbolic-ref','--short','HEAD'],{encoding:'utf8'}).trim();
