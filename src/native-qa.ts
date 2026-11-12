@@ -450,7 +450,8 @@ export class NativeQa{
       if(!stale?.State.Running)await removeNativeQaService(this.docker,job.id);
       throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
      }
-     await this.releaseIdleQaService(job.id);
+     // A running job may be between prepare and test, with its database just provisioned: only a finished job's database is idle.
+     if(['completed','failed'].includes(job.state))await this.releaseIdleQaService(job.id);
      if(['requested','confirmed'].includes(job.cancellation_state))await this.stop(principal,authority,job.id,'canceled');
      const result=await this.reconcile(principal,authority,job.id);
      if(result.state==='completed'||result.state==='failed'){
