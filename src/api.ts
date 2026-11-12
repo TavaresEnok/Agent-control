@@ -30,6 +30,7 @@ import {managedWorkspaceStream} from './workspace-stream.ts';
 import {createImportPreviewApi} from './import-preview-api.ts';
 import {createDiagnosticsApi} from './diagnostics-api.ts';
 import {createPortableExportApi} from './portable-export-api.ts';
+import {deliverPersonalPush, listPersonalPush, sendPersonalPushTest, subscribePersonalPush, unsubscribePersonalPush} from './personal-push.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -253,6 +254,35 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     await ledger.pool.query('UPDATE ac_projects SET auto_approve_plans=$2 WHERE id=$1',[runtime.projectId,input.enabled]);
     c.header('Cache-Control','no-store');
     return c.json({enabled:input.enabled});
+  });
+  const personalOwner=async(principal:string)=>Boolean(personalPanel&&(await projectOwnership(principal)).rowCount);
+  app.get('/api/v1/ac/personal/push',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    c.header('Cache-Control','no-store');
+    return c.json(await listPersonalPush(personalPanel.dataDirectory));
+  });
+  app.post('/api/v1/ac/personal/push/subscribe',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const input=z.object({subscription:z.object({endpoint:z.string().url().max(2000),keys:z.object({p256dh:z.string().min(16).max(200),auth:z.string().min(10).max(200)}).strict()}).passthrough(),label:z.string().max(80).optional()}).strict().parse(await c.req.json());
+    c.header('Cache-Control','no-store');
+    return c.json(await subscribePersonalPush(personalPanel.dataDirectory,{endpoint:input.subscription.endpoint,keys:input.subscription.keys},input.label??''),201);
+  });
+  app.delete('/api/v1/ac/personal/push/subscribe/:id',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const removed=await unsubscribePersonalPush(personalPanel.dataDirectory,Id.parse(c.req.param('id')));
+    if(!removed)return c.json({error:'NOT_FOUND'},404);
+    c.header('Cache-Control','no-store');
+    return c.json({removed:true});
+  });
+  app.post('/api/v1/ac/personal/push/test',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await sendPersonalPushTest(personalPanel.dataDirectory);
+    c.header('Cache-Control','no-store');
+    return c.json({ok:true});
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;
