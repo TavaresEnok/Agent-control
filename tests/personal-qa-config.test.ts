@@ -40,8 +40,35 @@ test('QA configuration rejects shell text, an unknown program and a timeout outs
  assert.deepEqual(contract.argv,['/usr/local/bin/corepack','pnpm','--filter','@ispagent/shared','test']);
  assert.deepEqual(contract.prepareArgv,['/usr/local/bin/corepack','pnpm','install','--frozen-lockfile']);
  assert.equal(contract.environment.includes('npm_config_cache=/cache/npm'),true);
+ assert.equal('services' in contract,false);
  assert.notEqual(nativeQaContractDigest(contract),nativeQaContractDigest(defaultPersonalQaContract(image)));
 });
+
+test('postgres services enter the contract digest and a project without them keeps today\'s digest',()=>{
+ const fallback=defaultPersonalQaContract(image);
+ const plain=parsePersonalQaConfig({test:['npm','test']});
+ const without=personalQaContractFromConfig(projectId,image,plain,name=>'/usr/bin/'+name);
+ assert.equal('services' in without,false);
+ assert.equal('services' in fallback,false);
+ assert.equal(nativeQaContractDigest(fallback),digest({contract:'native-qa-v1',definition:fallback}));
+ assert.throws(()=>parsePersonalQaConfig({test:['npm','test'],services:'postgres'}),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+ assert.throws(()=>parsePersonalQaConfig({test:['npm','test'],services:{postgres:{image:'postgres:18-alpine',database:'qa_test'}}}),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+ assert.throws(()=>parsePersonalQaConfig({test:['npm','test'],services:{postgres:{image:'postgres:16-alpine',database:'QA-TEST'}}}),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+ assert.throws(()=>parsePersonalQaConfig({test:['npm','test'],services:{postgres:{image:'postgres:16-alpine',database:'qa_test',password:'secret'}}}),(error:unknown)=>error instanceof Refusal&&error.code==='QA_SERVICES_INVALID');
+ const config=parsePersonalQaConfig({test:['npm','test'],services:{postgres:{image:'postgres:16-alpine',database:'qa_test'}}});
+ const contract=personalQaContractFromConfig(projectId,image,config,name=>'/usr/bin/'+name);
+ assert.deepEqual(contract.services,{postgres:{image:'postgres:16-alpine',database:'qa_test'}});
+ assert.equal(JSON.stringify(contract).includes('password'),false);
+ assert.equal(JSON.stringify(contract).includes('secret'),false);
+ const digested=nativeQaContractDigest(contract);
+ assert.equal(digested,digest({contract:'native-qa-v1',definition:contract}));
+ assert.notEqual(digested,nativeQaContractDigest(without));
+ assert.equal(digested.includes('qa_test'),false);
+ assert.equal(canonicalIncludes(contract,'postgres:16-alpine'),true);
+ assert.equal(canonicalIncludes(contract,'qa_test'),true);
+});
+
+function canonicalIncludes(value:unknown,text:string){return JSON.stringify(value).includes(text);}
 
 test('the QA file is stored mode 600 and clear removes it',async()=>{
  const directory=resolve(await mkdtemp(join(tmpdir(),'qa-file-')));

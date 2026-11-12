@@ -6,7 +6,7 @@ import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {readPrivateFile} from './installation.ts';
 import type {Ledger} from './ledger.ts';
-import {NativeQaContract,type NativeQaContract as NativeQaContractValue} from './native-qa-contract.ts';
+import {NativeQaContract,QaServices,type NativeQaContract as NativeQaContractValue} from './native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
 
@@ -40,6 +40,7 @@ const command=z.array(z.string().min(1).max(4096).refine(value=>!/[\0\r\n]/.test
 });
 const PersonalQaFile=z.object({
  prepare:command.optional(),test:command,timeoutSeconds:z.number().int().min(30).max(1800).default(600),
+ services:QaServices.optional(),
 }).strict();
 export type PersonalQaConfig=z.infer<typeof PersonalQaFile>;
 
@@ -58,8 +59,10 @@ export function parsePersonalQaConfig(input:unknown):PersonalQaConfig{
  }
  if(raw.test===undefined)throw new Refusal('QA_CONFIG_TEST_REQUIRED');
  if(raw.timeoutSeconds!==undefined&&(typeof raw.timeoutSeconds!=='number'||!Number.isInteger(raw.timeoutSeconds)||raw.timeoutSeconds<30||raw.timeoutSeconds>1800))throw new Refusal('QA_TIMEOUT_OUT_OF_RANGE');
+ if(raw.services!==undefined&&(typeof raw.services!=='object'||raw.services===null||Array.isArray(raw.services)))throw new Refusal('QA_SERVICES_INVALID');
  const parsed=PersonalQaFile.safeParse(raw);
  if(!parsed.success){
+  if(parsed.error.issues.some(issue=>issue.path[0]==='services'))throw new Refusal('QA_SERVICES_INVALID');
   if(parsed.error.issues.some(issue=>issue.message==='QA_COMMAND_NOT_ALLOWED'))throw new Refusal('QA_COMMAND_NOT_ALLOWED');
   if(parsed.error.issues.some(issue=>issue.path[0]==='timeoutSeconds'))throw new Refusal('QA_TIMEOUT_OUT_OF_RANGE');
   if(parsed.error.issues.some(issue=>(issue.path[0]==='test'||issue.path[0]==='prepare')))throw new Refusal('QA_CONFIG_NOT_A_LIST');
@@ -103,7 +106,7 @@ export function personalQaContractFromConfig(projectId:string,image:string,confi
   return [bin,...argv.slice(1)];
  };
  return NativeQaContract.parse({schemaVersion:1,id:'personal-qa-'+projectId,image,argv:absolute(config.test),
-  ...(config.prepare?{prepareArgv:absolute(config.prepare)}:{}),environment:[...personalQaCacheEnvironment],
+  ...(config.prepare?{prepareArgv:absolute(config.prepare)}:{}),...(config.services?{services:config.services}:{}),environment:[...personalQaCacheEnvironment],
   // Installing and testing a real project needs more room than the default syntax check.
   timeoutMs:config.timeoutSeconds*1000,memoryBytes:2147483648,pids:256,nanoCpus:2000000000});
 }
