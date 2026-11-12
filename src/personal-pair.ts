@@ -1,5 +1,6 @@
 import {createHash, randomInt, randomUUID, timingSafeEqual} from 'node:crypto';
 import {chmod, readFile, rename, writeFile} from 'node:fs/promises';
+import {isIP} from 'node:net';
 import {join, resolve} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
@@ -8,13 +9,19 @@ const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const lifetimeMs=10*60*1000;
 const windowMs=60*1000;
 const attemptLimit=5;
+const globalLimit=100;
 const chains=new Map<string,Promise<unknown>>();
+const failureSchema=z.union([
+ z.number().int().nonnegative(),
+ z.object({ip:z.string().min(1).max(64),at:z.number().int().nonnegative()}).strict(),
+]);
 const fileSchema=z.object({
  codes:z.array(z.object({hash:z.string().regex(/^[a-f0-9]{64}$/),expiresAt:z.number().int().positive()}).strict()).max(20),
- failures:z.array(z.number().int().nonnegative()).max(20),
+ failures:z.array(failureSchema).max(globalLimit),
  lockedUntil:z.number().int().nonnegative(),
 }).strict();
-type Store=z.infer<typeof fileSchema>;
+type Failure={ip:string;at:number};
+type Store={codes:{hash:string;expiresAt:number}[];failures:Failure[];lockedUntil:number};
 
 function exclusive<T>(path:string,fn:()=>Promise<T>):Promise<T>{
  const previous=chains.get(path)??Promise.resolve();
@@ -37,8 +44,24 @@ function randomCode(){
  for(let index=0;index<8;index++)code+=alphabet[randomInt(alphabet.length)];
  return code;
 }
+function clientKey(ip:string){
+ const clean=ip.trim().toLowerCase();
+ if(clean==='legacy'||clean==='unknown')return clean;
+ return isIP(clean)?clean:'unknown';
+}
+/** First address Caddy puts in x-forwarded-for, otherwise the connection address. */
+export function pairClientIp(forwardedFor:string|null|undefined,connectionAddress?:string|null){
+ const first=forwardedFor?.split(',')[0]?.trim()??'';
+ if(isIP(first))return first.toLowerCase();
+ const remote=connectionAddress?.trim()??'';
+ if(isIP(remote))return remote.toLowerCase();
+ return 'unknown';
+}
 async function readStore(path:string):Promise<Store>{
- try{return fileSchema.parse(JSON.parse(await readFile(path,'utf8')));}
+ try{
+  const parsed=fileSchema.parse(JSON.parse(await readFile(path,'utf8')));
+  return {codes:parsed.codes,lockedUntil:parsed.lockedUntil,failures:parsed.failures.map(item=>typeof item==='number'?{ip:'legacy',at:item}:{ip:clientKey(item.ip),at:item.at})};
+ }
  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {codes:[],failures:[],lockedUntil:0};throw error;}
 }
 async function writeStore(path:string,store:Store){
@@ -63,27 +86,34 @@ export async function createPairCode(dataDirectory:string,now=Date.now()){
   return {code,expiresAt};
  });
 }
-/** One use, ten minutes, then five wrong attempts lock every try for a minute. */
-export async function redeemPairCode(dataDirectory:string,code:string,now=Date.now()):Promise<'accepted'|'invalid'|'limited'>{
+/** One use, ten minutes. Five wrong attempts in a minute lock that address; one hundred lock every address. */
+export async function redeemPairCode(dataDirectory:string,code:string,now=Date.now(),ip='unknown'):Promise<'accepted'|'invalid'|'limited'>{
  const path=codePath(dataDirectory);
+ const key=clientKey(ip);
  return exclusive(path,async()=>{
   const store=await readStore(path);
+  // A lock written by the previous global limiter still blocks every address until it expires.
   if(store.lockedUntil>now)return 'limited';
-  if(store.lockedUntil){store.lockedUntil=0;store.failures=[];}
+  const failures=store.failures.filter(item=>now-item.at<windowMs);
+  if(failures.filter(item=>item.ip===key).length>=attemptLimit||failures.length>=globalLimit)return 'limited';
   store.codes=store.codes.filter(item=>item.expiresAt>now);
-  store.failures=store.failures.filter(at=>now-at<windowMs);
   const normalized=normalize(code);
   const shaped=/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/.test(normalized);
   const hash=shaped?hashCode(normalized):'';
   const index=shaped?store.codes.findIndex(item=>same(item.hash,hash)):-1;
   if(index<0){
-   store.failures.push(now);
-   if(store.failures.length>=attemptLimit)store.lockedUntil=now+windowMs;
+   failures.push({ip:key,at:now});
+   // Five errors block this address for a full minute from the last one, not from the first.
+   if(failures.filter(item=>item.ip===key).length>=attemptLimit){
+    for(const item of failures)if(item.ip===key)item.at=now;
+   }
+   store.failures=failures;
+   store.lockedUntil=0;
    await writeStore(path,store);
    return 'invalid';
   }
   store.codes.splice(index,1);
-  store.failures=[];
+  store.failures=failures.filter(item=>item.ip!==key);
   store.lockedUntil=0;
   await writeStore(path,store);
   return 'accepted';

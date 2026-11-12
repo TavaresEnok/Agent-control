@@ -1,3 +1,4 @@
+import {isIP} from 'node:net';
 import {z} from 'zod';
 import {Projects,ProjectRuntimes,ProjectUnavailable} from './projects.ts';
 import {Refusal} from './contracts.ts';
@@ -20,10 +21,22 @@ const publicRequest=(request:Request)=>{
  return request.method==='GET'&&(path==='/'||path==='/icon.svg'||path==='/manifest.webmanifest'||path==='/sw.js'||/^\/pwa\/icon-(?:180|192|512)\.png$/.test(path)||path.startsWith('/assets/')||/^\/(?:tasks|p|settings|conversa|tarefas|novo-projeto|new)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)||path==='/api/v1/ac/auth/config')||
  request.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim','/api/v1/ac/auth/session','/api/v1/ac/auth/code'].includes(path);
 };
+type ConnectionBindings={incoming?:{socket?:{remoteAddress?:string|undefined}}};
+/** The node socket is not visible inside the app. Copy its address and drop a client-supplied copy. */
+function withConnectionAddress(request:Request,bindings?:ConnectionBindings){
+ const address=bindings?.incoming?.socket?.remoteAddress;
+ const forged=request.headers.has('x-agent-control-remote-address');
+ if(!address&&!forged)return request;
+ const headers=new Headers(request.headers);
+ headers.delete('x-agent-control-remote-address');
+ if(address&&isIP(address))headers.set('x-agent-control-remote-address',address);
+ return new Request(request,{headers});
+}
 /** Mount in front of the existing authenticated gateway. Selection never grants access. */
 export function createProjectGateway(options:ProjectGatewayOptions){
  const apps=new WeakMap<CezarRuntime,ReturnType<ProjectGatewayOptions['appFor']>>();
- return async(request:Request):Promise<Response>=>{
+ return async(request:Request,bindings?:ConnectionBindings):Promise<Response>=>{
+  request=withConnectionAddress(request,bindings);
   try{
    if(publicRequest(request))return options.publicFetch(request);
    const principal=await options.authenticate(request);if(!principal)return Response.json({error:'AUTH_REQUIRED'},{status:401});

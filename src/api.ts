@@ -104,12 +104,12 @@ export type ApiOptions = {
   };
   configurationControl?: Control;
   personalAccounts?: {
-    add(principal:string,input:{provider:string;label:string;authFile?:string}):Promise<unknown>;
+    add(principal:string,input:{provider:string;label:string}):Promise<unknown>;
     status(principal:string,accountId:string):Promise<unknown>;
     readConversation(principal:string,query:{after?:string;limit:number}):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
     sendMessage(principal:string,input:{text:string;localId:string}):Promise<void>;
   };
-  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;scheduleRestart:()=>void};
+  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;projectId:string;scheduleRestart:()=>void};
   pairCodeLogin?:(request:Request)=>Promise<Response>;
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
@@ -118,6 +118,12 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
+  const requireInstallationOwner = async (principal: string) => {
+    const projectId = personalPanel?.projectId;
+    if (!projectId) throw new Refusal('PROJECT_OWNER_REQUIRED', 403);
+    const owned = await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [projectId, principal]);
+    if (!owned.rowCount) throw new Refusal('PROJECT_OWNER_REQUIRED', 403);
+  };
   const app = new Hono<{ Variables: { principal: string; timingStarted:number; authenticationMs:number } }>();
   const control = configurationControl??new Control(ledger,providerAdapters,runtime.projectId,administrative,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
   if(control.ledger!==ledger)throw new Refusal('CONFIGURATION_LEDGER_MISMATCH');
@@ -154,7 +160,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.post('/api/v1/ac/personal/projects',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const input=z.object({root:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),path:z.string().max(512).default(''),label:z.string().min(1).max(200)}).strict().parse(await c.req.json());
     const body=await createPersonalProject({installationPath:personalPanel.installationPath,roots:personalPanel.roots,rootId:input.root,relativePath:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label))});
     if(body.restarting)personalPanel.scheduleRestart();
@@ -163,7 +169,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.post('/api/v1/ac/personal/projects/:id/archive',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const body=await archivePersonalProject({installationPath:personalPanel.installationPath,projectId:Id.parse(c.req.param('id')),ledger,underSystemd:Boolean(process.env.INVOCATION_ID)});
     if(body.restarting)personalPanel.scheduleRestart();
     c.header('Cache-Control','no-store');
@@ -171,46 +177,46 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.get('/api/v1/ac/personal/folders',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     c.header('Cache-Control','no-store');
     return c.json(await listPersonalFolders({roots:personalPanel.roots,projectRepos:personalPanel.projectRepos,root:c.req.query('root'),path:c.req.query('path')}));
   });
   app.get('/api/v1/ac/personal/ssh',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     c.header('Cache-Control','no-store');
     return c.json(await personalSshStatus(personalPanel.dataDirectory));
   });
   app.post('/api/v1/ac/personal/ssh/scan',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const input=z.object({host:z.string().min(1).max(253),port:z.number().int().min(1).max(65535),user:z.string().min(1).max(32)}).strict().parse(await c.req.json());
     c.header('Cache-Control','no-store');
     return c.json(await scanPersonalHost(input.host,input.port,input.user));
   });
   app.post('/api/v1/ac/personal/ssh/hosts',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const input=z.object({host:z.string().min(1).max(253),port:z.number().int().min(1).max(65535),user:z.string().min(1).max(32),label:z.string().min(1).max(200),fingerprint:z.string().min(1).max(80)}).strict().parse(await c.req.json());
     c.header('Cache-Control','no-store');
     return c.json(await confirmPersonalHost(personalPanel.dataDirectory,input),201);
   });
   app.delete('/api/v1/ac/personal/ssh/hosts/:id',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     await removePersonalHost(personalPanel.dataDirectory,Id.parse(c.req.param('id')));
     c.header('Cache-Control','no-store');
     return c.json({removed:true});
   });
   app.get('/api/v1/ac/personal/ssh/folders',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     c.header('Cache-Control','no-store');
     return c.json(await listRemoteFolders(personalPanel.dataDirectory,c.req.query('host')??'',c.req.query('path')??''));
   });
   app.post('/api/v1/ac/personal/ssh/projects',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const input=z.object({host:z.uuid(),path:z.string().min(1).max(401),label:z.string().min(1).max(200)}).strict().parse(await c.req.json());
     const body=await createRemotePersonalProject({dataDirectory:personalPanel.dataDirectory,installationPath:personalPanel.installationPath,hostId:input.host,path:input.path,label:input.label,underSystemd:Boolean(process.env.INVOCATION_ID),addPersonalProject:(file,repository,label)=>import('./personal-project-add.ts').then(module=>module.addPersonalProject(file,repository,label))});
     if(body.restarting)personalPanel.scheduleRestart();
@@ -219,14 +225,14 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.post('/api/v1/ac/personal/accounts',async c=>{
     if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
-    const input=z.object({provider:z.enum(['codex','claude','grok']),label:z.string().min(1).max(100),authFile:z.string().optional()}).strict().parse(await c.req.json());
+    await requireInstallationOwner(c.get('principal'));
+    const input=z.object({provider:z.enum(['codex','claude','grok']),label:z.string().min(1).max(100)}).strict().parse(await c.req.json());
     c.header('Cache-Control','no-store');
     return c.json(await personalAccounts.add(c.get('principal'),input));
   });
   app.get('/api/v1/ac/personal/accounts/:id',async c=>{
     if(!personalAccounts)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
-    if(!(await projectOwnership(c.get('principal'))).rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const accountId=Id.parse(c.req.param('id'));
     c.header('Cache-Control','no-store');
     return c.json(await personalAccounts.status(c.get('principal'),accountId)??{accountId,state:'unknown'});
@@ -260,23 +266,22 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     c.header('Cache-Control','no-store');
     return c.json({enabled:input.enabled});
   });
-  const personalOwner=async(principal:string)=>Boolean(personalPanel&&(await projectOwnership(principal)).rowCount);
   app.get('/api/v1/ac/personal/push',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     c.header('Cache-Control','no-store');
     return c.json(await listPersonalPush(personalPanel.dataDirectory));
   });
   app.post('/api/v1/ac/personal/push/subscribe',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const input=z.object({subscription:z.object({endpoint:z.string().url().max(2000),keys:z.object({p256dh:z.string().min(16).max(200),auth:z.string().min(10).max(200)}).strict()}).passthrough(),label:z.string().max(80).optional()}).strict().parse(await c.req.json());
     c.header('Cache-Control','no-store');
     return c.json(await subscribePersonalPush(personalPanel.dataDirectory,{endpoint:input.subscription.endpoint,keys:input.subscription.keys},input.label??''),201);
   });
   app.delete('/api/v1/ac/personal/push/subscribe/:id',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     const removed=await unsubscribePersonalPush(personalPanel.dataDirectory,Id.parse(c.req.param('id')));
     if(!removed)return c.json({error:'NOT_FOUND'},404);
     c.header('Cache-Control','no-store');
@@ -284,7 +289,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
   });
   app.post('/api/v1/ac/personal/push/test',async c=>{
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
-    if(!await personalOwner(c.get('principal')))throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    await requireInstallationOwner(c.get('principal'));
     await sendPersonalPushTest(personalPanel.dataDirectory);
     c.header('Cache-Control','no-store');
     return c.json({ok:true});

@@ -209,12 +209,12 @@ async function main(){
    sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
   const relay=new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
   let stopGateway=()=>{};
-  const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,dataDirectory:config.dataDirectory,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
+  const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,dataDirectory:config.dataDirectory,projectId:config.project.id,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
   const pairCodeLogin=config.activation==='personal'?async(request:Request)=>{
    sessions.checkOrigin(request);
    const input=z.object({code:z.string().min(1).max(40)}).strict().parse(await request.json());
-   const {redeemPairCode}=await import('./personal-pair.ts');
-   const verdict=await redeemPairCode(config.dataDirectory,input.code);
+   const {redeemPairCode,pairClientIp}=await import('./personal-pair.ts');
+   const verdict=await redeemPairCode(config.dataDirectory,input.code,Date.now(),pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address')));
    if(verdict==='limited')return Response.json({error:'PAIR_CODE_LIMIT'},{status:429,headers:{'cache-control':'no-store','retry-after':'60'}});
    if(verdict!=='accepted')return Response.json({error:'PAIR_CODE_INVALID'},{status:401,headers:{'cache-control':'no-store'}});
    if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);

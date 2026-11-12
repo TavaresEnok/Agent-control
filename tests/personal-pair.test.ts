@@ -1,4 +1,4 @@
-import {test} from 'node:test';
+import {describe, test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdtemp, readFile, realpath, rm, stat} from 'node:fs/promises';
@@ -8,13 +8,14 @@ import {createApi} from '../src/api.ts';
 import type {Control} from '../src/control.ts';
 import type {CezarRuntime} from '../src/cezar.ts';
 import type {Ledger} from '../src/ledger.ts';
-import {createPairCode, redeemPairCode} from '../src/personal-pair.ts';
+import {createPairCode, pairClientIp, redeemPairCode} from '../src/personal-pair.ts';
 import {createProjectGateway} from '../src/projects-api.ts';
 
 const alphabet=/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/;
 
 async function directory(){return realpath(await mkdtemp(join(tmpdir(),'ac-pair-')));}
 
+describe('pair codes', {concurrency: false}, () => {
 test('a pair code works once, expires, and then wrong attempts are limited',async()=>{
  const root=await directory();
  try{
@@ -32,10 +33,27 @@ test('a pair code works once, expires, and then wrong attempts are limited',asyn
   const held=await createPairCode(root,3_000_000);
   for(let index=0;index<5;index++)assert.equal(await redeemPairCode(root,'ZZZZZZZZ',3_000_000+index),'invalid');
   const lockedAt=3_000_004;
-  assert.equal(await redeemPairCode(root,held.code,lockedAt+10),'limited');
+  assert.equal(await redeemPairCode(root,held.code,lockedAt+10,'unknown'),'limited');
   assert.equal(await redeemPairCode(root,held.code,lockedAt+60_000-1),'limited');
   assert.equal(await redeemPairCode(root,held.code,lockedAt+60_000),'accepted');
   assert.equal(await redeemPairCode(root,held.code,lockedAt+60_000+1),'invalid');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('one blocked address does not block another, and a hundred errors close the window',async()=>{
+ const root=await directory();
+ try{
+  assert.equal(pairClientIp('203.0.113.5, 10.0.0.8', '192.0.2.1'), '203.0.113.5');
+  assert.equal(pairClientIp('not-an-ip, 203.0.113.5', '192.0.2.1'), '192.0.2.1');
+  assert.equal(pairClientIp(null, null), 'unknown');
+  const held=await createPairCode(root, 5_000_000);
+  for(let index=0;index<5;index++)assert.equal(await redeemPairCode(root,'ZZZZZZZZ',5_000_000+index,'203.0.113.5'),'invalid');
+  assert.equal(await redeemPairCode(root,held.code,5_000_010,'203.0.113.5'),'limited');
+  assert.equal(await redeemPairCode(root,held.code,5_000_011,'203.0.113.9'),'accepted');
+  const crowd=await createPairCode(root, 8_000_000);
+  for(let index=0;index<100;index++)assert.equal(await redeemPairCode(root,'ZZZZZZZZ',8_000_000,`198.51.100.${index+1}`),'invalid');
+  assert.equal(await redeemPairCode(root,crowd.code,8_000_010,'203.0.113.20'),'limited');
+  assert.equal(await redeemPairCode(root,crowd.code,8_000_000+60_000,'203.0.113.20'),'accepted');
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -71,4 +89,5 @@ test('the code route is public and does not ask for a session',async()=>{
   assert.equal(missed.status,401);
   assert.equal(authenticated,false);
  }finally{await rm(root,{recursive:true,force:true});}
+});
 });
