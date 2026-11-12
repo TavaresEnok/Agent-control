@@ -21,6 +21,7 @@ import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-tea
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
+import type {ConversationTransport} from './conversation-transport.ts';
 
 /** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
 function httpFailureSuffix(error:Error){
@@ -216,8 +217,7 @@ export class HappierEndpoint {
   private timer: ReturnType<typeof setInterval> | undefined;
   private busy = false;
   private readonly lifecycle = new AbortController();
-  private runtimeReady = false;
-  private revision: number | undefined;
+  private conversation?: ConversationTransport;
   private lastPendingAt = 0;
   private readonly announced=new Map<string,string>();
   private teamModelsAt=0;
@@ -230,10 +230,11 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
+    this.conversation = conversation ?? this.createHappierConversation();
     const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
       machineId: options.machineId, serverUrl: options.baseUrl, transports: ['websocket'] });
     this.socket = socket; this.transport = transport;
@@ -272,7 +273,7 @@ export class HappierEndpoint {
       });
     }
     socket.on('rpc-request', async (data: unknown, callback: (value: unknown) => void) => callback(await this.rpc.handleRequest(data)));
-    socket.on('connect', () => { if(this.lifecycle.signal.aborted){socket.disconnect();return;}this.runtimeReady = false; this.rpc.onSocketConnect(socket); });
+    socket.on('connect', () => { if(this.lifecycle.signal.aborted){socket.disconnect();return;}this.onTransportConnected(); this.rpc.onSocketConnect(socket); });
     socket.on('disconnect', () => this.rpc.onSocketDisconnect());
   }
   async validateKey() {
@@ -302,6 +303,7 @@ export class HappierEndpoint {
   }
   async start() {
     try{
+    await this.activeConversation().start();
     await this.validateLink();
     if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
     const timeout=this.options.transportTimeoutMs??10000;
@@ -415,29 +417,14 @@ export class HappierEndpoint {
     });
     return { handled: true, result: { ok: true, providerAcceptancePending: true, intentId: intent.id } };
   }
-  private async insertAgentMessage(c:pg.PoolClient,localId:string,value:unknown,priority:0|50){
+  private async insertAgentMessage(c:pg.PoolClient,localId:string,value:unknown,priority:0|50):Promise<{id:string;seq:number}>{
     const id=this.options.sessionId+'|'+localId,ciphertext=this.seal(value);
     await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[id,this.options.sessionId,ciphertext,priority]);
-    const stored=(await c.query('SELECT session_id,ciphertext FROM ac_chat_messages WHERE id=$1',[id])).rows[0];
+    const stored=(await c.query('SELECT session_id,ciphertext,sequence FROM ac_chat_messages WHERE id=$1',[id])).rows[0];
     if(!stored||stored.session_id!==this.options.sessionId)throw new Refusal('CHAT_MESSAGE_CONFLICT');
     const decoded=this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext));
     if(decoded===null||digest(decoded)!==digest(value))throw new Refusal('CHAT_MESSAGE_CONFLICT');
-  }
-  // Shows the team in the app's model picker instead of the Claude catalog: read the current metadata,
-  // add the team list and write it back at that version (a concurrent change only costs a retry).
-  private async publishTeamModels(){
-   for(let attempt=0;attempt<3;attempt++){
-    const response=await fetch(this.options.baseUrl+'/v2/sessions/'+encodeURIComponent(this.options.sessionId),{headers:{authorization:'Bearer '+this.options.token},redirect:'error',signal:AbortSignal.timeout(8000)});
-    if(!response.ok)throw new Error('session '+response.status);
-    const body=z.object({session:z.object({metadata:z.string(),metadataVersion:z.number()}).passthrough()}).passthrough().parse(await response.json());
-    const current=this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(body.session.metadata));
-    if(!current||typeof current!=='object')throw new Error('metadata unreadable');
-    const next=await teamModelsMetadata(this.ledger.pool,current as Record<string,unknown>);
-    if(!next)return;
-    const written=z.object({result:z.string()}).passthrough().parse(await this.ack('update-metadata',{sid:this.options.sessionId,metadata:this.seal(next),expectedVersion:body.session.metadataVersion}));
-    if(written.result==='success')return;
-    if(written.result!=='version-mismatch')throw new Error('write '+written.result);
-   }
+    return {id,seq:Number(stored.sequence)};
   }
   async ack(event: string, data: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => this.socket.timeout(8000).emit(event, data,
@@ -466,7 +453,7 @@ export class HappierEndpoint {
     const revision=previous?.expected_revision??Number((await this.ledger.pool.query('SELECT COALESCE(max(revision),0) revision FROM ac_manager_plans WHERE context_id=$1',[intent.context_id])).rows[0].revision);
     // A long model call must not starve the manager lease. This is lease renewal,
     // not a second scheduler; the same callId remains authoritative after failure.
-    let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.socket.connected){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
+    let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.connectionState()==='connected'){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
     let result:z.infer<typeof managerPlanPublishedSchema>;
     const contextText=this.options.personalConversation?await personalRepositoryContext(this.runtime.repo)+'\n\nPedido:\n'+record.content.text:record.content.text;
     try{result=managerPlanPublishedSchema.parse(await planner.plan(this.options.principal,{id:callId,intentId:intent.id,contextId:intent.context_id,
@@ -494,7 +481,7 @@ export class HappierEndpoint {
       await c.query("UPDATE ac_intents SET state='done' WHERE id=$1",[intent.id]);
       await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
       await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,revision:result.revision,digest:result.digest}]);
-      await this.insertAgentMessage(c,localId,message,0);
+      await this.activeConversation().publishManagerText(localId,proposalText,message,c,0);
       await this.ledger.refreshPending(c,intent.context_id);
     });
     this.notePersonalPush(localId,proposalText);
@@ -505,7 +492,7 @@ export class HappierEndpoint {
   }
   private async say(localId:string,text:string){
    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
-   await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.insertAgentMessage(c,localId,message,0);});
+   await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.activeConversation().publishManagerText(localId,text,message,c,0);});
    this.notePersonalPush(localId,text);
   }
   /** Schedules a phone alert after the conversation write. A send failure is logged and never blocks the bridge. */
@@ -577,7 +564,7 @@ export class HappierEndpoint {
    await this.say('approve-'+result.revision,'Proposta '+result.revision+' aprovada. A execução começou.');
   }
   async tick() {
-    if (!this.socket.connected) return;
+    if (this.connectionState()!=='connected') return;
     await this.validateLink();
     await this.ledger.heartbeat(this.options.authority);
     if(this.options.transportOnly){this.socket.emit('session-alive',{sid:this.options.sessionId,time:Date.now(),thinking:false,mode:'remote'});return;}
@@ -622,7 +609,7 @@ export class HappierEndpoint {
               await c.query("UPDATE ac_intents SET state='failed' WHERE id=$1 AND context_id=$2",[intent.id,intent.context_id]);
               await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
               await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,failureCode:error.code}]);
-              await this.insertAgentMessage(c,localId,message,50);
+              await this.activeConversation().publishManagerText(localId,text,message,c,50);
               await this.ledger.refreshPending(c,intent.context_id);
             });
             this.notePersonalPush(localId,text);
@@ -689,7 +676,7 @@ export class HappierEndpoint {
     }
     if(this.options.personalConversation&&this.options.teamFeedRoot){
      // Once per process, retried at most once a minute; the profile list rarely changes.
-     if(this.teamModelsAt>=0&&Date.now()-this.teamModelsAt>60000){this.teamModelsAt=Date.now();await this.publishTeamModels().then(()=>{this.teamModelsAt=-1;},error=>{console.error(JSON.stringify({event:"TEAM_MODELS_NOT_PUBLISHED",error:String(error?.code??error?.message??error)}));});}
+     if(this.teamModelsAt>=0&&Date.now()-this.teamModelsAt>60000){this.teamModelsAt=Date.now();await this.activeConversation().publishTeamModels().then(()=>{this.teamModelsAt=-1;},error=>{console.error(JSON.stringify({event:"TEAM_MODELS_NOT_PUBLISHED",error:String(error?.code??error?.message??error)}));});}
      // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
      for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
       if(this.announced.get('team|'+job.id)===job.state)continue;
@@ -738,49 +725,30 @@ export class HappierEndpoint {
     if (capacityWait) throw capacityWait;
   }
   private async receivePending() {
-    if (!this.runtimeReady) {
-      const request = this.boundary.SessionRuntimeActivitySnapshotRequestSchema.parse({ sessionId: this.options.sessionId,
-        mutationId: randomUUID(), snapshot: { state: 'idle', activeCount: 0 } });
-      const result = z.object({ status: z.enum(['applied', 'unchanged']), projection: z.object({ revision: z.number() }).optional() }).passthrough()
-        .parse(await this.ack(this.boundary.SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT, request));
-      this.revision = result.projection?.revision; this.runtimeReady = true;
+    const claimed = await this.activeConversation().claimOwnerMessage();
+    if (!claimed) return;
+    try {
+      z.object({ ok: z.literal(true) }).passthrough().parse(await this.rpc.invokeLocal('session.userMessage.send',
+        { text: claimed.text, localId: claimed.localId, meta: claimed.meta ?? {} }));
+    } catch (error) {
+      // Personal mode: a refused message must not stay claimed forever in the Happier queue
+      // (it would show as "delivery uncertain" and need manual action). Say why and close the delivery.
+      // Only a definite product refusal is closed: it is raised before anything is recorded. Transient
+      // conditions and unknown errors keep the delivery claimed, as outside personal mode.
+      const transient=['STALE_MANAGER','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ADMISSION_CLOSED','HUMAN_PAUSED','MANAGER_RESTART_IN_PROGRESS'];
+      if (!this.options.personalConversation || !(error instanceof Refusal) || transient.includes(error.code)) throw error;
+      await this.say('refused-' + claimed.localId, 'Não consegui aceitar esta mensagem (' + error.code + '). Corrija a causa e envie de novo.');
+      await this.activeConversation().settleOwnerMessage(claimed.localId, 'refused');
+      return;
     }
-    const pending = Pending.parse(await this.boundary.materializeNextPendingQueueV2Message({ token: this.options.token,
-      sessionId: this.options.sessionId, socket: this.socket, deliveryStateOptIn: true, deliveryTiming: 'after_runtime_idle',
-      foregroundState: 'ready', expectedRuntimeActivityRevision: this.revision }));
-    if (pending.deferredReason === 'runtime_activity_unknown') this.runtimeReady = false;
-    if (pending.didMaterialize && pending.message?.localId) {
-      const record = UserRecord.parse(this.boundary.decrypt(this.options.key, this.options.encryptionVariant??'legacy', this.boundary.decodeBase64(pending.message.content.c)));
-      let accepted: unknown;
-      try {
-        accepted = z.object({ ok: z.literal(true) }).passthrough().parse(await this.rpc.invokeLocal('session.userMessage.send',
-          { text: record.content.text, localId: pending.message.localId, meta: record.meta ?? {} }));
-      } catch (error) {
-        // Personal mode: a refused message must not stay claimed forever in the Happier queue
-        // (it would show as "delivery uncertain" and need manual action). Say why and close the delivery.
-        // Only a definite product refusal is closed: it is raised before anything is recorded. Transient
-        // conditions and unknown errors keep the delivery claimed, as outside personal mode.
-        const transient=['STALE_MANAGER','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ADMISSION_CLOSED','HUMAN_PAUSED','MANAGER_RESTART_IN_PROGRESS'];
-        if (!this.options.personalConversation || !(error instanceof Refusal) || transient.includes(error.code)) throw error;
-        const code = error.code;
-        await this.say('refused-' + pending.message.localId, 'Não consegui aceitar esta mensagem (' + code + '). Corrija a causa e envie de novo.');
-        await this.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: this.socket, sessionId: this.options.sessionId, localId: pending.message.localId });
-        await this.boundary.markPendingQueueV2DeliveryHandled({ token: this.options.token, sessionId: this.options.sessionId, localId: pending.message.localId });
-        this.runtimeReady = false;
-        return;
-      }
-      void accepted;
-      await this.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: this.socket, sessionId: this.options.sessionId, localId: pending.message.localId });
-      await this.boundary.markPendingQueueV2DeliveryHandled({ token: this.options.token, sessionId: this.options.sessionId, localId: pending.message.localId });
-      this.runtimeReady = false;
-    }
+    await this.activeConversation().settleOwnerMessage(claimed.localId, 'accepted');
   }
-  connectionState(): 'connected'|'disconnected' {return this.socket.connected?'connected':'disconnected';}
+  connectionState(): 'connected'|'disconnected' {return this.activeConversation().connectionState();}
   /** Same key and history read as the bridge. The caller already checked the project owner. */
   async readPanelConversation(after: string | undefined, limit: number): Promise<PanelPage> {
     if (this.lifecycle.signal.aborted) throw new Refusal('MANAGER_STOPPED');
     await this.validateLink();
-    return readPanelTranscript(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, this.options.encryptionVariant ?? 'legacy', () => this.validateLink(), {after, limit, signal: this.lifecycle.signal, timeoutMs: this.options.transportTimeoutMs ?? 10000});
+    return this.activeConversation().readPage(after, limit);
   }
   private async postSession(path: string, body: unknown): Promise<number> {
     const response = await boundedNetwork(async signal => fetch(new URL(path, this.options.baseUrl), {
@@ -803,5 +771,73 @@ export class HappierEndpoint {
     const mirrored = await this.postSession('/v2/sessions/' + encodeURIComponent(this.options.sessionId) + '/messages', {ciphertext, localId});
     if (mirrored !== 200 && mirrored !== 409 && mirrored !== 400) throw new Refusal('OWNER_MESSAGE_NOT_RECORDED');
   }
-  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.socket.disconnect(); }
+  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.conversation?.close();this.socket.disconnect(); }
+  private activeConversation(): ConversationTransport {
+    return this.conversation ??= this.createHappierConversation();
+  }
+  /** Socket reconnect clears the activity snapshot so the next claim asks again. */
+  private onTransportConnected() {
+    (this.conversation as ConversationTransport & {noteSocketConnected?: () => void} | undefined)?.noteSocketConnected?.();
+  }
+  /** Happier I/O. `ack` is read on each call so a test can replace `endpoint.ack` after construction. */
+  private createHappierConversation(): ConversationTransport & {noteSocketConnected(): void} {
+    const endpoint = this;
+    let runtimeReady = false;
+    let revision: number | undefined;
+    return {
+      kind: 'happier',
+      async start() {},
+      connectionState() { return endpoint.socket.connected ? 'connected' : 'disconnected'; },
+      noteSocketConnected() { runtimeReady = false; },
+      async claimOwnerMessage() {
+        if (!runtimeReady) {
+          const request = endpoint.boundary.SessionRuntimeActivitySnapshotRequestSchema.parse({ sessionId: endpoint.options.sessionId,
+            mutationId: randomUUID(), snapshot: { state: 'idle', activeCount: 0 } });
+          const result = z.object({ status: z.enum(['applied', 'unchanged']), projection: z.object({ revision: z.number() }).optional() }).passthrough()
+            .parse(await endpoint.ack(endpoint.boundary.SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT, request));
+          revision = result.projection?.revision; runtimeReady = true;
+        }
+        const pending = Pending.parse(await endpoint.boundary.materializeNextPendingQueueV2Message({ token: endpoint.options.token,
+          sessionId: endpoint.options.sessionId, socket: endpoint.socket, deliveryStateOptIn: true, deliveryTiming: 'after_runtime_idle',
+          foregroundState: 'ready', expectedRuntimeActivityRevision: revision }));
+        if (pending.deferredReason === 'runtime_activity_unknown') runtimeReady = false;
+        if (!(pending.didMaterialize && pending.message?.localId)) return null;
+        const record = UserRecord.parse(endpoint.boundary.decrypt(endpoint.options.key, endpoint.options.encryptionVariant ?? 'legacy', endpoint.boundary.decodeBase64(pending.message.content.c)));
+        return {text: record.content.text, localId: pending.message.localId, meta: record.meta ?? {}};
+      },
+      async settleOwnerMessage(localId) {
+        await endpoint.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: endpoint.socket, sessionId: endpoint.options.sessionId, localId });
+        await endpoint.boundary.markPendingQueueV2DeliveryHandled({ token: endpoint.options.token, sessionId: endpoint.options.sessionId, localId });
+        runtimeReady = false;
+      },
+      async publishManagerText(localId, _text, record, client, priority = 0) {
+        const write = (c: pg.PoolClient) => endpoint.insertAgentMessage(c, localId, record, priority);
+        if (client) return write(client);
+        return endpoint.ledger.tx(async c => {
+          await endpoint.ledger.authorize(c, endpoint.options.principal, endpoint.options.authority.contextId, false);
+          return write(c);
+        });
+      },
+      readPage(after, limit) {
+        return readPanelTranscript(endpoint.options.baseUrl, endpoint.options.sessionId, endpoint.options.token, endpoint.options.key, endpoint.boundary, endpoint.options.encryptionVariant ?? 'legacy', () => endpoint.validateLink(), {after, limit, signal: endpoint.lifecycle.signal, timeoutMs: endpoint.options.transportTimeoutMs ?? 10000});
+      },
+      // Shows the team in the app's model picker instead of the Claude catalog: read the current metadata,
+      // add the team list and write it back at that version (a concurrent change only costs a retry).
+      async publishTeamModels() {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const response = await fetch(endpoint.options.baseUrl + '/v2/sessions/' + encodeURIComponent(endpoint.options.sessionId), {headers: {authorization: 'Bearer ' + endpoint.options.token}, redirect: 'error', signal: AbortSignal.timeout(8000)});
+          if (!response.ok) throw new Error('session ' + response.status);
+          const body = z.object({session: z.object({metadata: z.string(), metadataVersion: z.number()}).passthrough()}).passthrough().parse(await response.json());
+          const current = endpoint.boundary.decrypt(endpoint.options.key, endpoint.options.encryptionVariant ?? 'legacy', endpoint.boundary.decodeBase64(body.session.metadata));
+          if (!current || typeof current !== 'object') throw new Error('metadata unreadable');
+          const next = await teamModelsMetadata(endpoint.ledger.pool, current as Record<string, unknown>);
+          if (!next) return;
+          const written = z.object({result: z.string()}).passthrough().parse(await endpoint.ack('update-metadata', {sid: endpoint.options.sessionId, metadata: endpoint.seal(next), expectedVersion: body.session.metadataVersion}));
+          if (written.result === 'success') return;
+          if (written.result !== 'version-mismatch') throw new Error('write ' + written.result);
+        }
+      },
+      close() {},
+    };
+  }
 }
