@@ -68,7 +68,7 @@ export class Notifications{
     [authority.contextId,value.entityId,value.source,String(revision),value.seq,semantic,authority.epoch]);
    // A newer phase can supersede a not-yet-published observation. Never touch
    // an assigned message, ciphertext, sent flag or immutable publication receipt.
-   await c.query('UPDATE ac_notification_items SET superseded=true WHERE context_id=$1 AND entity_id=$2 AND source=$3 AND message_id IS NULL AND NOT superseded',[authority.contextId,value.entityId,value.source]);
+   await c.query('UPDATE ac_notification_items SET superseded=true WHERE context_id=$1 AND entity_id=$2 AND source=$3 AND message_id IS NULL AND local_message_id IS NULL AND NOT superseded',[authority.contextId,value.entityId,value.source]);
    const type=kind(value);if(!type)return {duplicate:false,queued:false};
    const id=digest({contextId:authority.contextId,entityId:value.entityId,source:value.source,revision:String(revision)});
    await c.query(`INSERT INTO ac_notification_items(id,context_id,session_id,entity_id,source,revision,plan_revision,observed_seq,kind,status,reason,manager_epoch,available_at)
@@ -80,9 +80,9 @@ export class Notifications{
  async flush(principal:string,authority:Authority,sessionId:string,seal:(value:unknown)=>string,onText?:(localId:string,text:string)=>void){
   const result=await this.ledger.tx(async c=>{
    await this.scope(c,principal,authority,sessionId);
-   const items=(await c.query<Item>(`SELECT n.* FROM ac_notification_items n WHERE n.context_id=$1 AND n.session_id=$2 AND n.message_id IS NULL AND NOT n.superseded
+   const items=(await c.query<Item>(`SELECT n.* FROM ac_notification_items n WHERE n.context_id=$1 AND n.session_id=$2 AND n.message_id IS NULL AND n.local_message_id IS NULL AND NOT n.superseded
     AND (n.kind='blocker' OR EXISTS(SELECT 1 FROM ac_notification_items due WHERE due.context_id=n.context_id AND due.session_id=n.session_id
-      AND due.kind='completion' AND due.message_id IS NULL AND NOT due.superseded AND due.available_at<=clock_timestamp()))
+      AND due.kind='completion' AND due.message_id IS NULL AND due.local_message_id IS NULL AND NOT due.superseded AND due.available_at<=clock_timestamp()))
     ORDER BY CASE WHEN n.kind='blocker' THEN 0 ELSE 1 END,n.created_at,n.id LIMIT $3 FOR UPDATE OF n`,[authority.contextId,sessionId,this.policy.maxBatchSize*2])).rows;
    let messages=0,observations=0;
    const notes:{localId:string;text:string}[]=[];
@@ -94,6 +94,31 @@ export class Notifications{
      message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:type,itemIds:group.map(item=>item.id)}}}));
     await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4)',[id,sessionId,ciphertext,type==='blocker'?50:0]);
     await c.query('UPDATE ac_notification_items SET message_id=$2 WHERE id=ANY($1::text[]) AND message_id IS NULL',[group.map(item=>item.id),id]);
+    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'notifications.batched',$2)",[authority.contextId,{kind:type,count:group.length,messageId:id,epoch:authority.epoch}]);
+    notes.push({localId,text});
+    messages++;observations+=group.length;
+   }
+   return {messages,observations,notes};
+  });
+  if(result.messages)for(const note of result.notes)onText?.(note.localId,note.text);
+  return {messages:result.messages,observations:result.observations};
+ }
+ /** Same batch as flush, published into the personal table. Does not write ciphertext or message_id. */
+ async flushToPersonal(principal:string,authority:Authority,sessionId:string,onText?:(localId:string,text:string)=>void){
+  const result=await this.ledger.tx(async c=>{
+   await this.scope(c,principal,authority,sessionId);
+   const items=(await c.query<Item>(`SELECT n.* FROM ac_notification_items n WHERE n.context_id=$1 AND n.session_id=$2 AND n.message_id IS NULL AND n.local_message_id IS NULL AND NOT n.superseded
+    AND (n.kind='blocker' OR EXISTS(SELECT 1 FROM ac_notification_items due WHERE due.context_id=n.context_id AND due.session_id=n.session_id
+      AND due.kind='completion' AND due.message_id IS NULL AND due.local_message_id IS NULL AND NOT due.superseded AND due.available_at<=clock_timestamp()))
+    ORDER BY CASE WHEN n.kind='blocker' THEN 0 ELSE 1 END,n.created_at,n.id LIMIT $3 FOR UPDATE OF n`,[authority.contextId,sessionId,this.policy.maxBatchSize*2])).rows;
+   let messages=0,observations=0;
+   const notes:{localId:string;text:string}[]=[];
+   for(const type of ['blocker','completion'] as const){
+    const group=items.filter(item=>item.kind===type).slice(0,this.policy.maxBatchSize);if(!group.length)continue;
+    const localId='notice-'+randomUUID(),id=authority.contextId+'|'+localId;
+    const text=(type==='completion'?`Atualização agrupada — ${group.length} conclusão(ões):`:`Atenção — ${group.length} bloqueio(s):`)+'\n'+group.map(item=>'- '+line(item)).join('\n');
+    await c.query(`INSERT INTO ac_personal_messages(id,context_id,role,text,local_id,accepted) VALUES($1,$2,'manager',$3,$4,true)`,[id,authority.contextId,text,localId]);
+    await c.query('UPDATE ac_notification_items SET local_message_id=$2 WHERE id=ANY($1::text[]) AND message_id IS NULL AND local_message_id IS NULL',[group.map(item=>item.id),id]);
     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'notifications.batched',$2)",[authority.contextId,{kind:type,count:group.length,messageId:id,epoch:authority.epoch}]);
     notes.push({localId,text});
     messages++;observations+=group.length;

@@ -3,7 +3,7 @@ import {join,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {readPrivateFile,type Installation} from './installation.ts';
-import {ManagerRegistry,happierEndpointFactory} from './managers.ts';
+import {ManagerRegistry,happierEndpointFactory,localEndpointFactory} from './managers.ts';
 import {ContextVault} from './context-vault.ts';
 import {loadHappier} from './happier.ts';
 import type {Control} from './control.ts';
@@ -23,6 +23,10 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
  if(!config.contextVault)throw new Refusal('VAULT_NOT_CONFIGURED');
  const repositories=[...new Set([config.project.repo,...config.projects.map(p=>p.repo),
   ...(await ledger.pool.query('SELECT repo FROM ac_project_repositories')).rows.map(r=>String(r.repo))])];
+ if((options.transport??'happier')==='local'){
+  if(config.activation!=='personal')throw new Refusal('LOCAL_TRANSPORT_REQUIRES_PERSONAL');
+  return startLocalManagerTransport(config,ledger,runtime,repositories,configurationControl,personal);
+ }
  if(resolve(options.tokenFile)!==options.tokenFile||await realpath(options.tokenFile)!==options.tokenFile||
   repositories.some(repo=>options.tokenFile===repo||options.tokenFile.startsWith(repo+sep)))throw new Refusal('UNSAFE_PRIVATE_FILE',403);
  const raw=await readPrivateFile(options.tokenFile,16384);let registry:ManagerRegistry|undefined;
@@ -70,4 +74,45 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
   }
   return registry;
  }catch(error){await registry?.close();throw error;}finally{raw.fill(0);}
+}
+/** Personal transcript in Postgres. Does not read the token, fetch a profile, or open a Happier socket. */
+async function startLocalManagerTransport(config:Installation,ledger:Ledger,runtime:CezarRuntime,repositories:string[],configurationControl:Control|undefined,personal:Parameters<typeof startConfiguredManagerTransport>[4]):Promise<ManagerRegistry>{
+ const options=config.managerTransport!;
+ const contexts=options.contexts.filter(item=>item.projectId===runtime.projectId);
+ if(!config.contextVault)throw new Refusal('VAULT_NOT_CONFIGURED');
+ const identity=(await ledger.pool.query('SELECT id FROM ac_installation_identity WHERE singleton=true')).rows[0];
+ if(!identity)throw new Refusal('INSTALLATION_IDENTITY_MISSING');
+ const source=new ContextVault(ledger,identity.id,config.contextVault.directory,config.contextVault.masterFile,repositories);
+ const pushDirectory=personal?.transportOnly===false?personal.dataDirectory:undefined;
+ const personalPush=pushDirectory?(notice:PersonalPushNotice)=>deliverPersonalPush(pushDirectory,notice):undefined;
+ const registry=new ManagerRegistry(ledger,runtime.projectId,localEndpointFactory(ledger,runtime,{
+  baseUrl:'http://127.0.0.1',token:'',machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,deliverPersonalPush:personalPush}));
+ try{
+  for(const item of contexts){
+   const {projectId,...request}=item;
+   if(projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
+   const allowed=(await ledger.pool.query("SELECT 1 FROM ac_contexts x JOIN ac_memberships m ON m.project_id=x.project_id WHERE x.id=$1 AND x.project_id=$2 AND m.principal_id=$3 AND m.role='owner' AND NOT x.archived",[item.contextId,projectId,options.principal])).rowCount;
+   if(!allowed)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+   for(let attempt=0;;attempt++){
+    try{await registry.startFromKeySource({...request,principal:options.principal},source);break;}
+    catch(error){if(!(error instanceof Refusal)||error.code!=='MANAGER_ACTIVE'||attempt>=10)throw error;await new Promise(done=>setTimeout(done,3000));}
+   }
+  }
+  if(personal?.transportOnly===false){
+   const watched=contexts.map(({projectId:_,...request})=>request),active=registry;let checking=false;
+   const watchdog=setInterval(()=>{if(checking)return;checking=true;void (async()=>{
+    for(const request of watched){
+     const state=await active.status(request.contextId).then(value=>value.state,()=>'revoked');
+     if(state==='running'||state==='starting')continue;
+     await active.restartFromKeySource({...request,principal:options.principal},source).then(
+      ()=>console.error('MANAGER_RECONNECTED '+request.contextId),
+      error=>{if(!(error instanceof Refusal)||!['MANAGER_ACTIVE','MANAGER_RESTART_IN_PROGRESS'].includes(error.code))console.error('MANAGER_RECONNECT_FAILED ('+(error instanceof Refusal?error.code:'UNCLASSIFIED')+') '+request.contextId);});
+    }
+   })().finally(()=>{checking=false;});},15000);
+   watchdog.unref?.();
+   const close=registry.close.bind(registry);
+   registry.close=async()=>{clearInterval(watchdog);return close();};
+  }
+  return registry;
+ }catch(error){await registry.close();throw error;}
 }

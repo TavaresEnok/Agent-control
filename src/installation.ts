@@ -38,6 +38,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  nativeBootstrap:NativeBootstrapConfig.optional(),
  codexQuota:CodexQuotaRegistryConfig.optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
+  transport:z.enum(['happier','local']).default('happier'),
   contexts:z.array(z.object({projectId:z.uuid(),contextId:z.uuid(),sessionId:z.string().min(1).max(200),profileId:z.string().min(1).max(100),
    keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey'])}).strict()).min(1).max(100)}).strict().optional(),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
@@ -65,6 +66,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
    (!value.accountHomesDirectory||!overlaps(project.tmpfsRoot,resolve(value.accountHomesDirectory)))&&
    value.remoteDevelopment!.transport.credentials.every(credential=>!overlaps(credential.path,project.tmpfsRoot)&&!roots.some(root=>overlaps(credential.path,root)));
  }),'Remote development requires configured projects, private canonical verifier keys and isolated tmpfs/SSH paths')
+ .refine(value=>value.managerTransport?.transport!=='local'||value.activation==='personal','LOCAL_TRANSPORT_REQUIRES_PERSONAL')
  .superRefine((value,ctx)=>{const code=nativeBootstrapSchemaError(value);if(code)ctx.addIssue({code:'custom',message:code});});
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
