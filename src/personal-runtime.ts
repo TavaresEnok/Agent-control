@@ -2,7 +2,7 @@ import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {appendFileSync,readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
 import {GitArtifacts} from './git.ts';
 import {assertSshOutsideMountRoots,pushIntegratedRemote,registerPersonalRemote,retryPendingRemotePushes} from './personal-ssh.ts';
 import type {Installation} from './installation.ts';
@@ -11,6 +11,7 @@ import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import {NativeImplementation} from './native-implementation.ts';
 import {NativePlanningSupervisor} from './native-planning-supervisor.ts';
 import {NativeQa} from './native-qa.ts';
+import {resolvePersonalProjectQa,syncPersonalQaPolicy} from './personal-qa-config.ts';
 import {NativeVerification} from './native-verification.ts';
 import {Quality} from './quality.ts';
 import {SemanticPlanning} from './semantic-planning.ts';
@@ -45,7 +46,7 @@ export async function releaseDeadPersonalGrants(ledger:Ledger){
  let released=0;
  for(const row of rows){
   const jobs=row.jobs as string[];
-  if(jobs.some(job=>['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-'].some(prefix=>names.includes(prefix+job))))continue;
+  if(jobs.some(job=>['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-','ac-native-qa-prepare-'].some(prefix=>names.includes(prefix+job))))continue;
   released+=Number((await ledger.pool.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2::jsonb WHERE id=$1 AND state<>'released'",
    [row.id,JSON.stringify({source:'personal-startup-sweep',containersAbsent:true,jobs})])).rowCount??0);
  }
@@ -113,13 +114,16 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  const managerChat=new PersonalManagerChat(ledger,{imageId:boot.planning.imageId,accountRoot:boot.planning.accountRoot});
  const byProject=new Map<string,PersonalProjectRuntime>();
  // One shared supervisor pair. Git, QA, implementation and verification stay on each checkout.
- const bind=async(repo:string,projectId:string,primary:boolean)=>{
+ const bind=async(repo:string,projectId:string,owner:string,primary:boolean)=>{
   try{
    // Worktrees and run records live under .ai/; keep them out of `git status` without touching tracked files.
    try{const exclude=join(repo,'.git','info','exclude');const current=readFileSync(exclude,'utf8');if(!/^\.ai\/$/m.test(current))appendFileSync(exclude,(current.endsWith('\n')?'':'\n')+'.ai/\n');}catch{/* bare or unusual layout: nothing to hide */}
    const git=new PersonalGitArtifacts(repo);
    const quality=new Quality(ledger,reviewKey,git);
-   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,boot.qa,reviewKey);
+   const qaContract=await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:boot.qa.image,fallback:boot.qa});
+   const cacheRoot=qaContract.prepareArgv?resolve(join(config.dataDirectory,'qa-cache',projectId)):undefined;
+   const nativeQa=new NativeQa(ledger,quality,repo,boot.execution.hostRoot,qaContract,reviewKey,undefined,undefined,undefined,cacheRoot);
+   await syncPersonalQaPolicy(ledger,owner,projectId,nativeQa.verifierDigest);
    const nativeVerification=new NativeVerification(ledger,quality,executions,reviewKey);
    const implementation=new NativeImplementation(ledger,repo,quality,executions);
    const branch=execFileSync('/usr/bin/git',['-C',repo,'symbolic-ref','--short','HEAD'],{encoding:'utf8'}).trim();
@@ -128,8 +132,8 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
    byProject.set(projectId,{engineering,implementation});
   }catch(error){if(primary)throw error;}
  };
- await bind(config.project.repo,config.project.id,true);
- for(const project of config.projects){if(project.id!==config.project.id)await bind(project.repo,project.id,false);}
+ await bind(config.project.repo,config.project.id,config.project.owner,true);
+ for(const project of config.projects){if(project.id!==config.project.id)await bind(project.repo,project.id,project.owner,false);}
  if(!byProject.has(config.project.id))throw new Error('PERSONAL_TARGET_UNRESOLVED');
  await retryPendingRemotePushes().catch(()=>{console.error('REMOTE_PUSH_RETRY_FAILED');});
  return {planning,executions,semantic,managerChat,byProject};

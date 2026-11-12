@@ -15,7 +15,7 @@ function retiredPlanning(previous:unknown,current:string):{retiredImageIds?:stri
  return ids.length?{retiredImageIds:ids}:{};
 }
 import {nativeQaContractDigest} from './native-qa-contract.ts';
-import {defaultPersonalQaContract} from './personal-qa-config.ts';
+import {defaultPersonalQaContract,resolvePersonalProjectQa,syncPersonalQaPolicy} from './personal-qa-config.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
 import {publishFirstPersonalPolicies,refreshPersonalTemplates,shareProjectAccounts} from './personal-policies.ts';
@@ -67,10 +67,12 @@ export async function nativeSetup(path:string){
    execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
    qa,qaDigest:nativeQaContractDigest(qa),review:{signingKeyFile:reviewKey.file,keyFingerprint:reviewKey.fingerprint,verifierDigest:nativeReviewVerifierDigest}};
   // The QA stage refuses a policy whose QA verifier digest differs from this contract, so keep the latest revision in step with it.
+  const qaDigestFor=async(projectId:string)=>nativeQaContractDigest(await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:images.tools!,fallback:qa}));
+  const primaryDigest=await qaDigestFor(config.project.id);
   const latest=(await ledger.pool.query('SELECT revision,snapshot FROM ac_quality_policies WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[config.project.id])).rows[0];
   const base=latest?QualityPolicy.parse(latest.snapshot):QualityPolicy.parse({schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false});
-  if(base.verifierDigest!==nativeReviewVerifierDigest||base.qaVerifierDigest!==block.qaDigest)
-   await new QualityPolicies(ledger).publish(config.project.owner,config.project.id,Number(latest?.revision??0),{...base,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:block.qaDigest});
+  if(base.verifierDigest!==nativeReviewVerifierDigest||base.qaVerifierDigest!==primaryDigest)
+   await new QualityPolicies(ledger).publish(config.project.owner,config.project.id,Number(latest?.revision??0),{...base,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:primaryDigest});
   // A new project has no capacity policy yet, and a conversation cannot be created without one: publish the
   // obvious first one, each role served by the profiles the owner registered for it. An existing policy is left alone.
   if(!(await ledger.pool.query('SELECT 1 FROM ac_policy_revisions WHERE project_id=$1 LIMIT 1',[config.project.id])).rowCount){
@@ -86,7 +88,9 @@ export async function nativeSetup(path:string){
    if(project.id===config.project.id)continue;
    if(!(await ledger.pool.query('SELECT 1 FROM ac_projects WHERE id=$1',[project.id])).rowCount)continue;
    await shareProjectAccounts(ledger,config.project.owner,config.project.id,project.id);
-   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,{qaVerifierDigest:block.qaDigest});
+   const projectDigest=await qaDigestFor(project.id);
+   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,{qaVerifierDigest:projectDigest});
+   await syncPersonalQaPolicy(ledger,project.owner,project.id,projectDigest);
    await refreshPersonalTemplates(ledger,project.id);
   }
   const raw=JSON.parse((await readFile(path,'utf8')).toString()) as Record<string,unknown>;

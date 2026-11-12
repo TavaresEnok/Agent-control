@@ -4,7 +4,7 @@ import {ReconciliationHistory} from './reconciliation-history.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
 import {createHash,createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
-import {mkdir,lstat,realpath,open,rename} from 'node:fs/promises';
+import {chmod,mkdir,lstat,realpath,open,rename} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {Ledger,type Intent} from './ledger.ts';
@@ -38,12 +38,65 @@ export async function collectQaLogs(fetch:()=>Promise<Buffer>){
  * sandbox. Docker exit status is authoritative; test stdout cannot mint QA.
  * No model, account home, shell supplied by an agent or second scheduler. */
 export class NativeQa{
- readonly contract:NativeQaContract;readonly verifierDigest:string;private readonly key:Buffer;private readonly docker:DockerDaemon;
+ readonly contract:NativeQaContract;readonly verifierDigest:string;private readonly key:Buffer;private readonly docker:DockerDaemon;private readonly cacheRoot?:string;
  constructor(readonly ledger:Ledger,readonly quality:Quality,readonly repository:string,private readonly root:string,contract:NativeQaContract,key:Uint8Array,
-  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope){
+  socketPath?:string,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment(),resourceEnvelope?:NativeResourceEnvelope,cacheRoot?:string){
   if(quality.ledger!==ledger||key.byteLength<32||resolve(root)!==root||resolve(repository)!==repository||root===repository||root.startsWith(repository+sep)||repository.startsWith(root+sep))throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
-  this.contract=Object.freeze(NativeQaContract.parse(structuredClone(contract)));Object.freeze(this.contract.argv);Object.freeze(this.contract.environment);
+  this.contract=Object.freeze(NativeQaContract.parse(structuredClone(contract)));Object.freeze(this.contract.argv);Object.freeze(this.contract.environment);if(this.contract.prepareArgv)Object.freeze(this.contract.prepareArgv);
+  if(this.contract.prepareArgv){if(!cacheRoot||resolve(cacheRoot)!==cacheRoot)throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');this.cacheRoot=cacheRoot;}
+  else if(cacheRoot)throw new Refusal('NATIVE_QA_CONFIGURATION_INVALID');
   this.verifierDigest=nativeQaContractDigest(this.contract);this.key=Buffer.from(key);this.docker=nativeDockerDaemon(socketPath,resourceEnvelope);
+ }
+ /** Configured QA writes the checkout, so it runs as the gateway user. The default contract stays uid 10001. */
+ private qaUser(){return this.contract.prepareArgv?`${process.getuid?.()??10001}:${process.getgid?.()??10001}`:'10001:10001';}
+ private async ensureProjectCache(){
+  const cache=this.cacheRoot;if(!cache||cache===this.repository||cache.startsWith(this.repository+sep)||cache===this.root||cache.startsWith(this.root+sep)||this.root.startsWith(cache+sep)||this.repository.startsWith(cache+sep))throw new Refusal('NATIVE_QA_CACHE_UNSAFE');
+  await mkdir(cache,{recursive:true,mode:0o700});await chmod(cache,0o700);
+  for(const name of ['home','npm','pnpm','corepack','xdg']){const child=join(cache,name);await mkdir(child,{recursive:true,mode:0o700});await chmod(child,0o700);}
+  const info=await lstat(cache);
+  if(!info.isDirectory()||info.isSymbolicLink()||info.uid!==process.getuid?.()||(info.mode&0o777)!==0o700||await realpath(cache)!==cache)throw new Refusal('NATIVE_QA_CACHE_UNSAFE');
+ }
+ private frameQaText(text:string){const payload=Buffer.from(text.endsWith('\n')||text.length===0?text:text+'\n');const header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(payload.length,4);return Buffer.concat([header,payload]);}
+ private async writeQaLog(jobId:string,logs:Buffer){
+  const pending=join(this.paths(jobId).area,'qa-logs-'+randomUUID()+'.pending');
+  const file=await open(pending,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
+  try{await file.writeFile(logs);await file.sync();}finally{await file.close();}
+  await rename(pending,join(this.paths(jobId).area,'qa-logs.bin'));
+  const directory=await open(this.paths(jobId).area,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{await directory.sync();}finally{await directory.close();}
+ }
+ private async failUnstarted(principal:string,authority:Authority,job:Record<string,any>,failureCode:string,exitCode:number,logs:Buffer){
+  let stored=logs.length?logs:this.frameQaText(failureCode);
+  try{assertCompleteQaLogs(stored);}catch{stored=this.frameQaText((stored.toString('utf8').split('\n').filter(Boolean).slice(-40).join('\n'))||failureCode);}
+  await this.writeQaLog(job.id,stored);
+  const receipt={schemaVersion:1,jobId:job.id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,contractDigest:this.verifierDigest,executionStarted:exitCode!==-1,exitCode,status:failureCode==='QA_CANCELED'?'canceled':'failed',logSha256:createHash('sha256').update(stored).digest('hex'),logsAvailable:true,synthetic:false,modelInference:false,failureCode};
+  await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
+   const row=(await c.query('SELECT state,container_id FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE',[job.id])).rows[0];
+   const grant=(await c.query('SELECT state FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[job.grant_id])).rows[0];
+   if(!row||!['uncertain','running'].includes(row.state)||row.container_id||!grant||!['uncertain','reserved','running'].includes(grant.state))throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
+   await cancelPreparedNativeResources(c,this.docker,job.id,job.grant_id,authority);
+   await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[job.id,receipt]);
+   await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[job.grant_id,receipt]);
+  });
+  return {state:'failed' as const,receipt};
+ }
+ /** Prepare uses the daemon's default network and a writable checkout. No account home is mounted. */
+ private prepareSpec(jobId:string,hash:string){
+  const work=this.paths(jobId).work;
+  return {Image:this.contract.image,User:this.qaUser(),WorkingDir:'/work',Entrypoint:[this.contract.prepareArgv![0]],Cmd:this.contract.prepareArgv!.slice(1),Env:[...this.contract.environment],
+   Labels:{'agent-control.contract':'native-qa-prepare-v1','agent-control.job':jobId,'agent-control.request':hash},
+   HostConfig:{ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
+ }
+ private preparedTestSpec(jobId:string,hash:string){
+  const work=this.paths(jobId).work;
+  return {Image:this.contract.image,User:this.qaUser(),WorkingDir:'/work',Entrypoint:[this.contract.argv[0]],Cmd:this.contract.argv.slice(1),Env:[...this.contract.environment],
+   Labels:{'agent-control.contract':'native-qa-v1','agent-control.job':jobId,'agent-control.request':hash},
+   HostConfig:{NetworkMode:'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:this.contract.pids,Memory:this.contract.memoryBytes,NanoCpus:this.contract.nanoCpus,Tmpfs:{'/tmp':'rw,nosuid,nodev,mode=1777,size=128m'},Binds:[work+':/work:rw',this.cacheRoot+':/cache:rw']}};
+ }
+ private async rememberContainer(principal:string,authority:Authority,job:Record<string,any>,containerId:string){
+  const updated=await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
+   const result=await c.query("UPDATE ac_native_qa_jobs SET container_id=$2,state='running' WHERE id=$1 AND state IN ('uncertain','running') AND container_id IS NULL RETURNING id",[job.id,containerId]);
+   await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='uncertain'",[job.grant_id]);return result.rowCount??0;});
+  if(!updated)throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
  }
  async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority,recoverSource:'ac_native_qa_jobs',recoverJob:id=>this.reconcile(principal,authority,id)});}
  private paths(id:string){z.uuid().parse(id);const area=join(this.root,id);return {area,work:join(area,'work')};}
@@ -90,18 +143,18 @@ export class NativeQa{
    throw new Refusal('NATIVE_IMAGE_MISSING');
   }
   await this.diskGuard?.assertAdmission();const root=await lstat(this.root);if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==process.getuid?.()||(root.mode&0o7777)!==0o700||await realpath(this.root)!==this.root)throw new Refusal('NATIVE_QA_ROOT_UNSAFE');
-  await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId,grantId,jobId:stage.id,names:['ac-native-qa-'+stage.id],isCanceled});
+  await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId,grantId,jobId:stage.id,names:['ac-native-qa-'+stage.id,...(this.contract.prepareArgv?['ac-native-qa-prepare-'+stage.id]:[])],isCanceled});
   await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,intentId,false);await this.policy(c,artifact);
    const s=(await c.query('SELECT state,attempt_id,manager_epoch FROM ac_stage_operations WHERE id=$1 FOR UPDATE',[stage.id])).rows[0];
    const g=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[grantId])).rows[0];
    if(s?.state!=='registered'||Number(s.manager_epoch)!==authority.epoch||g?.state!=='reserved'||g.attempt_id!==s.attempt_id||g.intent_id!==intentId||g.role!=='qa'||Number(g.manager_epoch)!==authority.epoch)throw new Refusal('NATIVE_QA_GRANT_MISMATCH');
    await c.query(`INSERT INTO ac_native_qa_jobs(id,context_id,intent_id,artifact_id,grant_id,session_id,manager_epoch,request_digest,contract_digest,state,deadline_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uncertain',clock_timestamp()+$10::int*interval '1 millisecond')`,[stage.id,authority.contextId,intentId,artifact.id,grantId,stage.session_id,authority.epoch,hash,this.verifierDigest,this.contract.timeoutMs]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'uncertain',clock_timestamp()+$10::int*interval '1 millisecond')`,[stage.id,authority.contextId,intentId,artifact.id,grantId,stage.session_id,authority.epoch,hash,this.verifierDigest,this.contract.timeoutMs*(this.contract.prepareArgv?2:1)]);
    await c.query("UPDATE ac_stage_operations SET state='uncertain',grant_id=$2 WHERE id=$1",[stage.id,grantId]);await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[grantId]);
   });
   const p=this.paths(stage.id);
-  try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);await setQaSnapshotPermissions(p.work,true);}
+  try{await mkdir(p.area,{mode:0o700});await new GitArtifacts(this.repository).snapshot(artifact.commit_id,artifact.base_id,p.work);if(this.contract.prepareArgv)await this.ensureProjectCache();else await setQaSnapshotPermissions(p.work,true);}
   catch(error){
    // This catch covers only preparation, before the first Docker request.
    // A later lost create/start response remains uncertain. A received create refusal is freed below.
@@ -114,6 +167,13 @@ export class NativeQa{
     await cancelPreparedNativeResources(c,this.docker,stage.id,grantId,authority);
     await c.query("UPDATE ac_native_qa_jobs SET state='failed',receipt=$2 WHERE id=$1",[stage.id,receipt]);await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[grantId,receipt]);
    });return {state:'failed' as const,receipt};
+  }
+  // A configured project prepares on the default Docker network, then the test container is launched from reconcile.
+  if(this.contract.prepareArgv){
+   await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
+    await c.query("UPDATE ac_native_qa_jobs SET state='running' WHERE id=$1 AND state='uncertain'",[stage.id]);
+    await c.query("UPDATE ac_capacity_grants SET state='running' WHERE id=$1 AND state='uncertain'",[grantId]);});
+   return {state:'running' as const};
   }
   const image=this.contract.image;
   let id:string;
@@ -144,13 +204,15 @@ export class NativeQa{
   const h=physical.HostConfig,m=physical.Mounts;
   const namespaces=z.object({CapAdd:z.array(z.string()).nullish(),Devices:z.array(z.unknown()).nullish(),PidMode:z.string().optional(),IpcMode:z.string().optional()}).parse(h);
   const binds=m.filter(x=>x.Type!=='tmpfs');
-  if((job.container_id&&job.container_id!==physical.Id)||physical.Image!==this.contract.image||physical.Config.User!=='10001:10001'||physical.Config.WorkingDir!=='/work'||
+  const prepared=Boolean(this.contract.prepareArgv),workBind=binds.find(bind=>bind.Destination==='/work'),cacheBind=binds.find(bind=>bind.Destination==='/cache');
+  const bindsMatch=prepared?binds.length===2&&workBind?.Source===this.paths(job.id).work&&workBind?.RW===true&&cacheBind?.Source===this.cacheRoot&&cacheBind?.RW===true:binds.length===1&&binds[0]!.Source===this.paths(job.id).work&&binds[0]!.Destination==='/work'&&!binds[0]!.RW;
+  if((job.container_id&&job.container_id!==physical.Id)||physical.Image!==this.contract.image||physical.Config.User!==this.qaUser()||physical.Config.WorkingDir!=='/work'||
    JSON.stringify(physical.Config.Entrypoint)!==JSON.stringify([this.contract.argv[0]])||JSON.stringify(physical.Config.Cmd??[])!==JSON.stringify(this.contract.argv.slice(1))||
    !envMatches(physical.Config.Env??[],[...this.contract.environment])||physical.Config.Labels['agent-control.contract']!=='native-qa-v1'||physical.Config.Labels['agent-control.job']!==job.id||physical.Config.Labels['agent-control.request']!==job.request_digest||
    h.NetworkMode!=='none'||!h.ReadonlyRootfs||h.Privileged||!h.CapDrop?.includes('ALL')||!h.SecurityOpt?.some(s=>s==='no-new-privileges'||s==='no-new-privileges:true')||
    (namespaces.CapAdd?.length??0)>0||(namespaces.Devices?.length??0)>0||!['','private',undefined].includes(namespaces.PidMode)||!['','private',undefined].includes(namespaces.IpcMode)||
    h.Memory!==this.contract.memoryBytes||h.PidsLimit!==this.contract.pids||h.NanoCpus!==this.contract.nanoCpus||
-   binds.length!==1||binds[0].Source!==this.paths(job.id).work||binds[0].Destination!=='/work'||binds[0].RW||m.some(x=>x.Type==='tmpfs'&&x.Destination!=='/tmp'))throw new Refusal('NATIVE_QA_CONTAINER_MISMATCH');
+   !bindsMatch||m.some(x=>x.Type==='tmpfs'&&x.Destination!=='/tmp'))throw new Refusal('NATIVE_QA_CONTAINER_MISMATCH');
  }
  async stop(principal:string,authority:Authority,id:string,reason:'canceled'|'timeout'){
   z.uuid().parse(id);return this.ledger.tx(async c=>{
@@ -158,10 +220,58 @@ export class NativeQa{
    await this.authorize(c,principal,authority,job.intent_id,true);job=(await c.query('SELECT * FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE',[id])).rows[0];
    if(['completed','failed'].includes(job.state))return;
    await c.query('UPDATE ac_native_qa_jobs SET stop_reason=$2 WHERE id=$1 AND stop_reason IS NULL',[id,reason]);
-   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical)return;this.inspect(physical,job);if(physical.State.Running)await this.docker.stop(physical.Id);
+   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical){if(this.contract.prepareArgv){const prep=await this.docker.inspect('ac-native-qa-prepare-'+id);if(prep?.State.Running)await this.docker.stop(prep.Id);}return;}this.inspect(physical,job);if(physical.State.Running)await this.docker.stop(physical.Id);
   });
  }
- async reconcile(principal:string,authority:Authority,id:string){
+ private async launchPreparedTest(principal:string,authority:Authority,job:Record<string,any>){
+  let id:string;
+  try{id=await this.ledger.tx(async c=>{
+   await this.authorize(c,principal,authority,job.intent_id,false);
+   const artifact=(await c.query('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2',[job.artifact_id,authority.contextId])).rows[0];
+   if(!artifact)throw new Refusal('NATIVE_QA_ARTIFACT_MISMATCH');
+   await this.policy(c,artifact);
+   const saved=(await c.query("SELECT * FROM ac_native_qa_jobs WHERE id=$1 AND state IN ('uncertain','running') FOR UPDATE",[job.id])).rows[0];
+   if(!saved||saved.container_id||Number(saved.manager_epoch)!==authority.epoch||saved.request_digest!==job.request_digest)throw new Refusal('NATIVE_QA_RECONCILIATION_REQUIRED');
+   const created=await this.docker.create('ac-native-qa-'+job.id,this.preparedTestSpec(job.id,job.request_digest));
+   await this.docker.start(created);return created;
+  });}
+  catch(error){
+   if(!(error instanceof Refusal)||error.code!=='DOCKER_CREATE_REFUSED')throw error;
+   return this.failUnstarted(principal,authority,job,'DOCKER_CREATE_REFUSED',1,this.frameQaText('DOCKER_CREATE_REFUSED'));
+  }
+  await this.rememberContainer(principal,authority,job,id);
+  const prep=await this.docker.inspect('ac-native-qa-prepare-'+job.id);
+  if(prep&&!prep.State.Running)await this.docker.remove(prep.Id).catch(()=>{});
+  return 'launched' as const;
+ }
+ /** Advance a configured QA job from the prepare container to the network-less test container. */
+ private async stepPrepare(principal:string,authority:Authority,job:Record<string,any>):Promise<{state:'running'|'failed'|'uncertain';receipt?:any}|'launched'|undefined>{
+  const test=await this.docker.inspect('ac-native-qa-'+job.id);
+  if(test){await this.rememberContainer(principal,authority,job,test.Id);return 'launched';}
+  const prep=await this.docker.inspect('ac-native-qa-prepare-'+job.id);
+  if(!prep){
+   let ready=false;try{const info=await lstat(this.paths(job.id).work);ready=info.isDirectory()&&!info.isSymbolicLink();}catch{ready=false;}
+   if(!ready||job.deadline_elapsed||job.stop_reason)return undefined;
+   try{const created=await this.docker.create('ac-native-qa-prepare-'+job.id,this.prepareSpec(job.id,job.request_digest));await this.docker.start(created);}
+   catch(error){if(error instanceof Refusal&&error.code==='DOCKER_CREATE_REFUSED')return this.failUnstarted(principal,authority,job,'QA_PREPARE_FAILED',1,this.frameQaText('QA_PREPARE_FAILED'));throw error;}
+   return {state:'running'};
+  }
+  if(prep.State.Status==='created'){await this.docker.start(prep.Id);return {state:'running'};}
+  const started=Date.parse(String((prep.State as {StartedAt?:string}).StartedAt??''));
+  const phaseOver=Number.isFinite(started)&&Date.now()-started>this.contract.timeoutMs;
+  if(prep.State.Running){if(phaseOver||job.deadline_elapsed||job.stop_reason)await this.stop(principal,authority,job.id,job.stop_reason==='canceled'?'canceled':'timeout');return {state:'running'};}
+  if(prep.State.Status!=='exited'||!Number.isFinite(Date.parse(prep.State.FinishedAt))||String(prep.State.FinishedAt).startsWith('0001-'))return {state:'uncertain'};
+  const collected=await collectQaLogs(()=>this.docker.logs(prep.Id,40));
+  const logs=collected.logsAvailable?collected.logs:this.frameQaText('QA_PREPARE_FAILED');
+  const oom=(prep.State as {OOMKilled?:boolean}).OOMKilled===true;
+  const canceled=job.stop_reason==='canceled';
+  if(canceled||job.stop_reason==='timeout'||phaseOver||oom||prep.State.ExitCode!==0){
+   await this.docker.remove(prep.Id).catch(()=>{});
+   return this.failUnstarted(principal,authority,job,canceled?'QA_CANCELED':'QA_PREPARE_FAILED',prep.State.ExitCode||1,logs);
+  }
+  return this.launchPreparedTest(principal,authority,job);
+ }
+ async reconcile(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
   z.uuid().parse(id);const job=await this.ledger.tx(async c=>{
    const row=(await c.query('SELECT *,deadline_at<=clock_timestamp() deadline_elapsed FROM ac_native_qa_jobs WHERE id=$1 AND context_id=$2',[id,authority.contextId])).rows[0];if(!row)throw new Refusal('NATIVE_QA_JOB_NOT_FOUND',404);
    await this.authorize(c,principal,authority,row.intent_id,true);if(row.contract_digest!==this.verifierDigest||Number(row.manager_epoch)>authority.epoch)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');return row;
@@ -179,10 +289,15 @@ export class NativeQa{
     return {state:'failed' as const,receipt};
    });if(recovered)return recovered;
   }
+  if(this.contract.prepareArgv&&!job.container_id&&!['completed','failed'].includes(job.state)){
+   const stepped=await this.stepPrepare(principal,authority,job);
+   if(stepped==='launched')return this.reconcile(principal,authority,id);
+   if(stepped)return stepped;
+  }
   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical)return {state:'uncertain' as const};this.inspect(physical,job);
-  if(physical.State.Running){if(job.deadline_elapsed)await this.stop(principal,authority,id,'timeout');return {state:'running' as const};}
+  if(physical.State.Running){const started=Date.parse(String((physical.State as {StartedAt?:string}).StartedAt??''));if(job.deadline_elapsed||(this.contract.prepareArgv&&Number.isFinite(started)&&Date.now()-started>this.contract.timeoutMs))await this.stop(principal,authority,id,'timeout');return {state:'running' as const};}
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return {state:'uncertain' as const};
-  const {logs,logsAvailable}=await collectQaLogs(()=>this.docker.logs(physical.Id));
+  const {logs,logsAvailable}=await collectQaLogs(()=>this.docker.logs(physical.Id,this.contract.prepareArgv?40:undefined));
   const logSha256=createHash('sha256').update(logs).digest('hex');
   const pending=join(this.paths(id).area,'qa-logs-'+randomUUID()+'.pending');
   const file=await open(pending,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
@@ -254,6 +369,7 @@ export class NativeQa{
     const byName=await this.docker.inspect('ac-native-qa-'+id),byId=await this.docker.inspect(verified.job.container_id);
     if(byName||byId){if(!byName||!byId||byName.Id!==byId.Id)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');this.inspect(byId,verified.job);
      if(byId.State.Running||byId.State.Status!=='exited'||byId.State.ExitCode!==verified.job.receipt.exitCode||byId.State.FinishedAt!==verified.job.receipt.finishedAt)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');await this.docker.remove(byId.Id);}
+    if(this.contract.prepareArgv){const prep=await this.docker.inspect('ac-native-qa-prepare-'+id);if(prep){if(prep.State.Running)throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');await this.docker.remove(prep.Id);}}
    }
    if(await this.docker.inspect(verified.job.container_id)||await this.docker.inspect('ac-native-qa-'+id))throw new Refusal('NATIVE_QA_RETIREMENT_UNCONFIRMED');
    // Restore traversal only after physical absence is confirmed, and before
@@ -297,7 +413,7 @@ export class NativeQa{
   const observed=await this.reconcile(principal,authority,id);if(observed.state!=='completed'&&observed.state!=='failed')throw new Refusal('NATIVE_QA_RESULT_UNCONFIRMED');
   const job=(await this.ledger.pool.query('SELECT j.*,a.* FROM ac_native_qa_jobs j JOIN ac_artifacts a ON a.id=j.artifact_id WHERE j.id=$1',[id])).rows[0];
   if(!job)throw new Refusal('NATIVE_QA_ARTIFACT_MISMATCH');
-  const machine=observed.receipt;const receipt=VerificationReceipt.parse({schemaVersion:1,id:evidenceId(id),artifactId:job.artifact_id,kind:'qa',sessionId:job.session_id,grantId:job.grant_id,policyRevision:job.policy_revision,commit:job.commit_id,tree:job.tree_id,base:job.base_id,status:machine.status,exitCode:machine.exitCode,verifierDigest:this.verifierDigest,logSha256:machine.logSha256,commandDigest:digest({argv:this.contract.argv,image:this.contract.image}),verifierVersion:'native-qa-v1'});
+  const machine=observed.receipt;const receipt=VerificationReceipt.parse({schemaVersion:1,id:evidenceId(id),artifactId:job.artifact_id,kind:'qa',sessionId:job.session_id,grantId:job.grant_id,policyRevision:job.policy_revision,commit:job.commit_id,tree:job.tree_id,base:job.base_id,status:machine.status,exitCode:machine.exitCode,verifierDigest:this.verifierDigest,logSha256:machine.logSha256,commandDigest:digest(this.contract.prepareArgv?{argv:this.contract.argv,prepare:this.contract.prepareArgv,image:this.contract.image}:{argv:this.contract.argv,image:this.contract.image}),verifierVersion:'native-qa-v1'});
   const signature=createHmac('sha256',this.key).update(canonical(receipt)).digest('hex');
   await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,job.intent_id,true);await this.ledger.assertIntentActive(c,authority.contextId,job.intent_id);await this.policy(c,job);
