@@ -19,7 +19,8 @@ export class BrowserSessions{
  }
  private idHash(id:string){return createHash('sha256').update(id).digest('hex');}
  private cookieValue(id:string,age:number){return `ac_session=${id}; Path=/api/; HttpOnly; SameSite=Strict; Max-Age=${age}${this.options.secure?'; Secure':''}`;}
- async issue(request:Request){
+ async issue(request:Request,maxAgeSeconds=this.options.maxAgeSeconds){
+  if(!Number.isInteger(maxAgeSeconds)||maxAgeSeconds<60||maxAgeSeconds>2592000)throw Error('INVALID_BROWSER_SESSION_CONFIG');
   const origin=request.headers.get('origin');if(origin&&origin!==this.options.origin)throw new Refusal('CROSS_ORIGIN_FORBIDDEN',403);
   const authorization=request.headers.get('authorization');
   if(!authorization?.startsWith('Bearer ')||authorization.length>8192)throw new Refusal('AUTH_REQUIRED',401);
@@ -29,8 +30,8 @@ export class BrowserSessions{
   const ciphertext=Buffer.concat([cipher.update(authorization,'utf8'),cipher.final()]);
   await this.ledger.pool.query(`INSERT INTO ac_browser_sessions(id_digest,principal_id,token_ciphertext,nonce,tag,expires_at)
    VALUES($1,$2,$3,$4,$5,clock_timestamp()+$6*interval '1 second')`,
-   [idDigest,principal,ciphertext.toString('base64'),nonce.toString('base64'),cipher.getAuthTag().toString('base64'),this.options.maxAgeSeconds]);
-  return new Response(JSON.stringify({state:'authenticated'}),{status:200,headers:{'content-type':'application/json','cache-control':'no-store','set-cookie':this.cookieValue(id,this.options.maxAgeSeconds)}});
+   [idDigest,principal,ciphertext.toString('base64'),nonce.toString('base64'),cipher.getAuthTag().toString('base64'),maxAgeSeconds]);
+  return new Response(JSON.stringify({state:'authenticated'}),{status:200,headers:{'content-type':'application/json','cache-control':'no-store','set-cookie':this.cookieValue(id,maxAgeSeconds)}});
  }
  private async credential(request:Request){
   const id=this.cookie(request);if(!id)return null;

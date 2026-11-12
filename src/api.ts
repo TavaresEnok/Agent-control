@@ -30,6 +30,7 @@ import {managedWorkspaceStream} from './workspace-stream.ts';
 import {createImportPreviewApi} from './import-preview-api.ts';
 import {createDiagnosticsApi} from './diagnostics-api.ts';
 import {createPortableExportApi} from './portable-export-api.ts';
+import {panelPasswordConfigured} from './personal-password.ts';
 import {listPersonalPush, sendPersonalPushTest, subscribePersonalPush, unsubscribePersonalPush} from './personal-push.ts';
 import {panelServiceWorkerResponse} from './panel-service-worker.ts';
 import {readFile,realpath} from 'node:fs/promises';
@@ -111,11 +112,12 @@ export type ApiOptions = {
   };
   personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;projectId:string;scheduleRestart:()=>void};
   pairCodeLogin?:(request:Request)=>Promise<Response>;
+  passwordLogin?:(request:Request)=>Promise<Response>;
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
   const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
-    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin} = options;
+    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin, passwordLogin} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const requireInstallationOwner = async (principal: string) => {
@@ -137,10 +139,14 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(sessions&&c.req.method==='GET'){
       const ui=await publicUi(c.req.path);if(ui)return ui;
     }
-    if(c.req.path==='/api/v1/ac/auth/config'&&c.req.method==='GET'){c.header('Cache-Control','no-store');return c.json(authRelay?.config??{enabled:false});}
+    if(c.req.path==='/api/v1/ac/auth/config'&&c.req.method==='GET'){
+      c.header('Cache-Control','no-store');
+      const passwordLoginEnabled=personalPanel?await panelPasswordConfigured(personalPanel.dataDirectory):false;
+      return c.json({...(authRelay?.config??{enabled:false}),passwordLogin:passwordLoginEnabled});
+    }
     if(authRelay&&c.req.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim'].includes(c.req.path))return next();
     if(c.req.path==='/api/v1/ac/auth/session'&&c.req.method==='POST'&&sessions)return next();
-    if(c.req.path==='/api/v1/ac/auth/code'&&c.req.method==='POST')return next();
+    if(c.req.method==='POST'&&(c.req.path==='/api/v1/ac/auth/code'||c.req.path==='/api/v1/ac/auth/password'))return next();
     const authenticationStarted=performance.now();
     const bearer=c.req.raw.headers.get('authorization');
     let principal:string|null|undefined;
@@ -340,6 +346,10 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     .post('/api/v1/ac/auth/code',async c=>{
       if(!pairCodeLogin)return c.json({error:'NOT_FOUND'},404);
       return pairCodeLogin(c.req.raw);
+    })
+    .post('/api/v1/ac/auth/password',async c=>{
+      if(!passwordLogin)return c.json({error:'NOT_FOUND'},404);
+      return passwordLogin(c.req.raw);
     })
     .post('/api/v1/ac/auth/logout',async c=>{if(!sessions)throw new Refusal('INGRESS_DISABLED',403);return sessions.revoke(c.req.raw);})
     .get('/api/v1/ac/health', c => c.json({ schemaVersion: 1, mode: runtime.executionMode }))

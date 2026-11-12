@@ -19,7 +19,7 @@ const id=z.uuid();
 const publicRequest=(request:Request)=>{
  const path=new URL(request.url).pathname;
  return request.method==='GET'&&(path==='/'||path==='/icon.svg'||path==='/manifest.webmanifest'||path==='/sw.js'||/^\/pwa\/icon-(?:180|192|512)\.png$/.test(path)||path.startsWith('/assets/')||/^\/(?:tasks|p|settings|conversa|tarefas|novo-projeto|new)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)||path==='/api/v1/ac/auth/config')||
- request.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim','/api/v1/ac/auth/session','/api/v1/ac/auth/code'].includes(path);
+ request.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim','/api/v1/ac/auth/session','/api/v1/ac/auth/code','/api/v1/ac/auth/password'].includes(path);
 };
 type ConnectionBindings={incoming?:{socket?:{remoteAddress?:string|undefined}}};
 /** The node socket is not visible inside the app. Copy its address and drop a client-supplied copy. */
