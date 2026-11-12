@@ -24,7 +24,8 @@
     "personal:public": "node scripts/personal-public.mjs",
     "prebuild": "node scripts/prepare-build.mjs --before",
     "personal:cockpit": "node scripts/personal-cockpit.mjs",
-    "personal:backup": "node scripts/personal-backup.mjs"
+    "personal:backup": "node scripts/personal-backup.mjs",
+    "personal:restore-check": "node scripts/personal-restore-check.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {databaseDumpPlan,databaseEndpoint,dumpProcessEnv,personalPgContainer,runPersonalBackup} from '../src/personal-backup.ts';
+import {databaseDumpPlan,databaseEndpoint,databaseListPlan,dumpProcessEnv,personalPgContainer,runPersonalBackup,runPersonalRestoreCheck} from '../src/personal-backup.ts';
 
 const now=new Date(2026,10,12,9,5,30);
 
@@ -63,6 +63,10 @@ test('database dump plan keeps the password in the environment',()=>{
  assert.equal(dumpProcessEnv({PATH:'/usr/bin'},db).PGPASSWORD,'s3cret');
  assert.equal(databaseEndpoint('postgresql://ac:a%2Fb@127.0.0.1/agent_control').password,'a/b');
  assert.throws(()=>databaseEndpoint('postgresql://-ac:s3cret@127.0.0.1/agent_control'),(error:unknown)=>error instanceof Refusal&&error.code==='BACKUP_DATABASE_URL');
+ const list=databaseListPlan('ac-personal-pg');
+ assert.deepEqual(list,{command:'docker',args:['exec','-i','ac-personal-pg','pg_restore','--list']});
+ assert.equal(list.args.some(arg=>arg.includes('s3cret')||arg.endsWith('.dump')),false);
+ assert.deepEqual(databaseListPlan(null),{command:'pg_restore',args:['--list']});
 });
 
 test('personal backup copies secrets, skips disposable directories and refuses a destination inside the data directory',async()=>{
@@ -128,5 +132,26 @@ test('personal backup omits happier data that belongs to another installation',a
   const manifest=await readFile(join(destination,'agent-control-IspAgent-20261112-0905','MANIFEST.txt'),'utf8');
   assert.match(manifest,/happier-shared-from/);
   assert.doesNotMatch(manifest,/data\/happier\//);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('restore check matches every sha256 and does not restore when the dump is unreadable or a file changes',async()=>{
+ const env=await tree();
+ const dump=async(file:string)=>{await writeFile(file,'PGDMP-fake',{mode:0o600});};
+ const destination=join(env.root,'empty');
+ try{
+  await runPersonalBackup([env.file,destination],{now,dump});
+  const backup=join(destination,'agent-control-IspAgent-20261112-0905');
+  const listed:string[]=[];
+  await assert.rejects(runPersonalRestoreCheck([backup],{listDump:async()=>{throw new Error('bad archive');}}),(error:unknown)=>error instanceof Refusal&&error.code==='RESTORE_DUMP_UNREADABLE');
+  assert.equal(listed.length,0);
+  const lines=await runPersonalRestoreCheck([backup],{listDump:async file=>{listed.push(file);}});
+  assert.match(lines[0]??'',/MANIFEST\.txt confere \(\d+ arquivos\)\./);
+  assert.equal(lines[1],'database.dump é legível.');
+  assert.deepEqual(listed,[join(backup,'database.dump')]);
+  await writeFile(join(backup,'data','happier-account.key'),'tampered\n',{mode:0o600});
+  await assert.rejects(runPersonalRestoreCheck([backup],{listDump:async()=>{listed.push('again');}}),(error:unknown)=>error instanceof Refusal&&error.code==='RESTORE_MANIFEST_MISMATCH');
+  assert.deepEqual(listed,[join(backup,'database.dump')]);
+  await assert.rejects(runPersonalRestoreCheck([join(env.root,'missing')]),(error:unknown)=>error instanceof Refusal&&error.code==='RESTORE_NOT_A_BACKUP');
  }finally{await rm(env.root,{recursive:true,force:true});}
 });

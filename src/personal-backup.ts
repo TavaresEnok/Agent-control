@@ -17,6 +17,11 @@ export type PersonalBackupOptions={
  dump?:(file:string,db:DatabaseEndpoint)=>Promise<void>;
  dockerPs?:()=>Promise<string>;
 };
+export type PersonalRestoreOptions={
+ /** Test double. Resolves when `database.dump` is a readable custom-format archive. */
+ listDump?:(file:string)=>Promise<void>;
+ dockerPs?:()=>Promise<string>;
+};
 export class CommandRefusal extends Refusal{
  constructor(code:string,readonly detail=''){super(code);}
 }
@@ -48,6 +53,12 @@ export function personalPgContainer(dockerPs:string,port:string):string|null{
 export function databaseDumpPlan(container:string|null,db:DatabaseEndpoint){
  if(container)return {command:'docker',args:['exec','-e','PGPASSWORD',container,'pg_dump','-Fc','-w','-U',db.user,'-d',db.database]};
  return {command:'pg_dump',args:['-Fc','-w','-h',db.host,'-p',db.port,'-U',db.user,'-d',db.database]};
+}
+
+/** `pg_restore --list` reads the archive from stdin, so the dump path never becomes an argument. */
+export function databaseListPlan(container:string|null){
+ if(container)return {command:'docker',args:['exec','-i',container,'pg_restore','--list']};
+ return {command:'pg_restore',args:['--list']};
 }
 
 export function dumpProcessEnv(base:NodeJS.ProcessEnv,db:DatabaseEndpoint):NodeJS.ProcessEnv{
@@ -284,4 +295,90 @@ export async function runPersonalBackup(argv:string[],options:PersonalBackupOpti
   if(createdParent)await rm(destination,{recursive:true,force:true});
   throw error;
  }
+}
+
+function safeRelative(rel:string){
+ if(!rel||rel.includes('\\')||rel.includes('\0')||rel.startsWith('/'))return false;
+ return rel.split('/').every(part=>part!==''&&part!=='.'&&part!=='..');
+}
+
+export async function verifyBackupManifest(backup:string){
+ const root=await realpath(backup);
+ let text:string;
+ try{text=await readFile(join(root,'MANIFEST.txt'),'utf8');}
+ catch{throw new Refusal('RESTORE_NOT_A_BACKUP');}
+ if(!text.endsWith('\n'))throw new Refusal('RESTORE_MANIFEST_MISMATCH');
+ const lines=text.slice(0,-1).split('\n');
+ const listed=new Map<string,string>();
+ for(const line of lines){
+  if(!/^([a-f0-9]{64})  (.+)$/.test(line)||line.slice(64,66)!=='  ')throw new Refusal('RESTORE_MANIFEST_MISMATCH');
+  const hash=line.slice(0,64),rel=line.slice(66);
+  if(listed.has(rel)||!safeRelative(rel))throw new Refusal('RESTORE_MANIFEST_MISMATCH');
+  listed.set(rel,hash);
+ }
+ let actual:string[];
+ try{actual=await regularFiles(root,false);}
+ catch{throw new Refusal('RESTORE_MANIFEST_MISMATCH');}
+ if(actual.length!==listed.size||actual.some(rel=>!listed.has(rel)))throw new Refusal('RESTORE_MANIFEST_MISMATCH');
+ for(const rel of actual){
+  let hash='';
+  try{hash=await fileSha256(join(root,rel));}
+  catch{throw new Refusal('RESTORE_MANIFEST_MISMATCH');}
+  if(hash!==listed.get(rel))throw new Refusal('RESTORE_MANIFEST_MISMATCH');
+ }
+ return actual.length;
+}
+
+async function listArchive(backup:string,dumpFile:string,options:PersonalRestoreOptions){
+ if(options.listDump){
+  try{await options.listDump(dumpFile);}
+  catch(error){
+   if(error instanceof Refusal)throw error;
+   throw new CommandRefusal('RESTORE_DUMP_UNREADABLE',redact(error instanceof Error?error.message:'' ,''));
+  }
+  return;
+ }
+ let container:string|null=null;
+ let secret='';
+ try{
+  const raw=JSON.parse(await readFile(join(backup,'installation.json'),'utf8')) as {databaseUrl?:unknown};
+  if(typeof raw.databaseUrl==='string'){
+   const db=databaseEndpoint(raw.databaseUrl);
+   secret=db.password;
+   if(loopback(db.host))container=personalPgContainer(await dockerListing(options.dockerPs),db.port);
+  }
+ }catch(error){
+  if(error instanceof Refusal&&error.code==='BACKUP_DATABASE_URL')throw error;
+  container=null;
+ }
+ const plan=databaseListPlan(container);
+ if(plan.args.some(arg=>arg.includes('database.dump')||(secret!==''&&arg.includes(secret))))throw new Refusal('RESTORE_DUMP_UNREADABLE');
+ const result=await spawnCollected(plan.command,plan.args,process.env,dumpFile,null,60_000);
+ if(result.code!==0)throw new CommandRefusal('RESTORE_DUMP_UNREADABLE',redact(result.stderr,secret));
+}
+
+/** Check a backup folder. Never writes to the database or the installation. */
+export async function runPersonalRestoreCheck(argv:string[],options:PersonalRestoreOptions={}){
+ const [backupArg]=argv;
+ if(!backupArg||backupArg.startsWith('--')||argv.length!==1)throw new Refusal('RESTORE_USAGE');
+ const requested=resolve(backupArg);
+ try{
+  const info=await lstat(requested);
+  if(info.isSymbolicLink()||!info.isDirectory())throw new Refusal('RESTORE_NOT_A_BACKUP');
+ }catch(error){
+  if(error instanceof Refusal)throw error;
+  throw new Refusal('RESTORE_NOT_A_BACKUP');
+ }
+ const backup=await realpath(requested);
+ const count=await verifyBackupManifest(backup);
+ const dumpFile=join(backup,'database.dump');
+ try{
+  const info=await lstat(dumpFile);
+  if(!info.isFile()||info.isSymbolicLink())throw new Refusal('RESTORE_DUMP_UNREADABLE');
+ }catch(error){
+  if(error instanceof Refusal)throw error;
+  throw new Refusal('RESTORE_DUMP_UNREADABLE');
+ }
+ await listArchive(backup,dumpFile,options);
+ return [`MANIFEST.txt confere (${count} arquivos).`,'database.dump é legível.'];
 }
