@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter, useLocation } from 'react-router'
 import {getApiBaseUrl} from '@open-mercato/cezar-api-client'
 import type {ReactNode} from 'react'
@@ -41,6 +41,15 @@ export function ScopedEvents({children}:{children:ReactNode}){
  *  The events provider is above the routes and publishes the live usage map to its descendants.
  *  Managed mode reconnects it when the project in the URL changes.
  */
+function PersonalPushRegistration(){
+  useEffect(()=>{
+    if(import.meta.env.VITE_AGENT_CONTROL_MANAGED!=='1')return
+    if(!('serviceWorker' in navigator))return
+    void navigator.serviceWorker.register('/sw.js').catch(()=>{})
+  },[])
+  return null
+}
+
 export function App() {
   // Lazy initial state rather than a module-level constant: one client per App instance, so a
   // test (or a remount) never inherits another's cache, and StrictMode's double-invoke of the
@@ -50,6 +59,7 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AgentControlAuthGate>
+      <PersonalPushRegistration />
       <BrowserRouter>
       <ScopedEvents>
         {/* The machine-telemetry store, one per app: the sidebar widget and the Settings card are

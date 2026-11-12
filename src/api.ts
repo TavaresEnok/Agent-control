@@ -30,14 +30,15 @@ import {managedWorkspaceStream} from './workspace-stream.ts';
 import {createImportPreviewApi} from './import-preview-api.ts';
 import {createDiagnosticsApi} from './diagnostics-api.ts';
 import {createPortableExportApi} from './portable-export-api.ts';
-import {deliverPersonalPush, listPersonalPush, sendPersonalPushTest, subscribePersonalPush, unsubscribePersonalPush} from './personal-push.ts';
+import {listPersonalPush, sendPersonalPushTest, subscribePersonalPush, unsubscribePersonalPush} from './personal-push.ts';
+import {panelServiceWorkerResponse} from './panel-service-worker.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
 // Only immutable public UI files are served without a session. Never delegate an
 // unauthenticated request to the embedded server, which owns privileged routes.
-// Lets a phone install the cockpit as an app (home-screen icon, full screen). No service worker:
-// the cockpit needs the server anyway, and nothing private is cached.
+// Lets a phone install the cockpit as an app (home-screen icon, full screen).
+// /sw.js only displays push alerts. It has no fetch handler and caches nothing.
 const manifest=JSON.stringify({name:'Agent Control',short_name:'Agent Control',start_url:'/',scope:'/',display:'standalone',
   background_color:'#000000',theme_color:'#000000',icons:[{src:'/pwa/icon-192.png',sizes:'192x192',type:'image/png'},
   {src:'/pwa/icon-512.png',sizes:'512x512',type:'image/png'},{src:'/pwa/icon-512.png',sizes:'512x512',type:'image/png',purpose:'maskable'}]});
@@ -62,8 +63,10 @@ async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T):Prom
   const line=text.trim().split('\n')[0]!.trim();
   return {...run,title:line.length>90?line.slice(0,90).trimEnd()+'…':line};
 }
+export function publicPanelAsset(path:string){return publicUi(path);}
 async function publicUi(path:string):Promise<Response|null>{
   let file:string, type:string;
+  if(path==='/sw.js')return panelServiceWorkerResponse();
   if(path==='/manifest.webmanifest')return new Response(manifest,{headers:{'content-type':'application/manifest+json','cache-control':'no-cache','x-content-type-options':'nosniff'}});
   if(/^\/pwa\/icon-(?:180|192|512)\.png$/.test(path)){
     try{return new Response(await readFile(resolve('deploy',path.slice(1))),{headers:{'content-type':'image/png','cache-control':'max-age=86400','x-content-type-options':'nosniff'}});}catch{return null;}
