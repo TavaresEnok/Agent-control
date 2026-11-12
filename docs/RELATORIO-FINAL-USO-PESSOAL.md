@@ -102,3 +102,28 @@ npm run gateway -- say $I pare                             # cancela a execuçã
 ```
 
 O resultado entra como commit no branch aberto no repositório, e os arquivos no disco avançam junto. Se algo travar, o código do motivo fica em `ac_audit` (`kind='manager.blocked'`) e o `serve` mostra o código da recusa ao subir. Depois de reconstruir imagens ou mudar o QA, rode `personal:setup` e reinicie o gateway. O guia completo está em `docs/USO-PESSOAL.md`.
+
+## Painel, vários projetos e SSH (11–12/11/2026)
+
+O plano `docs/PLANO-PAINEL-E-PROJETOS.md` foi executado até o fim. O Grok 4.7 programou; o Claude foi gerente e revisor. Tudo foi provado ao vivo na instalação do IspAgent, pelo endereço público `https://agentcontrol.tokstiloesporte.com`.
+
+- **Conversa no painel:** pergunta, pedido, Aprovar, Descartar, Parar e Equipe. Os relatos de cada papel aparecem com provedor, modelo e esforço.
+- **Vários projetos numa instalação, com um login de Claude e um de Grok:** dois pedidos ao mesmo tempo, cada um integrado só no próprio repositório. Projetos de teste: `segundo` e `ac-terceiro-projeto`.
+- **Novo projeto pelo painel:** a escolha é feita entre as pastas liberadas por `personal:roots`, e o gateway reinicia sozinho.
+- **Projeto por SSH:** provado com um servidor de teste (`ac-ssh-teste`, só em 127.0.0.1).
+  - A identidade do servidor é fixada na confirmação; uma identidade trocada é recusada.
+  - O resultado vai para o branch `agent-control/…` do servidor remoto, sem tocar no `main` de lá.
+- **QA com os testes do projeto:** no IspAgent, 51 testes da API. Um pedido que quebrava um teste foi reprovado, mostrando o teste; um pedido normal passou e foi integrado.
+- **Entrada por código:** `npm run gateway -- pair`. Avisos por Web Push: o código está pronto, mas o aviso no celular não foi testado.
+- **Imagens apagadas por limpeza do Docker:** agora a conversa avisa e o comando `personal:images` reconstrói tudo. Antes, isso deixava um planejamento travado.
+- **Backup:** `personal:backup` e `personal:restore-check`. A restauração foi conferida num banco descartável.
+- **Revisão independente por modelo Claude distinto** (Sonnet 5.5, `docs/implementation/REVISAO-CLAUDE-20261112.md`): nenhum achado alto, e os 12 médios e baixos foram corrigidos. Uso real em produção ainda exige revisão externa de segurança.
+
+Pendente do titular:
+
+- testar o login e os avisos no celular;
+- testar o SSH com um servidor real;
+- reiniciar a máquina de verdade;
+- decidir o push do branch;
+- descobrir o que rodou `docker system prune` ou `docker image prune -a` em 11/11;
+- apagar ou manter os projetos e o contêiner de teste.
