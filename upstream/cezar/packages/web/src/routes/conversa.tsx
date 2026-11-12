@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { PersonalPushControl } from '@/components/personal-push-control'
 import { agentControlFetch } from './settings/agent-control-fetch'
 
 const pageSchema = z.object({
@@ -206,6 +207,9 @@ export function ConversaRoute() {
 
   return (
     <div data-route="conversa" className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-end border-b px-2 py-1">
+        <PersonalPushControl />
+      </div>
       <div
         ref={scroller}
         onScroll={() => {
