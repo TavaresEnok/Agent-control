@@ -40,7 +40,11 @@ const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: ComponentType<SV
 /** Swatches point at the STABLE family tokens (`--accent-lime`, `--violet`), not `--primary` —
  *  the whole point of the control is that `--primary` changes under it. */
 const ACCENT_OPTIONS: Array<{ value: Accent; label: string; swatch: string }> = [
-  { value: 'lime', label: 'Lime', swatch: 'var(--accent-lime)' },
+  {
+    value: 'lime',
+    label: import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Azul' : 'Lime',
+    swatch: import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? '#4F8CFF' : 'var(--accent-lime)',
+  },
   { value: 'violet', label: 'Violet', swatch: 'var(--violet)' },
 ]
 

@@ -252,6 +252,15 @@
  * so these blocks only name the deviations.
  */
 
+/* Managed panel only (`ac-managed` on <html>, set from main.tsx). Replaces the lime accent
+ * in both themes: blue fill, dark label, and the same blue on the focus ring. A chosen
+ * violet accent still wins — `:root[data-accent='violet']` is more specific. */
+html.ac-managed {
+  --primary: #4F8CFF;
+  --primary-foreground: #0B1220;
+  --ring: #4F8CFF;
+}
+
 /* Violet accent: the `--primary` family swaps onto the existing violet tokens. An accent is
  * exactly a `--primary` family swap — a new accent = a new block here + one entry in
  * ACCENT_OPTIONS (routes/settings/appearance.tsx). */
