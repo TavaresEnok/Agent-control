@@ -224,7 +224,9 @@ async function main(){
     if(!token||/[\s\x00-\x1f\x7f]/.test(token))throw new Refusal('MANAGER_TOKEN_INVALID',400);
     const headers=new Headers();headers.set('authorization','Bearer '+token);
     const principal=await verify(new Request(config.http.publicOrigin+'/',{headers}));
-    if(principal!==config.project.owner)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    // The Happier account the installation talks through must own the primary project in the ledger.
+    const owns=principal?(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,principal])).rowCount:0;
+    if(!principal||!owns)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
     const issuedHeaders=new Headers(request.headers);issuedHeaders.set('authorization','Bearer '+token);
     return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}));
    }finally{raw.fill(0);}
