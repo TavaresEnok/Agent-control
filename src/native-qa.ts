@@ -249,7 +249,18 @@ export class NativeQa{
    const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical){if(this.contract.prepareArgv){const prep=await this.docker.inspect('ac-native-qa-prepare-'+id);if(prep?.State.Running)await this.docker.stop(prep.Id);}return;}this.inspect(physical,job);if(physical.State.Running)await this.docker.stop(physical.Id);
   });
  }
+ private readonly launching=new Map<string,Promise<unknown>>();
+ /** The run loop and reconciliation both reach this step. Only one may provision the database and start the test;
+  * a second provisioning would replace the first database and network under the test it already started. */
  private async launchPreparedTest(principal:string,authority:Authority,job:Record<string,any>){
+  const prior=this.launching.get(job.id);
+  if(prior){await prior.catch(()=>{});return {state:'running' as const};}
+  if(await this.docker.inspect('ac-native-qa-'+job.id))return {state:'running' as const};
+  const run=this.launchPreparedTestOnce(principal,authority,job);
+  this.launching.set(job.id,run);
+  try{return await run;}finally{this.launching.delete(job.id);}
+ }
+ private async launchPreparedTestOnce(principal:string,authority:Authority,job:Record<string,any>){
   let extra:string[]=[];
   if(this.contract.services){try{extra=await this.qaDatabaseEnv(job.id);}catch(error){if(error instanceof Refusal&&error.code==='QA_DATABASE_NOT_READY')return this.failUnstarted(principal,authority,job,'QA_DATABASE_NOT_READY',1,this.frameQaText('QA_DATABASE_NOT_READY'));throw error;}}
   let id:string;
