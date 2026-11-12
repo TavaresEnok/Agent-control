@@ -98,7 +98,8 @@ export function foldResults(
 
 export const DICTATION_INSECURE = 'Dictation needs https or localhost'
 export const DICTATION_NO_SERVICE = 'Dictation is not available in this browser'
-export const DICTATION_OLD_SHELL = 'Dictation needs a newer Cezar app — update it to use the microphone'
+const dictationProduct = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Agent Control' : 'Cezar'
+export const DICTATION_OLD_SHELL = `Dictation needs a newer ${dictationProduct} app — update it to use the microphone`
 
 /** The macOS desktop shell, when it hosts this page: `microphone` says whether it is entitled to
  *  one. Shells before 0.1.10 are not, and macOS refuses every dictation there (telemetry c55c7b0b). */
@@ -136,7 +137,7 @@ export function dictationNotice(code: string | undefined): DictationNotice | nul
     case 'not-allowed':
       return {
         message: macosShell()
-          ? 'Microphone blocked — allow Cezar in System Settings → Privacy & Security → Microphone and Speech Recognition'
+          ? `Microphone blocked — allow ${dictationProduct} in System Settings → Privacy & Security → Microphone and Speech Recognition`
           : "Microphone blocked — allow it for this site in the browser's site settings",
         failure: null,
       }

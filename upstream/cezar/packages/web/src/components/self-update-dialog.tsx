@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { panelBrandName } from '@/lib/panel-brand'
 import { cn } from '@/lib/utils'
 
 import { DevelopmentPanel, pullOfVersion } from './self-update-development'
@@ -40,7 +41,7 @@ export function SelfUpdateDialog({
   open,
   onOpenChange,
   autoApply,
-  brandName = 'cezar',
+  brandName = panelBrandName(),
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void

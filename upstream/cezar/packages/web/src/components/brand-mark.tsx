@@ -1,3 +1,4 @@
+import { panelBrandName } from '@/lib/panel-brand'
 import { cn } from '@/lib/utils'
 
 /**
@@ -52,6 +53,7 @@ export function BrandMark({ height = BRAND_LOCKUP.mark, className }: { height?: 
 
 /** The mark beside the name, at the navigation sizes. */
 export function BrandLockup({ className, name = 'cezar', logoUrl = null }: { className?: string; name?: string; logoUrl?: string | null }) {
+  const label = panelBrandName(name)
   return (
     <span
       data-slot="brand-lockup"
@@ -61,10 +63,10 @@ export function BrandLockup({ className, name = 'cezar', logoUrl = null }: { cla
       {logoUrl ? <img data-slot="brand-logo" src={logoUrl} alt="" className="size-[26px] shrink-0 object-contain" /> : <BrandMark />}
       <span
         data-slot="brand-name"
-        className={cn('max-w-full truncate leading-none font-semibold tracking-normal', name === 'cezar' && 'lowercase')}
+        className={cn('max-w-full truncate leading-none font-semibold tracking-normal', label === 'cezar' && 'lowercase')}
         style={{ fontFamily: 'var(--brand)', fontSize: BRAND_LOCKUP.name }}
       >
-        {name}
+        {label}
       </span>
     </span>
   )

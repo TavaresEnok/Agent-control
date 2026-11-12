@@ -22,6 +22,7 @@ import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { pageTitleContext } from '@/routes'
+import { panelBrandName } from '@/lib/panel-brand'
 
 /**
  * Derive the sidebar's repo chip from `/api/health`.
@@ -66,7 +67,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const health = useHealth()
   const workspaceConfig = useWorkspaceConfig()
   const branding = workspaceConfig.data?.branding
-  const customBranding = branding !== undefined && (
+  const managed = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
+  const brandName = panelBrandName(branding?.name)
+  const customBranding = !managed && branding !== undefined && (
     branding.name !== 'cezar' || branding.logoUrl !== null
   )
   const starCount = useStarCount(!customBranding && workspaceConfig.data !== undefined)
@@ -126,7 +129,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       (isBootProject ? (repoChipOf(health.data)?.name ?? null) : null))
   const pageLabel = titleLabel ?? titleContext.pageLabel
 
-  useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })
+  useDocumentTitle({ projectName, pageLabel, brandName, brandLogoUrl: managed ? null : workspaceConfig.data?.branding.logoUrl })
 
   // Multi-project sidebar only from the SECOND project on (multi-project spec, "Sidebar").
   // With one registered project — or with the registry still loading, or unreachable — the
@@ -184,14 +187,14 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     <ListViewProvider>
       <AppShell
         repo={repo}
-        brandName={workspaceConfig.data?.branding.name ?? 'cezar'}
-        brandLogoUrl={workspaceConfig.data?.branding.logoUrl ?? null}
+        brandName={brandName}
+        brandLogoUrl={managed ? null : (workspaceConfig.data?.branding.logoUrl ?? null)}
         version={health.data?.version ?? null}
         latestVersion={health.data?.latestVersion ?? null}
         // The ⭐ ask's count. Same honesty rule as the chips above: `available: false` — offline,
         // a rate-limited IP, or promos silenced with `CEZ_NO_BANNER=1` — is `null` here, and
         // AppShell renders no chip for it rather than a button that cannot count.
-        starCount={!customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null}
+        starCount={!managed && !customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null}
         // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
         // is known to be empty — AppShell renders neither for a falsy count.
         inboxCount={todos.data?.length ?? null}

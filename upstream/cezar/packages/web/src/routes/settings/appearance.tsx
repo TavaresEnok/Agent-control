@@ -235,7 +235,7 @@ export function AppearanceSection() {
       data-slot="appearance-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
-      <BrandingFields />
+      {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? null : <BrandingFields />}
       <Field title="Theme" hint="System follows your OS preference. Applies to this browser.">
         <Segmented slot="appearance-theme" label="Theme" value={theme} options={THEME_OPTIONS} onChange={setTheme} />
       </Field>

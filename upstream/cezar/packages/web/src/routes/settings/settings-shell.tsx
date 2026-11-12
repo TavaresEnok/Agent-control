@@ -12,6 +12,7 @@ import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-cli
 import { useHealth, useProjects, useStarCount, useWorkspaceConfig } from '@/api/queries'
 import { StarChip, VersionChip } from '@/components/app-shell'
 import { BrandLockup } from '@/components/brand-mark'
+import { panelBrandName } from '@/lib/panel-brand'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { SidebarDrawer, SidebarFrame, useSidebarWidth } from '@/components/sidebar-frame'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -459,12 +460,13 @@ function SettingsSidebarContent({
   const health = useHealth().data
   const version = health?.version ?? null
   const latestVersion = health?.latestVersion ?? null
+  const managed = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
   const stars = useStarCount().data
-  const starCount = stars?.available ? (stars.count ?? null) : null
+  const starCount = managed ? null : (stars?.available ? (stars.count ?? null) : null)
   // White-label branding (main): the same name and logo the app sidebar's lockup and chips show.
   const branding = useWorkspaceConfig().data?.branding
-  const brandName = branding?.name ?? 'cezar'
-  const brandLogoUrl = branding?.logoUrl ?? null
+  const brandName = panelBrandName(branding?.name)
+  const brandLogoUrl = managed ? null : (branding?.logoUrl ?? null)
 
   return (
     <TouchTargetsContext.Provider value={touch}>

@@ -73,7 +73,7 @@ export function TelemetryConsentBanner() {
   const setConsent = useSetTelemetryConsent()
   const [busy, setBusy] = useState(false)
   const [details, setDetails] = useState(false)
-  if (!shouldAskForTelemetry(consent.data)) return null
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' || !shouldAskForTelemetry(consent.data)) return null
 
   const answer = async (c: Answer) => {
     setBusy(true)

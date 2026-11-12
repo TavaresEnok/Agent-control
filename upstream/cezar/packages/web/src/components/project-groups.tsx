@@ -772,7 +772,9 @@ function ProjectGroup({
               // Add (#1432); repeating the button here would put a registry write in the nav.
               <span
                 data-slot="project-unregistered"
-                title="cezar is serving this folder — it is not in your saved projects. Add it from this project's Settings."
+                title={import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
+                  ? 'Agent Control is serving this folder — it is not in your saved projects. Add it from this project’s Settings.'
+                  : 'cezar is serving this folder — it is not in your saved projects. Add it from this project’s Settings.'}
                 className="shrink-0 rounded-full bg-muted px-[7px] py-px text-micro font-medium text-soft-foreground"
               >
                 not saved

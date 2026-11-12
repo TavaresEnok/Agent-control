@@ -27,6 +27,7 @@ import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
+import { panelBrandName } from '@/lib/panel-brand'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -201,7 +202,7 @@ export const AppShell = React.memo(function AppShell({
   banner,
   footerBanner,
   projectGroups,
-  brandName = 'cezar',
+  brandName = panelBrandName(),
   brandLogoUrl = null,
 }: AppShellProps) {
   const { pathname } = useLocation()

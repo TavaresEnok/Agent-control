@@ -38,7 +38,7 @@ const SKILL_SOURCE_DESCRIPTIONS: Record<Skill['source'], string> = {
   agents: 'From .agents/skills or an agent-specific folder; always enabled while present.',
   global: 'User-wide from ~/.agents/skills or ~/.claude/skills, shared across projects.',
   team: 'Shared from a team repository configured for this project; importable skills can be enabled or disabled here.',
-  builtin: 'Built into Cezar rather than installed from a skill repository.',
+  builtin: `Built into ${import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Agent Control' : 'Cezar'} rather than installed from a skill repository.`,
 }
 
 /** The source tag every skill listing shows — project sources read emphasized (#377). */

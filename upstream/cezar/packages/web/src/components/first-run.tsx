@@ -102,6 +102,7 @@ export function FirstRun({ gitRepo }: { gitRepo: boolean | undefined }) {
   const skipped = uiState.data?.onboarding?.agentCheckSkipped === true
   // Nothing until the agent answer is in: a welcome that flips to "sign in" a moment later is worse
   // than a short blank.
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return null
   if (providers.data === undefined && !skipped) return null
   if (hasSignedInAgent(providers.data) === false && !skipped) return <AgentStep />
   // The same for git: a welcome that flips to "pick a project" once `/repo` answers is a flash of
@@ -1374,6 +1375,7 @@ export function WelcomeBack({ runs }: { runs: readonly RunRecord[] }) {
   const write = useOnboardingWrite()
   const [now] = React.useState(() => Date.now())
   const [showNews, setShowNews] = React.useState(false)
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return null
   const since = welcomeBackSince(uiState.data?.onboarding, now)
   if (!since) return null
   const waiting = tasksNeedingYou(runs)
@@ -1450,6 +1452,7 @@ export function WhatsNewNavItem() {
   const [open, setOpen] = React.useState(false)
   const [now] = React.useState(() => Date.now())
   const capabilities = { designMode: health.data?.capabilities.designMode, automations: health.data?.capabilities.automations }
+  if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') return null
   const items = recentAnnouncements(capabilities, now)
   if (!uiState.data || items.length === 0) return null
   const unseen = whatsNewHasUnseen(uiState.data.onboarding, capabilities, now)

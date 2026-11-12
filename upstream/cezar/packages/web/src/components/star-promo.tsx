@@ -55,12 +55,13 @@ const otherDialogOpen = () => document.querySelector('[role="dialog"],[role="ale
 export function StarPromo() {
   const queryClient = useQueryClient()
   const workspaceConfig = useWorkspaceConfig()
+  const managed = import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1'
   const branding = workspaceConfig.data?.branding
   const customBranding = branding !== undefined && (
     branding.name !== 'cezar' || branding.logoUrl !== null
   )
-  const starCount = useStarCount(workspaceConfig.data !== undefined && !customBranding)
-  const allowed = !customBranding && starCount.data?.available === true
+  const starCount = useStarCount(!managed && workspaceConfig.data !== undefined && !customBranding)
+  const allowed = !managed && !customBranding && starCount.data?.available === true
   const count = !customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null
   const [open, setOpen] = useState(false)
 
@@ -143,6 +144,7 @@ export function StarPromo() {
     }
   }, [queryClient])
 
+  if (managed) return null
   return customBranding ? null : <StarAskDialog open={open} onOpenChange={setOpen} count={count} />
 }
 

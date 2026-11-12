@@ -94,7 +94,7 @@ const RAW_TRANSPORT_MESSAGES = new Set([
   'NetworkError when attempting to fetch resource.',
 ])
 
-export const UNREACHABLE_TOAST = 'cannot reach the cezar server — check the connection and try again'
+export const UNREACHABLE_TOAST = `cannot reach the ${import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Agent Control' : 'cezar'} server — check the connection and try again`
 
 /** A raw transport `TypeError` that escaped the client's `ApiError(0)` mapping (a body read that
  *  failed after the headers arrived) still says something a user can act on (telemetry 2e454012). */

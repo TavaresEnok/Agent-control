@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 
+import { panelBrandName } from '@/lib/panel-brand'
+
 export interface DocumentTitleParts {
   projectName: string | null
   pageLabel: string | null
@@ -16,7 +18,7 @@ function titlePart(value: string | null): string | null {
 export function documentTitleOf({ projectName, pageLabel, brandName }: DocumentTitleParts): string {
   const project = titlePart(projectName)
   const page = titlePart(pageLabel)
-  const brand = titlePart(brandName ?? null) ?? 'cezar'
+  const brand = panelBrandName(titlePart(brandName ?? null))
 
   if (project && page) return `${project} — ${page} · ${brand}`
   if (project) return `${project} · ${brand}`

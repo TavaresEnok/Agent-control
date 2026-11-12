@@ -23,6 +23,8 @@ function resolveApiBase(): string {
 
 setApiBaseUrl(resolveApiBase())
 
+if (import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1') document.title = 'Agent Control'
+
 const container = document.getElementById('root')
 if (!container) throw new Error('cezar: #root container is missing from index.html')
 
