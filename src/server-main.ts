@@ -67,6 +67,21 @@ async function main(){
   console.log('Válido até '+new Date(issued.expiresAt).toISOString());
   return;
  }
+ if(command==='password'){
+  const remove=extra.includes('--remove');
+  const args=extra.filter(item=>item!=='--remove');
+  if(!path||extra.some(item=>item.startsWith('--')&&item!=='--remove')||(remove?args.length>1:args.length!==1))throw Error('INVALID_INSTALLATION_COMMAND');
+  const config=await loadInstallation(path);
+  if(config.activation!=='personal')throw Error('PERSONAL_ACTIVATION_REQUIRED');
+  const {promptPanelPassword,removePanelLogin,savePanelLogin}=await import('./personal-password.ts');
+  if(remove){await removePanelLogin(config.dataDirectory);console.log('Credencial apagada.');return;}
+  const user=args[0]!.trim().toLowerCase();
+  if(!/^[a-z0-9._-]{3,40}$/.test(user))throw Error('INVALID_PANEL_USER');
+  const password=await promptPanelPassword();
+  const saved=await savePanelLogin(config.dataDirectory,user,password);
+  console.log('Senha gravada para '+saved.user+'.');
+  return;
+ }
  if(command==='personal-connect'){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
   const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path)));return;
@@ -232,7 +247,27 @@ async function main(){
     return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}));
    }finally{raw.fill(0);}
   }:undefined;
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin});
+  const passwordLogin=config.activation==='personal'?async(request:Request)=>{
+   sessions.checkOrigin(request);
+   const input=z.object({user:z.string().min(1).max(40),password:z.string().min(1).max(200)}).strict().parse(await request.json());
+   if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);
+   const raw=await readPrivateFile(config.managerTransport.tokenFile,16384);
+   try{
+    const token=raw.toString('utf8').trim();
+    if(!token||/[\s\x00-\x1f\x7f]/.test(token))throw new Refusal('MANAGER_TOKEN_INVALID',400);
+    const headers=new Headers();headers.set('authorization','Bearer '+token);
+    const principal=await verify(new Request(config.http.publicOrigin+'/',{headers}));
+    const owns=principal?(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,principal])).rowCount:0;
+    if(!principal||!owns)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+    const {verifyPanelLogin,panelLoginDenied,panelSessionSeconds}=await import('./personal-password.ts');
+    const {pairClientIp}=await import('./personal-pair.ts');
+    const verdict=await verifyPanelLogin(config.dataDirectory,input.user,input.password,Date.now(),pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address')));
+    if(verdict!=='accepted')return panelLoginDenied(verdict);
+    const issuedHeaders=new Headers(request.headers);issuedHeaders.set('authorization','Bearer '+token);
+    return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}),panelSessionSeconds);
+   }finally{raw.fill(0);}
+  }:undefined;
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
