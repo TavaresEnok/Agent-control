@@ -1,60 +1,49 @@
-# Ordem para o Grok — cadastrar servidor SSH com login e senha
+# Ordem para o Grok — melhoria 1: cara própria do painel e fim dos avisos que poluem
 
-Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço **alto** (segurança).
+Escrita pelo gerente (Claude) em 12/11/2026. O gerente executa o Grok sem tela, com `grok-4.7`, esforço médio.
 
 ---
 
-Você é o programador do Agent Control. Leia `src/personal-ssh.ts`, as rotas `/api/v1/ac/personal/ssh*` em `src/api.ts` e a tela "Outro servidor (SSH)" em `upstream/cezar/packages/web/src/routes/novo-projeto.tsx`.
-
-Hoje o titular tem de colar a chave pública da instalação no `authorized_keys` do outro servidor. Ele quer só informar host, porta, usuário e senha.
-
-## Decisão do gerente (não mude)
-
-- **A senha é usada uma única vez:** só para instalar a chave pública da instalação no `~/.ssh/authorized_keys` do usuário remoto. Depois disso todas as conexões continuam por chave, como hoje.
-- **A senha nunca é gravada**, nunca vai para log, mensagem de erro, banco ou arquivo, e não fica em variável global. Zere o `Buffer` depois do uso.
-- **A identidade do servidor continua obrigatória.** O fluxo continua: escanear, mostrar o fingerprint e o dono confirmar. A senha só é enviada **depois** da confirmação, com `StrictHostKeyChecking=yes` contra o `known_hosts` fixado. Uma senha nunca vai para um servidor com identidade não confirmada.
+Você é o programador do Agent Control. O painel é a página web do Cezar (`upstream/cezar/packages/web/src`) com as telas do Agent Control por cima. Tudo o que você mudar vale **só quando `import.meta.env.VITE_AGENT_CONTROL_MANAGED==='1'`**. Fora disso, o Cezar continua igual.
 
 ## O que fazer
 
-1. **`installKeyWithPassword(dataDirectory, hostId, password)`** em `src/personal-ssh.ts`.
-   - Usa o `ssh` com as mesmas opções de isolamento de `sshOptionArgs`, exceto `IdentitiesOnly` e `IdentityFile`, e mais `-o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1`.
-   - A senha entra por `SSH_ASKPASS`: um script auxiliar em pasta temporária privada (700). Ele **lê a senha de um descritor de arquivo herdado** (um pipe), não de argumento nem de variável de ambiente com o valor. Use `SSH_ASKPASS_REQUIRE=force` e `DISPLAY` vazio. O script é apagado no `finally`.
-   - Comando remoto fixo:
-     - cria `~/.ssh` com 700 e `~/.ssh/authorized_keys` com 600;
-     - acrescenta a chave pública só se ela ainda não estiver lá (compare a linha inteira);
-     - a chave vai como argumento entre aspas simples, já validada por regex `^ssh-ed25519 [A-Za-z0-9+/=]+( [A-Za-z0-9@._-]+)?$`.
-   - Depois, testa a conexão por chave (`BatchMode=yes`, por exemplo `true`). Se falhar, `SSH_KEY_INSTALL_FAILED`.
-   - Erros: senha errada → `SSH_PASSWORD_REJECTED` (401); identidade diferente → `HOST_KEY_CHANGED`; rede → `SSH_FAILED`. Sem texto do servidor.
-   - Tempo máximo: 30 s.
-2. **Rota `POST /api/v1/ac/personal/ssh/hosts/:id/install-key {password}`**, só para o dono da instalação (`requireInstallationOwner`). Senha de 1 a 200 caracteres. A resposta não ecoa nada.
-   - Limite: 5 falhas por servidor por 10 minutos, para não virar força bruta contra o outro servidor.
-3. **Tela.** Em "Adicionar servidor", os campos são host, porta (padrão 22), usuário e **senha**.
-   - Fluxo: "Conferir identidade" → mostra o fingerprint → "Confirmar e conectar".
-   - Isso confirma a identidade, chama `install-key` com a senha e limpa o campo.
-   - Embaixo, um link "Prefiro colar a chave eu mesmo", que mostra a chave pública como hoje e confirma sem senha.
-   - Mensagens: "Senha recusada pelo servidor.", "Conectado. A senha não foi guardada.".
-4. **`docs/USO-PESSOAL.md`:** explique o fluxo novo em poucas linhas.
+1. **Nome e marca.** No painel gerenciado, o nome visível é sempre "Agent Control": título da aba, topo do menu, tela de entrada e qualquer "Cezar" visível ao usuário. O texto de licença e de créditos pode continuar.
+2. **Cor própria.** Troque o acento verde-limão por um azul próprio (`#4F8CFF`, com texto escuro `#0B1220` sobre o botão), usando os tokens de `styles/index.css` (`--primary`, `--primary-foreground` e os de foco e anel). Faça isso num seletor que só vale no painel gerenciado. Por exemplo, uma classe `ac-managed` no `<html>`, posta em `main.tsx` quando a variável for `'1'`. Confira o tema claro e o escuro. Ajuste também o `theme_color` do manifest em `src/api.ts`.
+3. **Menu enxuto.**
+   - No painel gerenciado, o menu mostra só, nesta ordem: **Conversa**, **Tarefas**, **Novo projeto** e **Configurações**.
+   - Esconda Inbox, Git, GitHub, Tracker, Automations, Skills e Workflows do menu e da paleta de comandos.
+   - Se alguém abrir uma dessas rotas direto, a página mostra "Não disponível no Agent Control" com um link para a Conversa.
+   - Rótulos em português.
+   - Nas Configurações, deixe só as seções do Agent Control (procure `agent-control-section` e `registry.tsx`) e as de aparência e tema.
+4. **Sem aviso de falha durante o reinício.** Na Conversa (`routes/conversa.tsx`):
+   - uma falha de leitura isolada não mostra nada;
+   - a partir de 3 falhas seguidas aparece "Reconectando…", discreto;
+   - "Não foi possível atualizar." só aparece depois de 30 s sem sucesso;
+   - a primeira leitura bem-sucedida limpa tudo.
+5. **Sem a conexão em tempo real recusada.**
+   - No painel gerenciado, a página não abre o WebSocket `/api/v1/ws`, que o gateway recusa com 403 de propósito. Veja `app.tsx`, `GlobalEventsProvider` e onde a URL do WebSocket é montada.
+   - As telas que dependiam dele continuam funcionando pela consulta periódica que já existe. Se alguma ficar sem atualização, use uma consulta a cada 5 s só nela.
 
-## Testes essenciais
+## Verificação
 
-- O script de askpass não contém a senha, e a senha não aparece nos argumentos do processo. Teste a função que monta o comando e o ambiente.
-- A rota exige a identidade já confirmada: um host não confirmado é recusado antes de qualquer conexão.
-- Falha 6 vezes seguidas: na sexta vem o bloqueio.
+- `npm --prefix upstream/cezar/packages/web run typecheck` sai 0.
+- `npm run typecheck` sai 0.
+- Sem testes de tela. O gerente confere no celular simulado.
 
 ## Permissões nesta execução (não tem tela)
 
-- Você pode editar arquivos em `src/`, `tests/` e `upstream/cezar/packages/web/src/`, além de `docs/USO-PESSOAL.md`.
-- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `npx tsx --test <arquivo>`, `rg`, `ls`.
-- Não rode `ssh`, o gateway nem o Docker. O gerente prova com um servidor de teste.
+- Você pode editar arquivos em `upstream/cezar/packages/web/src/` e em `src/api.ts`.
+- No shell, só estes comandos, **um por chamada**, sem `&&`, `;`, `|` ou redirecionamento e **sem variáveis de ambiente na frente**: `git status`, `git diff`, `git add <arquivos>`, `git commit -m "..."`, `git log`, `git show`, `npm run typecheck`, `npm --prefix upstream/cezar/packages/web run typecheck`, `rg`, `ls`.
+- Não pesquise na internet nem rode outros comandos. Se faltar informação, procure no código com `rg`.
 
 ## Regras
 
-- Sem push. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
+- Sem push. Um commit por item. Mensagem de commit: uma frase em inglês, sem linha `Co-Authored-By` do Claude.
 - Se travar por mais de 15 minutos, pare e relate.
 
 ## Relatório final
 
 - Os hashes dos commits.
-- Onde fica cada regra de segurança da senha (arquivo:linha).
-- Os testes.
+- Os typechecks.
 - O que não conferiu.

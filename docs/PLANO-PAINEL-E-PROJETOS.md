@@ -207,3 +207,12 @@ Itens deixados de fora de propósito:
 | Cota compartilhada entre projetos | Limite global por conta (Fase 2.5) e fila em vez de erro. |
 | Conexão SSH cai no meio | O push é seguro de repetir. A execução não depende da conexão, porque roda aqui. |
 | Web Push no iPhone é limitado | Exige o app instalado. Enquanto isso, o app Happier continua avisando. |
+
+## Melhorias depois do plano (pedidas em 12/11/2026)
+
+| # | Melhoria | Estado |
+|---|---|---|
+| M1 | Cara própria do painel (nome, cor, menu enxuto) e fim dos avisos que poluem | com o Grok |
+| M2 | QA com os testes que usam banco (banco de teste temporário numa rede interna sem internet) | não começada |
+| M3 | Corrigir os 8 testes antigos do modo bloqueado | não começada |
+| M4 | Tirar o Happier: conversa e login no próprio Agent Control (levantamento primeiro) | não começada |
