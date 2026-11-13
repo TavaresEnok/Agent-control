@@ -31,8 +31,12 @@ export const CapacityPolicy = z.object({ schemaVersion: z.literal(1),
     qa: Chain.optional(), specialist: Chain.optional(), judge: Chain.optional() }).strict(),
   /** Set when a personal combo published this revision. Old snapshots omit it. */
   combo: z.string().min(1).max(80).optional(),
-  /** Programmer profile ids by task level. Absent on policies published before combos. */
-  programmerTiers: z.object({ standard: z.array(Id).min(1).max(20), basic: z.array(Id).max(20) }).strict().optional(),
+  /** Programmer profile ids by task level. Absent on policies published before combos.
+   * Reserve ids are the emergency chain for that level. Old snapshots omit them. */
+  programmerTiers: z.object({
+    standard: z.array(Id).min(1).max(20), basic: z.array(Id).max(20),
+    standardReserve: z.array(Id).max(20).optional(), basicReserve: z.array(Id).max(20).optional(),
+  }).strict().optional(),
   /** True only when the combo named a model QA profile. Absent means script QA only. */
   qaModel: z.boolean().optional(),
 }).strict().superRefine((p, ctx) => {
@@ -46,12 +50,15 @@ export const QuotaInput = z.object({ status: z.enum(['available','exhausted','ra
   source: z.string().min(1).max(200), ttlSeconds: z.number().int().min(1).max(3600) }).strict();
 export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role,
   taskLevel: z.enum(['basic','standard']).optional() }).strict();
-/** Basic tasks use the combo's basic profiles when that list exists. Every other programmer task uses standard. Policies without tiers keep the full chain. */
+/** Basic tasks use the combo's basic profiles when that list exists. Every other programmer task uses standard. Policies without tiers keep the full chain.
+ * A level's reserve list, when present, is the only emergency chain for that level. Older snapshots leave the list out and keep filtering emergency by the regular ids. */
 export function programmerChain(policy:CapacityPolicy,role:string,chain:{regular:string[];emergency:string[]},taskLevel?:'basic'|'standard'){
  if(role!=='programmer'||!policy.programmerTiers)return chain;
  const useBasic=taskLevel==='basic'&&policy.programmerTiers.basic.length>0;
- const allowed=new Set(useBasic?policy.programmerTiers.basic:policy.programmerTiers.standard);
- return {regular:chain.regular.filter(id=>allowed.has(id)),emergency:chain.emergency.filter(id=>allowed.has(id))};
+ const regularIds=new Set(useBasic?policy.programmerTiers.basic:policy.programmerTiers.standard);
+ const listed=useBasic?policy.programmerTiers.basicReserve:policy.programmerTiers.standardReserve;
+ const emergencyIds=listed?new Set(listed):regularIds;
+ return {regular:chain.regular.filter(id=>regularIds.has(id)),emergency:chain.emergency.filter(id=>emergencyIds.has(id))};
 }
 export type Grant = { id: string; attempt_id: string; context_id: string; account_id: string; profile_id: string;
   resource_kind:'model'; state: string; manager_epoch: string; request_digest: string; emergency: boolean };
@@ -59,7 +66,7 @@ export const LocalCompositorGrantRequest=z.object({attemptId:Id,intentId:Id,cont
 export type LocalCompositorGrant={id:string;attempt_id:string;intent_id:string;context_id:string;manager_epoch:string;
  resource_kind:'local_compositor';account_id:null;profile_id:null;role:'programmer';state:string;request_digest:string;emergency:false};
 
-type LoadedProfile = ChainProfileFacts & { accountId: string | null; maxConcurrent: number | null };
+type LoadedProfile = ChainProfileFacts & { accountId: string | null; maxConcurrent: number | null; provider: string | null };
 const evaluations: Role[] = ['reviewer','qa','specialist','judge'];
 
 /** Only the PG ledger admits capacity. This service never advances a Cezar DAG. */
@@ -247,18 +254,18 @@ export class Capacity {
   }
   /** Read-only chain lookup. Missing ids stay in order so the refusal can name them. */
   private async chainFacts(c: pg.PoolClient, ids: string[], projectId: string): Promise<LoadedProfile[]> {
-    const found = await c.query<{profile_id:string;model:string;catalog_valid:boolean;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number}>(
+    const found = await c.query<{profile_id:string;model:string;catalog_valid:boolean;mode:string;account_enabled:boolean;profile_enabled:boolean;eligibility:string;project_access:boolean;fresh_quota:string|null;account_id:string;max_concurrent:number;provider:string}>(
       `SELECT p.id profile_id,p.model,EXISTS(SELECT 1 FROM ac_model_catalog m WHERE m.provider=a.provider AND m.model=p.model AND (p.effort=ANY(m.efforts) OR (p.effort IN ('xhigh','max') AND 'high'=ANY(m.efforts))) AND p.role=ANY(m.roles)) catalog_valid,a.mode,a.enabled account_enabled,p.enabled profile_enabled,a.eligibility,
         EXISTS(SELECT 1 FROM ac_account_access x WHERE x.account_id=a.id AND x.project_id=$2) project_access,
         CASE WHEN a.exhausted_until>clock_timestamp() THEN 'exhausted' ELSE ac_profile_quota_status(a.id,p.model) END fresh_quota,
-        a.id account_id,a.max_concurrent
+        a.id account_id,a.max_concurrent,a.provider
         FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
         LEFT JOIN ac_quota_observations q ON q.account_id=a.id WHERE p.id=ANY($1::uuid[])`, [ids, projectId]);
     const byId = new Map(found.rows.map(row => [row.profile_id, row]));
     return ids.map(profileId => {
       const row = byId.get(profileId);
-      if (!row) return { profileId, profilePresent: false, projectAccess: false, mode: null, accountEnabled: false, profileEnabled: false, eligibility: null, freshQuotaStatus: null, accountId: null, maxConcurrent: null };
-      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, modelDisabled:modelDisabledByPolicy(row.model), catalogValid:row.catalog_valid, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent };
+      if (!row) return { profileId, profilePresent: false, projectAccess: false, mode: null, accountEnabled: false, profileEnabled: false, eligibility: null, freshQuotaStatus: null, accountId: null, maxConcurrent: null, provider: null };
+      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, modelDisabled:modelDisabledByPolicy(row.model), catalogValid:row.catalog_valid, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent, provider: row.provider };
     });
   }
   async reserve(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority): Promise<Grant> {
@@ -301,8 +308,20 @@ export class Capacity {
       const ids = [...regular,...chain.emergency];
       const loaded = await this.chainFacts(c, ids, context.project_id);
       // Saturation is a later gate. This path never writes quota and never leaves the chain.
+      // Regular is walked first. A titular profile excluded as quota_exhausted (also exhausted_until)
+      // or authentication_required yields, and the next eligible profile is reserved. That next
+      // profile is the emergency reserve when every regular profile yielded. The plan is refused
+      // only when the reserve is missing or itself ineligible — not because the titular is out.
       const personal=await this.personal(c);
-      const choice = loaded.find(row => classifyProfileExclusion(row,{personal}) === null && row.accountId && row.maxConcurrent != null);
+      // Personal mode keeps the reviewer off the provider that wrote the change, including the reserve.
+      let writerProvider:string|null=null;
+      if(personal&&(request.role==='reviewer'||request.role==='judge')){
+        const writer=(await c.query(`SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
+          WHERE g.intent_id=$1 AND g.context_id=$2 AND g.role='programmer' AND g.resource_kind='model'
+          ORDER BY g.created_at DESC LIMIT 1`,[request.intentId,request.contextId])).rows[0];
+        writerProvider=writer?String(writer.provider):null;
+      }
+      const choice = loaded.find(row => classifyProfileExclusion(row,{personal}) === null && !(writerProvider&&row.provider===writerProvider) && row.accountId && row.maxConcurrent != null);
       if (!choice?.accountId || choice.maxConcurrent == null) {
         const exclusions = orderedProfileExclusions(loaded,{personal});
         await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);

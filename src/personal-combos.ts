@@ -8,8 +8,11 @@ import {Effort} from './effort.ts';
 import type {Ledger} from './ledger.ts';
 
 const Provider=z.enum(['claude','grok','codex']);
+const ComboReserve=z.object({provider:Provider,model:z.string().min(1).max(100),effort:Effort}).strict();
+export type ComboReserve=z.infer<typeof ComboReserve>;
 export const ComboSlot=z.object({
  provider:Provider,model:z.string().min(1).max(100),effort:Effort,count:z.number().int().min(1).max(10).default(1),
+ reserve:ComboReserve.optional(),
 }).strict();
 export type ComboSlot=z.infer<typeof ComboSlot>;
 const ProgrammerSlots=z.array(ComboSlot).min(1).max(4);
@@ -23,8 +26,8 @@ export const PersonalCombo=z.object({
 export type PersonalCombo=z.infer<typeof PersonalCombo>;
 const ComboFile=z.object({schemaVersion:z.literal(1),combos:z.array(PersonalCombo).max(40)}).strict();
 
-const slot=(provider:ComboSlot['provider'],model:string,effort:ComboSlot['effort'],count=1):ComboSlot=>
- ({provider,model,effort,count});
+const slot=(provider:ComboSlot['provider'],model:string,effort:ComboSlot['effort'],count=1,reserve?:ComboReserve):ComboSlot=>
+ ({provider,model,effort,count,...(reserve?{reserve}:{})});
 
 /** The four teams the owner asked for. Counts are explicit so the JSON stays stable. */
 export const builtinCombos:PersonalCombo[]=[
@@ -99,6 +102,15 @@ function slotsOf(combo:PersonalCombo):SlotUse[]{
  for(const slot of combo.roles.programmer.basic??[])uses.push({role:'programmer',slot});
  return uses;
 }
+function reserveSpec(spec:ComboSlot):ComboSlot|null{
+ if(!spec.reserve)return null;
+ return {provider:spec.reserve.provider,model:spec.reserve.model,effort:spec.reserve.effort,count:1};
+}
+function modelsOf(spec:ComboSlot):Array<[string,string]>{
+ const models:[[string,string]]=[[spec.provider,spec.model]];
+ if(spec.reserve)models.push([spec.reserve.provider,spec.reserve.model]);
+ return models;
+}
 
 export type AppliedCombo={
  name:string;revision:number;maxProgrammersPerContext:number;qaModel:boolean;
@@ -145,13 +157,13 @@ export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:st
   const accounts=new Map<string,string>();
   for(const row of accountRows)if(!accounts.has(String(row.provider)))accounts.set(String(row.provider),String(row.id));
   for(const provider of ['claude','grok','codex'] as const)
-   if(uses.some(use=>use.slot.provider===provider)&&!accounts.has(provider))throw new Refusal(accountRequired(provider));
+   if(uses.some(use=>use.slot.provider===provider||use.slot.reserve?.provider===provider)&&!accounts.has(provider))throw new Refusal(accountRequired(provider));
   const seenModels=new Set<string>();
-  for(const use of uses){
-   const key=use.slot.provider+'\0'+use.slot.model;
+  for(const use of uses)for(const [provider,model] of modelsOf(use.slot)){
+   const key=provider+'\0'+model;
    if(seenModels.has(key))continue;seenModels.add(key);
-   const existing=await c.query('SELECT 1 FROM ac_model_catalog WHERE provider=$1 AND model=$2',[use.slot.provider,use.slot.model]);
-   if(!existing.rowCount)await capacity.registerModel(owner,{provider:use.slot.provider,model:use.slot.model,efforts:['low','medium','high'],roles:[...catalogRoles],source:'personal://account-add'});
+   const existing=await c.query('SELECT 1 FROM ac_model_catalog WHERE provider=$1 AND model=$2',[provider,model]);
+   if(!existing.rowCount)await capacity.registerModel(owner,{provider,model,efforts:['low','medium','high'],roles:[...catalogRoles],source:'personal://account-add'});
   }
   const used=new Set<string>();
   const take=async(role:Role,spec:ComboSlot)=>{
@@ -172,22 +184,25 @@ export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:st
    }
    return ids;
   };
+  const takeReserve=async(role:Role,spec:ComboSlot)=>{const reserve=reserveSpec(spec);return reserve?take(role,reserve):[];};
   const manager=await take('manager',combo.roles.manager);
+  const managerReserve=await takeReserve('manager',combo.roles.manager);
   const reviewer=await take('reviewer',combo.roles.reviewer);
-  const programmerStandard:string[]=[];
-  for(const spec of combo.roles.programmer.standard)programmerStandard.push(...await take('programmer',spec));
-  const programmerBasic:string[]=[];
-  for(const spec of combo.roles.programmer.basic??[])programmerBasic.push(...await take('programmer',spec));
+  const reviewerReserve=await takeReserve('reviewer',combo.roles.reviewer);
+  const programmerStandard:string[]=[];const standardReserve:string[]=[];
+  for(const spec of combo.roles.programmer.standard){programmerStandard.push(...await take('programmer',spec));standardReserve.push(...await takeReserve('programmer',spec));}
+  const programmerBasic:string[]=[];const basicReserve:string[]=[];
+  for(const spec of combo.roles.programmer.basic??[]){programmerBasic.push(...await take('programmer',spec));basicReserve.push(...await takeReserve('programmer',spec));}
   const previous=(await c.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[projectId])).rows[0];
   const prev=previous?CapacityPolicy.parse(previous.snapshot):null;
-  let qa:string[]=[];
-  if(combo.roles.qa)qa=await take('qa',combo.roles.qa);
+  let qa:string[]=[];let qaReserve:string[]=[];
+  if(combo.roles.qa){qa=await take('qa',combo.roles.qa);qaReserve=await takeReserve('qa',combo.roles.qa);}
   else if(prev?.roles.qa){
    const still=(await c.query('SELECT id FROM ac_profiles WHERE id=ANY($1::uuid[]) AND enabled',[prev.roles.qa.regular])).rows.map(row=>String(row.id));
    const live=new Set(still);
    qa=prev.roles.qa.regular.filter(id=>live.has(id));
   }
-  const keep=new Set([...manager,...reviewer,...programmerStandard,...programmerBasic,...qa]);
+  const keep=new Set([...manager,...managerReserve,...reviewer,...reviewerReserve,...programmerStandard,...standardReserve,...programmerBasic,...basicReserve,...qa,...qaReserve]);
   const sweep=['manager','reviewer','programmer',...(combo.roles.qa?['qa']:[])];
   const extras=(await c.query(`SELECT p.id,p.revision FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
    WHERE x.project_id=$1 AND p.enabled AND p.role=ANY($2::text[])`,[projectId,sweep])).rows;
@@ -195,15 +210,18 @@ export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:st
    await capacity.setEnabled(owner,projectId,'profile',{id:String(row.id),enabled:false,expectedRevision:Number(row.revision)});
   const expected=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_policy_revisions WHERE project_id=$1',[projectId])).rows[0].revision);
   const roles:CapacityPolicy['roles']={
-   manager:{regular:manager,emergency:[]},reviewer:{regular:reviewer,emergency:[]},
-   programmer:{regular:[...programmerStandard,...programmerBasic],emergency:[]},
+   manager:{regular:manager,emergency:managerReserve},reviewer:{regular:reviewer,emergency:reviewerReserve},
+   programmer:{regular:[...programmerStandard,...programmerBasic],emergency:[...standardReserve,...basicReserve]},
   };
-  if(qa.length)roles.qa={regular:qa,emergency:[]};
+  if(qa.length)roles.qa={regular:qa,emergency:qaReserve};
   if(prev?.roles.specialist)roles.specialist=prev.roles.specialist;
   if(prev?.roles.judge)roles.judge=prev.roles.judge;
+  const programmerTiers:NonNullable<CapacityPolicy['programmerTiers']>={standard:programmerStandard,basic:programmerBasic};
+  if(standardReserve.length)programmerTiers.standardReserve=standardReserve;
+  if(basicReserve.length)programmerTiers.basicReserve=basicReserve;
   const policy=CapacityPolicy.parse({
    schemaVersion:1,maxProgrammersPerContext:programmerCount,maxEvaluatorsPerContext:prev?.maxEvaluatorsPerContext??2,roles,
-   combo:combo.name,programmerTiers:{standard:programmerStandard,basic:programmerBasic},qaModel:Boolean(combo.roles.qa),
+   combo:combo.name,programmerTiers,qaModel:Boolean(combo.roles.qa),
   });
   const revision=await capacity.publish(owner,projectId,expected,policy);
   const contexts=(await c.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived ORDER BY id',[projectId])).rows;

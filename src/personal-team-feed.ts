@@ -4,6 +4,7 @@
 // and the private execution-host directory; every message has a stable id, so restarts never repeat one.
 import type pg from 'pg';
 import {CapacityPolicy} from './capacity.ts';
+import {reserveYieldReason} from './capacity-exclusions.ts';
 import {execFile} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -13,7 +14,18 @@ export type TeamFeedOptions={executionHost:string;repo?:string;pool?:pg.Pool};
 export type TeamMessage={id:string;text:string};
 type Job={id:string;kind:'planning'|'programmer'|'qa'|'reviewer'|'judge'|'specialist';state:string;provider:string|null;model:string|null;effort:string|null;receipt:any;base:string|null;intentId?:string|null};
 
-const ROLE:Record<Job['kind'],string>={planning:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor',judge:'Juiz',specialist:'Especialista'};
+const ROLE:Record<string,string>={planning:'Gerente',manager:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor',judge:'Juiz',specialist:'Especialista'};
+
+/** One sentence when a reserve profile takes a role whose titular quota or login is out. */
+export function reserveAssumptionText(provider:string,role:string,model:string){
+ return `Cota de ${provider} esgotada: ${ROLE[role]??role} segue com ${model}.`;
+}
+export function reserveAssumptionNotice(input:{role:string;selectedProvider:string;selectedModel:string;skipped:{provider:string;reason:string}[]}):{localId:string;text:string}|null{
+ const hit=input.skipped.find(item=>reserveYieldReason(item.reason==='quota_exhausted'||item.reason==='authentication_required'?item.reason:null)&&item.provider!==input.selectedProvider);
+ if(!hit)return null;
+ const text=reserveAssumptionText(hit.provider,input.role,input.selectedModel);
+ return {localId:`cota-${hit.provider}-${input.role}-${input.selectedModel}`,text};
+}
 const Uuid=z.uuid();
 
 export async function teamJobs(pool:pg.Pool,contextId:string,limit=40):Promise<Job[]>{
@@ -94,6 +106,30 @@ export async function teamMessage(job:Job,options:TeamFeedOptions):Promise<TeamM
  if(!ok||!verdict?.verdict)return {id,text:`${name} não concluiu a revisão${result?.failureCode?' ('+result.failureCode+')':''}.`};
  const findings=(verdict.findings??[]).slice(0,10).map(f=>`• [${f.severity}] ${clip(f.summary,300)}`).join('\n');
  return {id,text:`${name} ${verdict.verdict==='pass'?'aprovou':'rejeitou'}${findings?':\n'+findings:' sem apontamentos'}.`};
+}
+
+/** Grants whose skipped titular was out of quota or login, and whose chosen profile is another provider. */
+export async function reserveAssumptionNotices(pool:pg.Pool,contextId:string):Promise<{localId:string;text:string}[]>{
+ const rows=(await pool.query(`SELECT g.role,p.model,selected.provider AS selected_provider,skipped.provider
+  FROM ac_capacity_grants g
+  JOIN ac_profiles p ON p.id=g.profile_id
+  JOIN ac_accounts selected ON selected.id=g.account_id
+  JOIN LATERAL (
+   SELECT sa.provider FROM jsonb_array_elements(COALESCE(g.selection->'skippedCandidates','[]'::jsonb)) WITH ORDINALITY elem(value, ord)
+   JOIN ac_profiles sp ON sp.id=(elem.value->>'profileId')::uuid
+   JOIN ac_accounts sa ON sa.id=sp.account_id
+   WHERE elem.value->>'reason' IN ('quota_exhausted','authentication_required') AND sa.provider<>selected.provider
+   ORDER BY elem.ord LIMIT 1
+  ) skipped ON true
+  WHERE g.context_id=$1 AND g.resource_kind='model'`,[contextId])).rows as {role:string;model:string;selected_provider:string;provider:string}[];
+ const notices: {localId:string;text:string}[]=[];
+ const seen=new Set<string>();
+ for(const row of rows){
+  const notice=reserveAssumptionNotice({role:row.role,selectedProvider:row.selected_provider,selectedModel:row.model,skipped:[{provider:row.provider,reason:'quota_exhausted'}]});
+  if(!notice||seen.has(notice.localId))continue;
+  seen.add(notice.localId);notices.push(notice);
+ }
+ return notices;
 }
 
 // The "equipe" command: who is configured for each role and the latest thing each one did.

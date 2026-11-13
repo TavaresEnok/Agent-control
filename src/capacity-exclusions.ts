@@ -58,6 +58,12 @@ export function classifyProfileExclusion(facts: ChainProfileFacts, options?: {pe
   return 'quota_unknown';
 }
 
+/** Personal reserve takes over for these reasons: the titular quota is exhausted, or the login is required.
+ * Other exclusions still skip a profile; these two are the ones the conversation names. */
+export function reserveYieldReason(reason: CapacityExclusionReason | null): boolean {
+  return reason === 'quota_exhausted' || reason === 'authentication_required';
+}
+
 /** Chain order in, exclusion order out. A selectable profile is omitted. */
 export function orderedProfileExclusions(chain: readonly ChainProfileFacts[], options?: {personal?: boolean}): ProfileExclusion[] {
   const exclusions: ProfileExclusion[] = [];

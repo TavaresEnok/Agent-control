@@ -19,7 +19,7 @@ import {applyPersonalCombo,describeAppliedCombo} from './personal-combos.ts';
 import {isRepeatablePersonalNotice,recentPersonalNotices,suppressRepeatedPersonalNotice} from './personal-notice.ts';
 import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
-import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
+import {reserveAssumptionNotices,teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
@@ -830,6 +830,13 @@ export class HappierEndpoint {
      }
     }
     const claudeLimit=await this.claudeLimitAnnouncement();if(claudeLimit)await this.say(claudeLimit.localId,claudeLimit.text).catch(()=>{});
+    if(this.options.personalConversation){
+     for(const notice of await reserveAssumptionNotices(this.ledger.pool,this.options.authority.contextId).catch(()=>[])){
+      if(this.announced.get(notice.localId)==='said')continue;
+      await this.say(notice.localId,notice.text).catch(()=>{});
+      this.announced.set(notice.localId,'said');
+     }
+    }
     await this.flushNotifications();await this.deliverQueuedMessages();
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
     if (recoveryFailure !== undefined) throw recoveryFailure;
