@@ -4,6 +4,7 @@ import {redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-r
 import type {AgentRunner,AgentRunSpec,AgentSession} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import {usageWindowsObservationSchema,type UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {Refusal} from './contracts.ts';
+import {claudeLimitFromText,preferredLimitUsage} from './quota-exhaustion.ts';
 import {extractJsonObject} from './claude-planning-adapter.ts';
 
 const Path=z.string().min(1).max(240).refine(path=>!path.startsWith('/')&&!path.includes('\\')&&
@@ -29,7 +30,7 @@ export class ClaudeExecutionAdapter{
   if(process.env.AC_DEBUG_QUOTA_EXHAUSTED==='1')throw new ClaudeExecutionFailure('PROVIDER_USAGE_LIMIT',null,null);
   const input=Input.parse(raw);if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
   await assertAuthorized();if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
-  let usage:UsageWindowsObservation|null=null,tokens:number|null=null,failed=false,completed=false,timedOut=false;
+  let usage:UsageWindowsObservation|null=null,tokens:number|null=null,failed=false,completed=false,timedOut=false,providerText='';
   // /work exists in the worker only in personal mode: the programmer's checkout, or a reviewer's read-only copy
   // without Git metadata plus `.agent-control-review.diff`. Reading files is the only tool an evaluator gets; no shell.
   const mounted=existsSync('/work');
@@ -51,19 +52,21 @@ export class ClaudeExecutionAdapter{
   const timer=setTimeout(()=>{timedOut=true;stop();},input.timeoutMs);signal?.addEventListener('abort',stop,{once:true});
   try{
    session=this.runner.startSession(spec,event=>{
-    if(event.type==='error')failed=true;
+    if(event.type==='error'){failed=true;providerText+='\n'+event.message;}
     if(event.type==='turn-end'){if(event.reason)failed=true;else completed=true;}
     if(event.type==='token-usage'&&Number.isSafeInteger(event.tokensUsed)&&event.tokensUsed>=0)tokens=event.tokensUsed;
    },{autoEndAfterFirstTurn:true});
    if(signal?.aborted)stop();
    const result=await Promise.race([session.result,stopped]);
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
+   const limit=claudeLimitFromText([providerText,result.text]);
+   if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
    if(failed||!completed)throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
    const extracted=input.outputSchema?extractJsonObject(result.text):undefined;
    const text=extracted===undefined?result.text:JSON.stringify(extracted);
    if(Buffer.byteLength(text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
    return {output:redactSecrets(text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
-  }catch(error){throw new ClaudeExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
+  }catch(error){if(error instanceof ClaudeExecutionFailure)throw error;const limit=claudeLimitFromText([providerText,error instanceof Error?error.message:'']);if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));throw new ClaudeExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }
 }
