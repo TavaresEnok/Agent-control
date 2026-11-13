@@ -216,3 +216,14 @@ Itens deixados de fora de propósito:
 | M2 | QA com os testes que usam banco | **feita e provada**: banco PostgreSQL temporário numa rede interna sem internet a cada QA; suíte completa da API do IspAgent (369 testes) passou e o pedido integrou `dcbcd5a`, sem sobras. Correções no caminho: OpenSSL na imagem (`6cdbc57c`), banco preservado até o fim do job (`bb0d98ab`), um só caminho inicia o teste (`a1febba2`) |
 | M3 | Corrigir os testes antigos | **feita**: simulações de teste atualizadas, só em `tests/`; 5 arquivos, 17 testes passam (merge `b205b0e5`). Ficam de fora os que pedem ambiente inexistente aqui (controlador isolado, bancos R3) |
 | M4 | Tirar o Happier | **feita e provada** no IspAgent: transporte local (`managerTransport.transport="local"`, merge `592725e3`), histórico de 1.994 mensagens importado com datas originais (`9e398027`), login só por usuário e senha, serviço `agent-control-happier-ispagent` desligado; pedido completo integrado `a569380`. Volta atrás: tirar o campo, religar o serviço e reiniciar o gateway |
+
+## Acabamento (13/11/2026)
+
+| Item | Estado |
+|---|---|
+| Vigia a cada 2 min (aviso de queda e volta, imagens refeitas sozinhas) | **feito e provado** com queda simulada; timers `agent-control-watch-ispagent` e `agent-control-backup-ispagent` ligados |
+| Backup diário 03:30, 7 cópias, cópia externa opcional (`<dataDirectory>/backup-offsite`) | **feito**; falta o titular informar o destino externo |
+| Cota do Claude: espera e retoma sozinho | **feito** e coberto por testes; não aconteceu ao vivo ainda |
+| Conversa limpa (avisos repetidos escondidos, iguais em 10 min suprimidos) | **feito e provado** |
+| Lista de tarefas e menu em português, QA pelo painel | **feito**; a página de Configurações ainda tem textos do Cezar em inglês |
+| Instalação `smoke` desligada | **feito** (dados mantidos) |
