@@ -25,6 +25,7 @@
     "prebuild": "node scripts/prepare-build.mjs --before",
     "personal:cockpit": "node scripts/personal-cockpit.mjs",
     "personal:backup": "node scripts/personal-backup.mjs",
+    "personal:backup-rotate": "node scripts/personal-backup-rotate.mjs",
     "personal:restore-check": "node scripts/personal-restore-check.mjs",
     "personal:watch": "node scripts/personal-watch.mjs"
   },
