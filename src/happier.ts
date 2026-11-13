@@ -258,6 +258,7 @@ export class HappierEndpoint {
   readonly rpc: Rpc;
   readonly transport;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private leaseTimer?:ReturnType<typeof setInterval>;
   private busy = false;
   private readonly lifecycle = new AbortController();
   private conversation?: ConversationTransport;
@@ -400,6 +401,9 @@ export class HappierEndpoint {
     }catch(error){this.close();throw error;}
   }
   private armTick(){
+    // Personal mode: one long model call or a busy startup must not cost the 15 s manager lease.
+    // The tick still renews it; this timer only covers the stretches in between.
+    if(this.options.personalConversation){let renewing=false;this.leaseTimer=setInterval(()=>{if(renewing||this.lifecycle.signal.aborted)return;renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});},4000);this.leaseTimer.unref?.();}
     this.timer = setInterval(() => { if (this.busy) return; this.busy = true;
       void this.tick().then(async() => {
         if(this.lastError)await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
@@ -908,7 +912,7 @@ export class HappierEndpoint {
     const mirrored = await this.postSession('/v2/sessions/' + encodeURIComponent(this.options.sessionId) + '/messages', {ciphertext, localId});
     if (mirrored !== 200 && mirrored !== 409 && mirrored !== 400) throw new Refusal('OWNER_MESSAGE_NOT_RECORDED');
   }
-  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.conversation?.close();this.socket.disconnect(); }
+  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer);if(this.leaseTimer)clearInterval(this.leaseTimer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.conversation?.close();this.socket.disconnect(); }
   private activeConversation(): ConversationTransport {
     return this.conversation ??= this.createHappierConversation();
   }

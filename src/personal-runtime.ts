@@ -38,12 +38,12 @@ export async function renewPersonalQuota(ledger:Ledger){
  * containers exists any more. Without this, two crashed stages block an account for good.
  * If Docker cannot be listed, nothing is released.
  */
-export async function releaseDeadPersonalGrants(ledger:Ledger){
+export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1){
  let names:string[];
  try{names=execFileSync('docker',['ps','-a','--format','{{.Names}}'],{encoding:'utf8',timeout:15000}).split('\n').filter(Boolean);}catch{return 0;}
  const rows=(await ledger.pool.query(`SELECT g.id,array_remove(array[pj.id::text,ej.id::text,qj.id::text],NULL) jobs FROM ac_capacity_grants g
   LEFT JOIN ac_native_planning_jobs pj ON pj.grant_id=g.id LEFT JOIN ac_native_execution_jobs ej ON ej.grant_id=g.id LEFT JOIN ac_native_qa_jobs qj ON qj.grant_id=g.id
-  WHERE g.state<>'released' AND g.resource_kind='model' AND g.created_at<clock_timestamp()-interval '1 minute'`)).rows;
+  WHERE g.state<>'released' AND g.resource_kind='model' AND g.created_at<clock_timestamp()-make_interval(mins=>$1)`,[olderThanMinutes])).rows;
  let released=0;
  for(const row of rows){
   const jobs=row.jobs as string[];
@@ -84,6 +84,8 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  await renewPersonalQuota(ledger);
  await releaseDeadPersonalGrants(ledger);
  setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
+ // A stage that fails before its container exists leaves its reservation behind; without this it would hold an evaluator slot until the next restart.
+ setInterval(()=>{releaseDeadPersonalGrants(ledger,5).catch(()=>{});},2*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');
  const executionPem=(await readPrivateFile(boot.execution.signingKeyFile)).toString('utf8');

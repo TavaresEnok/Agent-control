@@ -135,7 +135,7 @@ export type ApiOptions = {
     readConversation(principal:string,query:{after?:string;limit:number}):Promise<{messages:{id:string;role:'owner'|'manager';text:string;createdAt:string}[];next:string|null}>;
     sendMessage(principal:string,input:{text:string;localId:string}):Promise<void>;
   };
-  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;projectId:string;scheduleRestart:()=>void};
+  personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;projectId:string;owner?:string;scheduleRestart:()=>void};
   pairCodeLogin?:(request:Request)=>Promise<Response>;
   passwordLogin?:(request:Request)=>Promise<Response>;
 };
@@ -375,7 +375,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
     await requireInstallationOwner(c.get('principal'));
     const input=z.object({name:z.string().trim().min(1).max(80)}).strict().parse(await c.req.json());
-    const applied=await applyPersonalCombo(ledger,c.get('principal'),personalPanel.projectId,input.name,personalPanel.dataDirectory);
+    const applied=await applyPersonalCombo(ledger,personalPanel.owner??c.get('principal'),personalPanel.projectId,input.name,personalPanel.dataDirectory);
     c.header('Cache-Control','no-store');
     return c.json({name:applied.name,revision:applied.revision,maxProgrammersPerContext:applied.maxProgrammersPerContext,qaModel:applied.qaModel});
   });
