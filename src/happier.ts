@@ -449,7 +449,11 @@ export class HappierEndpoint {
       // The manager model decides; keywords are only a fallback when no manager account answers.
       // The manager also knows its own team, so "who is the reviewer?" gets the real answer.
       const team=this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(()=>''):'';
-      const decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;
+      // The decision is a model call that can outlast the 15 s manager lease, above all at high effort: keep the lease alive meanwhile.
+      let renewingDecision=false;const decisionLease=setInterval(()=>{if(!renewingDecision&&!this.lifecycle.signal.aborted){renewingDecision=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewingDecision=false;});}},4000);decisionLease.unref?.();
+      let decision;
+      try{decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;}
+      finally{clearInterval(decisionLease);}
       if(!decision){const notice=await this.claudeLimitAnnouncement();if(notice){await this.say(notice.localId,notice.text);throw new Refusal('NO_ELIGIBLE_CAPACITY');}}
       const kind=decision?.kind??classifyPersonalText(q.text);
       if(kind==='answer'){await this.say('answer-'+q.localId,decision?.answer||'Não consegui consultar o gerente agora. Confira as contas com papel de gerente no painel e tente de novo.');return {handled:true,result:{ok:true,answered:true}};}
