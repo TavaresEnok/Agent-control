@@ -42,7 +42,7 @@ export async function startConfiguredManagerTransport(config:Installation,ledger
   const pushDirectory=personal?.transportOnly===false?personal.dataDirectory:undefined;
   const personalPush=pushDirectory?(notice:PersonalPushNotice)=>deliverPersonalPush(pushDirectory,notice):undefined;
   registry=new ManagerRegistry(ledger,runtime.projectId,happierEndpointFactory(ledger,runtime,await loadHappier(),{
-   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,deliverPersonalPush:personalPush}));
+   baseUrl:config.happier.upstreamOrigin,token,machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,dataDirectory:personal?.transportOnly===false?config.dataDirectory:undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,deliverPersonalPush:personalPush}));
   for(const item of contexts){
    const {projectId,...request}=item;
    if(projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
@@ -86,7 +86,7 @@ async function startLocalManagerTransport(config:Installation,ledger:Ledger,runt
  const pushDirectory=personal?.transportOnly===false?personal.dataDirectory:undefined;
  const personalPush=pushDirectory?(notice:PersonalPushNotice)=>deliverPersonalPush(pushDirectory,notice):undefined;
  const registry=new ManagerRegistry(ledger,runtime.projectId,localEndpointFactory(ledger,runtime,{
-  baseUrl:'http://127.0.0.1',token:'',machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,deliverPersonalPush:personalPush}));
+  baseUrl:'http://127.0.0.1',token:'',machineId:options.machineId,transportOnly:personal?.transportOnly!==false,semanticPlanning:personal?.semanticPlanning,configurationControl,personalConversation:personal?.transportOnly===false,teamFeedRoot:personal?.transportOnly===false?join(config.dataDirectory,'native','execution-host'):undefined,dataDirectory:personal?.transportOnly===false?config.dataDirectory:undefined,managerChat:personal?.managerChat,projectLabel:personal?.projectLabel,deliverPersonalPush:personalPush}));
  try{
   for(const item of contexts){
    const {projectId,...request}=item;

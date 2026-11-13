@@ -3,6 +3,7 @@
 // said and changed, the QA log line and the reviewer's verdict and findings. Read-only over the ledger
 // and the private execution-host directory; every message has a stable id, so restarts never repeat one.
 import type pg from 'pg';
+import {CapacityPolicy} from './capacity.ts';
 import {execFile} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -101,10 +102,21 @@ export async function teamStatus(pool:pg.Pool,contextId:string,options:TeamFeedO
   WHERE p.enabled AND p.role IN ('manager','programmer','reviewer') ORDER BY array_position(ARRAY['manager','programmer','reviewer'],p.role),a.provider`)).rows;
  const names:Record<string,string>={manager:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor'};
  const team=profiles.map(p=>`• ${names[p.role]}: ${p.provider} · ${p.model} · ${p.effort}`).join('\n');
+ let combo='nenhum',qaLine='• QA: script automático do projeto (sem modelo)';
+ try{
+  const row=(await pool.query(`SELECT r.snapshot FROM ac_contexts x JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision WHERE x.id=$1`,[contextId])).rows[0];
+  const parsed=CapacityPolicy.safeParse(row?.snapshot);
+  if(parsed.success&&parsed.data.combo)combo=parsed.data.combo;
+  const qaIds=parsed.success&&parsed.data.qaModel?parsed.data.roles.qa?.regular??[]:[];
+  if(qaIds.length){
+   const qa=(await pool.query(`SELECT a.provider,p.model,p.effort FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id WHERE p.id=ANY($1::uuid[]) ORDER BY p.id`,[qaIds])).rows;
+   if(qa.length)qaLine=qa.map(p=>`• QA: ${p.provider} · ${p.model} · ${p.effort}`).join('\n');
+  }
+ }catch{/* The role list still answers when the policy row cannot be read. */}
  const recent=await teamJobs(pool,contextId,6);
  const feed={...options,pool};
  const last=(await Promise.all(recent.map(job=>teamMessage(job,feed)))).filter(Boolean).map(m=>'• '+m!.text.split('\n')[0]).join('\n');
- return `Equipe:\n${team||'• nenhuma conta ativa'}\n• QA: script automático do projeto (sem modelo)\n\nÚltimas atividades:\n${last||'• nada ainda'}`;
+ return `Equipe:\nCombo atual: ${combo}\n${team||'• nenhuma conta ativa'}\n${qaLine}\n\nÚltimas atividades:\n${last||'• nada ainda'}`;
 }
 
 // The app's model picker reads `sessionModelsV1` from the session metadata. A Claude-flavored session

@@ -6,7 +6,8 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {dockerLogText,teamMessage} from '../src/personal-team-feed.ts';
-import {personalControlWord} from '../src/personal-conversation.ts';
+import {personalComboRequest,personalControlWord} from '../src/personal-conversation.ts';
+import {builtinCombos,describeAppliedCombo} from '../src/personal-combos.ts';
 
 const frame=(text:string)=>{const body=Buffer.from(text);const head=Buffer.alloc(8);head[0]=1;head.writeUInt32BE(body.length,4);return Buffer.concat([head,body]);};
 
@@ -62,6 +63,15 @@ test('the programmer report diffs only the intent repository',async()=>{
 
 test('equipe and status ask for the team panel',()=>{
  assert.equal(personalControlWord(' Equipe '),'team');assert.equal(personalControlWord('status'),'team');assert.equal(personalControlWord('aprovar'),'approve');
+ assert.equal(personalComboRequest('use o combo padrão'),'padrão');
+ assert.equal(personalComboRequest('Use o combo  Megapoderoso'),'Megapoderoso');
+ assert.equal(personalComboRequest('equipe'),null);
+ const mega=builtinCombos.find(item=>item.name==='megapoderoso')!;
+ const text=describeAppliedCombo({name:mega.name,revision:3,maxProgrammersPerContext:6,qaModel:true,manager:[],reviewer:[],programmerStandard:[],programmerBasic:[],qa:[],combo:mega});
+ assert.match(text,/Combo megapoderoso em uso/);
+ assert.match(text,/Programadores padrão: 4 × codex · gpt-6.1-sol · high/);
+ assert.match(text,/Programadores básicos: 2 × grok · grok-4.7 · high/);
+ assert.match(text,/Programadores por contexto: 6/);
 });
 
 test('the app model picker lists the team, once',async()=>{

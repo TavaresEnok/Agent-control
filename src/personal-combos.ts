@@ -106,6 +106,22 @@ export type AppliedCombo={
  combo:PersonalCombo;
 };
 
+function slotText(slot:ComboSlot){return `${slot.count} × ${slot.provider} · ${slot.model} · ${slot.effort}`;}
+/** Portuguese summary shown after "use o combo". */
+export function describeAppliedCombo(applied:AppliedCombo){
+ const combo=applied.combo;
+ const lines=[
+  `Combo ${applied.name} em uso.`,
+  `Gerente: ${slotText(combo.roles.manager)}`,
+  `Revisor: ${slotText(combo.roles.reviewer)}`,
+  `Programadores padrão: ${combo.roles.programmer.standard.map(slotText).join('; ')}`,
+ ];
+ if(combo.roles.programmer.basic?.length)lines.push(`Programadores básicos: ${combo.roles.programmer.basic.map(slotText).join('; ')}`);
+ lines.push(combo.roles.qa?`QA: ${slotText(combo.roles.qa)}`:'QA: script automático do projeto (sem modelo)');
+ lines.push(`Programadores por contexto: ${applied.maxProgrammersPerContext}`);
+ return lines.join('\n');
+}
+
 const accountRequired=(provider:string)=>provider==='codex'?'CODEX_ACCOUNT_REQUIRED':provider==='claude'?'CLAUDE_ACCOUNT_REQUIRED':provider==='grok'?'GROK_ACCOUNT_REQUIRED':'PROVIDER_ACCOUNT_REQUIRED';
 
 /**

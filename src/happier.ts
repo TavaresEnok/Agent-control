@@ -14,7 +14,8 @@ import {chatConfigurationHandler} from './chat-control.ts';
 import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,nativeImagesRemovedNotice,notificationReason,notificationStatus} from './notifications.ts';
-import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {classifyPersonalText,personalComboRefusal,personalComboRequest,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {applyPersonalCombo,describeAppliedCombo} from './personal-combos.ts';
 import {isRepeatablePersonalNotice,recentPersonalNotices,suppressRepeatedPersonalNotice} from './personal-notice.ts';
 import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
@@ -272,7 +273,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.conversation = conversation ?? this.createHappierConversation();
@@ -424,10 +425,22 @@ export class HappierEndpoint {
         }
       }).finally(() => { this.busy = false; }); }, 300);
   }
+  private async applyComboReply(name:string){
+   const directory=this.options.dataDirectory;
+   if(!directory)return 'Os combos não estão configurados nesta instalação.';
+   const context=(await this.ledger.pool.query('SELECT project_id FROM ac_contexts WHERE id=$1',[this.options.authority.contextId])).rows[0];
+   if(!context?.project_id)return 'Não encontrei o projeto desta conversa. Nada foi alterado.';
+   try{
+    const applied=await applyPersonalCombo(this.ledger,this.options.principal,String(context.project_id),name,directory);
+    return describeAppliedCombo(applied);
+   }catch(error){return personalComboRefusal(error instanceof Refusal?error.code:'COMBO_APPLY_FAILED');}
+  }
   async accept(raw: unknown) {
     if(this.options.transportOnly)throw new Refusal('EXECUTION_DISABLED');
     const q = UserRequest.parse(raw); await this.validateLink();
     if(this.options.personalConversation){
+     const comboName=personalComboRequest(q.text);
+     if(comboName){await this.say('combo-'+q.localId,await this.applyComboReply(comboName));return {handled:true,result:{ok:true}};}
      const word=personalControlWord(q.text);
      if(word==='team'){await this.say('team-status-'+q.localId,this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}):'O painel da equipe não está configurado nesta instalação.');return {handled:true,result:{ok:true}};}
      if(word==='stop'){await this.stopLatest();return {handled:true,result:{ok:true,canceled:true}};}
