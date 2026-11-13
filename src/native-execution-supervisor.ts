@@ -468,6 +468,10 @@ export class NativeExecutionSupervisor{
    }else if(input.role==='programmer'){
     const op=(await c.query('SELECT state,receipt FROM ac_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[jobId,input.intentId])).rows[0];
     if(op?.state!=='completed'||digest(op.receipt?.nativeExecution)!==digest(receipt))throw new Refusal('NATIVE_RETIREMENT_EVIDENCE_MISSING');
+   }else if(input.role==='qa'&&row.state==='completed'){
+    const stage=(await c.query('SELECT * FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[jobId,input.intentId])).rows[0];
+    const verdict=stage?.receipt?.qaModel?.verdict;
+    if(stage?.state!=='completed'||stage.grant_id!==input.grantId||stage.session_id!==input.sessionId||stage.node_id!=='qa'||(verdict!=='pass'&&verdict!=='reject')||digest(stage.receipt?.nativeExecution)!==digest(receipt))throw new Refusal('NATIVE_RETIREMENT_EVIDENCE_MISSING');
    }else if(row.state==='completed')throw new Refusal('NATIVE_RETIREMENT_EVIDENCE_MISSING');
    return row;
   };

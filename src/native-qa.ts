@@ -16,6 +16,7 @@ import {QualityPolicy} from './quality-policy.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {provisionNativeQaDatabase,redactQaDatabaseSecrets,removeNativeQaService} from './native-qa-database.ts';
 import {NativeQaContract as NativeQaSchema,nativeQaContractDigest,type NativeQaContract as NativeQaValue} from './native-qa-contract.ts';
+import {continueAfterScriptQa,contextQaModel,qaLogTail,qaModelIds} from './qa-model.ts';
 export const NativeQaContract=NativeQaSchema;
 export type NativeQaContract=NativeQaValue;
 export {nativeQaContractDigest};
@@ -118,6 +119,12 @@ export class NativeQa{
  }
  async reconcileResourceAdmissions(principal:string,authority:Authority){return reconcileNativeResourceAdmissions({docker:this.docker,ledger:this.ledger,principal,authority,recoverSource:'ac_native_qa_jobs',recoverJob:id=>this.reconcile(principal,authority,id)});}
  private paths(id:string){z.uuid().parse(id);const area=join(this.root,id);return {area,work:join(area,'work')};}
+ /** Last lines of the script log. Empty when the file is not on disk yet. */
+ async testLogTail(jobId:string,maxLines=40){
+  const file=join(this.paths(jobId).area,'qa-logs.bin');
+  try{const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW);try{return qaLogTail(await handle.readFile(),maxLines);}finally{await handle.close();}}
+  catch{return '';}
+ }
  private async authorize(c:import('pg').PoolClient,principal:string,authority:Authority,intentId:string,paused:boolean){
   const context=await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,paused);if(!paused)await this.ledger.assertIntentActive(c,authority.contextId,intentId);
   const source=(await c.query('SELECT i.principal_id,r.repo FROM ac_intents i JOIN ac_project_repositories r ON r.project_id=$3 WHERE i.id=$1 AND i.context_id=$2',[intentId,authority.contextId,context.project_id])).rows[0];
@@ -127,7 +134,7 @@ export class NativeQa{
   const row=(await c.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',[artifact.project_id,artifact.policy_revision])).rows[0];
   const policy=QualityPolicy.parse(row?.snapshot);if(digest(policy)!==row.digest||(policy.qaVerifierDigest??policy.verifierDigest)!==this.verifierDigest)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');
  }
- async run(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,artifact:ArtifactRow,isCanceled:()=>boolean){
+ async run(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,artifact:ArtifactRow,isCanceled:()=>boolean,beforeRecord?:(observed:{state:string;receipt?:{status?:string}})=>Promise<void>){
   try{
    if(isCanceled())throw new Refusal('STAGE_CANCELED');
    let status=await this.start(principal,authority,intent.id,stage,grantId,artifact,isCanceled);
@@ -135,7 +142,8 @@ export class NativeQa{
     if(isCanceled()){await this.stop(principal,authority,stage.id,'canceled');throw new Refusal('STAGE_CANCELED');}
     await new Promise(resolve=>setTimeout(resolve,1000));status=await this.reconcile(principal,authority,stage.id);
    }
-   return await this.record(principal,authority,stage.id);
+   // The hook runs only after a passed script. A throw leaves the stage unrecorded so the next run asks again.
+   return await continueAfterScriptQa({scriptState:status.state,scriptStatus:status.receipt?.status,qaModel:Boolean(beforeRecord),evaluate:async()=>{if(beforeRecord)await beforeRecord(status);},record:()=>this.record(principal,authority,stage.id)});
   }finally{
    // The database stays up while the test container is running. A lost cleanup is retried by reconciliation.
    if(this.contract.services){try{const test=await this.docker.inspect('ac-native-qa-'+stage.id);if(!test?.State.Running)await removeNativeQaService(this.docker,stage.id);}catch{/* retry on the next reconciliation */}}
@@ -470,7 +478,7 @@ export class NativeQa{
        await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,job.intent_id,true);
         await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1 AND grant_id=$3 AND state IN ('uncertain','running')",[job.id,{cancellation:true,nativeQa:result.receipt},job.grant_id]);});
        await this.retire(principal,authority,job.id);
-      }else await this.record(principal,authority,job.id);
+      }else try{await this.record(principal,authority,job.id);}catch(error){if(!(error instanceof Refusal)||error.code!=='QA_MODEL_REQUIRED')throw error;}
      }
     }catch(error){errors.push(error);}
    }
@@ -488,6 +496,11 @@ export class NativeQa{
    await this.authorize(c,principal,authority,job.intent_id,true);await this.ledger.assertIntentActive(c,authority.contextId,job.intent_id);await this.policy(c,job);
    const row=(await c.query('SELECT s.*,g.state grant_state,g.physical_receipt FROM ac_stage_operations s JOIN ac_capacity_grants g ON g.id=s.grant_id WHERE s.id=$1 FOR UPDATE OF s,g',[id])).rows[0];
    if(!row||row.intent_id!==job.intent_id||row.session_id!==job.session_id||row.grant_id!==job.grant_id||row.node_id!=='qa'||row.grant_state!=='released'||digest(row.physical_receipt)!==digest(machine))throw new Refusal('NATIVE_QA_STAGE_MISMATCH');
+   if(machine.status==='passed'&&await contextQaModel(c,job.context_id)){
+    const ids=qaModelIds(id);
+    const model=(await c.query('SELECT state,receipt FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 AND session_id=$3 AND node_id=$4',[ids.stageId,job.intent_id,ids.sessionId,'qa'])).rows[0];
+    if(model?.state!=='completed'||model.receipt?.qaModel?.verdict!=='pass')throw new Refusal('QA_MODEL_REQUIRED');
+   }
    if(row.state==='completed'){if(digest(row.receipt?.verification)!==digest(receipt))throw new Refusal('NATIVE_QA_RESULT_CONFLICT');return;}
    if(!['uncertain','running'].includes(row.state))throw new Refusal('NATIVE_QA_STAGE_MISMATCH');
    await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[id,{verification:receipt,signature,nativeQa:machine}]);

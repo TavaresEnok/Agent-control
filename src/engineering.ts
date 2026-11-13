@@ -1,4 +1,6 @@
 import {stageReport} from './personal-team-feed.ts';
+import {ownerRequest} from './personal-owner-request.ts';
+import {contextQaModel} from './qa-model.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -98,6 +100,17 @@ export class EngineeringStages{
   if(options.isolatedAdvice&&options.isolatedAdvice.ledger!==ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
   this.key=Buffer.from(options.verifierKey);if(this.key.length<32)throw Error('VERIFIER_KEY_TOO_SHORT');
   installNativeReviewCorrectionGate(options.quality,this.key);
+ }
+ /** Script QA first. The combo model, when named, sees the diff only after that script passed. */
+ private async runNativeQa(principal:string,intent:Intent,authority:Authority,stage:{id:string;session_id:string},grantId:string,artifact:ArtifactRow,isCanceled:()=>boolean){
+  const qaModel=await contextQaModel(this.ledger.pool,authority.contextId);
+  const beforeRecord=qaModel?async()=>{
+   if(!this.options.nativeVerification||!this.options.nativeQa)throw new Refusal('QA_MODEL_UNAVAILABLE');
+   const diff=await this.options.git.diff(artifact.commit_id,artifact.base_id);
+   const testTail=await this.options.nativeQa.testLogTail(stage.id);
+   await this.options.nativeVerification.evaluateQaModel(principal,intent,authority,stage.id,artifact,{diff:diff.diff,truncated:diff.truncated,ownerRequest:await ownerRequest(authority.contextId,intent.id),testTail},isCanceled);
+  }:undefined;
+  return this.options.nativeQa!.run(principal,intent,authority,stage,grantId,artifact,isCanceled,beforeRecord);
  }
  async assertSpecialistApproved(c:import('pg').PoolClient,intentId:string,authority:Authority,writer?:{sessionId:string;grantId:string}){
   return assertPreimplementationAdvice(c,this.key,intentId,authority,writer);
@@ -569,7 +582,19 @@ export class EngineeringStages{
     }
     return {text:`Recorded ${node} result ${stage.id}`,toolCalls:[],tokensUsed:0};
    }
-   if(stage.state!=='registered')throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
+   if(stage.state!=='registered'){
+    if(node==='qa'&&stage.grant_id&&this.options.nativeQa&&(stage.state==='uncertain'||stage.state==='running')){
+     const job=(await this.ledger.pool.query('SELECT state,artifact_id FROM ac_native_qa_jobs WHERE id=$1 AND context_id=$2',[stage.id,authority.contextId])).rows[0];
+     if(job&&(job.state==='completed'||job.state==='failed')){
+      const resumed=(await this.ledger.pool.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1 AND context_id=$2 AND intent_id=$3',[job.artifact_id,authority.contextId,intent.id])).rows[0];
+      if(!resumed)throw new Refusal('NATIVE_QA_ARTIFACT_MISMATCH');
+      const verified=await this.runNativeQa(principal,intent,authority,stage,stage.grant_id,resumed,()=>canceled||!this.running);
+      if(verified.status!=='passed')throw new Refusal('VERIFICATION_FAILED');
+      const text=`Recorded qa result ${stage.id}`;onEvent?.({type:'text',text});onEvent?.({type:'done'});return {text,toolCalls:[],tokensUsed:0};
+     }
+    }
+    throw new Refusal('STAGE_RECONCILIATION_REQUIRED');
+   }
    const implementation=(await this.ledger.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intent.id])).rows[0];
    if(implementation?.state!=='completed'||!implementation.receipt?.commit||!implementation.native_session_id)throw new Refusal('IMPLEMENTATION_EVIDENCE_MISSING');
    const source=implementation.receipt;
@@ -651,7 +676,7 @@ export class EngineeringStages{
      if(programmer&&programmer.account_id===grant.account_id)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
     }
     if(nativeStage){
-     const verified=node==='qa'?await this.options.nativeQa!.run(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running):await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);
+     const verified=node==='qa'?await this.runNativeQa(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running):await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);
      if(verified.status!=='passed')throw new Refusal('VERIFICATION_FAILED');
     }else if(this.options.isolatedVerification){
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',

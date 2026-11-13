@@ -7,6 +7,8 @@ import {Quality,VerificationReceipt,type ArtifactRow} from './quality.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from './native-execution-supervisor.ts';
 import {NativeReviewVerdict,nativeReviewOutputSchema,nativeReviewVerifierDigest} from './native-review-contract.ts';
+import {Capacity} from './capacity.ts';
+import {contextQaModel,parseQaModelVerdict,qaModelExecutionRequest,qaModelIds} from './qa-model.ts';
 export {nativeReviewVerifierDigest};
 const Verdict=NativeReviewVerdict;
 const schema=nativeReviewOutputSchema;
@@ -74,5 +76,70 @@ export class NativeVerification{
    await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[jobId,{verification:receipt,signature,nativeExecution:observed.receipt}]);
   });
   await this.quality.record(principal,receipt,signature,authority);await supervisor.retireTerminal(principal,authority,jobId);return receipt;
+ }
+ /** Combo QA model. Reuses the reviewer supervisor and verdict, and never writes script QA evidence. */
+ async evaluateQaModel(principal:string,intent:Intent,authority:Authority,scriptStageId:string,artifact:ArtifactRow,material:{diff:string;truncated?:boolean;ownerRequest?:string;testTail:string},isCanceled:()=>boolean){
+  if(isCanceled())throw new Refusal('STAGE_CANCELED');
+  if(!await contextQaModel(this.ledger.pool,authority.contextId))throw new Refusal('QA_MODEL_UNAVAILABLE');
+  const ids=qaModelIds(scriptStageId);
+  if(ids.sessionId===artifact.implementation_session_id)throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+  const stored=await this.storedQaModel(intent.id,ids.stageId);
+  if(stored)return stored;
+  const prior=(await this.ledger.pool.query('SELECT grant_id,session_id,account_id,executor_digest,key_fingerprint FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2',[ids.stageId,authority.contextId])).rows[0];
+  if(prior&&prior.session_id!==ids.sessionId)throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+  let grantId=prior?.grant_id as string|undefined;
+  if(!prior){
+   await this.ledger.tx(async c=>{
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
+    await c.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state) VALUES($1,$2,'qa',$3,$4,$5,'registered') ON CONFLICT(intent_id,node_id,session_id) DO NOTHING`,[ids.stageId,intent.id,ids.sessionId,ids.attemptId,authority.epoch]);
+   });
+   const stage=(await this.ledger.pool.query('SELECT state,grant_id FROM ac_stage_operations WHERE id=$1 AND intent_id=$2',[ids.stageId,intent.id])).rows[0];
+   if(!stage||stage.state!=='registered')throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+   const grant=await new Capacity(this.ledger).reserve(principal,{attemptId:ids.attemptId,intentId:intent.id,contextId:authority.contextId,role:'qa'},authority);
+   if(grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
+   grantId=grant.id;
+   const attached=await this.ledger.tx(async c=>{
+    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority);
+    return c.query("UPDATE ac_stage_operations SET grant_id=$2 WHERE id=$1 AND intent_id=$3 AND state='registered' AND manager_epoch=$4 AND (grant_id IS NULL OR grant_id=$2)",[ids.stageId,grantId,intent.id,authority.epoch]);
+   });
+   if(!attached.rowCount)throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+  }
+  const request=NativeExecutionRequest.parse(qaModelExecutionRequest({stageId:ids.stageId,sessionId:ids.sessionId,intentId:intent.id,grantId:grantId!,artifact,diff:material.diff,truncated:material.truncated,ownerRequest:material.ownerRequest,testTail:material.testTail}));
+  const account=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
+  const candidates=this.supervisors.filter(s=>s.supportsAccount(account?.account_id)&&(!prior||prior.account_id===account?.account_id&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint));
+  const supervisor=candidates.length===1?candidates[0]:undefined;
+  if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
+  let status=await supervisor.start(principal,authority,request);
+  while(status.state!=='completed'&&status.state!=='failed'){
+   if(isCanceled()){await supervisor.stop(principal,authority,request);throw new Refusal('STAGE_CANCELED');}
+   await new Promise(resolve=>setTimeout(resolve,1000));status=await supervisor.reconcile(principal,authority,request);
+  }
+  if(status.state==='failed'||!('output' in status)||typeof status.output!=='string'){await supervisor.retireTerminal(principal,authority,ids.stageId);throw new Refusal('QA_MODEL_UNAVAILABLE');}
+  let verdict;try{verdict=parseQaModelVerdict(JSON.parse(status.output));}catch{throw new Refusal('QA_MODEL_VERDICT_MISMATCH');}
+  if(verdict.kind!=='review'||verdict.artifactId!==artifact.id||verdict.commit!==artifact.commit_id||verdict.tree!==artifact.tree_id||verdict.base!==artifact.base_id||verdict.policyRevision!==artifact.policy_revision||(verdict.verdict==='pass'&&verdict.findings.some(f=>f.severity==='high')))throw new Refusal('QA_MODEL_VERDICT_MISMATCH');
+  await this.persistQaModel(principal,authority,intent.id,ids,grantId!,verdict,status.receipt);
+  await supervisor.retireTerminal(principal,authority,ids.stageId);
+  if(verdict.verdict==='reject')throw new Refusal('QA_MODEL_REJECTED');
+  return {verdict:'pass' as const,findings:verdict.findings};
+ }
+ private async storedQaModel(intentId:string,stageId:string){
+  const row=(await this.ledger.pool.query('SELECT state,receipt FROM ac_stage_operations WHERE id=$1 AND intent_id=$2',[stageId,intentId])).rows[0];
+  if(!row)return undefined;
+  if(row.state!=='completed')return undefined;
+  const verdict=row.receipt?.qaModel?.verdict;
+  if(verdict==='pass')return {verdict:'pass' as const,findings:row.receipt.qaModel.findings??[]};
+  if(verdict==='reject')throw new Refusal('QA_MODEL_REJECTED');
+  throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+ }
+ private async persistQaModel(principal:string,authority:Authority,intentId:string,ids:{stageId:string;sessionId:string},grantId:string,verdict:{verdict:'pass'|'reject';findings:unknown},executionReceipt:unknown){
+  const receipt={qaModel:{verdict:verdict.verdict,findings:verdict.findings},nativeExecution:executionReceipt};
+  await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);await this.ledger.assertIntentActive(c,authority.contextId,intentId);
+   const row=(await c.query(`SELECT s.state,s.receipt,s.grant_id,s.session_id,g.state grant_state FROM ac_stage_operations s JOIN ac_capacity_grants g ON g.id=s.grant_id WHERE s.id=$1 AND s.intent_id=$2 FOR UPDATE OF s`,[ids.stageId,intentId])).rows[0];
+   if(!row||row.grant_id!==grantId||row.session_id!==ids.sessionId||row.grant_state!=='released')throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+   if(row.state==='completed'){if(row.receipt?.qaModel?.verdict!==verdict.verdict)throw new Refusal('QA_MODEL_RESULT_CONFLICT');return;}
+   if(!['uncertain','running'].includes(row.state))throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
+   await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[ids.stageId,receipt]);
+  });
  }
 }
