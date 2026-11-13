@@ -36,7 +36,7 @@ export async function readSignedWorkerLaunch<S extends z.ZodType>(schema:S,domai
 }
 /** Personal homes keep the credential file that account-add copied. The same walk is used by the worker so the snapshot tag matches. */
 export async function readMountedCredentialSecrets(provider:'codex'|'claude'|'grok',accountRoot='/account'){
- const path=provider==='grok'?join(accountRoot,'.grok','auth.json'):provider==='claude'?join(accountRoot,'.credentials.json'):join(accountRoot,'auth.json');
+ const path=provider==='grok'?join(accountRoot,'.grok','auth.json'):provider==='claude'?join(accountRoot,'.credentials.json'):join(accountRoot,'.codex','auth.json');
  const bytes=await readPrivateWorkerFile(path,65536);
  try{
   const strings=(value:unknown):string[]=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(strings):value&&typeof value==='object'?Object.values(value).flatMap(strings):[];

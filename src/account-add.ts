@@ -33,7 +33,7 @@ function capture(accountId:string,chunk:Buffer){
 function startDeviceLogin(provider:'codex'|'claude'|'grok',home:string,accountId:string){
  const command=provider==='codex'?'codex':provider==='claude'?'claude':'grok';
  const args=provider==='claude'?['setup-token']:['login','--device-auth'];
- const child=spawn(command,args,{env:{...process.env,CODEX_HOME:home,CLAUDE_CONFIG_DIR:home,HOME:provider==='grok'?home:process.env.HOME},stdio:['ignore','pipe','pipe'],detached:true});
+ const child=spawn(command,args,{env:{...process.env,CODEX_HOME:resolve(home,'.codex'),CLAUDE_CONFIG_DIR:home,HOME:provider==='grok'?home:process.env.HOME},stdio:['ignore','pipe','pipe'],detached:true});
  child.stdout.on('data',(chunk:Buffer)=>capture(accountId,chunk));
  child.stderr.on('data',(chunk:Buffer)=>capture(accountId,chunk));
  child.on('error',()=>{const current=sessions.get(accountId);if(current)sessions.set(accountId,{...current,state:'error'});});
@@ -71,8 +71,9 @@ export async function addProviderAccount(config:Installation,ledger:Ledger,raw:{
  sessions.set(accountId,login);
  if(raw.authFile){
   if(!isAbsolute(raw.authFile)||resolve(raw.authFile)!==raw.authFile)throw new Refusal('AUTH_FILE_INVALID',400);
-  const target=provider==='grok'?resolve(home,'.grok','auth.json'):provider==='claude'?resolve(home,'.credentials.json'):resolve(home,'auth.json');
+  const target=provider==='grok'?resolve(home,'.grok','auth.json'):provider==='claude'?resolve(home,'.credentials.json'):resolve(home,'.codex','auth.json');
   if(provider==='grok')await mkdir(resolve(home,'.grok'),{recursive:true,mode:0o700});
+  else if(provider==='codex')await mkdir(resolve(home,'.codex'),{recursive:true,mode:0o700});
   await copyFile(raw.authFile,target);
   const file=await open(target,constants.O_RDONLY);
   try{await file.chmod(0o600);}finally{await file.close();}
