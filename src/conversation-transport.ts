@@ -88,12 +88,12 @@ export class LocalConversationTransport implements ConversationTransport {
   async readPage(after: string | undefined, limit: number): Promise<PanelPage> {
     if (after === undefined) {
       const rows = (await this.deps.ledger.pool.query(`SELECT id, role, text, created_at, seq FROM ac_personal_messages
-        WHERE context_id=$1 ORDER BY seq DESC LIMIT $2`, [this.deps.contextId, limit])).rows as {id: string; role: string; text: string; created_at: Date; seq: string}[];
+        WHERE context_id=$1 AND NOT hidden ORDER BY seq DESC LIMIT $2`, [this.deps.contextId, limit])).rows as {id: string; role: string; text: string; created_at: Date; seq: string}[];
       const ordered = [...rows].reverse();
       return {messages: ordered.map(panelRow), next: rows.length ? String(rows[0]!.seq) : null};
     }
     const rows = (await this.deps.ledger.pool.query(`SELECT id, role, text, created_at, seq FROM ac_personal_messages
-      WHERE context_id=$1 AND seq > $2 ORDER BY seq ASC LIMIT $3`, [this.deps.contextId, Number(after), limit])).rows as {id: string; role: string; text: string; created_at: Date; seq: string}[];
+      WHERE context_id=$1 AND NOT hidden AND seq > $2 ORDER BY seq ASC LIMIT $3`, [this.deps.contextId, Number(after), limit])).rows as {id: string; role: string; text: string; created_at: Date; seq: string}[];
     const last = rows.at(-1);
     return {messages: rows.map(panelRow), next: last ? String(last.seq) : after};
   }
