@@ -1,7 +1,7 @@
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,lstat,realpath,copyFile,readFile,writeFile,chmod} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
+import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const repo=fileURLToPath(new URL('../',import.meta.url));
 const kinds={planning:{entry:'native-planning-worker',dockerfile:'Dockerfile.native-planning'},execution:{entry:'native-execution-worker',dockerfile:'Dockerfile.native-execution'},tools:{entry:'native-tools-worker',dockerfile:'Dockerfile.native-tools'}};
@@ -25,6 +25,12 @@ export async function prepareNativeImage(kind,binaryPath,expected){
   const path=await realpath(resolve(source)),data=await readFile(path);
   if(data[0]!==127||data.subarray(1,4).toString()!=='ELF'||data.length>512*1024*1024)throw Error(variable+'_NOT_ELF');
   extra[name]=createHash('sha256').update(data).digest('hex');await writeFile(join(context,'extra-bin',name),data,{mode:0o555,flag:'wx'});data.fill(0);
+ }
+ // The Codex CLI runs its file tools through a companion binary that ships beside it; without it a reviewer cannot read the checkout.
+ if(kind!=='tools'){
+  const helper=join(dirname(binary),'codex-code-mode-host');
+  const found=await lstat(helper).then(i=>i.isFile()&&!i.isSymbolicLink(),()=>false);
+  if(found){const data=await readFile(helper);if(data[0]===127&&data.subarray(1,4).toString()==='ELF'&&data.length<=512*1024*1024){extra['codex-code-mode-host']=createHash('sha256').update(data).digest('hex');await writeFile(join(context,'extra-bin','codex-code-mode-host'),data,{mode:0o555,flag:'wx'});}data.fill(0);}
  }
  await copyFile(join(repo,'deploy',selected.dockerfile),join(context,'Dockerfile'));await chmod(join(context,'Dockerfile'),0o600);
  const bundle=await readFile(bundlePath),dockerfile=await readFile(join(context,'Dockerfile'));

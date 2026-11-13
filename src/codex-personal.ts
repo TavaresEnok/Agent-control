@@ -26,17 +26,18 @@ function extractJsonObject(text:string):unknown{
 
 /**
  * Argv for personal `codex exec`. The programmer writes the checkout.
- * Reviewer, QA, judge, specialist and planning stay read-only.
+ * The worker container is the sandbox (read-only root, no capabilities, only the job's mounts): Codex's own
+ * bubblewrap sandbox cannot start inside it, so it is turned off. Evaluators get their checkout mounted read-only.
  * xhigh and max are already capped at high.
  */
 export function codexPersonalCommand(input:{role:CodexPersonalRole;model:string;effort:string;prompt:string;outputSchema?:Record<string,unknown>}){
  const mapped=cliEffort('codex',Effort.parse(input.effort));
- const readOnly=input.role!=='programmer';
- const cwd=input.role==='manager'||input.role==='planning'?'/tmp':'/work';
+ // Evaluators have no /work: their read-only copy of the artifact is mounted at /planning, as for Claude and Grok.
+ const cwd=input.role==='manager'||input.role==='planning'?'/tmp':input.role==='programmer'?'/work':'/planning';
  const prompt=input.outputSchema&&input.role!=='programmer'&&input.role!=='manager'
   ?'Reply with ONLY one JSON object, no prose and no code fences, matching this JSON Schema: '+JSON.stringify(input.outputSchema)+'\n\n'+input.prompt
   :input.prompt;
- return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account/.codex'],args:['exec','--skip-git-repo-check','--sandbox',readOnly?'read-only':'workspace-write','--model',input.model,'-c','model_reasoning_effort='+mapped,'-C',cwd,prompt]};
+ return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account/.codex'],args:['exec','--skip-git-repo-check','--sandbox','danger-full-access','--model',input.model,'-c','model_reasoning_effort='+mapped,'-C',cwd,prompt]};
 }
 
 /** Runs the personal Codex CLI. A usage-limit message becomes PROVIDER_USAGE_LIMIT. */

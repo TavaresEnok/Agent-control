@@ -15,25 +15,25 @@ test('personal Codex skips the subscription assertion and locked Codex keeps it'
  assert.equal(codexWorkerAssertsSubscriptionIdentity(undefined),true);
 });
 
-test('personal Codex argv writes for the programmer and is read-only for the reviewer',()=>{
+test('personal Codex argv leaves sandboxing to the worker container for every role',()=>{
  const programmer=codexPersonalCommand({role:'programmer',model:'gpt-6.1-sol',effort:'max',prompt:'edit the checkout'});
  assert.deepEqual(programmer.env,['CODEX_HOME=/account/.codex']);
  assert.equal(programmer.args[0],'exec');
- assert.equal(programmer.args[programmer.args.indexOf('--sandbox')+1],'workspace-write');
+ assert.equal(programmer.args[programmer.args.indexOf('--sandbox')+1],'danger-full-access');
  assert.equal(programmer.args[programmer.args.indexOf('--model')+1],'gpt-6.1-sol');
  assert.ok(programmer.args.includes('model_reasoning_effort=high'));
  assert.equal(programmer.args[programmer.args.indexOf('-C')+1],'/work');
  assert.equal(programmer.args.at(-1),'edit the checkout');
  const reviewer=codexPersonalCommand({role:'reviewer',model:'gpt-6.1-terra',effort:'high',prompt:'leia o diff',outputSchema:{type:'object'}});
- assert.equal(reviewer.args[reviewer.args.indexOf('--sandbox')+1],'read-only');
+ assert.equal(reviewer.args[reviewer.args.indexOf('--sandbox')+1],'danger-full-access');
  assert.equal(reviewer.args[reviewer.args.indexOf('--model')+1],'gpt-6.1-terra');
  assert.ok(reviewer.args.includes('model_reasoning_effort=high'));
- assert.equal(reviewer.args[reviewer.args.indexOf('-C')+1],'/work');
+ assert.equal(reviewer.args[reviewer.args.indexOf('-C')+1],'/planning');
  assert.match(String(reviewer.args.at(-1)),/ONLY one JSON object/);
  assert.match(String(reviewer.args.at(-1)),/leia o diff/);
  const qa=codexPersonalCommand({role:'qa',model:'gpt-6.1-sol',effort:'medium',prompt:'qa',outputSchema:{type:'object'}});
- assert.equal(qa.args[qa.args.indexOf('--sandbox')+1],'read-only');
- assert.equal(qa.args[qa.args.indexOf('-C')+1],'/work');
+ assert.equal(qa.args[qa.args.indexOf('--sandbox')+1],'danger-full-access');
+ assert.equal(qa.args[qa.args.indexOf('-C')+1],'/planning');
 });
 
 test('a Codex limit text becomes PROVIDER_USAGE_LIMIT',()=>{
