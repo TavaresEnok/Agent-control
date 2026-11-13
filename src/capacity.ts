@@ -29,6 +29,12 @@ export const CapacityPolicy = z.object({ schemaVersion: z.literal(1),
   maxEvaluatorsPerContext: z.number().int().min(1).max(10),
   roles: z.object({ manager: Chain.optional(), programmer: Chain.optional(), reviewer: Chain.optional(),
     qa: Chain.optional(), specialist: Chain.optional(), judge: Chain.optional() }).strict(),
+  /** Set when a personal combo published this revision. Old snapshots omit it. */
+  combo: z.string().min(1).max(80).optional(),
+  /** Programmer profile ids by task level. Absent on policies published before combos. */
+  programmerTiers: z.object({ standard: z.array(Id).min(1).max(20), basic: z.array(Id).max(20) }).strict().optional(),
+  /** True only when the combo named a model QA profile. Absent means script QA only. */
+  qaModel: z.boolean().optional(),
 }).strict().superRefine((p, ctx) => {
   for (const [role, chain] of Object.entries(p.roles)) if (chain) {
     const ids = [...chain.regular,...chain.emergency];
