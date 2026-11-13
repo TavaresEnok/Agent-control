@@ -2,6 +2,7 @@ import {execFile} from 'node:child_process';
 import {join} from 'node:path';
 import type {Ledger} from './ledger.ts';
 import {claudeLimitFromText,isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
+import {cliEffort,Effort} from './effort.ts';
 
 export type ManagerDecision={kind:'answer'|'plan';answer:string};
 type ManagerProfile={accountId:string;provider:string;model:string;effort:string};
@@ -26,10 +27,12 @@ export function parseManagerDecision(stdout:string):ManagerDecision{
  return {kind:'answer',answer:text.slice(0,8000)};
 }
 
-function cli(provider:string,model:string,effort:string,prompt:string){
- if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,'--model',model,'--effort',effort,'--output-format','text']};
- if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',effort,'--output-format','plain','--cwd','/tmp','--no-plan','--always-approve']};
- return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account'],args:['exec','--skip-git-repo-check','--sandbox','read-only','--model',model,'-c','model_reasoning_effort='+effort,'-C','/tmp',prompt]};
+/** Argv for the manager CLI. Does not spawn. Claude keeps xhigh and max; Grok and Codex cap at high. */
+export function managerChatCommand(provider:string,model:string,effort:string,prompt:string){
+ const mapped=cliEffort(provider,Effort.parse(effort));
+ if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,'--model',model,'--effort',mapped,'--output-format','text']};
+ if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd','/tmp','--no-plan','--always-approve']};
+ return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account'],args:['exec','--skip-git-repo-check','--sandbox','read-only','--model',model,'-c','model_reasoning_effort='+mapped,'-C','/tmp',prompt]};
 }
 
 /**
@@ -46,7 +49,7 @@ export class PersonalManagerChat{
   return rows.map(row=>({accountId:String(row.account_id),provider:String(row.provider),model:String(row.model),effort:String(row.effort)}));
  }
  private run(profile:ManagerProfile,prompt:string){
-  const command=cli(profile.provider,profile.model,profile.effort,prompt);
+  const command=managerChatCommand(profile.provider,profile.model,profile.effort,prompt);
   const proxy=process.env.AC_PERSONAL_EGRESS==='1'?['--env','HTTPS_PROXY=http://provider-egress:8080','--env','HTTP_PROXY=http://provider-egress:8080','--env','NO_PROXY=']:[];
   const args=['run','--rm','--network',this.options.network??'ac-native-provider','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
    '--pids-limit','256','--memory','1g','--tmpfs','/tmp:rw,nosuid,nodev,size=64m','--workdir','/tmp',

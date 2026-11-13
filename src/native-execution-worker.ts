@@ -10,10 +10,11 @@ import {ClaudeExecutionAdapter,ClaudeExecutionFailure} from './claude-execution-
 import {GrokExecutionFailure,runGrokProgrammer} from './grok-execution-adapter.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
+import {Effort} from './effort.ts';
 const UUID=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,intentId:UUID,grantId:UUID,accountId:UUID,profileId:UUID,sessionId:UUID,
  epoch:z.number().int().positive(),providerSubjectDigest:Hash,credentialSnapshotTag:Hash,executorDigest:Hash,inputDigest:Hash,proxyUrl:z.literal('http://provider-egress:8080'),
- model:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/),effort:z.enum(['low','medium','high']),
+ model:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/),effort:Effort,
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(z.string().max(240)).max(64),
  artifactCommit:z.string().regex(/^[a-f0-9]{40}$/).optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),
  environmentId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),toolsAddress:z.string().refine(isPrivateToolAddress),timeoutMs:z.number().int().min(1000).max(1800000),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude','grok']).optional()}).strict();

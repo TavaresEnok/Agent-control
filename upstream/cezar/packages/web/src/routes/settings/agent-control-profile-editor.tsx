@@ -2,7 +2,7 @@ import {useState} from 'react'
 import {z} from 'zod'
 import {Button} from '@/components/ui/button'
 const roleSchema=z.enum(['manager','programmer','reviewer','qa','specialist','judge'])
-const effortSchema=z.enum(['low','medium','high'])
+const effortSchema=z.enum(['low','medium','high','xhigh','max'])
 export const catalogEntrySchema=z.object({provider:z.string(),model:z.string(),efforts:z.array(effortSchema),roles:z.array(roleSchema),source:z.string()})
 type Props={accounts:{id:string;label:string;provider:string;mode?:string;can_manage:boolean}[];catalog:z.infer<typeof catalogEntrySchema>[];busy:boolean;
  onAdd:(payload:{id:string;accountId:string;model:string;effort:z.infer<typeof effortSchema>;role:z.infer<typeof roleSchema>})=>void}

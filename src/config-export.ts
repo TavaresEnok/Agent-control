@@ -3,6 +3,7 @@ import {z} from 'zod';
 import {canonical,digest,Id,Refusal} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {CapacityPolicy} from './capacity.ts';
+import {Effort} from './effort.ts';
 import {QualityPolicy} from './quality-policy.ts';
 import {ProjectEnvironmentConfig} from './project-environments.ts';
 import {Template} from './templates.ts';
@@ -20,7 +21,7 @@ const ProjectPayload=z.object({project:ProjectConfig,managedGraphs:ManagedGraphs
  templates:z.array(z.object({id:Id,revision:z.number().int().positive(),name:z.string(),snapshot:Template}).strict()),
  capacityPolicies:z.array(z.object({revision:z.number().int().positive(),policy:CapacityPolicy}).strict()),
  qualityPolicies:z.array(z.object({revision:z.number().int().positive(),policy:QualityPolicy}).strict()),
- profiles:z.array(z.object({id:Id,accountId:Id,model:z.string(),effort:z.enum(['low','medium','high']),role:z.enum(['manager','programmer','reviewer','qa','specialist','judge']),enabled:z.boolean()}).strict()),
+ profiles:z.array(z.object({id:Id,accountId:Id,model:z.string(),effort:Effort,role:z.enum(['manager','programmer','reviewer','qa','specialist','judge']),enabled:z.boolean()}).strict()),
  accounts:z.array(z.object({id:Id,provider:z.string(),label:z.string(),mode:z.string(),eligibility:z.string(),enabled:z.boolean(),maxConcurrent:z.number().int(),identity:Binding}).strict()),
  models:z.array(z.object({provider:z.string(),model:z.string(),efforts:z.array(z.string()),roles:z.array(z.string())}).strict())
 }).strict();

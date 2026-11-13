@@ -9,10 +9,10 @@ import {digest,Refusal} from './contracts.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {nativeProtocolHostSupervisor} from './native-protocol-host-supervisor.ts';
+import {Effort} from './effort.ts';
 
 const run=promisify(execFile),Hash=z.string().regex(/^[a-f0-9]{64}$/),Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const Effort=z.enum(['low','medium','high']);
-const Model=z.object({model:z.string().min(1).max(100),efforts:z.array(Effort).min(1).max(3)}).strict();
+const Model=z.object({model:z.string().min(1).max(100),efforts:z.array(Effort).min(1).max(5)}).strict();
 const Models=z.array(Model).min(1).max(500).refine(rows=>new Set(rows.map(row=>row.model)).size===rows.length);
 const Spec=z.discriminatedUnion('kind',[
  z.object({kind:z.literal('execution'),workerImage:Image,toolsImage:Image,executorDigest:Hash}).strict(),
@@ -136,7 +136,7 @@ export class NativeProtocolCompatibility{
  }
  async revoke(principal:string,executorDigest:string,expectedRevision:number){Hash.parse(executorDigest);z.number().int().positive().parse(expectedRevision);return this.ledger.tx(async c=>{await admin(c,principal);const result=await c.query('UPDATE ac_native_protocol_promotions SET revoked=true,revision=revision+1,updated_at=clock_timestamp() WHERE executor_digest=$1 AND revision=$2 RETURNING revision',[executorDigest,expectedRevision]);if(!result.rowCount)throw new Refusal('NATIVE_PROTOCOL_REVISION_CONFLICT');return result.rows[0];});}
 }
-export async function pinNativeProtocolForNewAttempt(c:pg.PoolClient,input:{kind:'execution'|'planning';jobId:string;executorDigest:string;model:string;effort:'low'|'medium'|'high'}){
+export async function pinNativeProtocolForNewAttempt(c:pg.PoolClient,input:{kind:'execution'|'planning';jobId:string;executorDigest:string;model:string;effort:Effort}){
  const parsed=z.object({kind:z.enum(['execution','planning']),jobId:z.uuid(),executorDigest:Hash,model:z.string().min(1).max(100),effort:Effort}).strict().parse(input);
  await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['native-protocol:'+parsed.kind+':'+parsed.jobId]);
  const prior=(await c.query('SELECT * FROM ac_native_protocol_attempt_pins WHERE kind=$1 AND job_id=$2',[parsed.kind,parsed.jobId])).rows[0];

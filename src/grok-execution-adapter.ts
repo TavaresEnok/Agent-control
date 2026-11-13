@@ -2,8 +2,14 @@ import {spawn} from 'node:child_process';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import type {UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
+import {Effort,cliEffort} from './effort.ts';
 
-const Input=z.object({model:z.string().min(1).max(100),effort:z.enum(['low','medium','high']),task:z.string().min(1).max(100000),timeoutMs:z.number().int().min(1000).max(1800000)}).passthrough();
+const Input=z.object({model:z.string().min(1).max(100),effort:Effort,task:z.string().min(1).max(100000),timeoutMs:z.number().int().min(1000).max(1800000)}).passthrough();
+/** Argv the Grok CLI receives. xhigh and max are already capped at high. */
+export function grokProgrammerArgs(model:string,effort:string,task:string){
+ const mapped=cliEffort('grok',Effort.parse(effort));
+ return ['-p',task,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd','/work','--no-plan','--always-approve'];
+}
 export class GrokExecutionFailure extends Refusal{
  constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null){super(code);}
 }
@@ -13,7 +19,7 @@ export async function runGrokProgrammer(raw:unknown,signal?:AbortSignal){
  const input=Input.parse(raw);
  if(signal?.aborted)throw new GrokExecutionFailure('EXECUTION_CANCELED',null,null);
  const bin=process.env.GROK_BIN??'/usr/local/bin/grok';
- const child=spawn(bin,['-p',input.task,'--model',input.model,'--reasoning-effort',input.effort,'--output-format','plain','--cwd','/work','--no-plan','--always-approve'],{cwd:'/work',env:process.env,stdio:['ignore','pipe','pipe']});
+ const child=spawn(bin,grokProgrammerArgs(input.model,input.effort,input.task),{cwd:'/work',env:process.env,stdio:['ignore','pipe','pipe']});
  let stdout='',stderr='';
  child.stdout.on('data',(chunk:Buffer)=>{stdout+=chunk.toString('utf8');});
  child.stderr.on('data',(chunk:Buffer)=>{stderr+=chunk.toString('utf8');});

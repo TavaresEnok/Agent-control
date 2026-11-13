@@ -7,13 +7,14 @@ import {Capacity} from './capacity.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {ManagerPlan,ManagerPlans} from './planning.ts';
 import {managerPlanOutputJsonSchema} from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
+import {Effort} from './effort.ts';
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 export const SemanticPlanningRequest=z.object({id:Id,intentId:Id,contextId:Id,expectedRevision:z.number().int().nonnegative(),
  sourceMessageRef:z.string().min(1).max(240).regex(/^[a-z][a-z0-9-]*:[^\s]+$/),
  qualityRevision:z.number().int().positive(),targetRef:z.string().max(240).regex(/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9/_-]*$/),
  knownReferences:z.array(z.string().min(1).max(240).regex(/^[a-z][a-z0-9-]*:[^\s]+$/)).max(256).optional(),text:z.string().min(1).max(100000)}).strict();
 const Profile=z.object({id:Id,accountId:Id,provider:z.string().min(1).max(80),model:z.string().min(1).max(100),
- effort:z.enum(['low','medium','high']),mode:z.enum(['synthetic','subscription_cli'])}).strict();
+ effort:Effort,mode:z.enum(['synthetic','subscription_cli'])}).strict();
 export const PlanningPhysicalReceipt=z.object({payload:z.object({callId:Id,intentId:Id,contextId:Id,grantId:Id,profileId:Id,sessionId:Id,
  epoch:z.number().int().positive(),executorDigest:Hash,inputDigest:Hash,profileDigest:Hash,outputDigest:Hash,physicalDigest:Hash,
  exitCode:z.number().int(),failureCode:z.string().min(1).max(120).optional()}).strict(),signature:z.string().regex(/^[a-f0-9]{128}$/)}).strict();
