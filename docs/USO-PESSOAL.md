@@ -112,13 +112,21 @@ Sempre que reconstruir uma imagem ou mudar o QA, rode `npm run personal:images -
 
 ### Combos de equipe
 
-Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o esforço e a quantidade. Quatro já vêm prontos: `padrão` (gerente e revisor Claude Sonnet 5.5 em esforço médio, dois programadores Grok 4.7 em esforço médio, QA só por script), `superfoda`, `megapoderoso` e `econômico`. Um combo do titular, gravado em `<dataDirectory>/combos.json` com modo 600, substitui o pronto de mesmo nome. Aplicar cria os perfis que faltam, desativa os que o combo não usa e publica a política de capacidade. Se faltar a conta ativa do provedor, nada muda.
+Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o esforço, a quantidade e a reserva. A reserva assume quando a conta titular está esgotada ou sem login. Três já vêm prontos.
+
+`complexo`: gerente Claude Opus 5.5 alto, reserva GPT 6.1 Sol alto; 3 programadores normais GPT 6.1 Sol alto, reserva Grok 4.7 alto; 1 programador básico Grok 4.7 alto, reserva GPT 6.1 Sol alto; revisor Claude Opus 5.5 alto, reserva Grok 4.7 alto; QA Grok 4.7 alto, reserva Claude Sonnet 5.5 médio.
+
+`intermediário`: gerente Claude Sonnet 5.5 alto, reserva GPT 6.1 Sol médio; programadores normais 2 × Grok 4.7 médio e 1 × GPT 6.1 Sol médio, um é a reserva do outro; revisor GPT 6.1 Sol alto, reserva Claude Sonnet 5.5 alto; QA Claude Sonnet 5.5 médio, reserva Grok 4.7 médio.
+
+`economia`: gerente Claude Sonnet 5.5 médio, reserva Grok 4.7 médio; programadores normais 2 × Grok 4.7 médio e 1 × GPT 6.1 Terra médio, um é a reserva do outro; revisor GPT 6.1 Terra alto, reserva Claude Sonnet 5.5 baixo; QA só pelos testes do projeto, sem modelo.
+
+Todo combo pronto tem pelo menos 3 programadores e reserva no gerente, no revisor e nos programadores. Um combo do titular com menos de 3 programadores ou sem essas reservas é recusado. O arquivo fica em `<dataDirectory>/combos.json` com modo 600 e substitui o pronto de mesmo nome. Aplicar cria os perfis que faltam, desativa os que o combo não usa e publica a política de capacidade. Se faltar a conta ativa do provedor, nada muda.
 
 `<projeto>` é o label ou o id. O comando age como o dono gravado nesse projeto.
 
 ```bash
 npm run personal:combo -- <instalação.json> <projeto> list
-npm run personal:combo -- <instalação.json> <projeto> apply padrão
+npm run personal:combo -- <instalação.json> <projeto> apply intermediário
 ```
 
 Na conversa, `equipe` mostra o combo atual. `use o combo <nome>` aplica e responde com o resumo. No painel gerenciado, a tela Equipe fica no menu depois de Tarefas: a lista, o botão "Usar este" e o editor, só para o dono da instalação.
@@ -146,7 +154,7 @@ npm run gateway -- say <instalacao> "o que este repositório faz?"
 npm run gateway -- say <instalacao> "crie docs/guia.md com ..."   # chega a proposta com as tarefas
 npm run gateway -- say <instalacao> aprovar                        # ou: descartar, pare
 npm run gateway -- say <instalacao> equipe                         # combo atual, papéis e a última atividade de cada um
-npm run gateway -- say <instalacao> "use o combo padrão"           # aplica esse combo e responde com o resumo
+npm run gateway -- say <instalacao> "use o combo intermediário"    # aplica esse combo e responde com o resumo
 npm run gateway -- chat-log <instalacao> 600                       # acompanha a conversa por 600 s
 npm run gateway -- chat-log <instalacao>                           # histórico
 ```
@@ -277,7 +285,7 @@ O histórico antigo continua no SQLite. O que foi escrito só na tabela nova nã
 
 Só contas que você possui.
 
-A equipe de cada projeto é o combo aplicado. No combo `padrão`, o gerente e o revisor usam Claude Sonnet 5.5 em esforço médio e os programadores usam Grok 4.7 em esforço médio; o QA fica no script do projeto. Outros combos podem usar Codex e um modelo de QA. A equipe permanente do `AGENTS.md` não muda.
+A equipe de cada projeto é o combo aplicado. No combo `intermediário`, o gerente usa Claude Sonnet 5.5 alto com reserva GPT 6.1 Sol médio, os programadores normais são 2 × Grok 4.7 médio e 1 × GPT 6.1 Sol médio (um é a reserva do outro), o revisor usa GPT 6.1 Sol alto com reserva Claude Sonnet 5.5 alto, e o QA usa Claude Sonnet 5.5 médio com reserva Grok 4.7 médio. `complexo` e `economia` trocam modelos e esforço; em `economia` o QA fica no script do projeto. A equipe permanente do `AGENTS.md` não muda.
 
 ```bash
 npm run gateway -- account-add /caminho/instalacao.json claude "Claude"

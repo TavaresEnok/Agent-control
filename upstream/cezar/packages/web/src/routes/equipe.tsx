@@ -55,6 +55,7 @@ function applyError(code: string): string {
   if (code === 'COMBO_NOT_FOUND') return 'Combo não encontrado.'
   if (code === 'COMBO_NAME_AMBIGUOUS') return 'Há mais de um combo com esse nome.'
   if (code === 'COMBO_TOO_MANY_PROGRAMMERS') return 'A soma dos programadores passa de 10.'
+  if (code === 'COMBO_MINIMUM_REQUIRED') return 'Um combo precisa de pelo menos 3 programadores e de reserva no gerente, no revisor e nos programadores.'
   if (code === 'PROJECT_OWNER_REQUIRED') return 'Só o dono da instalação pode mudar a equipe.'
   if (code === 'COMBOS_FILE_INVALID') return 'O arquivo de combos está inválido.'
   if (code === 'COMBO_LIMIT') return 'Já há 40 combos gravados.'

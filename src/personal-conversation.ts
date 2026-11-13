@@ -18,6 +18,7 @@ export function personalComboRefusal(code:string){
  if(code==='COMBO_NOT_FOUND')return 'Combo não encontrado. Nada foi alterado.';
  if(code==='COMBO_NAME_AMBIGUOUS')return 'Há mais de um combo com esse nome. Nada foi alterado.';
  if(code==='COMBO_TOO_MANY_PROGRAMMERS')return 'A soma dos programadores passa de 10. Nada foi alterado.';
+ if(code==='COMBO_MINIMUM_REQUIRED')return 'Um combo precisa de pelo menos 3 programadores e de reserva no gerente, no revisor e nos programadores. Nada foi alterado.';
  if(code==='PROJECT_OWNER_REQUIRED')return 'Só o dono da instalação pode aplicar um combo. Nada foi alterado.';
  return 'Não foi possível aplicar o combo. Nada foi alterado.';
 }

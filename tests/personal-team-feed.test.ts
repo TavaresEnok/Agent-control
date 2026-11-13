@@ -66,12 +66,12 @@ test('equipe and status ask for the team panel',()=>{
  assert.equal(personalComboRequest('use o combo padrão'),'padrão');
  assert.equal(personalComboRequest('Use o combo  Megapoderoso'),'Megapoderoso');
  assert.equal(personalComboRequest('equipe'),null);
- const mega=builtinCombos.find(item=>item.name==='megapoderoso')!;
- const text=describeAppliedCombo({name:mega.name,revision:3,maxProgrammersPerContext:6,qaModel:true,manager:[],reviewer:[],programmerStandard:[],programmerBasic:[],qa:[],combo:mega});
- assert.match(text,/Combo megapoderoso em uso/);
- assert.match(text,/Programadores padrão: 4 × codex · gpt-6.1-sol · high/);
- assert.match(text,/Programadores básicos: 2 × grok · grok-4.7 · high/);
- assert.match(text,/Programadores por contexto: 6/);
+ const combo=builtinCombos.find(item=>item.name==='complexo')!;
+ const text=describeAppliedCombo({name:combo.name,revision:3,maxProgrammersPerContext:4,qaModel:true,manager:[],reviewer:[],programmerStandard:[],programmerBasic:[],qa:[],combo});
+ assert.match(text,/Combo complexo em uso/);
+ assert.match(text,/Programadores padrão: 3 × codex · gpt-6.1-sol · high/);
+ assert.match(text,/Programadores básicos: 1 × grok · grok-4.7 · high/);
+ assert.match(text,/Programadores por contexto: 4/);
 });
 
 test('the app model picker lists the team, once',async()=>{

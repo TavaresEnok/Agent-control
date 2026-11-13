@@ -29,15 +29,49 @@ const ComboFile=z.object({schemaVersion:z.literal(1),combos:z.array(PersonalComb
 const slot=(provider:ComboSlot['provider'],model:string,effort:ComboSlot['effort'],count=1,reserve?:ComboReserve):ComboSlot=>
  ({provider,model,effort,count,...(reserve?{reserve}:{})});
 
-/** The four teams the owner asked for. Counts are explicit so the JSON stays stable. */
+const sol=(effort:ComboSlot['effort']):ComboReserve=>({provider:'codex',model:'gpt-6.1-sol',effort});
+const grokReserve=(effort:ComboSlot['effort']):ComboReserve=>({provider:'grok',model:'grok-4.7',effort});
+const sonnet=(effort:ComboSlot['effort']):ComboReserve=>({provider:'claude',model:'claude-sonnet-5-5',effort});
+/** The three teams the owner asked for. Counts are explicit so the JSON stays stable. */
 export const builtinCombos:PersonalCombo[]=[
- {name:'padrão',roles:{manager:slot('claude','claude-sonnet-5-5','medium'),reviewer:slot('claude','claude-sonnet-5-5','medium'),programmer:{standard:[slot('grok','grok-4.7','medium',2)]}}},
- {name:'superfoda',roles:{manager:slot('claude','claude-opus-5-5','high'),reviewer:slot('claude','claude-opus-5-5','high'),programmer:{standard:[slot('codex','gpt-6.1-sol','medium',3)]},qa:slot('grok','grok-4.7','high')}},
- {name:'megapoderoso',roles:{manager:slot('claude','claude-opus-5-5','xhigh'),reviewer:slot('claude','claude-opus-5-5','high'),programmer:{standard:[slot('codex','gpt-6.1-sol','high',4)],basic:[slot('grok','grok-4.7','high',2)]},qa:slot('claude','claude-opus-5-5','medium')}},
- {name:'econômico',roles:{manager:slot('claude','claude-sonnet-5-5','low'),reviewer:slot('claude','claude-sonnet-5-5','low'),programmer:{standard:[slot('grok','grok-4.7','low',1)]}}},
+ {name:'complexo',roles:{
+  manager:slot('claude','claude-opus-5-5','high',1,sol('high')),
+  reviewer:slot('claude','claude-opus-5-5','high',1,grokReserve('high')),
+  programmer:{
+   standard:[slot('codex','gpt-6.1-sol','high',3,grokReserve('high'))],
+   basic:[slot('grok','grok-4.7','high',1,sol('high'))],
+  },
+  qa:slot('grok','grok-4.7','high',1,sonnet('medium')),
+ }},
+ {name:'intermediário',roles:{
+  manager:slot('claude','claude-sonnet-5-5','high',1,sol('medium')),
+  reviewer:slot('codex','gpt-6.1-sol','high',1,sonnet('high')),
+  programmer:{standard:[
+   slot('grok','grok-4.7','medium',2,sol('medium')),
+   slot('codex','gpt-6.1-sol','medium',1,grokReserve('medium')),
+  ]},
+  qa:slot('claude','claude-sonnet-5-5','medium',1,grokReserve('medium')),
+ }},
+ {name:'economia',roles:{
+  manager:slot('claude','claude-sonnet-5-5','medium',1,grokReserve('medium')),
+  reviewer:slot('codex','gpt-6.1-terra','high',1,sonnet('low')),
+  programmer:{standard:[
+   slot('grok','grok-4.7','medium',2,{provider:'codex',model:'gpt-6.1-terra',effort:'medium'}),
+   slot('codex','gpt-6.1-terra','medium',1,grokReserve('medium')),
+  ]},
+ }},
 ].map(combo=>PersonalCombo.parse(combo));
 
 const catalogRoles=['manager','programmer','reviewer','qa','specialist','judge'] as const;
+
+/** An owner combo needs three programmers and a reserve on the manager, the reviewer and every programmer slot. QA may omit its reserve. */
+export function assertComboMinimum(combo:PersonalCombo){
+ const programmers=[...combo.roles.programmer.standard,...(combo.roles.programmer.basic??[])];
+ const count=programmers.reduce((sum,item)=>sum+item.count,0);
+ if(count<3||!combo.roles.manager.reserve||!combo.roles.reviewer.reserve||programmers.some(item=>!item.reserve))
+  throw new Refusal('COMBO_MINIMUM_REQUIRED');
+}
+for(const combo of builtinCombos)assertComboMinimum(combo);
 
 export function combosPath(dataDirectory:string){
  if(!dataDirectory||resolve(dataDirectory)!==dataDirectory)throw new Refusal('COMBOS_DIRECTORY_INVALID');
@@ -55,6 +89,7 @@ export async function readOwnerCombos(dataDirectory:string):Promise<PersonalComb
 /** Inserts or replaces one owner combo. The file is mode 600. A custom name hides the built-in of the same name. */
 export async function writeOwnerCombo(dataDirectory:string,raw:PersonalCombo){
  const combo=PersonalCombo.parse(raw);
+ assertComboMinimum(combo);
  const current=await readOwnerCombos(dataDirectory);
  const index=current.findIndex(item=>item.name===combo.name);
  if(index>=0)current[index]=combo;else current.push(combo);
@@ -144,6 +179,7 @@ const accountRequired=(provider:string)=>provider==='codex'?'CODEX_ACCOUNT_REQUI
 export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:string,name:string,dataDirectory:string):Promise<AppliedCombo>{
  Id.parse(projectId);
  const combo=findPersonalCombo(name,await readOwnerCombos(dataDirectory));
+ assertComboMinimum(combo);
  const uses=slotsOf(combo);
  const programmerCount=uses.filter(use=>use.role==='programmer').reduce((sum,use)=>sum+use.slot.count,0);
  if(programmerCount>10)throw new Refusal('COMBO_TOO_MANY_PROGRAMMERS');

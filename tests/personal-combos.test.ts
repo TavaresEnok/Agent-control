@@ -1,41 +1,70 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtemp,rm,stat} from 'node:fs/promises';
+import {mkdtemp,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Capacity} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
-import {applyPersonalCombo,builtinCombos,findPersonalCombo,writeOwnerCombo} from '../src/personal-combos.ts';
+import {applyPersonalCombo,builtinCombos,findPersonalCombo,readOwnerCombos,writeOwnerCombo} from '../src/personal-combos.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
-test('megapoderoso asks for four standard programmers and two basic ones',()=>{
- const combo=builtinCombos.find(item=>item.name==='megapoderoso');
+test('complexo keeps Opus regular, Sol emergency and four programmers',()=>{
+ const combo=builtinCombos.find(item=>item.name==='complexo');
  assert.ok(combo);
- assert.equal(combo.roles.manager.effort,'xhigh');
- assert.equal(combo.roles.programmer.standard[0]?.count,4);
- assert.equal(combo.roles.programmer.standard[0]?.provider,'codex');
- assert.equal(combo.roles.programmer.basic?.[0]?.count,2);
- assert.equal(combo.roles.programmer.basic?.[0]?.provider,'grok');
- assert.equal(combo.roles.qa?.effort,'medium');
- assert.equal(findPersonalCombo('Megapoderoso',[]).name,'megapoderoso');
- const names=builtinCombos.map(item=>item.name).sort();
- assert.deepEqual(names,['econômico','megapoderoso','padrão','superfoda'].sort());
+ assert.equal(combo.roles.manager.model,'claude-opus-5-5');
+ assert.equal(combo.roles.manager.effort,'high');
+ assert.deepEqual(combo.roles.manager.reserve,{provider:'codex',model:'gpt-6.1-sol',effort:'high'});
+ assert.equal(combo.roles.programmer.standard[0]?.count,3);
+ assert.equal(combo.roles.programmer.standard[0]?.model,'gpt-6.1-sol');
+ assert.equal(combo.roles.programmer.standard[0]?.reserve?.model,'grok-4.7');
+ assert.equal(combo.roles.programmer.basic?.[0]?.count,1);
+ assert.equal(combo.roles.programmer.basic?.[0]?.model,'grok-4.7');
+ assert.equal(combo.roles.programmer.basic?.[0]?.reserve?.model,'gpt-6.1-sol');
+ assert.equal(combo.roles.reviewer.reserve?.model,'grok-4.7');
+ assert.equal(combo.roles.qa?.model,'grok-4.7');
+ assert.equal(combo.roles.qa?.reserve?.model,'claude-sonnet-5-5');
+ assert.equal(combo.roles.qa?.reserve?.effort,'medium');
+ const middle=builtinCombos.find(item=>item.name==='intermediário')!;
+ assert.equal(middle.roles.programmer.standard[0]?.count,2);
+ assert.equal(middle.roles.programmer.standard[0]?.reserve?.model,'gpt-6.1-sol');
+ assert.equal(middle.roles.programmer.standard[1]?.count,1);
+ assert.equal(middle.roles.programmer.standard[1]?.reserve?.model,'grok-4.7');
+ const cheap=builtinCombos.find(item=>item.name==='economia')!;
+ assert.equal(cheap.roles.qa,undefined);
+ assert.equal(cheap.roles.programmer.standard[1]?.model,'gpt-6.1-terra');
+ assert.equal(cheap.roles.reviewer.reserve?.effort,'low');
+ assert.equal(findPersonalCombo('Complexo',[]).name,'complexo');
+ assert.deepEqual(builtinCombos.map(item=>item.name).sort(),['complexo','economia','intermediário'].sort());
 });
 
 test('owner combo file is mode 600 and overrides a built-in name',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ac-combos-'));
  try{
-  const custom=builtinCombos[0]!;
-  await writeOwnerCombo(dir,{...custom,name:'padrão',roles:{...custom.roles,programmer:{standard:[{provider:'grok',model:'grok-4.7',effort:'low',count:1}]}}});
+  const custom=builtinCombos.find(item=>item.name==='intermediário')!;
+  const overridden={...custom,roles:{...custom.roles,manager:{...custom.roles.manager,effort:'medium' as const}}};
+  await writeOwnerCombo(dir,overridden);
   assert.equal((await stat(join(dir,'combos.json'))).mode&0o777,0o600);
-  assert.equal(findPersonalCombo('padrão',[{...custom,roles:{...custom.roles,programmer:{standard:[{provider:'grok',model:'grok-4.7',effort:'low',count:1}]}}}]).roles.programmer.standard[0]?.count,1);
+  assert.equal(findPersonalCombo('intermediário',[overridden]).roles.manager.effort,'medium');
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('an owner combo with two programmers or without a reserve is refused',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ac-combos-'));
+ try{
+  const base=builtinCombos.find(item=>item.name==='economia')!;
+  const short={...base,name:'curto',roles:{...base.roles,programmer:{standard:[{...base.roles.programmer.standard[0]!,count:2}]}}};
+  await assert.rejects(writeOwnerCombo(dir,short),(error:unknown)=>error instanceof Refusal&&error.code==='COMBO_MINIMUM_REQUIRED');
+  const {reserve:_omit,...manager}=base.roles.manager;
+  await assert.rejects(writeOwnerCombo(dir,{...base,name:'sem-reserva',roles:{...base.roles,manager}}),(error:unknown)=>error instanceof Refusal&&error.code==='COMBO_MINIMUM_REQUIRED');
+  await writeFile(join(dir,'combos.json'),JSON.stringify({schemaVersion:1,combos:[short]})+'\n');
+  assert.equal((await readOwnerCombos(dir))[0]?.name,'curto');
  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
 const databaseUrl=process.env.AC_TEST_DATABASE_URL;
-test('megapoderoso refuses without Codex and publishes six programmers with Codex',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
+test('complexo refuses without Codex and publishes Opus regular, Sol emergency and four programmers',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
  const database=await isolatedDatabase(databaseUrl!,'combos'),db=new Ledger(database.url),dir=await mkdtemp(join(tmpdir(),'ac-combos-'));
  try{
   await db.migrate();
@@ -58,24 +87,31 @@ test('megapoderoso refuses without Codex and publishes six programmers with Code
    return {profiles,policies,catalog};
   };
   const before=await counts();
-  await assert.rejects(applyPersonalCombo(db,principal,project,'megapoderoso',dir),(error:unknown)=>error instanceof Refusal&&error.code==='CODEX_ACCOUNT_REQUIRED');
+  const base=builtinCombos.find(item=>item.name==='economia')!;
+  const short={...base,name:'curto',roles:{...base.roles,programmer:{standard:[{...base.roles.programmer.standard[0]!,count:2}]}}};
+  await writeFile(join(dir,'combos.json'),JSON.stringify({schemaVersion:1,combos:[short]})+'\n');
+  await assert.rejects(applyPersonalCombo(db,principal,project,'curto',dir),(error:unknown)=>error instanceof Refusal&&error.code==='COMBO_MINIMUM_REQUIRED');
+  await assert.rejects(applyPersonalCombo(db,principal,project,'complexo',dir),(error:unknown)=>error instanceof Refusal&&error.code==='CODEX_ACCOUNT_REQUIRED');
   assert.deepEqual(await counts(),before);
   assert.equal((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1',[context])).rows[0].capacity_policy_revision,null);
   await add('codex');
-  const applied=await applyPersonalCombo(db,principal,project,'megapoderoso',dir);
-  assert.equal(applied.maxProgrammersPerContext,6);
-  assert.equal(applied.programmerStandard.length,4);
-  assert.equal(applied.programmerBasic.length,2);
+  const applied=await applyPersonalCombo(db,principal,project,'complexo',dir);
+  assert.equal(applied.maxProgrammersPerContext,4);
+  assert.equal(applied.programmerStandard.length,3);
+  assert.equal(applied.programmerBasic.length,1);
   assert.equal(applied.qaModel,true);
   const snapshot=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',[project,applied.revision])).rows[0].snapshot;
-  assert.equal(snapshot.combo,'megapoderoso');
-  assert.equal(snapshot.maxProgrammersPerContext,6);
-  assert.equal(snapshot.programmerTiers.standard.length,4);
-  assert.equal(snapshot.programmerTiers.basic.length,2);
-  assert.equal(snapshot.roles.programmer.regular.length,6);
+  const model=async(id:string)=>String((await db.pool.query('SELECT model FROM ac_profiles WHERE id=$1',[id])).rows[0].model);
+  assert.equal(snapshot.combo,'complexo');
+  assert.equal(await model(snapshot.roles.manager.regular[0]),'claude-opus-5-5');
+  assert.equal(await model(snapshot.roles.manager.emergency[0]),'gpt-6.1-sol');
+  assert.equal(snapshot.maxProgrammersPerContext,4);
+  assert.equal(snapshot.programmerTiers.standard.length,3);
+  assert.equal(snapshot.programmerTiers.basic.length,1);
+  assert.equal(snapshot.programmerTiers.standardReserve.length,1);
+  assert.equal(snapshot.programmerTiers.basicReserve.length,1);
+  assert.equal(snapshot.roles.programmer.regular.length,4);
   assert.deepEqual(snapshot.roles.programmer.regular,[...applied.programmerStandard,...applied.programmerBasic]);
   assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1',[context])).rows[0].capacity_policy_revision),applied.revision);
-  const enabled=Number((await db.pool.query("SELECT count(*)::int n FROM ac_profiles WHERE role='programmer' AND enabled")).rows[0].n);
-  assert.equal(enabled,6);
  }finally{await db.close();await database.close();await rm(dir,{recursive:true,force:true});}
 });
