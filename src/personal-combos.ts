@@ -153,7 +153,10 @@ export type AppliedCombo={
  combo:PersonalCombo;
 };
 
-function slotText(slot:ComboSlot){return `${slot.count} × ${slot.provider} · ${slot.model} · ${slot.effort}`;}
+function slotText(slot:ComboSlot){
+ const base=`${slot.count} × ${slot.provider} · ${slot.model} · ${slot.effort}`;
+ return slot.reserve?`${base}; reserva: ${slot.reserve.provider} · ${slot.reserve.model} · ${slot.reserve.effort}`:base;
+}
 /** Portuguese summary shown after "use o combo". */
 export function describeAppliedCombo(applied:AppliedCombo){
  const combo=applied.combo;

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {dockerLogText,teamMessage} from '../src/personal-team-feed.ts';
+import {dockerLogText,teamMessage,teamStatus} from '../src/personal-team-feed.ts';
 import {personalComboRequest,personalControlWord} from '../src/personal-conversation.ts';
 import {builtinCombos,describeAppliedCombo} from '../src/personal-combos.ts';
 
@@ -69,9 +69,51 @@ test('equipe and status ask for the team panel',()=>{
  const combo=builtinCombos.find(item=>item.name==='complexo')!;
  const text=describeAppliedCombo({name:combo.name,revision:3,maxProgrammersPerContext:4,qaModel:true,manager:[],reviewer:[],programmerStandard:[],programmerBasic:[],qa:[],combo});
  assert.match(text,/Combo complexo em uso/);
- assert.match(text,/Programadores padrão: 3 × codex · gpt-6.1-sol · high/);
+ assert.match(text,/Gerente: 1 × claude · claude-opus-5-5 · high; reserva: codex · gpt-6.1-sol · high/);
+ assert.match(text,/Programadores padrão: 3 × codex · gpt-6.1-sol · high; reserva: grok · grok-4.7 · high/);
  assert.match(text,/Programadores básicos: 1 × grok · grok-4.7 · high/);
  assert.match(text,/Programadores por contexto: 4/);
+});
+
+test('equipe names the reserve stored on the project policy',async()=>{
+ const manager=randomUUID(),managerReserve=randomUUID(),programmer=randomUUID(),programmerReserve=randomUUID(),reviewer=randomUUID(),reviewerReserve=randomUUID();
+ const qa=randomUUID(),qaReserve=randomUUID();
+ const known:Record<string,{provider:string;model:string;effort:string}>={
+  [manager]:{provider:'claude',model:'claude-sonnet-5-5',effort:'high'},
+  [managerReserve]:{provider:'codex',model:'gpt-6.1-sol',effort:'medium'},
+  [programmer]:{provider:'grok',model:'grok-4.7',effort:'medium'},
+  [programmerReserve]:{provider:'codex',model:'gpt-6.1-sol',effort:'medium'},
+  [reviewer]:{provider:'codex',model:'gpt-6.1-sol',effort:'high'},
+  [reviewerReserve]:{provider:'claude',model:'claude-sonnet-5-5',effort:'high'},
+  [qa]:{provider:'claude',model:'claude-sonnet-5-5',effort:'medium'},
+  [qaReserve]:{provider:'grok',model:'grok-4.7',effort:'medium'},
+ };
+ const snapshot={schemaVersion:1,maxProgrammersPerContext:3,maxEvaluatorsPerContext:2,combo:'intermediário',qaModel:true,roles:{
+  manager:{regular:[manager],emergency:[managerReserve]},
+  programmer:{regular:[programmer],emergency:[programmerReserve]},
+  reviewer:{regular:[reviewer],emergency:[reviewerReserve]},
+  qa:{regular:[qa],emergency:[qaReserve]},
+ }};
+ const pool={query:async(sql:string,params?:unknown[])=>{
+  if(sql.includes('ac_policy_revisions'))return {rows:[{snapshot}]};
+  if(sql.includes('ANY($1::uuid[])'))return {rows:(params?.[0] as string[]).map(id=>({id,...known[id]}))};
+  return {rows:[]};
+ }} as never;
+ const text=await teamStatus(pool,randomUUID(),{executionHost:'/tmp/none'});
+ assert.match(text,/Combo atual: intermediário/);
+ assert.match(text,/• Gerente: claude · claude-sonnet-5-5 · high\n {2}reserva: codex · gpt-6.1-sol · medium/);
+ assert.match(text,/• Programador: grok · grok-4.7 · medium\n {2}reserva: codex · gpt-6.1-sol · medium/);
+ assert.match(text,/• Revisor: codex · gpt-6.1-sol · high\n {2}reserva: claude · claude-sonnet-5-5 · high/);
+ assert.match(text,/• QA: claude · claude-sonnet-5-5 · medium\n {2}reserva: grok · grok-4.7 · medium/);
+ const fallback={query:async(sql:string)=>{
+  if(sql.includes('ac_policy_revisions'))return {rows:[]};
+  if(sql.includes('p.enabled'))return {rows:[{role:'manager',provider:'claude',model:'claude-sonnet-5-5',effort:'medium'}]};
+  return {rows:[]};
+ }} as never;
+ const open=await teamStatus(fallback,randomUUID(),{executionHost:'/tmp/none'});
+ assert.match(open,/Combo atual: nenhum/);
+ assert.match(open,/• Gerente: claude · claude-sonnet-5-5 · medium/);
+ assert.doesNotMatch(open,/reserva:/);
 });
 
 test('the app model picker lists the team, once',async()=>{

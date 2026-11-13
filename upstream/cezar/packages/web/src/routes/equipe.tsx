@@ -15,13 +15,20 @@ const effortLabel: Record<(typeof efforts)[number], string> = {
   max: 'max',
 }
 
+const reserveSchema = z.object({
+  provider: z.enum(providers),
+  model: z.string().min(1),
+  effort: z.enum(efforts),
+})
 const slotSchema = z.object({
   provider: z.enum(providers),
   model: z.string().min(1),
   effort: z.enum(efforts),
   count: z.number().int().min(1).max(10),
+  reserve: reserveSchema.optional(),
 })
 type Slot = z.infer<typeof slotSchema>
+type Reserve = z.infer<typeof reserveSchema>
 const comboSchema = z.object({
   name: z.string(),
   roles: z.object({
@@ -37,8 +44,16 @@ const comboSchema = z.object({
 type Combo = z.infer<typeof comboSchema>
 const listSchema = z.object({ current: z.string().nullable(), combos: z.array(comboSchema) })
 
+function blankReserve(provider: Slot['provider']): Reserve {
+  return { provider: provider === 'grok' ? 'codex' : 'grok', model: '', effort: 'medium' }
+}
+
 function blank(provider: Slot['provider'] = 'grok'): Slot {
-  return { provider, model: '', effort: 'medium', count: 1 }
+  return { provider, model: '', effort: 'medium', count: 1, reserve: blankReserve(provider) }
+}
+
+function withReserve(slot: Slot): Slot {
+  return slot.reserve ? slot : { ...slot, reserve: blankReserve(slot.provider) }
 }
 
 function draftFrom(combo?: Combo): Combo {
@@ -64,6 +79,8 @@ function applyError(code: string): string {
 }
 
 function SlotFields({ label, value, onChange }: { label: string; value: Slot; onChange: (next: Slot) => void }) {
+  const reserve = value.reserve ?? blankReserve(value.provider)
+  const setReserve = (next: Reserve) => onChange({ ...value, reserve: next })
   return (
     <fieldset className="grid gap-2 rounded-md border border-input p-2">
       <legend className="px-1">{label}</legend>
@@ -83,12 +100,29 @@ function SlotFields({ label, value, onChange }: { label: string; value: Slot; on
       <label className="flex flex-col gap-1">Quantidade
         <Input aria-label={`${label} quantidade`} type="number" min={1} max={10} value={value.count} onChange={(event) => onChange({ ...value, count: Number(event.target.value) })} />
       </label>
+      <fieldset className="grid gap-2 rounded-md border border-input p-2">
+        <legend className="px-1">Reserva</legend>
+        <label className="flex flex-col gap-1">Provedor
+          <select aria-label={`${label} reserva provedor`} className="h-11 rounded-md border border-input bg-card px-2" value={reserve.provider} onChange={(event) => setReserve({ ...reserve, provider: event.target.value as Reserve['provider'] })}>
+            {providers.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">Modelo
+          <Input aria-label={`${label} reserva modelo`} value={reserve.model} onChange={(event) => setReserve({ ...reserve, model: event.target.value })} />
+        </label>
+        <label className="flex flex-col gap-1">Esforço
+          <select aria-label={`${label} reserva esforço`} className="h-11 rounded-md border border-input bg-card px-2" value={reserve.effort} onChange={(event) => setReserve({ ...reserve, effort: event.target.value as Reserve['effort'] })}>
+            {efforts.map((effort) => <option key={effort} value={effort}>{effortLabel[effort]}</option>)}
+          </select>
+        </label>
+      </fieldset>
     </fieldset>
   )
 }
 
 function line(slot: Slot): string {
-  return `${slot.count} × ${slot.model} ${effortLabel[slot.effort]} (${slot.provider})`
+  const base = `${slot.count} × ${slot.model} ${effortLabel[slot.effort]} (${slot.provider})`
+  return slot.reserve ? `${base}; reserva: ${slot.reserve.model} ${effortLabel[slot.reserve.effort]} (${slot.reserve.provider})` : base
 }
 
 /** Managed team screen. Lists combos, marks the project's current one, and edits owner combos. */
@@ -137,7 +171,19 @@ export function EquipeRoute() {
   }, [])
 
   function load(combo: Combo) {
-    setDraft(combo)
+    setDraft({
+      ...combo,
+      roles: {
+        ...combo.roles,
+        manager: withReserve(combo.roles.manager),
+        reviewer: withReserve(combo.roles.reviewer),
+        programmer: {
+          standard: combo.roles.programmer.standard.map(withReserve),
+          ...(combo.roles.programmer.basic?.length ? { basic: combo.roles.programmer.basic.map(withReserve) } : {}),
+        },
+        ...(combo.roles.qa ? { qa: withReserve(combo.roles.qa) } : {}),
+      },
+    })
     setQaOn(Boolean(combo.roles.qa))
     setBasicOn(Boolean(combo.roles.programmer.basic?.length))
     setError('')

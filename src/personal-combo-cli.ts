@@ -15,7 +15,8 @@ function project(config:Installation,token:string){
 }
 
 function slotText(slot:PersonalCombo['roles']['manager']){
- return `${slot.count} × ${slot.provider} · ${slot.model} · ${slot.effort}`;
+ const base=`${slot.count} × ${slot.provider} · ${slot.model} · ${slot.effort}`;
+ return slot.reserve?`${base}; reserva: ${slot.reserve.provider} · ${slot.reserve.model} · ${slot.reserve.effort}`:base;
 }
 
 /** One combo as shown by `list`. The current project combo is marked. */

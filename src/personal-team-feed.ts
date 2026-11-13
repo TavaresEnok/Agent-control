@@ -132,23 +132,41 @@ export async function reserveAssumptionNotices(pool:pg.Pool,contextId:string):Pr
  return notices;
 }
 
-// The "equipe" command: who is configured for each role and the latest thing each one did.
+// The "equipe" command: who is configured for each role, including the reserve, and the latest thing each one did.
+const roleTitle:Record<string,string>={manager:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor'};
+function chainLines(title:string,regular:readonly string[],emergency:readonly string[],label:(id:string)=>string){
+ const lines=regular.map(id=>`• ${title}: ${label(id)}`);
+ for(const id of emergency)lines.push(`  reserva: ${label(id)}`);
+ return lines;
+}
 export async function teamStatus(pool:pg.Pool,contextId:string,options:TeamFeedOptions){
- const profiles=(await pool.query(`SELECT p.role,a.provider,p.model,p.effort FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
-  WHERE p.enabled AND p.role IN ('manager','programmer','reviewer') ORDER BY array_position(ARRAY['manager','programmer','reviewer'],p.role),a.provider`)).rows;
- const names:Record<string,string>={manager:'Gerente',programmer:'Programador',qa:'QA',reviewer:'Revisor'};
- const team=profiles.map(p=>`• ${names[p.role]}: ${p.provider} · ${p.model} · ${p.effort}`).join('\n');
- let combo='nenhum',qaLine='• QA: script automático do projeto (sem modelo)';
+ let combo='nenhum',team='',qaLine='• QA: script automático do projeto (sem modelo)';
+ let fromPolicy=false;
  try{
   const row=(await pool.query(`SELECT r.snapshot FROM ac_contexts x JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision WHERE x.id=$1`,[contextId])).rows[0];
   const parsed=CapacityPolicy.safeParse(row?.snapshot);
-  if(parsed.success&&parsed.data.combo)combo=parsed.data.combo;
-  const qaIds=parsed.success&&parsed.data.qaModel?parsed.data.roles.qa?.regular??[]:[];
-  if(qaIds.length){
-   const qa=(await pool.query(`SELECT a.provider,p.model,p.effort FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id WHERE p.id=ANY($1::uuid[]) ORDER BY p.id`,[qaIds])).rows;
-   if(qa.length)qaLine=qa.map(p=>`• QA: ${p.provider} · ${p.model} · ${p.effort}`).join('\n');
+  if(parsed.success){
+   fromPolicy=true;
+   if(parsed.data.combo)combo=parsed.data.combo;
+   const roles=parsed.data.roles;
+   const ids=[...(roles.manager?.regular??[]),...(roles.manager?.emergency??[]),...(roles.programmer?.regular??[]),...(roles.programmer?.emergency??[]),...(roles.reviewer?.regular??[]),...(roles.reviewer?.emergency??[]),...(roles.qa?.regular??[]),...(roles.qa?.emergency??[])];
+   const found=ids.length?(await pool.query(`SELECT p.id,a.provider,p.model,p.effort FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id WHERE p.id=ANY($1::uuid[])`,[ids])).rows:[];
+   const byId=new Map(found.map(item=>[String(item.id),`${item.provider} · ${item.model} · ${item.effort}`]));
+   const label=(id:string)=>byId.get(id)??id;
+   const lines=[
+    ...chainLines('Gerente',roles.manager?.regular??[],roles.manager?.emergency??[],label),
+    ...chainLines('Programador',roles.programmer?.regular??[],roles.programmer?.emergency??[],label),
+    ...chainLines('Revisor',roles.reviewer?.regular??[],roles.reviewer?.emergency??[],label),
+   ];
+   team=lines.join('\n');
+   if(parsed.data.qaModel&&roles.qa?.regular.length)qaLine=chainLines('QA',roles.qa.regular,roles.qa.emergency??[],label).join('\n');
   }
  }catch{/* The role list still answers when the policy row cannot be read. */}
+ if(!fromPolicy){
+  const profiles=(await pool.query(`SELECT p.role,a.provider,p.model,p.effort FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id
+   WHERE p.enabled AND p.role IN ('manager','programmer','reviewer') ORDER BY array_position(ARRAY['manager','programmer','reviewer'],p.role),a.provider`)).rows;
+  team=profiles.map(p=>`• ${roleTitle[p.role]??p.role}: ${p.provider} · ${p.model} · ${p.effort}`).join('\n');
+ }
  const recent=await teamJobs(pool,contextId,6);
  const feed={...options,pool};
  const last=(await Promise.all(recent.map(job=>teamMessage(job,feed)))).filter(Boolean).map(m=>'• '+m!.text.split('\n')[0]).join('\n');
