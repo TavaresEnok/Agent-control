@@ -4,6 +4,7 @@ import {
   InboxIcon,
   ListChecksIcon,
   MessageSquareIcon,
+  UsersIcon,
   SettingsIcon,
   SparklesIcon,
   WorkflowIcon,
@@ -65,6 +66,7 @@ function listedNavItems(): readonly NavItem[] {
   return [
     { to: '/conversa', label: 'Conversa', icon: MessageSquareIcon, match: ['/', '/conversa'] },
     { to: '/tarefas', label: 'Tarefas', icon: ListChecksIcon, match: ['/tarefas', '/tasks', '/compare'], badge: 'tasks-unread' },
+    { to: '/equipe', label: 'Equipe', icon: UsersIcon, match: ['/equipe'] },
     { to: '/novo-projeto', label: 'Novo projeto', icon: FolderPlusIcon, match: ['/novo-projeto'] },
     { to: '/settings', label: 'Configurações', icon: SettingsIcon, match: ['/settings'] },
   ]

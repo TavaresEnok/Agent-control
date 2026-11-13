@@ -21,6 +21,7 @@ import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
 import { ConversaRoute } from './routes/conversa'
+import { EquipeRoute } from './routes/equipe'
 import { NovoProjetoRoute } from './routes/novo-projeto'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
@@ -314,6 +315,7 @@ const PAGE_TITLE_ROUTES = [
         { pattern: '/conversa', pageLabel: 'Conversa' },
         { pattern: '/novo-projeto', pageLabel: 'Novo projeto' },
         { pattern: '/tarefas', pageLabel: 'Tarefas' },
+        { pattern: '/equipe', pageLabel: 'Equipe' },
       ]
     : []),
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
@@ -375,6 +377,9 @@ export const AppRoutes = memo(function AppRoutes() {
         )}
         {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
           <Route path="tarefas" element={<TasksOverviewRoute />} />
+        )}
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
+          <Route path="equipe" element={<EquipeRoute />} />
         )}
         <Route path="new" element={<NewTaskProjectRoute />} />
 

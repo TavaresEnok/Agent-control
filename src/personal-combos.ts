@@ -69,6 +69,13 @@ export async function listPersonalCombos(dataDirectory:string){
  return {current:null as string|null,combos:[...custom,...builtinCombos.filter(combo=>!hidden.has(combo.name))]};
 }
 
+/** Name stored on the project's assigned capacity policy. Null when no combo was applied. */
+export async function projectComboName(db:{query:(text:string,values?:unknown[])=>Promise<{rows:Array<Record<string,unknown>>}>},projectId:string){
+ const row=(await db.query(`SELECT r.snapshot->>'combo' AS combo FROM ac_contexts x JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision WHERE x.project_id=$1 AND NOT x.archived AND jsonb_typeof(r.snapshot->'combo')='string' ORDER BY x.id LIMIT 1`,[projectId])).rows[0];
+ const name=row?.combo;
+ return typeof name==='string'&&name.length>0?name:null;
+}
+
 /** Custom combos win on an exact name. Otherwise one case-insensitive match, custom first. */
 export function findPersonalCombo(name:string,custom:readonly PersonalCombo[]):PersonalCombo{
  const wanted=name.trim();

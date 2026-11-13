@@ -36,6 +36,7 @@ import {panelServiceWorkerResponse} from './panel-service-worker.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 import {parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig} from './personal-qa-config.ts';
+import {applyPersonalCombo,listPersonalCombos,PersonalCombo,projectComboName,writeOwnerCombo} from './personal-combos.ts';
 import {archivedInView,childRunTaskId,clipPanelTitle,planTaskDisplayTitle,type PlanTaskSummary} from './personal-run-title.ts';
 
 // Only immutable public UI files are served without a session. Never delegate an
@@ -100,7 +101,7 @@ async function publicUi(path:string):Promise<Response|null>{
   else if(/^\/assets\/[A-Za-z0-9_.-]+\.(?:js|css|woff2|png|svg)$/.test(path)){
     file=path.slice(1);const ext=file.split('.').pop();
     type=({js:'text/javascript',css:'text/css',woff2:'font/woff2',png:'image/png',svg:'image/svg+xml'} as Record<string,string>)[ext!];
-  }else if(path==='/'||/^\/(?:tasks|p|settings|conversa|tarefas|novo-projeto|new)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)){
+  }else if(path==='/'||/^\/(?:tasks|p|settings|conversa|tarefas|equipe|novo-projeto|new)(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path)){
     file='index.html';type='text/html; charset=utf-8';
   }else return null;
   try{
@@ -354,6 +355,29 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(restarting)personalPanel.scheduleRestart();
     c.header('Cache-Control','no-store');
     return c.json({restarting,restartRequired:!restarting});
+  });
+  app.get('/api/v1/ac/personal/combos',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    const listed=await listPersonalCombos(personalPanel.dataDirectory);
+    const current=await projectComboName(ledger.pool,personalPanel.projectId);
+    c.header('Cache-Control','no-store');
+    return c.json({...listed,current});
+  });
+  app.put('/api/v1/ac/personal/combos',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    const combo=await writeOwnerCombo(personalPanel.dataDirectory,PersonalCombo.parse(await c.req.json()));
+    c.header('Cache-Control','no-store');
+    return c.json({combo});
+  });
+  app.post('/api/v1/ac/personal/combos/apply',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    const input=z.object({name:z.string().trim().min(1).max(80)}).strict().parse(await c.req.json());
+    const applied=await applyPersonalCombo(ledger,c.get('principal'),personalPanel.projectId,input.name,personalPanel.dataDirectory);
+    c.header('Cache-Control','no-store');
+    return c.json({name:applied.name,revision:applied.revision,maxProgrammersPerContext:applied.maxProgrammersPerContext,qaModel:applied.qaModel});
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;
