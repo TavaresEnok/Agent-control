@@ -86,7 +86,7 @@ export async function teamMessage(job:Job,options:TeamFeedOptions):Promise<TeamM
  if(!['completed','failed'].includes(job.state))return null;
  const ok=job.state==='completed';
  if(job.kind==='planning')return {id,text:ok?`${name} terminou o plano.`:`${name} não conseguiu montar o plano.`};
- if(job.kind==='qa'){
+ if(job.kind==='qa'&&!job.model){
   const lines=(await qaLog(options.executionHost,job.id)).trim().split('\n').filter(Boolean);
   const passed=job.receipt?.status==='passed';
   return {id,text:`QA ${passed?'passou':'reprovou'}${lines.length?': '+clip(lines.slice(passed?-1:-40).join('\n'),4000):job.receipt?.failureCode?' ('+job.receipt.failureCode+')':''}.`};
