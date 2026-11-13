@@ -293,6 +293,39 @@ npm run personal:restore-check -- /caminho/vazio/agent-control-meuprojeto-AAAAMM
 
 O destino tem que ser uma pasta vazia, fora do diretório de dados e fora dos repositórios dos projetos. O comando cria dentro dela `agent-control-<label>-<AAAAMMDD-HHMM>`. `personal:restore-check` só confere o `MANIFEST.txt` e se o `database.dump` é legível. Não restaura nada.
 
+## Vigia e backup automático
+
+A vigia é uma conferência única, feita para um timer de 2 minutos. O aviso sai direto pela lib `web-push`, com as chaves e as inscrições de `<dataDirectory>/push`. Não passa pelo gateway, então chega mesmo com ele fora do ar.
+
+```bash
+npm run personal:watch -- <instalação.json>
+```
+
+O comando pede `GET http://127.0.0.1:<porta>/api/v1/ac/health`. Uma falha só fica em `<dataDirectory>/watch-state.json` (modo `0600`). Na segunda falha seguida ele manda "Agent Control fora do ar no servidor.". Quando o gateway volta a responder, manda "Agent Control voltou." uma vez. A saída é uma linha de resumo, sem segredos.
+
+Se alguma imagem atual do `nativeBootstrap` (planejamento, worker, ferramentas ou QA) não existir no Docker, a vigia roda `npm run personal:images -- <instalação.json>`, reinicia `agent-control-gateway-<nome>` e manda "Imagens do Agent Control reconstruídas.". Há no máximo uma reconstrução por hora. O `<nome>` é o diretório da instalação, o mesmo critério de `personal:services`.
+
+O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS`, e fica com as 7 mais novas. As mais velhas são apagadas só quando o caminho, conferido por completo, é um diretório de verdade dentro da pasta pedida. Atalho não é apagado.
+
+```bash
+npm run personal:backup-rotate -- <instalação.json> /caminho/dos/backups
+```
+
+Para copiar o backup novo para outra máquina, grave uma linha `usuario@host:/caminho` em `<dataDirectory>/backup-offsite` (arquivo comum, modo `0600`). A cópia usa `rsync -a` por SSH, com a chave e o `known_hosts` de `<dataDirectory>/ssh`. Se a cópia falha, chega o aviso "Cópia do backup para fora do servidor falhou." e nada é apagado.
+
+Os timers do usuário:
+
+```bash
+npm run personal:timers -- <instalação.json>
+```
+
+Isso grava e liga:
+
+- `agent-control-watch-<nome>.service` e `.timer`, a cada 2 minutos;
+- `agent-control-backup-<nome>.service` e `.timer`, todo dia às 03:30, na pasta `/home/app/backups-agent-control/<nome>`.
+
+`--remove` desliga e apaga esses quatro units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
+
 ## Logs e atualização
 
 Logs do gateway: `docker compose -f deploy/compose.personal.yml logs -f gateway`.

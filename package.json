@@ -27,7 +27,8 @@
     "personal:backup": "node scripts/personal-backup.mjs",
     "personal:backup-rotate": "node scripts/personal-backup-rotate.mjs",
     "personal:restore-check": "node scripts/personal-restore-check.mjs",
-    "personal:watch": "node scripts/personal-watch.mjs"
+    "personal:watch": "node scripts/personal-watch.mjs",
+    "personal:timers": "node scripts/personal-timers.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",
