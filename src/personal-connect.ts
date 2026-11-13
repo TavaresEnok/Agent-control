@@ -15,6 +15,12 @@ import {publishFirstPersonalPolicies,shareProjectAccounts} from './personal-poli
 import {Templates} from './templates.ts';
 
 const b64=(bytes:Uint8Array)=>Buffer.from(bytes).toString('base64');
+/** Prefer the manager named by the project's current regular chain, then the lowest id. */
+const managerProfileSql=`SELECT p.id FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
+ LEFT JOIN LATERAL (SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1) policy ON true
+ WHERE p.role='manager' AND p.enabled AND x.project_id=$1
+ ORDER BY CASE WHEN COALESCE(policy.snapshot->'roles'->'manager'->'regular','[]'::jsonb) ? p.id::text THEN 0 ELSE 1 END, p.id
+ LIMIT 1`;
 /** A 32-byte secret in an owner-only regular file; created on first use and never accepted in any other shape. */
 async function privateBytes(path:string){
  let bytes:Buffer;
@@ -114,7 +120,7 @@ export async function personalConnect(path:string,injected?:PersonalHappierClien
   const branches=new Map<string,string>();
   for(const project of pending){
    await shareProjectAccounts(ledger,config.project.owner,config.project.id,project.id);
-   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,boot?{qaVerifierDigest:boot.qaDigest}:undefined);
+   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,boot?{qaVerifierDigest:boot.qaDigest}:undefined,config.dataDirectory);
    const ready=(await ledger.pool.query('SELECT (SELECT count(*) FROM ac_policy_revisions WHERE project_id=$1)::int policies,(SELECT count(*) FROM ac_quality_policies WHERE project_id=$1)::int quality',[project.id])).rows[0];
    if(!ready?.policies||!ready?.quality){if(project.id===config.project.id)return accountsRequired(path);throw new Error('ACCOUNTS_REQUIRED');}
    branches.set(project.id,currentBranch(project.repo));
@@ -148,8 +154,7 @@ export async function personalConnect(path:string,injected?:PersonalHappierClien
    if(!quality)throw new Error('QUALITY_POLICY_REQUIRED');
    if(!(await ledger.pool.query('SELECT 1 FROM ac_context_templates WHERE context_id=$1',[contextId])).rowCount)
     await new Templates(ledger).publish(profile.id,contextId,0,{workflow:'semantic-proposal-v1',targetRef:'refs/heads/'+branches.get(project.id),qualityRevision:quality});
-   const profileId=String((await ledger.pool.query(`SELECT p.id FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
-    WHERE p.role='manager' AND p.enabled AND x.project_id=$1 ORDER BY p.id LIMIT 1`,[project.id])).rows[0]?.id??'personal-manager');
+   const profileId=String((await ledger.pool.query(managerProfileSql,[project.id])).rows[0]?.id??'personal-manager');
    const request={contextId,sessionId,profileId,keyVersion:1 as const,encryptionVariant:'legacy' as const};
    try{await new ContextVault(ledger,installationId,vault.directory,vault.masterFile,repositories).importKey({...request,principal:profile.id},secret);}
    catch(error){if(!(error instanceof Refusal)||error.code!=='VAULT_ENTRY_EXISTS')throw error;}
@@ -196,7 +201,7 @@ async function connectPersonalLocal(path:string,config:Installation){
    const branches=new Map<string,string>();
    for(const project of pending){
     await shareProjectAccounts(ledger,config.project.owner,config.project.id,project.id);
-    await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,boot?{qaVerifierDigest:boot.qaDigest}:undefined);
+    await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,boot?{qaVerifierDigest:boot.qaDigest}:undefined,config.dataDirectory);
     const ready=(await ledger.pool.query('SELECT (SELECT count(*) FROM ac_policy_revisions WHERE project_id=$1)::int policies,(SELECT count(*) FROM ac_quality_policies WHERE project_id=$1)::int quality',[project.id])).rows[0];
     if(!ready?.policies||!ready?.quality){if(project.id===config.project.id)return accountsRequired(path);throw new Error('ACCOUNTS_REQUIRED');}
     branches.set(project.id,currentBranch(project.repo));
@@ -222,8 +227,7 @@ async function connectPersonalLocal(path:string,config:Installation){
     if(!quality)throw new Error('QUALITY_POLICY_REQUIRED');
     if(!(await ledger.pool.query('SELECT 1 FROM ac_context_templates WHERE context_id=$1',[contextId])).rowCount)
      await new Templates(ledger).publish(principal,contextId,0,{workflow:'semantic-proposal-v1',targetRef:'refs/heads/'+branches.get(project.id),qualityRevision:quality});
-    const profileId=String((await ledger.pool.query(`SELECT p.id FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
-     WHERE p.role='manager' AND p.enabled AND x.project_id=$1 ORDER BY p.id LIMIT 1`,[project.id])).rows[0]?.id??'personal-manager');
+    const profileId=String((await ledger.pool.query(managerProfileSql,[project.id])).rows[0]?.id??'personal-manager');
     const request={contextId,sessionId,profileId,keyVersion:1 as const,encryptionVariant:'legacy' as const};
     try{await new ContextVault(ledger,installationId,vault.directory,vault.masterFile,repositories).importKey({...request,principal},secret);}
     catch(error){if(!(error instanceof Refusal)||error.code!=='VAULT_ENTRY_EXISTS')throw error;}

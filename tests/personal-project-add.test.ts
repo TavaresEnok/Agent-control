@@ -63,6 +63,10 @@ test('adding a repository registers it once, shares accounts and publishes polic
   await capacity.addAccount(owner,primaryId,{id:programmerAccount,provider:'synthetic-personal',label:'programmer',resourceIdentity:'prg-'+programmerAccount,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://personal-add',maxConcurrent:1});
   await capacity.addProfile(owner,primaryId,{id:managerProfile,accountId:managerAccount,model:'manager-model',effort:'medium',role:'manager'});
   await capacity.addProfile(owner,primaryId,{id:programmerProfile,accountId:programmerAccount,model:'programmer-model',effort:'medium',role:'programmer'});
+  for(const provider of ['claude','grok','codex'] as const){
+   const id=randomUUID();
+   await capacity.addAccount(owner,primaryId,{id,provider,label:provider,resourceIdentity:provider+':'+id,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://personal-add',maxConcurrent:2});
+  }
   await capacity.publish(owner,primaryId,0,{schemaVersion:1,roles:{manager:{regular:[managerProfile],emergency:[]},programmer:{regular:[programmerProfile],emergency:[]}},maxEvaluatorsPerContext:2,maxProgrammersPerContext:2});
   await new QualityPolicies(setup).publish(owner,primaryId,0,{schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:'a'.repeat(64)});
   await setup.close();setup=undefined;
@@ -90,7 +94,6 @@ test('adding a repository registers it once, shares accounts and publishes polic
   assert.equal(saved.managerTransport.tokenFile,join(data,'manager-token'));
   assert.equal(saved.managerTransport.contexts.length,2);
   assert.equal(saved.managerTransport.contexts[1]?.projectId,result.projectId);
-  assert.equal(saved.managerTransport.contexts[1]?.profileId,managerProfile);
   const backup=await readFile(join(data,'installation.json.before-add-Segundo'),'utf8');
   assert.equal(backup.includes(secondary),false);
   assert.equal((await stat(join(data,'installation.json.before-add-Segundo'))).mode&0o077,0);
@@ -109,8 +112,14 @@ test('adding a repository registers it once, shares accounts and publishes polic
    };
   };
   check=new Ledger(fixture.url);
+  const born=(await check.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[result.projectId])).rows[0].snapshot;
+  assert.equal(born.combo,'intermediário');
+  assert.equal(born.maxProgrammersPerContext,3);
+  assert.equal(born.roles.programmer.regular.length,3);
+  assert.equal(saved.managerTransport.contexts[1]?.profileId,born.roles.manager.regular[0]);
+  assert.notEqual(saved.managerTransport.contexts[1]?.profileId,managerProfile);
   const first=await counts(check);
-  assert.deepEqual(first,{projects:3,repositories:1,owner:1,access:2,policies:1,quality:1,contexts:1,mode:'locked'});
+  assert.deepEqual(first,{projects:3,repositories:1,owner:1,access:5,policies:1,quality:1,contexts:1,mode:'locked'});
   await check.close();check=undefined;
 
   await assert.rejects(()=>addPersonalProject(file,secondary,'Segundo',{happier}),/REPOSITORY_ALREADY_IN_INSTALLATION/);

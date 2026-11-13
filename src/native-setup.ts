@@ -19,7 +19,6 @@ import {defaultPersonalQaContract,resolvePersonalProjectQa,syncPersonalQaPolicy}
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {QualityPolicies,QualityPolicy} from './quality-policy.ts';
 import {publishFirstPersonalPolicies,refreshPersonalTemplates,shareProjectAccounts} from './personal-policies.ts';
-import {Capacity} from './capacity.ts';
 
 const Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
@@ -73,14 +72,8 @@ export async function nativeSetup(path:string){
   const base=latest?QualityPolicy.parse(latest.snapshot):QualityPolicy.parse({schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false});
   if(base.verifierDigest!==nativeReviewVerifierDigest||base.qaVerifierDigest!==primaryDigest)
    await new QualityPolicies(ledger).publish(config.project.owner,config.project.id,Number(latest?.revision??0),{...base,verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:primaryDigest});
-  // A new project has no capacity policy yet, and a conversation cannot be created without one: publish the
-  // obvious first one, each role served by the profiles the owner registered for it. An existing policy is left alone.
-  if(!(await ledger.pool.query('SELECT 1 FROM ac_policy_revisions WHERE project_id=$1 LIMIT 1',[config.project.id])).rowCount){
-   const profiles=(await ledger.pool.query(`SELECT p.id,p.role FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1 AND p.enabled ORDER BY p.role,p.id`,[config.project.id])).rows;
-   const roles:Record<string,{regular:string[];emergency:string[]}>={};
-   for(const profile of profiles)(roles[String(profile.role)]??={regular:[],emergency:[]}).regular.push(String(profile.id));
-   if(roles.manager&&roles.programmer)await new Capacity(ledger).publish(config.project.owner,config.project.id,0,{schemaVersion:1,roles,maxEvaluatorsPerContext:2,maxProgrammersPerContext:2} as never);
-  }
+  // A project with no capacity policy is born on intermediário. An existing policy is left alone.
+  await publishFirstPersonalPolicies(ledger,config.project.owner,config.project.id,config.project.id,{qaVerifierDigest:primaryDigest},config.dataDirectory);
   // Conversations plan against the latest quality revision, so move their templates forward with it.
   await refreshPersonalTemplates(ledger,config.project.id);
   // Other projects on this installation share the same accounts and get their own first policies.
@@ -89,7 +82,7 @@ export async function nativeSetup(path:string){
    if(!(await ledger.pool.query('SELECT 1 FROM ac_projects WHERE id=$1',[project.id])).rowCount)continue;
    await shareProjectAccounts(ledger,config.project.owner,config.project.id,project.id);
    const projectDigest=await qaDigestFor(project.id);
-   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,{qaVerifierDigest:projectDigest});
+   await publishFirstPersonalPolicies(ledger,config.project.owner,project.id,config.project.id,{qaVerifierDigest:projectDigest},config.dataDirectory);
    await syncPersonalQaPolicy(ledger,project.owner,project.id,projectDigest);
    await refreshPersonalTemplates(ledger,project.id);
   }
