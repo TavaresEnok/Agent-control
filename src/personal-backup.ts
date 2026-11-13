@@ -254,17 +254,24 @@ function reposOf(config:Installation){
  return [config.project,...config.projects].map(project=>project.repo);
 }
 
-/** Copy the installation, its private data and a database dump. Does not restore anything. */
-export async function runPersonalBackup(argv:string[],options:PersonalBackupOptions={}){
- const [installationArg,destinationArg]=argv;
- if(!installationArg||!destinationArg||installationArg.startsWith('--')||destinationArg.startsWith('--')||argv.length!==2)throw new Refusal('BACKUP_USAGE');
- const config=await loadInstallation(resolve(installationArg));
+/** Refuse a backup folder inside private data or a project repository. Returns the canonical path. */
+export async function assertPersonalBackupDestination(config:Installation,destinationArg:string){
  const dataReal=await realpath(config.dataDirectory);
  const destination=await canonicalPath(destinationArg);
  if(isInside(dataReal,destination)||isInside(resolve(config.dataDirectory),destination))throw new Refusal('BACKUP_DESTINATION_INSIDE_DATA');
  for(const repo of reposOf(config)){
   if(isInside(await canonicalPath(repo),destination))throw new Refusal('BACKUP_DESTINATION_INSIDE_REPOSITORY');
  }
+ return destination;
+}
+
+/** Copy the installation, its private data and a database dump. Does not restore anything. */
+export async function runPersonalBackup(argv:string[],options:PersonalBackupOptions={}){
+ const [installationArg,destinationArg]=argv;
+ if(!installationArg||!destinationArg||installationArg.startsWith('--')||destinationArg.startsWith('--')||argv.length!==2)throw new Refusal('BACKUP_USAGE');
+ const config=await loadInstallation(resolve(installationArg));
+ const destination=await assertPersonalBackupDestination(config,destinationArg);
+ const dataReal=await realpath(config.dataDirectory);
  let createdParent=false;
  try{
   const info=await lstat(destination);
