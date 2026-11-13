@@ -5,6 +5,8 @@ COPY native-planning-worker.mjs /opt/agent-control/dist/src/native-planning-work
 COPY --chmod=0555 codex /usr/local/bin/codex
 # Optional claude/grok binaries (AC_NATIVE_CLAUDE_BIN, AC_NATIVE_GROK_BIN). The directory may be empty.
 COPY --chmod=0555 extra-bin/ /usr/local/bin/
+# System CA bundle: the Codex CLI verifies TLS against it (Claude and Grok ship their own).
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /account /input /output /planning /runner && chmod 0555 /runner
 USER node
 WORKDIR /planning
