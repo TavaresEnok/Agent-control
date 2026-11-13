@@ -35,6 +35,8 @@ import {listPersonalPush, sendPersonalPushTest, subscribePersonalPush, unsubscri
 import {panelServiceWorkerResponse} from './panel-service-worker.ts';
 import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
+import {parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig} from './personal-qa-config.ts';
+import {archivedInView,childRunTaskId,clipPanelTitle,planTaskDisplayTitle,type PlanTaskSummary} from './personal-run-title.ts';
 
 // Only immutable public UI files are served without a session. Never delegate an
 // unauthenticated request to the embedded server, which owns privileged routes.
@@ -54,15 +56,37 @@ function localNativeRequest(url:URL,raw:Request){
   return new Request(local,{method:raw.method,headers,signal:raw.signal});
 }
 const seenRuns=new Map<string,string>();
-async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T):Promise<T>{
+const planTaskList=z.array(z.object({id:z.string(),title:z.string().optional(),summary:z.string().optional(),name:z.string().optional(),writePaths:z.array(z.string()).optional()}).passthrough());
+async function planTasksByRun(ledger:Ledger,runIds:readonly string[]):Promise<Map<string,PlanTaskSummary[]>>{
+  const ids=runIds.filter(id=>z.uuid().safeParse(id).success);
+  const found=new Map<string,PlanTaskSummary[]>();
+  if(!ids.length)return found;
+  const rows=(await ledger.pool.query(`SELECT DISTINCT ON (i.run_id) i.run_id::text AS run_id, p.snapshot->'tasks' AS tasks
+    FROM ac_intents i
+    JOIN ac_manager_plans p ON p.context_id=i.context_id
+    LEFT JOIN ac_managed_executions m ON m.parent_intent_id=COALESCE(i.parent_intent_id,i.id) AND m.context_id=i.context_id
+    WHERE i.run_id = ANY($1::uuid[])
+    ORDER BY i.run_id, CASE WHEN (m.recipe->>'proposalRevision') ~ '^[0-9]+$' AND p.revision=(m.recipe->>'proposalRevision')::int THEN 0 ELSE 1 END, p.revision DESC`,[ids]).catch(()=>({rows:[] as {run_id:string;tasks:unknown}[]}))).rows;
+  for(const row of rows){
+    const parsed=planTaskList.safeParse(row.tasks);
+    found.set(String(row.run_id),parsed.success?parsed.data:[]);
+  }
+  return found;
+}
+async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T,tasks?:readonly PlanTaskSummary[],now=Date.now()):Promise<T & {archived?:boolean}>{
   const id=(run as {id?:unknown}).id;if(typeof id==='string'&&seenRuns.has(id))run={...run,seenAt:seenRuns.get(id)};
-  const match=typeof run.title==='string'?/^Intent ([0-9a-f-]{36})$/.exec(run.title):null;
-  if(!match)return run;
-  const row=(await ledger.pool.query('SELECT context_id FROM ac_intents WHERE id=$1',[match[1]]).catch(()=>({rows:[]}))).rows[0];
-  const text=row?await ownerRequest(String(row.context_id),match[1]):undefined;
-  if(!text)return run;
-  const line=text.trim().split('\n')[0]!.trim();
-  return {...run,title:line.length>90?line.slice(0,90).trimEnd()+'…':line};
+  const title=typeof run.title==='string'?run.title:'';
+  const match=/^Intent ([0-9a-f-]{36})$/.exec(title);
+  if(match){
+    const row=(await ledger.pool.query('SELECT context_id FROM ac_intents WHERE id=$1',[match[1]]).catch(()=>({rows:[]}))).rows[0];
+    const text=row?await ownerRequest(String(row.context_id),match[1]):undefined;
+    if(text)run={...run,title:clipPanelTitle(text)};
+  }else if(childRunTaskId(title)){
+    const loaded=tasks??(typeof id==='string'?((await planTasksByRun(ledger,[id])).get(id)??[]):[]);
+    const display=planTaskDisplayTitle(title,loaded);
+    if(display)run={...run,title:display};
+  }
+  return archivedInView(run,now);
 }
 export function publicPanelAsset(path:string){return publicUi(path);}
 async function publicUi(path:string):Promise<Response|null>{
@@ -309,6 +333,28 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     c.header('Cache-Control','no-store');
     return c.json({ok:true});
   });
+  app.get('/api/v1/ac/personal/qa',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    c.header('Cache-Control','no-store');
+    return c.json({config:await readPersonalQaConfig(personalPanel.dataDirectory,runtime.projectId)});
+  });
+  app.put('/api/v1/ac/personal/qa',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    const config=parsePersonalQaConfig(await c.req.json());
+    await writePersonalQaConfig(personalPanel.dataDirectory,runtime.projectId,config);
+    c.header('Cache-Control','no-store');
+    return c.json({config,appliesOnRestart:true});
+  });
+  app.post('/api/v1/ac/personal/qa/restart',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    const restarting=Boolean(process.env.INVOCATION_ID);
+    if(restarting)personalPanel.scheduleRestart();
+    c.header('Cache-Control','no-store');
+    return c.json({restarting,restartRequired:!restarting});
+  });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;
     if(!owner)throw new Refusal('PROJECT_FORBIDDEN',403);
@@ -509,7 +555,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const allowed = await ledger.pool.query(`SELECT i.run_id FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id
         JOIN ac_memberships m ON m.project_id=x.project_id WHERE x.project_id=$1 AND m.principal_id=$2`, [runtime.projectId, c.get('principal')]);
       const ids = new Set(allowed.rows.map(row => row.run_id));
-      return c.json(await Promise.all(runtime.store.listRuns().filter(run => ids.has(run.id)).map(run=>ownerTitled(ledger,run))));
+      const listed=runtime.store.listRuns().filter(run => ids.has(run.id));
+      const childIds=listed.flatMap(run=>typeof run.id==='string'&&typeof run.title==='string'&&childRunTaskId(run.title)?[run.id]:[]);
+      const tasks=await planTasksByRun(ledger,childIds);
+      const now=Date.now();
+      return c.json(await Promise.all(listed.map(run=>ownerTitled(ledger,run,typeof run.id==='string'&&typeof run.title==='string'&&childRunTaskId(run.title)?tasks.get(run.id)??[]:undefined,now))));
     }
     const run = path.match(/^\/api\/v1\/runs\/([a-f0-9-]{36})(?:\/(events|history|diff|layouts|usage|dispatch|todos|git\/status|changes))?$/);
     if (run) {

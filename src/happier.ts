@@ -15,6 +15,7 @@ import type {Control} from './control.ts';
 import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,nativeImagesRemovedNotice,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
+import {isRepeatablePersonalNotice,recentPersonalNotices,suppressRepeatedPersonalNotice} from './personal-notice.ts';
 import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
 import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
@@ -576,6 +577,13 @@ export class HappierEndpoint {
    return {localId:'claude-limit-'+until.toISOString(),text:claudeLimitNotice(until)};
   }
   private async say(localId:string,text:string){
+   if(this.options.personalConversation&&isRepeatablePersonalNotice(text,localId)){
+    const recent=await recentPersonalNotices(this.ledger.pool,this.options.authority.contextId).catch(()=>[]);
+    if(suppressRepeatedPersonalNotice({text,localId,recent})){
+     console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED',text}));
+     return;
+    }
+   }
    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
    await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.activeConversation().publishManagerText(localId,text,message,c,0);});
    this.notePersonalPush(localId,text);

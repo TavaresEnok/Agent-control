@@ -74,8 +74,10 @@ import {
   type TaskFacetId,
   type TaskTableFilters,
 } from '@/lib/task-filters'
+import { managedCopy } from '@/lib/managed-copy'
 import {
   SORT_OPTIONS,
+  bucketLabelText,
   listCounts,
   queuePositions,
   runTitle,
@@ -294,13 +296,13 @@ export function TasksOverview({
       {/* Desktop header. Below `md` the shell's top bar already says "Tasks", and the drawer
           carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Tasks</h1>
+        <h1 className="text-base font-semibold">{managedCopy('Tasks', 'Tarefas')}</h1>
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
-            Active
+            {managedCopy('Active', 'Ativas')}
           </OverviewTab>
           <OverviewTab view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-            Archived
+            {managedCopy('Archived', 'Arquivadas')}
           </OverviewTab>
         </div>
         <div className="flex-1" />
@@ -341,8 +343,8 @@ export function TasksOverview({
             type="text"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search tasks…"
-            aria-label="Search tasks"
+            placeholder={managedCopy('Search tasks…', 'Buscar tarefas…')}
+            aria-label={managedCopy('Search tasks', 'Buscar tarefas')}
             className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-ui text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
         </div>
@@ -436,7 +438,7 @@ export function TasksOverview({
                             colSpan={columns.length + (onTaskAction ? 1 : 0)}
                             className={cn(SECTION_LABEL_CLASS, 'border-b border-border bg-muted/40 px-3.5 py-1.5 text-left')}
                           >
-                            {item.section.label} · {item.section.taskCount}
+                            {item.section.label === 'Pinned' ? bucketLabelText('Pinned') : item.section.label === 'All tasks' ? managedCopy('All tasks', 'Todas as tarefas') : item.section.label} · {item.section.taskCount}
                           </th>
                         </tr>
                       ) : (
@@ -480,7 +482,7 @@ export function TasksOverview({
                     data-section={item.section.key}
                     className={cn(SECTION_LABEL_CLASS, 'px-1 pt-1')}
                   >
-                    {item.section.label} · {item.section.taskCount}
+                    {item.section.label === 'Pinned' ? bucketLabelText('Pinned') : item.section.label === 'All tasks' ? managedCopy('All tasks', 'Todas as tarefas') : item.section.label} · {item.section.taskCount}
                   </h2>
                 ) : (
                 <TaskCard

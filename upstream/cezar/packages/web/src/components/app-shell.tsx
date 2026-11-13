@@ -760,7 +760,7 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       className={cn(SIDEBAR_SECTION_LINK_CLASS, isActive && 'bg-muted')}
     >
       <LayersIcon className={sidebarSectionIconClass(isActive)} aria-hidden="true" />
-      All tasks
+      {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' ? 'Todas as tarefas' : 'All tasks'}
     </RouterLink>
   )
 }

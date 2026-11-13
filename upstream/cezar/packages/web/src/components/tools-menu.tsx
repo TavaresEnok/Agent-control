@@ -3,6 +3,7 @@ import { Link as RouterLink } from 'react-router'
 
 import type { BackendCheck, ForgeInfo, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
+import { managedCopy } from '@/lib/managed-copy'
 import { formatMem } from '@/lib/tasks-table'
 import { Link } from '@/lib/project-router'
 import {
@@ -124,7 +125,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
           className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-meta font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <StatusDot tone={blocker || disk ? 'pending' : 'success'} />
-          Tools
+          {managedCopy('Tools', 'Ferramentas')}
           <ChevronDownIcon className="size-[11px]" aria-hidden="true" />
         </button>
       </DropdownMenuTrigger>
@@ -137,7 +138,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
         className="w-[240px]"
       >
         <DropdownMenuLabel className="eyebrow text-soft-foreground">
-          Installed tools
+          {managedCopy('Installed tools', 'Ferramentas instaladas')}
         </DropdownMenuLabel>
         {health.checks.map((check) =>
           check.available ? <AvailableToolRow key={check.name} check={check} /> : <UnavailableToolRow key={check.name} check={check} />

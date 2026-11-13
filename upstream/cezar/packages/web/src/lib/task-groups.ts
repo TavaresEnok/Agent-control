@@ -1,5 +1,6 @@
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { isAwaitingAnswer, isNeedsYouStatus } from './attention'
+import { managedCopy } from './managed-copy'
 
 /**
  * How the task list is bucketed, sorted and collapsed — the pure half of the sidebar quick-list
@@ -22,6 +23,22 @@ export type BucketLabel = 'Pinned' | 'Needs you' | 'Working' | 'Recent' | 'Archi
 
 /** Rendering order. Also the exhaustive set — `groupRuns` emits a subset of these, in this order. */
 export const BUCKET_ORDER: readonly BucketLabel[] = ['Pinned', 'Needs you', 'Working', 'Recent', 'Archived']
+
+/** Paint a bucket key. The key itself stays English so filters and tests keep one vocabulary. */
+export function bucketLabelText(label: BucketLabel): string {
+  switch (label) {
+    case 'Pinned':
+      return managedCopy('Pinned', 'Fixadas')
+    case 'Needs you':
+      return managedCopy('Needs you', 'Precisa de você')
+    case 'Working':
+      return managedCopy('Working', 'Em andamento')
+    case 'Recent':
+      return managedCopy('Recent', 'Recentes')
+    case 'Archived':
+      return managedCopy('Archived', 'Arquivadas')
+  }
+}
 
 /**
  * Sort weight per status: needs-you first, then the pipeline in the order it will actually
@@ -258,7 +275,7 @@ export function sortTimestamp(run: RunTimes, sortBy: SortBy): string {
 
 /** The time column's heading under `sortBy`. */
 export function sortTimeLabel(sortBy: SortBy): string {
-  return sortBy === 'created' ? 'Created' : 'Updated'
+  return sortBy === 'created' ? managedCopy('Created', 'Criada') : managedCopy('Updated', 'Atualizada')
 }
 
 /**

@@ -49,6 +49,7 @@ import {
 } from '@/lib/telemetry'
 import { openTaskPalette } from '@/components/task-palette/open'
 import { useProjectOrder } from '@/lib/use-project-order'
+import { managedCopy } from '@/lib/managed-copy'
 import { cn } from '@/lib/utils'
 
 /**
@@ -584,8 +585,8 @@ export function CommandPalette() {
         if (!next) trackPaletteDismissed('command')
         setOpen(next)
       }}
-      title="Command palette"
-      description="Search projects, tasks, views, actions, and skills"
+      title={managedCopy('Command palette', 'Paleta de comandos')}
+      description={managedCopy('Search projects, tasks, views, actions, and skills', 'Buscar projetos, tarefas, visões, ações e habilidades')}
       showCloseButton={false}
       filter={paletteScore}
       commandProps={{ onKeyDown }}
@@ -785,7 +786,7 @@ function PaletteContent({ close }: { close: () => void }) {
   return (
     <>
       <CommandInput
-        placeholder="Search projects, tasks, views, actions, skills…"
+        placeholder={managedCopy('Search projects, tasks, views, actions, skills…', 'Buscar projetos, tarefas, visões, ações e habilidades…')}
         value={search}
         onValueChange={setSearch}
       />
@@ -794,7 +795,7 @@ function PaletteContent({ close }: { close: () => void }) {
           `min-h` keeps a short result set from collapsing the box to nothing, which would move
           the bottom edge as violently as the old centring moved the top. */}
       <CommandList className="max-h-[55vh] min-h-[14rem] sm:max-h-[60vh] lg:max-h-[68vh]">
-        <CommandEmpty>Nothing matches.</CommandEmpty>
+        <CommandEmpty>{managedCopy('Nothing matches.', 'Nada encontrado.')}</CommandEmpty>
 
         {/* First, headless, and the row an empty query pre-selects: opening ⌘K and pressing
             Enter starts a task. It used to sit ninth in Views with a duplicate down in Actions;
