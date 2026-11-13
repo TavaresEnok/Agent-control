@@ -3,7 +3,7 @@ import {redactNativeLogsOrWithhold,assertNoNativeTaskSecrets} from './native-exe
 import {readNativeSecretSnapshot,writeNativeSecretSnapshot,quarantineNativeLegacyLog,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {assertCodexSubscriptionIdentity,readMountedCredentialSecrets} from './native-worker-security.ts';
-import {isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
+import {providerLimitDisposition} from './quota-exhaustion.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
@@ -545,6 +545,19 @@ export class NativeExecutionSupervisor{
   if(!allowed.has(resolved))throw new Refusal('NATIVE_EXECUTION_REPOSITORY_MISMATCH');
   return resolved;
  }
+ /** Same worker, tools container and grant. Renews only the launch expiry, then starts the exited pair again. */
+ private async resumeExecutionContainers(jobId:string,workerId:string,toolsId:string){
+  const path=join(this.paths(jobId).input,'launch.json'),handle=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+  let payload:Record<string,unknown>;
+  try{const stat=await handle.stat();if(!stat.isFile()||stat.nlink!==1||stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0||stat.size>1024*1024)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+   const parsed=JSON.parse((await handle.readFile()).toString('utf8'));payload=parsed.payload;
+   if(!payload||typeof payload!=='object'||!verify(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(String(parsed.signature),'hex')))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+  }finally{await handle.close();}
+  payload.expiresAt=Date.now()+50000;
+  await writeFile(path,JSON.stringify({payload,signature:sign(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(payload)),this.key).toString('hex')}),{mode:0o600});
+  await rm(join(this.paths(jobId).output,'execution-result.json'),{force:true});
+  await this.docker.start(toolsId);await this.docker.start(workerId);
+ }
  private async readResult(input:Input,exitCode:number){
   const p=this.paths(input.jobId);await this.directory(p.root);await this.directory(p.output);
   let result:z.infer<typeof Result>;
@@ -580,7 +593,9 @@ export class NativeExecutionSupervisor{
   if(tools.State.Status!=='exited'||[worker,tools].some(p=>!Number.isFinite(Date.parse(p.State.FinishedAt))||p.State.FinishedAt.startsWith('0001-')))return {state:'uncertain' as const};
   const result=await this.readResult(input,worker.State.ExitCode);
   if(result.jobId!==input.jobId||result.exitCode!==worker.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-  if(isProviderLimit(result.failureCode))await noteProviderExhaustion(this.ledger,job.account_id,result.usageWindows);
+  const disposition=await providerLimitDisposition(this.ledger,job.account_id,result.failureCode,result.usageWindows);
+  if(disposition==='wait')return {state:'running' as const};
+  if(disposition==='resume'){await this.resumeExecutionContainers(input.jobId,worker.Id,tools.Id);return {state:'running' as const};}
   const cancellation=(await this.ledger.pool.query("SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND state='requested'",[input.intentId])).rowCount;
   let finalization:any=null,artifact:z.infer<typeof NativeArtifactIdentity>|null=null;
   if(input.role==='programmer'){

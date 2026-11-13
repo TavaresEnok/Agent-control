@@ -21,6 +21,7 @@ import {teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-tea
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
+import {claudeLimitNotice} from './quota-exhaustion.ts';
 import {bindPersonalOwnerMessage,enqueuePersonalOwner,readPersonalOwnerText,type ConversationTransport} from './conversation-transport.ts';
 
 /** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
@@ -411,7 +412,7 @@ export class HappierEndpoint {
         this.lastError = code;
         if (['STALE_MANAGER','CONTEXT_FORBIDDEN','PROJECT_RUNTIME_MISMATCH','CONTEXT_KEY_UNAUTHORIZED','SESSION_CONTEXT_MISMATCH'].includes(this.lastError)) this.close();
         else if(code==='NATIVE_IMAGE_MISSING'){try{await this.say('native-images-missing',nativeImagesRemovedNotice);await this.deliverQueuedMessages();}catch{}}
-        else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(code)){
+        else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','PROVIDER_USAGE_LIMIT'].includes(code)){
           // Critical controller blockers do not wait for the completion window.
           // Failure to publish preserves the same encrypted outbox for retry.
           try{
@@ -435,6 +436,7 @@ export class HappierEndpoint {
       // The manager also knows its own team, so "who is the reviewer?" gets the real answer.
       const team=this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(()=>''):'';
       const decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;
+      if(!decision){const notice=await this.claudeLimitAnnouncement();if(notice){await this.say(notice.localId,notice.text);throw new Refusal('NO_ELIGIBLE_CAPACITY');}}
       const kind=decision?.kind??classifyPersonalText(q.text);
       if(kind==='answer'){await this.say('answer-'+q.localId,decision?.answer||'Não consegui consultar o gerente agora. Confira as contas com papel de gerente no painel e tente de novo.');return {handled:true,result:{ok:true,answered:true}};}
      }
@@ -564,6 +566,15 @@ export class HappierEndpoint {
      if(project?.auto_approve_plans)await this.startProposal(result.revision,result.digest);
     }
   }
+  private async claudeLimitAnnouncement(){
+   if(!this.options.personalConversation)return null;
+   const row=(await this.ledger.pool.query(`SELECT max(a.exhausted_until) AS until FROM ac_accounts a
+    JOIN ac_account_access x ON x.account_id=a.id JOIN ac_contexts c ON c.project_id=x.project_id
+    WHERE c.id=$1 AND a.provider='claude' AND a.exhausted_until>clock_timestamp()`,[this.options.authority.contextId])).rows[0];
+   if(!row?.until)return null;
+   const until=new Date(row.until);
+   return {localId:'claude-limit-'+until.toISOString(),text:claudeLimitNotice(until)};
+  }
   private async say(localId:string,text:string){
    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
    await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.activeConversation().publishManagerText(localId,text,message,c,0);});
@@ -674,7 +685,7 @@ export class HappierEndpoint {
       if(intent.command.payload.workflow==='semantic-proposal-v1'){
         if(!['done','failed','canceled','cancelled'].includes(intent.state))try{await this.processSemanticProposal(intent);}catch(error){
           if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.id,source:'manager',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}
-          if(error instanceof Refusal&&['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code)){capacityWait??=error;continue;}
+          if(error instanceof Refusal&&['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','HUMAN_PAUSED','ADMISSION_CLOSED','PROVIDER_USAGE_LIMIT'].includes(error.code)){capacityWait??=error;continue;}
           if(error instanceof Refusal&&['PLANNING_EXECUTOR_FAILED','PLANNING_OUTPUT_REJECTED','NATIVE_IMAGE_MISSING','DOCKER_CREATE_REFUSED'].includes(error.code)){
             const localId=(error.code==='NATIVE_IMAGE_MISSING'?'images-missing-':'proposal-failed-')+intent.id;
             const text=error.code==='NATIVE_IMAGE_MISSING'?nativeImagesRemovedNotice:'A geração da proposta falhou. Consulte o diagnóstico desta conversa antes de continuar.';
@@ -709,7 +720,7 @@ export class HappierEndpoint {
       }
       catch(error){
         if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}
-        if(!(error instanceof Refusal)||!['PLAN_CANCELLATION_REQUESTED','HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
+        if(!(error instanceof Refusal)||!['PLAN_CANCELLATION_REQUESTED','HUMAN_PAUSED','ADMISSION_CLOSED','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','PROVIDER_USAGE_LIMIT'].includes(error.code))throw error;
         if(['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))capacityWait??=error;
         await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
           {entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:notificationReason(error)});
@@ -797,6 +808,7 @@ export class HappierEndpoint {
       await this.replan(id,'do plano').catch(async()=>{await this.say('replan-failed-'+id,'Não consegui pedir o replanejamento. Envie o pedido de novo com a correção.');});
      }
     }
+    const claudeLimit=await this.claudeLimitAnnouncement();if(claudeLimit)await this.say(claudeLimit.localId,claudeLimit.text).catch(()=>{});
     await this.flushNotifications();await this.deliverQueuedMessages();
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
     if (recoveryFailure !== undefined) throw recoveryFailure;
