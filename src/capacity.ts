@@ -44,7 +44,15 @@ export const CapacityPolicy = z.object({ schemaVersion: z.literal(1),
 export type CapacityPolicy = z.infer<typeof CapacityPolicy>;
 export const QuotaInput = z.object({ status: z.enum(['available','exhausted','rate_limited','auth_required','unknown','unreachable','disabled','configuration_error']),
   source: z.string().min(1).max(200), ttlSeconds: z.number().int().min(1).max(3600) }).strict();
-export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role }).strict();
+export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role,
+  taskLevel: z.enum(['basic','standard']).optional() }).strict();
+/** Basic tasks use the combo's basic profiles when that list exists. Every other programmer task uses standard. Policies without tiers keep the full chain. */
+export function programmerChain(policy:CapacityPolicy,role:string,chain:{regular:string[];emergency:string[]},taskLevel?:'basic'|'standard'){
+ if(role!=='programmer'||!policy.programmerTiers)return chain;
+ const useBasic=taskLevel==='basic'&&policy.programmerTiers.basic.length>0;
+ const allowed=new Set(useBasic?policy.programmerTiers.basic:policy.programmerTiers.standard);
+ return {regular:chain.regular.filter(id=>allowed.has(id)),emergency:chain.emergency.filter(id=>allowed.has(id))};
+}
 export type Grant = { id: string; attempt_id: string; context_id: string; account_id: string; profile_id: string;
   resource_kind:'model'; state: string; manager_epoch: string; request_digest: string; emergency: boolean };
 export const LocalCompositorGrantRequest=z.object({attemptId:Id,intentId:Id,contextId:Id}).strict();
@@ -278,8 +286,9 @@ export class Capacity {
       if (!stored) throw new Refusal('CAPACITY_POLICY_REQUIRED');
       const policy = CapacityPolicy.parse(stored.snapshot);
       if (digest(stored.snapshot)!==stored.digest) throw new Refusal('POLICY_DIGEST_MISMATCH');
-      const chain = policy.roles[request.role];
-      if (!chain) throw new Refusal('ROLE_NOT_CONFIGURED');
+      const storedChain = policy.roles[request.role];
+      if (!storedChain) throw new Refusal('ROLE_NOT_CONFIGURED');
+      const chain = programmerChain(policy, request.role, storedChain, request.taskLevel);
       const priority=request.role==='manager'?100:evaluations.includes(request.role)?50:0;
       const wait=await c.query(`INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,priority)
         VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(attempt_id) DO UPDATE SET manager_epoch=excluded.manager_epoch

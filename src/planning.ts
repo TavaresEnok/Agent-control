@@ -6,10 +6,51 @@ import {QualityPolicy} from './quality-policy.ts';
 import {workflowDefSchema} from '../upstream/cezar/packages/cezar/dist/workflows/types.js';
 import {graphIssues,graphToSteps,type GraphNode,type GraphEdge} from '../upstream/cezar/packages/cezar/dist/workflows/graph.js';
 
-import {ManagerPlan,ManagerTask,type PlanBinding,type CompiledManagerPlan,managerPlanListSchema,managerPlanComparisonSchema}
+import {ManagerPlan as ContractManagerPlan,type ManagerPlan as ContractPlan,type ManagerTask as ContractTask,type PlanBinding,type CompiledManagerPlan,managerPlanListSchema,managerPlanComparisonSchema,compiledManagerPlanSchema,managerPlanOutputJsonSchema as contractManagerPlanOutputJsonSchema}
  from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
-export {ManagerPlan,ManagerTask} from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
 export type {PlanBinding,CompiledManagerPlan} from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
+export {managerPlanListSchema,managerPlanComparisonSchema};
+/** basic: documentação, texto, configuração simples e mudança de poucas linhas. standard: o resto. Omit means standard. */
+export const TaskLevel=z.enum(['basic','standard']);
+export const TASK_LEVEL_PROMPT='Cada tarefa pode trazer level "basic" ou "standard". Sem level, vale standard. "basic" é documentação, texto, configuração simples e mudança de poucas linhas; "standard" é o resto.';
+export type ManagerTask=ContractTask&{level?:'basic'|'standard'};
+export type ManagerPlan=Omit<ContractPlan,'tasks'>&{tasks:ManagerTask[]};
+/** Parses the contract plan, then puts level back. The contract package cannot be edited, and its Zod copy cannot be extended. */
+export function parseManagerPlan(raw:unknown):ManagerPlan{
+ if(!raw||typeof raw!=='object'||Array.isArray(raw))return ContractManagerPlan.parse(raw);
+ const source=raw as Record<string,unknown>;
+ if(!Array.isArray(source.tasks))return ContractManagerPlan.parse(raw);
+ const levels:Array<'basic'|'standard'|undefined>=[];
+ const tasks=source.tasks.map(task=>{
+  if(!task||typeof task!=='object'||Array.isArray(task)){levels.push(undefined);return task;}
+  const copy={...(task as Record<string,unknown>)};
+  if(!Object.hasOwn(copy,'level')){levels.push(undefined);return copy;}
+  const level=TaskLevel.parse(copy.level);
+  delete copy.level;levels.push(level);return copy;
+ });
+ const parsed=ContractManagerPlan.parse({...source,tasks});
+ return {...parsed,tasks:parsed.tasks.map((task,index)=>levels[index]?{...task,level:levels[index]}:task)};
+}
+export const ManagerPlan=z.unknown().transform((value):ManagerPlan=>parseManagerPlan(value));
+export const managerPlanProposalSchema=z.object({expectedRevision:z.number().int().nonnegative(),plan:ManagerPlan}).strict();
+export const managerPlanPreviewSchema=z.object({revision:z.number().int().positive(),digest:z.string().regex(/^[a-f0-9]{64}$/),
+ compilationDigest:z.string().regex(/^[a-f0-9]{64}$/),parentRevision:z.number().int().positive().nullable(),epoch:z.number().int().positive(),
+ plan:ManagerPlan,compilation:z.unknown().transform(value=>compiledManagerPlanSchema.parse(value))}).strict();
+/** Contract schema plus an optional task level. Level is not required, so old plans stay valid. */
+export function managerPlanOutputJsonSchema(){
+ const schema=structuredClone(contractManagerPlanOutputJsonSchema()) as Record<string,unknown>;
+ const visit=(node:unknown)=>{
+  if(!node||typeof node!=='object')return;
+  if(Array.isArray(node)){for(const item of node)visit(item);return;}
+  const record=node as Record<string,any>;
+  if(record.properties?.writePaths&&record.properties?.qualityRevision&&record.properties?.id&&!record.properties.level){
+   record.properties.level={type:'string',enum:['basic','standard']};
+   if(Array.isArray(record.required))record.required=record.required.filter((key:string)=>key!=='level');
+  }
+  for(const value of Object.values(record))visit(value);
+ };
+ visit(schema);return schema;
+}
 export type PlanningPolicy={qualityRevision:number;policy:z.input<typeof QualityPolicy>};
 
 function overlap(a:string,b:string){return a===b||a.startsWith(b+'/')||b.startsWith(a+'/');}

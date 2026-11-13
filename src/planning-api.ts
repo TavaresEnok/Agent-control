@@ -3,9 +3,9 @@ import {bodyLimit} from 'hono/body-limit';
 import {z} from 'zod';
 import type {Ledger} from './ledger.ts';
 import {Id,Refusal,type Authority} from './contracts.ts';
-import {ManagerPlans} from './planning.ts';
+import {ManagerPlans,managerPlanProposalSchema,managerPlanPreviewSchema} from './planning.ts';
 import {SemanticPlanning,SemanticPlanningRequest} from './semantic-planning.ts';
-import {managerPlanProposalSchema,managerPlanPublishedSchema,managerPlanPreviewSchema,managerPlanRestoreSchema}
+import {managerPlanPublishedSchema,managerPlanRestoreSchema}
  from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
 
 /** Mounted after the parent's session/bearer middleware and before native fallback.

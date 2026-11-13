@@ -5,8 +5,7 @@ import {Id,Authority,Refusal,digest,canonical} from './contracts.ts';
 import {Ledger} from './ledger.ts';
 import {Capacity} from './capacity.ts';
 import {assertModelAllowed} from './model-policy.ts';
-import {ManagerPlan,ManagerPlans} from './planning.ts';
-import {managerPlanOutputJsonSchema} from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
+import {ManagerPlan,ManagerPlans,managerPlanOutputJsonSchema} from './planning.ts';
 import {Effort} from './effort.ts';
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 export const SemanticPlanningRequest=z.object({id:Id,intentId:Id,contextId:Id,expectedRevision:z.number().int().nonnegative(),

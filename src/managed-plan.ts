@@ -25,7 +25,8 @@ export function managedId(parent:string,unit:string,kind:string){
 const Phase=z.enum(['implement','qa','review','judge','integrate','select','prepare','specialist']);
 export const ManagedUnit=z.object({id:z.string(),kind:z.enum(['task','composition']),intentId:Id,runId:Id,operationId:Id,attemptId:Id,
  qualityRevision:z.number().int().positive(),targetRef:z.string(),writePaths:z.array(z.string()),acceptanceRefs:z.array(z.string()),sources:z.array(z.string()),
- taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/).optional(),correctionRevision:z.number().int().min(0).max(5).optional(),requiresSpecialist:z.boolean().optional()}).strict();
+ taskId:z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/).optional(),correctionRevision:z.number().int().min(0).max(5).optional(),requiresSpecialist:z.boolean().optional(),
+ taskLevel:z.enum(['basic']).optional()}).strict();
 export type ManagedUnit=z.infer<typeof ManagedUnit>;
 export const ManagedRecipe=z.object({schemaVersion:z.union([z.literal(1),z.literal(2),z.literal(3),z.literal(4)]),mode:z.enum(['synthetic-only','native']),parentIntentId:Id,
  proposalRevision:z.number().int().positive(),proposalDigest:z.string(),workflow:workflowDefSchema,
@@ -94,10 +95,10 @@ function boundedCorrectionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],pare
  const targetRef=plan.tasks[0]!.targetRef,units:ManagedUnit[]=[],bindings:ManagedRecipe['bindings']={},launches:ManagedRecipe['launches']={};
  const nodes:GraphNode[]=[{id:'start',type:'start'},{id:'failed',type:'end',status:'failed'}],edges:GraphEdge[]=[];let frontier=['start'];
  const connect=(from:string[],to:string)=>{for(const source of from)edges.push({from:source,to});};
- const make=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],acceptanceRefs:string[],sources:string[]=[],taskId?:string,correctionRevision?:number)=>{
+ const make=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],acceptanceRefs:string[],sources:string[]=[],taskId?:string,correctionRevision?:number,taskLevel?:'basic')=>{
   const value:ManagedUnit={id,kind,intentId:managedId(parentIntentId,id,'intent'),runId:managedId(parentIntentId,id,'run'),operationId:managedId(parentIntentId,id,'operation'),
    attemptId:managedId(parentIntentId,id,'attempt'),qualityRevision,targetRef,writePaths,acceptanceRefs,sources,
-   ...(taskId===undefined?{}:{taskId,correctionRevision})};units.push(value);return value;
+   ...(taskId===undefined?{}:{taskId,correctionRevision}),...(taskLevel==='basic'?{taskLevel:'basic' as const}:{})};units.push(value);return value;
  };
  const stage=(unit:ManagedUnit,phase:ManagedRecipe['bindings'][string]['phase'],source:string[],verdict=false)=>{
   const id=`${unit.id}-${phase}`;
@@ -108,7 +109,7 @@ function boundedCorrectionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],pare
   const grouped=new Map<number,string[]>();for(const id of batch){const revision=tasks.get(id)!.qualityRevision;grouped.set(revision,[...(grouped.get(revision)??[]),id]);}return [...grouped.values()];
  });
  for(const [index,batch] of batches.entries()){
-  const initial=batch.map(id=>{const task=tasks.get(id)!;const acceptance=native?[...task.acceptanceRefs]:['acceptance:synthetic-effect-v1'];return make(`task-${id}`,'task',task.qualityRevision,task.writePaths,acceptance,[],id,0);});
+  const initial=batch.map(id=>{const task=tasks.get(id)!;const acceptance=native?[...task.acceptanceRefs]:['acceptance:synthetic-effect-v1'];return make(`task-${id}`,'task',task.qualityRevision,task.writePaths,acceptance,[],id,0,task.level==='basic'?'basic':undefined);});
   const launch=`launch-${index}`;launches[launch]=initial.map(unit=>unit.id);
   if(initial.length===1){nodes.push({id:launch,type:'dispatch',name:initial[0]!.id,prompt:`AC_MANAGED_UNIT:${initial[0]!.id}`});connect(frontier,launch);edges.push({from:launch+'.failed',to:'failed'});frontier=[launch];}
   else{
@@ -123,7 +124,7 @@ function boundedCorrectionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],pare
     let unit=first;
     if(revision){
      const id=`correction-${managedId(parentIntentId,`${task.id}:${revision}`,'unit').replaceAll('-','')}`;
-     unit=make(id,'task',task.qualityRevision,task.writePaths,[...first.acceptanceRefs],[],task.id,revision);
+     unit=make(id,'task',task.qualityRevision,task.writePaths,[...first.acceptanceRefs],[],task.id,revision,task.level==='basic'?'basic':undefined);
      const launchId=`${id}-launch`;nodes.push({id:launchId,type:'dispatch',name:id,prompt:`AC_MANAGED_UNIT:${id}`});launches[launchId]=[id];
      connect(failed,launchId);edges.push({from:launchId+'.failed',to:'failed'});entry=[launchId];
     }
@@ -176,10 +177,10 @@ function managedBatchRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentInt
  if(new Set(plan.tasks.map(task=>task.targetRef)).size!==1)throw new Refusal('MANAGED_SINGLE_TARGET_REQUIRED');
  const targetRef=plan.tasks[0]!.targetRef,units:ManagedUnit[]=[],bindings:ManagedRecipe['bindings']={},launches:ManagedRecipe['launches']={};
  const nodes:GraphNode[]=[{id:'start',type:'start'},{id:'failed',type:'end',status:'failed'}],edges:GraphEdge[]=[];let cursor='start';
- const unit=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],acceptanceRefs:string[],sources:string[]=[],taskId?:string)=>{
+ const unit=(id:string,kind:ManagedUnit['kind'],qualityRevision:number,writePaths:string[],acceptanceRefs:string[],sources:string[]=[],taskId?:string,taskLevel?:'basic')=>{
   const value:ManagedUnit={id,kind,intentId:managedId(parentIntentId,id,'intent'),runId:managedId(parentIntentId,id,'run'),
    operationId:managedId(parentIntentId,id,'operation'),attemptId:managedId(parentIntentId,id,'attempt'),qualityRevision,targetRef,writePaths,
-   acceptanceRefs,sources,...(taskId===undefined?{}:{taskId})};units.push(value);return value;
+   acceptanceRefs,sources,...(taskId===undefined?{}:{taskId}),...(taskLevel==='basic'?{taskLevel:'basic' as const}:{})};units.push(value);return value;
  };
  const edge=(id:string)=>{edges.push({from:cursor,to:id},{from:id+'.failed',to:'failed'});cursor=id;};
  const checks=(u:ManagedUnit,integrate:boolean)=>{
@@ -194,7 +195,7 @@ function managedBatchRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentInt
  });
  for(const [batchIndex,batch] of batches.entries()){
   const members=batch.map(id=>{const task=tasks.get(id)!;return unit(`task-${id}`,'task',task.qualityRevision,task.writePaths,
-   native?[...task.acceptanceRefs]:syntheticAcceptance,[],task.id);});
+   native?[...task.acceptanceRefs]:syntheticAcceptance,[],task.id,task.level==='basic'?'basic':undefined);});
   const launch=`launch-${batchIndex}`;
   if(members.length===1){const u=members[0]!;nodes.push({id:launch,type:'dispatch',name:u.id,prompt:`AC_MANAGED_UNIT:${u.id}`});launches[launch]=[u.id];edge(launch);checks(u,true);}
   else{

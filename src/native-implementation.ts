@@ -136,7 +136,7 @@ export class NativeImplementation{
     const operation=(await this.ledger.pool.query('SELECT execution_attempt_id FROM ac_operations WHERE id=$1 AND intent_id=$2',[intent.operation_id,intent.id])).rows[0];
     if(!operation)throw new Refusal('OPERATION_MISSING');
     let grant;
-    for(;;){if(canceled||!this.active)throw new Refusal('STAGE_CANCELED');try{grant=await new Capacity(this.ledger).reserve(owner,{attemptId:operation.execution_attempt_id,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority);break;}
+    for(;;){if(canceled||!this.active)throw new Refusal('STAGE_CANCELED');try{grant=await new Capacity(this.ledger).reserve(owner,{attemptId:operation.execution_attempt_id,intentId:intent.id,contextId:intent.context_id,role:'programmer',...(managed?.unit.taskLevel==='basic'?{taskLevel:'basic' as const}:{})},authority);break;}
      catch(error){if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','HUMAN_PAUSED','ADMISSION_CLOSED','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;await new Promise(resolve=>setTimeout(resolve,1000));}}
     // Bind the reservation before fallible Git preparation. A preparation error
     // must be able to release this exact, still-unstarted grant.

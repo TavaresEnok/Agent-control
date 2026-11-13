@@ -1159,7 +1159,7 @@ export class CezarRuntime {
               let grant;
               for(;;){
                 if(canceled||!runtime.running)throw new Refusal('STAGE_CANCELED');
-                try{grant=await runtime.capacity.reserve(principal,{attemptId:unit.attemptId,intentId:intent.id,contextId:intent.context_id,role:'programmer'},authority);break;}
+                try{grant=await runtime.capacity.reserve(principal,{attemptId:unit.attemptId,intentId:intent.id,contextId:intent.context_id,role:'programmer',...(unit.taskLevel==='basic'?{taskLevel:'basic' as const}:{})},authority);break;}
                 catch(error){if(!(error instanceof Refusal)||!['NO_ELIGIBLE_CAPACITY','CAPACITY_QUEUED','CAPACITY_BUSY','ORIGINAL_RESERVE_NOT_NEEDED'].includes(error.code))throw error;
                   await new Promise(resolve=>setTimeout(resolve,250));}
               }
