@@ -171,9 +171,22 @@ export function describeAppliedCombo(applied:AppliedCombo){
 
 const accountRequired=(provider:string)=>provider==='codex'?'CODEX_ACCOUNT_REQUIRED':provider==='claude'?'CLAUDE_ACCOUNT_REQUIRED':provider==='grok'?'GROK_ACCOUNT_REQUIRED':'PROVIDER_ACCOUNT_REQUIRED';
 
+/** Profile ids named by a capacity snapshot, including emergency and programmer-tier reserves. */
+function snapshotProfileIds(snapshot:unknown):string[]{
+ const parsed=CapacityPolicy.safeParse(snapshot);
+ if(!parsed.success)return [];
+ const ids:string[]=[];
+ for(const chain of Object.values(parsed.data.roles))if(chain)ids.push(...chain.regular,...chain.emergency);
+ const tiers=parsed.data.programmerTiers;
+ if(tiers)ids.push(...tiers.standard,...tiers.basic,...(tiers.standardReserve??[]),...(tiers.basicReserve??[]));
+ return ids;
+}
+
 /**
  * Publishes one capacity revision for the combo, or changes nothing.
- * Profiles the combo does not use are disabled, never deleted. Disabling is global on the profile row.
+ * Selection uses the profile ids in this project's chains. A profile row is disabled only when
+ * no vigente policy of any project still names it: another project's latest revision, or the
+ * revision assigned to one of its live contexts. Profiles are never deleted.
  * A combo without model QA keeps the enabled QA profiles so script QA can still reserve.
  */
 export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:string,name:string,dataDirectory:string):Promise<AppliedCombo>{
@@ -239,10 +252,18 @@ export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:st
    qa=prev.roles.qa.regular.filter(id=>live.has(id));
   }
   const keep=new Set([...manager,...managerReserve,...reviewer,...reviewerReserve,...programmerStandard,...standardReserve,...programmerBasic,...basicReserve,...qa,...qaReserve]);
+  const held=new Set<string>();
+  const live=(await c.query(`SELECT r.snapshot FROM ac_policy_revisions r JOIN (
+    SELECT project_id,max(revision) AS revision FROM ac_policy_revisions WHERE project_id<>$1 GROUP BY project_id
+    UNION
+    SELECT project_id,capacity_policy_revision FROM ac_contexts
+    WHERE project_id<>$1 AND NOT archived AND capacity_policy_revision IS NOT NULL
+   ) live ON live.project_id=r.project_id AND live.revision=r.revision`,[projectId])).rows;
+  for(const row of live)for(const id of snapshotProfileIds(row.snapshot))held.add(id);
   const sweep=['manager','reviewer','programmer',...(combo.roles.qa?['qa']:[])];
   const extras=(await c.query(`SELECT p.id,p.revision FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id
    WHERE x.project_id=$1 AND p.enabled AND p.role=ANY($2::text[])`,[projectId,sweep])).rows;
-  for(const row of extras)if(!keep.has(String(row.id)))
+  for(const row of extras)if(!keep.has(String(row.id))&&!held.has(String(row.id)))
    await capacity.setEnabled(owner,projectId,'profile',{id:String(row.id),enabled:false,expectedRevision:Number(row.revision)});
   const expected=Number((await c.query('SELECT COALESCE(max(revision),0) revision FROM ac_policy_revisions WHERE project_id=$1',[projectId])).rows[0].revision);
   const roles:CapacityPolicy['roles']={

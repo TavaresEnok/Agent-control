@@ -115,3 +115,35 @@ test('complexo refuses without Codex and publishes Opus regular, Sol emergency a
   assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1',[context])).rows[0].capacity_policy_revision),applied.revision);
  }finally{await db.close();await database.close();await rm(dir,{recursive:true,force:true});}
 });
+
+test('applying a combo on one project leaves a profile that another project still uses enabled',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
+ const database=await isolatedDatabase(databaseUrl!,'share'),db=new Ledger(database.url),dir=await mkdtemp(join(tmpdir(),'ac-combos-'));
+ try{
+  await db.migrate();
+  const principal='combo-owner',projectA=randomUUID(),projectB=randomUUID(),capacity=new Capacity(db);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[projectA,'A']);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[projectB,'B']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[projectA,principal]);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[projectB,principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+  await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
+  for(const provider of ['claude','grok','codex'] as const){
+   const id=randomUUID();
+   await capacity.addAccount(principal,projectA,{id,provider,label:provider,resourceIdentity:provider+':'+id,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://combos',maxConcurrent:4});
+   await capacity.shareAccount(principal,id,projectB);
+  }
+  await db.createContext(principal,projectB,randomUUID());
+  const onA=await applyPersonalCombo(db,principal,projectA,'complexo',dir);
+  const onB=await applyPersonalCombo(db,principal,projectB,'complexo',dir);
+  assert.equal(onB.manager[0],onA.manager[0]);
+  const opus=onA.manager[0]!;
+  const enabled=async(id:string)=>Boolean((await db.pool.query('SELECT enabled FROM ac_profiles WHERE id=$1',[id])).rows[0].enabled);
+  await applyPersonalCombo(db,principal,projectA,'economia',dir);
+  assert.equal(await enabled(opus),true);
+  const left=(await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',[projectA])).rows[0].snapshot;
+  assert.equal(left.combo,'economia');
+  assert.equal(left.roles.manager.regular.includes(opus),false);
+  await applyPersonalCombo(db,principal,projectB,'economia',dir);
+  assert.equal(await enabled(opus),false);
+ }finally{await db.close();await database.close();await rm(dir,{recursive:true,force:true});}
+});

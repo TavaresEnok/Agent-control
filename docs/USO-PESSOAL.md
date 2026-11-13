@@ -120,7 +120,7 @@ Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o
 
 `economia`: gerente Claude Sonnet 5.5 médio, reserva Grok 4.7 médio; programadores normais 2 × Grok 4.7 médio e 1 × GPT 6.1 Terra médio, um é a reserva do outro; revisor GPT 6.1 Terra alto, reserva Claude Sonnet 5.5 baixo; QA só pelos testes do projeto, sem modelo.
 
-Todo combo pronto tem pelo menos 3 programadores e reserva no gerente, no revisor e nos programadores. Um combo do titular com menos de 3 programadores ou sem essas reservas é recusado. O arquivo fica em `<dataDirectory>/combos.json` com modo 600 e substitui o pronto de mesmo nome. Aplicar cria os perfis que faltam, desativa os que o combo não usa e publica a política de capacidade. Se faltar a conta ativa do provedor, nada muda.
+Todo combo pronto tem pelo menos 3 programadores e reserva no gerente, no revisor e nos programadores. Um combo do titular com menos de 3 programadores ou sem essas reservas é recusado. O arquivo fica em `<dataDirectory>/combos.json` com modo 600 e substitui o pronto de mesmo nome. Aplicar cria os perfis que faltam e publica a política de capacidade do projeto. A escolha usa só os ids dessa política. Um perfil só é desativado se nenhuma política vigente de nenhum projeto o usar: a revisão mais recente de cada projeto, ou a revisão atribuída a um contexto que não está arquivado. Se faltar a conta ativa do provedor, nada muda.
 
 `<projeto>` é o label ou o id. O comando age como o dono gravado nesse projeto.
 
