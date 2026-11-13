@@ -76,7 +76,8 @@ async function defaultProbe(url:string){
  const timer=setTimeout(()=>controller.abort(),5000);
  try{
   const response=await fetch(url,{signal:controller.signal,redirect:'manual'});
-  return response.status>=200&&response.status<300;
+  // Any answer below 500 means the gateway process is up; the health route itself asks for a session.
+  return response.status<500;
  }catch{return false;}
  finally{clearTimeout(timer);}
 }
@@ -97,7 +98,7 @@ function runCommand(command:string,args:string[],timeout:number,inherit:boolean,
 
 async function defaultInspect(image:string){
  if(!imageId.test(image))return false;
- try{await runCommand('docker',['image','inspect','--type','image',image],30_000,false);return true;}
+ try{await runCommand('docker',['image','inspect',image],30_000,false);return true;}
  catch{return false;}
 }
 
