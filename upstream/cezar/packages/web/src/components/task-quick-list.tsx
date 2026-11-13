@@ -18,9 +18,11 @@ import { UnreadMarker } from '@/components/unread-marker'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
+import { managedCopy } from '@/lib/managed-copy'
 import { isRunActive } from '@/lib/run-status'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
+  bucketLabelText,
   groupRuns,
   lastActivityAt,
   listCounts,
@@ -90,21 +92,21 @@ export function TaskQuickList({
       <div className="sticky top-0 z-10 bg-sidebar pt-2 pb-1">
         <div className="inline-flex w-full gap-0.5 rounded-md bg-muted p-[3px]">
           <ViewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
-            Active
+            {managedCopy('Active', 'Ativas')}
             {/* The one reason to look at a tab you are not on. */}
             {counts.waiting > 0 && view !== 'active' ? (
-              <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
+              <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label={managedCopy('needs you', 'precisa de você')} />
             ) : null}
           </ViewTab>
           <ViewTab view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-            Archived
+            {managedCopy('Archived', 'Arquivadas')}
           </ViewTab>
         </div>
       </div>
 
       {buckets.length === 0 ? (
         <p className="px-3 py-3.5 text-xs text-soft-foreground">
-          {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
+          {view === 'archived' ? managedCopy('Nothing archived yet.', 'Nada arquivado ainda.') : managedCopy('No tasks yet — describe one.', 'Nenhuma tarefa ainda.')}
         </p>
       ) : (
         <QuickListBuckets
@@ -161,7 +163,7 @@ export function QuickListBuckets({
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
           <h2 className="px-3 pt-2.5 pb-1 eyebrow text-soft-foreground">
-            {bucket.label}
+            {bucketLabelText(bucket.label)}
           </h2>
           {nestRows(bucket.rows).map((node) => (
             <Row
