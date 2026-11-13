@@ -110,6 +110,19 @@ No painel, Configurações → QA do projeto mostra e grava o mesmo arquivo, par
 
 Sempre que reconstruir uma imagem ou mudar o QA, rode `npm run personal:images -- <instalação.json>` de novo e reinicie o gateway com o comando impresso. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
 
+### Combos de equipe
+
+Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o esforço e a quantidade. Quatro já vêm prontos: `padrão` (gerente e revisor Claude Sonnet 5.5 em esforço médio, dois programadores Grok 4.7 em esforço médio, QA só por script), `superfoda`, `megapoderoso` e `econômico`. Um combo do titular, gravado em `<dataDirectory>/combos.json` com modo 600, substitui o pronto de mesmo nome. Aplicar cria os perfis que faltam, desativa os que o combo não usa e publica a política de capacidade. Se faltar a conta ativa do provedor, nada muda.
+
+`<projeto>` é o label ou o id. O comando age como o dono gravado nesse projeto.
+
+```bash
+npm run personal:combo -- <instalação.json> <projeto> list
+npm run personal:combo -- <instalação.json> <projeto> apply padrão
+```
+
+Na conversa, `equipe` mostra o combo atual. `use o combo <nome>` aplica e responde com o resumo. No painel gerenciado, a tela Equipe fica no menu depois de Tarefas: a lista, o botão "Usar este" e o editor, só para o dono da instalação.
+
 ## Ligar a conversa (Happier)
 
 A conversa passa por um servidor Happier local. São três comandos, uma vez só:
@@ -132,7 +145,8 @@ A conversa mostra cada papel pelo nome, com provedor, modelo e esforço: o geren
 npm run gateway -- say <instalacao> "o que este repositório faz?"
 npm run gateway -- say <instalacao> "crie docs/guia.md com ..."   # chega a proposta com as tarefas
 npm run gateway -- say <instalacao> aprovar                        # ou: descartar, pare
-npm run gateway -- say <instalacao> equipe                         # quem é gerente, programador e revisor, e o que cada um fez por último
+npm run gateway -- say <instalacao> equipe                         # combo atual, papéis e a última atividade de cada um
+npm run gateway -- say <instalacao> "use o combo padrão"           # aplica esse combo e responde com o resumo
 npm run gateway -- chat-log <instalacao> 600                       # acompanha a conversa por 600 s
 npm run gateway -- chat-log <instalacao>                           # histórico
 ```
@@ -154,13 +168,13 @@ O aplicativo é o Happier oficial: iOS na App Store, Android no Google Play, des
    - **Celular, sem subdomínio:** o celular não alcança `127.0.0.1` do servidor. Use uma rede privada como o Tailscale (instalado no servidor e no celular; no servidor, `tailscale serve --bg http://127.0.0.1:38343` publica em HTTPS só para a sua rede) ou um proxy HTTPS seu.
 3. No app, em **Servidor**, adicione o endereço (`http://127.0.0.1:38343` pelo túnel, ou o endereço HTTPS do Tailscale) e selecione-o.
 4. Escolha **Restaurar conta → Restaurar com chave secreta** e cole a chave.
-5. A conversa do projeto aparece na lista de sessões. Escreva nela como no terminal: pergunta, pedido, `aprovar`, `descartar`, `pare`, `equipe`.
+5. A conversa do projeto aparece na lista de sessões. Escreva nela como no terminal: pergunta, pedido, `aprovar`, `descartar`, `pare`, `equipe`, `use o combo <nome>`.
 
 Este caminho segue a documentação do Happier, mas ainda não foi testado num aparelho de verdade.
 
 ### Painel no celular (Cezar)
 
-O gateway serve a tela do Cezar presa ao projeto: as execuções, o fluxo de cada uma (programar, revisar, QA, integrar), o relato de cada papel e os commits. Ela é só de leitura: os pedidos, `aprovar` e `pare` continuam pela conversa do Happier. Para abrir no celular e instalar como app:
+O gateway serve a tela do Cezar presa ao projeto: as execuções, o fluxo de cada uma (programar, revisar, QA, integrar), o relato de cada papel e os commits. Os pedidos, `aprovar` e `pare` continuam pela conversa do Happier. A tela Equipe, no menu depois de Tarefas, lista os combos, mostra o atual e deixa o dono aplicar ou editar um combo. Para abrir no celular e instalar como app:
 
 ```bash
 npm run personal:cockpit -- ~/.agent-control/meuprojeto/installation.json painel.seudominio.com
@@ -263,7 +277,7 @@ O histórico antigo continua no SQLite. O que foi escrito só na tabela nova nã
 
 Só contas que você possui.
 
-Neste teste o gerente e o revisor usam Claude Sonnet 5.5 em esforço médio. O programador usa Grok 4.7 em esforço médio. O QA permanece no Claude. A equipe permanente do `AGENTS.md` não muda.
+A equipe de cada projeto é o combo aplicado. No combo `padrão`, o gerente e o revisor usam Claude Sonnet 5.5 em esforço médio e os programadores usam Grok 4.7 em esforço médio; o QA fica no script do projeto. Outros combos podem usar Codex e um modelo de QA. A equipe permanente do `AGENTS.md` não muda.
 
 ```bash
 npm run gateway -- account-add /caminho/instalacao.json claude "Claude"

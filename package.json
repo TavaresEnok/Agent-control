@@ -18,6 +18,7 @@
     "personal:images": "node scripts/personal-images.mjs",
     "personal:project": "node scripts/personal-project.mjs",
     "personal:qa": "node scripts/personal-qa.mjs",
+    "personal:combo": "node scripts/personal-combo.mjs",
     "personal:roots": "node scripts/personal-roots.mjs",
     "personal:happier": "node scripts/personal-happier.mjs",
     "personal:services": "node scripts/personal-services.mjs",
