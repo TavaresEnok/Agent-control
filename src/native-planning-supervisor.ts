@@ -3,7 +3,7 @@ import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {constants} from 'node:fs';
-import {open,lstat,realpath,mkdir,writeFile} from 'node:fs/promises';
+import {open,lstat,realpath,mkdir,writeFile,rm} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {createPrivateKey,createPublicKey,sign,verify,createHash} from 'node:crypto';
 import {z} from 'zod';
@@ -16,7 +16,7 @@ import {digest,canonical,Refusal,type Authority} from './contracts.ts';
 import {planningReceiptMessage,PlanningPhysicalReceipt,type PlanningExecutor,type PlanningInvocation} from './semantic-planning.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
-import {isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
+import {providerLimitDisposition} from './quota-exhaustion.ts';
 export {nativePlanningExecutorDigest};
 const Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Result=z.object({schemaVersion:z.literal(1),callId:z.uuid(),output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),
@@ -139,6 +139,21 @@ export class NativePlanningSupervisor{
   // One bounded observation window. Retries use only reconcile(), never start().
   for(let i=0;i<130;i++){const result=await this.reconcile(input);if(result)return result;await new Promise(r=>setTimeout(r,1000));}
   throw new Refusal('PLANNING_RESULT_UNCERTAIN');
+ }
+ /** Same container and grant. Only the launch expiry and the previous result file change. */
+ private async resumePlanningContainer(input:PlanningInvocation,containerId:string){
+  const paths=this.paths(input.callId),file=join(paths.input,'launch.json');
+  const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW);
+  let payload:Record<string,unknown>;
+  try{const stat=await handle.stat();if(!stat.isFile()||stat.nlink!==1||stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0||stat.size>1024*1024)throw new Refusal('PLANNING_RESULT_UNCERTAIN');
+   const parsed=JSON.parse((await handle.readFile()).toString('utf8'));payload=parsed.payload;
+   if(!payload||typeof payload!=='object'||!verify(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(String(parsed.signature),'hex')))throw new Refusal('PLANNING_RESULT_UNCERTAIN');
+  }finally{await handle.close();}
+  payload.expiresAt=Date.now()+50000;
+  const signature=sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(payload)),this.key).toString('hex');
+  await writeFile(file,JSON.stringify({payload,signature}),{mode:0o600});
+  await rm(join(paths.output,'planning-result.json'),{force:true});
+  await this.docker.start(containerId);
  }
  private async readResult(input:PlanningInvocation){
   const paths=this.paths(input.callId);await this.privateDirectory(paths.root);await this.privateDirectory(paths.output);
@@ -380,7 +395,9 @@ export class NativePlanningSupervisor{
   if(physical.State.Running||physical.State.Status==='created')return null;
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return null;
   const result=await this.terminalResult(input,physical.State.ExitCode);if(result.callId!==input.callId||result.exitCode!==physical.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('PLANNING_OUTPUT_INVALID');
-  if(isProviderLimit(result.failureCode))await noteProviderExhaustion(this.ledger,input.profile.accountId,result.usageWindows);
+  const disposition=await providerLimitDisposition(this.ledger,input.profile.accountId,result.failureCode,result.usageWindows);
+  if(disposition==='wait')throw new Refusal('NO_ELIGIBLE_CAPACITY');
+  if(disposition==='resume'){await this.resumePlanningContainer(input,physical.Id);return null;}
   const physicalReceipt={normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,nativeSessionId:result.nativeSessionId,jobId:input.callId,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,synthetic:Boolean(this.config.syntheticFixture),executorDigest:this.config.executorDigest};
   const payload={callId:input.callId,intentId:input.intentId,contextId:input.contextId,grantId:input.grantId,profileId:input.profile.id,sessionId:input.sessionId,epoch:input.executionEpoch,
    executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,profileDigest:digest(input.profile),outputDigest:createHash('sha256').update(result.output).digest('hex'),physicalDigest:digest(physicalReceipt),exitCode:result.exitCode};
