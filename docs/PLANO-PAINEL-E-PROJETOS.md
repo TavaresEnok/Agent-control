@@ -227,3 +227,39 @@ Itens deixados de fora de propósito:
 | Conversa limpa (avisos repetidos escondidos, iguais em 10 min suprimidos) | **feito e provado** |
 | Lista de tarefas e menu em português, QA pelo painel | **feito**; a página de Configurações ainda tem textos do Cezar em inglês |
 | Instalação `smoke` desligada | **feito** (dados mantidos) |
+
+## Combos de equipe (13/11/2026)
+
+Três combos prontos, todos com pelo menos 3 programadores e uma reserva em outro provedor para cada papel. Projeto novo nasce no `intermediário`. O IspAgent usa o `intermediário`.
+
+| Combo | Gerente (reserva) | Programadores (reserva) | Revisor (reserva) | QA depois dos testes (reserva) |
+|---|---|---|---|---|
+| complexo | Opus 5.5 alto (Sol alto) | 3 × Sol alto nas tarefas normais + 1 × Grok alto nas básicas (um cobre o outro) | Opus 5.5 alto (Grok alto) | Grok alto (Sonnet médio) |
+| intermediário | Sonnet 5.5 alto (Sol médio) | 2 × Grok médio + 1 × Sol médio (um cobre o outro) | Sol alto (Sonnet alto) | Sonnet médio (Grok médio) |
+| economia | Sonnet 5.5 médio (Grok médio) | 2 × Grok médio + 1 × Terra médio (um cobre o outro) | Terra alto (Sonnet baixo) | só os testes |
+
+Como usar:
+
+- no painel, a tela "Equipe";
+- na conversa, "use o combo <nome>";
+- por comando, `npm run personal:combo -- <instalação.json> <projeto> list|apply <nome>`.
+
+**Provado ao vivo no IspAgent com o intermediário:**
+
+- 3 programadores em paralelo;
+- revisor Sol (Codex);
+- QA com 369 testes e depois com o modelo;
+- integração: `f550567` e `b846d86`.
+
+**Não provado ao vivo:**
+
+- a reserva assumindo com uma conta sem cota (só nos testes);
+- os combos complexo e economia;
+- a separação entre tarefas básicas e normais.
+
+Correções que a prova exigiu:
+
+- **Codex no modo pessoal:** login em `.codex/auth.json`, certificados CA e o `codex-code-mode-host` nas imagens, e o isolamento próprio do Codex desligado dentro do contêiner.
+- **Vez do gerente:** renovada continuamente.
+- **Reservas órfãs:** limpas a cada 2 minutos.
+- **`personal:images`:** apaga as pastas de preparo. Sem isso, as reconstruções encheram o disco em 13/11.
