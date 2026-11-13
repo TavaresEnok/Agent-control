@@ -3,7 +3,8 @@
 import {execFileSync,spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {basename,dirname,resolve} from 'node:path';
+import {basename,dirname,resolve,sep} from 'node:path';
+import {rmSync} from 'node:fs';
 const [installation,given]=process.argv.slice(2);
 if(!installation){console.log('Uso: npm run personal:images -- <instalação.json> [nome]');process.exit(0);}
 const file=resolve(installation);
@@ -28,7 +29,11 @@ const prepare=(script)=>{
 const planning=prepare('prepare-native-planning-image.mjs');
 const execution=prepare('prepare-native-execution-image.mjs');
 const tools=prepare('prepare-native-tools-image.mjs');
-const build=(tag,context)=>{const result=spawnSync('docker',['build','-t',tag,context],{stdio:'inherit'});if(result.error||result.status)process.exit(result.status??1);};
+// Each build context holds copies of the CLI binaries (hundreds of MB). Remove it after the build, and prune the
+// dangling image the previous build left behind, or repeated rebuilds fill the disk.
+const stateRoot=resolve(import.meta.dirname,'..','.state');
+const discard=context=>{const path=resolve(context);if(path.startsWith(stateRoot+sep)&&/^native-(planning|execution|tools)-image-[A-Za-z0-9]+$/.test(basename(path)))rmSync(path,{recursive:true,force:true});};
+const build=(tag,context)=>{const result=spawnSync('docker',['build','-t',tag,context],{stdio:'inherit'});discard(context);if(result.error||result.status)process.exit(result.status??1);};
 build('ac-native-planning:personal',planning);
 build('ac-native-execution:personal',execution);
 build('ac-native-tools:personal',tools);
@@ -36,4 +41,5 @@ const id=tag=>execFileSync('docker',['image','inspect',tag,'--format','{{.Id}}']
 const setup=spawnSync(process.execPath,[resolve(import.meta.dirname,'personal-setup.mjs'),file],{stdio:'inherit',env:{...env,
  AC_NATIVE_PLANNING_IMAGE:id('ac-native-planning:personal'),AC_NATIVE_WORKER_IMAGE:id('ac-native-execution:personal'),AC_NATIVE_TOOLS_IMAGE:id('ac-native-tools:personal')}});
 if(setup.error||setup.status)process.exit(setup.status??1);
+spawnSync('docker',['image','prune','-f'],{stdio:'ignore'});spawnSync('docker',['builder','prune','-f','--filter','until=1h'],{stdio:'ignore'});
 console.log(`Reinicie o gateway: systemctl --user restart agent-control-gateway-${name}`);
