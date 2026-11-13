@@ -3,6 +3,7 @@ import {z} from 'zod';
 import type pg from 'pg';
 import {Authority,Id,Refusal,digest} from './contracts.ts';
 import {Ledger} from './ledger.ts';
+import {isRepeatablePersonalNotice,suppressRepeatedPersonalNotice,type PersonalNoticeInput} from './personal-notice.ts';
 
 export const NotificationPolicy=z.object({completionWindowMs:z.number().int().min(0).max(30000).default(2000),
  maxBatchSize:z.number().int().min(1).max(100).default(20),maxDeliveriesPerTick:z.number().int().min(1).max(100).default(50)}).strict();
@@ -113,10 +114,22 @@ export class Notifications{
     ORDER BY CASE WHEN n.kind='blocker' THEN 0 ELSE 1 END,n.created_at,n.id LIMIT $3 FOR UPDATE OF n`,[authority.contextId,sessionId,this.policy.maxBatchSize*2])).rows;
    let messages=0,observations=0;
    const notes:{localId:string;text:string}[]=[];
+   let recent:PersonalNoticeInput['recent']|undefined;
    for(const type of ['blocker','completion'] as const){
     const group=items.filter(item=>item.kind===type).slice(0,this.policy.maxBatchSize);if(!group.length)continue;
     const localId='notice-'+randomUUID(),id=authority.contextId+'|'+localId;
     const text=(type==='completion'?`Atualização agrupada — ${group.length} conclusão(ões):`:`Atenção — ${group.length} bloqueio(s):`)+'\n'+group.map(item=>'- '+line(item)).join('\n');
+    if(isRepeatablePersonalNotice(text,localId)){
+     if(!recent)recent=(await c.query(`SELECT text, (extract(epoch FROM (clock_timestamp()-created_at))*1000)::float8 AS age_ms
+      FROM ac_personal_messages WHERE context_id=$1 AND role='manager' AND created_at>=clock_timestamp()-interval '10 minutes'`,[authority.contextId])).rows
+      .map(row=>({text:String(row.text??''),ageMs:Number(row.age_ms)}));
+     if(suppressRepeatedPersonalNotice({text,localId,recent})){
+      await c.query('UPDATE ac_notification_items SET superseded=true WHERE id=ANY($1::text[]) AND message_id IS NULL AND local_message_id IS NULL',[group.map(item=>item.id)]);
+      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'notifications.suppressed',$2)",[authority.contextId,{kind:type,count:group.length,epoch:authority.epoch}]);
+      console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED',text}));
+      continue;
+     }
+    }
     await c.query(`INSERT INTO ac_personal_messages(id,context_id,role,text,local_id,accepted) VALUES($1,$2,'manager',$3,$4,true)`,[id,authority.contextId,text,localId]);
     await c.query('UPDATE ac_notification_items SET local_message_id=$2 WHERE id=ANY($1::text[]) AND message_id IS NULL AND local_message_id IS NULL',[group.map(item=>item.id),id]);
     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'notifications.batched',$2)",[authority.contextId,{kind:type,count:group.length,messageId:id,epoch:authority.epoch}]);
