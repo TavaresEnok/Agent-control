@@ -1,0 +1,175 @@
+import {spawn} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
+import {chmod, readFile, rename, writeFile} from 'node:fs/promises';
+import {basename, dirname, join, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {Refusal} from './contracts.ts';
+import {loadInstallation, type Installation} from './installation.ts';
+import {deliverPersonalPush} from './personal-push.ts';
+
+const hourMs=60*60*1000;
+const imageId=/^sha256:[a-f0-9]{64}$/;
+
+export const gatewayDownNotice='Agent Control fora do ar no servidor.';
+export const gatewayUpNotice='Agent Control voltou.';
+export const imagesRebuiltNotice='Imagens do Agent Control reconstruídas.';
+
+type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null};
+export type PersonalWatchDeps={
+ now?:()=>Date;
+ probe?:(url:string)=>Promise<boolean>;
+ notify?:(dataDirectory:string,body:string)=>Promise<void>;
+ images?:(config:Installation)=>readonly string[];
+ inspectImage?:(image:string)=>Promise<boolean>;
+ rebuildImages?:(installationFile:string)=>Promise<void>;
+ restartGateway?:(unit:string)=>Promise<void>;
+};
+
+const emptyState=():WatchState=>({consecutiveFailures:0,downNotified:false,lastImageRebuildAt:null});
+
+export function personalServiceName(installationFile:string){
+ const name=basename(dirname(resolve(installationFile))).replace(/[^A-Za-z0-9_-]/g,'-');
+ if(!name)throw new Refusal('INVALID_SERVICE_NAME');
+ return name;
+}
+
+/** Current planning, worker, tools and QA images. Retired digests are not required. */
+export function personalWatchImages(config:Installation):string[]{
+ const boot=config.nativeBootstrap;
+ if(!boot||boot.state==='disabled'||boot.state==='bench')return [];
+ return [...new Set([boot.planning.imageId,boot.execution.workerImage,boot.execution.toolsImage,boot.qa.image])];
+}
+
+function parseState(value:unknown):WatchState{
+ if(!value||typeof value!=='object')return emptyState();
+ const row=value as Record<string,unknown>;
+ const failures=row.consecutiveFailures;
+ const down=row.downNotified;
+ const at=row.lastImageRebuildAt;
+ if(typeof failures!=='number'||!Number.isInteger(failures)||failures<0||failures>1_000_000)return emptyState();
+ if(typeof down!=='boolean')return emptyState();
+ if(at!==null&&(typeof at!=='string'||Number.isNaN(Date.parse(at))))return emptyState();
+ return {consecutiveFailures:failures,downNotified:down,lastImageRebuildAt:at};
+}
+
+async function readState(path:string){
+ let text:string;
+ try{text=await readFile(path,'utf8');}
+ catch(error){
+  if((error as NodeJS.ErrnoException).code==='ENOENT')return emptyState();
+  throw error;
+ }
+ try{return parseState(JSON.parse(text) as unknown);}
+ catch{return emptyState();}
+}
+
+async function writeState(path:string,state:WatchState){
+ const temporary=`${path}.${randomUUID()}.tmp`;
+ await writeFile(temporary,JSON.stringify(state)+'\n',{mode:0o600,flag:'wx'});
+ await chmod(temporary,0o600);
+ await rename(temporary,path);
+ await chmod(path,0o600);
+}
+
+async function defaultProbe(url:string){
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),5000);
+ try{
+  const response=await fetch(url,{signal:controller.signal,redirect:'manual'});
+  return response.status>=200&&response.status<300;
+ }catch{return false;}
+ finally{clearTimeout(timer);}
+}
+
+/** Direct Web Push. The gateway is not on this path, so a down gateway can still notify. */
+async function defaultNotify(dataDirectory:string,body:string){
+ await deliverPersonalPush(dataDirectory,{messageId:'watch-'+randomUUID(),title:'Agent Control',body,url:'/'});
+}
+
+function runCommand(command:string,args:string[],timeout:number,inherit:boolean,cwd?:string,env?:NodeJS.ProcessEnv){
+ return new Promise<void>((resolvePromise,reject)=>{
+  const child=spawn(command,args,{cwd,env,stdio:inherit?'inherit':'ignore'});
+  const timer=setTimeout(()=>{child.kill();reject(new Error('TIMEOUT'));},timeout);
+  child.on('error',error=>{clearTimeout(timer);reject(error);});
+  child.on('close',code=>{clearTimeout(timer);if(code===0)resolvePromise();else reject(new Error(String(code??1)));});
+ });
+}
+
+async function defaultInspect(image:string){
+ if(!imageId.test(image))return false;
+ try{await runCommand('docker',['image','inspect','--type','image',image],30_000,false);return true;}
+ catch{return false;}
+}
+
+async function defaultRebuild(installationFile:string){
+ const root=fileURLToPath(new URL('..',import.meta.url));
+ await runCommand('npm',['run','personal:images','--',installationFile],60*60*1000,true,root,process.env);
+}
+
+async function defaultRestart(unit:string){
+ if(!/^agent-control-gateway-[A-Za-z0-9_-]+$/.test(unit))throw new Error('INVALID_GATEWAY_UNIT');
+ await runCommand('systemctl',['--user','restart',unit],120_000,true);
+}
+
+function due(at:string|null,now:Date){
+ if(!at)return true;
+ const then=Date.parse(at);
+ if(Number.isNaN(then))return true;
+ return now.getTime()-then>=hourMs;
+}
+
+/** One check. Two health failures notify; recovery notifies once. At most one image rebuild per hour. */
+export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
+ const [installationArg]=argv;
+ if(!installationArg||installationArg.startsWith('--')||argv.length!==1)throw new Refusal('WATCH_USAGE');
+ const installationFile=resolve(installationArg);
+ const config=await loadInstallation(installationFile);
+ if(config.activation!=='personal')throw new Refusal('WATCH_PERSONAL_REQUIRED');
+ const now=(deps.now??(()=>new Date()))();
+ const probe=deps.probe??defaultProbe;
+ const notify=deps.notify??defaultNotify;
+ const inspect=deps.inspectImage??defaultInspect;
+ const rebuild=deps.rebuildImages??defaultRebuild;
+ const restart=deps.restartGateway??defaultRestart;
+ const statePath=join(config.dataDirectory,'watch-state.json');
+ const state=await readState(statePath);
+ const up=await probe(`http://127.0.0.1:${config.http.port}/api/v1/ac/health`);
+ let healthNotice:string|null=null;
+ if(up){
+  if(state.downNotified)healthNotice=gatewayUpNotice;
+  state.consecutiveFailures=0;
+  state.downNotified=healthNotice?false:state.downNotified;
+ }else{
+  state.consecutiveFailures+=1;
+  if(state.consecutiveFailures>=2&&!state.downNotified)healthNotice=gatewayDownNotice;
+ }
+ if(healthNotice===gatewayDownNotice)state.downNotified=true;
+ if(healthNotice===gatewayUpNotice)state.downNotified=false;
+ if(healthNotice)await notify(config.dataDirectory,healthNotice);
+ await writeState(statePath,state);
+ const wanted=(deps.images??personalWatchImages)(config).filter(image=>imageId.test(image));
+ let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok';
+ if(wanted.length>0){
+  let missing=false;
+  for(const image of wanted){
+   let present=false;
+   try{present=await inspect(image);}catch{present=false;}
+   if(!present)missing=true;
+  }
+  if(!missing)imageStatus='ok';
+  else if(!due(state.lastImageRebuildAt,now))imageStatus='skipped';
+  else{
+   state.lastImageRebuildAt=now.toISOString();
+   await writeState(statePath,state);
+   try{
+    await rebuild(installationFile);
+    await restart(`agent-control-gateway-${personalServiceName(installationFile)}`);
+    try{await notify(config.dataDirectory,imagesRebuiltNotice);}catch{/* rebuild already happened */}
+    imageStatus='rebuilt';
+   }catch{imageStatus='failed';}
+  }
+ }
+ const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':''].filter(Boolean);
+ const notice=tags.length?` notice=${tags.join('+')}`:'';
+ return `watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${notice}`;
+}
