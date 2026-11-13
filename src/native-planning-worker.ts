@@ -1,12 +1,14 @@
 import {constants} from 'node:fs';
 import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
+import {codexPersonalCommand,runCodexExec} from './codex-personal.ts';
 import {initializeNativeWorkerEnvironment,readSignedWorkerLaunch,assertCodexSubscriptionIdentity} from './native-worker-security.ts';
 import {CodexPlanningAdapter,CodexPlanningFailure} from './codex-planning-adapter.ts';
 import {ClaudePlanningAdapter,ClaudePlanningFailure} from './claude-planning-adapter.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {Effort} from './effort.ts';
+import type {UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 const UUID=z.uuid();
 const Launch=z.object({schemaVersion:z.literal(1),callId:UUID,contextId:UUID,intentId:UUID,grantId:UUID,accountId:UUID,profileId:UUID,sessionId:UUID,
  epoch:z.number().int().positive(),proxyUrl:z.literal('http://provider-egress:8080').optional(),providerSubjectDigest:z.string().regex(/^[a-f0-9]{64}$/),executorDigest:z.string().regex(/^[a-f0-9]{64}$/),inputDigest:z.string().regex(/^[a-f0-9]{64}$/),
@@ -25,14 +27,22 @@ async function main(){
  if(input.constraints.contextId!==input.contextId||input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_PLANNING_DIRECTORY');
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
- let result:Awaited<ReturnType<CodexPlanningAdapter['generate']>>|undefined,failure:string|null=null;let failedUsage:CodexPlanningFailure|ClaudePlanningFailure|undefined;
+ let result:{output:string;tokensUsed:number|null;usageWindows:UsageWindowsObservation|null;sessionId:string}|undefined,failure:string|null=null;let failedUsage:CodexPlanningFailure|ClaudePlanningFailure|undefined;
  try{
+  if(input.provider==='codex'){
+   process.env.CODEX_HOME='/account/.codex';
+   const command=codexPersonalCommand({role:'planning',model:input.model,effort:input.effort,prompt:JSON.stringify({request:input.text,sourceMessageRef:input.sourceMessageRef,authorized:input.constraints}),outputSchema:input.outputSchema});
+   const ran=await runCodexExec({args:command.args,timeoutMs:120000,signal:abort.signal,cwd:'/tmp',kind:'planning',json:true});
+   if(ran.failureCode)failure=ran.failureCode;
+   result={output:ran.failureCode?'':ran.output,tokensUsed:null,usageWindows:ran.usageWindows,sessionId:input.sessionId};
+  }else{
   const adapter=input.provider==='claude'
    ?new ClaudePlanningAdapter(new ClaudeCliRunner({bin:'/usr/local/bin/claude',timeoutMs:120000}))
    :new CodexPlanningAdapter(new CodexAppServerRunner({bin:'/usr/local/bin/codex',timeoutMs:120000}));
   if(input.provider!=='claude')await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
   result=await adapter.generate({sessionId:input.sessionId,model:input.model,effort:input.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,
    constraints:input.constraints,outputSchema:input.outputSchema,timeoutMs:120000},async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal);
+  }
  }catch(error){if(error instanceof CodexPlanningFailure||error instanceof ClaudePlanningFailure){failedUsage=error;failure=error.code;}else failure='PLANNING_EXECUTION_FAILED';}
  const output=await open('/output/planning-result.json',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
  const usage=result?.usageWindows??failedUsage?.usageWindows??null;

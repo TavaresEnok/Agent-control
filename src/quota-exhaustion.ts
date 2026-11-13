@@ -28,6 +28,9 @@ function readReset(text:string,now:number){
 }
 
 function isClaudeLimitText(text:string){return CLAUDE_MARKER.test(text)||LIMIT_PHRASE.test(text)||(/\blimit\b/i.test(text)&&RESET_AT.test(text));}
+/** Phrases `codex exec` prints when the ChatGPT allowance is spent. */
+const CODEX_LIMIT=/you(?:'|’)ve hit your usage limit|\bcodex\b[^\n]{0,48}\busage\s+limit\b|\busage_limit_reached\b/i;
+function isCodexLimitText(text:string){return CODEX_LIMIT.test(text)||LIMIT_PHRASE.test(text)||(/\blimit\b/i.test(text)&&RESET_AT.test(text));}
 
 /** Claude CLI limit text from a result, stderr tail, or error event. No reset means wait one hour. */
 export function claudeLimitFromText(texts:readonly (string|null|undefined)[],now=Date.now()):{failureCode:'PROVIDER_USAGE_LIMIT';usageWindows:UsageWindowsObservation|null}|null{
@@ -35,6 +38,15 @@ export function claudeLimitFromText(texts:readonly (string|null|undefined)[],now
  if(!text||!isClaudeLimitText(text))return null;
  const resetsAt=readReset(text,now);
  const usageWindows=resetsAt===null?null:{provider:'claude' as const,source:'claude-stream' as const,observedAt:now,windows:[{id:'terminal-limit',kind:'other' as const,applicability:'all' as const,models:[],resetsAt,durationMinutes:null,usedPercent:100,status:'blocked' as const,observedAt:now}]};
+ return {failureCode:'PROVIDER_USAGE_LIMIT',usageWindows};
+}
+
+/** Codex CLI limit text from stdout or stderr. No reset means wait one hour. */
+export function codexLimitFromText(texts:readonly (string|null|undefined)[],now=Date.now()):{failureCode:'PROVIDER_USAGE_LIMIT';usageWindows:UsageWindowsObservation|null}|null{
+ const text=texts.filter((item):item is string=>typeof item==='string'&&item.trim().length>0).join('\n');
+ if(!text||!isCodexLimitText(text))return null;
+ const resetsAt=readReset(text,now);
+ const usageWindows=resetsAt===null?null:{provider:'codex' as const,source:'codex-notification' as const,observedAt:now,windows:[{id:'terminal-limit',kind:'other' as const,applicability:'all' as const,models:[],resetsAt,durationMinutes:null,usedPercent:100,status:'blocked' as const,observedAt:now}]};
  return {failureCode:'PROVIDER_USAGE_LIMIT',usageWindows};
 }
 

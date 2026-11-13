@@ -1,7 +1,8 @@
 import {execFile} from 'node:child_process';
 import {join} from 'node:path';
 import type {Ledger} from './ledger.ts';
-import {claudeLimitFromText,isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
+import {codexPersonalCommand} from './codex-personal.ts';
+import {claudeLimitFromText,codexLimitFromText,isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
 import {cliEffort,Effort} from './effort.ts';
 
 export type ManagerDecision={kind:'answer'|'plan';answer:string};
@@ -32,7 +33,7 @@ export function managerChatCommand(provider:string,model:string,effort:string,pr
  const mapped=cliEffort(provider,Effort.parse(effort));
  if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,'--model',model,'--effort',mapped,'--output-format','text']};
  if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd','/tmp','--no-plan','--always-approve']};
- return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account'],args:['exec','--skip-git-repo-check','--sandbox','read-only','--model',model,'-c','model_reasoning_effort='+mapped,'-C','/tmp',prompt]};
+ return codexPersonalCommand({role:'manager',model,effort,prompt});
 }
 
 /**
@@ -69,7 +70,7 @@ export class PersonalManagerChat{
   const prompt=PROMPT+'\n\nContexto do repositório:\n'+repositoryContext.slice(0,20000)+'\n\nMensagem:\n'+message.slice(0,20000);
   for(const profile of await this.profiles()){
    const result=await this.run(profile,prompt);
-   const limit=profile.provider==='claude'?claudeLimitFromText([result.stdout,result.stderr]):null;
+   const limit=profile.provider==='claude'?claudeLimitFromText([result.stdout,result.stderr]):profile.provider==='codex'?codexLimitFromText([result.stdout,result.stderr]):null;
    if(limit){await noteProviderExhaustion(this.ledger,profile.accountId,limit.usageWindows).catch(()=>{});continue;}
    if(result.code===0&&result.stdout.trim())return parseManagerDecision(result.stdout);
    if(isProviderLimit(result.stderr)||isProviderLimit(result.stdout)||/usage limit|rate limit|quota/i.test(result.stderr))

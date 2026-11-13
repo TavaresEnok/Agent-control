@@ -2,15 +2,17 @@ import {constants} from 'node:fs';
 import {waitForNativeLaunch} from './native-worker-gate.ts';
 import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
+import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from './codex-personal.ts';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
-import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
+import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {CodexExecutionAdapter,CodexExecutionFailure} from './codex-execution-adapter.ts';
 import {ClaudeExecutionAdapter,ClaudeExecutionFailure} from './claude-execution-adapter.ts';
 import {GrokExecutionFailure,runGrokProgrammer} from './grok-execution-adapter.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {Effort} from './effort.ts';
+import type {UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 const UUID=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,intentId:UUID,grantId:UUID,accountId:UUID,profileId:UUID,sessionId:UUID,
  epoch:z.number().int().positive(),providerSubjectDigest:Hash,credentialSnapshotTag:Hash,executorDigest:Hash,inputDigest:Hash,proxyUrl:z.literal('http://provider-egress:8080'),
@@ -27,18 +29,22 @@ async function main(){
  await waitForNativeLaunch();
  const input=await readSignedWorkerLaunch(Launch,'agent-control:native-execution-launch:v1','/input/launch.json','/runner/execution-public-key.pem');
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
- initializeNativeWorkerEnvironment(input.provider==='grok'||input.provider==='claude'?undefined:input.proxyUrl);
- const identified=input.provider==='claude'||input.provider==='grok'?null:await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
+ const personalCli=input.provider==='claude'||input.provider==='grok'||input.provider==='codex';
+ initializeNativeWorkerEnvironment(personalCli?undefined:input.proxyUrl);
+ const identified=codexWorkerAssertsSubscriptionIdentity(input.provider)?await assertCodexSubscriptionIdentity(input.providerSubjectDigest):null;
  const secrets=identified?.secrets??await readMountedCredentialSecrets(input.provider??'codex');
  const account=identified??{secrets,accessToken:'',accountId:input.accountId};
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_WORKER_DIRECTORY');
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;
  try{token=capability.toString('utf8').trim();if(!/^[A-Za-z0-9._~-]{32,512}$/.test(token))throw Error('INVALID_TOOL_CAPABILITY');}finally{capability.fill(0);}
- const home=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
- if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
+ if(input.provider==='codex')process.env.CODEX_HOME='/account/.codex';
+ else{
+  const home=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
+  if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
+ }
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
- let result:Awaited<ReturnType<CodexExecutionAdapter['run']>>|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
+ let result:{output:string;tokensUsed:number|null;usageWindows:UsageWindowsObservation|null;nativeSessionId:string|null}|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
  try{
   const request={sessionId:input.sessionId,model:input.model,effort:input.effort,role:input.role,task:input.task,writePaths:input.writePaths,
    artifactCommit:input.artifactCommit,outputSchema:input.outputSchema,timeoutMs:input.timeoutMs,
@@ -48,6 +54,12 @@ async function main(){
   }else if(input.provider==='claude'){
    const adapter=new ClaudeExecutionAdapter(new ClaudeCliRunner({bin:'/usr/local/bin/claude',timeoutMs:input.timeoutMs}));
    result=await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)]);
+  }else if(input.provider==='codex'){
+   const command=codexPersonalCommand({role:input.role,model:input.model,effort:input.effort,prompt:input.task,outputSchema:input.outputSchema});
+   const ran=await runCodexExec({args:command.args,timeoutMs:input.timeoutMs,signal:abort.signal,cwd:command.args.includes('-C')?String(command.args[command.args.indexOf('-C')+1]):'/work',kind:'execution',json:input.role!=='programmer'});
+   const output=redactSecrets(ran.output,[...account.secrets,...collectSecretValues(process.env)]);
+   if(ran.failureCode){failure=ran.failureCode;result={output:'',tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null};}
+   else result={output,tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null};
   }else{
    const adapter=new CodexExecutionAdapter(new CodexAppServerRunner({bin:'/usr/local/bin/codex',timeoutMs:input.timeoutMs}));
    result=await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)],{accessToken:account.accessToken,accountId:account.accountId,planType:null});

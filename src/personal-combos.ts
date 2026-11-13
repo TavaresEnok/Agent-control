@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {chmod,mkdir,readFile,rename,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,readFile,rename,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {z} from 'zod';
 import {Capacity,CapacityPolicy,type Role} from './capacity.ts';
@@ -174,6 +174,12 @@ export function describeAppliedCombo(applied:AppliedCombo){
 
 const accountRequired=(provider:string)=>provider==='codex'?'CODEX_ACCOUNT_REQUIRED':provider==='claude'?'CLAUDE_ACCOUNT_REQUIRED':provider==='grok'?'GROK_ACCOUNT_REQUIRED':'PROVIDER_ACCOUNT_REQUIRED';
 
+/** A real Codex account is logged in only when `.codex/auth.json` is on its home. */
+export async function requireCodexAuthFile(accountHome:string){
+ let info;try{info=await lstat(join(accountHome,'.codex','auth.json'));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Refusal('CODEX_LOGIN_REQUIRED');throw error;}
+ if(!info.isFile())throw new Refusal('CODEX_LOGIN_REQUIRED');
+}
+
 /** Profile ids named by a capacity snapshot, including emergency and programmer-tier reserves. */
 function snapshotProfileIds(snapshot:unknown):string[]{
  const parsed=CapacityPolicy.safeParse(snapshot);
@@ -204,12 +210,21 @@ export async function applyPersonalCombo(ledger:Ledger,owner:string,projectId:st
   await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE',[projectId]);
   const membership=await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[projectId,owner]);
   if(!membership.rowCount)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
-  const accountRows=(await c.query(`SELECT a.id,a.provider FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
+  const accountRows=(await c.query(`SELECT a.id,a.provider,a.mode FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id
    WHERE x.project_id=$1 AND a.owner_id=$2 AND a.enabled ORDER BY a.id`,[projectId,owner])).rows;
   const accounts=new Map<string,string>();
   for(const row of accountRows)if(!accounts.has(String(row.provider)))accounts.set(String(row.provider),String(row.id));
   for(const provider of ['claude','grok','codex'] as const)
    if(uses.some(use=>use.slot.provider===provider||use.slot.reserve?.provider===provider)&&!accounts.has(provider))throw new Refusal(accountRequired(provider));
+  if(uses.some(use=>use.slot.provider==='codex'||use.slot.reserve?.provider==='codex')){
+   const accountId=accounts.get('codex')!;
+   const mode=String(accountRows.find(row=>String(row.id)===accountId)?.mode??'');
+   if(mode==='subscription_cli'){
+    const home=(await c.query('SELECT root_path FROM ac_account_homes WHERE account_id=$1',[accountId])).rows[0];
+    if(typeof home?.root_path!=='string')throw new Refusal('CODEX_LOGIN_REQUIRED');
+    await requireCodexAuthFile(join(home.root_path,accountId));
+   }
+  }
   const seenModels=new Set<string>();
   for(const use of uses)for(const [provider,model] of modelsOf(use.slot)){
    const key=provider+'\0'+model;

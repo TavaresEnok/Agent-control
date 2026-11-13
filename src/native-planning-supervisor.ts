@@ -85,7 +85,7 @@ export class NativePlanningSupervisor{
   await this.privateDirectory(this.config.hostRoot);const paths=this.paths(input.callId);
   const launch={schemaVersion:1,callId:input.callId,contextId:input.contextId,intentId:input.intentId,grantId:input.grantId,accountId:input.profile.accountId,profileId:input.profile.id,sessionId:input.sessionId,
    epoch:input.executionEpoch,...(await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount?{}:{proxyUrl:'http://provider-egress:8080' as const},providerSubjectDigest:identity.subjectDigest,executorDigest:this.config.executorDigest,inputDigest:input.inputDigest,
-   model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(provider!=='codex'?{provider}:{})};
+   model:input.profile.model,effort:input.profile.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,constraints:{contextId:input.contextId,...input.constraints},outputSchema:input.outputSchema,expiresAt:Date.now()+60000,...(personal&&!this.config.syntheticFixture?{provider}:provider!=='codex'?{provider}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   const name='ac-native-plan-'+input.callId,launchDigest=digest(launch);
   await this.ledger.tx(async c=>{

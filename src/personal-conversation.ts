@@ -13,6 +13,7 @@ export function personalComboRequest(text:string):string|null{
 }
 export function personalComboRefusal(code:string){
  if(code==='CODEX_ACCOUNT_REQUIRED')return 'Falta uma conta Codex ativa. Nada foi alterado.';
+ if(code==='CODEX_LOGIN_REQUIRED')return 'Falta o login do Codex nessa conta (.codex/auth.json). Nada foi alterado.';
  if(code==='CLAUDE_ACCOUNT_REQUIRED')return 'Falta uma conta Claude ativa. Nada foi alterado.';
  if(code==='GROK_ACCOUNT_REQUIRED')return 'Falta uma conta Grok ativa. Nada foi alterado.';
  if(code==='COMBO_NOT_FOUND')return 'Combo não encontrado. Nada foi alterado.';
