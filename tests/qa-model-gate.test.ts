@@ -58,3 +58,9 @@ test('the QA model request carries the diff, the owner request and the test tail
  const header=Buffer.alloc(8);header[0]=1;const payload=Buffer.from('line-1\nline-2\n');header.writeUInt32BE(payload.length,4);
  assert.equal(qaLogTail(Buffer.concat([header,payload])), 'line-1\nline-2\n');
 });
+
+test('the QA model judges one task by the files it touches, not the whole plan',()=>{
+ assert.match(QA_MODEL_INSTRUCTION,/whole plan/);
+ assert.match(QA_MODEL_INSTRUCTION,/only for the files it touches/);
+ assert.match(QA_MODEL_INSTRUCTION,/never reject because another part of the plan is absent/);
+});

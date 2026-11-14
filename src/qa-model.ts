@@ -7,7 +7,7 @@ import {NativeReviewVerdict,nativeReviewOutputSchema} from './native-review-cont
 export function qaModelShouldRun(scriptStatus:string|undefined,qaModel:boolean|undefined){
  return scriptStatus==='passed'&&qaModel===true;
 }
-export const QA_MODEL_INSTRUCTION='You are the QA model. The script runner already finished. Read the diff, ownerRequest and testTail. Reject when the change should have a test and does not, or when the test does not really test the change. Return only the reviewer verdict JSON with verdict pass or reject. Do not change files or claim that you executed the tests.';
+export const QA_MODEL_INSTRUCTION='You are the QA model. The script runner already finished. Read the diff, ownerRequest and testTail. ownerRequest holds the exact words of the owner for the whole plan; this change may be only one of several independent tasks, so judge it only for the files it touches and never reject because another part of the plan is absent here. Reject when the change should have a test and does not, or when the test does not really test the change. Documentation or other text-only changes need no test. Return only the reviewer verdict JSON with verdict pass or reject. Do not change files or claim that you executed the tests.';
 
 export function qaModelIds(scriptStageId:string){
  return {stageId:managedId(scriptStageId,'qa-model','stage'),sessionId:managedId(scriptStageId,'qa-model','session'),attemptId:managedId(scriptStageId,'qa-model','attempt')};
