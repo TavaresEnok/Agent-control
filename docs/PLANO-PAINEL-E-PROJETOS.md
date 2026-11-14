@@ -251,11 +251,26 @@ Como usar:
 - QA com 369 testes e depois com o modelo;
 - integração: `f550567` e `b846d86`.
 
-**Não provado ao vivo:**
+**Provado ao vivo no IspAgent com o complexo (14/11):**
 
-- a reserva assumindo com uma conta sem cota (só nos testes);
-- os combos complexo e economia;
-- a separação entre tarefas básicas e normais.
+- tarefas básicas para o Grok e a normal (ler o código) para o Sol;
+- revisor Opus 5.5;
+- QA com testes e depois o Grok;
+- composição integrada: `986c3c9`.
+
+Foram precisas seis tentativas. Cada falha mostrou um defeito, todos corrigidos com teste:
+
+1. **Falso limite do Codex.** A saída de um Codex que terminou bem era lida como "limite de uso": ele ecoa os arquivos que lê, e um teste do IspAgent menciona "rate limit". O limite agora só é procurado quando a execução falha, e só no fim da saída. A regra vale também para os adaptadores do Claude e para o chat do gerente.
+2. **Limite repetido.** Um limite batido de novo depois da liberação da conta religava a tarefa a cada 2 minutos. Agora volta a esperar.
+3. **Grok como avaliador.** O Grok não funcionava como revisor ou QA: abria `/work` e não devolvia o veredito em JSON.
+4. **Corrida no QA.** A rotina da etapa e a reconciliação de fundo criavam o mesmo contêiner de QA. A perdedora derrubava a etapa. Agora é uma reconciliação por vez por tarefa.
+5. **Escopo do QA com modelo.** O QA com modelo julgava cada tarefa pelo pedido inteiro. Agora julga só os arquivos que a tarefa toca, como o revisor.
+6. **Veredito ilegível.** Um veredito com JSON ilegível derrubava o plano. Agora o revisor ou o QA é chamado mais uma vez.
+
+**Pendente:**
+
+- **Veredito ilegível que sobrou.** Uma tarefa de revisão com veredito ilegível nunca se resolve na reconciliação. Ela repete o erro no registro do gateway, e, depois de uma reconstrução das imagens, também "supervisor indisponível". Hoje sobrou uma: o revisor `d766dbd8`, da 5.ª tentativa.
+- **Ainda não provado ao vivo:** a reserva assumindo com uma conta sem cota, que tem só os testes, e o combo economia.
 
 Correções que a prova exigiu:
 
