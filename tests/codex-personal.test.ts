@@ -4,9 +4,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity} from '../src/codex-personal.ts';
+import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from '../src/codex-personal.ts';
 import {requireCodexAuthFile} from '../src/personal-combos.ts';
-import {codexLimitFromText,isProviderLimit} from '../src/quota-exhaustion.ts';
+import {codexLimitFromText,isProviderLimit,providerLimitDisposition} from '../src/quota-exhaustion.ts';
 
 test('personal Codex skips the subscription assertion and locked Codex keeps it',()=>{
  assert.equal(codexWorkerAssertsSubscriptionIdentity('codex'),false);
@@ -58,4 +58,37 @@ test('a Codex combo login is the .codex/auth.json file',async()=>{
   await writeFile(join(dir,'.codex','auth.json'),'{}\n',{mode:0o600});
   await requireCodexAuthFile(dir);
  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('a Codex run that succeeds is never a limit, even when it read files that mention one',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ac-codex-run-'));
+ try{
+  const bin=join(dir,'codex');
+  // Mimics codex exec: the transcript on stderr echoes a test file about rate limits, then the answer on stdout.
+  await writeFile(bin,"#!/bin/sh\necho 'exec: cat failing-adapters.ts' >&2\necho \"throw new Error('rate limit exceeded; quota reached')\" >&2\necho 'Mapa criado.'\nexit \"${FAKE_EXIT:-0}\"\n",{mode:0o700});
+  const previous=process.env.CODEX_BIN;process.env.CODEX_BIN=bin;
+  try{
+   const ok=await runCodexExec({args:[],timeoutMs:10000,cwd:dir,kind:'execution'});
+   assert.equal(ok.failureCode,null);assert.match(ok.output,/Mapa criado/);
+   process.env.FAKE_EXIT='1';
+   const failed=await runCodexExec({args:[],timeoutMs:10000,cwd:dir,kind:'execution'});
+   assert.equal(failed.failureCode,'PROVIDER_USAGE_LIMIT');
+  }finally{delete process.env.FAKE_EXIT;if(previous===undefined)delete process.env.CODEX_BIN;else process.env.CODEX_BIN=previous;}
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('a limit hit again after the recorded reset waits again instead of restarting straight away',async()=>{
+ let until:Date|null=null;
+ const ledger={pool:{query:async(sql:string,params:any[])=>{
+  if(sql.startsWith('SELECT'))return {rows:[{exhausted_until:until}]};
+  const next=new Date(params[1]);if(!until||until<next)until=next;return {rows:[]};
+ }}} as any;
+ const start=Date.now();
+ assert.equal(await providerLimitDisposition(ledger,'a','PROVIDER_USAGE_LIMIT',null,start,start),'wait');
+ const reset=until!.getTime();
+ // After the reset, the same old observation lets the job run again.
+ assert.equal(await providerLimitDisposition(ledger,'a','PROVIDER_USAGE_LIMIT',null,reset+1000,start),'resume');
+ // The restarted job hits the limit again: that is a new limit, so it waits for a new reset.
+ assert.equal(await providerLimitDisposition(ledger,'a','PROVIDER_USAGE_LIMIT',null,reset+60000,reset+30000),'wait');
+ assert.equal(await providerLimitDisposition(ledger,'a',null,null,reset+60000,reset+30000),'seal');
 });

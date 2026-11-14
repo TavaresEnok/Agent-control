@@ -395,7 +395,7 @@ export class NativePlanningSupervisor{
   if(physical.State.Running||physical.State.Status==='created')return null;
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return null;
   const result=await this.terminalResult(input,physical.State.ExitCode);if(result.callId!==input.callId||result.exitCode!==physical.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('PLANNING_OUTPUT_INVALID');
-  const disposition=await providerLimitDisposition(this.ledger,input.profile.accountId,result.failureCode,result.usageWindows);
+  const disposition=await providerLimitDisposition(this.ledger,input.profile.accountId,result.failureCode,result.usageWindows,Date.now(),Date.parse(physical.State.FinishedAt));
   if(disposition==='wait')throw new Refusal('NO_ELIGIBLE_CAPACITY');
   if(disposition==='resume'){await this.resumePlanningContainer(input,physical.Id);return null;}
   const physicalReceipt={normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,nativeSessionId:result.nativeSessionId,jobId:input.callId,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,synthetic:Boolean(this.config.syntheticFixture),executorDigest:this.config.executorDigest};

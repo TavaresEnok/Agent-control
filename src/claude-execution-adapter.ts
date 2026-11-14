@@ -60,7 +60,7 @@ export class ClaudeExecutionAdapter{
    if(signal?.aborted)stop();
    const result=await Promise.race([session.result,stopped]);
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
-   const limit=claudeLimitFromText([providerText,result.text]);
+   const limit=failed||!completed?claudeLimitFromText([providerText,result.text]):null;
    if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
    if(failed||!completed)throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
    const extracted=input.outputSchema?extractJsonObject(result.text):undefined;

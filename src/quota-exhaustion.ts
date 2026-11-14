@@ -95,14 +95,17 @@ export async function noteProviderExhaustion(ledger:Ledger,accountId:string,usag
  await ledger.pool.query('UPDATE ac_accounts SET exhausted_until=$2 WHERE id=$1 AND (exhausted_until IS NULL OR exhausted_until<$2)',[accountId,until.toISOString()]);
 }
 
-/** A provider limit waits until the recorded reset, then the same job may run again. */
-export async function providerLimitDisposition(ledger:Ledger,accountId:string,failureCode:string|null|undefined,usage:unknown,now=Date.now()):Promise<'seal'|'wait'|'resume'>{
+/** A provider limit waits until the recorded reset, then the same job may run again.
+ * `observedAt` is when the job hit the limit (the container's finish time). A limit hit after the recorded
+ * reset is a new one, so it waits again instead of restarting the job straight into the same limit. */
+export async function providerLimitDisposition(ledger:Ledger,accountId:string,failureCode:string|null|undefined,usage:unknown,now=Date.now(),observedAt?:number):Promise<'seal'|'wait'|'resume'>{
  if(!isProviderLimit(failureCode))return 'seal';
  const row=(await ledger.pool.query('SELECT exhausted_until FROM ac_accounts WHERE id=$1',[accountId])).rows[0];
  const current=row?.exhausted_until?new Date(row.exhausted_until).getTime():0;
  const future=futureResetMs(usage,now);
  if(future!==null&&(!current||current+1000<future)){await noteProviderExhaustion(ledger,accountId,usage);return 'wait';}
  if(!current){await noteProviderExhaustion(ledger,accountId,usage);return 'wait';}
+ if(observedAt!==undefined&&Number.isFinite(observedAt)&&observedAt>current){await noteProviderExhaustion(ledger,accountId,usage);return 'wait';}
  if(current>now)return 'wait';
  return 'resume';
 }

@@ -113,6 +113,8 @@ test('a claude planning limit exhausts the account and the stage waits without f
   await writeFile(join(root,'input','launch.json'),JSON.stringify({payload,signature:sign(null,Buffer.from('agent-control:native-planning-launch:v1\n'+canonical(payload)),keys.privateKey).toString('hex')}),{mode:0o600});
   await writeFile(join(root,'output','planning-result.json'),JSON.stringify({schemaVersion:1,callId:call,output:'',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:'PROVIDER_USAGE_LIMIT',exitCode:1}),{mode:0o600});
   await db.pool.query("UPDATE ac_accounts SET exhausted_until=clock_timestamp()-interval '1 minute' WHERE id=$1",[account]);
+  // The job hit the limit before the recorded reset; only a limit seen after the reset would wait again.
+  physical.State={...physical.State,FinishedAt:new Date(Date.now()-120000).toISOString()};
   assert.equal(await code(planning.plan(principal,request,authority)),'PLANNING_RESULT_UNCERTAIN');
   assert.equal(starts,1);
   assert.equal((await db.pool.query('SELECT state,failure_code FROM ac_semantic_planning_calls WHERE id=$1',[call])).rows[0].state,'uncertain');

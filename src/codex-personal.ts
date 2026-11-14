@@ -60,7 +60,9 @@ export async function runCodexExec(input:{args:readonly string[];timeoutMs:numbe
  const failCode=input.kind==='planning'?'PLANNING_NATIVE_EXECUTION_FAILED':'EXECUTION_NATIVE_FAILED';
  let code=1,failed=false;
  try{code=await timed;}catch(error){failed=true;code=1;if((error as Error).message==='TIMEOUT')timedOut=true;else if((error as Error).message!=='CANCELED')failed=true;}
- const limit=codexLimitFromText([stdout,stderr]);
+ // The stderr transcript echoes every file Codex reads, so a successful run must never be read as a limit,
+ // and a failed one is judged only by the end of its output.
+ const limit=failed||code!==0?codexLimitFromText([stdout.slice(-4000),stderr.slice(-4000)]):null;
  if(limit)return {output:'',failureCode:limit.failureCode,usageWindows:limit.usageWindows};
  if(input.signal?.aborted)return {output:'',failureCode:cancelCode,usageWindows:null};
  if(timedOut)return {output:'',failureCode:timeoutCode,usageWindows:null};

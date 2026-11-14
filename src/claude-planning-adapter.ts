@@ -74,7 +74,7 @@ export class ClaudePlanningAdapter{
    if(signal?.aborted)stop();
    const result=await Promise.race([session.result,stopped]);
    if(timedOut)throw new Refusal('PLANNING_TIMEOUT');if(signal?.aborted)throw new Refusal('PLANNING_CANCELED');
-   const limit=claudeLimitFromText([providerText,result.text]);
+   const limit=failedTurn||!completedTurn?claudeLimitFromText([providerText,result.text]):null;
    if(limit)throw new ClaudePlanningFailure(limit.failureCode,observedTokens,preferredLimitUsage(usage,limit.usageWindows));
    if(failedTurn||!completedTurn||result.toolCalls.length>0)throw new Refusal('PLANNING_NATIVE_TURN_FAILED');
    if(Buffer.byteLength(result.text)>256*1024)throw new Refusal('PLANNING_OUTPUT_TOO_LARGE');

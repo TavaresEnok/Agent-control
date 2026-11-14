@@ -598,7 +598,7 @@ export class NativeExecutionSupervisor{
   if(tools.State.Status!=='exited'||[worker,tools].some(p=>!Number.isFinite(Date.parse(p.State.FinishedAt))||p.State.FinishedAt.startsWith('0001-')))return {state:'uncertain' as const};
   const result=await this.readResult(input,worker.State.ExitCode);
   if(result.jobId!==input.jobId||result.exitCode!==worker.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-  const disposition=await providerLimitDisposition(this.ledger,job.account_id,result.failureCode,result.usageWindows);
+  const disposition=await providerLimitDisposition(this.ledger,job.account_id,result.failureCode,result.usageWindows,Date.now(),Date.parse(worker.State.FinishedAt));
   if(disposition==='wait')return {state:'running' as const};
   if(disposition==='resume'){await this.resumeExecutionContainers(input.jobId,worker.Id,tools.Id);return {state:'running' as const};}
   const cancellation=(await this.ledger.pool.query("SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND state='requested'",[input.intentId])).rowCount;

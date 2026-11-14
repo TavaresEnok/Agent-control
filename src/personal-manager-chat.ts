@@ -70,10 +70,12 @@ export class PersonalManagerChat{
   const prompt=PROMPT+'\n\nContexto do repositório:\n'+repositoryContext.slice(0,20000)+'\n\nMensagem:\n'+message.slice(0,20000);
   for(const profile of await this.profiles()){
    const result=await this.run(profile,prompt);
-   const limit=profile.provider==='claude'?claudeLimitFromText([result.stdout,result.stderr]):profile.provider==='codex'?codexLimitFromText([result.stdout,result.stderr]):null;
+   const ok=result.code===0&&Boolean(result.stdout.trim());
+   const tails=[result.stdout.slice(-4000),result.stderr.slice(-4000)];
+   const limit=ok?null:profile.provider==='claude'?claudeLimitFromText(tails):profile.provider==='codex'?codexLimitFromText(tails):null;
    if(limit){await noteProviderExhaustion(this.ledger,profile.accountId,limit.usageWindows).catch(()=>{});continue;}
-   if(result.code===0&&result.stdout.trim())return parseManagerDecision(result.stdout);
-   if(isProviderLimit(result.stderr)||isProviderLimit(result.stdout)||/usage limit|rate limit|quota/i.test(result.stderr))
+   if(ok)return parseManagerDecision(result.stdout);
+   if(isProviderLimit(tails[1])||isProviderLimit(tails[0])||/usage limit|rate limit|quota/i.test(tails[1]))
     await noteProviderExhaustion(this.ledger,profile.accountId).catch(()=>{});
   }
   return null;
