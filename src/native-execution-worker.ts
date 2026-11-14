@@ -9,6 +9,7 @@ import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/ceza
 import {CodexExecutionAdapter,CodexExecutionFailure} from './codex-execution-adapter.ts';
 import {ClaudeExecutionAdapter,ClaudeExecutionFailure} from './claude-execution-adapter.ts';
 import {GrokExecutionFailure,runGrokProgrammer} from './grok-execution-adapter.ts';
+import {runWithVerdictRetry} from './evaluator-output.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {Effort} from './effort.ts';
@@ -49,21 +50,27 @@ async function main(){
   const request={sessionId:input.sessionId,model:input.model,effort:input.effort,role:input.role,task:input.task,writePaths:input.writePaths,
    artifactCommit:input.artifactCommit,outputSchema:input.outputSchema,timeoutMs:input.timeoutMs,
    environment:{id:input.environmentId,url:'ws://127.0.0.1:19492' as const,authBearerToken:token,cwd:'/work' as const}};
+  const runOnce=async():Promise<{result:NonNullable<typeof result>;failure:string|null}>=>{
   if(input.provider==='grok'){
-   result=await runGrokProgrammer(request,abort.signal);
+   return {result:await runGrokProgrammer(request,abort.signal),failure:null};
   }else if(input.provider==='claude'){
    const adapter=new ClaudeExecutionAdapter(new ClaudeCliRunner({bin:'/usr/local/bin/claude',timeoutMs:input.timeoutMs}));
-   result=await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)]);
+   return {result:await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)]),failure:null};
   }else if(input.provider==='codex'){
    const command=codexPersonalCommand({role:input.role,model:input.model,effort:input.effort,prompt:input.task,outputSchema:input.outputSchema});
    const ran=await runCodexExec({args:command.args,timeoutMs:input.timeoutMs,signal:abort.signal,cwd:command.args.includes('-C')?String(command.args[command.args.indexOf('-C')+1]):'/work',kind:'execution',json:input.role!=='programmer'});
    const output=redactSecrets(ran.output,[...account.secrets,...collectSecretValues(process.env)]);
-   if(ran.failureCode){failure=ran.failureCode;result={output:'',tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null};}
-   else result={output,tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null};
+   if(ran.failureCode)return {result:{output:'',tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null},failure:ran.failureCode};
+   return {result:{output,tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null},failure:null};
   }else{
    const adapter=new CodexExecutionAdapter(new CodexAppServerRunner({bin:'/usr/local/bin/codex',timeoutMs:input.timeoutMs}));
-   result=await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)],{accessToken:account.accessToken,accountId:account.accountId,planType:null});
+   return {result:await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)],{accessToken:account.accessToken,accountId:account.accountId,planType:null}),failure:null};
   }
+  };
+  // An evaluator must return one JSON verdict. A model sometimes slips (a stray bracket); ask once more
+  // instead of failing the whole plan on a typo.
+  const evaluator=input.role!=='programmer'&&Boolean(input.outputSchema);
+  const ran=await runWithVerdictRetry(evaluator,()=>abort.signal.aborted,runOnce);result=ran.result;failure=ran.failure;
  }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage=error;failure=error.code;}else failure='EXECUTION_FAILED';}
  finally{forwarder.close();}
  const usage=result?.usageWindows??failedUsage?.usageWindows??null,safeUsage=Buffer.byteLength(JSON.stringify(usage))<=32768?usage:null;

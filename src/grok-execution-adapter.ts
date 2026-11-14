@@ -34,6 +34,7 @@ export async function runGrokProgrammer(raw:unknown,signal?:AbortSignal){
  const code=await Promise.race([new Promise<number>((resolve,reject)=>child.once('error',()=>reject(new GrokExecutionFailure('EXECUTION_NATIVE_FAILED',null,null))).once('exit',status=>resolve(status??1))),timedOut]);
  if(code!==0)throw new GrokExecutionFailure(stderr.includes('usage limit')||stderr.includes('rate limit')?'PROVIDER_USAGE_LIMIT':'EXECUTION_NATIVE_FAILED',null,null);
  let output=stdout.slice(0,256*1024);
- if(evaluator){const parsed=extractJsonObject(output);if(parsed===undefined)throw new GrokExecutionFailure('EXECUTION_OUTPUT_INVALID',null,null);output=JSON.stringify(parsed);}
+ // An unreadable verdict is returned as is: the worker asks once more, and verification rejects it if it stays unreadable.
+ if(evaluator){const parsed=extractJsonObject(output);if(parsed!==undefined)output=JSON.stringify(parsed);}
  return {output,tokensUsed:null,usageWindows:null,nativeSessionId:null};
 }
