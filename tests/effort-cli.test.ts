@@ -23,3 +23,9 @@ test('Claude argv keeps --effort xhigh and Grok argv caps at high',()=>{
  assert.ok(codex.args.includes('model_reasoning_effort=high'));
  assert.deepEqual(grokProgrammerArgs('grok-4.7','max','task').slice(4,6),['--reasoning-effort','high']);
 });
+
+test('Grok evaluators work in the read-only copy at /planning, the programmer in /work',()=>{
+ const at=(role?:string)=>{const args=grokProgrammerArgs('grok-4.7','high','task',role);return args[args.indexOf('--cwd')+1];};
+ assert.equal(at('programmer'),'/work');assert.equal(at(),'/work');
+ assert.equal(at('qa'),'/planning');assert.equal(at('reviewer'),'/planning');
+});

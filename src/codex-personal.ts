@@ -14,7 +14,7 @@ export function codexWorkerAssertsSubscriptionIdentity(provider:'codex'|'claude'
 }
 
 /** First parseable JSON object. Fences and surrounding prose are ignored. */
-function extractJsonObject(text:string):unknown{
+export function extractJsonObject(text:string):unknown{
  const body=text.replace(/```(?:json)?/gi,'');
  for(let start=body.indexOf('{');start>=0;start=body.indexOf('{',start+1)){
   for(let end=body.lastIndexOf('}');end>start;end=body.lastIndexOf('}',end-1)){
