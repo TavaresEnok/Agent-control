@@ -300,7 +300,10 @@ export class NativeQa{
    let ready=false;try{const info=await lstat(this.paths(job.id).work);ready=info.isDirectory()&&!info.isSymbolicLink();}catch{ready=false;}
    if(!ready||job.deadline_elapsed||job.stop_reason)return undefined;
    try{const created=await this.docker.create('ac-native-qa-prepare-'+job.id,this.prepareSpec(job.id,job.request_digest));await this.docker.start(created);}
-   catch(error){if(error instanceof Refusal&&error.code==='DOCKER_CREATE_REFUSED')return this.failUnstarted(principal,authority,job,'QA_PREPARE_FAILED',1,this.frameQaText('QA_PREPARE_FAILED'));throw error;}
+   catch(error){if(error instanceof Refusal&&error.code==='DOCKER_CREATE_REFUSED')return this.failUnstarted(principal,authority,job,'QA_PREPARE_FAILED',1,this.frameQaText('QA_PREPARE_FAILED'));
+    // Another process (or a lost response) already created it: the next reconcile observes that container.
+    if(error instanceof Refusal&&error.code==='DOCKER_CREATE_UNCERTAIN'&&await this.docker.inspect('ac-native-qa-prepare-'+job.id))return {state:'running'};
+    throw error;}
    return {state:'running'};
   }
   if(prep.State.Status==='created'){await this.docker.start(prep.Id);return {state:'running'};}
@@ -318,7 +321,15 @@ export class NativeQa{
   }
   return this.launchPreparedTest(principal,authority,job);
  }
+ /** The stage's own polling and the gateway's reconciliation pass both reconcile running jobs. They must not run
+  * at the same time for one job, or both create the same container and the loser fails the stage. */
+ private readonly reconciling=new Map<string,Promise<unknown>>();
  async reconcile(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
+  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{}).then(()=>this.reconcileOnce(principal,authority,id));
+  this.reconciling.set(id,next);
+  try{return await next;}finally{if(this.reconciling.get(id)===next)this.reconciling.delete(id);}
+ }
+ private async reconcileOnce(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
   z.uuid().parse(id);const job=await this.ledger.tx(async c=>{
    const row=(await c.query('SELECT *,deadline_at<=clock_timestamp() deadline_elapsed FROM ac_native_qa_jobs WHERE id=$1 AND context_id=$2',[id,authority.contextId])).rows[0];if(!row)throw new Refusal('NATIVE_QA_JOB_NOT_FOUND',404);
    await this.authorize(c,principal,authority,row.intent_id,true);if(row.contract_digest!==this.verifierDigest||Number(row.manager_epoch)>authority.epoch)throw new Refusal('NATIVE_QA_CONTRACT_MISMATCH');return row;
@@ -338,7 +349,7 @@ export class NativeQa{
   }
   if(this.contract.prepareArgv&&!job.container_id&&!['completed','failed'].includes(job.state)){
    const stepped=await this.stepPrepare(principal,authority,job);
-   if(stepped==='launched')return this.reconcile(principal,authority,id);
+   if(stepped==='launched')return this.reconcileOnce(principal,authority,id);
    if(stepped)return stepped;
   }
   const physical=await this.docker.inspect('ac-native-qa-'+id);if(!physical)return {state:'uncertain' as const};this.inspect(physical,job);
