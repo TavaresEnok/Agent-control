@@ -40,7 +40,7 @@ export class NativeVerification{
   if(isCanceled())throw new Refusal('STAGE_CANCELED');
   const previous=(await this.ledger.pool.query('SELECT executor_digest,key_fingerprint,account_id FROM ac_native_execution_jobs WHERE id=$1',[stage.id])).rows[0];
   const grant=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
-  const candidates=this.supervisors.filter(s=>s.supportsAccount(grant?.account_id)&&(previous?true:s.active)&&(!previous||previous.account_id===grant?.account_id&&s.executorDigest===previous.executor_digest&&s.keyFingerprint===previous.key_fingerprint));
+  const candidates=this.supervisors.filter(s=>s.supportsAccount(grant?.account_id)&&(previous?true:s.active!==false)&&(!previous||previous.account_id===grant?.account_id&&s.executorDigest===previous.executor_digest&&s.keyFingerprint===previous.key_fingerprint));
   const supervisor=candidates.length===1?candidates[0]:undefined;
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   await this.ledger.tx(async c=>{
@@ -134,7 +134,7 @@ export class NativeVerification{
   }
   const request=NativeExecutionRequest.parse(qaModelExecutionRequest({stageId:ids.stageId,sessionId:ids.sessionId,intentId:intent.id,grantId:grantId!,artifact,diff:material.diff,truncated:material.truncated,ownerRequest:material.ownerRequest,testTail:material.testTail}));
   const account=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
-  const candidates=this.supervisors.filter(s=>s.supportsAccount(account?.account_id)&&(prior?true:s.active)&&(!prior||prior.account_id===account?.account_id&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint));
+  const candidates=this.supervisors.filter(s=>s.supportsAccount(account?.account_id)&&(prior?true:s.active!==false)&&(!prior||prior.account_id===account?.account_id&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint));
   const supervisor=candidates.length===1?candidates[0]:undefined;
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   let status=await supervisor.start(principal,authority,request);
