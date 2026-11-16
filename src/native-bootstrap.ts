@@ -34,7 +34,7 @@ const nativeBootstrapBody={
  epoch:z.number().int().positive(),instanceId:z.uuid(),source:z.literal('authorized-endpoint'),
  accounts:z.array(AccountBinding).min(1).max(8),
  planning:z.object({id:Name,imageId:Image,retiredImageIds:z.array(Image).max(8).optional(),executorDigest:Hash,signingKeyFile:privatePath,keyFingerprint:Hash,hostRoot:privatePath,accountRoot:privatePath}).strict(),
- execution:z.object({id:Name,workerImage:Image,toolsImage:Image,executorDigest:Hash,signingKeyFile:privatePath,keyFingerprint:Hash,
+ execution:z.object({id:Name,workerImage:Image,toolsImage:Image,retiredImages:z.array(z.object({workerImage:Image,toolsImage:Image}).strict()).max(8).optional(),executorDigest:Hash,signingKeyFile:privatePath,keyFingerprint:Hash,
   hostRoot:privatePath,accountRoot:privatePath,providerNetworkId:Hash,workerEnv:z.array(Env).max(16),toolsEnv:z.array(Env).max(16)}).strict(),
  qa:NativeQaContract,qaDigest:Hash,review:z.object({signingKeyFile:privatePath,keyFingerprint:Hash,verifierDigest:Hash}).strict(),
 };

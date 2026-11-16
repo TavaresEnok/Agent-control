@@ -145,7 +145,7 @@ export class NativeImplementation{
      const bound=await c.query("UPDATE ac_operations SET grant_id=$2 WHERE id=$1 AND intent_id=$3 AND state='registered' AND manager_epoch=$4 AND (grant_id IS NULL OR grant_id=$2) RETURNING id",[intent.operation_id,grant!.id,intent.id,authority.epoch]);
      if(!bound.rowCount)throw new Refusal('NATIVE_IMPLEMENTATION_RECONCILIATION_REQUIRED');
     });
-    const eligible=this.supervisors.filter(s=>s.supportsAccount(grant!.account_id));
+    const eligible=this.supervisors.filter(s=>s.active&&s.supportsAccount(grant!.account_id));
     if(eligible.length!==1)throw new Refusal('NATIVE_PROGRAMMER_EXECUTOR_AMBIGUOUS');
     supervisor=eligible[0]!;
     const frozen=await this.ledger.tx(async c=>{

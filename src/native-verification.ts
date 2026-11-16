@@ -29,7 +29,7 @@ export class NativeVerification{
   if(isCanceled())throw new Refusal('STAGE_CANCELED');
   const previous=(await this.ledger.pool.query('SELECT executor_digest,key_fingerprint,account_id FROM ac_native_execution_jobs WHERE id=$1',[stage.id])).rows[0];
   const grant=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
-  const candidates=this.supervisors.filter(s=>s.supportsAccount(grant?.account_id)&&(!previous||previous.account_id===grant?.account_id&&s.executorDigest===previous.executor_digest&&s.keyFingerprint===previous.key_fingerprint));
+  const candidates=this.supervisors.filter(s=>s.supportsAccount(grant?.account_id)&&(previous?true:s.active)&&(!previous||previous.account_id===grant?.account_id&&s.executorDigest===previous.executor_digest&&s.keyFingerprint===previous.key_fingerprint));
   const supervisor=candidates.length===1?candidates[0]:undefined;
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   await this.ledger.tx(async c=>{
@@ -46,9 +46,12 @@ export class NativeVerification{
    await new Promise(resolve=>setTimeout(resolve,1000));status=await supervisor.reconcile(principal,authority,request);
   }
   if(status.state==='failed'){await supervisor.retireTerminal(principal,authority,stage.id);throw new Refusal('NATIVE_VERIFICATION_EXECUTION_UNCONFIRMED');}
-  return this.record(principal,authority,stage.id);
+  const recorded=await this.record(principal,authority,stage.id);
+  if(!recorded)throw new Refusal('NATIVE_VERIFICATION_VERDICT_INVALID');
+  return recorded;
  }
- async record(principal:string,authority:Authority,jobId:string){
+ /** Returns null when the reviewer finished without a usable verdict. Its stage is then closed as such, never as evidence, so reconciliation stops retrying it. */
+ async record(principal:string,authority:Authority,jobId:string):Promise<z.infer<typeof VerificationReceipt>|null>{
   z.uuid().parse(jobId);
   const job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2',[jobId,authority.contextId])).rows[0];
   if(!job||!['reviewer','judge'].includes(job.role))throw new Refusal('NATIVE_VERIFICATION_JOB_MISMATCH');
@@ -56,8 +59,11 @@ export class NativeVerification{
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   const observed=await supervisor.reconcileRegistered(principal,authority,jobId);
   if(observed.state!=='completed'||!('output' in observed)||typeof observed.output!=='string')throw new Refusal('NATIVE_VERIFICATION_EXECUTION_UNCONFIRMED');
-  const verdict=Verdict.parse(JSON.parse(observed.output)),kind=job.role==='reviewer'?'review':'judge';
-  if(verdict.kind!==kind||verdict.commit!==job.base_id||(verdict.verdict==='pass'&&verdict.findings.some(f=>f.severity==='high')))throw new Refusal('NATIVE_VERIFICATION_VERDICT_MISMATCH');
+  const kind=job.role==='reviewer'?'review':'judge';
+  let verdict:z.infer<typeof Verdict>|null=null;try{verdict=Verdict.parse(JSON.parse(observed.output));}catch{verdict=null;}
+  if(!verdict||verdict.kind!==kind||verdict.commit!==job.base_id||(verdict.verdict==='pass'&&verdict.findings.some(f=>f.severity==='high'))){
+   await this.settleUnusable(principal,authority,job,kind,observed.receipt,observed.output);await supervisor.retireTerminal(principal,authority,jobId);return null;
+  }
   const artifact=(await this.ledger.pool.query<ArtifactRow>('SELECT * FROM ac_artifacts WHERE id=$1 AND intent_id=$2 AND context_id=$3',[verdict.artifactId,job.intent_id,authority.contextId])).rows[0];
   if(!artifact||artifact.commit_id!==verdict.commit||artifact.tree_id!==verdict.tree||artifact.base_id!==verdict.base||artifact.policy_revision!==verdict.policyRevision||artifact.implementation_session_id===job.session_id||artifact.implementation_grant_id===job.grant_id)throw new Refusal('NATIVE_VERIFICATION_ARTIFACT_MISMATCH');
   // The digest was taken with or without the owner's words, depending on whether a personal conversation was bound then.
@@ -76,6 +82,16 @@ export class NativeVerification{
    await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[jobId,{verification:receipt,signature,nativeExecution:observed.receipt}]);
   });
   await this.quality.record(principal,receipt,signature,authority);await supervisor.retireTerminal(principal,authority,jobId);return receipt;
+ }
+ private async settleUnusable(principal:string,authority:Authority,job:Record<string,any>,kind:'review'|'judge',nativeExecution:unknown,output:string){
+  await this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const row=(await c.query('SELECT * FROM ac_stage_operations WHERE id=$1 FOR UPDATE',[job.id])).rows[0];
+   if(!row||row.intent_id!==job.intent_id||row.session_id!==job.session_id||row.grant_id!==job.grant_id||row.node_id!==kind)throw new Refusal('NATIVE_VERIFICATION_STAGE_MISMATCH');
+   if(row.state==='completed'){if(row.receipt?.invalidVerdict!==true||digest(row.receipt.nativeExecution)!==digest(nativeExecution))throw new Refusal('NATIVE_VERIFICATION_RESULT_CONFLICT');return;}
+   if(!['uncertain','running'].includes(row.state))throw new Refusal('NATIVE_VERIFICATION_STAGE_MISMATCH');
+   await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[job.id,{invalidVerdict:true,logSha256:createHash('sha256').update(output).digest('hex'),nativeExecution}]);
+  });
  }
  /** Combo QA model. Reuses the reviewer supervisor and verdict, and never writes script QA evidence. */
  async evaluateQaModel(principal:string,intent:Intent,authority:Authority,scriptStageId:string,artifact:ArtifactRow,material:{diff:string;truncated?:boolean;ownerRequest?:string;testTail:string},isCanceled:()=>boolean){
@@ -106,7 +122,7 @@ export class NativeVerification{
   }
   const request=NativeExecutionRequest.parse(qaModelExecutionRequest({stageId:ids.stageId,sessionId:ids.sessionId,intentId:intent.id,grantId:grantId!,artifact,diff:material.diff,truncated:material.truncated,ownerRequest:material.ownerRequest,testTail:material.testTail}));
   const account=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
-  const candidates=this.supervisors.filter(s=>s.supportsAccount(account?.account_id)&&(!prior||prior.account_id===account?.account_id&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint));
+  const candidates=this.supervisors.filter(s=>s.supportsAccount(account?.account_id)&&(prior?true:s.active)&&(!prior||prior.account_id===account?.account_id&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint));
   const supervisor=candidates.length===1?candidates[0]:undefined;
   if(!supervisor)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_AMBIGUOUS');
   let status=await supervisor.start(principal,authority,request);

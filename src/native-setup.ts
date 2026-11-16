@@ -14,6 +14,14 @@ function retiredPlanning(previous:unknown,current:string):{retiredImageIds?:stri
  const ids=[...(old.planning.retiredImageIds??[]),old.planning.imageId].filter((id,i,all)=>id!==current&&all.indexOf(id)===i).slice(-8);
  return ids.length?{retiredImageIds:ids}:{};
 }
+/** Same for the execution image pair: a job left behind by a rebuild is still reconciled and retired by its own pair. */
+function retiredExecution(previous:unknown,worker:string,tools:string):{retiredImages?:{workerImage:string;toolsImage:string}[]}{
+ const old=(previous as {state?:string;execution?:{workerImage?:string;toolsImage?:string;retiredImages?:{workerImage:string;toolsImage:string}[]}}|undefined);
+ if(old?.state!=='active'||!old.execution?.workerImage||!old.execution.toolsImage)return {};
+ const all=[...(old.execution.retiredImages??[]),{workerImage:old.execution.workerImage,toolsImage:old.execution.toolsImage}];
+ const pairs=all.filter((x,i)=>!(x.workerImage===worker&&x.toolsImage===tools)&&all.findIndex(y=>y.workerImage===x.workerImage&&y.toolsImage===x.toolsImage)===i).slice(-8);
+ return pairs.length?{retiredImages:pairs}:{};
+}
 import {nativeQaContractDigest} from './native-qa-contract.ts';
 import {defaultPersonalQaContract,resolvePersonalProjectQa,syncPersonalQaPolicy} from './personal-qa-config.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
@@ -63,7 +71,7 @@ export async function nativeSetup(path:string){
   const block={state:'active',contract:'native-bootstrap-configured-v1',projectId:config.project.id,contextId:config.managerTransport?.contexts.find(item=>item.projectId===config.project.id)?.contextId??context?.id??randomUUID(),epoch:1,instanceId:randomUUID(),source:'authorized-endpoint',
    accounts:accounts.map(account=>({accountId:account.id,subjectDigest:String(account.resource_identity).slice(account.provider.length+1)})),
    planning:{id:'personal-planning',imageId:images.planning,...retiredPlanning(config.nativeBootstrap,images.planning!),executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},
-   execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
+   execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,...retiredExecution(config.nativeBootstrap,images.worker!,images.tools!),executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
    qa,qaDigest:nativeQaContractDigest(qa),review:{signingKeyFile:reviewKey.file,keyFingerprint:reviewKey.fingerprint,verifierDigest:nativeReviewVerifierDigest}};
   // The QA stage refuses a policy whose QA verifier digest differs from this contract, so keep the latest revision in step with it.
   const qaDigestFor=async(projectId:string)=>nativeQaContractDigest(await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:images.tools!,fallback:qa}));

@@ -42,7 +42,9 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
 type Input=z.infer<typeof NativeExecutionRequest>;
 export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
- workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture};
+ workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;
+ /** false: kept only to reconcile and retire jobs started under a replaced image pair; it never launches. */
+ active?:boolean};
 export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null};
 const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export {nativeExecutionExecutorDigest};
@@ -74,6 +76,7 @@ export class NativeExecutionSupervisor{
  readonly executorDigest:string;
  readonly scopeId:string;
  supportsAccount(accountId:string){return this.subjects.has(accountId);}
+ get active(){return this.config.active!==false;}
  get keyFingerprint(){return this.fingerprint;}private readonly key;private readonly publicKey:string;private readonly fingerprint:string;
  private readonly subjects=new Map<string,string>();private readonly docker:DockerDaemon;private readonly user:string;
  private readonly effectTails=new Map<string,Promise<void>>();
@@ -164,6 +167,7 @@ export class NativeExecutionSupervisor{
  async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
+  if(!this.active)throw new Refusal('NATIVE_EXECUTOR_RETIRED');
   const g=await this.ledger.tx(async c=>{const grant=await this.identity(c,principal,authority,input);assertModelAllowed(grant.model);
    // This path creates a private network outside the fenced resource bridge.
    if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
@@ -464,6 +468,8 @@ export class NativeExecutionSupervisor{
    }else if(row.state==='completed'&&['reviewer','judge'].includes(input.role)){
     const stage=(await c.query('SELECT * FROM ac_stage_operations WHERE id=$1 AND intent_id=$2 FOR UPDATE',[jobId,input.intentId])).rows[0];
     const evidence=stage?.receipt?.verification;
+    // A reviewer that returned no usable verdict leaves no evidence; its closed stage is the terminal proof.
+    if(stage?.state==='completed'&&stage.receipt?.invalidVerdict===true&&stage.grant_id===input.grantId&&stage.session_id===input.sessionId&&digest(stage.receipt.nativeExecution)===digest(receipt))return row;
     const stored=evidence&&(await c.query('SELECT receipt,receipt_digest FROM ac_verification_evidence WHERE id=$1 AND grant_id=$2 AND session_id=$3',[evidence.id,input.grantId,input.sessionId])).rows[0];
     if(stage?.state!=='completed'||stage.grant_id!==input.grantId||stage.session_id!==input.sessionId||digest(stage.receipt.nativeExecution)!==digest(receipt)||!stored||digest(stored.receipt)!==digest(evidence)||stored.receipt_digest!==digest(evidence))throw new Refusal('NATIVE_RETIREMENT_EVIDENCE_MISSING');
    }else if(input.role==='programmer'){

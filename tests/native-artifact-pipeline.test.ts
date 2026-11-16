@@ -68,12 +68,34 @@ test('stopped native fixture finalizes exact scoped Git code, registers high-ris
   const reviewRoot=join(spool,reviewId);await mkdir(reviewRoot,{mode:0o700});await mkdir(join(reviewRoot,'output'),{mode:0o700});await writeFile(join(reviewRoot,'request.json'),JSON.stringify(request),{mode:0o600});
   const verdict={schemaVersion:1,kind:'review',artifactId:artifact.id,policyRevision:artifact.policy_revision,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,verdict:'pass',findings:[]};
   await writeFile(join(reviewRoot,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:reviewId,output:JSON.stringify(verdict),normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
-  const reviewPhysical=(id:string)=>({Id:id,Image:image,Config:{Labels:{'agent-control.contract':'native-execution-v1','agent-control.job':reviewId,'agent-control.launch':digest(request)}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:new Date().toISOString()}});
-  Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>name===reviewWorker||name.startsWith('ac-native-worker-')?reviewPhysical(reviewWorker):reviewPhysical(reviewTools)},configurable:true});
-  const verifier=new NativeVerification(db,quality,[supervisor],verifierKey),review=await verifier.record(principal,successor,reviewId);
+  // A stateful fake daemon: stopped containers keep one finish time, return logs and disappear once removed, as retirement requires.
+  const fakeDocker=(job:string,launch:string,worker:string,tools:string)=>{const finished=new Date().toISOString(),gone=new Set<string>();
+   const item=(id:string)=>gone.has(id)?null:{Id:id,Image:image,Config:{Labels:{'agent-control.contract':'native-execution-v1','agent-control.job':job,'agent-control.launch':launch}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:finished}};
+   return {inspect:async(name:string)=>name===worker||name==='ac-native-worker-'+job?item(worker):name===tools||name==='ac-native-tools-'+job?item(tools):null,
+    logs:async()=>Buffer.from('fixture log\n'),remove:async(id:string)=>{gone.add(id);},inspectPrivateNetwork:async()=>null,removePrivateNetwork:async()=>{}};};
+  Object.defineProperty(supervisor,'docker',{value:fakeDocker(reviewId,digest(request),reviewWorker,reviewTools),configurable:true});
+  const verifier=new NativeVerification(db,quality,[supervisor],verifierKey),review=(await verifier.record(principal,successor,reviewId))!;
   assert.equal(review.status,'passed');assert.notEqual(review.sessionId,artifact.implementation_session_id);assert.equal(review.kind,'review');
-  assert.equal((await verifier.record(principal,successor,reviewId)).id,review.id);
+  assert.equal((await verifier.record(principal,successor,reviewId))!.id,review.id);
   await assert.rejects(db.tx(c=>quality.assertReady(c,artifact.id,successor)),/QA_MISSING/);assert.equal(git('rev-parse','refs/heads/protected'),base);
+  // A reviewer whose answer is not a readable verdict closes its stage without evidence and is retired, so reconciliation stops retrying it.
+  const slipGrant=randomUUID(),slipId=randomUUID(),slipSession=randomUUID(),slipAttempt=randomUUID();
+  await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+   VALUES($1,$2,$3,$4,$5,$6,$7,'reviewer',$8,1,1,$9,false,'running')`,[slipGrant,slipAttempt,intent.id,context,successor.epoch,account,reviewProfile,project,digest({fixture:'slip'})]);
+  await db.pool.query("INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,grant_id,manager_epoch,state) VALUES($1,$2,'review',$3,$4,$5,$6,'uncertain')",[slipId,intent.id,slipSession,slipAttempt,slipGrant,successor.epoch]);
+  const slipRequest=nativeReviewRequest({id:slipId,session_id:slipSession},intent.id,slipGrant,artifact,'review'),slipWorker='5'.repeat(64),slipTools='6'.repeat(64);
+  await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'reviewer','running',$14,$15,$16)`,[slipId,slipGrant,intent.id,context,successor.epoch,slipSession,account,reviewProfile,digest({fixture:true}),supervisor.executorDigest,fingerprint,digest(slipRequest),artifact.commit_id,slipWorker,slipTools,network]);
+  const slipRoot=join(spool,slipId);await mkdir(slipRoot,{mode:0o700});await mkdir(join(slipRoot,'output'),{mode:0o700});await writeFile(join(slipRoot,'request.json'),JSON.stringify(slipRequest),{mode:0o600});
+  const slipped=JSON.stringify({...verdict}).replace('"base":"'+artifact.base_id+'"','"base":"'+artifact.base_id+'"]');
+  await writeFile(join(slipRoot,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:slipId,output:slipped,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
+  Object.defineProperty(supervisor,'docker',{value:fakeDocker(slipId,digest(slipRequest),slipWorker,slipTools),configurable:true});
+  assert.equal(await verifier.record(principal,successor,slipId),null);
+  const slipStage=(await db.pool.query('SELECT state,receipt FROM ac_stage_operations WHERE id=$1',[slipId])).rows[0];
+  assert.equal(slipStage.state,'completed');assert.equal(slipStage.receipt.invalidVerdict,true);assert.equal(slipStage.receipt.verification,undefined);
+  assert.equal((await db.pool.query("SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1",[slipId])).rows[0]?.state,'removed');
+  assert.equal(await verifier.record(principal,successor,slipId),null);
+  assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_verification_evidence WHERE session_id=$1",[slipSession])).rows[0].n,0);
   // A separate direct helper fixture proves refusal of writes outside scope.
   const badId=randomUUID(),bad=join(spool,badId);await mkdir(bad,{mode:0o700});await artifacts.snapshot(base,base,join(bad,'work'));await writeFile(join(bad,'work/outside.txt'),'unauthorized');
   execFileSync('/usr/bin/ruby',[new URL('../services/agent-control-git/native_finalize.rb',import.meta.url).pathname],{input:JSON.stringify({jobId:badId,inputDigest:'a'.repeat(64),scopeDigest:digest(['src/example.ts']),base,writePaths:['src/example.ts'],work:join(bad,'work'),output:join(bad,'finalizer-result.json')}),stdio:['pipe','ignore','pipe']});
