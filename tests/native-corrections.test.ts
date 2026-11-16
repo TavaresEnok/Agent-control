@@ -120,7 +120,7 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
   Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>physical.get(name)??null,inspectPrivateNetwork:async()=>null,removePrivateNetwork:async()=>{},stop:async()=>{},
    remove:async(id:string)=>{for(const [name,item] of physical)if(item.Id===id)physical.delete(name);},
    logs:async()=>{const payload=Buffer.from('synthetic native log\n'),header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(payload.length,4);return Buffer.concat([header,payload]);}}});
-  let mode:'correct'|'limit'|'infra'='correct',openProgrammers=0,maxProgrammers=0,parallelArrivals=0;
+  let mode:'correct'|'slip'|'limit'|'infra'='correct',slips=0,openProgrammers=0,maxProgrammers=0,parallelArrivals=0;
   const show=(commit:string,path:string)=>{try{return execFileSync('git',['-C',repo,'show',`${commit}:${path}`],{encoding:'utf8'});}catch{return '';}};
   Object.defineProperty(supervisor,'start',{value:async(_principal:string,a:typeof authority,raw:unknown)=>{
    const input=NativeExecutionRequest.parse(raw);
@@ -149,6 +149,8 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
      const artifact=(await db.pool.query('SELECT * FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
      const reviewReject=show(artifact.commit_id,'src/beta/a.ts').startsWith('review-reject')||(mode==='limit'&&show(artifact.commit_id,'src/solo/a.ts').startsWith('never'));
      output=JSON.stringify({schemaVersion:1,kind:'review',artifactId:artifact.id,policyRevision:artifact.policy_revision,commit:artifact.commit_id,tree:artifact.tree_id,base:artifact.base_id,verdict:reviewReject?'reject':'pass',findings:[]});
+     // The reviewer slip seen live: the first answer is not valid JSON.
+     if(mode==='slip'&&slips++===0)output='{"schemaVersion":1,"kind":"review","verdict":"pass","base":"'+artifact.base_id+'"]';
     }
     await writeFile(join(dir,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:input.jobId,output,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
     const item=(id:string)=>({Id:id,Image:modelImage,Config:{Labels:{'agent-control.job':input.jobId,'agent-control.launch':inputDigest,'agent-control.contract':'native-execution-v1'}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:new Date().toISOString()}});
@@ -226,20 +228,35 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
   await runtime.observe(corrected.intent,authority);
   console.log(JSON.stringify({proof:'native-corrections',tasks:3,corrections:decisions.length,parallelProgrammers:maxProgrammers,modelCalls:0,qa:'injected substitute',review:'synthetic model substitute'}));
 
+  mode='slip';parallelArrivals=0;
+  const slipped=await runPlan(plan(context,[{...task('slip',1,[],['src/slip/a.ts']),qualityRevision}]),'encrypted:slip');
+  assert.equal(slipped.failure,'');assert.equal(slipped.status,'done');assert.equal(slips,2);
+  const slipStages=(await db.pool.query(`SELECT s.state,s.receipt FROM ac_stage_operations s JOIN ac_intents i ON i.id=s.intent_id WHERE i.parent_intent_id=$1 AND s.node_id='review'`,[slipped.intent.id])).rows;
+  assert.equal(slipStages.filter(row=>row.receipt?.invalidVerdict===true).length,1);
+  assert(slipStages.some(row=>row.state==='completed'&&row.receipt?.verification?.status==='passed'));
+  assert.equal(show(git('rev-parse','refs/heads/protected'),'src/slip/a.ts'),'ok\n');
+  // The retry itself rejects: the rejection must open a correction, never read as a pass.
+  slips=0;
+  const slipRejected=await runPlan(plan(context,[{...task('slipreject',1,[],['src/beta/a.ts']),qualityRevision}]),'encrypted:slip-reject');
+  assert.equal(slipRejected.failure,'');assert.equal(slipRejected.status,'done');assert.equal(slips,3);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_managed_correction_decisions WHERE parent_intent_id=$1',[slipRejected.intent.id])).rows[0].n,1);
+  assert.equal(show(git('rev-parse','refs/heads/protected'),'src/beta/a.ts').startsWith('fixed '),true);
+  const approvedAfterSlip=git('rev-parse','refs/heads/protected');
+
   mode='limit';parallelArrivals=0;
-  assert.equal(git('rev-parse','refs/heads/protected'),approvedTarget);
+  assert.equal(git('rev-parse','refs/heads/protected'),approvedAfterSlip);
   const limited=await runPlan(plan(context,[{...task('solo',1,[],['src/solo/a.ts']),qualityRevision}]),'encrypted:limit');
   assert.equal(limited.status,'failed');
   const limitDecisions=(await db.pool.query('SELECT * FROM ac_managed_correction_decisions WHERE parent_intent_id=$1',[limited.intent.id])).rows;
   assert.equal(limitDecisions.length,1);assert.equal(limitDecisions[0].revision,1);
   const limitChildren=(await db.pool.query('SELECT i.parent_unit_id,o.state FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id WHERE i.parent_intent_id=$1',[limited.intent.id])).rows;
   assert.equal(limitChildren.filter(row=>row.parent_unit_id.includes('correction')).length,1);
-  assert.equal(git('rev-parse','refs/heads/protected'),approvedTarget);
-  assert.notEqual(limitDecisions[0].prior_commit,approvedTarget);
+  assert.equal(git('rev-parse','refs/heads/protected'),approvedAfterSlip);
+  assert.notEqual(limitDecisions[0].prior_commit,approvedAfterSlip);
   assert.notEqual(limitDecisions[0].base_id,limitDecisions[0].prior_commit);
 
   mode='infra';
-  assert.equal(git('rev-parse','refs/heads/protected'),approvedTarget);
+  assert.equal(git('rev-parse','refs/heads/protected'),approvedAfterSlip);
   const broken=await runPlan(plan(context,[{...task('down',1,[],['src/down/a.ts']),qualityRevision},{...task('peer',0,[],['src/peer/a.ts']),qualityRevision}]),'encrypted:infra');
   assert.equal(broken.status,'failed');
   const infraDecisions=Number((await db.pool.query('SELECT count(*) n FROM ac_managed_correction_decisions WHERE parent_intent_id=$1',[broken.intent.id])).rows[0].n);
@@ -247,6 +264,6 @@ test('authenticated native rejection corrects once, an exhausted limit stops, an
   const correction=(await db.pool.query(`SELECT o.state,o.grant_id,o.native_session_id FROM ac_intents i JOIN ac_operations o ON o.intent_id=i.id
    WHERE i.parent_intent_id=$1 AND i.parent_unit_id LIKE 'correction-%'`,[broken.intent.id])).rows;
   assert(correction.length>=1);assert(correction.every(row=>row.state==='registered'&&row.grant_id===null&&row.native_session_id===null));
-  assert.equal(git('rev-parse','refs/heads/protected'),approvedTarget);
+  assert.equal(git('rev-parse','refs/heads/protected'),approvedAfterSlip);
  }finally{if(heartbeat)clearInterval(heartbeat);await runtime?.close();await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
 });

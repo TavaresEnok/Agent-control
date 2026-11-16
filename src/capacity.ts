@@ -49,7 +49,9 @@ export type CapacityPolicy = z.infer<typeof CapacityPolicy>;
 export const QuotaInput = z.object({ status: z.enum(['available','exhausted','rate_limited','auth_required','unknown','unreachable','disabled','configuration_error']),
   source: z.string().min(1).max(200), ttlSeconds: z.number().int().min(1).max(3600) }).strict();
 export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role,
-  taskLevel: z.enum(['basic','standard']).optional() }).strict();
+  taskLevel: z.enum(['basic','standard']).optional(),
+  /** Accounts a verdict retry should not use again. Ignored when no other profile is eligible. */
+  avoidAccounts: z.array(Id).max(8).optional() }).strict();
 /** Basic tasks use the combo's basic profiles when that list exists. Every other programmer task uses standard. Policies without tiers keep the full chain.
  * A level's reserve list, when present, is the only emergency chain for that level. Older snapshots leave the list out and keep filtering emergency by the regular ids. */
 export function programmerChain(policy:CapacityPolicy,role:string,chain:{regular:string[];emergency:string[]},taskLevel?:'basic'|'standard'){
@@ -321,7 +323,8 @@ export class Capacity {
           ORDER BY g.created_at DESC LIMIT 1`,[request.intentId,request.contextId])).rows[0];
         writerProvider=writer?String(writer.provider):null;
       }
-      const choice = loaded.find(row => classifyProfileExclusion(row,{personal}) === null && !(writerProvider&&row.provider===writerProvider) && row.accountId && row.maxConcurrent != null);
+      const usable = (row: LoadedProfile) => classifyProfileExclusion(row,{personal}) === null && !(writerProvider&&row.provider===writerProvider) && row.accountId && row.maxConcurrent != null;
+      const choice = loaded.find(row => usable(row) && !request.avoidAccounts?.includes(row.accountId!)) ?? loaded.find(usable);
       if (!choice?.accountId || choice.maxConcurrent == null) {
         const exclusions = orderedProfileExclusions(loaded,{personal});
         await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);

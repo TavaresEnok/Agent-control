@@ -110,5 +110,17 @@ test('exhausted titular yields to the reserve and the reviewer stays on another 
   const login=await reserve('manager');
   assert.equal(login.emergency,true);
   assert.equal(await managerModel(login.profile_id),'gpt-6.1-sol');
+  // A verdict retry skips the reviewer that answered without a usable verdict, and falls back to it when nothing else is left.
+  await capacity.observeQuota(principal,claude,{status:'available',source:'synthetic://reserve',ttlSeconds:3600});
+  const retried=await open();
+  await capacity.reserve(principal,{attemptId:randomUUID(),intentId:retried,contextId:context,role:'programmer',taskLevel:'standard'},authority);
+  const first=await capacity.reserve(principal,{attemptId:randomUUID(),intentId:retried,contextId:context,role:'reviewer'},authority);
+  assert.equal(await providerOf(first.profile_id),'claude');
+  await release(first.id);
+  const avoided=await capacity.reserve(principal,{attemptId:randomUUID(),intentId:retried,contextId:context,role:'reviewer',avoidAccounts:[claude]},authority);
+  assert.equal(await providerOf(avoided.profile_id),'grok');
+  await release(avoided.id);
+  const fallback=await capacity.reserve(principal,{attemptId:randomUUID(),intentId:retried,contextId:context,role:'reviewer',avoidAccounts:[claude,grok]},authority);
+  assert.equal(await providerOf(fallback.profile_id),'claude');
  }finally{await db.close();await database.close();await rm(dir,{recursive:true,force:true});}
 });

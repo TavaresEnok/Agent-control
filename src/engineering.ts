@@ -26,6 +26,9 @@ export type EngineeringOptions={nativeQa?:NativeQa;nativeVerification?:NativeVer
  onAdmissionWait?:(runId:string,key:string,reason:string|null)=>void;syntheticVerifierPath?:string};
 const nodeSchema=z.enum(['qa','review','judge','integrate']);
 function artifactId(intentId:string,commit:string){const h=digest({domain:'artifact-v1',intentId,commit});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
+/** A reviewer that finishes without a usable verdict is asked again: first the same reviewer, then another account. Each retry has its own stage, so a restart replays the chain. */
+const MAX_VERDICT_RETRIES=2;
+function verdictRetrySession(parent:string,attempt:number){const h=digest({domain:'review-verdict-retry-v1',parent,attempt});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function reviewSession(parent:string,index:number){const h=digest({domain:'review-session-v1',parent,index});return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;}
 function stop(child:ChildProcess|undefined){if(!child||child.exitCode!==null||child.signalCode!==null)return;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}}
 type CorrectionClient=Parameters<Quality['assertCorrectionFailures']>[0];
@@ -499,13 +502,21 @@ export class EngineeringStages{
   for(const stage of saved.completed)await this.options.quality.record(saved.principal,stage.receipt.verification,stage.receipt.signature,authority);
   return true;
  }
- start(intent:Intent,authority:Authority,nodeId:string,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void),internalReview=false,qualityVerdict=false):AgentSession{
+ start(intent:Intent,authority:Authority,nodeId:string,spec:AgentRunSpec,onEvent?:((event:AgentEvent)=>void),internalReview=false,qualityVerdict=false,verdictRetry=0,verdictChain:readonly string[]=[]):AgentSession{
   const node=nodeSchema.parse(nodeId),sessionId=z.uuid().parse(spec.sessionId);
   const notify=onEvent;
   if(qualityVerdict)onEvent=event=>{if(event.type!=='done')notify?.(event);};
   let child:ChildProcess|undefined,open=true,canceled=false;
   const nested=new Set<AgentSession>();
   const admissionWait=(reason:string|null)=>{const runId=spec.env?.CEZ_TASK_ID;if(runId)this.options.onAdmissionWait?.(runId,`stage:${node}:${sessionId}`,reason);};
+  const retryVerdict=async()=>{
+   if(verdictRetry>=MAX_VERDICT_RETRIES)throw new Refusal('NATIVE_VERIFICATION_VERDICT_INVALID');
+   onEvent?.({type:'text',text:`Stage ${node} had no usable verdict. Retry ${verdictRetry+1} of ${MAX_VERDICT_RETRIES}.`});
+   // The retry returns its raw result; this session's own quality wrapper reports the verdict once.
+   const retry=this.start(intent,authority,node,{...spec,sessionId:verdictRetrySession(sessionId,verdictRetry+1)},onEvent,node==='review'?true:internalReview,false,verdictRetry+1,[...verdictChain,sessionId]);
+   nested.add(retry);
+   try{return await retry.result;}finally{nested.delete(retry);}
+  };
   const result=(async()=>{
    if(!this.running)throw new Refusal('RUNTIME_NOT_AUTHORIZED');
    const contract=await this.ledger.tx(async c=>{
@@ -575,6 +586,7 @@ export class EngineeringStages{
       if(!await this.ledger.tx(c=>explicitQaWaiverStageReady(c,authority.contextId,waiver.artifactId)))throw new Refusal('QA_WAIVER_STALE');
      }else{
       const expected=node==='review'?'review':node;
+      if(stage.receipt?.invalidVerdict===true&&(node==='review'||node==='judge'))return await retryVerdict();
       if(stage.receipt?.verification?.kind!==expected)throw new Refusal('VERIFICATION_RECEIPT_MISSING');
       await this.options.quality.record(principal,stage.receipt.verification,stage.receipt.signature,authority);
       if(stage.receipt.verification.status!=='passed'||stage.receipt.verification.exitCode!==0)throw new Refusal('VERIFICATION_FAILED');
@@ -654,8 +666,12 @@ export class EngineeringStages{
      await c.query("UPDATE ac_stage_operations SET state='completed',receipt=$2,finished_at=clock_timestamp() WHERE id=$1",[stage.id,{integration:receipt}]);});
     if(receipt.status!=='integrated')throw new Refusal('INTEGRATION_REJECTED');
    }else{
+    // The second verdict retry avoids every account that already answered this stage without a usable verdict.
+    const avoidAccounts=verdictRetry>=2?(await this.ledger.pool.query(`SELECT g.account_id FROM ac_stage_operations s JOIN ac_capacity_grants g ON g.id=s.grant_id
+     WHERE s.intent_id=$1 AND s.node_id=$2 AND s.session_id=ANY($3::uuid[]) AND s.state='completed' AND s.receipt->>'invalidVerdict'='true' AND g.account_id IS NOT NULL
+     GROUP BY g.account_id ORDER BY min(s.finished_at) LIMIT 8`,[intent.id,node,verdictChain])).rows.map(row=>String(row.account_id)):[];
     const reserve=()=>new Capacity(this.ledger).reserve(principal,{attemptId:stage.attempt_id,intentId:intent.id,contextId:intent.context_id,
-     role:node==='qa'?'qa':node==='judge'?'judge':'reviewer'},authority);
+     role:node==='qa'?'qa':node==='judge'?'judge':'reviewer',...(avoidAccounts.length?{avoidAccounts}:{})},authority);
     // Capacity exhaustion is an admission wait in this same native session,
     // not failed verification. Reuse the persisted stage/attempt on every poll.
     let grant:Awaited<ReturnType<typeof reserve>>;let waitReason:string|undefined;
@@ -681,7 +697,12 @@ export class EngineeringStages{
      }
     }
     if(nativeStage){
-     const verified=node==='qa'?await this.runNativeQa(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running):await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);
+     let verified;
+     if(node==='qa')verified=await this.runNativeQa(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running);
+     else{
+      try{verified=await this.options.nativeVerification!.run(principal,intent,authority,stage,grant.id,artifact,node,()=>canceled||!this.running);}
+      catch(error){if(error instanceof Refusal&&error.code==='NATIVE_VERIFICATION_VERDICT_INVALID')return await retryVerdict();throw error;}
+     }
      if(verified.status!=='passed')throw new Refusal('VERIFICATION_FAILED');
     }else if(this.options.isolatedVerification){
      const qualityRow=(await this.ledger.pool.query('SELECT snapshot,digest FROM ac_quality_policies WHERE project_id=$1 AND revision=$2',
