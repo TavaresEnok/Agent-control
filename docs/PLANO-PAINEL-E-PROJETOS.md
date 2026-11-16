@@ -19,7 +19,7 @@ Atualize esta tabela a cada commit.
 | 6 | Avisos no celular e entrada sem o app Happier | código pronto e no ar (`37e1d090`…`02573d12`, correção `6d97d47d`); entrada por código provada no endereço público (válido entra, errado e reuso recusados, limite por endereço). **Falta o titular:** ativar os avisos no celular e tocar em "Enviar teste" |
 | 7 | Fechamento | **feita**: revisão independente sem achado alto, 12 achados médios e baixos corrigidos (`bda6ba69`, `0e4f6a89`, `17310d60`); backup real (`personal:backup`, 292 MB) e restauração conferida num banco descartável; serviços derrubados e religados voltaram sozinhos e responderam; reinício real da máquina e push ficam com o titular |
 
-Último commit conferido: `3f11f029`. Plano concluído; restam só as ações do titular.
+Último commit conferido: `9f071527` (combos complexo, intermediário e economia e a reserva provados ao vivo; 8 defeitos corrigidos). Plano concluído; restam só as ações do titular.
 
 ## Aonde queremos chegar
 
@@ -267,10 +267,33 @@ Foram precisas seis tentativas. Cada falha mostrou um defeito, todos corrigidos 
 5. **Escopo do QA com modelo.** O QA com modelo julgava cada tarefa pelo pedido inteiro. Agora julga só os arquivos que a tarefa toca, como o revisor.
 6. **Veredito ilegível.** Um veredito com JSON ilegível derrubava o plano. Agora o revisor ou o QA é chamado mais uma vez.
 
-**Pendente:**
+**Provado ao vivo no IspAgent com o economia e a reserva (16/11):**
 
-- **Veredito ilegível que sobrou.** Uma tarefa de revisão com veredito ilegível nunca se resolve na reconciliação. Ela repete o erro no registro do gateway, e, depois de uma reconstrução das imagens, também "supervisor indisponível". Hoje sobrou uma: o revisor `d766dbd8`, da 5.ª tentativa.
-- **Ainda não provado ao vivo:** a reserva assumindo com uma conta sem cota, que tem só os testes, e o combo economia.
+- conta Codex marcada como sem cota durante a prova;
+- o revisor passou sozinho para a reserva: "Cota de codex esgotada: Revisor segue com claude-sonnet-5-5";
+- 2 programadores Grok médio em paralelo;
+- revisor Sonnet baixo (a reserva) nas duas tarefas e na composição;
+- QA só com os testes do projeto;
+- integrado: `d395d31`.
+
+Depois disso, a pasta de teste foi apagada por um pedido normal no intermediário (`12140ec`), e a conta Codex foi liberada.
+
+Essa prova revelou mais dois defeitos, também corrigidos com teste:
+
+7. **Escopo do revisor.** A primeira tentativa falhou porque o Sonnet rejeitou uma tarefa por faltar o arquivo da outra. O revisor agora sabe o que avalia: uma tarefa é julgada só pelos arquivos que toca, e a composição pelo pedido inteiro (`bf9b9377`).
+8. **Revisor sem veredito.** Um revisor sem veredito legível ficava sem fechamento e repetia o erro no registro do gateway. Era o caso do `d766dbd8`, da 5.ª tentativa do complexo. Agora a etapa fecha como "veredito inutilizável", nunca como evidência, e o job é aposentado. Depois de uma reconstrução das imagens, o par antigo de imagens fica como supervisor inativo: ele fecha os jobs antigos e nunca inicia um novo (`e097602b`). O `d766dbd8` foi fechado e seus contêineres removidos.
+
+**Testes (16/11):**
+
+- O executor de CI do projeto (`node scripts/test-ci.mjs`, com `AC_TEST_DATABASE_URL`) passa em todos os 170 arquivos que inclui. A última falha era um teste que reabria uma reserva já liberada, coisa que a migração 094 proíbe (`9f071527`).
+- `npm test` roda tudo sem preparar o ambiente: 40 testes falham por isso. Eles pedem um destes:
+  - `sudo` sem senha, para `mount tmpfs`;
+  - o Happier rodando e compilado;
+  - imagens e contêineres de laboratório (SSH, migração);
+  - variáveis de opt-in;
+  - `umask 022`, que o executor de CI já fixa.
+
+  Não são defeitos do produto. Rodá-los exige montar esse laboratório.
 
 Correções que a prova exigiu:
 
