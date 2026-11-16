@@ -17,10 +17,10 @@ test('authenticated usage report/export compares period deltas, preserves unknow
   const a=await db.acquire(principal,context,randomUUID(),'synthetic-manager',60),usage=new Usage(db);
   const profile=(await db.pool.query('SELECT p.* FROM ac_profiles p JOIN ac_account_access x ON x.account_id=p.account_id WHERE x.project_id=$1',[project])).rows[0];
   const second=randomUUID();await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role) VALUES($1,$2,'second-fixture','medium','reviewer')",[second,profile.account_id]);
-  const make=async(created:string,profileId=profile.id)=>{
+  const make=async(created:string,profileId=profile.id,state='released')=>{
    const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:r3-usage-fixture'}},a,'api');
    const id=randomUUID();await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,created_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$11,$8,$9,1,'usage-fixture',false,'released',$10)`,[id,randomUUID(),intent.id,context,a.epoch,profile.account_id,profileId,project,fixture.revision,created,profileId===second?'reviewer':'programmer']);return {id,intent};
+    VALUES($1,$2,$3,$4,$5,$6,$7,$11,$8,$9,1,'usage-fixture',false,$12,$10)`,[id,randomUUID(),intent.id,context,a.epoch,profile.account_id,profileId,project,fixture.revision,created,profileId===second?'reviewer':'programmer',state]);return {id,intent};
   };
   const observe=async(grantId:string,seq:number,at:string,input:number|null,output:number|null=0,cache:number|null=0,reasoning:number|null=null)=>{
    const event={grantId,eventId:randomUUID(),seq,counters:{input,output,cache,reasoning}};await usage.record(principal,a,event);assert.equal((await usage.record(principal,a,event)).duplicate,true);
@@ -80,7 +80,8 @@ test('authenticated usage report/export compares period deltas, preserves unknow
   await db.pool.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state,grant_id,started_at,finished_at) VALUES($1,$2,'review',$3,$4,1,'completed',$5,'2026-01-02T01:00:00Z','2026-01-02T02:00:00Z')`,[randomUUID(),missingBaseline.intent.id,randomUUID(),randomUUID(),missingBaseline.id]);
   const running=await make('2025-12-01T00:00:00Z',second);
   await db.pool.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,manager_epoch,state,grant_id,started_at) VALUES($1,$2,'review',$3,$4,1,'running',$5,'2026-01-01T12:00:00Z')`,[randomUUID(),running.intent.id,randomUUID(),randomUUID(),running.id]);
-  const openUnreported=await make('2025-12-01T00:00:00Z',second);await db.pool.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[openUnreported.id]);
+  // A released grant cannot be reopened (migration 094), so this open attempt starts uncertain.
+  const openUnreported=await make('2025-12-01T00:00:00Z',second,'uncertain');
   const allParams=new URLSearchParams(params);allParams.set('limit','200');const finalReport=await (await get(path+'?'+allParams)).json() as UsageReport;
   assert.equal(finalReport.attempts.find(row=>row.grantId===openUnreported.id)!.counters.input,null);
   assert.equal(finalReport.consistency,'per_request_snapshot');
