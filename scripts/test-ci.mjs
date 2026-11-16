@@ -80,7 +80,11 @@ if(listOnly){
   console.log(JSON.stringify({included,excluded},null,1));
   process.exit(0);
 }
-if(!process.env.AC_TEST_DATABASE_URL)throw Error('ISOLATED_DATABASE_REQUIRED');
+if(!process.env.AC_TEST_DATABASE_URL){
+  console.error('Defina AC_TEST_DATABASE_URL com um Postgres descartável (postgresql://usuario:senha@127.0.0.1:porta/banco).');
+  console.error('Os arquivos que precisam do laboratório (Docker, SSH, Happier, sudo) ficam fora e aparecem em "excluded"; rode-os com npm run test:all no laboratório.');
+  process.exit(1);
+}
 // Project admission refuses group-writable paths, so a permissive host umask fails valid fixtures.
 process.umask(0o022);
 if(logDir)await mkdir(logDir,{recursive:true});

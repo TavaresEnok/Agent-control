@@ -33,9 +33,9 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   assert.equal(line.includes('s3cret'),false);
   assert.equal(line.includes('postgresql'),false);
   const parsed=JSON.parse(line) as {installed:string[];backupDirectory:string};
-  assert.deepEqual(parsed.installed,['agent-control-watch-ispagent.timer','agent-control-backup-ispagent.timer']);
+  assert.deepEqual(parsed.installed,['agent-control-watch-ispagent.timer', 'agent-control-backup-ispagent.timer', 'agent-control-maintenance-ispagent.timer', 'agent-control-restore-proof-ispagent.timer']);
   assert.equal(parsed.backupDirectory,'/home/app/backups-agent-control/ispagent');
-  assert.deepEqual(calls,[['daemon-reload'],['enable','--now','agent-control-watch-ispagent.timer'],['enable','--now','agent-control-backup-ispagent.timer']]);
+  assert.deepEqual(calls,[['daemon-reload'],['enable','--now','agent-control-watch-ispagent.timer'],['enable','--now','agent-control-backup-ispagent.timer'],['enable','--now','agent-control-maintenance-ispagent.timer'],['enable','--now','agent-control-restore-proof-ispagent.timer']]);
   const dir=join(env.home,'.config/systemd/user');
   const watch=await readFile(join(dir,'agent-control-watch-ispagent.timer'),'utf8');
   const backup=await readFile(join(dir,'agent-control-backup-ispagent.timer'),'utf8');
@@ -45,7 +45,15 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   assert.match(watch,/Persistent=true/);
   assert.match(backup,/OnCalendar=\*-\*-\* 03:30:00/);
   assert.match(backup,/Persistent=true/);
-  for(const text of [watchService,backupService]){
+  const maintenance=await readFile(join(dir,'agent-control-maintenance-ispagent.timer'),'utf8');
+  const restore=await readFile(join(dir,'agent-control-restore-proof-ispagent.timer'),'utf8');
+  const maintenanceService=await readFile(join(dir,'agent-control-maintenance-ispagent.service'),'utf8');
+  const restoreService=await readFile(join(dir,'agent-control-restore-proof-ispagent.service'),'utf8');
+  assert.match(maintenance,/OnCalendar=Sun \*-\*-\* 04:00:00/);
+  assert.match(restore,/OnCalendar=\*-\*-01 04:30:00/);
+  assert.ok(maintenanceService.includes(`/usr/bin/node ${join(root,'scripts/personal-maintenance.mjs')} ${env.file}`));
+  assert.ok(restoreService.includes(`/usr/bin/node ${join(root,'scripts/personal-restore-proof.mjs')} ${env.file} /home/app/backups-agent-control/ispagent`));
+  for(const text of [watchService,backupService,maintenanceService,restoreService]){
    assert.match(text,/Type=oneshot/);
    assert.equal(text.includes('Restart=always'),false);
    assert.equal(text.includes('s3cret'),false);
@@ -55,9 +63,9 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   assert.ok(backupService.includes(`/usr/bin/node ${join(root,'scripts/personal-backup-rotate.mjs')} ${env.file} /home/app/backups-agent-control/ispagent`));
   calls.length=0;
   const removed=await runPersonalTimers([env.file,'--remove'],{home:env.home,systemctl:args=>{if(args[0]==='disable')throw new Error('missing');calls.push(args);}});
-  assert.equal(JSON.parse(removed).removed.length,4);
+  assert.equal(JSON.parse(removed).removed.length,8);
   assert.deepEqual(calls,[['daemon-reload']]);
-  for(const name of ['agent-control-watch-ispagent.service','agent-control-watch-ispagent.timer','agent-control-backup-ispagent.service','agent-control-backup-ispagent.timer']){
+  for(const name of ['agent-control-watch-ispagent.service', 'agent-control-watch-ispagent.timer', 'agent-control-backup-ispagent.service', 'agent-control-backup-ispagent.timer', 'agent-control-maintenance-ispagent.service', 'agent-control-maintenance-ispagent.timer', 'agent-control-restore-proof-ispagent.service', 'agent-control-restore-proof-ispagent.timer']){
    assert.equal(await stat(join(dir,name)).then(()=>true,()=>false),false);
   }
  }finally{await rm(env.root,{recursive:true,force:true});}

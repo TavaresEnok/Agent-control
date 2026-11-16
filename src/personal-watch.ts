@@ -1,11 +1,13 @@
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod, readFile, rename, writeFile} from 'node:fs/promises';
+import {chmod, readFile, rename, statfs, writeFile} from 'node:fs/promises';
+import pg from 'pg';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation, type Installation} from './installation.ts';
 import {deliverPersonalPush} from './personal-push.ts';
+import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
 
 const hourMs=60*60*1000;
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -14,7 +16,7 @@ export const gatewayDownNotice='Agent Control fora do ar no servidor.';
 export const gatewayUpNotice='Agent Control voltou.';
 export const imagesRebuiltNotice='Imagens do Agent Control reconstruídas.';
 
-type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null};
+type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null;sent:Record<string,string>};
 export type PersonalWatchDeps={
  now?:()=>Date;
  probe?:(url:string)=>Promise<boolean>;
@@ -23,9 +25,15 @@ export type PersonalWatchDeps={
  inspectImage?:(image:string)=>Promise<boolean>;
  rebuildImages?:(installationFile:string)=>Promise<void>;
  restartGateway?:(unit:string)=>Promise<void>;
+ /** Gateway log lines from the last few minutes. */
+ recentLog?:(unit:string,minutes:number)=>Promise<string>;
+ /** Percent of the root disk in use. */
+ diskUsedPercent?:()=>Promise<number>;
+ /** Health notices about logins. */
+ logins?:(config:Installation,installationFile:string,now:Date)=>Promise<HealthNotice[]>;
 };
 
-const emptyState=():WatchState=>({consecutiveFailures:0,downNotified:false,lastImageRebuildAt:null});
+const emptyState=():WatchState=>({consecutiveFailures:0,downNotified:false,lastImageRebuildAt:null,sent:{}});
 
 export function personalServiceName(installationFile:string){
  const name=basename(dirname(resolve(installationFile))).replace(/[^A-Za-z0-9_-]/g,'-');
@@ -49,7 +57,9 @@ function parseState(value:unknown):WatchState{
  if(typeof failures!=='number'||!Number.isInteger(failures)||failures<0||failures>1_000_000)return emptyState();
  if(typeof down!=='boolean')return emptyState();
  if(at!==null&&(typeof at!=='string'||Number.isNaN(Date.parse(at))))return emptyState();
- return {consecutiveFailures:failures,downNotified:down,lastImageRebuildAt:at};
+ const sent:Record<string,string>={};
+ if(row.sent&&typeof row.sent==='object')for(const [key,value] of Object.entries(row.sent as Record<string,unknown>).slice(0,200))if(typeof value==='string'&&!Number.isNaN(Date.parse(value)))sent[key.slice(0,200)]=value;
+ return {consecutiveFailures:failures,downNotified:down,lastImageRebuildAt:at,sent};
 }
 
 async function readState(path:string){
@@ -112,6 +122,33 @@ async function defaultRestart(unit:string){
  await runCommand('systemctl',['--user','restart',unit],120_000,true);
 }
 
+async function defaultRecentLog(unit:string,minutes:number){
+ if(!/^agent-control-gateway-[A-Za-z0-9_-]+$/.test(unit))return '';
+ return new Promise<string>(resolvePromise=>{
+  const child=spawn('journalctl',['--user','-u',unit,'--since',`-${minutes}min`,'--no-pager','-o','cat'],{stdio:['ignore','pipe','ignore']});
+  let text='';
+  const timer=setTimeout(()=>child.kill(),30_000);
+  child.stdout.on('data',chunk=>{if(text.length<8_000_000)text+=chunk;});
+  child.on('error',()=>{clearTimeout(timer);resolvePromise('');});
+  child.on('close',()=>{clearTimeout(timer);resolvePromise(text);});
+ });
+}
+
+async function defaultDiskUsedPercent(){
+ const info=await statfs('/');
+ const total=info.blocks*info.bsize,free=info.bavail*info.bsize;
+ return total>0?100*(total-free)/total:0;
+}
+
+async function defaultLogins(config:Installation,installationFile:string,now:Date){
+ const accountRoot=personalAccountRoot(config);
+ const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
+ try{
+  const rows=(await pool.query("SELECT id,provider FROM ac_accounts WHERE enabled AND mode='subscription_cli'")).rows as {id:string;provider:string}[];
+  return await loginNotices(accountRoot,rows,now,installationFile);
+ }finally{await pool.end();}
+}
+
 function due(at:string|null,now:Date){
  if(!at)return true;
  const then=Date.parse(at);
@@ -146,7 +183,10 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  }
  if(healthNotice===gatewayDownNotice)state.downNotified=true;
  if(healthNotice===gatewayUpNotice)state.downNotified=false;
- if(healthNotice)await notify(config.dataDirectory,healthNotice);
+ if(healthNotice){
+  try{await notify(config.dataDirectory,healthNotice);}
+  catch{state.downNotified=healthNotice===gatewayUpNotice;healthNotice=null;/* not sent: the next check tries again, and the later checks still run */}
+ }
  await writeState(statePath,state);
  const wanted=(deps.images??personalWatchImages)(config).filter(image=>imageId.test(image));
  let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok';
@@ -170,7 +210,20 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
    }catch{imageStatus='failed';}
   }
  }
- const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':''].filter(Boolean);
+ // Repeated errors, a full disk and logins about to expire. Each notice repeats at most at its own pace.
+ const health:HealthNotice[]=[];
+ try{health.push(...repeatedErrorNotices(await (deps.recentLog??defaultRecentLog)(`agent-control-gateway-${personalServiceName(installationFile)}`,ERROR_WINDOW_MINUTES)));}catch{/* no log, no notice */}
+ try{const disk=diskNotice(await (deps.diskUsedPercent??defaultDiskUsedPercent)());if(disk)health.push(disk);}catch{/* no disk figure */}
+ try{health.push(...await (deps.logins??defaultLogins)(config,installationFile,now));}catch{/* database or files unavailable */}
+ const planned=dueNotices(health,state.sent,now);
+ state.sent=planned.sent;
+ const delivered:HealthNotice[]=[];
+ for(const item of planned.due){
+  try{await notify(config.dataDirectory,item.text);state.sent[item.key]=now.toISOString();delivered.push(item);}
+  catch{/* not recorded, so the next check tries again */}
+ }
+ await writeState(statePath,state);
+ const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':'',...delivered.map(item=>item.key.split(':')[0]!)].filter(Boolean);
  const notice=tags.length?` notice=${tags.join('+')}`:'';
  return `watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${notice}`;
 }

@@ -43,7 +43,7 @@ WantedBy=timers.target
 `;
 }
 
-/** Unit text for the 2-minute watch and the 03:30 backup. No systemd calls. */
+/** Unit text for the 2-minute watch, the 03:30 backup, Sunday's maintenance and the monthly restore proof. No systemd calls. */
 export function personalTimerUnits(input:{name:string;root:string;installationFile:string;execPath:string}){
  const {name,root,installationFile,execPath}=input;
  const backupDirectory=`/home/app/backups-agent-control/${name}`;
@@ -53,13 +53,24 @@ export function personalTimerUnits(input:{name:string;root:string;installationFi
  const backupTimer=`agent-control-backup-${name}.timer`;
  const watchExec=`${execPath} ${join(root,'scripts/personal-watch.mjs')} ${installationFile}`;
  const backupExec=`${execPath} ${join(root,'scripts/personal-backup-rotate.mjs')} ${installationFile} ${backupDirectory}`;
+ const maintenanceService=`agent-control-maintenance-${name}.service`;
+ const maintenanceTimer=`agent-control-maintenance-${name}.timer`;
+ const restoreService=`agent-control-restore-proof-${name}.service`;
+ const restoreTimer=`agent-control-restore-proof-${name}.timer`;
+ const maintenanceExec=`${execPath} ${join(root,'scripts/personal-maintenance.mjs')} ${installationFile}`;
+ const restoreExec=`${execPath} ${join(root,'scripts/personal-restore-proof.mjs')} ${installationFile} ${backupDirectory}`;
  const units:PersonalTimerUnit[]=[
   {file:watchService,text:serviceUnit('Agent Control: watch',name,root,execPath,watchExec)},
   {file:watchTimer,text:timerUnit('Agent Control: watch',name,watchService,'OnBootSec=2min\nOnUnitActiveSec=2min')},
   {file:backupService,text:serviceUnit('Agent Control: backup',name,root,execPath,backupExec)},
   {file:backupTimer,text:timerUnit('Agent Control: backup',name,backupService,'OnCalendar=*-*-* 03:30:00\nAccuracySec=1min')},
+  {file:maintenanceService,text:serviceUnit('Agent Control: maintenance',name,root,execPath,maintenanceExec)},
+  {file:maintenanceTimer,text:timerUnit('Agent Control: maintenance',name,maintenanceService,'OnCalendar=Sun *-*-* 04:00:00\nAccuracySec=1min')},
+  {file:restoreService,text:serviceUnit('Agent Control: restore proof',name,root,execPath,restoreExec)},
+  {file:restoreTimer,text:timerUnit('Agent Control: restore proof',name,restoreService,'OnCalendar=*-*-01 04:30:00\nAccuracySec=1min')},
  ];
- return {backupDirectory,units,enable:[watchTimer,backupTimer],remove:[watchTimer,backupTimer,watchService,backupService]};
+ const enable=[watchTimer,backupTimer,maintenanceTimer,restoreTimer];
+ return {backupDirectory,units,enable,remove:[...enable,watchService,backupService,maintenanceService,restoreService]};
 }
 
 /** Write the user units, then daemon-reload and enable --now the timers. --remove drops them. */

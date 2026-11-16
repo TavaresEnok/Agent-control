@@ -162,7 +162,7 @@ async function copyData(source:string,dest:string,depth:number,includeHappier:bo
  }
 }
 
-function spawnCollected(command:string,args:string[],env:NodeJS.ProcessEnv,stdinFile:string|null,stdoutFile:string|null,timeoutMs:number){
+export function spawnCollected(command:string,args:string[],env:NodeJS.ProcessEnv,stdinFile:string|null,stdoutFile:string|null,timeoutMs:number){
  return new Promise<{code:number;stderr:string}>((resolvePromise,reject)=>{
   const child=spawn(command,args,{env,stdio:[stdinFile?'pipe':'ignore',stdoutFile?'pipe':'ignore','pipe']});
   const errors:Buffer[]=[];
@@ -205,7 +205,7 @@ async function captureStdout(command:string,args:string[]){
  return Buffer.concat(out).toString('utf8');
 }
 
-async function dockerListing(dockerPs?:()=>Promise<string>){
+export async function dockerListing(dockerPs?:()=>Promise<string>){
  if(dockerPs)return dockerPs();
  try{return await captureStdout('docker',['ps','--format','{{.Names}}\t{{.Ports}}']);}
  catch{return '';}

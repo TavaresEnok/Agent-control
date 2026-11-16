@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/prepare-build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test": "node scripts/test-ci.mjs",
+    "test:all": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:isolated": "node scripts/test-isolated.mjs",
     "start": "node --import tsx src/lab-main.ts",
     "start:built": "node dist/src/lab-main.js",
@@ -29,7 +30,9 @@
     "personal:backup-rotate": "node scripts/personal-backup-rotate.mjs",
     "personal:restore-check": "node scripts/personal-restore-check.mjs",
     "personal:watch": "node scripts/personal-watch.mjs",
-    "personal:timers": "node scripts/personal-timers.mjs"
+    "personal:timers": "node scripts/personal-timers.mjs",
+    "personal:maintenance": "node scripts/personal-maintenance.mjs",
+    "personal:restore-proof": "node scripts/personal-restore-proof.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

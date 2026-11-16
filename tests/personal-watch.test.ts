@@ -9,6 +9,8 @@ import type {Installation} from '../src/installation.ts';
 import {gatewayDownNotice,gatewayUpNotice,imagesRebuiltNotice,personalWatchImages,runPersonalWatch} from '../src/personal-watch.ts';
 
 const digest=(char:string)=>'sha256:'+char.repeat(64);
+/** No journal, a roomy disk and no login problem, unless a test says otherwise. */
+const quiet={recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[]};
 
 async function fixture(activation:'personal'|'locked'='personal'){
  const root=await mkdtemp(join(tmpdir(),'personal-watch-'));
@@ -31,7 +33,7 @@ test('two health failures notify once and recovery notifies once',async()=>{
  const sent:string[]=[];
  const urls:string[]=[];
  let up=false;
- const run=()=>runPersonalWatch([env.file],{probe:async url=>{urls.push(url);return up;},notify:async(_dir,body)=>{sent.push(body);}});
+ const run=()=>runPersonalWatch([env.file],{...quiet,probe:async url=>{urls.push(url);return up;},notify:async(_dir,body)=>{sent.push(body);}});
  try{
   assert.match(await run(),/^watch gateway=down failures=1 images=ok$/);
   assert.deepEqual(sent,[]);
@@ -68,7 +70,7 @@ test('a corrupt watch state does not throw and starts the failure count again',a
  const env=await fixture();
  await writeFile(join(env.data,'watch-state.json'),'{',{mode:0o600});
  try{
-  const line=await runPersonalWatch([env.file],{probe:async()=>false,notify:async()=>{throw new Error('no');}});
+  const line=await runPersonalWatch([env.file],{...quiet,probe:async()=>false,notify:async()=>{throw new Error('no');}});
   assert.match(line,/failures=1/);
   const state=JSON.parse(await readFile(join(env.data,'watch-state.json'),'utf8')) as {consecutiveFailures:number};
   assert.equal(state.consecutiveFailures,1);
@@ -82,7 +84,7 @@ test('a missing image is rebuilt at most once per hour and the gateway is restar
  let rebuilds=0;
  let restarts:string[]=[];
  const sent:string[]=[];
- const run=()=>runPersonalWatch([env.file],{
+ const run=()=>runPersonalWatch([env.file],{...quiet,
   now:()=>new Date(now),
   probe:async()=>true,
   images:()=>[image,'not-a-digest',image],
@@ -110,7 +112,7 @@ test('a failed image rebuild does not notify and does not run again within the h
  const env=await fixture();
  let rebuilds=0;
  const sent:string[]=[];
- const run=()=>runPersonalWatch([env.file],{
+ const run=()=>runPersonalWatch([env.file],{...quiet,
   now:()=>new Date('2026-11-13T03:30:00.000Z'),
   probe:async()=>true,
   images:()=>[digest('b')],
@@ -135,8 +137,45 @@ test('watch reads the four native images and ignores a locked installation',asyn
  assert.deepEqual(personalWatchImages({nativeBootstrap:{state:'bench'}} as Installation),[]);
  const env=await fixture('locked');
  try{
-  await assert.rejects(runPersonalWatch([env.file],{probe:async()=>{throw new Error('probed');}}),(error:unknown)=>error instanceof Refusal&&error.code==='WATCH_PERSONAL_REQUIRED');
+  await assert.rejects(runPersonalWatch([env.file],{...quiet,probe:async()=>{throw new Error('probed');}}),(error:unknown)=>error instanceof Refusal&&error.code==='WATCH_PERSONAL_REQUIRED');
   await assert.rejects(runPersonalWatch([]),(error:unknown)=>error instanceof Refusal&&error.code==='WATCH_USAGE');
   assert.equal(await stat(join(env.data,'watch-state.json')).then(()=>true,()=>false),false);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('repeated errors, a full disk and an expiring login notify at their own pace',async()=>{
+ const env=await fixture();
+ const sent:string[]=[];
+ let now=new Date('2026-11-16T12:00:00Z'),log='',disk=50,logins:{key:string;text:string;repeatMs:number}[]=[];
+ const run=()=>runPersonalWatch([env.file],{now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);},images:()=>[],
+  recentLog:async()=>log,diskUsedPercent:async()=>disk,logins:async()=>logins});
+ try{
+  const line='RECONCILIATION_FAILED NATIVE_JOB_RECONCILIATION_FAILED: d766dbd8-ebb9-4eb1-9c66-4445bdfd4481 NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE';
+  log=Array(9).fill(line).join('\n');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  log=Array(12).fill(line).concat(Array(40).fill('{"event":"PERSONAL_NOTICE_SUPPRESSED","text":"Tarefa na fila."}')).join('\n');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=error');
+  assert.match(sent[0]!,/^Erro repetido no Agent Control \(12 vezes em 5 min\): RECONCILIATION_FAILED NATIVE_JOB_RECONCILIATION_FAILED: \* NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE$/);
+  now=new Date('2026-11-16T12:30:00Z');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  now=new Date('2026-11-16T13:01:00Z');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=error');
+  log='';disk=93;
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=disk');
+  assert.match(sent.at(-1)!,/^Disco do servidor em 93%/);
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  disk=50;logins=[{key:'login:abc',text:'O login do Claude vence em 2 dias.',repeatMs:24*3600_000}];
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok notice=login');
+  assert.equal(await run(),'watch gateway=up failures=0 images=ok');
+  assert.equal(sent.length,4);
+  // A notice that could not be sent is tried again on the next check.
+  logins=[{key:'login:def',text:'O Grok está sem login válido.',repeatMs:24*3600_000}];
+  let failing=true;
+  const flaky=()=>runPersonalWatch([env.file],{now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{if(failing)throw new Error('push down');sent.push(body);},images:()=>[],
+   recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>logins});
+  assert.equal(await flaky(),'watch gateway=up failures=0 images=ok');
+  failing=false;
+  assert.equal(await flaky(),'watch gateway=up failures=0 images=ok notice=login');
+  assert.equal(sent.at(-1),'O Grok está sem login válido.');
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
