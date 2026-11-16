@@ -125,6 +125,86 @@ function line(slot: Slot): string {
   return slot.reserve ? `${base}; reserva: ${slot.reserve.model} ${effortLabel[slot.reserve.effort]} (${slot.reserve.provider})` : base
 }
 
+const accountsSchema = z.object({
+  accounts: z.array(z.object({
+    id: z.string(),
+    provider: z.string(),
+    label: z.string(),
+    exhaustedUntil: z.string().nullable(),
+    login: z.string().nullable(),
+  })),
+})
+type Account = z.infer<typeof accountsSchema>['accounts'][number]
+
+function untilText(iso: string): string {
+  const date = new Date(iso)
+  return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+/** Each account's quota pause and login, with a button that ends a pause now. */
+function AccountsSection() {
+  const [accounts, setAccounts] = useState<Account[] | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+
+  async function load() {
+    const response = await agentControlFetch('/api/v1/ac/personal/accounts', { cache: 'no-store' })
+    if (!response.ok) throw new Error('ACCOUNTS_UNAVAILABLE')
+    setAccounts(accountsSchema.parse(await response.json()).accounts)
+  }
+
+  useEffect(() => {
+    let cancel = false
+    const refresh = () => { load().catch(() => { if (!cancel) setError('Não foi possível ler as contas.') }) }
+    refresh()
+    const timer = setInterval(refresh, 30_000)
+    return () => { cancel = true; clearInterval(timer) }
+  }, [])
+
+  async function release(account: Account) {
+    if (busy) return
+    setBusy(account.id)
+    setError('')
+    try {
+      const response = await agentControlFetch(`/api/v1/ac/personal/accounts/${account.id}/release`, { method: 'POST' })
+      if (!response.ok) throw new Error('RELEASE_FAILED')
+      await load()
+    } catch {
+      setError('Não foi possível liberar a conta.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-2" aria-label="Contas">
+      <h2 className="font-medium">Contas</h2>
+      {error ? <p role="alert">{error}</p> : null}
+      {accounts === null && !error ? <p>Carregando…</p> : null}
+      <ul className="flex flex-col gap-2">
+        {(accounts ?? []).map((account) => (
+          <li key={account.id} className="flex flex-col gap-1 rounded-md border border-input p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong>{account.label}</strong>
+              <span className="text-xs text-muted-foreground">{account.provider}</span>
+              {account.exhaustedUntil
+                ? <span className="rounded-full bg-muted px-2 py-0.5 text-xs">sem cota até {untilText(account.exhaustedUntil)}</span>
+                : <span className="rounded-full bg-muted px-2 py-0.5 text-xs">disponível</span>}
+            </div>
+            {account.exhaustedUntil ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p>A reserva do combo assume os papéis desta conta até lá.</p>
+                <Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => void release(account)}>Liberar agora</Button>
+              </div>
+            ) : null}
+            {account.login ? <p role="status">{account.login}</p> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 /** Managed team screen. Lists combos, marks the project's current one, and edits owner combos. */
 export function EquipeRoute() {
   const [current, setCurrent] = useState<string | null>(null)
@@ -270,6 +350,7 @@ export function EquipeRoute() {
     <div data-route="equipe" className="flex flex-col gap-4 px-3 py-4 text-sm">
       <h1 className="text-lg font-medium">Equipe</h1>
       <p>Combo atual: {current ?? 'nenhum'}</p>
+      <AccountsSection />
       {error ? <p role="alert">{error}</p> : null}
       {notice ? <p>{notice}</p> : null}
       <ul className="flex flex-col gap-2">

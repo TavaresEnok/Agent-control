@@ -37,6 +37,7 @@ import {readFile,realpath} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 import {parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig} from './personal-qa-config.ts';
 import {applyPersonalCombo,listPersonalCombos,PersonalCombo,projectComboName,writeOwnerCombo} from './personal-combos.ts';
+import {personalAccountStatus,releasePersonalAccount} from './personal-accounts.ts';
 import {archivedInView,childRunTaskId,clipPanelTitle,planTaskDisplayTitle,type PlanTaskSummary} from './personal-run-title.ts';
 
 // Only immutable public UI files are served without a session. Never delegate an
@@ -378,6 +379,19 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     const applied=await applyPersonalCombo(ledger,personalPanel.owner??c.get('principal'),personalPanel.projectId,input.name,personalPanel.dataDirectory);
     c.header('Cache-Control','no-store');
     return c.json({name:applied.name,revision:applied.revision,maxProgrammersPerContext:applied.maxProgrammersPerContext,qaModel:applied.qaModel});
+  });
+  app.get('/api/v1/ac/personal/accounts',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    c.header('Cache-Control','no-store');
+    return c.json({accounts:await personalAccountStatus(ledger.pool,personalPanel.projectId,personalPanel.dataDirectory,personalPanel.installationPath)});
+  });
+  app.post('/api/v1/ac/personal/accounts/:accountId/release',async c=>{
+    if(!personalPanel)return c.json({error:'NOT_FOUND'},404);
+    await requireInstallationOwner(c.get('principal'));
+    await releasePersonalAccount(ledger.pool,personalPanel.projectId,Id.parse(c.req.param('accountId')));
+    c.header('Cache-Control','no-store');
+    return c.json({released:true});
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;
