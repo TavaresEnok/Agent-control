@@ -147,6 +147,8 @@ O `personal-connect` grava em `dataDirectory` o segredo da conta (`happier-accou
 
 ### Conversar pelo terminal
 
+Quando o revisor termina sem um veredito legível (por exemplo, JSON quebrado), a etapa fecha como "veredito inutilizável", sem contar como aprovação, e o revisor é chamado de novo. A primeira nova tentativa usa o mesmo revisor; a segunda evita as contas que já falharam nessa etapa e cai na reserva, se houver. Depois de duas novas tentativas sem veredito, a tarefa falha.
+
 A conversa mostra cada papel pelo nome, com provedor, modelo e esforço: o gerente montando o plano, o programador começando e terminando (com o que ele disse, o commit e os arquivos alterados), o resultado do QA e o veredito do revisor com os apontamentos. O histórico fica na própria conversa, então aparece também no app.
 
 ```bash
@@ -292,7 +294,9 @@ npm run gateway -- account-add /caminho/instalacao.json claude "Claude"
 npm run gateway -- account-add /caminho/instalacao.json grok "Grok"
 ```
 
-O comando mostra a URL e o código. Abra a URL, informe o código e conclua o login. Para copiar um login que já é seu, sem movê-lo:
+O comando mostra a URL e o código. Abra a URL, informe o código e conclua o login.
+
+Na tela Equipe do painel, "Contas" mostra cada conta do projeto: "disponível" ou "sem cota até" a hora em que o provedor libera, e o aviso de login quando houver. Enquanto uma conta está sem cota, a reserva do combo assume os papéis dela. "Liberar agora" encerra a pausa na hora; se o provedor ainda estiver sem cota, a pausa volta no próximo job. Para copiar um login que já é seu, sem movê-lo:
 
 ```bash
 npm run gateway -- account-add <instalacao> claude Claude --auth-file "$HOME/.claude/.credentials.json"
@@ -346,9 +350,25 @@ npm run personal:timers -- <instalação.json>
 Isso grava e liga:
 
 - `agent-control-watch-<nome>.service` e `.timer`, a cada 2 minutos;
-- `agent-control-backup-<nome>.service` e `.timer`, todo dia às 03:30, na pasta `/home/app/backups-agent-control/<nome>`.
+- `agent-control-backup-<nome>.service` e `.timer`, todo dia às 03:30, na pasta `/home/app/backups-agent-control/<nome>`;
+- `agent-control-maintenance-<nome>.service` e `.timer`, todo domingo às 04:00 (`npm run personal:maintenance -- <instalação.json>`);
+- `agent-control-restore-proof-<nome>.service` e `.timer`, todo dia 1 às 04:30 (`npm run personal:restore-proof -- <instalação.json> <pasta-dos-backups>`).
 
-`--remove` desliga e apaga esses quatro units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
+A cada 2 minutos a vigia também manda um aviso ao celular quando:
+
+- a mesma linha de erro aparece 10 vezes ou mais nos últimos 5 minutos do gateway (repete no máximo de hora em hora);
+- o disco passa de 90% (no máximo a cada 6 horas);
+- o login de uma conta está para vencer em até 3 dias ou falta no arquivo de login (no máximo uma vez por dia). O aviso já traz o comando `account-add` para entrar de novo.
+
+A manutenção semanal apaga o cache de build do Docker com mais de 7 dias e tira da instalação as imagens aposentadas (`retiredImages` e `retiredImageIds`) que nenhum job aberto ainda usa, apagando-as do Docker. Antes de mudar a instalação, ela guarda `installation.json.before-maintenance`. Volumes, contêineres e imagens de outros projetos não são tocados.
+
+A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
+
+`--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
+
+## Testes do Agent Control
+
+`npm test` roda o executor de CI (`scripts/test-ci.mjs`): um processo por arquivo, com bancos descartáveis. Ele precisa de `AC_TEST_DATABASE_URL` apontando para um Postgres descartável. Os arquivos que precisam do laboratório (Docker, SSH, Happier ou `sudo`) ficam fora e aparecem na lista `excluded` do resultado. Para rodar tudo, no laboratório: `npm run test:all`.
 
 ## Logs e atualização
 

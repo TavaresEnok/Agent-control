@@ -19,7 +19,7 @@ Atualize esta tabela a cada commit.
 | 6 | Avisos no celular e entrada sem o app Happier | código pronto e no ar (`37e1d090`…`02573d12`, correção `6d97d47d`); entrada por código provada no endereço público (válido entra, errado e reuso recusados, limite por endereço). **Falta o titular:** ativar os avisos no celular e tocar em "Enviar teste" |
 | 7 | Fechamento | **feita**: revisão independente sem achado alto, 12 achados médios e baixos corrigidos (`bda6ba69`, `0e4f6a89`, `17310d60`); backup real (`personal:backup`, 292 MB) e restauração conferida num banco descartável; serviços derrubados e religados voltaram sozinhos e responderam; reinício real da máquina e push ficam com o titular |
 
-Último commit conferido: `9f071527` (combos complexo, intermediário e economia e a reserva provados ao vivo; 8 defeitos corrigidos). Plano concluído; restam só as ações do titular.
+Último commit conferido: `331fea35` mais as melhorias de 16/11 abaixo (combos complexo, intermediário e economia e a reserva provados ao vivo; 8 defeitos corrigidos). Plano concluído; restam só as ações do titular.
 
 ## Aonde queremos chegar
 
@@ -67,8 +67,8 @@ Não escreva testes de tela, de texto ou de casos raros. Não rode a suíte comp
 ## Fase 0 — Fechar o que já existe (pequena)
 
 - [ ] **Titular:** entrar no painel pelo celular ("Entrar pelo Happier", aprovar no app) e instalar como app. Se falhar, corrigir com o print.
-- [ ] Um pedido real no IspAgent, para confirmar que a tarefa mostra o relato de cada papel com o modelo (`src/personal-team-feed.ts`, `stageReport`).
-- [ ] Tirar do painel o que engana:
+- [x] Um pedido real no IspAgent, para confirmar que a tarefa mostra o relato de cada papel com o modelo (`src/personal-team-feed.ts`, `stageReport`).
+- [x] Tirar do painel o que engana:
   - a dica "claude --resume" de assumir a sessão;
   - o seletor de modelo claude/opus;
   - os erros 403 de star-count, agent-profiles e skills-update. O gateway passa a responder vazio, como já faz com os registros de leitura em `src/api.ts`.
@@ -77,13 +77,13 @@ Não escreva testes de tela, de texto ou de casos raros. Não rode a suíte comp
 
 ## Fase 1 — Conversar pelo painel
 
-1. [ ] **Ler a conversa:** `GET /api/v1/ac/personal/conversation?projectId=…&after=…` no gateway. Devolve as mensagens decifradas do projeto (titular, gerente e equipe), em páginas, usando a mesma chave e a mesma recuperação de histórico da ponte (`recoverHistory` em `src/happier.ts`). Só no modo pessoal e só com login.
-2. [ ] **Enviar mensagem:** `POST /api/v1/ac/personal/messages {projectId,text,clientId}`. Grava o texto como mensagem do titular na conversa do Happier do projeto e a ponte processa como hoje. `clientId` evita mensagem duplicada quando o celular reenvia.
+1. [x] **Ler a conversa:** `GET /api/v1/ac/personal/conversation?projectId=…&after=…` no gateway. Devolve as mensagens decifradas do projeto (titular, gerente e equipe), em páginas, usando a mesma chave e a mesma recuperação de histórico da ponte (`recoverHistory` em `src/happier.ts`). Só no modo pessoal e só com login.
+2. [x] **Enviar mensagem:** `POST /api/v1/ac/personal/messages {projectId,text,clientId}`. Grava o texto como mensagem do titular na conversa do Happier do projeto e a ponte processa como hoje. `clientId` evita mensagem duplicada quando o celular reenvia.
    - **Se o Happier não aceitar a gravação pelo gateway:** chamar o `accept()` do transporte do projeto e espelhar o texto na conversa. Registre aqui qual caminho ficou.
-3. [ ] **Tela "Conversa" no painel:** lista de mensagens com atualização a cada 2–3 s e caixa de texto. Ela substitui o aviso "canonical-happier-conversation" de `upstream/cezar/packages/web/src/components/composer/composer.tsx` e a caixa "Continue" que não funciona.
-4. [ ] **Botões Aprovar, Descartar, Parar e Equipe**, que enviam as palavras de controle de hoje (`src/personal-conversation.ts`). Não se cria nenhum caminho novo de autoridade.
-5. [ ] **Proposta legível:** cartão com as tarefas e os arquivos da proposta pendente, usando os endpoints `manager-plans` que a página já conhece.
-6. [ ] **"Nova tarefa" do Cezar** passa a abrir a conversa com o texto já preenchido.
+3. [x] **Tela "Conversa" no painel:** lista de mensagens com atualização a cada 2–3 s e caixa de texto. Ela substitui o aviso "canonical-happier-conversation" de `upstream/cezar/packages/web/src/components/composer/composer.tsx` e a caixa "Continue" que não funciona.
+4. [x] **Botões Aprovar, Descartar, Parar e Equipe**, que enviam as palavras de controle de hoje (`src/personal-conversation.ts`). Não se cria nenhum caminho novo de autoridade.
+5. [x] **Proposta legível:** cartão com as tarefas e os arquivos da proposta pendente, usando os endpoints `manager-plans` que a página já conhece.
+6. [x] **"Nova tarefa" do Cezar** passa a abrir a conversa com o texto já preenchido.
 
 **Testes essenciais:** um teste dos dois endpoints, cobrindo a recusa sem login, a recusa fora do modo pessoal e o `clientId` repetido sem duplicar.
 
@@ -91,19 +91,19 @@ Não escreva testes de tela, de texto ou de casos raros. Não rode a suíte comp
 
 ## Fase 2 — Vários projetos numa instalação (a maior)
 
-1. [ ] **`composePersonalRuntime` (`src/personal-runtime.ts`) passa a ser por projeto.** Hoje ele usa `config.project.repo` em cerca de seis pontos.
+1. [x] **`composePersonalRuntime` (`src/personal-runtime.ts`) passa a ser por projeto.** Hoje ele usa `config.project.repo` em cerca de seis pontos.
    - Continuam comuns: imagens, rede dos workers, chaves de assinatura e pastas de contas.
    - Passam a ser por projeto: trava do repositório, artefatos Git, QA e implementação.
-2. [ ] **`src/server-main.ts`:** tirar as condições `project.id===config.project.id` do modo pessoal (linhas ~174–179). Cada projeto de `projects[]` ganha execução, transporte do gerente e conversa com o gerente.
-3. [ ] **Relatos da equipe e das etapas por projeto:** hoje `registerStageReporter` aceita um único repositório.
-4. [ ] **Uma conversa do Happier por projeto**, na mesma conta (`src/personal-connect.ts`).
-5. [ ] **Capacidade:**
+2. [x] **`src/server-main.ts`:** tirar as condições `project.id===config.project.id` do modo pessoal (linhas ~174–179). Cada projeto de `projects[]` ganha execução, transporte do gerente e conversa com o gerente.
+3. [x] **Relatos da equipe e das etapas por projeto:** hoje `registerStageReporter` aceita um único repositório.
+4. [x] **Uma conversa do Happier por projeto**, na mesma conta (`src/personal-connect.ts`).
+5. [x] **Capacidade:**
    - contas comuns a todos os projetos;
    - políticas de capacidade e de qualidade por projeto;
    - um limite global de execuções simultâneas por conta, para não estourar a cota.
-6. [ ] **`npm run personal:project -- --add <instalação.json> <repositório> --label x`:** acrescenta o projeto a uma instalação existente, sem banco novo e sem login novo. A lógica fica num módulo que a Fase 3 reaproveita.
-7. [ ] **Seletor de projetos no painel:** a página do Cezar já lista projetos por `/api/v1/projects`. Cada projeto tem a própria conversa e as próprias tarefas.
-8. [ ] **Migração, com backup do banco, do cofre e de `installation.json` antes:**
+6. [x] **`npm run personal:project -- --add <instalação.json> <repositório> --label x`:** acrescenta o projeto a uma instalação existente, sem banco novo e sem login novo. A lógica fica num módulo que a Fase 3 reaproveita.
+7. [x] **Seletor de projetos no painel:** a página do Cezar já lista projetos por `/api/v1/projects`. Cada projeto tem a própria conversa e as próprias tarefas.
+8. [x] **Migração, com backup do banco, do cofre e de `installation.json` antes:**
    - a instalação do IspAgent vira a principal;
    - a instalação de teste `smoke` fica de lado;
    - as sobras `smoke2` podem ser apagadas com o OK do titular.
@@ -114,10 +114,10 @@ Não escreva testes de tela, de texto ou de casos raros. Não rode a suíte comp
 
 ## Fase 3 — Novo projeto pelo painel (local)
 
-1. [ ] **Navegar nas pastas:** `GET /api/v1/ac/personal/folders?path=…` lista subpastas só dentro das raízes permitidas (`projectRoots`) e marca quais são repositórios Git. Não segue link simbólico e recusa `..`.
-2. [ ] **Criar o projeto:** `POST /api/v1/ac/personal/projects {path,label}` faz o mesmo que o `--add` da Fase 2, com o mesmo módulo. Só aceita repositório Git com um branch. Se a pasta não for Git, explica como resolver.
-3. [ ] **Tela "Novo projeto":** navegar, escolher a pasta, dar um nome, criar e cair na conversa do projeto.
-4. [ ] **Arquivar projeto pelo painel:** some da lista e não apaga nenhum arquivo.
+1. [x] **Navegar nas pastas:** `GET /api/v1/ac/personal/folders?path=…` lista subpastas só dentro das raízes permitidas (`projectRoots`) e marca quais são repositórios Git. Não segue link simbólico e recusa `..`.
+2. [x] **Criar o projeto:** `POST /api/v1/ac/personal/projects {path,label}` faz o mesmo que o `--add` da Fase 2, com o mesmo módulo. Só aceita repositório Git com um branch. Se a pasta não for Git, explica como resolver.
+3. [x] **Tela "Novo projeto":** navegar, escolher a pasta, dar um nome, criar e cair na conversa do projeto.
+4. [x] **Arquivar projeto pelo painel:** some da lista e não apaga nenhum arquivo.
 
 **Testes essenciais:** um teste de caminho, que recusa pasta fora das raízes, `..` e link simbólico que aponta para fora.
 
@@ -125,24 +125,24 @@ Não escreva testes de tela, de texto ou de casos raros. Não rode a suíte comp
 
 ## Fase 4 — Projeto em outro servidor por SSH
 
-1. [ ] **Chave SSH da instalação:** gerar uma chave própria em `<dataDirectory>/ssh/` (ed25519). Ela não é a do usuário e pode ser revogada sozinha. O painel mostra a chave pública para o titular pôr no `authorized_keys` do outro servidor.
-2. [ ] **Cadastrar o servidor:**
+1. [x] **Chave SSH da instalação:** gerar uma chave própria em `<dataDirectory>/ssh/` (ed25519). Ela não é a do usuário e pode ser revogada sozinha. O painel mostra a chave pública para o titular pôr no `authorized_keys` do outro servidor.
+2. [x] **Cadastrar o servidor:**
    - o titular informa host, porta e usuário;
    - na primeira conexão o painel mostra a identidade (fingerprint) e o titular confirma;
    - a identidade fica num `known_hosts` da instalação;
    - se a identidade mudar depois, o servidor é bloqueado e não há aceite automático.
-3. [ ] **Navegar nas pastas remotas:** comando fixo pelo SSH, com o caminho validado e passado como argumento. O usuário nunca monta o comando. Mostra quais pastas são repositórios Git.
-4. [ ] **Criar o projeto remoto:**
+3. [x] **Navegar nas pastas remotas:** comando fixo pelo SSH, com o caminho validado e passado como argumento. O usuário nunca monta o comando. Mostra quais pastas são repositórios Git.
+4. [x] **Criar o projeto remoto:**
    - `git clone` por SSH para `<dataDirectory>/remote/<label>`;
    - o projeto guarda de onde veio;
    - a partir daí funciona como um projeto local, com o mecanismo das Fases 2 e 3.
-5. [ ] **Antes de cada pedido:** `git fetch` do servidor remoto, para trabalhar sobre a versão atual do branch alvo.
-6. [ ] **Devolver o resultado:**
+5. [x] **Antes de cada pedido:** `git fetch` do servidor remoto, para trabalhar sobre a versão atual do branch alvo.
+6. [x] **Devolver o resultado:**
    - depois da integração, `git push` para `refs/heads/agent-control/<data>-<tarefa>` no servidor remoto;
    - a conversa informa o branch e como juntar lá;
    - o branch principal do remoto nunca é tocado;
    - se a conexão cair, o mesmo push é refeito (é seguro repetir), sem refazer o trabalho.
-7. [ ] **Opcional, só se o titular pedir:** botão "aplicar no principal" que faz o push para o branch alvo, só em avanço direto (fast-forward) e com aprovação explícita.
+7. [ ] **Opcional, só se o titular pedir:** botão "aplicar no principal" que faz o push para o branch alvo, só em avanço direto (fast-forward) e com aprovação explícita. (não pedido até agora)
 
 **Testes essenciais:**
 
@@ -156,32 +156,32 @@ Não escreva testes de tela, de texto ou de casos raros. Não rode a suíte comp
 
 ## Fase 5 — QA que roda os testes do projeto
 
-1. [ ] **Configuração por projeto, no painel:** "comando de preparo" (por exemplo `npm ci`) e "comando de teste" (por exemplo `npm test`). Hoje o QA só confere conflito, JSON e sintaxe de JavaScript.
-2. [ ] **O QA roda os dois comandos no contêiner de QA**, com cache de dependências por projeto, limite de tempo e as últimas linhas do erro na conversa.
-3. [ ] **Projeto sem comando configurado continua com o QA de hoje.**
+1. [x] **Configuração por projeto, no painel:** "comando de preparo" (por exemplo `npm ci`) e "comando de teste" (por exemplo `npm test`). Hoje o QA só confere conflito, JSON e sintaxe de JavaScript.
+2. [x] **O QA roda os dois comandos no contêiner de QA**, com cache de dependências por projeto, limite de tempo e as últimas linhas do erro na conversa.
+3. [x] **Projeto sem comando configurado continua com o QA de hoje.**
 
 **Pronto quando:** no IspAgent, um pedido que quebra um teste é reprovado pelo QA, com o teste que falhou na conversa, e um pedido normal passa.
 
 ## Fase 6 — Avisos no celular e entrada sem o app Happier
 
-1. [ ] **Service worker e Web Push:**
+1. [x] **Service worker e Web Push:**
    - chaves VAPID da instalação em `<dataDirectory>`;
    - cada aparelho se inscreve uma vez;
    - o service worker não guarda respostas da API, para não mostrar dado velho.
-2. [ ] **Quando avisar:** proposta pronta, execução integrada, falha e pergunta do gerente. Tocar no aviso abre a conversa certa.
-3. [ ] **Entrada sem o app Happier:** um código de uso único, gerado por `npm run gateway -- pair <instalação.json>`, autoriza um aparelho novo. "Entrar pelo Happier" continua disponível.
-4. [ ] **Avisos do Happier:** passam a ser opcionais, ligados ou desligados por instalação.
+2. [x] **Quando avisar:** proposta pronta, execução integrada, falha e pergunta do gerente. Tocar no aviso abre a conversa certa.
+3. [x] **Entrada sem o app Happier:** um código de uso único, gerado por `npm run gateway -- pair <instalação.json>`, autoriza um aparelho novo. "Entrar pelo Happier" continua disponível.
+4. [x] **Avisos do Happier:** passam a ser opcionais, ligados ou desligados por instalação.
 
 **Pronto quando:** com o celular bloqueado, chega "Proposta pronta" e o toque abre a conversa do projeto certo. Um aparelho novo entra com o código, sem o app Happier. No iPhone, o aviso só funciona com o painel instalado como app (iOS 16.4 ou mais novo).
 
 ## Fase 7 — Fechamento
 
-1. [ ] **Revisão independente** do que é novo (endpoints, pastas, SSH, push e avisos), seguindo o `AGENTS.md`, e correção dos achados graves.
-2. [ ] **Backup:**
+1. [x] **Revisão independente** do que é novo (endpoints, pastas, SSH, push e avisos), seguindo o `AGENTS.md`, e correção dos achados graves.
+2. [x] **Backup:**
    - `npm run personal:backup` salva a chave Happier, o cofre, o banco e as chaves SSH e VAPID;
    - testar uma restauração numa instalação descartável.
-3. [ ] **Reinício do servidor:** confirmar que os serviços voltam sozinhos e o painel responde.
-4. [ ] **Atualizar os documentos:** `docs/USO-PESSOAL.md` (como usar), `docs/RELATORIO-FINAL-USO-PESSOAL.md` (o que foi provado) e esta tabela.
+3. [ ] **Reinício do servidor:** confirmar que os serviços voltam sozinhos e o painel responde. Serviços derrubados e religados voltaram sozinhos; o reinício real da máquina fica com o titular.
+4. [x] **Atualizar os documentos:** `docs/USO-PESSOAL.md` (como usar), `docs/RELATORIO-FINAL-USO-PESSOAL.md` (o que foi provado) e esta tabela.
 5. [ ] **Titular:** decidir o push do branch.
 
 **Pronto quando:** não resta achado grave, o backup foi restaurado num teste e os serviços voltam sozinhos depois de reiniciar o servidor.
@@ -301,3 +301,21 @@ Correções que a prova exigiu:
 - **Vez do gerente:** renovada continuamente.
 - **Reservas órfãs:** limpas a cada 2 minutos.
 - **`personal:images`:** apaga as pastas de preparo. Sem isso, as reconstruções encheram o disco em 13/11.
+
+## Melhorias de 16/11/2026
+
+Pedidas pelo titular depois do fechamento e feitas pelo Claude, sem o Grok.
+
+| Melhoria | Estado |
+|---|---|
+| Revisor sem veredito legível tenta de novo | **feita e provada** em teste de fluxo completo (`native-corrections`, cenário "slip"): a primeira resposta quebrada fecha a etapa como veredito inutilizável, a nova tentativa aprova e a tarefa integra. Segunda tentativa evita as contas que falharam (`avoidAccounts`, teste em `personal-reserve`). Máximo de 2 novas tentativas |
+| Aviso de erro repetido no gateway | **feita**: a vigia de 2 min avisa quando a mesma linha aparece 10 vezes em 5 min (no máximo de hora em hora). Conferida contra o log real do revisor órfão: teria avisado com 79 repetições |
+| Contas e cotas no painel | **feita**: seção "Contas" na tela Equipe, com "sem cota até" e "Liberar agora" (`/api/v1/ac/personal/accounts`) |
+| Aviso de login perto de vencer | **feita**: a vigia lê os arquivos de login e avisa 3 dias antes de o login do Claude vencer, ou quando falta login em qualquer conta |
+| Limpeza do disco e das imagens aposentadas | **feita e rodada**: `personal:maintenance` todo domingo 04:00; aviso com o disco em 90%. Na primeira rodada saíram 1 par de execução e 7 imagens de planejamento aposentadas |
+| `npm test` limpo | **feita**: `npm test` roda o executor de CI; os arquivos de laboratório aparecem em `excluded`; a suíte inteira é `npm run test:all` |
+| Plano acertado | **feita**: caixas marcadas; ficam abertas só as ações do titular |
+| Revisão de segurança externa | **pacote pronto** em `docs/REVISAO-SEGURANCA-EXTERNA.md`; a revisão em si precisa de uma pessoa ou de outro provedor |
+| Prova mensal de restauração | **feita e rodada**: `personal:restore-proof` no dia 1 às 04:30. A primeira rodada restaurou o backup de 16/11 num banco descartável (4 projetos, 4 conversas, 208 pedidos) e apagou o banco |
+
+Revisão independente por modelo Claude distinto (Claude Sonnet 5.5, esforço médio, só leitura) sobre estas mudanças antes do commit. Um achado alto: a nova tentativa do revisor embrulhava o veredito duas vezes, e uma reprovação na nova tentativa podia sair como aprovação. Corrigido, com teste que falha no código antigo (`native-corrections`, cenário "slip-reject"). Também corrigidos: contas evitadas só da própria cadeia de tentativas, pasta de logins única (`accountHomesDirectory`), aviso não enviado volta na próxima checagem, e URLs, caminhos e tokens mascarados no aviso de erro. Executor de CI: 173 de 173 arquivos, 79 de laboratório fora.
