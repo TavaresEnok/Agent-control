@@ -1,6 +1,7 @@
 import {Refusal} from './contracts.ts';
+import {VERIFY_RUNTIME_BIN} from './verify-image.ts';
 
-/** Local homologation only. Another host is VERIFY_EXTERNAL_TARGET; a different destination or port is VERIFY_TARGET_ESCAPE. */
+/** Loopback or one container label. Another host is VERIFY_EXTERNAL_TARGET; a different destination or port is VERIFY_TARGET_ESCAPE. */
 export type DynamicScanPlan = {
   network: 'verify-homologation';
   allowedHost: string;
@@ -19,8 +20,14 @@ function normalizeHost(hostname: string): string {
   return lower.endsWith('.') ? lower.slice(0, -1) : lower;
 }
 
+const SINGLE_LABEL = /^[a-z0-9]([a-z0-9-]{0,62})$/;
+
+function isSingleLabel(value: string): boolean {
+  return SINGLE_LABEL.test(value);
+}
+
 function allowedName(host: string): boolean {
-  return host === '127.0.0.1' || host === 'localhost' || host.endsWith('.local');
+  return host === '127.0.0.1' || host === 'localhost' || isSingleLabel(host);
 }
 
 function endpoint(targetUrl: string): Endpoint {
@@ -52,14 +59,22 @@ function destinationOf(value: string): {host: string; port: number | null} {
   return {host: normalizeHost(trimmed), port: null};
 }
 
+function hostOfToken(token: string): string {
+  const candidates = token.endsWith('.*') ? [token, token.slice(0, -2)] : [token];
+  for (const candidate of candidates) {
+    try { return normalizeHost(new URL(candidate).hostname); }
+    catch { /* a trailing .* is the scanner include regex, not a second host */ }
+  }
+  return '*';
+}
+
 function citedHosts(text: string): string[] {
   const found: string[] = [];
   for (const match of text.matchAll(/[a-z][a-z0-9+.-]*:\/\//gi)) {
     const slice = text.slice(match.index ?? 0);
     const end = slice.search(/[\s'"]/);
     const token = end === -1 ? slice : slice.slice(0, end);
-    try { found.push(normalizeHost(new URL(token).hostname)); }
-    catch { found.push('*'); }
+    found.push(hostOfToken(token));
   }
   for (const match of text.matchAll(/\b(\d{1,3}(?:\.\d{1,3}){3})\b/g)) found.push(match[1]);
   return found;
@@ -79,12 +94,27 @@ export function dynamicScanPlan(targetUrl: string): DynamicScanPlan {
     allowedHost: target.host,
     allowedPort: target.port,
     tools: [
-      {name: 'zap', mode: 'baseline-passivo', args: ['zap-baseline.py', '-t', target.raw]},
+      {name: 'zap', mode: 'baseline-passivo', args: ['zap-baseline.py', '-t', target.raw, '-z', `-config contexts.context.0.include=${target.origin}.*`]},
       {name: 'schemathesis', args: ['schemathesis', 'run', schema, '--base-url', target.origin]},
-      {name: 'nuclei', args: ['nuclei', '-u', target.raw, '-tags', 'cve,exposure,misconfig']},
+      {name: 'nuclei', args: ['nuclei', '-u', target.raw, '-tags', 'cve,exposure,misconfig', '-follow-redirects=false']},
     ],
   };
   const foreign = plan.tools.flatMap(tool => tool.args.flatMap(citedHosts)).filter(host => host !== target.host);
   if (foreign.length) throw new Refusal('VERIFY_TARGET_ESCAPE');
   return plan;
+}
+
+/** Create an internal network and attach only the target container. */
+export async function attachInternalTarget({network, container, run}: {
+  network: string;
+  container: string;
+  run: (args: readonly string[]) => Promise<{code: number; stdout: string}>;
+}): Promise<void> {
+  if (!isSingleLabel(network) || !isSingleLabel(container)) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
+  const created = await run([VERIFY_RUNTIME_BIN, 'network', 'create', '--internal', network]);
+  if (created.code !== 0) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
+  const inspected = await run([VERIFY_RUNTIME_BIN, 'network', 'inspect', network, '--format', '{{.Internal}}']);
+  if (inspected.code !== 0 || inspected.stdout.trim() !== 'true') throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
+  const connected = await run([VERIFY_RUNTIME_BIN, 'network', 'connect', network, container]);
+  if (connected.code !== 0) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
 }

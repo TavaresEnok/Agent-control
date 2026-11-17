@@ -10,7 +10,7 @@ const messages:Record<string,string>={
  VERIFY_CONTEXT_REQUIRED:'O projeto não tem um contexto para verificar.',
  VERIFY_DB_REQUIRED:'As bases de vulnerabilidade ainda não estão no servidor.',
  VERIFY_WORKER_UNAVAILABLE:'O runtime pessoal não está ativo.',
- VERIFY_EXTERNAL_TARGET:'A homologação tem que ficar em localhost, 127.0.0.1 ou um nome .local.',
+ VERIFY_EXTERNAL_TARGET:'A homologação tem que ficar em localhost, 127.0.0.1 ou no contêiner-alvo.',
  VERIFY_TARGET_ESCAPE:'A homologação aponta para outro destino.',
  VERIFY_TOOLS_FAILED:'As ferramentas de verificação falharam.',
  VERIFY_COMMIT_INVALID:'Não foi possível ler o commit do repositório.',

@@ -12,6 +12,7 @@ import {Ledger} from '../src/ledger.ts';
 import {ProviderCollectors} from '../src/providers.ts';
 import {createSyntheticProviderAdapter} from '../src/synthetic-provider-adapter.ts';
 import {beginPersonalVerification, readVerificationProgress} from '../src/verify-command.ts';
+import {VERIFY_RUNTIME_BIN} from '../src/verify-image.ts';
 import {listSecurityReports} from '../src/verify-report.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -154,6 +155,7 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     let toolsStarted = false;
     let spec: {image: string; repository: string; databases: string; output: string} | undefined;
     const modelCalls = {count: 0};
+    let networkCalled = false;
     const begun = await beginPersonalVerification({
       projectId: project,
       url: 'http://127.0.0.1:9/app',
@@ -168,6 +170,10 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
       databasesDirectory: databases,
       image,
       modelCalls,
+      networkRunner: async () => {
+        networkCalled = true;
+        return {code: 0, stdout: 'true'};
+      },
       runTools: async received => {
         spec = received;
         toolsStarted = true;
@@ -188,6 +194,7 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     assert.equal(running[0]?.status, 'running');
     assert.equal(running[0]?.phase, 'ferramentas');
     assert.equal(running[0]?.note, HOMOLOGATION_NOTE);
+    assert.equal(networkCalled, false);
     const progressFile = join(dataDirectory, 'verificacoes', project, 'andamento', `${begun.id}.json`);
     assert.equal((await stat(progressFile)).mode & 0o777, 0o600);
     assert.equal((await stat(join(dataDirectory, 'verificacoes'))).mode & 0o777, 0o700);
@@ -206,12 +213,125 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     assert.equal(typeof finished[0]?.durationMs, 'number');
     const reports = await listSecurityReports(dataDirectory, project);
     assert.equal(reports.some(item => item.id === begun.id && item.note.includes(HOMOLOGATION_NOTE)), true);
+    assert.equal(networkCalled, false);
   } finally {
     releaseTools();
     if (observed) await observed.catch(() => undefined);
     await db.close();
     await database.close();
     await rm(repo, {recursive: true, force: true});
+    await rm(dataDirectory, {recursive: true, force: true});
+    await rm(databases, {recursive: true, force: true});
+  }
+});
+
+test('o prazo do exame é seis horas', async () => {
+  const mod = await import('../src/verify-command.ts');
+  assert.equal(mod.EXAM_TIME_LIMIT_MS, 21_600_000);
+});
+
+test('prazo esgotado não chama ferramentas nem o worker', async () => {
+  const url = process.env.AC_TEST_DATABASE_URL;
+  assert.ok(url);
+  const database = await isolatedDatabase(url, 'verify_exam_time');
+  const db = new Ledger(database.url);
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-time-'));
+  const databases = await mkdtemp(join(tmpdir(), 'ac-verify-time-db-'));
+  const projectId = randomUUID();
+  let toolsCalled = false;
+  let workerCalled = false;
+  let observed: Promise<void> | undefined;
+  try {
+    await db.migrate();
+    const begun = await beginPersonalVerification({
+      projectId,
+      dataDirectory,
+      repoPath: dataDirectory,
+      commit: 'a'.repeat(40),
+      ledger: db,
+      principal: 'verify-owner',
+      authority: {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1},
+      policyRevision: 1,
+      worker: {async run() { workerCalled = true; return ''; }},
+      databasesDirectory: databases,
+      image: `sha256:${'ab'.repeat(32)}`,
+      timeLimitMs: -1,
+      runTools: async () => { toolsCalled = true; },
+      observe: job => { observed = job; },
+    });
+    assert.equal(begun.status, 'running');
+    assert.ok(observed);
+    await assert.rejects(observed, (error: unknown) => {
+      assert.equal(error instanceof Error, true);
+      assert.equal((error as Error).message, 'VERIFY_EXAM_TIMEOUT');
+      return true;
+    });
+    assert.equal(toolsCalled, false);
+    assert.equal(workerCalled, false);
+    const finished = await readVerificationProgress(dataDirectory, projectId);
+    assert.equal(finished.length, 1);
+    assert.equal(finished[0]?.id, begun.id);
+    assert.equal(finished[0]?.status, 'failed');
+    assert.equal(finished[0]?.phase, 'failed');
+  } finally {
+    if (observed) await observed.catch(() => undefined);
+    await db.close();
+    await database.close();
+    await rm(dataDirectory, {recursive: true, force: true});
+    await rm(databases, {recursive: true, force: true});
+  }
+});
+
+test('contêiner alvo entra na rede interna e o laço não varre', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-net-'));
+  const databases = await mkdtemp(join(tmpdir(), 'ac-verify-netdb-'));
+  const projectId = randomUUID();
+  const calls: string[][] = [];
+  let releaseTools = () => {};
+  let stop = false;
+  const gate = new Promise<void>(resolve => { releaseTools = resolve; });
+  let observed: Promise<void> | undefined;
+  try {
+    const begun = await beginPersonalVerification({
+      projectId,
+      url: 'http://verify-alvo:9/app',
+      dataDirectory,
+      repoPath: dataDirectory,
+      commit: 'ab'.repeat(20),
+      ledger: {} as Ledger,
+      principal: 'verify-owner',
+      authority: {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1},
+      policyRevision: 1,
+      worker: {async run() { throw new Error('worker'); }},
+      databasesDirectory: databases,
+      image: `sha256:${'cd'.repeat(32)}`,
+      networkRunner: async args => {
+        calls.push([...args]);
+        return {code: 0, stdout: args.includes('inspect') ? 'true' : ''};
+      },
+      runTools: async () => {
+        await gate;
+        if (stop) throw new Error('fim do teste');
+      },
+      observe: job => { observed = job; },
+    });
+    const network = `verify-homologation-${begun.id.replaceAll('-', '').slice(0, 8)}`;
+    assert.match(network, /^verify-homologation-[a-f0-9]{8}$/);
+    assert.deepEqual(calls, [
+      [VERIFY_RUNTIME_BIN, 'network', 'create', '--internal', network],
+      [VERIFY_RUNTIME_BIN, 'network', 'inspect', network, '--format', '{{.Internal}}'],
+      [VERIFY_RUNTIME_BIN, 'network', 'connect', network, 'verify-alvo'],
+    ]);
+    const running = await readVerificationProgress(dataDirectory, projectId);
+    assert.equal(running.length, 1);
+    assert.equal(running[0]?.status, 'running');
+    assert.equal(running[0]?.note, HOMOLOGATION_NOTE);
+  } finally {
+    if (observed) {
+      stop = true;
+      releaseTools();
+      await observed.catch(() => undefined);
+    }
     await rm(dataDirectory, {recursive: true, force: true});
     await rm(databases, {recursive: true, force: true});
   }

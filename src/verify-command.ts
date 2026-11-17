@@ -8,8 +8,8 @@ import {loadInstallation, readPrivateFile, type Installation} from './installati
 import {Ledger} from './ledger.ts';
 import {collectToolFindings} from './verify-collect.ts';
 import {readCurrentVerifyDatabase} from './verify-db.ts';
-import {dynamicScanPlan} from './verify-dynamic.ts';
-import {verifyExamArguments} from './verify-image.ts';
+import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
+import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
 import {type SecurityExamSupervisor} from './verify-native-launch.ts';
 import {runSecurityVerification} from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
@@ -19,6 +19,8 @@ export const HOMOLOGATION_NOTE = 'Homologação declarada e não varrida: a imag
 const EXAM_MEMORY_BYTES = 2_147_483_648;
 const EXAM_NANO_CPUS = 1_000_000_000;
 const EXAM_PIDS = 256;
+/** Six hours. A full exam finished in about three, so this is the ceiling. */
+export const EXAM_TIME_LIMIT_MS = 21_600_000;
 
 export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string}) => Promise<void>;
 
@@ -39,6 +41,8 @@ export type PersonalVerificationInput = {
   databasesDirectory?: string;
   image?: string;
   modelCalls?: {count: number};
+  timeLimitMs?: number;
+  networkRunner?: (args: readonly string[]) => Promise<{code: number; stdout: string}>;
 };
 
 export type VerificationProgress = {
@@ -66,6 +70,7 @@ type ReadyVerification = {
   databasesDirectory: string;
   image: string;
   modelCalls?: {count: number};
+  timeLimitMs: number;
 };
 
 type ProgressState = {
@@ -111,6 +116,26 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     databasesDirectory: input.databasesDirectory,
     image: input.image,
     modelCalls: input.modelCalls,
+    timeLimitMs: chosenTimeLimit(input.timeLimitMs),
+  };
+}
+
+function chosenTimeLimit(value: number | undefined): number {
+  if (value === undefined) return EXAM_TIME_LIMIT_MS;
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Refusal('VERIFY_LIMITS_INVALID');
+  return value;
+}
+
+function assertExamDeadline(startedMs: number, limitMs: number): void {
+  if (Date.now() >= startedMs + limitMs) throw new Error('VERIFY_EXAM_TIMEOUT');
+}
+
+function workerWithDeadline(worker: VerifyWorker, startedMs: number, limitMs: number): VerifyWorker {
+  return {
+    async run(call) {
+      assertExamDeadline(startedMs, limitMs);
+      return worker.run(call);
+    },
   };
 }
 
@@ -162,6 +187,22 @@ function runArguments(args: readonly string[]): Promise<void> {
   });
 }
 
+function defaultNetworkRunner(args: readonly string[]): Promise<{code: number; stdout: string}> {
+  return new Promise(resolvePromise => {
+    let settled = false;
+    let stdout = '';
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise({code, stdout});
+    };
+    const child = spawn(args[0] ?? VERIFY_RUNTIME_BIN, [...args.slice(1)], {stdio: ['ignore', 'pipe', 'ignore']});
+    child.stdout.on('data', chunk => { stdout += String(chunk); });
+    child.once('error', () => finish(1));
+    child.once('close', code => finish(code ?? 1));
+  });
+}
+
 /** The exam user is not the directory owner, so the mount is widened only while the process runs. */
 async function defaultRunTools(spec: {image: string; repository: string; databases: string; output: string}): Promise<void> {
   const args = verifyExamArguments({
@@ -197,8 +238,10 @@ async function runJob(input: {
   };
   try {
     const runTools = ready.runTools ?? defaultRunTools;
+    assertExamDeadline(startedMs, ready.timeLimitMs);
     await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
     const collected = await collectToolFindings(output);
+    assertExamDeadline(startedMs, ready.timeLimitMs);
     await runSecurityVerification({
       ledger: ready.ledger,
       principal: ready.principal,
@@ -208,7 +251,7 @@ async function runJob(input: {
       dataDirectory: ready.dataDirectory,
       commit: ready.commit,
       policyRevision: ready.policyRevision,
-      worker: ready.worker,
+      worker: workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs),
       rawFindings: collected.findings,
       runId: id,
       onPhase,
@@ -234,9 +277,18 @@ async function runJob(input: {
 
 export async function beginPersonalVerification(input: PersonalVerificationInput): Promise<{id: string; status: 'running'; phase: string}> {
   const startedMs = Date.now();
-  if (input.url !== undefined) dynamicScanPlan(input.url);
+  const plan = input.url !== undefined ? dynamicScanPlan(input.url) : undefined;
   const ready = requireReady(input);
   const id = randomUUID();
+  if (plan && plan.allowedHost !== '127.0.0.1' && plan.allowedHost !== 'localhost') {
+    const hex = id.replaceAll('-', '').slice(0, 8);
+    if (!/^[a-f0-9]{8}$/.test(hex)) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
+    await attachInternalTarget({
+      network: `verify-homologation-${hex}`,
+      container: plan.allowedHost,
+      run: input.networkRunner ?? defaultNetworkRunner,
+    });
+  }
   const state: ProgressState = {
     id,
     status: 'running',

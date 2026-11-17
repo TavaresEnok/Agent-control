@@ -72,6 +72,20 @@ test('o exame recusa imagem solta, caminho, socket e rede', () => {
   assert.throws(() => verifyExamArguments({...base, memoryBytes: 0}), refused('VERIFY_LIMITS_INVALID'));
 });
 
+test('o mount só aceita um caminho absoluto seguro', () => {
+  assert.throws(() => verifyExamArguments({...base, repository: '/tmp/a,dst=/etc'}), refused('VERIFY_PATH_FORBIDDEN'));
+  assert.throws(() => verifyDatabaseArguments({image: pinned, output: '/tmp/a,dst=/etc'}), refused('VERIFY_PATH_FORBIDDEN'));
+  assert.throws(() => verifyExamArguments({...base, repository: '/tmp/../etc'}), refused('VERIFY_PATH_FORBIDDEN'));
+  const args = verifyExamArguments({...base, repository: '/tmp/ok'});
+  assert.equal(mounts(args)[0], 'type=bind,src=/tmp/ok,dst=/repository,readonly');
+});
+
+test('o limite de pids do exame é 512', () => {
+  assert.equal(flag(verifyExamArguments({...base, pidsLimit: 256}), '--pids-limit'), '256');
+  assert.equal(flag(verifyExamArguments({...base, pidsLimit: 512}), '--pids-limit'), '512');
+  assert.throws(() => verifyExamArguments({...base, pidsLimit: 513}), refused('VERIFY_LIMITS_INVALID'));
+});
+
 test('o passo das bases escreve só o diretório de saída e não monta socket', () => {
   const args = verifyDatabaseArguments({image: pinned, output: '/var/verify/databases'});
   assert.equal(args[0], VERIFY_RUNTIME_BIN);

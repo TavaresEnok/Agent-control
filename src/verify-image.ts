@@ -31,7 +31,7 @@ function assertHostPath(path: string): string {
   if (typeof path !== 'string') throw new Refusal('VERIFY_PATH_FORBIDDEN');
   assertNoForeignNetwork(path);
   if (isSocket(path)) throw new Refusal('VERIFY_SOCKET_FORBIDDEN');
-  if (path.length === 0 || path.length > 4096 || path.includes('\0') || path.includes('\\') || /\s/.test(path) || !path.startsWith('/')) {
+  if (path.length === 0 || path.length > 4096 || path.includes('\0') || path.includes('\\') || /\s/.test(path) || !path.startsWith('/') || !/^\/[A-Za-z0-9._/-]+$/.test(path)) {
     throw new Refusal('VERIFY_PATH_FORBIDDEN');
   }
   const normalized = path.length > 1 ? path.replace(/\/+$/, '') : path;
@@ -92,7 +92,7 @@ export function verifyExamArguments({image, repository, databases, output, memor
   if (overlaps(report, source) || overlaps(report, cache)) throw new Refusal('VERIFY_PATH_FORBIDDEN');
   assertLimit(memoryBytes, 68_719_476_736);
   assertLimit(nanoCpus, 1_024_000_000_000);
-  assertLimit(pidsLimit, 100_000);
+  assertLimit(pidsLimit, 512);
   const memory = String(memoryBytes);
   return [
     VERIFY_RUNTIME_BIN, 'run', '--rm',
