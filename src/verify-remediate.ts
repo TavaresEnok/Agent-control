@@ -1,7 +1,9 @@
+import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, open, readdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {promisify} from 'node:util';
 import type pg from 'pg';
 import {z} from 'zod';
 import {digest, Refusal, type Authority} from './contracts.ts';
@@ -27,7 +29,7 @@ const EXCERPT_LIMIT = 4000;
 
 type OpenFinding = {id: string; status: string; file: string; line: number | null; title: string; reference: string | null; severity: string; snippet: string};
 type ReviewerCall = VerifyWorkerCall & {reviewerProvider?: unknown};
-type RunRef = {id: string; intentId: string};
+type RunRef = {id: string; intentId: string; commitId: string};
 type ReportUpdate = {id: string; status: 'fechado' | 'reaberto'; file: string; line: number | null; title: string};
 type MatchedReport = {dir: string; runRaw: string; achadosRaw: string | null};
 
@@ -45,6 +47,8 @@ function uniqueIds(ids: readonly string[]): string[] {
 const LOWER_FORBIDDEN = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const PROOF_BYTES = 1_000_000;
 const PROOF_SNIPPET = 12;
+const CommitId = /^[a-f0-9]{40}$|^[a-f0-9]{64}$/;
+const execGit = promisify(execFile);
 
 function normalizeIds(ids: readonly string[]): string[] {
   if (ids.length === 0) throw new Refusal('VERIFY_NOTHING_TO_FIX', 400);
@@ -165,11 +169,11 @@ function isSecretBasename(file: string): boolean {
 async function loadRun(client: pg.PoolClient, runId: string, projectId: string, contextId: string): Promise<RunRef> {
   if (!Uuid.safeParse(runId).success || !Uuid.safeParse(projectId).success) throw new Refusal('VERIFY_RUN_MISSING', 404);
   const row = (await client.query(
-    'SELECT id, intent_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND context_id=$3',
+    'SELECT id, intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND context_id=$3',
     [runId, projectId, contextId],
-  )).rows[0] as {id: string; intent_id: string} | undefined;
+  )).rows[0] as {id: string; intent_id: string; commit_id: string} | undefined;
   if (!row) throw new Refusal('VERIFY_RUN_MISSING', 404);
-  return {id: String(row.id), intentId: String(row.intent_id)};
+  return {id: String(row.id), intentId: String(row.intent_id), commitId: String(row.commit_id)};
 }
 
 async function projectRepo(client: pg.PoolClient, projectId: string): Promise<string | null> {
@@ -317,9 +321,62 @@ async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt
   return {status: verdict.status, provider: reviewerProvider(call)};
 }
 
-async function snippetGone(repo: string | null, finding: OpenFinding): Promise<boolean> {
+function correctionDiffInvocation(examinedCommit: string, relativeFile: string): {args: string[]; env: Record<string, string>} {
+  const path = typeof process.env.PATH === 'string' && process.env.PATH.length > 0 ? process.env.PATH : '/usr/bin:/bin';
+  return {
+    args: [
+      '-c', 'core.hooksPath=/dev/null',
+      '--no-pager',
+      'diff',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--unified=0',
+      examinedCommit,
+      'HEAD',
+      '--',
+      relativeFile,
+    ],
+    env: {
+      PATH: path,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_COUNT: '0',
+      HOME: '/nonexistent',
+    },
+  };
+}
+
+function diffDropsSnippet(diff: string, snippet: string): boolean {
+  const removed = diff.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).map(line => line.slice(1)).join('\n');
+  return removed.includes(snippet);
+}
+
+async function snippetChangedSince(repo: string, examinedCommit: string, relativeFile: string, snippet: string): Promise<boolean> {
+  const invocation = correctionDiffInvocation(examinedCommit, relativeFile);
+  let stdout = '';
+  try {
+    const result = await execGit('git', invocation.args, {
+      cwd: repo,
+      timeout: 8000,
+      maxBuffer: 2_000_000,
+      encoding: 'utf8',
+      env: invocation.env,
+    });
+    const raw: unknown = result.stdout;
+    stdout = typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : '';
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? (error as {code?: unknown}).code : undefined;
+    const raw = error && typeof error === 'object' && 'stdout' in error ? (error as {stdout?: unknown}).stdout : '';
+    const text = typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : '';
+    if (code !== 1) return false;
+    stdout = text;
+  }
+  return diffDropsSnippet(stdout, snippet);
+}
+
+async function snippetGone(repo: string | null, finding: OpenFinding, examinedCommit: string): Promise<boolean> {
   const snippet = finding.snippet.trim();
-  if (snippet.length < PROOF_SNIPPET || !repo || isSecretBasename(finding.file)) return false;
+  if (snippet.length < PROOF_SNIPPET || !repo || isSecretBasename(finding.file) || !CommitId.test(examinedCommit)) return false;
   const located = await locateRepoFile(repo, finding.file);
   if (!located) return false;
   try {
@@ -327,13 +384,14 @@ async function snippetGone(repo: string | null, finding: OpenFinding): Promise<b
     try {
       const info = await handle.stat();
       if (!info.isFile() || info.size > PROOF_BYTES) return false;
-      return !(await handle.readFile({encoding: 'utf8'})).includes(snippet);
+      if ((await handle.readFile({encoding: 'utf8'})).includes(snippet)) return false;
     } finally {
       await handle.close();
     }
   } catch {
     return false;
   }
+  return snippetChangedSince(repo, examinedCommit, finding.file, snippet);
 }
 
 function parseVerdict(raw: string): z.infer<typeof RecheckVerdict> {
@@ -577,7 +635,7 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
     } else {
       const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoidProviders(first.provider));
       const discarded = first.status === 'descartado' || second.status === 'descartado';
-      const proof = excerpt.seen && discarded && await snippetGone(loaded.repo, finding);
+      const proof = excerpt.seen && discarded && await snippetGone(loaded.repo, finding, loaded.run.commitId);
       const agreed = excerpt.seen && first.status === 'descartado' && second.status === 'descartado' && first.provider.length > 0 && second.provider.length > 0 && first.provider !== second.provider;
       status = proof || agreed ? 'fechado' : 'reaberto';
     }

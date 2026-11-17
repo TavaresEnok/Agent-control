@@ -1,15 +1,66 @@
+import {execFile} from 'node:child_process';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {promisify} from 'node:util';
+import pg from 'pg';
 import {digest, Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {acceptSecurityVerification} from '../src/verify-intent.ts';
 import {requestCorrection, recheckFindings} from '../src/verify-remediate.ts';
 import {REMEDIATION_ACCEPTANCE, type VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
+
+const execGit = promisify(execFile);
+const PROOF_SNIPPET = 'TRECHO_SUMIU_1234';
+const PROOF_DATABASE = 'ac_implementation_test_vordem5_b3';
+
+async function openNamedDatabase(name: string) {
+  if (name !== PROOF_DATABASE) throw new Error('REFUSING_DATABASE');
+  const base = (await readFile('/tmp/ac-vordem5-base-url', 'utf8')).trim();
+  const url = new URL(base);
+  if (url.pathname !== '/ac_implementation_test' || !['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('ISOLATED_DATABASE_REQUIRED');
+  const admin = new pg.Client({connectionString: base});
+  await admin.connect();
+  try {
+    await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE "${name}"`);
+  } finally {
+    await admin.end();
+  }
+  url.pathname = `/${name}`;
+  return {
+    url: url.href,
+    async close() {
+      const client = new pg.Client({connectionString: base});
+      await client.connect();
+      try {
+        await client.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      } finally {
+        await client.end();
+      }
+    },
+  };
+}
+
+async function git(repo: string, args: string[]): Promise<string> {
+  const result = await execGit('git', ['-C', repo, '-c', 'core.autocrlf=false', ...args], {
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      HOME: process.env.HOME ?? '/tmp',
+      GIT_AUTHOR_NAME: 'Exam',
+      GIT_AUTHOR_EMAIL: 'exam@localhost',
+      GIT_COMMITTER_NAME: 'Exam',
+      GIT_COMMITTER_EMAIL: 'exam@localhost',
+      GIT_CONFIG_NOSYSTEM: '1',
+    },
+  });
+  return String(result.stdout).trim();
+}
 
 const secret = 'sk-somente-no-payload-interno';
 const file = 'src/nao-escrever-verify-remediate.ts';
@@ -325,8 +376,8 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     const agreed = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-031'], worker: worker('descartado', variedSeen)});
     assert.deepEqual(agreed.results, [{id: 'ACH-031', status: 'fechado'}]);
     assert.equal(variedSeen.length, 2);
-    const proved = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-032'], worker: worker('descartado', [], () => 'unico')});
-    assert.deepEqual(proved.results, [{id: 'ACH-032', status: 'fechado'}]);
+    const unproved = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-032'], worker: worker('descartado', [], () => 'unico')});
+    assert.deepEqual(unproved.results, [{id: 'ACH-032', status: 'reaberto'}]);
     const short = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-034'], worker: worker('descartado', [], () => 'unico')});
     assert.deepEqual(short.results, [{id: 'ACH-034', status: 'reaberto'}]);
     const mediumSeen: {role: string; task: string; writePaths: readonly string[]}[] = [];
@@ -347,6 +398,79 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     if (data) await rm(data, {recursive: true, force: true});
     if (repo) await rm(repo, {recursive: true, force: true});
     if (outside) await rm(outside, {recursive: true, force: true});
+    await db.close();
+    await database.close();
+  }
+});
+
+test('snippetGone exige o arquivo e o diff do commit de correção', async () => {
+  const database = await openNamedDatabase(PROOF_DATABASE);
+  const db = new Ledger(database.url);
+  let repo = '';
+  let data = '';
+  try {
+    await db.migrate();
+    const principal = 'verify-remediate-proof';
+    const project = randomUUID();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Prova']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    const context = await db.createContext(principal, project, randomUUID());
+    const authority = await db.acquire(principal, context, randomUUID(), 'verify-remediate-proof', 60);
+    repo = await realpath(await mkdtemp(join(tmpdir(), 'ac-verify-proof-')));
+    await mkdir(join(repo, 'src'), {recursive: true});
+    const worktreeFile = 'src/prova-worktree.ts';
+    const committedFile = 'src/prova-commit.ts';
+    const deletedFile = 'src/prova-delete.ts';
+    for (const relative of [worktreeFile, committedFile, deletedFile]) {
+      await writeFile(join(repo, relative), `${PROOF_SNIPPET}\nmantem\n`);
+    }
+    await git(repo, ['init']);
+    await git(repo, ['add', 'src']);
+    await git(repo, ['commit', '-m', 'examined']);
+    const examined = await git(repo, ['rev-parse', 'HEAD']);
+    const intent = await acceptSecurityVerification(db, principal, authority, {projectId: project, commit: examined, policyRevision: 1});
+    const runId = randomUUID();
+    await db.pool.query(
+      `INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir)
+       VALUES($1,$2,$3,$4,$5,$6,'done',$7)`,
+      [runId, project, context, intent.id, principal, examined, '20261117-120000-seguranca'],
+    );
+    await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [project, repo]);
+    const profile = randomUUID();
+    const files = [worktreeFile, committedFile, deletedFile];
+    for (const covered of files) {
+      await db.pool.query(
+        `INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,profile_id,checklist)
+         VALUES($1,$2,'bancada','bancada',$3,'["SEM-ITEM"]'::jsonb)`,
+        [runId, covered, profile],
+      );
+    }
+    await db.pool.query(
+      `INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,line,payload) VALUES
+       ($1,'ACH-101','confirmado','alta',$2,1,$5::jsonb),
+       ($1,'ACH-102','confirmado','alta',$3,1,$5::jsonb),
+       ($1,'ACH-103','confirmado','alta',$4,1,$5::jsonb)`,
+      [runId, worktreeFile, committedFile, deletedFile, JSON.stringify({title: 'Trecho', snippet: PROOF_SNIPPET})],
+    );
+    data = await mkdtemp(join(tmpdir(), 'ac-verify-proof-data-'));
+    const input = {runId, dataDirectory: data, projectId: project};
+    const single = () => 'unico';
+    await writeFile(join(repo, worktreeFile), 'mantem\n');
+    const dirty = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-101'], worker: worker('descartado', [], single)});
+    assert.deepEqual(dirty.results, [{id: 'ACH-101', status: 'reaberto'}]);
+    await writeFile(join(repo, committedFile), 'mantem\n');
+    await git(repo, ['add', committedFile]);
+    await git(repo, ['commit', '-m', 'remove snippet']);
+    const proved = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-102'], worker: worker('descartado', [], single)});
+    assert.deepEqual(proved.results, [{id: 'ACH-102', status: 'fechado'}]);
+    await git(repo, ['rm', deletedFile]);
+    await git(repo, ['commit', '-m', 'delete file']);
+    const removed = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-103'], worker: worker('descartado', [], single)});
+    assert.deepEqual(removed.results, [{id: 'ACH-103', status: 'reaberto'}]);
+  } finally {
+    if (data) await rm(data, {recursive: true, force: true});
+    if (repo) await rm(repo, {recursive: true, force: true});
     await db.close();
     await database.close();
   }
