@@ -1,5 +1,5 @@
 import {constants} from 'node:fs';
-import {chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readlink, rm, symlink, unlink, writeFile} from 'node:fs/promises';
+import {chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 /** Basenames removed from the exam copy. Match is case-insensitive. */
@@ -111,9 +111,101 @@ export function examLoginHomes(copyRoot: string): {claudeConfigDir: string; code
   return {claudeConfigDir: copyRoot, codexHome: join(copyRoot, '.codex'), grokHome: copyRoot};
 }
 
+/** Credential and config files the exam CLIs read. Caches, sessions and logs are left behind. */
+const EXAM_LOGIN_FILES = [
+  '.credentials.json', '.claude.json', 'settings.json', '.claude/settings.json',
+  '.codex/auth.json', '.codex/config.toml', '.grok/auth.json', '.grok/config.toml',
+] as const;
+
 /**
- * Copy an account home onto tmpfs. Regular files are new inodes. Symlinks are recreated and not followed,
- * so writing into the copy does not change the source.
+ * Paths the exam must not read. A single leading slash in user settings anchors at CLAUDE_CONFIG_DIR,
+ * so each path is also emitted with `//`, which Claude treats as absolute.
+ */
+const EXAM_DENY_PATHS = [
+  '/account/.credentials.json', '/tmp/ac-exam-login-*', '/tmp/ac-exam-login-*/**',
+  '/proc/self/environ', '/runner', '/runner/**',
+] as const;
+
+function examReadDenyRules(): string[] {
+  const rules: string[] = [];
+  for (const entry of EXAM_DENY_PATHS) {
+    for (const tool of ['Read', 'Grep', 'Glob']) {
+      rules.push(`${tool}(${entry})`, `${tool}(/${entry})`);
+    }
+  }
+  return rules;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeExamDeny(base: Record<string, unknown>): Record<string, unknown> {
+  const doc: Record<string, unknown> = {...base};
+  const permissions = isRecord(doc.permissions) ? {...doc.permissions} : {};
+  const deny = Array.isArray(permissions.deny) ? [...permissions.deny] : [];
+  for (const rule of examReadDenyRules()) {
+    if (!deny.includes(rule)) deny.push(rule);
+  }
+  permissions.deny = deny;
+  doc.permissions = permissions;
+  return doc;
+}
+
+/** Read a regular file. A symlink yields undefined and is not followed. */
+async function readUnfollowed(file: string): Promise<string | undefined> {
+  let handle;
+  try { handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ELOOP') return undefined;
+    throw error;
+  }
+  try { return await handle.readFile({encoding: 'utf8'}); }
+  finally { await handle.close(); }
+}
+
+/** Merge Read, Grep and Glob denies into a settings file. Symlinks are not followed. Mode is 0600. */
+async function writeSettingsWithDeny(file: string, create: boolean): Promise<void> {
+  let info;
+  try { info = await lstat(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  if (!info && !create) return;
+  if (info?.isSymbolicLink()) {
+    if (!create) return;
+    await unlink(file);
+    info = undefined;
+  }
+  if (info && !info.isFile()) return;
+  let base: Record<string, unknown> = {};
+  if (info?.isFile()) {
+    const text = await readUnfollowed(file);
+    if (text !== undefined) {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (isRecord(parsed)) base = parsed;
+      } catch { /* an unreadable settings file is replaced by the deny document */ }
+    }
+  }
+  const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(mergeExamDeny(base)));
+    await handle.chmod(0o600);
+  } finally { await handle.close(); }
+}
+
+const CODEX_CONTAINER_SANDBOX_LIMIT = [
+  'Codex stays on the container sandbox.',
+  'A read-only Codex sandbox cannot start inside the worker container, so the exam does not switch Codex off that sandbox.',
+  'Reads of these paths are not denied by Codex: /account/.credentials.json, /tmp/ac-exam-login-*, /proc/self/environ, /runner.',
+  '',
+].join('\n');
+
+/**
+ * Copy credential and config files onto tmpfs. Regular files are new inodes.
+ * Symlinks are recreated and not followed, so writing into the copy does not change the source.
  */
 export async function prepareExamLoginCopy(source: string, tmpRoot = '/tmp'): Promise<string> {
   const rootInfo = await lstat(source);
@@ -121,26 +213,62 @@ export async function prepareExamLoginCopy(source: string, tmpRoot = '/tmp'): Pr
   const parent = await mkdtemp(join(tmpRoot, 'ac-exam-login-'));
   const dest = join(parent, 'home');
   await mkdir(dest, {mode: 0o700});
-  await copyLoginChildren(source, dest);
+  for (const relative of EXAM_LOGIN_FILES) await copyLoginFile(source, dest, relative);
+  await writeSettingsWithDeny(join(dest, 'settings.json'), true);
+  const claudeDir = join(dest, '.claude');
+  let claudeInfo;
+  try { claudeInfo = await lstat(claudeDir); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  if (claudeInfo?.isDirectory()) await writeSettingsWithDeny(join(claudeDir, 'settings.json'), false);
+  const limit = join(dest, 'codex-container-sandbox-limit.txt');
+  const handle = await open(limit, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(CODEX_CONTAINER_SANDBOX_LIMIT);
+    await handle.chmod(0o600);
+  } finally { await handle.close(); }
   return dest;
 }
 
-async function copyLoginChildren(source: string, dest: string): Promise<void> {
-  for (const name of await readdir(source)) {
-    const from = join(source, name);
-    const to = join(dest, name);
-    const info = await lstat(from);
+/** Copy one allowlisted path. A symlink is recreated at the first link and not followed. */
+async function copyLoginFile(sourceRoot: string, destRoot: string, relative: string): Promise<void> {
+  const parts = relative.split('/');
+  let fromDir = sourceRoot;
+  let toDir = destRoot;
+  for (let i = 0; i < parts.length; i += 1) {
+    const from = join(fromDir, parts[i]!);
+    const to = join(toDir, parts[i]!);
+    let info;
+    try { info = await lstat(from); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
     if (info.isSymbolicLink()) {
-      await symlink(await readlink(from), to);
-      continue;
+      let existing;
+      try { existing = await lstat(to); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (!existing) await symlink(await readlink(from), to);
+      return;
     }
-    if (info.isDirectory()) {
-      await mkdir(to, {mode: 0o700});
-      await copyLoginChildren(from, to);
-      continue;
+    const last = i === parts.length - 1;
+    if (last) {
+      if (!info.isFile()) return;
+      await copyFile(from, to, constants.COPYFILE_EXCL);
+      await chmod(to, info.mode & 0o777);
+      return;
     }
-    if (!info.isFile()) continue;
-    await copyFile(from, to, constants.COPYFILE_EXCL);
-    await chmod(to, info.mode & 0o777);
+    if (!info.isDirectory()) return;
+    try { await mkdir(to, {mode: 0o700}); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const created = await lstat(to);
+      if (!created.isDirectory()) return;
+    }
+    fromDir = from;
+    toDir = to;
   }
 }

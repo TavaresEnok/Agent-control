@@ -11,7 +11,10 @@ export function grokWorkdir(role?:string){return !role||role==='programmer'?'/wo
 /** Argv the Grok CLI receives. xhigh and max are already capped at high. */
 export function grokProgrammerArgs(model:string,effort:string,task:string,role?:string){
  const mapped=cliEffort('grok',Effort.parse(effort));
- return ['-p',task,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd',grokWorkdir(role),'--no-plan','--always-approve'];
+ const args=['-p',task,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd',grokWorkdir(role),'--no-plan'];
+ // The exam worker sets AC_VERIFY_EXAM. Auto-approval stays on for the programmer and for every non-exam run.
+ if(process.env.AC_VERIFY_EXAM!=='1'||!role||role==='programmer')args.push('--always-approve');
+ return args;
 }
 export class GrokExecutionFailure extends Refusal{
  constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null){super(code);}
