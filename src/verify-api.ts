@@ -1,3 +1,5 @@
+import {lstat} from 'node:fs/promises';
+import {join} from 'node:path';
 import {Hono} from 'hono';
 import {z} from 'zod';
 import {Authority, Id, Refusal} from './contracts.ts';
@@ -5,9 +7,15 @@ import type {Ledger} from './ledger.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
 import {listSecurityReports, readAchadoMarkdown, readSecurityReport} from './verify-report.ts';
 import {recheckFindings, requestCorrection} from './verify-remediate.ts';
+import {readVerificationProgress} from './verify-command.ts';
 
 type ManagerAuthority = z.infer<typeof Authority>;
-type Panel = {dataDirectory: string; projectId: string};
+type Panel = {dataDirectory: string; projectId: string; installationPath: string};
+type VerificationStart = {id: string; status: 'running'; phase: string};
+const verificationStartBody = z.union([
+  z.object({}).strict(),
+  z.object({url: z.string().min(1).max(500)}).strict(),
+]);
 type ApiEnv = {Variables: {principal: string; timingStarted: number; authenticationMs: number}};
 type VisibleAchado = Omit<z.infer<typeof Achado>, 'secretPreview'>;
 
@@ -32,6 +40,12 @@ export type VerificationRouteDeps = {
     authority: ManagerAuthority,
     input: {runId: string; achadoIds: string[]; dataDirectory: string; projectId: string},
   ) => Promise<{results: {id: string; status: 'fechado' | 'reaberto'}[]}>;
+  /** Injected by the installation. The route never calls a model itself. */
+  start?: (
+    principal: string,
+    panel: Panel,
+    body: {url?: string},
+  ) => Promise<VerificationStart>;
 };
 
 function missingReport(error: unknown): boolean {
@@ -120,6 +134,15 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
     throw new Error('VERIFY_REMEDIATE_UNAVAILABLE');
   }
 
+  app.post('/api/v1/ac/personal/verificacoes', async c => {
+    c.header('Cache-Control', 'no-store');
+    const {principal, panel} = await ownerPanel(c, deps);
+    const body = verificationStartBody.parse(await c.req.json());
+    if (!deps.start) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
+    const started = await deps.start(principal, panel, 'url' in body ? {url: body.url} : {});
+    return c.json({id: started.id, status: started.status, phase: started.phase}, 202);
+  });
+
   app.get('/api/v1/ac/personal/verificacoes', async c => {
     c.header('Cache-Control', 'no-store');
     const {panel} = await ownerPanel(c, deps);
@@ -137,6 +160,22 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
       return parsed.data;
     });
     return c.json({verificacoes});
+  });
+
+  // Literal path before :runId. Otherwise "andamento" is parsed as a uuid.
+  app.get('/api/v1/ac/personal/verificacoes/andamento', async c => {
+    c.header('Cache-Control', 'no-store');
+    const {panel} = await ownerPanel(c, deps);
+    let runs: Awaited<ReturnType<typeof readVerificationProgress>> = [];
+    try {
+      await lstat(join(panel.dataDirectory, 'verificacoes', panel.projectId, 'andamento'));
+    } catch (error) {
+      if (!missingReport(error)) throw error;
+      return c.json({runs});
+    }
+    const listed = await readVerificationProgress(panel.dataDirectory, panel.projectId);
+    if (!Array.isArray(listed)) throw new Error('VERIFY_REPORT_SHAPE');
+    return c.json({runs: listed});
   });
 
   app.get('/api/v1/ac/personal/verificacoes/:runId', async c => {

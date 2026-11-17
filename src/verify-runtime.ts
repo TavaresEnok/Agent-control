@@ -34,6 +34,10 @@ export type SecurityVerificationInput = {
   worker: VerifyWorker;
   rawFindings?: RawFinding[];
   checklist?: readonly ChecklistItem[];
+  runId?: string;
+  onPhase?: (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => void | Promise<void>;
+  modelCalls?: {count: number};
+  notes?: readonly string[];
 };
 
 type Seat = {
@@ -74,7 +78,7 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
     commit: input.commit,
     policyRevision: input.policyRevision,
   });
-  const runId = randomUUID();
+  const runId = input.runId ?? randomUUID();
   const createdAt = new Date();
   await insertRun(input, intent, runId);
   try {
@@ -119,6 +123,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   const files = await listExamFiles(input.repoPath);
   const slices = sliceExamFiles(files, checklist);
   const notes: string[] = [];
+  if (input.notes?.length) notes.push(...input.notes);
   const coverage = new Map<string, CoverageRow>();
   const open: OpenFinding[] = [];
   const exams: unknown[] = [];
@@ -131,6 +136,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   if (files.length === 0 && rawFindings.length === 0) {
     notes.push('Nenhum arquivo para examinar.');
   } else {
+    if (input.onPhase) await input.onPhase('mapa');
     const mapped = await reserveAndRun(input, capacity, intent.id, 'specialist', mapTask(files), 'verify-map');
     mapSeat = mapped.seat;
     mapProvider = mapped.seat.provider;
@@ -142,6 +148,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       notes.push('O mapa não veio em JSON válido. A lista de arquivos ficou no lugar.');
     }
     mapMarkdown = mapToMarkdown(map, files);
+    if (input.onPhase) await input.onPhase('exame');
     for (const slice of slices) {
       if (!slice.files.length) continue;
       const examined = await reserveAndRun(input, capacity, intent.id, 'specialist', examTask(slice, mapMarkdown, rawFindings), 'verify-exam');
@@ -201,6 +208,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
 
   const confirms: unknown[] = [];
   const achados: Achado[] = [];
+  if (input.onPhase) await input.onPhase('confirmacao');
   for (const finding of open) {
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
     const forbidden = finding.examinerProvider ?? mapProvider;
@@ -243,6 +251,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
 
   const rows = orderedCoverage(files, coverage);
   const note = (notes.length ? notes.join(' ') : 'Verificação somente leitura concluída.').slice(0, 500);
+  if (input.onPhase) await input.onPhase('relatorio');
   const report = await writeSecurityReport({
     dataDirectory: input.dataDirectory,
     projectId: input.projectId,
@@ -317,6 +326,7 @@ async function reserveAndRun(
       repo: input.repoPath,
       writePaths: [] as const,
     });
+    if (input.modelCalls) input.modelCalls.count += 1;
     const output = await input.worker.run(call);
     return {seat, output};
   } catch (error) {

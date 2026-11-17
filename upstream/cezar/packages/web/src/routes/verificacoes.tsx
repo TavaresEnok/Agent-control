@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { z } from 'zod'
 
@@ -34,8 +34,17 @@ const detailSchema = z.object({
   achados: z.array(achadoSchema),
   cobertura: z.string(),
 })
+const progressSchema = z.object({
+  id: z.string().min(1),
+  status: z.string().min(1),
+  phase: z.string().min(1),
+})
+const progressListSchema = z.object({
+  runs: z.array(progressSchema),
+})
 
 type Summary = z.infer<typeof summarySchema>
+type Progress = z.infer<typeof progressSchema>
 type Achado = z.infer<typeof achadoSchema>
 
 const severityLabel: Record<Achado['severity'], string> = {
@@ -50,6 +59,19 @@ const statusLabel: Record<Achado['status'], string> = {
   descartado: 'descartado',
   fechado: 'fechado',
   reaberto: 'reaberto',
+}
+const phaseLabel: Record<string, string> = {
+  ferramentas: 'ferramentas',
+  mapa: 'mapa',
+  exame: 'exame',
+  confirmacao: 'confirmação',
+  relatorio: 'relatório',
+  done: 'concluída',
+  failed: 'falhou',
+}
+
+function labelPhase(phase: string): string {
+  return phaseLabel[phase] ?? phase
 }
 
 function when(createdAt: string, directoryName: string): string {
@@ -69,6 +91,12 @@ function fileOf(achado: Achado): string {
 function VerificacoesLista() {
   const [items, setItems] = useState<Summary[] | null>(null)
   const [error, setError] = useState('')
+  const [startError, setStartError] = useState('')
+  const [progress, setProgress] = useState<Progress | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [starting, setStarting] = useState(false)
+  const busy = useRef(false)
+  const running = progress?.status === 'running'
 
   useEffect(() => {
     let cancel = false
@@ -76,15 +104,73 @@ function VerificacoesLista() {
       .then(async (response) => {
         if (!response.ok) throw new Error('UNAVAILABLE')
         const body = listSchema.parse(await response.json())
-        if (!cancel) setItems(body.verificacoes)
+        if (cancel) return
+        setItems(body.verificacoes)
+        setError('')
       })
       .catch(() => { if (!cancel) setError('Não foi possível ler as verificações.') })
     return () => { cancel = true }
-  }, [])
+  }, [reloadKey])
+
+  useEffect(() => {
+    if (!running) return
+    let cancel = false
+    const timer = setInterval(() => {
+      agentControlFetch('/api/v1/ac/personal/verificacoes/andamento', { cache: 'no-store' })
+        .then(async (response) => {
+          if (cancel || !response.ok) return
+          const body = progressListSchema.parse(await response.json())
+          if (cancel) return
+          const current = body.runs.find((run) => run.id === progress?.id) ?? body.runs.find((run) => run.status === 'running')
+          if (!current) return
+          setProgress(current)
+          if (current.status === 'done') setReloadKey((key) => key + 1)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => {
+      cancel = true
+      clearInterval(timer)
+    }
+  }, [running])
+
+  function start() {
+    if (busy.current || running) return
+    busy.current = true
+    setStarting(true)
+    setStartError('')
+    agentControlFetch('/api/v1/ac/personal/verificacoes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then(async (response) => {
+        if (response.status >= 400) throw new Error('UNAVAILABLE')
+        if (response.status !== 202) return
+        const body = progressSchema.parse(await response.json())
+        setProgress(body)
+        if (body.status === 'done') setReloadKey((key) => key + 1)
+      })
+      .catch(() => { setStartError('Não foi possível iniciar a verificação.') })
+      .finally(() => {
+        busy.current = false
+        setStarting(false)
+      })
+  }
 
   return (
     <div data-route="verificacoes" className="flex flex-col gap-4 px-3 py-4 text-sm">
       <h1 className="text-lg font-medium">Verificações</h1>
+      <button
+        type="button"
+        className="self-start rounded-md border border-input px-2 py-1"
+        disabled={starting || running}
+        onClick={start}
+      >
+        Nova verificação
+      </button>
+      {startError ? <p role="alert">{startError}</p> : null}
+      {progress ? <p>Fase: {labelPhase(progress.phase)}. Status: {progress.status}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {items === null && !error ? <p>Carregando…</p> : null}
       {items && items.length === 0 ? <p>Nenhuma verificação ainda.</p> : null}
