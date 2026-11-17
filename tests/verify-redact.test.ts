@@ -273,3 +273,88 @@ test('basename secreto cobre npmrc, certificados, terraform, credentials, servic
     assert.equal(isSecretClassBasename(name), false, name);
   }
 });
+
+test('valor entre aspas com espaço é redigido inteiro', () => {
+  const double = 'password="segredo com espaco"';
+  const single = "password='segredo com espaco'";
+  const json = '{"password": "segredo com espaco"}';
+  const tight = '{"password":"segredo com espaco"}';
+  assert.equal(redactUnknownSecrets(double), mask(double));
+  assert.equal(redactUnknownSecrets(single), mask(single));
+  assert.equal(redactUnknownSecrets(json), `{"${mask('password": "segredo com espaco"')}}`);
+  assert.equal(redactUnknownSecrets(tight), `{"${mask('password":"segredo com espaco"')}}`);
+  assert.equal(redactUnknownSecrets(`antes ${double} depois`), `antes ${mask(double)} depois`);
+  for (const line of [double, single, json, tight]) {
+    const once = redactUnknownSecrets(line);
+    assert.equal(once.includes('segredo'), false, line);
+    assert.equal(once.includes('espaco'), false, line);
+    assert.equal(hasKnownSecret(line), true, line);
+    assert.equal(hasKnownSecret(once), false, line);
+    assert.equal(redactUnknownSecrets(once), once, line);
+  }
+});
+
+test('redige --password com espaço ou igual, inclusive valor curto', () => {
+  const spaced = '--password x';
+  const equals = '--password=secret';
+  assert.equal(spaced.length < 16, true);
+  const spacedOut = redactUnknownSecrets(spaced);
+  assert.equal(spacedOut, mask(spaced));
+  assert.equal(spacedOut.includes('sha256:'), false);
+  assert.equal(spacedOut.includes('x'), false);
+  assert.equal(hasKnownSecret(spaced), true);
+  assert.equal(hasKnownSecret(spacedOut), false);
+  assert.equal(redactUnknownSecrets(spacedOut), spacedOut);
+  assert.equal(redactUnknownSecrets('run --password x --verbose'), `run ${mask(spaced)} --verbose`);
+  const equalsOut = redactUnknownSecrets(equals);
+  assert.equal(equalsOut, mask(equals));
+  assert.equal(equalsOut.includes('secret'), false);
+  assert.equal(hasKnownSecret(equals), true);
+  assert.equal(hasKnownSecret(equalsOut), false);
+  assert.equal(redactUnknownSecrets(equalsOut), equalsOut);
+  assert.equal(redactUnknownSecrets(`cmd ${equals} --verbose`), `cmd ${mask(equals)} --verbose`);
+});
+
+test('redige Authorization Basic como Bearer, com ou sem aspas', () => {
+  const basic = 'Authorization: Basic dXNlcjpwYXNzCg==';
+  const lower = 'authorization: basic dXNlcjpwYXNzCg==';
+  const quoted = 'Authorization: Basic "segredo com espaco"';
+  const single = "Authorization: Basic 'segredo com espaco'";
+  for (const line of [basic, lower, quoted, single]) {
+    const once = redactUnknownSecrets(line);
+    assert.equal(once, mask(line), line);
+    assert.equal(once.includes('dXNlcjpwYXNzCg=='), false, line);
+    assert.equal(once.includes('espaco'), false, line);
+    assert.equal(hasKnownSecret(line), true, line);
+    assert.equal(hasKnownSecret(once), false, line);
+    assert.equal(redactUnknownSecrets(once), once, line);
+  }
+  const bearer = 'Authorization: Bearer super-token-ficticio-123';
+  assert.equal(redactUnknownSecrets(bearer), mask(bearer));
+});
+
+test('key não casa monkey nem keyboard e ainda casa a chave real', () => {
+  for (const line of ['monkey=segredo', 'keyboard=segredo']) {
+    assert.equal(redactUnknownSecrets(line), line, line);
+    assert.equal(hasKnownSecret(line), false, line);
+  }
+  assert.equal(redactUnknownSecrets('key=valor-secreto-longo'), mask('key=valor-secreto-longo'));
+  assert.equal(redactUnknownSecrets('api_key=valor-secreto-longo'), `api_${mask('key=valor-secreto-longo')}`);
+  assert.equal(redactUnknownSecrets('"key": "valor-secreto-longo"'), `"${mask('key": "valor-secreto-longo"')}`);
+  assert.equal(redactUnknownSecrets('client_secret=valor-secreto-longo'), `client_${mask('secret=valor-secreto-longo')}`);
+  for (const line of [
+    'key=valor-secreto-longo',
+    'api_key=valor-secreto-longo',
+    '"key": "valor-secreto-longo"',
+    'client_secret=valor-secreto-longo',
+  ]) {
+    const once = redactUnknownSecrets(line);
+    assert.equal(hasKnownSecret(line), true, line);
+    assert.equal(once.includes('valor-secreto-longo'), false, line);
+    assert.equal(hasKnownSecret(once), false, line);
+    assert.equal(redactUnknownSecrets(once), once, line);
+  }
+  assert.equal(redactUnknownSecrets('o token ficou no texto'), 'o token ficou no texto');
+  assert.equal(hasKnownSecret('"secretPreview": null'), false);
+  assert.equal(redactUnknownSecrets('"secretPreview": null'), '"secretPreview": null');
+});

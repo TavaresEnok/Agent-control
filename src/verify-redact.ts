@@ -7,6 +7,11 @@ const ELLIPSIS = '\u2026';
 const SHA256_MIN_LENGTH = 16;
 // A masked value already contains the ellipsis; do not treat that token as a new secret.
 const NOT_A_MASK = String.raw`(?![^\s\u2026]*\u2026)`;
+// A quoted value keeps internal spaces. An unquoted value stops at whitespace.
+const SECRET_VALUE = String.raw`(?:"[^"\r\n]*"|'[^'\r\n]*'|\S+)`;
+// `key` is not a letter suffix (monkey) and not the prefix of keyboard.
+// No lookbehind on secret: `_` before it is what hid client_secret.
+const ASSIGN_NAME = String.raw`pass|passwd|password|secret|token|(?<![A-Za-z])key(?!board)|auth|credential`;
 
 const UNKNOWN_PATTERNS = [
   /-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----/g,
@@ -25,13 +30,14 @@ const UNKNOWN_PATTERNS = [
   /(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
   /(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g,
   /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/g,
-  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*bearer[ \t]+${NOT_A_MASK}\S+`, 'gi'),
+  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*(?:bearer|basic)[ \t]+${NOT_A_MASK}${SECRET_VALUE}`, 'gi'),
   // 40-char AWS secret access key. Pure hex is a git SHA-1 and must stay.
   /(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])/g,
   /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])/g,
-  // No lookbehind: `_` before `secret` is what hid client_secret. Optional quote covers JSON keys.
-  // A bare JSON literal is not a secret: "secretPreview": null must stay in our own report.
-  new RegExp(String.raw`(pass|passwd|password|secret|token|key|auth|credential)\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)\S+`, 'gi'),
+  // `--password x` and `--password=secret`. A space separates only after `--`.
+  new RegExp(String.raw`(?<![A-Za-z0-9_])--(?:${ASSIGN_NAME})\w*(?:["']?\s*[:=]\s*|[ \t]+)${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'gi'),
+  // Optional quote covers JSON keys. A bare JSON literal is not a secret: "secretPreview": null must stay.
+  new RegExp(String.raw`(?:${ASSIGN_NAME})\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'gi'),
 ];
 
 function fresh(pattern: RegExp, global: boolean): RegExp {
