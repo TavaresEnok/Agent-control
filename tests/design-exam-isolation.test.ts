@@ -40,7 +40,7 @@ function decideIsolation(flag: string, personal: boolean, workflow: unknown, rol
   if (flag === 'designExam||securityExam' || flag === 'securityExam||designExam') return designExam || securityExam;
   if (flag === 'readonlyExamIsolation(personal,examWorkflow,input.role)') {
     const fn = (supervisor as {readonlyExamIsolation?: (personal: unknown, workflow: unknown, role: unknown) => boolean}).readonlyExamIsolation;
-    assert.equal(typeof fn, 'function');
+    if (typeof fn !== 'function') throw new Error('READONLY_EXAM_ISOLATION_MISSING');
     return fn(personal, workflow, role);
   }
   throw new Error('EXAM_ISOLATION_EXPRESSION ' + flag);
@@ -191,7 +191,7 @@ function decideStage(flag: string, personal: boolean, workflow: unknown, role: u
   if (flag === 'designExam' || flag === 'personal&&readonlyDesignExam(examWorkflow,input.role)') return designExam;
   if (flag === 'stageDesignExamCaptures(personal,examWorkflow,input.role)') {
     const fn = (supervisor as {stageDesignExamCaptures?: (personal: unknown, workflow: unknown, role: unknown) => boolean}).stageDesignExamCaptures;
-    assert.equal(typeof fn, 'function');
+    if (typeof fn !== 'function') throw new Error('STAGE_DESIGN_EXAM_CAPTURES_MISSING');
     return fn(personal, workflow, role);
   }
   if (flag === 'stageCaptures') {

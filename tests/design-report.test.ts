@@ -531,7 +531,7 @@ test('registra usuário, limites e rede da imagem sem afirmar execução', async
   await withTemp(async data => {
     const invalid = reportInput(data);
     await assert.rejects(
-      writeDesignReport({...invalid, emptyState: 'talvez'} as Parameters<typeof writeDesignReport>[0]),
+      writeDesignReport({...invalid, emptyState: 'talvez'} as unknown as Parameters<typeof writeDesignReport>[0]),
       refused('DESIGN_REPORT_INVALID'),
     );
     assert.deepEqual(await readdir(data), []);

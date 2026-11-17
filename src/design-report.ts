@@ -2,9 +2,8 @@ import {constants, type Stats} from 'node:fs';
 import {chmod, lstat, mkdir, open, readdir, realpath, type FileHandle} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
-import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments} from './design-image.ts';
-import {captureProof} from './design-mark.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
+import {captureProof} from './design-mark.ts';
 import {DesignAchado, DesignCoverageRow, DesignReportSummary} from './design-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}-design$/;
