@@ -1,9 +1,8 @@
-import {createHash} from 'node:crypto';
-import {constants} from 'node:fs';
-import {lstat, mkdir, mkdtemp, open, readFile, realpath, rm, rmdir} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join, sep} from 'node:path';
+import {join} from 'node:path';
 import {Id, Refusal} from './contracts.ts';
+import {writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
 import {discoverRoutesFromSource, screenCoverageMarkdown, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
@@ -92,7 +91,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const routes = discoverRoutesFromSource(input.files);
   const notes: string[] = [];
   const captured = await captureIfAsked(input, target.origin, routes, notes);
-  const staged = await stageDesignCaptures(input.repo, input.runId, captured.held);
+  const staged = await stageDesignCaptures(input.dataDirectory, input.runId, captured.held);
   const routesByFile = new Map<string, string[]>();
   for (const route of routes) {
     const key = route.file.slice(0, 400);
@@ -114,6 +113,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       };
     });
     if (screens.length === 0) notes.push('Nenhuma tela de código entrou no exame.');
+    staged.publish();
     examined = await examineDesignScreens({
       repo: input.repo,
       intentId: input.intentId,
@@ -125,6 +125,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       release: input.release,
     });
   } finally {
+    staged.conceal();
     await staged.cleanup();
   }
   notes.push(...examined.notes);
@@ -324,69 +325,20 @@ async function captureIfAsked(
 }
 
 /**
- * Writes PNGs under `<repo>/.design-captures/<runId>/` for the exam and deletes them after.
- * The git snapshot ignores that directory. The supervisor copies the sha256 files into
- * `/planning/capturas` and `/work/capturas` before the container starts.
- * The task cites the host path that exists while `worker.run` is in flight.
+ * Writes PNGs under `<dataDirectory>/design-captures/<runId>/` and deletes that run after the exam.
+ * Publish the directory only while `worker.run` is in flight so the supervisor copies that run.
  */
 async function stageDesignCaptures(
-  repo: string,
+  dataDirectory: string,
   runId: string,
   held: readonly HeldCapture[],
-): Promise<{byRoute: Map<string, DesignScreenCapture[]>; cleanup: () => Promise<void>}> {
-  if (held.length === 0 || !Id.safeParse(runId).success) {
-    return {byRoute: new Map(), cleanup: async () => {}};
-  }
-  let root: string;
-  try {
-    root = await realpath(repo);
-  } catch {
-    throw new Refusal('DESIGN_REPO_UNREADABLE', 400);
-  }
-  const parent = join(root, '.design-captures');
-  const dir = join(parent, runId);
-  await mkdir(parent, {recursive: true, mode: 0o700});
-  const parentStat = await lstat(parent);
-  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
-  const parentReal = await realpath(parent);
-  if (parentReal !== parent || !parentReal.startsWith(root + sep)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
-  await mkdir(dir, {mode: 0o700});
-  const byRoute = new Map<string, DesignScreenCapture[]>();
-  const written = new Map<string, string>();
-  const cleanup = async () => {
-    await rm(dir, {recursive: true, force: true});
-    await rmdir(parent).catch(() => undefined);
-  };
-  try {
-    for (const item of held) {
-      const sha256 = createHash('sha256').update(item.bytes).digest('hex');
-      let path = written.get(sha256);
-      if (path === undefined) {
-        path = join(dir, `${sha256}.png`);
-        const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-        try {
-          await handle.writeFile(item.bytes);
-        } finally {
-          await handle.close();
-        }
-        written.set(sha256, path);
-      }
-      const capture: DesignScreenCapture = {
-        path,
-        viewport: item.viewport,
-        theme: item.theme,
-        state: item.state,
-        sha256,
-      };
-      const list = byRoute.get(item.route) ?? [];
-      list.push(capture);
-      byRoute.set(item.route, list);
-    }
-  } catch (error) {
-    await cleanup();
-    throw error;
-  }
-  return {byRoute, cleanup};
+): Promise<{
+  byRoute: Map<string, DesignScreenCapture[]>;
+  publish: () => void;
+  conceal: () => void;
+  cleanup: () => Promise<void>;
+}> {
+  return writeDesignExamCaptures(dataDirectory, runId, held);
 }
 
 function assertPasswordAbsent(password: string | undefined, value: unknown): void {
