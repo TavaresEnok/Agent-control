@@ -5,6 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {failAbandonedVerifyRuns, type VerifyRunLedger} from '../src/verify-abandon.ts';
 
+const delay = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms); });
+
 const project = '11111111-1111-4111-8111-111111111111';
 const run = '22222222-2222-4222-8222-222222222222';
 const kept = '33333333-3333-4333-8333-333333333333';
@@ -68,6 +70,63 @@ test('marcador de outro run e lease ainda ativa não são apagados', async () =>
     await assert.rejects(() => stat(join(dir, `${run}.json`)));
     assert.equal(await readFile(join(dir, '.running'), 'utf8'), `${kept}\n`);
   } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('lease ainda válido na primeira varredura permanece; a seguinte limpa o andamento sem reiniciar', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ac-verify-abandon-watch-'));
+  let stop = () => {};
+  const parked: Array<(rows: {id: string; project_id: string}[]) => void> = [];
+  const releaseParked = () => { for (const wake of parked.splice(0)) wake([]); };
+  try {
+    const dir = join(root, 'verificacoes', project, 'andamento');
+    await mkdir(dir, {recursive: true});
+    const progress = join(dir, `${run}.json`);
+    const marker = join(dir, '.running');
+    await writeFile(progress, '{"status":"running"}');
+    await writeFile(marker, `${run}\n`);
+    let calls = 0;
+    let releaseExpired!: (rows: {id: string; project_id: string}[]) => void;
+    const expired = new Promise<{id: string; project_id: string}[]>(resolve => { releaseExpired = resolve; });
+    const mock: VerifyRunLedger = {pool: {query() {
+      const n = ++calls;
+      if (n === 1) return Promise.resolve({rows: []});
+      if (n === 2) return expired.then(rows => ({rows}));
+      return new Promise(resolve => { parked.push(rows => resolve({rows})); });
+    }}};
+    const abandon = await import('../src/verify-abandon.ts');
+    assert.equal(typeof abandon.watchAbandonedVerifyRuns, 'function');
+    const started = Date.now();
+    const gone = async (path: string) => {
+      while (true) {
+        try { await stat(path); } catch (error) {
+          const code = error && typeof error === 'object' && 'code' in error ? (error as {code: unknown}).code : undefined;
+          if (code === 'ENOENT') return;
+          throw error;
+        }
+        if (Date.now() - started > 800) throw new Error(`not removed: ${path}`);
+        await delay(5);
+      }
+    };
+    stop = abandon.watchAbandonedVerifyRuns(mock, root, 20);
+    while (calls < 1) {
+      if (Date.now() - started > 400) throw new Error('first sweep did not run');
+      await delay(5);
+    }
+    assert.equal(await readFile(progress, 'utf8'), '{"status":"running"}');
+    assert.equal(await readFile(marker, 'utf8'), `${run}\n`);
+    releaseExpired([{id: run, project_id: project}]);
+    await gone(progress);
+    await gone(marker);
+    assert.ok(calls >= 2);
+    stop();
+    const frozen = calls;
+    await delay(80);
+    assert.equal(calls, frozen);
+  } finally {
+    releaseParked();
+    stop();
     await rm(root, {recursive: true, force: true});
   }
 });

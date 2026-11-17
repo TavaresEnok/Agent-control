@@ -75,3 +75,14 @@ export async function failAbandonedVerifyRuns(ledger: VerifyRunLedger, dataDirec
     await clearProgress(dataDirectory, projectId, id);
   }
 }
+
+/** Repeats the sweep. A still-valid lease matches nothing; a sweep error stays in the timer. */
+export function watchAbandonedVerifyRuns(ledger: VerifyRunLedger, dataDirectory: string, everyMs = 60_000): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped) return;
+    void failAbandonedVerifyRuns(ledger, dataDirectory).catch(() => { console.error('VERIFY_ABANDON_FAILED'); });
+  }, everyMs);
+  timer.unref();
+  return () => { stopped = true; clearInterval(timer); };
+}

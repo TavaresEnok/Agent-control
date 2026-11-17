@@ -147,7 +147,7 @@ async function main(){
  let bootstrapSession:{shutdown():Promise<unknown>}|undefined;
  let bootstrapReport:{state:string;executionEnabled:boolean;inferenceEnabled:boolean}|undefined;
  const shutdownBootstrap=async()=>{await bootstrapSession?.shutdown();};
- let runtimes:ProjectRuntimes|undefined,serving=false;
+ let runtimes:ProjectRuntimes|undefined,serving=false,stopAbandonedVerifyRuns=()=>{};
  try{
   if(command==='inspect'){
    const {inspectInstallationReadiness}=await import('./installation-readiness.ts');
@@ -330,14 +330,14 @@ async function main(){
     if(principal&&!bearer)sessions.checkOrigin(request);
     return principal;
    }});
-  if(config.activation==='personal'){try{const {failAbandonedVerifyRuns}=await import('./verify-abandon.ts');await failAbandonedVerifyRuns(ledger,config.dataDirectory);}catch{console.error('VERIFY_ABANDON_FAILED');}}
+  if(config.activation==='personal'){try{const {failAbandonedVerifyRuns,watchAbandonedVerifyRuns}=await import('./verify-abandon.ts');try{await failAbandonedVerifyRuns(ledger,config.dataDirectory);}catch{console.error('VERIFY_ABANDON_FAILED');}stopAbandonedVerifyRuns=watchAbandonedVerifyRuns(ledger,config.dataDirectory);}catch{console.error('VERIFY_ABANDON_FAILED');}}
   const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:prepared.report.state==='active'?'personal_ready':'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:prepared.report.executionEnabled,inferenceEnabled:prepared.report.inferenceEnabled,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
   serving=true;
   let closing=false;
-  const close=()=>{if(closing)return;closing=true;server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
+  const close=()=>{if(closing)return;closing=true;stopAbandonedVerifyRuns();server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
   stopGateway=close;
   process.once('SIGTERM',close);process.once('SIGINT',close);
- }finally{if(!serving){try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{try{await workflowRegistration?.close();}finally{await ledger.close();}}}}}}
+ }finally{if(!serving){stopAbandonedVerifyRuns();try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{try{await workflowRegistration?.close();}finally{await ledger.close();}}}}}}
 }
 main().catch(error=>{
  // Only a refusal code or an upper-case error identifier is shown; free text may carry paths or secrets.
