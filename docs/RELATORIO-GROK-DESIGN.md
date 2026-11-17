@@ -88,3 +88,52 @@ A bancada confirma regra plantada, WCAG ou `DESIGN-` e não descarta falso posit
 - Sem o `dist` de `@happier-dev/protocol`, o build do painel continua sem montar o React. Corrigir isso exigiria instalar o workspace Happier ou mudar o Vite, e isso não foi feito.
 - O entrypoint, a rede internal e o usuário 65532 estão no Dockerfile e nos scripts, sem uma construção local que prove a imagem.
 - Gravidade alta fora de regra plantada, WCAG ou id `DESIGN-` é rebaixada para informativa. Um achado novo que não siga esse prefixo não reprova sozinho.
+
+## Rodada 2
+
+Data: 2026-11-17. Sem push, sem merge e sem reescrita de histórico. O modo `locked` não mudou. Não há migração 101. A instalação viva, o gateway vivo, o banco `ac_ispagent`, o contêiner `ac-personal-pg` e o worktree do validador não foram alterados. Não houve compra de crédito. As chamadas de modelo usaram as assinaturas já copiadas para uma instalação descartável. `.grok-notas/` foi apagada antes deste commit e não entra no git.
+
+`npm test` terminou com 189 arquivos ok e `failed` vazio. `npm run typecheck` também saiu 0. `workflow-runtime-bootstrap.test.ts` passou porque o boundary do Happier já estava neste worktree (`upstream/happier/node_modules/.agent-control-boundary.mjs`, arquivo local, 191108 bytes). Isso é do ambiente, não de um patch nesse teste. `installation-readiness.test.ts` deixa de herdar `NO_COLOR` quando `FORCE_COLOR` também está definido, para o stderr do `inspect` ficar vazio.
+
+| Item | Commit | O que entrou |
+|---|---|---|
+| 1. Imagem | `d298d37f` | Entrypoint com cópia `0755` e `deploy/.dockerignore` |
+| 2. Examinador | `78e2c168` | `npm run personal:design`, caminho nativo pessoal, capturas em arquivo |
+| 3. Heurísticas | `4c034773` | Nome em expressão JSX, lista sem ramo de vazio, sombra translúcida fora do cinza |
+| 4. Painel | `a348ab90` | Sete telas em 375, 768 e 1440, e o resultado do módulo |
+| 5. Testes | `b0494585` | `installation-readiness.test.ts` |
+| 6. Relatório | este commit | Esta seção |
+
+### Imagem
+
+A imagem que vale é `ac-design:ordem2`, id `sha256:4e529de6e86ee5b2f3ecdb94420ace0b764078d544b9b92f81220e96eb90732b`. Uma construção anterior, digest terminado em `0d18106e`, não conta e foi apagada para liberar disco. Não houve `docker system prune` nem apagamento de imagem ou volume de outro projeto.
+
+Prova na rede internal `design-homologation`, usuário `65532:65532`, alvo `http://homologacao.local:8080`. Limites: memória e swap `2147483648`, `NanoCpus=2000000000`, pids 256, raiz só leitura, `cap-drop ALL`, `no-new-privileges`. `pa11y.status=0`, stdout `[]`, stderr sem `No usable sandbox`. URL externa continua `DESIGN_EXTERNAL_TARGET`. O Chrome da imagem recebe `--no-sandbox` porque o drop de capabilities impede o sandbox. O entrypoint copia a árvore em `0755` para o `find` conseguir atravessar.
+
+### Examinador
+
+O comando é `npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo 0600>]`. Só ativação `personal`. A bancada `designBenchWorker` ficou para os testes.
+
+O intento do exame entra como `accepted`, com o comando `plan.start` e o fluxo `design-readonly-v1`, sem outbox e sem plano congelado. A fila de capacidade ignora intento `done`, e a primeira tentativa real por isso voltou `CAPACITY_QUEUED`. Antes disso, a política de fábrica não tinha papel `specialist` e a reserva voltou `ROLE_NOT_CONFIGURED`. O núcleo de `capacity.reserve` não mudou. O supervisor nativo trata esse fluxo, em instalação pessoal e nos papéis `specialist` e `reviewer`, como exame somente leitura: não exige contrato de artefato, copia as capturas para o worker e aposenta o job sem evidência de estágio. O Happier pula o fluxo. O Cezar recusa com `DESIGN_INTENT_NOT_EXECUTION`. O CLI marca o intento `done` só quando o módulo volta.
+
+As capturas vão para disco, modo `0600`, e o pedido manda o modelo abrir o PNG. Não vão em base64 no texto. O revisor é outro provedor (`DESIGN_PROVIDER_MUST_DIFFER`).
+
+A execução que vale é `331663e8-79e1-4408-acee-ba9bf51eb9dc`, diretório `20261117-194844-design`, cerca de 48 minutos, contra o gateway descartável em `http://127.0.0.1:42539`. Examinador: Claude `claude-sonnet-5-5`, 20 chamadas (dez telas, com uma repetição quando a primeira resposta não era um único objeto JSON). Revisor: Codex `gpt-6.1-sol`, 91 chamadas. A cadeia de especialista existiu só na instalação descartável, revisão de política 2, regular Claude e emergência Grok. O combo de fábrica não publica `specialist` e não foi alterado. O JSON do modelo traz a lista como objeto, gravidade `low`/`high` e `cwe` vazio; o leitor normaliza isso antes do esquema da bancada.
+
+Noventa e um achados. A nota de falha conta só confirmado ou reaberto: 2 altos, 17 médios, 13 baixos. Os dois altos confirmados são a captura de `/tasks/:id/*` que mostra só `{"error":"AUTH_REQUIRED"}` e códigos técnicos crus como mensagem de erro. Um alto ficou provável: `--soft-foreground` (`#a3a3a3`) sobre branco. O revisor descartou o inventário de oito cinzas quando não havia medida.
+
+### Heurísticas
+
+`aria-label`, `aria-labelledby` e `title` em expressão JSX contam como nome. "Estado vazio ausente" só sai para `ul`, `ol`, `data-list` ou `role=list` sem ramo de vazio no mesmo arquivo. `.map(` sozinho não gera o achado. Achado alto continua exigindo regra plantada, WCAG ou id `DESIGN-`. Alfa menor que 0,5 não entra como cinza. `tests/design-lab.test.ts` passou: os 8 defeitos plantados continuam reprovando e as telas boas continuam limpas.
+
+### Painel
+
+Build `VITE_AGENT_CONTROL_MANAGED=1 npm --prefix upstream/cezar run build:web`, Vite 8.1.4, 3739 módulos, 2,33 s. O Happier veio do checkout principal por link, e o boundary foi gerado neste worktree. Sete telas pintadas em 375, 768 e 1440 substituem as três páginas pretas. O combo na tela Equipe aparece como "nenhum". O detalhe está em `docs/validation/verificacao-design-painel.md`.
+
+O módulo capturou oito rotas descobertas no fonte, não as rotas `/p/<projeto>/...` das capturas manuais. `/conversa`, `/novo-projeto` e `/new` pintaram a casca. `/tarefas` em 375 px mostrou o cabeçalho e a área principal vazia. `/equipe`, `/p/:projectId` e `/tasks/:id` responderam o documento `AUTH_REQUIRED` porque o parâmetro ficou literal. Ajustes foi pintado à mão e não entrou nas oito rotas. Não houve tema escuro nem estados forçados nessa corrida.
+
+### O que ficou de fora
+
+- O combo de fábrica ainda não tem cadeia `specialist`. Uma instalação nova precisa de uma revisão de política para o exame reservar o papel.
+- A descoberta de rotas não substitui `:projectId`. Várias capturas do módulo não são a tela logada.
+- A suíte `npm test` continua sem os testes de Docker, SSH e Happier. `workflow-runtime-bootstrap` depende do boundary já gerado.
