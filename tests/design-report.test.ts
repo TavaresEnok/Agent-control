@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments} from '../src/design-image.ts';
+import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_RUNTIME_BIN, DESIGN_USER, designRunArguments} from '../src/design-image.ts';
 import {readDesignReport, writeDesignReport} from '../src/design-report.ts';
 import {DESIGN_ACCEPTANCE, DesignReportSummary, type DesignAchado, type DesignCoverageRow} from '../src/design-types.ts';
 
@@ -447,7 +447,7 @@ test('registra usuário, limites e rede da imagem sem afirmar execução', async
     assert.equal(readme.includes('capturado'), false);
     assert.equal(readme.includes('não deu'), false);
     assert.match(readme, /não executou o contêiner/);
-    assert.match(readme, /docker run --rm --network design-homologation/);
+    assert.match(readme, new RegExp(`${DESIGN_RUNTIME_BIN} run --rm --network ${DESIGN_NETWORK}`));
     assert.doesNotMatch(readme, /o contêiner (?:foi|executou)|foi executad/i);
 
     let nano = 1;
