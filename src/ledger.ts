@@ -140,6 +140,8 @@ export class Ledger {
   }
   async accept(principal: string, raw: Command, a: Authority, channel: string, afterAccept?:(c:pg.PoolClient,intent:Intent)=>Promise<void>): Promise<Intent> {
     const command = Command.parse(raw);
+    // The owner CLI inserts this exam directly and does not call accept.
+    if(command.payload.workflow==='design-readonly-v1')throw new Refusal('DESIGN_INTENT_NOT_PUBLIC',403);
     if(command.payload.workflow==='engineering-native-v1'&&(channel!=='happier'||!afterAccept))throw new Refusal('NATIVE_CANONICAL_MESSAGE_REQUIRED',403);
     return this.tx(async c => {
       if(command.payload.workflow==='security-verify-readonly-v1'){
