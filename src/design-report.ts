@@ -3,6 +3,7 @@ import {chmod, lstat, mkdir, open, readdir, realpath, type FileHandle} from 'nod
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {captureProof} from './design-mark.ts';
+import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
 import {DesignAchado, DesignCoverageRow, DesignReportSummary} from './design-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}-design$/;
@@ -41,6 +42,8 @@ export type DesignReportWriteInput = {
   raw: unknown;
   note: string;
   captures?: readonly DesignReportCapture[];
+  /** "capturado" ou "não deu". Ausente, o relatório continua válido. */
+  emptyState?: 'capturado' | 'não deu';
 };
 
 function hasLiveAccessKey(text: string): boolean {
@@ -184,6 +187,188 @@ function coverageMarkdown(rows: readonly DesignCoverageRow[]): string {
   return lines.join('\n');
 }
 
+const PROBE_RUN: Omit<DesignRunInput, 'memoryBytes' | 'nanoCpus' | 'pidsLimit'> = {
+  image: DESIGN_IMAGE,
+  repository: '/var/lib/design/repo',
+  output: '/var/lib/design/out',
+  targetUrl: 'http://127.0.0.1:9/',
+  network: DESIGN_NETWORK,
+};
+
+type LimitPoint = {memoryBytes: number; nanoCpus: number; pidsLimit: number};
+
+function parseEmptyState(value: unknown): 'capturado' | 'não deu' | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'capturado' || value === 'não deu') return value;
+  throw new Refusal('DESIGN_REPORT_INVALID', 400);
+}
+
+function powerScale(): number[] {
+  const values: number[] = [];
+  let value = 1;
+  while (values.length < 60 && value <= Number.MAX_SAFE_INTEGER / 4) {
+    values.push(value);
+    value *= 2;
+  }
+  return values;
+}
+
+function outward(values: readonly number[]): number[] {
+  const mid = Math.floor(values.length / 2);
+  const ordered = [values[mid]];
+  for (let step = 1; ordered.length < values.length; step++) {
+    if (mid - step >= 0) ordered.push(values[mid - step]);
+    if (mid + step < values.length) ordered.push(values[mid + step]);
+  }
+  return ordered;
+}
+
+function runWithinLimits(memoryBytes: number, nanoCpus: number, pidsLimit: number): readonly string[] | null {
+  if (!Number.isSafeInteger(memoryBytes) || !Number.isSafeInteger(nanoCpus) || !Number.isSafeInteger(pidsLimit)) return null;
+  if (memoryBytes < 1 || nanoCpus < 1 || pidsLimit < 1) return null;
+  try {
+    return designRunArguments({...PROBE_RUN, memoryBytes, nanoCpus, pidsLimit});
+  } catch (error) {
+    if (error instanceof Refusal && error.code === 'DESIGN_LIMITS_INVALID') return null;
+    throw error;
+  }
+}
+
+function argumentOf(args: readonly string[], name: string): string {
+  const index = args.indexOf(name);
+  const value = index >= 0 ? args[index + 1] : undefined;
+  if (value === undefined || value.startsWith('--')) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  return value;
+}
+
+function findLimitSeed(): LimitPoint {
+  const samples = outward(powerScale());
+  for (const memoryBytes of samples) {
+    for (const nanoCpus of samples) {
+      for (const pidsLimit of samples) {
+        if (runWithinLimits(memoryBytes, nanoCpus, pidsLimit)) return {memoryBytes, nanoCpus, pidsLimit};
+      }
+    }
+  }
+  throw new Refusal('DESIGN_REPORT_INVALID', 400);
+}
+
+function lowestAccepted(ok: (value: number) => boolean, accepted: number): number {
+  let lo = 0;
+  let hi = accepted;
+  while (hi - lo > 1) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (ok(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+}
+
+function highestAccepted(ok: (value: number) => boolean, accepted: number): number {
+  const top = Number.MAX_SAFE_INTEGER;
+  if (ok(top)) return top;
+  let lo = accepted;
+  let hi = top;
+  while (hi - lo > 1) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (ok(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function imageUserIsRoot(user: string): boolean {
+  return user.split(':').some(part => part === '0' || part.toLowerCase() === 'root');
+}
+
+type ImageProof = {
+  user: string;
+  memoryMin: string;
+  memoryMax: string;
+  pidsMin: string;
+  pidsMax: string;
+  cpuMin: string;
+  cpuMax: string;
+  network: string;
+};
+
+let cachedImageProof: ImageProof | null = null;
+
+function imageProof(): ImageProof {
+  if (cachedImageProof) return cachedImageProof;
+  const seed = findLimitSeed();
+  const memoryMin = lowestAccepted(value => runWithinLimits(value, seed.nanoCpus, seed.pidsLimit) !== null, seed.memoryBytes);
+  const memoryMax = highestAccepted(value => runWithinLimits(value, seed.nanoCpus, seed.pidsLimit) !== null, seed.memoryBytes);
+  const pidsMin = lowestAccepted(value => runWithinLimits(seed.memoryBytes, seed.nanoCpus, value) !== null, seed.pidsLimit);
+  const pidsMax = highestAccepted(value => runWithinLimits(seed.memoryBytes, seed.nanoCpus, value) !== null, seed.pidsLimit);
+  const cpuMin = lowestAccepted(value => runWithinLimits(seed.memoryBytes, value, seed.pidsLimit) !== null, seed.nanoCpus);
+  const cpuMax = highestAccepted(value => runWithinLimits(seed.memoryBytes, value, seed.pidsLimit) !== null, seed.nanoCpus);
+  const outside = (value: number, kind: 'memory' | 'pids' | 'cpu'): boolean => {
+    if (!Number.isSafeInteger(value) || value < 1) return false;
+    if (kind === 'memory') return runWithinLimits(value, seed.nanoCpus, seed.pidsLimit) !== null;
+    if (kind === 'pids') return runWithinLimits(seed.memoryBytes, seed.nanoCpus, value) !== null;
+    return runWithinLimits(seed.memoryBytes, value, seed.pidsLimit) !== null;
+  };
+  if (outside(memoryMin - 1, 'memory') || outside(memoryMax + 1, 'memory')) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  if (outside(pidsMin - 1, 'pids') || outside(pidsMax + 1, 'pids')) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  if (outside(cpuMin - 1, 'cpu') || outside(cpuMax + 1, 'cpu')) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  const memoryAtMin = runWithinLimits(memoryMin, seed.nanoCpus, seed.pidsLimit);
+  const memoryAtMax = runWithinLimits(memoryMax, seed.nanoCpus, seed.pidsLimit);
+  const pidsAtMin = runWithinLimits(seed.memoryBytes, seed.nanoCpus, pidsMin);
+  const pidsAtMax = runWithinLimits(seed.memoryBytes, seed.nanoCpus, pidsMax);
+  const cpuAtMin = runWithinLimits(seed.memoryBytes, cpuMin, seed.pidsLimit);
+  const cpuAtMax = runWithinLimits(seed.memoryBytes, cpuMax, seed.pidsLimit);
+  if (!memoryAtMin || !memoryAtMax || !pidsAtMin || !pidsAtMax || !cpuAtMin || !cpuAtMax) {
+    throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  }
+  const user = argumentOf(memoryAtMin, '--user');
+  const network = argumentOf(memoryAtMin, '--network');
+  if (user !== DESIGN_USER || argumentOf(cpuAtMax, '--user') !== DESIGN_USER || imageUserIsRoot(user)) {
+    throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  }
+  if (network !== DESIGN_NETWORK || argumentOf(cpuAtMax, '--network') !== DESIGN_NETWORK) {
+    throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  }
+  if (memoryAtMin.filter(item => item === '--network').length !== 1) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  try {
+    designRunArguments({
+      ...PROBE_RUN,
+      network: `${DESIGN_NETWORK}-extra`,
+      memoryBytes: seed.memoryBytes,
+      nanoCpus: seed.nanoCpus,
+      pidsLimit: seed.pidsLimit,
+    });
+    throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  } catch (error) {
+    if (!(error instanceof Refusal) || error.code !== 'DESIGN_NETWORK_FORBIDDEN') throw error;
+  }
+  const memoryLow = argumentOf(memoryAtMin, '--memory');
+  const memoryHigh = argumentOf(memoryAtMax, '--memory');
+  if (memoryLow !== argumentOf(memoryAtMin, '--memory-swap') || memoryHigh !== argumentOf(memoryAtMax, '--memory-swap')) {
+    throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  }
+  if (memoryLow !== String(memoryMin) || memoryHigh !== String(memoryMax)) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  const pidsLow = argumentOf(pidsAtMin, '--pids-limit');
+  const pidsHigh = argumentOf(pidsAtMax, '--pids-limit');
+  if (pidsLow !== String(pidsMin) || pidsHigh !== String(pidsMax)) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  cachedImageProof = {
+    user,
+    memoryMin: memoryLow,
+    memoryMax: memoryHigh,
+    pidsMin: pidsLow,
+    pidsMax: pidsHigh,
+    cpuMin: argumentOf(cpuAtMin, '--cpus'),
+    cpuMax: argumentOf(cpuAtMax, '--cpus'),
+    network,
+  };
+  return cachedImageProof;
+}
+
+function imageProofText(): string {
+  const proof = imageProof();
+  return `O usuário da imagem é ${proof.user} e não é root. Os limites são memória de ${proof.memoryMin} a ${proof.memoryMax} bytes, pids de ${proof.pidsMin} a ${proof.pidsMax} e CPU de ${proof.cpuMin} a ${proof.cpuMax}. A única rede é ${proof.network}.`;
+}
+
 function readme(input: {
   runId: string;
   directoryName: string;
@@ -193,9 +378,10 @@ function readme(input: {
   total: number;
   counts: DesignReportSummary['counts'];
   discarded: number;
+  emptyState?: 'capturado' | 'não deu';
 }): string {
   const failing = input.counts.alta + input.counts.media + input.counts.baixa + input.counts.informativa;
-  return [
+  const lines = [
     '# Relatório de verificação de design',
     '',
     '## Resumo',
@@ -227,11 +413,17 @@ function readme(input: {
     '',
     discardedText(input.discarded),
     '',
+    '## Prova da imagem',
+    '',
+    imageProofText(),
+    '',
     '## O que não foi possível verificar',
     '',
     input.note,
     '',
-  ].join('\n');
+  ];
+  if (input.emptyState !== undefined) lines.push('## Estado vazio', '', input.emptyState, '');
+  return lines.join('\n');
 }
 
 function serializedRaw(raw: unknown): string {
@@ -475,6 +667,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
   if (typeof input.commit !== 'string' || typeof input.mapMarkdown !== 'string' || typeof input.note !== 'string') {
     throw new Refusal('DESIGN_REPORT_INVALID', 400);
   }
+  const emptyState = parseEmptyState(input.emptyState);
   assertNoLiveAccessKey({
     commit: input.commit,
     mapMarkdown: input.mapMarkdown,
@@ -509,6 +702,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       total: achados.length,
       counts,
       discarded,
+      emptyState,
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
     {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage))},

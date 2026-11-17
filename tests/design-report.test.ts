@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
+import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments} from '../src/design-image.ts';
 import {readDesignReport, writeDesignReport} from '../src/design-report.ts';
 import {DESIGN_ACCEPTANCE, DesignReportSummary, type DesignAchado, type DesignCoverageRow} from '../src/design-types.ts';
 
@@ -377,5 +378,131 @@ test('recusa segmento com ponto duplo, barra ou symlink', async () => {
     await symlink(hidden, coveragePath);
     await assert.rejects(readDesignReport(data, projectId, runId), refused('DESIGN_PATH_FORBIDDEN'));
     assert.equal(await readFile(hidden, 'utf8'), 'NAO-LER');
+  });
+});
+
+function limitArgs(memoryBytes: number, nanoCpus: number, pidsLimit: number): readonly string[] | null {
+  try {
+    return designRunArguments({
+      image: DESIGN_IMAGE,
+      repository: '/var/lib/design/repo',
+      output: '/var/lib/design/out',
+      targetUrl: 'http://127.0.0.1:9/',
+      memoryBytes,
+      nanoCpus,
+      pidsLimit,
+    });
+  } catch (error) {
+    assert.equal(error instanceof Refusal && error.code === 'DESIGN_LIMITS_INVALID', true);
+    return null;
+  }
+}
+
+function flag(args: readonly string[], name: string): string {
+  const value = args[args.indexOf(name) + 1];
+  assert.equal(typeof value, 'string');
+  return value;
+}
+
+test('registra usuário, limites e rede da imagem sem afirmar execução', async () => {
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    const proof = readme.match(/O usuário da imagem é (\S+) e não é root\. Os limites são memória de (\d+) a (\d+) bytes, pids de (\d+) a (\d+) e CPU de (\S+) a (\S+)\. A única rede é (\S+)\./);
+    assert.ok(proof);
+    const [, user, memoryMin, memoryMax, pidsMin, pidsMax, cpuMin, cpuMax, network] = proof;
+    assert.equal(user, DESIGN_USER);
+    assert.equal(user.split(':').some(part => part === '0' || part.toLowerCase() === 'root'), false);
+    assert.equal(network, DESIGN_NETWORK);
+    assert.equal(readme.includes('## Estado vazio'), false);
+    assert.equal(readme.includes('capturado'), false);
+    assert.equal(readme.includes('não deu'), false);
+    assert.doesNotMatch(readme, /cont[eê]iner|container|docker run|executad|foi execut/i);
+
+    let nano = 1;
+    let seed: readonly string[] | null = null;
+    while (nano <= Number.MAX_SAFE_INTEGER / 2) {
+      seed = limitArgs(Number(memoryMin), nano, Number(pidsMin));
+      if (seed) break;
+      nano *= 2;
+    }
+    assert.ok(seed);
+    assert.equal(limitArgs(Number(memoryMin) - 1, nano, Number(pidsMin)), null);
+    assert.ok(limitArgs(Number(memoryMax), nano, Number(pidsMin)));
+    assert.equal(limitArgs(Number(memoryMax) + 1, nano, Number(pidsMin)), null);
+    assert.equal(limitArgs(Number(memoryMin), nano, Number(pidsMin) - 1), null);
+    assert.ok(limitArgs(Number(memoryMin), nano, Number(pidsMax)));
+    assert.equal(limitArgs(Number(memoryMin), nano, Number(pidsMax) + 1), null);
+    assert.equal(flag(seed, '--user'), DESIGN_USER);
+    assert.equal(flag(seed, '--network'), DESIGN_NETWORK);
+    assert.equal(seed.filter(item => item === '--network').length, 1);
+    assert.equal(flag(seed, '--memory'), memoryMin);
+    assert.equal(flag(seed, '--pids-limit'), pidsMin);
+    assert.throws(
+      () => designRunArguments({
+        image: DESIGN_IMAGE,
+        repository: '/var/lib/design/repo',
+        output: '/var/lib/design/out',
+        targetUrl: 'http://127.0.0.1:9/',
+        memoryBytes: Number(memoryMin),
+        nanoCpus: nano,
+        pidsLimit: Number(pidsMin),
+        network: `${DESIGN_NETWORK}-extra`,
+      }),
+      refused('DESIGN_NETWORK_FORBIDDEN'),
+    );
+
+    const cpuOk = (value: number) => limitArgs(Number(memoryMin), value, Number(pidsMin)) !== null;
+    let cpuLo = 0;
+    let cpuHi = nano;
+    while (cpuHi - cpuLo > 1) {
+      const mid = cpuLo + Math.floor((cpuHi - cpuLo) / 2);
+      if (cpuOk(mid)) cpuHi = mid;
+      else cpuLo = mid;
+    }
+    const lowCpu = limitArgs(Number(memoryMin), cpuHi, Number(pidsMin));
+    assert.ok(lowCpu);
+    assert.equal(flag(lowCpu, '--cpus'), cpuMin);
+    let cpuTop = Number.MAX_SAFE_INTEGER;
+    cpuLo = nano;
+    while (cpuTop - cpuLo > 1) {
+      const mid = cpuLo + Math.floor((cpuTop - cpuLo) / 2);
+      if (cpuOk(mid)) cpuLo = mid;
+      else cpuTop = mid;
+    }
+    const highCpu = limitArgs(Number(memoryMin), cpuLo, Number(pidsMax));
+    assert.ok(highCpu);
+    assert.equal(flag(highCpu, '--cpus'), cpuMax);
+
+    const summary = DesignReportSummary.parse(JSON.parse(await readFile(join(written.directory, 'run.json'), 'utf8')));
+    assert.equal(summary.note, note);
+
+    const captured = await writeDesignReport(reportInput(data, {
+      runId: otherRunId,
+      createdAt: new Date(createdAt.getTime() + 1000),
+      emptyState: 'capturado',
+    }));
+    const capturedText = await readFile(join(captured.directory, 'README.md'), 'utf8');
+    assert.match(capturedText, /## Estado vazio\n\ncapturado\n/);
+    assert.match(capturedText, new RegExp(`O usuário da imagem é ${DESIGN_USER} e não é root`));
+    assert.equal(capturedText.includes('não deu'), false);
+
+    const missed = await writeDesignReport(reportInput(data, {
+      runId: '66666666-6666-4666-8666-666666666666',
+      createdAt: new Date(createdAt.getTime() + 2000),
+      emptyState: 'não deu',
+    }));
+    const missedText = await readFile(join(missed.directory, 'README.md'), 'utf8');
+    assert.match(missedText, /## Estado vazio\n\nnão deu\n/);
+    assert.equal(missedText.includes('capturado'), false);
+  });
+
+  await withTemp(async data => {
+    const invalid = reportInput(data);
+    await assert.rejects(
+      writeDesignReport({...invalid, emptyState: 'talvez'} as Parameters<typeof writeDesignReport>[0]),
+      refused('DESIGN_REPORT_INVALID'),
+    );
+    assert.deepEqual(await readdir(data), []);
   });
 });
