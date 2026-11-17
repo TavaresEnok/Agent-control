@@ -34,6 +34,7 @@ function supervisor(accountId: string, hooks: {
   start: SecurityExamSupervisor['start'];
   reconcile: SecurityExamSupervisor['reconcile'];
   retireTerminal: SecurityExamSupervisor['retireTerminal'];
+  stop?: SecurityExamSupervisor['stop'];
   active?: boolean;
 }): SecurityExamSupervisor {
   return {
@@ -44,6 +45,7 @@ function supervisor(accountId: string, hooks: {
     start: hooks.start,
     reconcile: hooks.reconcile,
     retireTerminal: hooks.retireTerminal,
+    ...(hooks.stop ? {stop: hooks.stop} : {}),
   };
 }
 
@@ -194,7 +196,7 @@ test('createRecheckNativeWorker usa a reserva de reviewer e ignora a concessão 
     base: 'b'.repeat(40),
     reserveReviewer: async id => {
       reservedIntent = id;
-      return {grantId: reservedGrant, accountId};
+      return {grantId: reservedGrant, accountId, provider: 'bancada'};
     },
     releaseGrant: async () => {
       throw new Error('release-called');
@@ -221,4 +223,176 @@ test('createRecheckNativeWorker usa a reserva de reviewer e ignora a concessão 
   assert.equal(seen?.role, 'reviewer');
   assert.deepEqual(seen?.writePaths, []);
   assert.equal(retired, true);
+});
+
+test('timeout só solta a concessão depois de parar e confirmar a saída', async () => {
+  const asked = call();
+  const events: string[] = [];
+  let stopped = false;
+  const chosen = supervisor(asked.accountId, {
+    async start() {
+      events.push('start');
+      return {state: 'running'};
+    },
+    async reconcile() {
+      events.push('reconcile');
+      if (!stopped) throw new Error('VERIFY_EXAM_TIMEOUT');
+      return {state: 'failed', output: ''};
+    },
+    async retireTerminal() {
+      events.push('retire');
+      return {state: 'removed'};
+    },
+    async stop() {
+      events.push('stop');
+      stopped = true;
+      return {state: 'stop_requested'};
+    },
+  });
+  const worker = createCapacityNativeWorker({
+    supervisors: [chosen],
+    principal: 'owner',
+    authority: authority(),
+    ledger,
+    base,
+    releaseGrant: async () => {
+      events.push('release');
+    },
+    wait: async () => {
+      events.push('wait');
+    },
+  });
+  await assert.rejects(() => worker.run(asked), /VERIFY_EXAM_TIMEOUT/);
+  assert.deepEqual(events, ['start', 'reconcile', 'stop', 'reconcile', 'release']);
+});
+
+test('timeout sem parada confirmada deixa a concessão presa', async () => {
+  const asked = call();
+  const released: string[] = [];
+  const missingStop = supervisor(asked.accountId, {
+    async start() {
+      return {state: 'running'};
+    },
+    async reconcile() {
+      throw new Error('VERIFY_EXAM_TIMEOUT');
+    },
+    async retireTerminal() {
+      throw new Error('retire-called');
+    },
+  });
+  let armed = false;
+  const stuck = supervisor(asked.accountId, {
+    async start() {
+      return {state: 'running'};
+    },
+    async reconcile() {
+      if (!armed) throw new Error('VERIFY_EXAM_TIMEOUT');
+      return {state: 'running'};
+    },
+    async retireTerminal() {
+      throw new Error('retire-called');
+    },
+    async stop() {
+      armed = true;
+      return {state: 'stop_requested'};
+    },
+  });
+  const failingStop = supervisor(asked.accountId, {
+    async start() {
+      return {state: 'running'};
+    },
+    async reconcile() {
+      throw new Error('VERIFY_EXAM_TIMEOUT');
+    },
+    async retireTerminal() {
+      throw new Error('retire-called');
+    },
+    async stop() {
+      throw new Error('stop-failed');
+    },
+  });
+  const noStop = createCapacityNativeWorker({
+    supervisors: [missingStop],
+    principal: 'owner',
+    authority: authority(),
+    ledger,
+    base,
+    releaseGrant: async grantId => {
+      released.push(grantId);
+    },
+    wait: async () => {},
+  });
+  await assert.rejects(() => noStop.run(asked), /VERIFY_EXAM_TIMEOUT/);
+  const uncertain = createCapacityNativeWorker({
+    supervisors: [stuck],
+    principal: 'owner',
+    authority: authority(),
+    ledger,
+    base,
+    releaseGrant: async grantId => {
+      released.push(grantId);
+    },
+    wait: async () => {},
+  });
+  await assert.rejects(() => uncertain.run(call({accountId: asked.accountId, grantId: asked.grantId})), /VERIFY_EXAM_TIMEOUT/);
+  const refused = createCapacityNativeWorker({
+    supervisors: [failingStop],
+    principal: 'owner',
+    authority: authority(),
+    ledger,
+    base,
+    releaseGrant: async grantId => {
+      released.push(grantId);
+    },
+    wait: async () => {},
+  });
+  await assert.rejects(() => refused.run(call({accountId: asked.accountId, grantId: asked.grantId})), /VERIFY_EXAM_TIMEOUT/);
+  assert.deepEqual(released, []);
+});
+
+test('createRecheckNativeWorker repassa avoidProviders e devolve o provedor da reserva', async () => {
+  const reservedGrant = randomUUID();
+  const accountId = randomUUID();
+  const intentId = randomUUID();
+  let avoided: readonly string[] | undefined;
+  const chosen = supervisor(accountId, {
+    async start() {
+      return {state: 'running'};
+    },
+    async reconcile() {
+      return {state: 'completed', output: 'revisto'};
+    },
+    async retireTerminal() {
+      return {state: 'removed'};
+    },
+  });
+  const worker = createRecheckNativeWorker({
+    supervisors: [chosen],
+    principal: 'owner',
+    authority: authority(),
+    base,
+    reserveReviewer: async (_id, avoid) => {
+      avoided = avoid;
+      return {grantId: reservedGrant, accountId, provider: 'claude'};
+    },
+    wait: async () => {
+      throw new Error('wait-called');
+    },
+  });
+  const asked = call({
+    role: 'reviewer',
+    provider: 'recheck',
+    accountId: '00000000-0000-4000-8000-000000000001',
+    profileId: '00000000-0000-4000-8000-000000000002',
+    model: 'recheck',
+    grantId: '00000000-0000-4000-8000-000000000003',
+    intentId,
+    task: 'Pedido de confirmação.',
+    repo: 'sem-repositorio',
+    avoidProviders: ['grok'],
+  });
+  const output = await worker.run(asked);
+  assert.equal(output, 'revisto');
+  assert.deepEqual(avoided, ['grok']);
+  assert.equal((asked as {reviewerProvider?: string}).reviewerProvider, 'claude');
 });

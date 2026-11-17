@@ -20,9 +20,10 @@ function refusal(code: string) {
   return (error: unknown) => error instanceof Refusal && error.code === code;
 }
 
-function worker(status: 'descartado' | 'confirmado', seen: {role: string; task: string; writePaths: readonly string[]}[]): VerifyWorker {
+function worker(status: 'descartado' | 'confirmado', seen: {role: string; task: string; writePaths: readonly string[]}[], providerFor: (avoided: readonly string[]) => string = avoided => avoided.includes('bancada') ? 'segunda' : 'bancada'): VerifyWorker {
   return {async run(call) {
     seen.push({role: call.role, task: call.task, writePaths: call.writePaths});
+    (call as {reviewerProvider?: string}).reviewerProvider = providerFor(call.avoidProviders ?? []);
     return JSON.stringify({kind: 'confirmacao', status, reason: 'o ponto foi relido', proof: 'saida da bancada'});
   }};
 }
@@ -103,6 +104,13 @@ test('correction asks the owner for the write paths and recheck closes or reopen
       ['ACH-016', 'src/crlf.ts\rinject', 1],
       ['ACH-017', 'certs/server.key', 2],
       ['ACH-018', 'keys/id_ed25519', 3],
+      ['ACH-019', '.claude/settings.json', 1],
+      ['ACH-020', '.Claude/settings.json', 1],
+      ['ACH-021', '.mcp.json', 1],
+      ['ACH-022', '.MCP.json', 1],
+      ['ACH-023', '.husky/pre-commit', 1],
+      ['ACH-024', '.codex/config.toml', 1],
+      ['ACH-025', '.grok/hooks.json', 1],
     ];
     for (const [id, path, line] of extra) {
       await db.pool.query(
@@ -118,10 +126,15 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     await assert.rejects(() => recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-001'], worker: worker('descartado', [])}), refusal('PERSONAL_ACTIVATION_REQUIRED'));
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: []}), refusal('VERIFY_NOTHING_TO_FIX'));
+    const twenty = Array.from({length: 20}, (_, index) => `ACH-${String(index + 50).padStart(3, '0')}`);
+    await assert.rejects(() => recheckFindings(db, principal, authority, {...input, achadoIds: [...twenty, 'ACH-070'], worker: worker('descartado', [])}), refusal('VERIFY_TOO_MANY'));
+    await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: [...twenty, 'ACH-070']}), refusal('VERIFY_TOO_MANY'));
+    await assert.rejects(() => recheckFindings(db, principal, authority, {...input, achadoIds: twenty, worker: worker('descartado', [])}), refusal('VERIFY_FINDING_MISSING'));
+    await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: [...twenty, twenty[0]!]}), refusal('VERIFY_FINDING_MISSING'));
     await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-999']}), refusal('VERIFY_FINDING_MISSING'));
     await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-003']}), refusal('VERIFY_FINDING_MISSING'));
     await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-004']}), refusal('VERIFY_PATH_FORBIDDEN'));
-    for (const id of ['ACH-005', 'ACH-006', 'ACH-007', 'ACH-008', 'ACH-009', 'ACH-010', 'ACH-011', 'ACH-012', 'ACH-013', 'ACH-015', 'ACH-016']) {
+    for (const id of ['ACH-005', 'ACH-006', 'ACH-007', 'ACH-008', 'ACH-009', 'ACH-010', 'ACH-011', 'ACH-012', 'ACH-013', 'ACH-015', 'ACH-016', 'ACH-019', 'ACH-020', 'ACH-021', 'ACH-022', 'ACH-023', 'ACH-024', 'ACH-025']) {
       await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: [id]}), refusal('VERIFY_PATH_FORBIDDEN'), id);
     }
     assert.equal(await readFile(outsideFile, 'utf8'), 'FORA_DO_REPOSITORIO\n');
@@ -239,7 +252,7 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     const reopenedJson = JSON.parse(await readFile(join(report, 'achados.json'), 'utf8')) as {achados: {id: string; status: string}[]};
     assert.equal(reopenedJson.achados.find(item => item.id === 'ACH-001')?.status, 'reaberto');
     assert.equal(reopenedJson.achados.find(item => item.id === 'ACH-002')?.status, 'fechado');
-    assert.equal(seen.length, 3);
+    assert.equal(seen.length, 5);
     for (const call of seen) {
       assert.equal(call.role, 'reviewer');
       assert.deepEqual(call.writePaths, []);
@@ -251,10 +264,12 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     assert.equal(seen[0]?.task.includes('Linha: 12'), true);
     assert.equal(seen[0]?.task.includes(visible), true);
     assert.equal(seen[0]?.task.includes(hidden), false);
-    assert.equal(seen[1]?.task.includes('Cabeçalho ausente'), true);
-    assert.equal(seen[1]?.task.includes('Linha: 40'), true);
-    assert.equal(seen[1]?.task.includes(visible), true);
-    assert.equal(seen[1]?.task.includes(hidden), false);
+    assert.equal(seen[1]?.task.includes('Consulta sem autorização'), true);
+    assert.equal(seen[1]?.task.includes('Linha: 12'), true);
+    assert.equal(seen[2]?.task.includes('Cabeçalho ausente'), true);
+    assert.equal(seen[2]?.task.includes('Linha: 40'), true);
+    assert.equal(seen[2]?.task.includes(visible), true);
+    assert.equal(seen[2]?.task.includes(hidden), false);
     assert.equal(message.text.includes(secret), false);
     assert.equal((await db.pool.query("SELECT status FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-013'", [runId])).rows[0].status, 'confirmado');
     const absentSeen: {role: string; task: string; writePaths: readonly string[]}[] = [];
@@ -277,12 +292,53 @@ test('correction asks the owner for the write paths and recheck closes or reopen
       assert.equal(secretSeen[0]?.task.includes(marker), false);
       assert.equal(secretSeen[0]?.task.includes(secret), false);
     }
+    const gone = 'TRECHO_SUMIU_1234';
+    const sameSeen: {role: string; task: string; writePaths: readonly string[]}[] = [];
+    const same = worker('descartado', sameSeen, () => 'unico');
+    await db.pool.query(
+      `INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,line,payload) VALUES
+       ($1,'ACH-030','confirmado','alta',$2,12,$3::jsonb),
+       ($1,'ACH-031','confirmado','alta',$2,12,$4::jsonb),
+       ($1,'ACH-032','confirmado','alta',$2,12,$5::jsonb),
+       ($1,'ACH-033','confirmado','alta',$2,12,$3::jsonb),
+       ($1,'ACH-034','confirmado','alta',$2,12,$6::jsonb),
+       ($1,'ACH-040','confirmado','media',$2,40,$7::jsonb)`,
+      [
+        runId,
+        file,
+        JSON.stringify({title: 'Alto presente', snippet: visible}),
+        JSON.stringify({title: 'Alto concordante', snippet: visible}),
+        JSON.stringify({title: 'Alto com prova', snippet: gone}),
+        JSON.stringify({title: 'Alto curto', snippet: 'curto'}),
+        JSON.stringify({title: 'Média simples', snippet: visible}),
+      ],
+    );
+    const stillThere = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-030'], worker: same});
+    assert.deepEqual(stillThere.results, [{id: 'ACH-030', status: 'reaberto'}]);
+    assert.equal(sameSeen.length, 2);
+    const sameAgain: {role: string; task: string; writePaths: readonly string[]}[] = [];
+    const repeated = worker('descartado', sameAgain, () => 'unico');
+    const sameProvider = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-033'], worker: repeated});
+    assert.deepEqual(sameProvider.results, [{id: 'ACH-033', status: 'reaberto'}]);
+    assert.equal(sameAgain.length, 2);
+    const variedSeen: {role: string; task: string; writePaths: readonly string[]}[] = [];
+    const agreed = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-031'], worker: worker('descartado', variedSeen)});
+    assert.deepEqual(agreed.results, [{id: 'ACH-031', status: 'fechado'}]);
+    assert.equal(variedSeen.length, 2);
+    const proved = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-032'], worker: worker('descartado', [], () => 'unico')});
+    assert.deepEqual(proved.results, [{id: 'ACH-032', status: 'fechado'}]);
+    const short = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-034'], worker: worker('descartado', [], () => 'unico')});
+    assert.deepEqual(short.results, [{id: 'ACH-034', status: 'reaberto'}]);
+    const mediumSeen: {role: string; task: string; writePaths: readonly string[]}[] = [];
+    const medium = await recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-040'], worker: worker('descartado', mediumSeen, () => 'unico')});
+    assert.deepEqual(medium.results, [{id: 'ACH-040', status: 'fechado'}]);
+    assert.equal(mediumSeen.length, 1);
     const outsideReport = join(outside, 'achados.json');
     await writeFile(outsideReport, 'NAO_SEGUIR_SYMLINK\n');
     await rm(join(report, 'achados.json'));
     await symlink(outsideReport, join(report, 'achados.json'));
     await assert.rejects(() => recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-002'], worker: worker('confirmado', [])}), refusal('VERIFY_PATH_FORBIDDEN'));
-    assert.equal((await db.pool.query("SELECT status FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-002'", [runId])).rows[0].status, 'fechado');
+    assert.equal((await db.pool.query("SELECT status FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-002'", [runId])).rows[0].status, 'reaberto');
     assert.equal(await readFile(outsideReport, 'utf8'), 'NAO_SEGUIR_SYMLINK\n');
     await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp() - interval '1 minute' WHERE context_id=$1", [context]);
     await assert.rejects(() => recheckFindings(db, principal, authority, {...input, achadoIds: ['ACH-001'], worker: worker('descartado', [])}), refusal('STALE_MANAGER'));

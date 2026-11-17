@@ -4,20 +4,34 @@ import {chmod, lstat, open, readdir} from 'node:fs/promises';
 import {basename, join, relative, sep} from 'node:path';
 
 const ELLIPSIS = '\u2026';
+const SHA256_MIN_LENGTH = 16;
+// A masked value already contains the ellipsis; do not treat that token as a new secret.
+const NOT_A_MASK = String.raw`(?![^\s\u2026]*\u2026)`;
 
 const UNKNOWN_PATTERNS = [
   /-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----/g,
   /(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/g,
+  /(?<![A-Z0-9])ASIA[0-9A-Z]{16}(?![A-Z0-9])/g,
   /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,400}(?![A-Za-z0-9_])/g,
   /(?<![A-Za-z0-9_])ghp_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
+  /(?<![A-Za-z0-9_])ghs_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
+  /(?<![A-Za-z0-9_])gho_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
+  /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
   /(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,400}(?![A-Za-z0-9_-])/g,
   /(?<![A-Za-z0-9])xox[a-z]-[A-Za-z0-9-]{10,400}(?![A-Za-z0-9-])/g,
   /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@\u2026]{1,200}:[^\s/@\u2026]{1,200}@/g,
   /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,255}(?![A-Za-z0-9_-])/g,
   /(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
+  /(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/g,
   /(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g,
   /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/g,
-  /(?<![A-Za-z0-9_])(?:password|secret|token)[ \t]*=[ \t]*(["'])(?:(?!\1)[^\r\n\u2026]){1,2000}\1/gi,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*bearer[ \t]+${NOT_A_MASK}\S+`, 'gi'),
+  // 40-char AWS secret access key. Pure hex is a git SHA-1 and must stay.
+  /(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])/g,
+  /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])/g,
+  // No lookbehind: `_` before `secret` is what hid client_secret. Optional quote covers JSON keys.
+  // A bare JSON literal is not a secret: "secretPreview": null must stay in our own report.
+  new RegExp(String.raw`(pass|passwd|password|secret|token|key|auth|credential)\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)\S+`, 'gi'),
 ];
 
 function fresh(pattern: RegExp, global: boolean): RegExp {
@@ -28,14 +42,17 @@ function fresh(pattern: RegExp, global: boolean): RegExp {
 }
 
 export function secretPreview(secret: string): {preview: string; sha256: string} {
+  const preview = `${secret.slice(0, 4)}${ELLIPSIS}`;
+  if (secret.length < SHA256_MIN_LENGTH) return {preview, sha256: ''};
   return {
-    preview: `${secret.slice(0, 4)}${ELLIPSIS}`,
+    preview,
     sha256: createHash('sha256').update(secret, 'utf8').digest('hex'),
   };
 }
 
 function masked(secret: string): string {
   const preview = secretPreview(secret);
+  if (secret.length < SHA256_MIN_LENGTH) return preview.preview;
   return `${preview.preview} (sha256:${preview.sha256})`;
 }
 
@@ -75,10 +92,16 @@ export function hasKnownSecret(text: string): boolean {
   return UNKNOWN_PATTERNS.some(pattern => fresh(pattern, false).test(text));
 }
 
-/** Basename only. `identity.ts` is not secret-class; `id_rsa` is. */
+/** Basename only, compared in lowercase. `identity.ts` is not secret-class; `id_rsa` is. */
 export function isSecretClassBasename(file: string): boolean {
-  const base = basename(file);
-  return base === '.env' || base.startsWith('.env') || base.endsWith('.pem') || base.endsWith('.key') || base.startsWith('id_');
+  const base = basename(file).toLowerCase();
+  if (base === '.env' || base.startsWith('.env') || base.endsWith('.pem') || base.endsWith('.key') || base.startsWith('id_')) return true;
+  if (base === '.npmrc' || base === '.netrc' || base === '.pgpass') return true;
+  if (base.endsWith('.p12') || base.endsWith('.pfx') || base.endsWith('.jks')) return true;
+  if (base.endsWith('.tfstate') || base.endsWith('.tfvars')) return true;
+  if (base.startsWith('credentials')) return true;
+  if (base.startsWith('service-account') && base.endsWith('.json')) return true;
+  return base.includes('kubeconfig');
 }
 
 export function secretFileStub(relativePath: string, line?: number | null): string {

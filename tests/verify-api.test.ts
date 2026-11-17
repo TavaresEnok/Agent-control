@@ -4,6 +4,7 @@ import {chmod, mkdir, mkdtemp, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createApi} from '../src/api.ts';
+import {Refusal} from '../src/contracts.ts';
 import {readVerificationProgress} from '../src/verify-command.ts';
 import type {Control} from '../src/control.ts';
 import type {CezarRuntime} from '../src/cezar.ts';
@@ -145,5 +146,32 @@ test('reverificar chama o worker injetado e não existe sem ele',async()=>{
   assert.deepEqual(seen.achadoIds,['ACH-001']);
   assert.equal(seen.epoch,1);
   assert.equal((await app.request(path,{method:'POST',headers,body:'{}'})).status,400);
+  const tooMany=Array.from({length:21},(_,index)=>`ACH-${String(index+1).padStart(3,'0')}`);
+  let called=false;
+  const limited=createApi(ledger,runtime,async request=>request.headers.get('authorization')==='Bearer owner'?'owner':null,()=>authority,{
+   configurationControl:{ledger} as Control,
+   personalPanel:{roots:[],projectRepos:[],installationPath:root,dataDirectory:root,projectId:primaryProjectId,scheduleRestart(){}},
+   personalVerification:{recheck:async()=>{called=true;return {results:[]};}},
+  });
+  const overflow=await limited.request(path,{method:'POST',headers,body:JSON.stringify({achadoIds:tooMany})});
+  assert.equal(overflow.status,400);
+  assert.deepEqual(await overflow.json(),{error:'INVALID_CONTRACT'});
+  assert.equal(called,false);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('a rota propaga Refusal 409 de uma execução já em andamento',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'ac-verify-conflict-')));
+ try{
+  let started=false;
+  const start=async()=>{
+   started=true;
+   throw new Refusal('VERIFY_ALREADY_RUNNING',409);
+  };
+  const app=api(root,'primary',start);
+  const response=await app.request('/api/v1/ac/personal/verificacoes',{method:'POST',headers:{authorization:'Bearer owner','content-type':'application/json'},body:'{}'});
+  assert.equal(started,true);
+  assert.equal(response.status,409);
+  assert.deepEqual(await response.json(),{error:'VERIFY_ALREADY_RUNNING'});
  }finally{await rm(root,{recursive:true,force:true});}
 });

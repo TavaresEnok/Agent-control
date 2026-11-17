@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after, test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {listSecurityReports, readAchadoMarkdown, readSecurityReport, writeSecurityReport} from '../src/verify-report.ts';
+import {listSecurityReports, readAchadoMarkdown, readSecurityReport, removeSecurityReport, writeSecurityReport} from '../src/verify-report.ts';
 import {Achado, CoverageRow, ReportSummary} from '../src/verify-types.ts';
 
 const previousUmask = process.umask(0o022);
@@ -465,6 +465,38 @@ test('um relatório corrompido não derruba a listagem e o nome antigo continua'
     const listed = await listSecurityReports(data, projectId);
     assert.deepEqual(listed.map(item => item.id), [otherRunId, runId]);
     assert.equal(listed.some(item => item.directoryName === broken), false);
+  });
+});
+
+test('removeSecurityReport apaga o relatório e as ferramentas e recusa symlink', async () => {
+  await withPair(async ({data, outside}) => {
+    const directoryName = '20261116-030405-33333333-seguranca';
+    const written = {directory: join(data, 'verificacoes', projectId, directoryName)};
+    await mkdir(written.directory, {recursive: true, mode: 0o700});
+    await writeFile(join(written.directory, 'run.json'), `${JSON.stringify({
+      id: runId,
+      directoryName,
+      createdAt: '2026-11-16T03:04:05.000Z',
+      counts: {alta: 0, media: 0, baixa: 0, informativa: 0},
+      note: 'remoção',
+    })}\n`, {mode: 0o600});
+    const tools = join(data, 'verificacoes', projectId, 'ferramentas', runId);
+    await mkdir(tools, {recursive: true, mode: 0o700});
+    await writeFile(join(tools, 'gitleaks.json'), '{"secret":"x"}\n', {mode: 0o600});
+    const outsideTools = join(outside, 'ferramentas-alvo');
+    await mkdir(outsideTools, {recursive: true});
+    await writeFile(join(outsideTools, 'gitleaks.json'), 'fora\n');
+    assert.equal((await listSecurityReports(data, projectId)).some(item => item.id === runId), true);
+    await removeSecurityReport(data, projectId, runId);
+    await assert.rejects(stat(written.directory));
+    await assert.rejects(stat(tools));
+    assert.equal((await listSecurityReports(data, projectId)).some(item => item.id === runId), false);
+    assert.equal(await readFile(join(outsideTools, 'gitleaks.json'), 'utf8'), 'fora\n');
+    await mkdir(join(data, 'verificacoes', projectId, 'ferramentas'), {recursive: true});
+    await symlink(outsideTools, join(data, 'verificacoes', projectId, 'ferramentas', runId));
+    await assert.rejects(removeSecurityReport(data, projectId, runId), refused('VERIFY_PATH_FORBIDDEN'));
+    assert.equal(await readFile(join(outsideTools, 'gitleaks.json'), 'utf8'), 'fora\n');
+    assert.equal((await lstat(join(data, 'verificacoes', projectId, 'ferramentas', runId))).isSymbolicLink(), true);
   });
 });
 

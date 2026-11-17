@@ -7,7 +7,14 @@ import {basename, join} from 'node:path';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
 import {Refusal} from '../src/contracts.ts';
-import {readCurrentVerifyDatabase, refreshVerifyDatabases} from '../src/verify-db.ts';
+import {
+  claimVerifyDatabaseStamp,
+  discardStampArguments,
+  pruneVerifyDatabaseStamps,
+  readCurrentVerifyDatabase,
+  refreshVerifyDatabases,
+  releaseVerifyDatabaseStamp,
+} from '../src/verify-db.ts';
 
 const execFileAsync = promisify(execFile);
 const image = 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -133,6 +140,193 @@ test('sem imagem fixada a busca não chega a criar o carimbo', async () => {
     assert.equal(result.fetchedAt, now.toISOString());
     assert.equal((await stat(join(data, 'verify-db', 'current.json'))).mode & 0o777, 0o600);
   } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+const DISCARD_FLAGS = ['--cap-drop', 'ALL', '--cap-add', 'DAC_OVERRIDE', 'FOWNER', '--security-opt', 'no-new-privileges', '--read-only'] as const;
+
+function assertDiscardFlags(args: readonly string[]): void {
+  for (const token of DISCARD_FLAGS) assert.ok(args.includes(token), token);
+  assert.equal(args[args.indexOf('--user') + 1], '0');
+  assert.equal(args[args.indexOf('--network') + 1], 'none');
+  assert.ok(args.includes('--rm'));
+  const mountAt = args.indexOf('--mount');
+  const imageAt = args.indexOf(image);
+  assert.ok(mountAt > 0 && imageAt > mountAt);
+  for (const flag of ['--cap-drop', '--cap-add', '--security-opt', '--read-only']) {
+    const at = args.indexOf(flag);
+    assert.ok(at > 0 && at < mountAt, flag);
+  }
+  assert.ok(args.indexOf('--cap-drop') < args.indexOf('--cap-add'));
+  assert.equal(args.at(-2), '-c');
+  assert.equal(args.at(-1), 'chmod -R a+rwX /databases');
+}
+
+test('o descarte só devolve ao root as caps de chmod, sem privilégio novo', () => {
+  const parent = '/tmp/verify-db-args';
+  const stamp = `${parent}/20261117-150405`;
+  const args = discardStampArguments(stamp, parent, image);
+  assertDiscardFlags(args);
+  assert.equal(args[0], 'docker');
+  assert.ok(args.includes(`type=bind,src=${stamp},dst=/databases`));
+  assert.equal(args.includes(image), true);
+});
+
+test('a poda conserva o current, os dois mais novos e o carimbo em uso', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    const names = [
+      '20261117-120000',
+      '20261117-130000',
+      '20261117-140000',
+      '20261117-150000',
+      '20261117-160000',
+    ];
+    for (const name of names) {
+      await mkdir(join(parent, name), {mode: 0o777});
+      await writeFile(join(parent, name, 'marker'), name);
+    }
+    const currentBody = JSON.stringify({
+      directory: join(parent, names[0]),
+      fetchedAt: now.toISOString(),
+      manifestSha256: 'abc',
+    }, null, 2) + '\n';
+    await writeFile(join(parent, 'current.json'), currentBody, {mode: 0o600});
+    const inUseBody = JSON.stringify({
+      stamps: [join(parent, names[1]), join(parent, '20200101-000000')],
+    }, null, 2) + '\n';
+    await writeFile(join(parent, 'in-use.json'), inUseBody, {mode: 0o600});
+    await chmod(join(parent, 'in-use.json'), 0o600);
+    await writeFile(join(parent, 'notes.txt'), 'keep');
+    let dockerCalls = 0;
+    await pruneVerifyDatabaseStamps(data, image, async () => {
+      dockerCalls += 1;
+      return 0;
+    });
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, ['20261117-120000', '20261117-130000', '20261117-150000', '20261117-160000']);
+    assert.equal(dockerCalls, 0);
+    assert.equal(await readFile(join(parent, 'current.json'), 'utf8'), currentBody);
+    assert.equal(await readFile(join(parent, 'in-use.json'), 'utf8'), inUseBody);
+    assert.equal(await readFile(join(parent, 'notes.txt'), 'utf8'), 'keep');
+    await assert.rejects(stat(join(parent, '20261117-140000')));
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('claim e release gravam in-use.json em 0600 sem duplicar o caminho', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    const stamp = join(parent, '20261117-150405');
+    const other = join(parent, '20261117-160000');
+    await claimVerifyDatabaseStamp(data, stamp);
+    const path = join(parent, 'in-use.json');
+    const read = async () => JSON.parse(await readFile(path, 'utf8')) as {stamps: string[]};
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+    assert.deepEqual((await read()).stamps, [stamp]);
+    await claimVerifyDatabaseStamp(data, stamp);
+    assert.deepEqual((await read()).stamps, [stamp]);
+    await claimVerifyDatabaseStamp(data, other);
+    assert.deepEqual((await read()).stamps, [stamp, other]);
+    await releaseVerifyDatabaseStamp(data, stamp);
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+    assert.deepEqual((await read()).stamps, [other]);
+    await releaseVerifyDatabaseStamp(data, stamp);
+    assert.deepEqual((await read()).stamps, [other]);
+    assert.equal((await readdir(parent)).some((name) => name.includes('.tmp')), false);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('depois de publicar, a poda apaga o que não é current, recente nem uso', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    const ancient = join(parent, '20200101-000000');
+    const used = join(parent, '20200101-000001');
+    const recent = join(parent, '20240101-000000');
+    await mkdir(ancient, {mode: 0o777});
+    await mkdir(used, {mode: 0o777});
+    await mkdir(recent, {mode: 0o777});
+    await writeFile(join(ancient, 'marker'), 'old');
+    await claimVerifyDatabaseStamp(data, used);
+    const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now});
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, ['20200101-000001', '20240101-000000', basename(result.directory)]);
+    assert.equal(basename(result.directory), '20261117-150405');
+    await assert.rejects(stat(ancient));
+    assert.equal((await readFile(join(parent, 'current.json'), 'utf8')).includes(result.directory), true);
+    assert.equal((await stat(join(parent, 'in-use.json'))).mode & 0o777, 0o600);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('uma busca que falha não poda carimbos antigos', async () => {
+  const data = await privateDirectory();
+  try {
+    const first = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now});
+    const parent = join(data, 'verify-db');
+    const ancient = join(parent, '20200101-000000');
+    await mkdir(ancient, {mode: 0o777});
+    await writeFile(join(ancient, 'marker'), 'old');
+    const previous = await readFile(join(parent, 'current.json'), 'utf8');
+    await assert.rejects(
+      () => refreshVerifyDatabases({
+        dataDirectory: data,
+        image,
+        now: later,
+        spawn: async () => 1,
+      }),
+      (error: unknown) => error instanceof Error && error.message === 'VERIFY_DB_FETCH_FAILED',
+    );
+    assert.equal(await readFile(join(parent, 'current.json'), 'utf8'), previous);
+    assert.equal(await readFile(join(ancient, 'marker'), 'utf8'), 'old');
+    assert.equal((await stat(first.directory)).isDirectory(), true);
+    await assert.rejects(stat(join(parent, '20261117-160000')));
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('um carimbo que resiste não desfaz o current e o seguinte ainda sai', async () => {
+  const data = await privateDirectory();
+  const parent = join(data, 'verify-db');
+  const stuck = join(parent, '20261117-140000');
+  try {
+    await mkdir(parent, {mode: 0o700});
+    const names = ['20261117-120000', '20261117-140000', '20261117-145000', '20261117-150000', '20261117-160000'];
+    for (const name of names) await mkdir(join(parent, name), {mode: 0o777});
+    await writeFile(join(stuck, 'owned'), 'x');
+    await chmod(stuck, 0o000);
+    const currentBody = JSON.stringify({
+      directory: join(parent, names[0]),
+      fetchedAt: now.toISOString(),
+      manifestSha256: 'abc',
+    }) + '\n';
+    await writeFile(join(parent, 'current.json'), currentBody, {mode: 0o600});
+    const calls: string[][] = [];
+    await pruneVerifyDatabaseStamps(data, image, async (args) => {
+      calls.push([...args]);
+      return 1;
+    });
+    assert.equal(calls.length, 1);
+    assertDiscardFlags(calls[0] ?? []);
+    assert.equal(await readFile(join(parent, 'current.json'), 'utf8'), currentBody);
+    await chmod(stuck, 0o700);
+    assert.equal((await stat(stuck)).isDirectory(), true);
+    await assert.rejects(stat(join(parent, '20261117-145000')));
+    assert.equal((await stat(join(parent, '20261117-120000'))).isDirectory(), true);
+    assert.equal((await stat(join(parent, '20261117-160000'))).isDirectory(), true);
+  } finally {
+    await chmod(stuck, 0o700).catch(() => undefined);
     await rm(data, {recursive: true, force: true});
   }
 });

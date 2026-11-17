@@ -83,6 +83,7 @@ export const VerifyWorkerCall = z.object({
   task: z.string().min(1).max(100000),
   repo: z.string().min(1).max(500),
   writePaths: z.tuple([]),
+  avoidProviders: z.array(z.string().min(1).max(80)).max(4).optional(),
 }).strict();
 export type VerifyWorkerCall = z.infer<typeof VerifyWorkerCall>;
 

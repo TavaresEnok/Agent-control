@@ -284,7 +284,7 @@ async function main(){
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
      const {beginPersonalVerification}=await import('./verify-command.ts');
      const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
-     return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image});
+     return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);
@@ -294,9 +294,22 @@ async function main(){
      const {recheckFindings}=await import('./verify-remediate.ts');
      const {randomUUID}=await import('node:crypto');
      const {Capacity}=await import('./capacity.ts');
-     const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:async intentId=>{
-      const grant=await new Capacity(ledger).reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'reviewer'},authority);
-      return {grantId:grant.id,accountId:grant.account_id};
+     const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:async(intentId,avoidProviders)=>{
+      const capacity=new Capacity(ledger);
+      const avoided:string[]=[];
+      let last:{grantId:string;accountId:string;provider:string}|undefined;
+      for(let attempt=0;attempt<4;attempt++){
+       const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'reviewer',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
+       const found=await ledger.pool.query('SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',[grant.id]);
+       const row=found.rows[0] as {provider?:unknown}|undefined;
+       const provider=typeof row?.provider==='string'?row.provider:'';
+       last={grantId:grant.id,accountId:grant.account_id,provider};
+       if(!avoidProviders?.includes(provider)||attempt===3)return last;
+       await releaseGrant(principal,authority,grant.id,'not_started');
+       avoided.push(grant.account_id);
+      }
+      if(!last)throw new Refusal('VERIFY_WORKER_UNAVAILABLE');
+      return last;
      },releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
      return recheckFindings(ledger,principal,authority,{...input,worker});
     },
@@ -317,6 +330,7 @@ async function main(){
     if(principal&&!bearer)sessions.checkOrigin(request);
     return principal;
    }});
+  if(config.activation==='personal'){try{const {failAbandonedVerifyRuns}=await import('./verify-abandon.ts');await failAbandonedVerifyRuns(ledger,config.dataDirectory);}catch{console.error('VERIFY_ABANDON_FAILED');}}
   const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:prepared.report.state==='active'?'personal_ready':'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:prepared.report.executionEnabled,inferenceEnabled:prepared.report.inferenceEnabled,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
   serving=true;
   let closing=false;

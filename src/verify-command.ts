@@ -1,17 +1,19 @@
 import {execFile, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod, mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
-import {join, resolve} from 'node:path';
+import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
+import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {collectToolFindings} from './verify-collect.ts';
-import {readCurrentVerifyDatabase} from './verify-db.ts';
+import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
 import {type SecurityExamSupervisor} from './verify-native-launch.ts';
-import {runSecurityVerification} from './verify-runtime.ts';
+import {runSecurityVerification, type SecurityVerificationInput} from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
 
 export const HOMOLOGATION_NOTE = 'Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis.';
@@ -21,8 +23,13 @@ const EXAM_NANO_CPUS = 1_000_000_000;
 const EXAM_PIDS = 256;
 /** Six hours. A full exam finished in about three, so this is the ceiling. */
 export const EXAM_TIME_LIMIT_MS = 21_600_000;
+/** Docker network create, inspect, connect, disconnect and rm. */
+export const NETWORK_COMMAND_TIMEOUT_MS = 30_000;
+const ARCHIVE_TIMEOUT_MS = 60_000;
 
 export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string}) => Promise<void>;
+type NetworkRunner = (args: readonly string[]) => Promise<{code: number; stdout: string}>;
+const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
 
 export type PersonalVerificationInput = {
   installationPath?: string;
@@ -41,8 +48,10 @@ export type PersonalVerificationInput = {
   databasesDirectory?: string;
   image?: string;
   modelCalls?: {count: number};
+  modelCallBudget?: number;
+  accountRoot?: string;
   timeLimitMs?: number;
-  networkRunner?: (args: readonly string[]) => Promise<{code: number; stdout: string}>;
+  networkRunner?: NetworkRunner;
 };
 
 export type VerificationProgress = {
@@ -70,6 +79,8 @@ type ReadyVerification = {
   databasesDirectory: string;
   image: string;
   modelCalls?: {count: number};
+  modelCallBudget?: number;
+  accountRoot?: string;
   timeLimitMs: number;
 };
 
@@ -116,6 +127,8 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     databasesDirectory: input.databasesDirectory,
     image: input.image,
     modelCalls: input.modelCalls,
+    modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
+    accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
   };
 }
@@ -172,54 +185,268 @@ function renderProgress(state: ProgressState): string {
   return `${JSON.stringify(body)}\n`;
 }
 
-function runArguments(args: readonly string[]): Promise<void> {
+export function runBoundedCommand(args: readonly string[], timeoutMs: number): Promise<{code: number; stdout: string}> {
+  return new Promise(resolvePromise => {
+    let settled = false;
+    let stdout = '';
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolvePromise({code, stdout});
+    };
+    const child = spawn(args[0] ?? '', [...args.slice(1)], {stdio: ['ignore', 'pipe', 'ignore']});
+    timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(124);
+    }, timeoutMs);
+    child.stdout?.on('data', chunk => { stdout += String(chunk); });
+    child.once('error', () => finish(1));
+    child.once('close', code => finish(code === 0 ? 0 : (code ?? 1)));
+  });
+}
+
+function runArguments(args: readonly string[], timeoutMs: number): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error?: Refusal) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
       if (error) reject(error);
       else resolvePromise();
     };
     const child = spawn(args[0] ?? '', [...args.slice(1)], {stdio: 'inherit'});
+    timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(new Refusal('VERIFY_TOOLS_FAILED'));
+    }, timeoutMs);
     child.once('error', () => finish(new Refusal('VERIFY_TOOLS_FAILED')));
     child.once('close', code => finish(code === 0 ? undefined : new Refusal('VERIFY_TOOLS_FAILED')));
   });
 }
 
 function defaultNetworkRunner(args: readonly string[]): Promise<{code: number; stdout: string}> {
-  return new Promise(resolvePromise => {
+  return runBoundedCommand(args, NETWORK_COMMAND_TIMEOUT_MS);
+}
+
+const GIT_ARCHIVE_ENV = {
+  PATH: '/usr/bin:/bin',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  HOME: '/nonexistent',
+  GIT_TERMINAL_PROMPT: '0',
+};
+
+function extractGitArchive(repo: string, commit: string, destination: string): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
     let settled = false;
-    let stdout = '';
-    const finish = (code: number) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const git = spawn('/usr/bin/git', ['-C', repo, '-c', 'core.hooksPath=/dev/null', 'archive', '--format=tar', commit], {
+      env: GIT_ARCHIVE_ENV,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const tar = spawn('/usr/bin/tar', ['-x', '-C', destination, '-f', '-'], {
+      env: {PATH: '/usr/bin:/bin'},
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    const stop = () => {
+      git.kill('SIGKILL');
+      tar.kill('SIGKILL');
+    };
+    const fail = (error: Error) => {
       if (settled) return;
       settled = true;
-      resolvePromise({code, stdout});
+      if (timer) clearTimeout(timer);
+      stop();
+      reject(error);
     };
-    const child = spawn(args[0] ?? VERIFY_RUNTIME_BIN, [...args.slice(1)], {stdio: ['ignore', 'pipe', 'ignore']});
-    child.stdout.on('data', chunk => { stdout += String(chunk); });
-    child.once('error', () => finish(1));
-    child.once('close', code => finish(code ?? 1));
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolvePromise();
+    };
+    timer = setTimeout(() => fail(new Refusal('VERIFY_TOOLS_FAILED')), ARCHIVE_TIMEOUT_MS);
+    git.stdout?.pipe(tar.stdin);
+    git.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED')));
+    tar.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED')));
+    let gitCode: number | null = null;
+    let tarCode: number | null = null;
+    const maybe = () => {
+      if (settled || gitCode === null || tarCode === null) return;
+      if (gitCode === 0 && tarCode === 0) succeed();
+      else fail(new Refusal('VERIFY_COMMIT_INVALID', 400));
+    };
+    git.once('close', code => { gitCode = code ?? 1; maybe(); });
+    tar.once('close', code => { tarCode = code ?? 1; maybe(); });
   });
 }
 
-/** The exam user is not the directory owner, so the mount is widened only while the process runs. */
-async function defaultRunTools(spec: {image: string; repository: string; databases: string; output: string}): Promise<void> {
-  const args = verifyExamArguments({
-    image: spec.image,
-    repository: spec.repository,
-    databases: spec.databases,
-    output: spec.output,
-    memoryBytes: EXAM_MEMORY_BYTES,
-    nanoCpus: EXAM_NANO_CPUS,
-    pidsLimit: EXAM_PIDS,
-  });
-  await chmod(spec.output, 0o777);
-  try {
-    await runArguments(args);
-  } finally {
-    await chmod(spec.output, 0o700);
+/** Git archive of the examined commit. The directory is mode 0700 and is not the live tree. */
+export async function prepareExamSnapshot(repoPath: string, commit: string): Promise<string> {
+  if (typeof repoPath !== 'string' || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)) {
+    throw new Refusal('VERIFY_COMMIT_INVALID', 400);
   }
+  const repo = resolve(repoPath);
+  const snapshot = await mkdtemp(join(tmpdir(), 'ac-verify-snapshot-'));
+  await chmod(snapshot, 0o700);
+  const rel = relative(repo, snapshot);
+  const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (!outside) {
+    await rm(snapshot, {recursive: true, force: true});
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  }
+  try {
+    await extractGitArchive(repo, commit, snapshot);
+    await chmod(snapshot, 0o700);
+    return snapshot;
+  } catch (error) {
+    await rm(snapshot, {recursive: true, force: true});
+    throw error;
+  }
+}
+
+/** The exam user is not the directory owner, so the mount is widened only while the process runs. */
+export async function defaultRunTools(
+  spec: {image: string; repository: string; databases: string; output: string; commit: string},
+  timeLimitMs: number = EXAM_TIME_LIMIT_MS,
+  execute?: (args: readonly string[]) => Promise<void>,
+): Promise<void> {
+  const snapshot = await prepareExamSnapshot(spec.repository, spec.commit);
+  try {
+    const args = verifyExamArguments({
+      image: spec.image,
+      repository: snapshot,
+      databases: spec.databases,
+      output: spec.output,
+      memoryBytes: EXAM_MEMORY_BYTES,
+      nanoCpus: EXAM_NANO_CPUS,
+      pidsLimit: EXAM_PIDS,
+    });
+    await chmod(spec.output, 0o777);
+    try {
+      await (execute ?? (command => runArguments(command, timeLimitMs)))(args);
+    } finally {
+      await chmod(spec.output, 0o700);
+    }
+  } finally {
+    await rm(snapshot, {recursive: true, force: true});
+  }
+}
+
+function claimableDatabaseStamp(dataDirectory: string, databasesDirectory: string): string | undefined {
+  if (!isAbsolute(dataDirectory) || !isAbsolute(databasesDirectory) || dataDirectory.includes('\0') || databasesDirectory.includes('\0')) return undefined;
+  const parent = join(resolve(dataDirectory), 'verify-db');
+  const stamp = resolve(databasesDirectory);
+  if (stamp === parent || !stamp.startsWith(parent + sep)) return undefined;
+  const name = stamp.slice(parent.length + 1);
+  if (!STAMP_DIRECTORY.test(name)) return undefined;
+  return stamp;
+}
+
+async function claimExamDatabase(dataDirectory: string, databasesDirectory: string): Promise<string | undefined> {
+  const stamp = claimableDatabaseStamp(dataDirectory, databasesDirectory);
+  if (!stamp) return undefined;
+  await claimVerifyDatabaseStamp(dataDirectory, stamp);
+  return stamp;
+}
+
+async function releaseExamDatabase(dataDirectory: string, stamp: string | undefined): Promise<void> {
+  if (!stamp) return;
+  await releaseVerifyDatabaseStamp(dataDirectory, stamp);
+}
+
+async function readOptionalAccountSecrets(accountRoot: string | undefined): Promise<readonly string[] | undefined> {
+  if (!accountRoot) return undefined;
+  const found: string[] = [];
+  for (const provider of ['codex', 'claude', 'grok'] as const) {
+    try {
+      for (const secret of await readMountedCredentialSecrets(provider, accountRoot)) {
+        if (!found.includes(secret)) found.push(secret);
+      }
+    } catch {
+      // A missing auth.json must not fail the exam. Do not log the credential.
+    }
+  }
+  return found.length > 0 ? found : undefined;
+}
+
+async function homologationContainers(installationPath: string | undefined): Promise<readonly string[]> {
+  if (!installationPath) return [];
+  const config = await loadInstallation(installationPath);
+  return config.verifyHomologationContainers ?? [];
+}
+
+async function assertVerificationAvailable(ready: ReadyVerification): Promise<void> {
+  const pool = ready.ledger.pool as {query?: (sql: string, params: readonly unknown[]) => Promise<{rows?: unknown; rowCount?: unknown}>} | undefined;
+  if (typeof pool?.query === 'function') {
+    const found = await pool.query(
+      "SELECT 1 AS present FROM ac_verify_runs WHERE project_id = $1 AND status = 'running' LIMIT 1",
+      [ready.projectId],
+    );
+    const rows = found?.rows;
+    const rowCount = found?.rowCount;
+    if ((Array.isArray(rows) && rows.length > 0) || (typeof rowCount === 'number' && rowCount > 0)) {
+      throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
+    }
+  }
+  const progress = await readVerificationProgress(ready.dataDirectory, ready.projectId);
+  if (progress.some(row => row.status === 'running')) throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
+}
+
+async function releaseRunningLock(path: string, id: string): Promise<void> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isFile()) return;
+    const body = await readFile(path, 'utf8');
+    if (body !== id) return;
+    await rm(path);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return;
+    throw error;
+  }
+}
+
+async function removeHomologationNetwork(network: string, container: string, run: NetworkRunner): Promise<void> {
+  try {
+    await run([VERIFY_RUNTIME_BIN, 'network', 'disconnect', network, container]);
+  } catch { /* disconnect is best-effort */ }
+  try {
+    await run([VERIFY_RUNTIME_BIN, 'network', 'rm', network]);
+  } catch { /* removal must not hide the exam result */ }
+}
+
+async function attachHomologation(network: string, container: string, run: NetworkRunner): Promise<void> {
+  let attached = false;
+  try {
+    await attachInternalTarget({network, container, run});
+    attached = true;
+  } finally {
+    if (!attached) await removeHomologationNetwork(network, container, run);
+  }
+}
+
+async function removeExamOutput(dataDirectory: string, projectId: string, output: string): Promise<void> {
+  const project = resolve(dataDirectory, 'verificacoes', projectId);
+  const target = resolve(output);
+  const rel = relative(project, target);
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return;
+  let info;
+  try {
+    info = await lstat(target);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) return;
+  const real = await realpath(target);
+  if (real !== target) return;
+  const relReal = relative(project, real);
+  if (relReal === '' || relReal === '..' || relReal.startsWith(`..${sep}`) || isAbsolute(relReal)) return;
+  await rm(real, {recursive: true});
 }
 
 async function runJob(input: {
@@ -230,6 +457,11 @@ async function runJob(input: {
   state: ProgressState;
   modelCalls: {count: number};
   startedMs: number;
+  lockPath: string;
+  databaseStamp?: string;
+  network?: string;
+  container?: string;
+  networkRunner: NetworkRunner;
 }): Promise<void> {
   const {ready, id, output, progressPath, state, modelCalls, startedMs} = input;
   const onPhase = async (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => {
@@ -237,41 +469,57 @@ async function runJob(input: {
     await writePrivateFile(progressPath, renderProgress(state));
   };
   try {
-    const runTools = ready.runTools ?? defaultRunTools;
-    assertExamDeadline(startedMs, ready.timeLimitMs);
-    await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
-    const collected = await collectToolFindings(output);
-    assertExamDeadline(startedMs, ready.timeLimitMs);
-    await runSecurityVerification({
-      ledger: ready.ledger,
-      principal: ready.principal,
-      authority: ready.authority,
-      projectId: ready.projectId,
-      repoPath: ready.repoPath,
-      dataDirectory: ready.dataDirectory,
-      commit: ready.commit,
-      policyRevision: ready.policyRevision,
-      worker: workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs),
-      rawFindings: collected.findings,
-      runId: id,
-      onPhase,
-      modelCalls,
-      notes: state.note ? [state.note] : undefined,
-    });
-    state.status = 'done';
-    state.phase = 'done';
-    state.modelCalls = modelCalls.count;
-    state.durationMs = Date.now() - startedMs;
-    await writePrivateFile(progressPath, renderProgress(state));
-  } catch (error) {
     try {
-      state.status = 'failed';
-      state.phase = 'failed';
+      const runTools = ready.runTools ?? ((spec: {image: string; repository: string; databases: string; output: string}) => defaultRunTools({...spec, commit: ready.commit}, ready.timeLimitMs));
+      assertExamDeadline(startedMs, ready.timeLimitMs);
+      await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
+      const collected = await collectToolFindings(output);
+      assertExamDeadline(startedMs, ready.timeLimitMs);
+      const accountSecrets = await readOptionalAccountSecrets(ready.accountRoot);
+      const verification: SecurityVerificationInput & {modelCallBudget?: number; accountSecrets?: readonly string[]} = {
+        ledger: ready.ledger,
+        principal: ready.principal,
+        authority: ready.authority,
+        projectId: ready.projectId,
+        repoPath: ready.repoPath,
+        dataDirectory: ready.dataDirectory,
+        commit: ready.commit,
+        policyRevision: ready.policyRevision,
+        worker: workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs),
+        rawFindings: collected.findings,
+        runId: id,
+        onPhase,
+        modelCalls,
+        notes: state.note ? [state.note] : undefined,
+      };
+      if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
+      if (accountSecrets) verification.accountSecrets = accountSecrets;
+      await runSecurityVerification(verification);
+      state.status = 'done';
+      state.phase = 'done';
       state.modelCalls = modelCalls.count;
       state.durationMs = Date.now() - startedMs;
       await writePrivateFile(progressPath, renderProgress(state));
-    } catch { /* the original failure stays visible */ }
-    throw error;
+    } catch (error) {
+      try {
+        state.status = 'failed';
+        state.phase = 'failed';
+        state.modelCalls = modelCalls.count;
+        state.durationMs = Date.now() - startedMs;
+        await writePrivateFile(progressPath, renderProgress(state));
+        await removeExamOutput(ready.dataDirectory, ready.projectId, output);
+      } catch { /* the original failure stays visible */ }
+      throw error;
+    }
+  } finally {
+    try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp); }
+    catch { /* the exam result stays visible */ }
+    try { await releaseRunningLock(input.lockPath, id); }
+    catch { /* the exam result stays visible */ }
+    if (input.network && input.container) {
+      try { await removeHomologationNetwork(input.network, input.container, input.networkRunner); }
+      catch { /* the exam result stays visible */ }
+    }
   }
 }
 
@@ -279,15 +527,19 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   const startedMs = Date.now();
   const plan = input.url !== undefined ? dynamicScanPlan(input.url) : undefined;
   const ready = requireReady(input);
+  await assertVerificationAvailable(ready);
   const id = randomUUID();
-  if (plan && plan.allowedHost !== '127.0.0.1' && plan.allowedHost !== 'localhost') {
+  const networkRunner = input.networkRunner ?? defaultNetworkRunner;
+  const needsNetwork = plan !== undefined && plan.allowedHost !== '127.0.0.1' && plan.allowedHost !== 'localhost';
+  let network: string | undefined;
+  let container: string | undefined;
+  if (needsNetwork && plan) {
+    const allowed = await homologationContainers(input.installationPath);
+    if (!allowed.includes(plan.allowedHost)) throw new Refusal('VERIFY_TARGET_FORBIDDEN', 403);
     const hex = id.replaceAll('-', '').slice(0, 8);
     if (!/^[a-f0-9]{8}$/.test(hex)) throw new Refusal('VERIFY_NETWORK_FORBIDDEN');
-    await attachInternalTarget({
-      network: `verify-homologation-${hex}`,
-      container: plan.allowedHost,
-      run: input.networkRunner ?? defaultNetworkRunner,
-    });
+    network = `verify-homologation-${hex}`;
+    container = plan.allowedHost;
   }
   const state: ProgressState = {
     id,
@@ -298,13 +550,36 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   };
   const modelCalls = ready.modelCalls ?? {count: 0};
   const progressDir = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'andamento']);
-  const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
-  const progressPath = join(progressDir, `${id}.json`);
-  await writePrivateFile(progressPath, renderProgress(state));
-  const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs});
-  input.observe?.(job);
-  void job.catch(() => undefined);
-  return {id, status: 'running', phase: 'ferramentas'};
+  const lockPath = join(progressDir, '.running');
+  try {
+    await writeFile(lockPath, id, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
+  } catch (error) {
+    if (isErrno(error, 'EEXIST')) throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
+    throw error;
+  }
+  let started = false;
+  let databaseStamp: string | undefined;
+  try {
+    if (network && container) await attachHomologation(network, container, networkRunner);
+    databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory);
+    const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
+    const progressPath = join(progressDir, `${id}.json`);
+    await writePrivateFile(progressPath, renderProgress(state));
+    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner});
+    started = true;
+    input.observe?.(job);
+    void job.catch(() => undefined);
+    return {id, status: 'running', phase: 'ferramentas'};
+  } catch (error) {
+    if (!started) {
+      try { await releaseExamDatabase(ready.dataDirectory, databaseStamp); } catch { /* keep the original error */ }
+      try { await releaseRunningLock(lockPath, id); } catch { /* keep the original error */ }
+      if (network && container) {
+        try { await removeHomologationNetwork(network, container, networkRunner); } catch { /* keep the original error */ }
+      }
+    }
+    throw error;
+  }
 }
 
 export async function readVerificationProgress(dataDirectory: string, projectId: string): Promise<VerificationProgress[]> {

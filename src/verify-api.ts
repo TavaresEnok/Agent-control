@@ -20,7 +20,7 @@ type ApiEnv = {Variables: {principal: string; timingStarted: number; authenticat
 type VisibleAchado = Omit<z.infer<typeof Achado>, 'secretPreview'>;
 
 const achadoIdsBody = z.object({
-  achadoIds: z.array(z.string().regex(/^ACH-\d{3}$/)).max(100),
+  achadoIds: z.array(z.string().regex(/^ACH-\d{3}$/)).max(20),
 }).strict();
 const achadoIdParam = z.string().regex(/^ACH-\d{3}$/);
 

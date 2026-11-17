@@ -93,6 +93,11 @@ export class Ledger {
       await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds' WHERE context_id=$1", [a.contextId]);
     });
   }
+  /** Ends this manager's lease without deleting the row or changing its epoch. */
+  async releaseLease(authority: Authority): Promise<void> {
+    const a = Authority.parse(authority);
+    await this.pool.query('UPDATE ac_managers SET lease_until = clock_timestamp() WHERE context_id=$1 AND instance_id=$2 AND epoch=$3', [a.contextId, a.instanceId, a.epoch]);
+  }
   /** Must run after fence/authorize has locked the context. Cancellation then
    * serializes with the physical-effect transaction, not only a UI flag. */
   async assertRuntimeRoute(c:pg.PoolClient,intentId:string){await assertGenerationIntent(c,intentId,this.runtimeIdentity);}

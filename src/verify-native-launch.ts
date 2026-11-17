@@ -7,6 +7,7 @@ import {VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
 // The native job may run until its 15 minute timeout. Polling every 2s has to outlast that.
 const EXAM_ATTEMPTS = 480;
 const EXAM_WAIT_MS = 2000;
+const STOP_CONFIRM_ATTEMPTS = 4;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => {
@@ -23,6 +24,7 @@ export type SecurityExamSupervisor = {
   start(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string}>;
   reconcile(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string; output?: string}>;
   retireTerminal(principal: string, authority: Authority, jobId: string): Promise<unknown>;
+  stop?(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string}>;
 };
 
 type ReleaseGrant = (grantId: string, reason: 'exited') => Promise<void> | void;
@@ -49,6 +51,38 @@ async function observeExam(
   throw new Error('VERIFY_EXAM_TIMEOUT');
 }
 
+function examTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message === 'VERIFY_EXAM_TIMEOUT';
+}
+
+async function confirmExamExit(
+  supervisor: SecurityExamSupervisor,
+  principal: string,
+  authority: Authority,
+  request: SecurityExamRequest,
+  wait: Wait,
+): Promise<boolean> {
+  const stop = supervisor.stop?.bind(supervisor);
+  if (!stop) return false;
+  try {
+    await stop(principal, authority, request);
+  } catch {
+    return false;
+  }
+  for (let attempt = 0; attempt < STOP_CONFIRM_ATTEMPTS; attempt += 1) {
+    let outcome: {state: string; output?: string};
+    try {
+      outcome = await supervisor.reconcile(principal, authority, request);
+    } catch {
+      return false;
+    }
+    if (terminal(outcome.state) && typeof outcome.output === 'string') return true;
+    if (attempt === STOP_CONFIRM_ATTEMPTS - 1) return false;
+    await wait(EXAM_WAIT_MS);
+  }
+  return false;
+}
+
 async function finishExam(
   supervisor: SecurityExamSupervisor,
   principal: string,
@@ -62,6 +96,17 @@ async function finishExam(
   try {
     outcome = await observeExam(supervisor, principal, authority, request, wait);
   } catch (error) {
+    if (examTimeout(error)) {
+      // The grant stays reserved unless stop and a terminal output both confirm the job is gone.
+      let confirmed = false;
+      try {
+        confirmed = await confirmExamExit(supervisor, principal, authority, request, wait);
+      } catch {
+        confirmed = false;
+      }
+      if (confirmed && releaseGrant) await releaseGrant(grantId, 'exited');
+      throw error;
+    }
     if (releaseGrant) await releaseGrant(grantId, 'exited');
     throw error;
   }
@@ -105,7 +150,7 @@ export function createRecheckNativeWorker(input: {
   principal: string;
   authority: Authority;
   base: string;
-  reserveReviewer(intentId: string): Promise<{grantId: string; accountId: string}>;
+  reserveReviewer(intentId: string, avoidProviders?: readonly string[]): Promise<{grantId: string; accountId: string; provider: string}>;
   releaseGrant?: ReleaseGrant;
   wait?: Wait;
 }): VerifyWorker {
@@ -113,7 +158,8 @@ export function createRecheckNativeWorker(input: {
   return {
     async run(call) {
       const parsed = VerifyWorkerCall.parse(call);
-      const reserved = await reserveReviewer(parsed.intentId);
+      const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders);
+      (call as {reviewerProvider?: string}).reviewerProvider = typeof reserved.provider === 'string' ? reserved.provider : '';
       const supervisor = supervisors.find(item => item.active && item.supportsAccount(reserved.accountId));
       if (!supervisor) {
         if (releaseGrant) await releaseGrant(reserved.grantId, 'exited');

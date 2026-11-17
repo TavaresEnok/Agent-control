@@ -1,7 +1,9 @@
+import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
-import {lstat, open, readdir} from 'node:fs/promises';
-import {isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {chmod, lstat, open, readdir, rename, rm, writeFile} from 'node:fs/promises';
+import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {normalizeToolOutput} from './verify-normalize.ts';
+import {redactUnknownSecrets} from './verify-redact.ts';
 import {RawFinding} from './verify-types.ts';
 
 const MAX_EXAM_FILE_BYTES = 50 * 1024 * 1024;
@@ -53,6 +55,31 @@ async function readRegularExam(path: string): Promise<string | null> {
   }
 }
 
+/** Redact before the finding is built, then replace the file without following a symlink. */
+async function rewriteRedactedExam(path: string, text: string): Promise<string | null> {
+  const redacted = redactUnknownSecrets(text);
+  if (redacted === text) return text;
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isFile()) return null;
+  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, redacted, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
+    await chmod(temporary, 0o600);
+    const again = await lstat(path);
+    if (again.isSymbolicLink() || !again.isFile()) return null;
+    await rename(temporary, path);
+    await chmod(path, 0o600);
+    const written = await lstat(path);
+    if (written.isSymbolicLink() || !written.isFile() || (written.mode & 0o777) !== 0o600) return null;
+    return redacted;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') return null;
+    throw error;
+  } finally {
+    await rm(temporary, {force: true});
+  }
+}
+
 export async function collectToolFindings(outputDirectory: string): Promise<{findings: RawFinding[]; rejected: number; files: string[]}> {
   const root = resolve(outputDirectory);
   const present = new Set(await readdir(root));
@@ -71,9 +98,14 @@ export async function collectToolFindings(outputDirectory: string): Promise<{fin
       rejected += 1;
       continue;
     }
+    const redacted = await rewriteRedactedExam(path, text);
+    if (redacted === null) {
+      rejected += 1;
+      continue;
+    }
     let body: unknown;
     try {
-      body = JSON.parse(text) as unknown;
+      body = JSON.parse(redacted) as unknown;
     } catch {
       continue;
     }

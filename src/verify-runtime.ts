@@ -8,7 +8,7 @@ import {Refusal, type Authority} from './contracts.ts';
 import {Ledger, type Intent} from './ledger.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
-import {isSecretClassBasename, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
+import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {listExamFiles, sliceExamFiles} from './verify-slices.ts';
 import {
@@ -40,8 +40,20 @@ export type SecurityVerificationInput = {
   runId?: string;
   onPhase?: (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => void | Promise<void>;
   modelCalls?: {count: number};
+  /** Absent uses DEFAULT_MODEL_CALL_BUDGET. Zero, negative, and non-finite values are refused. */
+  modelCallBudget?: number;
+  /** Redacted out of every task sent to a provider. Values shorter than 4 characters are ignored. */
+  accountSecrets?: readonly string[];
   notes?: readonly string[];
 };
+
+export const DEFAULT_MODEL_CALL_BUDGET = 600;
+
+function resolveModelCallBudget(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_MODEL_CALL_BUDGET;
+  if (typeof value !== 'number' || !Number.isFinite(value) || !(value > 0)) throw new Error('VERIFY_MODEL_BUDGET');
+  return value;
+}
 
 type Seat = {
   provider: string;
@@ -76,6 +88,7 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   achados: Achado[];
   coverage: CoverageRow[];
 }> {
+  const modelCallBudget = resolveModelCallBudget(input.modelCallBudget);
   await assertPersonalActivation(input.ledger);
   assertReportOutsideRepo(input.repoPath, input.dataDirectory);
   const runId = input.runId ?? randomUUID();
@@ -93,7 +106,7 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   });
   await insertRun(input, intent, runId);
   try {
-    return await examine(input, intent, runId, createdAt, reserved.directoryName);
+    return await examine(input, intent, runId, createdAt, reserved.directoryName, modelCallBudget);
   } catch (error) {
     try { await markFailed(input.ledger, runId); } catch { /* the original failure stays visible */ }
     throw error;
@@ -128,11 +141,15 @@ async function markFailed(ledger: Ledger, runId: string) {
   );
 }
 
-async function examine(input: SecurityVerificationInput, intent: Intent, runId: string, createdAt: Date, directoryName: string) {
+async function examine(input: SecurityVerificationInput, intent: Intent, runId: string, createdAt: Date, directoryName: string, modelCallBudget: number) {
   const capacity = new Capacity(input.ledger);
-  const rawFindings = (input.rawFindings ?? []).map(item => RawFinding.parse(item));
+  const trackedCalls = input.modelCalls ?? {count: 0};
+  const rawFindings = (input.rawFindings ?? [])
+    .map(item => RawFinding.parse(item))
+    .filter(item => !hasRefusedSecretText(item.rule) && !hasRefusedSecretText(item.snippet));
   const checklist = input.checklist ?? loadSecurityChecklist();
   const files = await listExamFiles(input.repoPath);
+  const allowedFiles = new Set(files);
   const slices = sliceExamFiles(files, checklist);
   const notes: string[] = [];
   if (input.notes?.length) notes.push(...input.notes);
@@ -150,7 +167,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     notes.push('Nenhum arquivo para examinar.');
   } else {
     if (input.onPhase) await input.onPhase('mapa');
-    const mapped = await reserveAndRun(input, capacity, intent.id, 'specialist', mapTask(files), 'verify-map');
+    const mapped = await reserveAndRun(input, capacity, intent.id, 'specialist', mapTask(files), 'verify-map', modelCallBudget, trackedCalls);
     mapSeat = mapped.seat;
     mapProvider = mapped.seat.provider;
     mapAccountId = mapped.seat.accountId;
@@ -164,7 +181,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     if (input.onPhase) await input.onPhase('exame');
     for (const slice of slices) {
       if (!slice.files.length) continue;
-      const examined = await reserveAndRun(input, capacity, intent.id, 'specialist', examTask(slice, mapMarkdown, rawFindings, history), 'verify-exam');
+      const examined = await reserveAndRun(input, capacity, intent.id, 'specialist', examTask(slice, mapMarkdown, rawFindings, history), 'verify-exam', modelCallBudget, trackedCalls);
       const exam = ExamResult.safeParse(coerceExamResult(parseJson(examined.output)));
       exams.push(exam.success ? exam.data : {slice: slice.id, invalid: true});
       const read = new Set(exam.success ? exam.data.filesRead : []);
@@ -175,6 +192,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       else if (missing.length) notes.push(`O examinador não marcou como lido: ${missing.join(', ')}.`);
       if (!exam.success) continue;
       for (const finding of exam.data.findings) {
+        if (hasRefusedSecretText(finding.title) || hasRefusedSecretText(finding.snippet)) continue;
         const title = clipSecret(finding.title, 200) || 'Achado';
         const reference = clipSecret([finding.reference, finding.cwe].filter((part): part is string => Boolean(part)).join(', '), 200) || title;
         open.push({
@@ -230,7 +248,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
     const forbidden = finding.examinerProvider ?? mapProvider;
     const avoid = finding.examinerAccountId ?? mapAccountId;
-    const content = await readRepoText(input.repoPath, finding.file, finding.line);
+    const content = await readRepoText(input.repoPath, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
       input,
       capacity,
@@ -238,6 +256,8 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       'reviewer',
       confirmationTask(finding, content.text, content.missing, history),
       'verify-confirm',
+      modelCallBudget,
+      trackedCalls,
       avoid ? [avoid] : undefined,
       forbidden ?? undefined,
     );
@@ -320,9 +340,12 @@ async function reserveAndRun(
   role: 'specialist' | 'reviewer',
   task: string,
   processId: string,
+  modelCallBudget: number,
+  trackedCalls: {count: number},
   avoidAccounts?: readonly string[],
   forbiddenProvider?: string,
 ): Promise<{seat: Seat; output: string}> {
+  if (trackedCalls.count >= modelCallBudget) throw new Error('VERIFY_MODEL_BUDGET');
   const grant = await capacity.reserve(input.principal, {
     attemptId: randomUUID(),
     intentId,
@@ -342,11 +365,11 @@ async function reserveAndRun(
       model: seat.model,
       grantId: seat.grantId,
       intentId,
-      task: task.slice(0, 100_000),
+      task: redactText(task, input.accountSecrets ?? []).slice(0, 100_000),
       repo: input.repoPath,
       writePaths: [] as const,
     });
-    if (input.modelCalls) input.modelCalls.count += 1;
+    trackedCalls.count += 1;
     const output = await input.worker.run(call);
     return {seat, output};
   } catch (error) {
@@ -469,14 +492,45 @@ function redactPersisted(value: unknown): unknown {
   return value;
 }
 
-function boundedText(value: unknown, max: number): string {
-  let raw = '';
-  if (typeof value === 'string') raw = value;
-  else if (typeof value === 'number' || typeof value === 'boolean') raw = String(value);
-  else if (value && typeof value === 'object') {
-    try { raw = JSON.stringify(value); } catch { raw = ''; }
+function textSource(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value && typeof value === 'object') {
+    try { return JSON.stringify(value); } catch { return ''; }
   }
-  return redactUnknownSecrets(raw).trim().slice(0, max);
+  return '';
+}
+
+function boundedText(value: unknown, max: number): string {
+  return redactUnknownSecrets(textSource(value)).trim().slice(0, max);
+}
+
+function shannonEntropy(value: string): number {
+  const chars = [...value];
+  const total = chars.length;
+  if (total === 0) return 0;
+  const counts = new Map<string, number>();
+  for (const char of chars) counts.set(char, (counts.get(char) ?? 0) + 1);
+  let entropy = 0;
+  for (const count of counts.values()) {
+    const p = count / total;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+/** True when a title or snippet carries a high-entropy token or a long base64 run.
+ * Redaction masks (`xxxx… (sha256:…)`) are not themselves a secret. */
+export function hasRefusedSecretText(text: string): boolean {
+  if (!text) return false;
+  const cleaned = text.replace(/[^\s\u2026]{4}\u2026 \(sha256:[a-f0-9]{64}\)/g, ' ');
+  if (/[A-Za-z0-9+/_-]{40,}={0,2}/.test(cleaned)) return true;
+  for (const token of cleaned.split(/\s+/)) {
+    if (token.length < 32) continue;
+    const chars = [...token];
+    if (chars.length >= 32 && shannonEntropy(token) >= 3.5) return true;
+  }
+  return false;
 }
 
 function positiveLine(value: unknown): number | null {
@@ -517,15 +571,16 @@ export function coerceExamResult(value: unknown): unknown {
     .map(item => boundedText(item, 400))
     .filter(item => item.length > 0)
     .slice(0, 80);
-  const findings = (Array.isArray(value.findings) ? value.findings : []).slice(0, 40).map(raw => {
+  const findings = (Array.isArray(value.findings) ? value.findings : []).slice(0, 40).flatMap(raw => {
     const finding = isRecord(raw) ? raw : {};
+    if (hasRefusedSecretText(textSource(finding.title)) || hasRefusedSecretText(textSource(finding.snippet))) return [];
     const title = boundedText(finding.title, 200) || 'Achado';
     const cwe = typeof finding.cwe === 'string' && /^CWE-\d{1,5}$/.test(finding.cwe.trim()) ? finding.cwe.trim() : null;
     const severityWord = typeof finding.severity === 'string' ? finding.severity.trim().toLowerCase() : '';
     const scenario = boundedText(finding.scenario ?? finding.detail, 2000) || title;
     const suggestion = boundedText(finding.suggestion ?? finding.fix, 2000) || 'Rever o ponto.';
     const reference = boundedText(finding.reference, 120) || cwe || title.slice(0, 120);
-    return {
+    return [{
       title,
       severity: SEVERITY_WORDS[severityWord] ?? 'media',
       file: boundedText(finding.file, 400) || 'desconhecido',
@@ -535,7 +590,7 @@ export function coerceExamResult(value: unknown): unknown {
       cwe,
       reference,
       snippet: boundedText(finding.snippet, 240),
-    };
+    }];
   });
   return {
     kind: 'exame',
@@ -637,16 +692,67 @@ function orderedCoverage(files: readonly string[], coverage: Map<string, Coverag
   });
 }
 
+/** Git log of deleted paths. The environment is not inherited, so account secrets never ride along. */
+export function buildHistoryGitInvocation(): {args: string[]; env: Record<string, string>} {
+  const path = typeof process.env.PATH === 'string' && process.env.PATH.length > 0 ? process.env.PATH : '/usr/bin:/bin';
+  return {
+    args: [
+      '-c', 'core.hooksPath=/dev/null',
+      '--no-pager',
+      'log',
+      '-p',
+      '--diff-filter=D',
+      '-n', '3',
+      '--pretty=format:%h',
+      '--no-ext-diff',
+      '--no-textconv',
+    ],
+    env: {
+      PATH: path,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_COUNT: '0',
+      HOME: '/nonexistent',
+    },
+  };
+}
+
+function gitDiffPaths(header: string): string[] {
+  const line = header.trim();
+  if (line.startsWith('a/') && line.includes(' b/')) {
+    const splitAt = line.lastIndexOf(' b/');
+    return [line.slice(2, splitAt), line.slice(splitAt + 3)];
+  }
+  const quoted = line.match(/^"a\/(.*)" "b\/(.*)"$/);
+  if (!quoted) return [];
+  return [quoted[1] ?? '', quoted[2] ?? ''];
+}
+
+/** Drop a diff block when the a/ or b/ basename is a secret-class file. */
+function stripSecretClassDiffs(log: string): string {
+  const parts = log.split(/\n(?=diff --git )/);
+  const kept = parts.filter(part => {
+    if (!part.startsWith('diff --git ')) return true;
+    const header = part.slice('diff --git '.length).split('\n', 1)[0] ?? '';
+    return !gitDiffPaths(header).some(path => isSecretClassBasename(path));
+  });
+  return kept.join('\n');
+}
+
 /** The model mount has no .git. A short redacted log is the only view of a deleted credential. */
-async function deletedHistoryExcerpt(repoPath: string): Promise<string> {
+export async function deletedHistoryExcerpt(repoPath: string): Promise<string> {
   try {
-    const result = await execGit('git', ['--no-pager', 'log', '-p', '--diff-filter=D', '-n', '3', '--pretty=format:%h'], {
+    const invocation = buildHistoryGitInvocation();
+    const result = await execGit('git', invocation.args, {
       cwd: repoPath,
       timeout: 8000,
       maxBuffer: 200_000,
-      env: {...process.env, GIT_CONFIG_NOSYSTEM: '1'},
+      encoding: 'utf8',
+      env: invocation.env,
     });
-    return redactUnknownSecrets(result.stdout || '').trim().slice(0, 8000);
+    const raw: unknown = result.stdout;
+    const stdout = typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : '';
+    return redactUnknownSecrets(stripSecretClassDiffs(stdout)).trim().slice(0, 8000);
   } catch {
     return '';
   }
@@ -658,17 +764,39 @@ function previewOf(snippet: string): string | null {
   return match[0];
 }
 
-async function readRepoText(repoPath: string, file: string, line?: number | null): Promise<{text: string; missing: boolean}> {
-  if (!file || file.includes('\0') || isAbsolute(file)) return {text: '', missing: true};
+function examRelativeKey(file: string): string | null {
+  if (!file || file.includes('\0')) return null;
+  const normalized = file.replaceAll('\\', '/').trim();
+  if (!normalized || normalized.startsWith('/')) return null;
+  const parts = normalized.split('/').filter(part => part.length > 0 && part !== '.');
+  if (parts.length === 0 || parts.some(part => part === '..')) return null;
+  return parts.join('/');
+}
+
+function toPosixPath(file: string): string {
+  return sep === '/' ? file : file.split(sep).join('/');
+}
+
+/** Only paths from one listExamFiles snapshot are readable. Anything else is missing and unread. */
+export async function readRepoText(
+  repoPath: string,
+  file: string,
+  line: number | null | undefined,
+  allowed: ReadonlySet<string>,
+): Promise<{text: string; missing: boolean}> {
+  const key = examRelativeKey(file);
+  if (!key || !allowed.has(key)) return {text: '', missing: true};
   const root = await realpath(repoPath);
   let target: string;
   try {
-    target = await realpath(resolve(root, file));
+    target = await realpath(resolve(root, key));
   } catch {
     return {text: '', missing: true};
   }
   const rel = relative(root, target);
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return {text: '', missing: true};
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return {text: '', missing: true};
+  const relKey = toPosixPath(rel);
+  if (!allowed.has(relKey)) return {text: '', missing: true};
   let info;
   try {
     info = await lstat(target);
@@ -676,9 +804,10 @@ async function readRepoText(repoPath: string, file: string, line?: number | null
     return {text: '', missing: true};
   }
   if (!info.isFile()) return {text: '', missing: true};
-  if (isSecretClassBasename(file) || isSecretClassBasename(rel)) return {text: secretFileStub(rel, line), missing: false};
+  if (isSecretClassBasename(key) || isSecretClassBasename(relKey)) return {text: secretFileStub(relKey, line), missing: false};
   try {
-    return {text: (await readFile(target, 'utf8')).slice(0, FILE_TEXT_LIMIT), missing: false};
+    const raw = await readFile(target, 'utf8');
+    return {text: redactUnknownSecrets(raw).slice(0, FILE_TEXT_LIMIT), missing: false};
   } catch {
     return {text: '', missing: true};
   }

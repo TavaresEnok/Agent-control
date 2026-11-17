@@ -20,14 +20,34 @@ export type RefreshVerifyDatabasesInput = {
 };
 
 type ManifestFile = {path: string; sha256: string; bytes: number};
+type CommandRunner = (args: readonly string[]) => Promise<number>;
 
-function runCommand(args: readonly string[], stdio: 'ignore' | 'inherit'): Promise<number> {
+/** The root chmod only has to finish; the download itself is the long one. */
+const DISCARD_TIMEOUT_MS = 60_000;
+/** Two hours. Vulnerability archives are large and the fetch must not hang forever. */
+const FETCH_TIMEOUT_MS = 7_200_000;
+const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
+const IN_USE_FILE = 'in-use.json';
+
+function runCommand(args: readonly string[], stdio: 'ignore' | 'inherit', timeoutMs: number): Promise<number> {
   const command = args[0];
   if (!command) return Promise.resolve(1);
   return new Promise((resolvePromise) => {
     const child = spawnProcess(command, args.slice(1), {stdio});
-    child.on('error', () => resolvePromise(1));
-    child.on('close', (code) => resolvePromise(code ?? 1));
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(code);
+    };
+    timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(1);
+    }, timeoutMs);
+    child.on('error', () => finish(1));
+    child.on('close', (code) => finish(code ?? 1));
   });
 }
 
@@ -82,12 +102,35 @@ async function ensureDatabaseRoot(parent: string): Promise<void> {
   await chmod(parent, 0o700);
 }
 
-async function discardStamp(stamp: string, parent: string, image: string): Promise<void> {
+function assertStampInside(stamp: string, parent: string): string {
   const resolvedStamp = resolve(stamp);
   const resolvedParent = resolve(parent);
   if (resolvedStamp === resolvedParent || !resolvedStamp.startsWith(resolvedParent + sep)) {
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
+  return resolvedStamp;
+}
+
+/** Docker argv for the chmod that runs only when the host cannot unlink a stamp. No I/O. */
+export function discardStampArguments(stamp: string, parent: string, image: string): readonly string[] {
+  const resolvedStamp = assertStampInside(stamp, parent);
+  return [
+    VERIFY_RUNTIME_BIN, 'run', '--rm',
+    '--user', '0',
+    '--network', 'none',
+    '--cap-drop', 'ALL',
+    '--cap-add', 'DAC_OVERRIDE',
+    '--cap-add', 'FOWNER',
+    '--security-opt', 'no-new-privileges',
+    '--read-only',
+    '--entrypoint', '/bin/sh',
+    '--mount', `type=bind,src=${resolvedStamp},dst=/databases`,
+    image, '-c', 'chmod -R a+rwX /databases',
+  ];
+}
+
+async function discardStamp(stamp: string, parent: string, image: string, spawn?: CommandRunner): Promise<void> {
+  const resolvedStamp = assertStampInside(stamp, parent);
   try {
     await rm(resolvedStamp, {recursive: true, force: true});
     return;
@@ -96,12 +139,14 @@ async function discardStamp(stamp: string, parent: string, image: string): Promi
     if (code !== 'EACCES' && code !== 'EPERM') throw new Error('VERIFY_DB_FETCH_FAILED');
   }
   // The downloader runs as uid 65532 and may leave a mode-0700 directory the host user cannot read.
-  const opened = await runCommand([
-    VERIFY_RUNTIME_BIN, 'run', '--rm', '--user', '0', '--network', 'none',
-    '--entrypoint', '/bin/sh',
-    '--mount', `type=bind,src=${resolvedStamp},dst=/databases`,
-    image, '-c', 'chmod -R a+rwX /databases',
-  ], 'ignore');
+  // Root keeps only the caps needed to chmod that tree; the rootfs stays read-only.
+  const args = discardStampArguments(stamp, parent, image);
+  let opened = 1;
+  try {
+    opened = spawn ? await spawn(args) : await runCommand(args, 'ignore', DISCARD_TIMEOUT_MS);
+  } catch {
+    opened = 1;
+  }
   if (opened !== 0) throw new Error('VERIFY_DB_FETCH_FAILED');
   try {
     await rm(resolvedStamp, {recursive: true, force: true});
@@ -204,7 +249,7 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
   await ensureDatabaseRoot(parent);
   const stamp = await createStamp(parent, now, image);
   const args = verifyDatabaseArguments({image, output: stamp});
-  const run = input.spawn ?? ((command) => runCommand(command, 'inherit'));
+  const run = input.spawn ?? ((command) => runCommand(command, 'inherit', FETCH_TIMEOUT_MS));
   let code = 1;
   try {
     code = await run(args);
@@ -215,25 +260,33 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
     await discardStamp(stamp, parent, image);
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
+  let snapshot: VerifyDatabaseSnapshot | undefined;
   try {
     // chmod(1) returns non-zero for files the downloader owns. The fetch script already
     // granted a+rX on those. Listing below is what proves the stamp is readable.
-    await runCommand(['chmod', '-R', 'a+rX', stamp], 'ignore');
+    await runCommand(['chmod', '-R', 'a+rX', stamp], 'ignore', DISCARD_TIMEOUT_MS);
     const files = await listRegularFiles(stamp);
     const manifestBytes = Buffer.from(JSON.stringify({fetchedAt, files}, null, 2) + '\n', 'utf8');
     await writeFile(join(stamp, 'manifest.json'), manifestBytes, {mode: 0o644, flag: 'wx'});
-    const snapshot = {
+    snapshot = {
       directory: stamp,
       fetchedAt,
       manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
     };
     await writePrivateJson(parent, 'current.json', snapshot);
-    return snapshot;
   } catch (error) {
     await discardStamp(stamp, parent, image);
     if (error instanceof Error && error.message === 'VERIFY_DB_FETCH_FAILED') throw error;
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
+  // current.json is already published. A stubborn old stamp must not undo it or fail the refresh.
+  try {
+    await pruneVerifyDatabaseStamps(root, image);
+  } catch {
+    console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED'}));
+  }
+  if (!snapshot) throw new Error('VERIFY_DB_FETCH_FAILED');
+  return snapshot;
 }
 
 /** The published stamp, or null when nothing has been published yet. */
@@ -252,5 +305,148 @@ export async function readCurrentVerifyDatabase(dataDirectory: string): Promise<
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
+  }
+}
+
+function assertDataDirectory(dataDirectory: string): string {
+  if (typeof dataDirectory !== 'string' || !isAbsolute(dataDirectory) || dataDirectory.includes('\0')) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN');
+  }
+  return resolve(dataDirectory);
+}
+
+/** Direct child of parent whose name is a stamp, or null when the path is something else. */
+function directStampName(parent: string, candidate: string): string | null {
+  if (typeof candidate !== 'string' || !isAbsolute(candidate) || candidate.includes('\0')) return null;
+  const resolvedParent = resolve(parent);
+  const resolved = resolve(candidate);
+  if (resolved === resolvedParent || !resolved.startsWith(resolvedParent + sep)) return null;
+  const name = resolved.slice(resolvedParent.length + 1);
+  if (!STAMP_DIRECTORY.test(name)) return null;
+  return name;
+}
+
+function assertClaimedStamp(parent: string, stamp: string): string {
+  const name = directStampName(parent, stamp);
+  if (!name) throw new Refusal('VERIFY_PATH_FORBIDDEN');
+  return join(resolve(parent), name);
+}
+
+async function readInUse(parent: string): Promise<string[] | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(parent, IN_USE_FILE), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error('VERIFY_DB_IN_USE_INVALID');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('VERIFY_DB_IN_USE_INVALID');
+  const stamps = (parsed as {stamps?: unknown}).stamps;
+  if (!Array.isArray(stamps) || stamps.some((item) => typeof item !== 'string')) throw new Error('VERIFY_DB_IN_USE_INVALID');
+  return stamps;
+}
+
+function normalizeStampList(stamps: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const item of stamps) {
+    const path = isAbsolute(item) ? resolve(item) : item;
+    if (!normalized.includes(path)) normalized.push(path);
+  }
+  return normalized;
+}
+
+async function listStampNames(parent: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(parent, {withFileTypes: true});
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && STAMP_DIRECTORY.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
+async function stampPresence(path: string): Promise<'yes' | 'no' | 'unknown'> {
+  try {
+    const info = await lstat(path);
+    return info.isDirectory() && !info.isSymbolicLink() ? 'yes' : 'no';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'no';
+    return 'unknown';
+  }
+}
+
+/** Remember a stamp so prune keeps it. The file is mode 0600 and replaced atomically. */
+export async function claimVerifyDatabaseStamp(dataDirectory: string, stamp: string): Promise<void> {
+  const root = assertDataDirectory(dataDirectory);
+  const parent = join(root, 'verify-db');
+  await ensureDatabaseRoot(parent);
+  const resolved = assertClaimedStamp(parent, stamp);
+  const stamps = normalizeStampList(await readInUse(parent) ?? []);
+  if (!stamps.includes(resolved)) stamps.push(resolved);
+  await writePrivateJson(parent, IN_USE_FILE, {stamps});
+}
+
+/** Drop a stamp from the in-use list. Missing file is a no-op. */
+export async function releaseVerifyDatabaseStamp(dataDirectory: string, stamp: string): Promise<void> {
+  const root = assertDataDirectory(dataDirectory);
+  const parent = join(root, 'verify-db');
+  const resolved = assertClaimedStamp(parent, stamp);
+  const existing = await readInUse(parent);
+  if (!existing) return;
+  const stamps = normalizeStampList(existing).filter((item) => item !== resolved);
+  await writePrivateJson(parent, IN_USE_FILE, {stamps});
+}
+
+/**
+ * Delete stamp directories except the two newest names, the one current.json
+ * points at, and any in-use path that still exists. Names sort chronologically.
+ * A failure to delete one stamp is logged and does not stop the others.
+ */
+export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: string, spawn?: CommandRunner): Promise<void> {
+  const root = assertDataDirectory(dataDirectory);
+  const parent = join(root, 'verify-db');
+  const names = await listStampNames(parent);
+  if (names.length === 0) return;
+  let currentName: string | null = null;
+  try {
+    const current = await readCurrentVerifyDatabase(root);
+    currentName = current ? directStampName(parent, current.directory) : null;
+  } catch {
+    console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'current'}));
+    return;
+  }
+  let inUse: string[] | null;
+  try {
+    inUse = await readInUse(parent);
+  } catch {
+    console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
+    return;
+  }
+  const keep = new Set(names.slice(-2));
+  if (currentName) keep.add(currentName);
+  for (const used of inUse ?? []) {
+    const name = directStampName(parent, used);
+    if (!name) continue;
+    const presence = await stampPresence(join(parent, name));
+    if (presence === 'no') continue;
+    keep.add(name);
+  }
+  for (const name of names) {
+    if (keep.has(name)) continue;
+    try {
+      await discardStamp(join(parent, name), parent, image, spawn);
+    } catch {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', stamp: name}));
+    }
   }
 }

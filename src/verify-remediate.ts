@@ -1,14 +1,14 @@
 import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, open, readdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
-import {isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import type pg from 'pg';
 import {z} from 'zod';
 import {digest, Refusal, type Authority} from './contracts.ts';
 import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transport.ts';
 import type {Ledger} from './ledger.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
-import {redactUnknownSecrets} from './verify-redact.ts';
+import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE, VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
 
 const AchadoId = z.string().regex(/^ACH-\d{3}$/);
@@ -25,7 +25,8 @@ const CweToken = /^CWE-\d{1,5}$/;
 const AsvsToken = /^ASVS(?:-\d+){1,4}$/;
 const EXCERPT_LIMIT = 4000;
 
-type OpenFinding = {id: string; status: string; file: string; line: number | null; title: string; reference: string | null};
+type OpenFinding = {id: string; status: string; file: string; line: number | null; title: string; reference: string | null; severity: string; snippet: string};
+type ReviewerCall = VerifyWorkerCall & {reviewerProvider?: unknown};
 type RunRef = {id: string; intentId: string};
 type ReportUpdate = {id: string; status: 'fechado' | 'reaberto'; file: string; line: number | null; title: string};
 type MatchedReport = {dir: string; runRaw: string; achadosRaw: string | null};
@@ -41,15 +42,20 @@ function uniqueIds(ids: readonly string[]): string[] {
   return unique;
 }
 
+const LOWER_FORBIDDEN = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
+const PROOF_BYTES = 1_000_000;
+const PROOF_SNIPPET = 12;
+
 function normalizeIds(ids: readonly string[]): string[] {
   if (ids.length === 0) throw new Refusal('VERIFY_NOTHING_TO_FIX', 400);
   const unique = uniqueIds(ids);
+  if (unique.length > 20) throw new Refusal('VERIFY_TOO_MANY', 400);
   if (unique.some(id => !AchadoId.safeParse(id).success)) throw new Refusal('VERIFY_FINDING_MISSING', 404);
   return unique;
 }
 
 function forbiddenSegment(part: string): boolean {
-  return part === '' || part === '.' || part === '..' || part === '.git' || part === '.github' || part === '.ai' || part === 'node_modules' || part.startsWith('.env');
+  return part === '' || part === '.' || part === '..' || part === '.git' || part === '.github' || part === '.ai' || part === 'node_modules' || part.startsWith('.env') || LOWER_FORBIDDEN.has(part.toLowerCase());
 }
 
 function assertRepoRelative(file: string): string {
@@ -73,6 +79,17 @@ function lineOf(value: unknown): number | null {
   const line = typeof value === 'number' ? value : Number(value);
   if (!Number.isInteger(line) || line <= 0) return null;
   return line;
+}
+
+function textField(payload: unknown, key: 'severity' | 'snippet'): string {
+  if (!payload || typeof payload !== 'object' || !(key in payload)) return '';
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function severityOf(column: unknown, payload: unknown): string {
+  if (typeof column === 'string' && column.trim()) return column.trim().toLowerCase();
+  return textField(payload, 'severity').trim().toLowerCase();
 }
 
 function titleOf(payload: unknown, id: string): string {
@@ -142,8 +159,7 @@ function managerText(groups: readonly {file: string; items: OpenFinding[]}[], wr
 }
 
 function isSecretBasename(file: string): boolean {
-  const base = file.split('/').at(-1) ?? '';
-  return base.startsWith('.env') || base.endsWith('.pem') || base.endsWith('.key') || base.startsWith('id_');
+  return isSecretClassBasename(file);
 }
 
 async function loadRun(client: pg.PoolClient, runId: string, projectId: string, contextId: string): Promise<RunRef> {
@@ -165,16 +181,25 @@ async function loadFindings(client: pg.PoolClient, runId: string, ids: readonly 
   const coveredRows = (await client.query('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runId])).rows as {file: string}[];
   const covered = new Set(coveredRows.map(row => String(row.file)));
   const rows = (await client.query(
-    'SELECT achado_id, status, file, line, payload FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])',
+    'SELECT achado_id, status, file, line, severity, payload FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])',
     [runId, ids],
-  )).rows as {achado_id: string; status: string; file: string; line: number | null; payload: unknown}[];
+  )).rows as {achado_id: string; status: string; file: string; line: number | null; severity?: unknown; payload: unknown}[];
   const byId = new Map(rows.map(row => [String(row.achado_id), row]));
   return ids.map(id => {
     const row = byId.get(id);
     if (!row || (eligibleOnly && row.status !== 'confirmado' && row.status !== 'reaberto')) throw new Refusal('VERIFY_FINDING_MISSING', 404);
     const file = assertRepoRelative(String(row.file));
     if (!covered.has(file)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    return {id, status: String(row.status), file, line: lineOf(row.line), title: titleOf(row.payload, id), reference: closedReference(row.payload)};
+    return {
+      id,
+      status: String(row.status),
+      file,
+      line: lineOf(row.line),
+      title: titleOf(row.payload, id),
+      reference: closedReference(row.payload),
+      severity: severityOf(row.severity, row.payload),
+      snippet: textField(row.payload, 'snippet'),
+    };
   });
 }
 
@@ -263,6 +288,52 @@ function recheckTask(finding: OpenFinding, excerpt: string): string {
     'Responda só com JSON {"kind":"confirmacao","status":"descartado"|"confirmado","reason":"...","proof":"..."}.',
     'Use descartado se o ponto não reproduz e confirmado se a falha continua.',
   ].join('\n');
+}
+
+function reviewerProvider(call: ReviewerCall): string {
+  return typeof call.reviewerProvider === 'string' ? call.reviewerProvider : '';
+}
+
+function avoidProviders(provider: string): string[] | undefined {
+  if (provider.length < 1 || provider.length > 80) return undefined;
+  return [provider];
+}
+
+async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt: string, intentId: string, avoid?: readonly string[]): Promise<{status: 'descartado' | 'confirmado'; provider: string}> {
+  const call: ReviewerCall = VerifyWorkerCall.parse({
+    role: 'reviewer',
+    provider: 'recheck',
+    accountId: '00000000-0000-4000-8000-000000000001',
+    profileId: '00000000-0000-4000-8000-000000000002',
+    model: 'recheck',
+    grantId: '00000000-0000-4000-8000-000000000003',
+    intentId,
+    task: recheckTask(finding, excerpt),
+    repo: 'sem-repositorio',
+    writePaths: [],
+    ...(avoid && avoid.length ? {avoidProviders: [...avoid]} : {}),
+  });
+  const verdict = parseVerdict(await worker.run(call));
+  return {status: verdict.status, provider: reviewerProvider(call)};
+}
+
+async function snippetGone(repo: string | null, finding: OpenFinding): Promise<boolean> {
+  const snippet = finding.snippet.trim();
+  if (snippet.length < PROOF_SNIPPET || !repo || isSecretBasename(finding.file)) return false;
+  const located = await locateRepoFile(repo, finding.file);
+  if (!located) return false;
+  try {
+    const handle = await open(located, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > PROOF_BYTES) return false;
+      return !(await handle.readFile({encoding: 'utf8'})).includes(snippet);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 function parseVerdict(raw: string): z.infer<typeof RecheckVerdict> {
@@ -437,8 +508,7 @@ async function updateReports(dataDirectory: string, projectId: string, runId: st
     await replacePrivate(match.report.dir, 'run.json', match.report.runRaw.endsWith('\n') ? match.report.runRaw : `${match.report.runRaw}\n`);
     for (const target of match.markdown) {
       const markdown = replaceSituacao(await readFile(target.path, 'utf8'), target.status);
-      await writeFile(target.path, markdown, {mode: 0o600});
-      await chmod(target.path, 0o600);
+      await replacePrivate(dirname(target.path), basename(target.path), markdown);
     }
   }
 }
@@ -497,29 +567,21 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
     return {run, findings: await loadFindings(client, run.id, requested, false), repo: await projectRepo(client, input.projectId)};
   });
   const decided: ReportUpdate[] = [];
-  // a reverificação de produção passa pelo mesmo VerifyWorker do exame, que reserva reviewer.
+  // reviewerProvider vem da reserva da conta, não do texto do modelo.
   for (const finding of loaded.findings) {
     const excerpt = await excerptFor(loaded.repo, finding);
-    const call = VerifyWorkerCall.parse({
-      role: 'reviewer',
-      provider: 'recheck',
-      accountId: '00000000-0000-4000-8000-000000000001',
-      profileId: '00000000-0000-4000-8000-000000000002',
-      model: 'recheck',
-      grantId: '00000000-0000-4000-8000-000000000003',
-      intentId: loaded.run.intentId,
-      task: recheckTask(finding, excerpt.text),
-      repo: 'sem-repositorio',
-      writePaths: [],
-    });
-    const verdict = parseVerdict(await input.worker.run(call));
-    decided.push({
-      id: finding.id,
-      status: verdict.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto',
-      file: finding.file,
-      line: finding.line,
-      title: finding.title,
-    });
+    const first = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId);
+    let status: 'fechado' | 'reaberto';
+    if (finding.severity !== 'alta') {
+      status = first.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
+    } else {
+      const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoidProviders(first.provider));
+      const discarded = first.status === 'descartado' || second.status === 'descartado';
+      const proof = excerpt.seen && discarded && await snippetGone(loaded.repo, finding);
+      const agreed = excerpt.seen && first.status === 'descartado' && second.status === 'descartado' && first.provider.length > 0 && second.provider.length > 0 && first.provider !== second.provider;
+      status = proof || agreed ? 'fechado' : 'reaberto';
+    }
+    decided.push({id: finding.id, status, file: finding.file, line: finding.line, title: finding.title});
   }
   await ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
@@ -531,7 +593,7 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
     }
-    await updateReports(input.dataDirectory, input.projectId, loaded.run.id, decided);
   });
+  await updateReports(input.dataDirectory, input.projectId, loaded.run.id, decided);
   return {results: decided.map(({id, status}) => ({id, status}))};
 }

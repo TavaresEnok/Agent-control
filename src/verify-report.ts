@@ -1,5 +1,5 @@
 import {randomBytes} from 'node:crypto';
-import {chmod, lstat, mkdir, readFile, readdir, realpath, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {hasKnownSecret} from './verify-redact.ts';
@@ -511,6 +511,42 @@ export async function readSecurityReport(dataDirectory: string, projectId: strin
   const achados = parseAchadosFile(await readTextInside(report.directory, join(report.directory, 'achados.json'), 'VERIFY_REPORT_INVALID'));
   const coverageMarkdown = await readTextInside(report.directory, join(report.directory, 'cobertura.md'), 'VERIFY_REPORT_INVALID');
   return {summary: report.summary, achados, coverageMarkdown};
+}
+
+async function removeContainedDirectory(project: string, target: string): Promise<void> {
+  const lexical = resolve(target);
+  assertInside(project, lexical);
+  let info;
+  try {
+    info = await lstat(lexical);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return;
+    if (isErrno(error, 'ELOOP') || isErrno(error, 'ENOTDIR')) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+    throw error;
+  }
+  if (info.isSymbolicLink()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  if (!info.isDirectory()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  const real = await realpath(lexical);
+  if (real !== lexical) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  assertInside(project, real);
+  await rm(real, {recursive: true});
+}
+
+/** Drop the report directory for this run and the raw tool directory that belongs to it. */
+export async function removeSecurityReport(dataDirectory: string, projectId: string, runId: string): Promise<void> {
+  assertSafeSegment(projectId);
+  assertSafeSegment(runId);
+  const project = await resolveProject(dataDirectory, projectId);
+  if (!project) return;
+  await removeContainedDirectory(project, join(project, 'ferramentas', runId));
+  let directory: string | undefined;
+  try {
+    directory = (await findReport(dataDirectory, projectId, runId)).directory;
+  } catch (error) {
+    if (error instanceof Refusal && error.code === 'VERIFY_REPORT_NOT_FOUND') return;
+    throw error;
+  }
+  await removeContainedDirectory(project, directory);
 }
 
 export async function readAchadoMarkdown(dataDirectory: string, projectId: string, runId: string, achadoId: string): Promise<string> {
