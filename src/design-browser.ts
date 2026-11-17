@@ -110,8 +110,8 @@ async function waitForPaint(page: DesignPage): Promise<void> {
 }
 
 /** Host Chrome through the Playwright already installed for the panel. The design CLI captures with this driver. */
-export async function openDesignBrowser(targetUrl?: string): Promise<{driver: DesignCaptureDriver; close: () => Promise<void>}> {
-  if (targetUrl !== undefined) assertDesignTarget(targetUrl);
+export async function openDesignBrowser(targetUrl: string): Promise<{driver: DesignCaptureDriver; close: () => Promise<void>}> {
+  assertDesignTarget(targetUrl);
   const specifier = new URL('../upstream/cezar/node_modules/playwright-core/index.mjs', import.meta.url);
   let chromium: ChromiumLauncher;
   try {
@@ -129,7 +129,7 @@ export async function openDesignBrowser(targetUrl?: string): Promise<{driver: De
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    const guard = targetUrl === undefined ? undefined : await installDesignBrowserGuard(context, page, targetUrl);
+    const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
     const driver: DesignCaptureDriver = {
       async setViewport(width, height) {
@@ -139,8 +139,7 @@ export async function openDesignBrowser(targetUrl?: string): Promise<{driver: De
         await page.emulateMedia({colorScheme: theme === 'escuro' ? 'dark' : 'light'});
       },
       async goto(url) {
-        if (guard) await guard.goto(url);
-        else await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
+        await guard.goto(url);
         await waitForPaint(page);
       },
       async screenshot() {
@@ -150,8 +149,7 @@ export async function openDesignBrowser(targetUrl?: string): Promise<{driver: De
         return page.content();
       },
       async fill(selector, value) {
-        if (guard) await guard.fill(selector, value);
-        else await page.fill(selector, value);
+        await guard.fill(selector, value);
       },
       async click(selector) {
         await page.click(selector);
@@ -161,7 +159,7 @@ export async function openDesignBrowser(targetUrl?: string): Promise<{driver: De
           {timeout: 15000},
         ).catch(() => undefined);
         // Login can navigate while the password field disappears.
-        guard?.afterLogin();
+        guard.afterLogin();
       },
     };
     return {

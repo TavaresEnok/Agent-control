@@ -52,7 +52,7 @@ async function main() {
   try {
     resolved = await resolvePersonalDesign(process.argv.slice(2));
     const stopLease = keepPersonalDesignLease(resolved.ledger, resolved.authority);
-    const browser = await openDesignBrowser();
+    const browser = await openDesignBrowser(parsed.url);
     const runId = randomUUID();
     try {
       const result = await runDesignModule({

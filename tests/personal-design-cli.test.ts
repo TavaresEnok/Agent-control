@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {chmod, mkdir, mkdtemp, symlink, writeFile, rm} from 'node:fs/promises';
+import {chmod, mkdir, mkdtemp, readFile, symlink, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -168,4 +168,10 @@ test('o leitor do repositório ignora .claude, .mcp.json, .codex e .grok e não 
     await rm(directory, {recursive: true, force: true});
     await rm(outside, {recursive: true, force: true});
   }
+});
+
+test('o comando abre o navegador do exame na URL declarada', async () => {
+  const source = await readFile(new URL('../src/personal-design-cli.ts', import.meta.url), 'utf8');
+  assert.match(source, /openDesignBrowser\(parsed\.url\)/);
+  assert.doesNotMatch(source, /openDesignBrowser\(\s*\)/);
 });
