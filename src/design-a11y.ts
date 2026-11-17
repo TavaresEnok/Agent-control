@@ -181,7 +181,7 @@ function expressionCounts(expr: string): boolean {
 }
 
 function attributeCounts(source: string, name: string): boolean {
-  const pattern = new RegExp(`\\b${name}\\s*=\\s*`, 'gi');
+  const pattern = new RegExp(`(?:^|[^A-Za-z0-9_-])${name}\\s*=\\s*`, 'gi');
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source)) !== null) {
     const from = match.index + match[0].length;
@@ -310,8 +310,12 @@ function openingParts(opening: string, tokenLength: number): {attrs: string; sel
   return {attrs: opening.slice(tokenLength, opening.length - cut), selfClosing: suffix !== null};
 }
 
+function hasSpread(source: string): boolean {
+  return /\{\s*\.\.\./.test(source);
+}
+
 function flagUnlabeled(findings: DesignRawFinding[], file: string, html: string, index: number, attrs: string, inner: string, raw: string): void {
-  if (accessibleName(attrs, inner) || containsComponent(inner)) return;
+  if (hasSpread(attrs) || hasSpread(inner) || accessibleName(attrs, inner) || containsComponent(inner)) return;
   findings.push(designRawFinding({
     tool: 'html',
     rule: DESIGN_PLANTED_RULES.unlabeledButton,

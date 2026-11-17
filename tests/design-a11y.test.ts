@@ -91,6 +91,41 @@ test('nome vazio continua achado, sem gravidade alta', () => {
   assert.equal(unlabeled(mixed).length, 1);
 });
 
+test('data-title e aria-title nao contam como nome', () => {
+  const fake = [
+    '<button data-title="Fechar"></button>',
+    '<button aria-title="Fechar"></button>',
+    '<button data-aria-label="Fechar"></button>',
+    '<button aria-label="" data-title="Fechar"></button>',
+    '<button aria-label=\'\' aria-title="Fechar"></button>',
+    '<button><img data-alt="icone" /></button>',
+    '<div role="button" data-title="Fechar"></div>',
+  ];
+  for (const html of fake) {
+    const findings = unlabeled(html);
+    assert.equal(findings.length, 1, html);
+    assert.equal(findings[0]?.severity, 'media', html);
+  }
+  const real = [
+    '<button title="Fechar" data-title="x"></button>',
+    '<button aria-label="Fechar" aria-title="x"></button>',
+    '<button><img alt="Salvar" data-alt="x" /></button>',
+  ];
+  for (const html of real) assert.deepEqual(unlabeled(html), [], html);
+});
+
+test('spread torna o nome desconhecido e nao gera achado', () => {
+  const spreads = [
+    '<button {...props}></button>',
+    '<button {...props} aria-label=""></button>',
+    '<button aria-label="" {...props}></button>',
+    '<button type="button" {...buttonProps}></button>',
+    '<div role="button" {...props}></div>',
+    '<button><span {...props}></span></button>',
+  ];
+  for (const html of spreads) assert.deepEqual(unlabeled(html), [], html);
+});
+
 test('so um componente interno nao vira achado de nome', () => {
   const onlyComponent = [
     '<button type="button"><ProjectRowLabel /></button>',
