@@ -1,0 +1,5 @@
+.titulo {
+  overflow: hidden;
+  white-space: nowrap;
+  height: 14px;
+}
