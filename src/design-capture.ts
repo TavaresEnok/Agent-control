@@ -23,6 +23,15 @@ export type DesignCaptureScreen = {
   route: string;
   hasDarkTheme: boolean;
   forceStates: boolean;
+  hasEmptyState?: boolean;
+};
+
+export type DesignEmptyStateStatus = 'capturado' | 'ausente' | 'nao-capturado';
+
+export type DesignEmptyStateRecord = {
+  screenId: string;
+  route: string;
+  status: DesignEmptyStateStatus;
 };
 
 /**
@@ -72,6 +81,7 @@ export type DesignCaptureMetadata = {
   captures: DesignCaptureRecord[];
   login?: PublicLoginRecord;
   skipped?: DesignCaptureSkip[];
+  emptyStates: DesignEmptyStateRecord[];
 };
 
 export type DesignCaptureOptions = {
@@ -81,6 +91,7 @@ export type DesignCaptureOptions = {
 /**
  * Sempre 375, 768 e 1440 no tema claro e no estado padrao.
  * Tema escuro só com hasDarkTheme. Estados vazio, carregando e erro só com forceStates.
+ * hasEmptyState acrescenta o estado vazio, sem repetir o que forceStates já pede.
  * O produto é o cartesiano desses eixos. O nome do arquivo só tem caracteres seguros e termina em .png.
  */
 export function planCaptures(screens: readonly DesignCaptureScreen[]): DesignCapturePlan[] {
@@ -90,7 +101,9 @@ export function planCaptures(screens: readonly DesignCaptureScreen[]): DesignCap
     const themes: DesignCaptureTheme[] = screen.hasDarkTheme ? ['claro', 'escuro'] : ['claro'];
     const states: DesignCaptureState[] = screen.forceStates
       ? ['padrao', 'vazio', 'carregando', 'erro']
-      : ['padrao'];
+      : screen.hasEmptyState === true
+        ? ['padrao', 'vazio']
+        : ['padrao'];
     for (const theme of themes) {
       for (const state of states) {
         for (const viewport of DESIGN_VIEWPORTS) {
@@ -167,7 +180,10 @@ export async function captureScreens(
     });
     files.push({fileName: plan.fileName, bytes});
   }
-  const metadata: DesignCaptureMetadata = revealed === undefined ? {captures} : {captures, login: revealed};
+  const emptyStates = emptyStateRecords(plans, captures);
+  const metadata: DesignCaptureMetadata = revealed === undefined
+    ? {captures, emptyStates}
+    : {captures, login: revealed, emptyStates};
   if (skipped.length > 0) metadata.skipped = skipped;
   const body = JSON.stringify(metadata, null, 2);
   if (login !== undefined && login.password.length > 0 && jsonValuesContain(metadata, login.password)) {
@@ -179,6 +195,35 @@ export async function captureScreens(
   }
   await writeFile(join(root, DESIGN_CAPTURE_METADATA_FILE), `${body}\n`, {mode: 0o600});
   return metadata;
+}
+
+function emptyStateRecords(
+  plans: readonly DesignCapturePlan[],
+  captures: readonly DesignCaptureRecord[],
+): DesignEmptyStateRecord[] {
+  const rows: {screenId: string; route: string; wanted: boolean; captured: boolean}[] = [];
+  const index = new Map<string, number>();
+  for (const plan of plans) {
+    const key = `${plan.screenId}\0${plan.route}`;
+    let at = index.get(key);
+    if (at === undefined) {
+      at = rows.length;
+      index.set(key, at);
+      rows.push({screenId: plan.screenId, route: plan.route, wanted: false, captured: false});
+    }
+    const row = rows[at];
+    if (row && plan.state === 'vazio') row.wanted = true;
+  }
+  for (const capture of captures) {
+    if (capture.state !== 'vazio') continue;
+    const row = rows[index.get(`${capture.screenId}\0${capture.route}`) ?? -1];
+    if (row) row.captured = true;
+  }
+  return rows.map(row => ({
+    screenId: row.screenId,
+    route: row.route,
+    status: !row.wanted ? 'ausente' : row.captured ? 'capturado' : 'nao-capturado',
+  }));
 }
 
 function isHtmlScreen(body: string): boolean {

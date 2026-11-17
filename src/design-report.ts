@@ -2,6 +2,7 @@ import {constants, type Stats} from 'node:fs';
 import {chmod, lstat, mkdir, open, readdir, realpath, type FileHandle} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
+import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments} from './design-image.ts';
 import {captureProof} from './design-mark.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
 import {DesignAchado, DesignCoverageRow, DesignReportSummary} from './design-types.ts';
@@ -30,6 +31,11 @@ const STATUS_LABEL: Record<DesignAchado['status'], string> = {
 
 export type DesignReportCapture = {fileName: string; bytes: Buffer};
 
+export type DesignReportEmptyState = {
+  route: string;
+  status: 'capturado' | 'ausente' | 'nao-capturado';
+};
+
 export type DesignReportWriteInput = {
   dataDirectory: string;
   projectId: string;
@@ -42,8 +48,9 @@ export type DesignReportWriteInput = {
   raw: unknown;
   note: string;
   captures?: readonly DesignReportCapture[];
-  /** "capturado" ou "não deu". Ausente, o relatório continua válido. */
+  /** "capturado" ou "não deu", quando o chamador só tem um resultado. */
   emptyState?: 'capturado' | 'não deu';
+  emptyStates?: readonly DesignReportEmptyState[];
 };
 
 function hasLiveAccessKey(text: string): boolean {
@@ -379,6 +386,7 @@ function readme(input: {
   counts: DesignReportSummary['counts'];
   discarded: number;
   emptyState?: 'capturado' | 'não deu';
+  emptyStates?: readonly DesignReportEmptyState[];
 }): string {
   const failing = input.counts.alta + input.counts.media + input.counts.baixa + input.counts.informativa;
   const lines = [
@@ -417,13 +425,63 @@ function readme(input: {
     '',
     imageProofText(),
     '',
+    designImageArgumentText().trimEnd(),
+    '',
     '## O que não foi possível verificar',
     '',
     input.note,
     '',
+    emptyStateBody(input.emptyState, input.emptyStates).trimEnd(),
+    '',
   ];
-  if (input.emptyState !== undefined) lines.push('## Estado vazio', '', input.emptyState, '');
   return lines.join('\n');
+}
+
+function emptyStateBody(
+  singular: 'capturado' | 'não deu' | undefined,
+  records: readonly DesignReportEmptyState[] | undefined,
+): string {
+  if (singular !== undefined && (records === undefined || records.length === 0)) {
+    return `## Estado vazio\n\n${singular}\n`;
+  }
+  return emptyStateSection(records);
+}
+
+function emptyStateSection(records: readonly DesignReportEmptyState[] | undefined): string {
+  if (records === undefined || records.length === 0) {
+    return '## Estado vazio\n\nNão houve registro de estado vazio: a captura não aconteceu.\n';
+  }
+  const lines = records.map(record => `- ${record.route}: ${emptyStateLabel(record.status)}`);
+  return ['## Estado vazio', '', ...lines, ''].join('\n');
+}
+
+function emptyStateLabel(status: DesignReportEmptyState['status']): string {
+  if (status === 'capturado') return 'capturado';
+  if (status === 'ausente') return 'ausente';
+  return 'não capturado';
+}
+
+function designImageArgumentText(): string {
+  const args = designRunArguments({
+    image: DESIGN_IMAGE,
+    repository: '/var/lib/design/repo',
+    output: '/var/lib/design/out',
+    targetUrl: 'http://127.0.0.1:4173',
+    memoryBytes: 512 * 1024 * 1024,
+    nanoCpus: 1_000_000_000,
+    pidsLimit: 128,
+    network: DESIGN_NETWORK,
+  });
+  return [
+    '## Imagem de design',
+    '',
+    'O relatório não executou o contêiner. A lista é o que designRunArguments usaria.',
+    `Usuário ${DESIGN_USER}, sem root. Rede somente ${DESIGN_NETWORK}.`,
+    'A função já recusa outra rede e aplica somente leitura, cap-drop ALL, no-new-privileges e os limites de memória, pids e cpus.',
+    '',
+    args.join(' '),
+    '',
+  ].join('\n');
 }
 
 function serializedRaw(raw: unknown): string {
@@ -703,6 +761,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       counts,
       discarded,
       emptyState,
+      emptyStates: input.emptyStates,
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
     {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage))},

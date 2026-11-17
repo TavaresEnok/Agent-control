@@ -191,6 +191,24 @@ async function assertNoExampleKey(path: string): Promise<void> {
   assert.equal(text.includes(letterKey), false, path);
 }
 
+test('o relatorio lista o estado vazio sem mexer na nota', async () => {
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {
+      emptyStates: [
+        {route: '/itens', status: 'capturado'},
+        {route: '/home', status: 'ausente'},
+        {route: '/tasks/1', status: 'nao-capturado'},
+      ],
+    }));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.match(readme, /\/itens: capturado/);
+    assert.match(readme, /\/home: ausente/);
+    assert.match(readme, /\/tasks\/1: não capturado/);
+    const run = JSON.parse(await readFile(join(written.directory, 'run.json'), 'utf8')) as {note: string};
+    assert.equal(run.note, note);
+  });
+});
+
 test('grava o relatorio privado, a contagem e a leitura', async () => {
   assert.equal(createdAt.toISOString(), '2026-11-16T03:04:05.000Z');
   assert.ok(preview.length <= 80);
@@ -216,6 +234,16 @@ test('grava o relatorio privado, a contagem e a leitura', async () => {
     assert.match(readme, /## Resumo/);
     assert.match(readme, /## Nota geral\n\nNão foi possível verificar o tema escuro desta rodada\./);
     assert.match(readme, /## O que não foi possível verificar\n\nNão foi possível verificar o tema escuro desta rodada\./);
+    assert.match(readme, /## Imagem de design/);
+    assert.match(readme, /não executou o contêiner/);
+    assert.match(readme, /65532:65532/);
+    assert.match(readme, /design-homologation/);
+    assert.match(readme, /--read-only/);
+    assert.match(readme, /--cap-drop/);
+    assert.match(readme, /no-new-privileges/);
+    assert.match(readme, /--network design-homologation/);
+    assert.match(readme, /## Estado vazio/);
+    assert.match(readme, /Não houve registro de estado vazio: a captura não aconteceu\./);
     assert.match(readme, /A contagem abaixo inclui só achados com situação confirmado ou reaberto\./);
     assert.match(readme, /\| alta \| 1 \|/);
     assert.match(readme, /\| média \| 1 \|/);
@@ -414,10 +442,13 @@ test('registra usuário, limites e rede da imagem sem afirmar execução', async
     assert.equal(user, DESIGN_USER);
     assert.equal(user.split(':').some(part => part === '0' || part.toLowerCase() === 'root'), false);
     assert.equal(network, DESIGN_NETWORK);
-    assert.equal(readme.includes('## Estado vazio'), false);
+    assert.match(readme, /## Estado vazio/);
+    assert.match(readme, /Não houve registro de estado vazio: a captura não aconteceu\./);
     assert.equal(readme.includes('capturado'), false);
     assert.equal(readme.includes('não deu'), false);
-    assert.doesNotMatch(readme, /cont[eê]iner|container|docker run|executad|foi execut/i);
+    assert.match(readme, /não executou o contêiner/);
+    assert.match(readme, /docker run --rm --network design-homologation/);
+    assert.doesNotMatch(readme, /o contêiner (?:foi|executou)|foi executad/i);
 
     let nano = 1;
     let seed: readonly string[] | null = null;

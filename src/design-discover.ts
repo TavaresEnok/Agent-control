@@ -108,6 +108,11 @@ export function missingEmptyStateFindings(file: string, text: string): DesignRaw
   return findings;
 }
 
+/** Há marcador de estado vazio fora de comentário. */
+export function sourceHasEmptyState(text: string): boolean {
+  return new RegExp(EMPTY_MARKER.source).test(maskComments(text));
+}
+
 type SourceSpan = {start: number; end: number};
 
 function functionSpans(text: string): SourceSpan[] {

@@ -6,6 +6,7 @@ import {
   missingEmptyStateFindings,
   publicLoginRecord,
   screenCoverageMarkdown,
+  sourceHasEmptyState,
   type DiscoveredRoute,
 } from '../src/design-discover.ts';
 
@@ -260,6 +261,14 @@ test('marcador de vazio fica no componente da lista', () => {
   assert.equal(arrowFindings.length, 1);
   assert.equal(arrowFindings[0]?.severity, 'media');
   assert.equal(arrowFindings[0]?.line, 6);
+});
+
+test('a fonte diz se a rota tem estado vazio', () => {
+  const list = 'export function Tela() {\n  return <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>;\n}\n';
+  assert.equal(sourceHasEmptyState(list), false);
+  assert.equal(sourceHasEmptyState(`${list}\nfunction Aviso() {\n  return <p>Nenhum item</p>;\n}\n`), true);
+  assert.equal(sourceHasEmptyState('export function Tela() {\n  // Nenhum item\n  return <ul></ul>;\n}\n'), false);
+  assert.equal(sourceHasEmptyState('export function Tela() {\n  if (items.length === 0) return null;\n  return <ul></ul>;\n}\n'), true);
 });
 
 test('tabela de cobertura em portugues', () => {

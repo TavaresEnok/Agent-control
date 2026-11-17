@@ -191,6 +191,49 @@ test('estado forcado acrescenta a consulta sem apagar rota nem fragmento', async
   }
 });
 
+test('rota com estado vazio ganha captura e o registro diz quando nao houve', async () => {
+  const plain = planCaptures([{id: 'home', route: '/home', hasDarkTheme: false, forceStates: false}]);
+  assert.equal(plain.length, 3);
+  assert.ok(plain.every(plan => plan.state === 'padrao'));
+  const empty = planCaptures([{id: 'home', route: '/home', hasDarkTheme: false, forceStates: false, hasEmptyState: true}]);
+  assert.equal(empty.length, 6);
+  assert.deepEqual(empty.map(plan => plan.state), ['padrao', 'padrao', 'padrao', 'vazio', 'vazio', 'vazio']);
+  assert.equal(planCaptures([{id: 'home', route: '/home', hasDarkTheme: true, forceStates: true, hasEmptyState: true}]).length, 24);
+  const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
+  try {
+    let url = '';
+    const driver: DesignCaptureDriver = {
+      async setViewport() {},
+      async emulateMedia() {},
+      async goto(next) {
+        url = next;
+      },
+      async screenshot() {
+        return PNG;
+      },
+      async content() {
+        if (url.includes('/skip') && url.includes('estado=vazio')) return '{"error":"AUTH_REQUIRED"}';
+        return '<main></main>';
+      },
+    };
+    const plans = planCaptures([
+      {id: 'lista', route: '/lista', hasDarkTheme: false, forceStates: false, hasEmptyState: true},
+      {id: 'home', route: '/home', hasDarkTheme: false, forceStates: false},
+      {id: 'skip', route: '/skip', hasDarkTheme: false, forceStates: false, hasEmptyState: true},
+    ]);
+    const meta = await captureScreens(driver, BASE, plans, join(parent, 'saida'));
+    assert.equal(meta.captures.filter(item => item.route === '/lista' && item.state === 'vazio').length, 3);
+    assert.equal(meta.captures.some(item => item.route === '/skip' && item.state === 'vazio'), false);
+    assert.deepEqual(meta.emptyStates, [
+      {screenId: 'lista', route: '/lista', status: 'capturado'},
+      {screenId: 'home', route: '/home', status: 'ausente'},
+      {screenId: 'skip', route: '/skip', status: 'nao-capturado'},
+    ]);
+  } finally {
+    await rm(parent, {recursive: true, force: true});
+  }
+});
+
 test('resposta JSON ou texto nao vira captura de tela', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
   try {

@@ -3,9 +3,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Id, Refusal} from './contracts.ts';
 import {writeDesignExamCaptures} from './design-capture-stage.ts';
-import {captureScreens, planCaptures, type DesignCaptureDriver} from './design-capture.ts';
+import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
-import {discoverRoutesFromSource, screenCoverageMarkdown, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
+import {discoverRoutesFromSource, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
 import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture} from './design-examine.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {markPngRect} from './design-mark.ts';
@@ -156,6 +156,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     raw,
     note,
     captures: captured.files,
+    emptyStates: captured.emptyStates,
   });
   const read = await readDesignReport(input.dataDirectory, input.projectId, input.runId);
   return {
@@ -245,6 +246,11 @@ function screenRows(
   });
 }
 
+function textFor(files: readonly {path: string; text: string}[], file: string | undefined): string {
+  if (file === undefined) return '';
+  return files.find(item => item.path === file)?.text ?? '';
+}
+
 function captureNoteFor(route: string, records: readonly {route: string; viewport: number; theme: string; fileName: string}[]): string {
   const related = records.filter(record => record.route === route);
   if (related.length === 0) return 'sem captura';
@@ -263,10 +269,10 @@ type HeldCapture = {
 async function captureIfAsked(
   input: DesignModuleInput,
   origin: string,
-  routes: readonly {id: string; route: string}[],
+  routes: readonly {id: string; route: string; file?: string}[],
   notes: string[],
-): Promise<{records: {route: string; viewport: number; theme: string; fileName: string}[]; files: DesignReportCapture[]; held: HeldCapture[]}> {
-  if (input.driver === undefined) return {records: [], files: [], held: []};
+): Promise<{records: {route: string; viewport: number; theme: string; fileName: string}[]; files: DesignReportCapture[]; held: HeldCapture[]; emptyStates: DesignEmptyStateRecord[]}> {
+  if (input.driver === undefined) return {records: [], files: [], held: [], emptyStates: []};
   const selected = (routes.length > 0 ? routes : [{id: 'inicio', route: '/'}]).slice(0, MAX_CAPTURE_ROUTES);
   const directory = await mkdtemp(join(tmpdir(), 'design-cap-'));
   try {
@@ -278,6 +284,7 @@ async function captureIfAsked(
         route: route.route,
         hasDarkTheme: input.captureDarkTheme === true,
         forceStates: input.forceStates === true,
+        hasEmptyState: sourceHasEmptyState(textFor(input.files, route.file)),
       }))),
       directory,
       input.login === undefined ? undefined : {login: input.login},
@@ -313,12 +320,13 @@ async function captureIfAsked(
       })),
       files,
       held,
+      emptyStates: metadata.emptyStates,
     };
   } catch (error) {
     if (error instanceof Refusal) throw error;
     const message = error instanceof Error ? error.message : 'erro';
     notes.push(`A captura não rodou: ${message}`.slice(0, 200));
-    return {records: [], files: [], held: []};
+    return {records: [], files: [], held: [], emptyStates: []};
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
