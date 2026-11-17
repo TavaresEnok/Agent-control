@@ -1,0 +1,106 @@
+FROM --platform=linux/amd64 debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS tools
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates python3 \
+ && rm -rf /var/lib/apt/lists/*
+COPY verify-tools.lock.json /tmp/verify-tools.lock.json
+RUN python3 - <<'PY'
+import json, pathlib, urllib.request
+lock = json.load(open("/tmp/verify-tools.lock.json"))
+root = pathlib.Path("/tmp/tools")
+root.mkdir(parents=True, exist_ok=True)
+lines = []
+for tool in lock["tools"]:
+    dest = root / tool["file"]
+    print("baixando " + tool["name"] + " " + tool["version"], flush=True)
+    last = None
+    for _attempt in range(3):
+        try:
+            urllib.request.urlretrieve(tool["url"], dest)
+            last = None
+            break
+        except Exception as exc:
+            last = exc
+    if last is not None:
+        raise SystemExit(last)
+    lines.append(tool["sha256"] + "  " + tool["file"])
+(root / "checksums.txt").write_text("\n".join(lines) + "\n")
+PY
+WORKDIR /tmp/tools
+RUN sha256sum -c checksums.txt
+RUN python3 - <<'PY'
+import json, os, pathlib, shutil, tarfile, zipfile
+lock = json.load(open("/tmp/verify-tools.lock.json"))
+root = pathlib.Path("/tmp/tools")
+bindir = pathlib.Path("/usr/local/bin")
+limit = 400 * 1024 * 1024
+for tool in lock["tools"]:
+    src = root / tool["file"]
+    dest = bindir / tool["name"]
+    kind = tool["kind"]
+    if kind == "bin":
+        shutil.copyfile(src, dest)
+    elif kind == "tar.gz":
+        with tarfile.open(src, "r:gz") as tar:
+            member = tar.getmember(tool["member"])
+            if not member.isfile() or member.name != tool["member"] or ".." in member.name.split("/"):
+                raise SystemExit("arquivo recusado")
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                raise SystemExit("arquivo recusado")
+            data = extracted.read()
+            if len(data) > limit:
+                raise SystemExit("arquivo recusado")
+            dest.write_bytes(data)
+    elif kind == "zip":
+        with zipfile.ZipFile(src) as archive:
+            data = archive.read(tool["member"])
+            if len(data) > limit:
+                raise SystemExit("arquivo recusado")
+            dest.write_bytes(data)
+    else:
+        raise SystemExit("arquivo recusado")
+    os.chmod(dest, 0o555)
+    print("instalado " + tool["name"] + " " + tool["version"], flush=True)
+PY
+
+FROM --platform=linux/amd64 debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl findutils git zlib1g \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 65532 verify \
+ && useradd --system --uid 65532 --gid 65532 --home-dir /home/verify --create-home --shell /usr/sbin/nologin verify \
+ && mkdir -p /repository /databases /output /opt/agent-control/rules /home/verify \
+ && chmod 0755 /repository /databases /output /home/verify
+COPY --from=tools /usr/local/bin/ /usr/local/bin/
+COPY --from=tools /tmp/verify-tools.lock.json /opt/agent-control/verify-tools.lock.json
+COPY verify-entrypoint.sh /usr/local/bin/verify-entrypoint.sh
+COPY verify-db-fetch.sh /usr/local/bin/verify-db-fetch.sh
+RUN chmod 0555 /usr/local/bin/gitleaks /usr/local/bin/osv-scanner /usr/local/bin/syft /usr/local/bin/grype \
+    /usr/local/bin/opengrep /usr/local/bin/hadolint /usr/local/bin/trivy /usr/local/bin/checkov \
+    /usr/local/bin/verify-entrypoint.sh /usr/local/bin/verify-db-fetch.sh \
+ && printf '%s\n' \
+      'rules:' \
+      '  - id: chamada-eval' \
+      '    languages: [javascript, typescript]' \
+      '    severity: ERROR' \
+      '    message: eval executa texto como código' \
+      '    pattern: eval(...)' \
+      '  - id: concatenacao-sql' \
+      '    languages: [javascript, typescript, python]' \
+      '    severity: ERROR' \
+      '    message: concatenação em consulta SQL' \
+      '    pattern-either:' \
+      '      - pattern: $DB.query("..." + $X)' \
+      '      - pattern: $CUR.execute("..." + $X)' \
+      '  - id: usuario-root' \
+      '    languages: [dockerfile]' \
+      '    severity: ERROR' \
+      '    message: instrução USER root' \
+      '    pattern: USER root' \
+      > /opt/agent-control/rules/seguranca.yaml \
+ && chmod 0444 /opt/agent-control/rules/seguranca.yaml /opt/agent-control/verify-tools.lock.json
+USER 65532:65532
+WORKDIR /output
+ENTRYPOINT ["/usr/local/bin/verify-entrypoint.sh"]
