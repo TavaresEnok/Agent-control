@@ -161,7 +161,7 @@ export class Ledger {
           (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [command.intentId, command.contextId, principal, hash, command, randomUUID(), randomUUID(), a.epoch, revision])).rows[0];
-        if(command.payload.workflow!=='managed-synthetic-v1'&&context.active_template_revision){
+        if(command.payload.workflow!=='managed-synthetic-v1'&&command.payload.workflow!=='security-verify-readonly-v1'&&context.active_template_revision){
           const selected=(await c.query('SELECT snapshot,digest FROM ac_context_templates WHERE context_id=$1 AND revision=$2',
             [command.contextId,context.active_template_revision])).rows[0];
           if(!selected)throw new Refusal('TEMPLATE_NOT_FOUND');

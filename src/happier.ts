@@ -711,6 +711,7 @@ export class HappierEndpoint {
       try{await this.ledger.tx(async c=>{await this.ledger.fence(c,this.options.authority,true);await this.ledger.assertRuntimeRoute(c,intent.id);});}
       catch(error){if(!workflowRuntimeParkingReason(error))throw error;
         await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.run_id,source:'admission',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RUNTIME_UNAVAILABLE'});continue;}
+      if(intent.command.payload.workflow==='security-verify-readonly-v1')continue;
       if(intent.command.payload.workflow==='semantic-proposal-v1'){
         if(!['done','failed','canceled','cancelled'].includes(intent.state))try{await this.processSemanticProposal(intent);}catch(error){
           if(workflowRuntimeParkingReason(error)){await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,{entityId:intent.id,source:'manager',planRevision:intent.plan_revision,seq:0,status:'waiting',reason:'RECONCILIATION_REQUIRED'});continue;}

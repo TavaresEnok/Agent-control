@@ -12,7 +12,7 @@ import {
   workflowForAdmission,workflowVersionRegistry,WORKFLOW_VERSION_RETIRED,
 } from '../src/workflow-versions.ts';
 
-const names=['baseline-synthetic-v1','engineering-synthetic-v1','engineering-native-v1','semantic-proposal-v1'] as const;
+const names=['baseline-synthetic-v1','engineering-synthetic-v1','engineering-native-v1','semantic-proposal-v1','security-verify-readonly-v1'] as const;
 
 test('workflow catalog is pinned, current-only for admission, and does not upgrade a retained snapshot',()=>{
   assert.equal(AGENT_CONTROL_RUNTIME_VERSION,'agent-control-0.1.0');
