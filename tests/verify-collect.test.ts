@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {lstat, mkdtemp, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 import {collectToolFindings} from '../src/verify-collect.ts';
+
+const MAX_EXAM_FILE_BYTES = 50 * 1024 * 1024;
 
 test('o JSON do exame vira achado sem o segredo inteiro', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'verify-collect-'));
@@ -26,5 +28,41 @@ test('o JSON do exame vira achado sem o segredo inteiro', async () => {
     assert.ok(result.findings.some(finding => finding.tool === 'hadolint' && finding.file === 'Dockerfile' && finding.rule === 'DL3002'));
   } finally {
     await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('arquivo regular entra; symlink e arquivo acima de 50 MB sao recusados', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'verify-collect-'));
+  const outside = await mkdtemp(join(tmpdir(), 'verify-collect-outside-'));
+  const marker = 'OUTSIDE-OSV-MARKER-7c1e';
+  try {
+    await writeFile(join(directory, 'gitleaks.json'), '[]');
+    await writeFile(join(outside, 'secret-osv.json'), JSON.stringify({
+      results: [{
+        source: {path: 'package.json'},
+        packages: [{
+          package: {name: 'pkg', version: '1.0.0'},
+          vulnerabilities: [{id: 'GHSA-outside', summary: marker}],
+        }],
+      }],
+    }));
+    await symlink(join(outside, 'secret-osv.json'), join(directory, 'osv.json'));
+    const huge = join(directory, 'grype.json');
+    await writeFile(huge, '{"matches":[]}');
+    await truncate(huge, MAX_EXAM_FILE_BYTES + 1);
+    const hugeInfo = await lstat(huge);
+    assert.equal(hugeInfo.isSymbolicLink(), false);
+    assert.equal(hugeInfo.isFile(), true);
+    assert.ok(hugeInfo.size > MAX_EXAM_FILE_BYTES);
+
+    const result = await collectToolFindings(directory);
+    const blob = JSON.stringify(result);
+    assert.equal(blob.includes(marker), false);
+    assert.deepEqual(result.files, ['gitleaks.json']);
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.rejected, 2);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+    await rm(outside, {recursive: true, force: true});
   }
 });
