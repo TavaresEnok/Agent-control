@@ -60,9 +60,18 @@ export type DesignCaptureRecord = {
   bytes: number;
 };
 
+export type DesignCaptureSkip = {
+  screenId: string;
+  route: string;
+  url: string;
+  reason: 'nao-e-html';
+  body: string;
+};
+
 export type DesignCaptureMetadata = {
   captures: DesignCaptureRecord[];
   login?: PublicLoginRecord;
+  skipped?: DesignCaptureSkip[];
 };
 
 export type DesignCaptureOptions = {
@@ -104,6 +113,7 @@ export function planCaptures(screens: readonly DesignCaptureScreen[]): DesignCap
  * Captura cada plano em PNG de página inteira.
  * A URL é baseUrl + route. Estado forçado acrescenta estado= sem apagar a rota.
  * Login efêmero preenche os seletores e não grava a senha. O JSON usa publicLoginRecord.
+ * Corpo JSON ou não-HTML não vira PNG: o plano fica em skipped.
  */
 export async function captureScreens(
   driver: DesignCaptureDriver,
@@ -126,13 +136,24 @@ export async function captureScreens(
     await driver.click(login.submitSelector);
   }
   const captures: DesignCaptureRecord[] = [];
+  const skipped: DesignCaptureSkip[] = [];
   const files: {fileName: string; bytes: Buffer}[] = [];
   for (const plan of plans) {
     const url = withState(joinBase(baseUrl, plan.route), plan.state);
     await driver.setViewport(plan.viewport, DESIGN_CAPTURE_HEIGHT[plan.viewport]);
     await driver.emulateMedia(plan.theme);
     await driver.goto(url);
-    await driver.content();
+    const body = await driver.content();
+    if (!isHtmlScreen(body)) {
+      skipped.push({
+        screenId: plan.screenId,
+        route: plan.route,
+        url,
+        reason: 'nao-e-html',
+        body: body.trim().slice(0, 200),
+      });
+      continue;
+    }
     const bytes = await driver.screenshot(true);
     captures.push({
       screenId: plan.screenId,
@@ -147,6 +168,7 @@ export async function captureScreens(
     files.push({fileName: plan.fileName, bytes});
   }
   const metadata: DesignCaptureMetadata = revealed === undefined ? {captures} : {captures, login: revealed};
+  if (skipped.length > 0) metadata.skipped = skipped;
   const body = JSON.stringify(metadata, null, 2);
   if (login !== undefined && login.password.length > 0 && jsonValuesContain(metadata, login.password)) {
     throw new Refusal('DESIGN_PASSWORD_LEAK');
@@ -157,6 +179,20 @@ export async function captureScreens(
   }
   await writeFile(join(root, DESIGN_CAPTURE_METADATA_FILE), `${body}\n`, {mode: 0o600});
   return metadata;
+}
+
+function isHtmlScreen(body: string): boolean {
+  const trimmed = body.trim().replace(/^\uFEFF/, '');
+  if (trimmed.length === 0) return false;
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const value = JSON.parse(trimmed) as unknown;
+      if (value !== null && typeof value === 'object') return false;
+    } catch {
+      // texto que só começa com chave continua candidato a HTML
+    }
+  }
+  return /<\/?[A-Za-z!][^>]*>/.test(trimmed);
 }
 
 function joinBase(baseUrl: string, route: string): string {

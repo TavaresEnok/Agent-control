@@ -129,6 +129,39 @@ test('descobre as dez rotas da regua em JSX e em objeto', () => {
   assert.equal(fromJsx[9]?.line, 10);
 });
 
+test('rota com parametro nao abre o texto literal', () => {
+  const jsx = [
+    '<Route path="/p/:projectId" element={<Projeto />} />',
+    '<Route path="/tasks/:id/*" element={<Tarefa />} />',
+    '<Route path="/p/:projectId/tarefas" example="/p/projeto/tarefas" />',
+    '<Route path="/inbox/:id" example={"/inbox/1"} />',
+    '<Route path="/equipe" />',
+    '<Route path="*" />',
+    '<Route path="/files/*" example="/p/:projectId" />',
+  ].join('\n');
+  const objects = [
+    'export const router = [',
+    '  { path: \'/tasks/:id\', element: Tarefa },',
+    '  { path: \'/tasks/:id\', example: \'/tasks/1\' },',
+    '  { example: \'/inbox/1\', path: \'/inbox/:id\' },',
+    '  { path: \'/blog/[...slug]\' },',
+    '  { path: \'/ajustes\' },',
+    '];',
+  ].join('\n');
+  const fromJsx = discoverRoutesFromSource([{path: 'src/App.tsx', text: jsx}]);
+  assert.deepEqual(fromJsx.map(item => item.route), ['/p/projeto/tarefas', '/inbox/1', '/equipe']);
+  const fromObjects = discoverRoutesFromSource([{path: 'src/routes.ts', text: objects}]);
+  assert.deepEqual(fromObjects.map(item => item.route), ['/tasks/1', '/inbox/1', '/ajustes']);
+  const files = discoverRoutesFromSource([
+    {path: 'src/pages/tasks/[id].tsx', text: 'export default function Page(){return null}\n'},
+    {path: 'src/app/p/[projectId]/page.tsx', text: 'export default function Page(){return null}\n'},
+    {path: 'src/app/blog/[...slug]/page.tsx', text: 'export default function Page(){return null}\n'},
+    {path: 'src/app/docs/[[...slug]]/page.tsx', text: 'export default function Page(){return null}\n'},
+    {path: 'src/pages/ajustes.tsx', text: 'export default function Page(){return null}\n'},
+  ]);
+  assert.deepEqual(files.map(item => item.route), ['/ajustes']);
+});
+
 test('estado vazio ausente quando ha lista e nao ha marcador de vazio', () => {
   const lines = [
     'export function Itens() {',

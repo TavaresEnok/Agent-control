@@ -501,6 +501,31 @@ test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do es
   assert.equal(result.confirmations[0]?.finding.measure, undefined);
 });
 
+test('corpo JSON ou nao-HTML nao e tela e nao gera achado', async () => {
+  const kit = harness(false);
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [
+      {file: 'src/Tarefa.tsx', route: '/tasks/1', code: '{"error":"AUTH_REQUIRED"}', captureNote: 'captura'},
+      {file: 'src/Texto.tsx', route: '/texto', code: 'AUTH_REQUIRED', captureNote: 'captura'},
+      screen,
+    ],
+    checklist: loadDesignChecklist().slice(0, 1),
+    rawFindings: [],
+    worker: kit.worker,
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  assert.equal(result.findings.length, 0);
+  assert.equal(result.confirmations.length, 0);
+  assert.deepEqual(result.coverage.map(row => row.file), [screen.file]);
+  assert.equal(kit.events.filter(event => event === 'reserve:specialist').length, 1);
+  assert.match(result.notes.join('\n'), /\/tasks\/1/);
+  assert.match(result.notes.join('\n'), /\/texto/);
+  assert.match(result.notes.join('\n'), /não é tela/);
+});
+
 test('alta sem medida estruturada vira informativa e a razao medida permanece alta', () => {
   assert.equal(clampHighSeverity('alta', null), 'informativa');
   assert.equal(clampHighSeverity('alta', undefined), 'informativa');

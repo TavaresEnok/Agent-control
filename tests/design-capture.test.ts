@@ -191,6 +191,53 @@ test('estado forcado acrescenta a consulta sem apagar rota nem fragmento', async
   }
 });
 
+test('resposta JSON ou texto nao vira captura de tela', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
+  try {
+    const calls: Call[] = [];
+    const bodies = ['{"error":"AUTH_REQUIRED"}', 'not-a-page', '<main>ok</main>'];
+    const driver: DesignCaptureDriver = {
+      async setViewport(width, height) {
+        calls.push({op: 'viewport', width, height});
+      },
+      async emulateMedia(theme) {
+        calls.push({op: 'theme', theme});
+      },
+      async goto(url) {
+        calls.push({op: 'goto', url});
+      },
+      async screenshot(fullPage) {
+        calls.push({op: 'shot', fullPage});
+        return PNG;
+      },
+      async content() {
+        calls.push({op: 'content'});
+        return bodies.shift() ?? '';
+      },
+    };
+    const plans: DesignCapturePlan[] = [
+      {screenId: 'tarefa', route: '/tasks/1', viewport: 375, theme: 'claro', state: 'padrao', fileName: 'tarefa-375-claro-padrao.png'},
+      {screenId: 'texto', route: '/texto', viewport: 768, theme: 'claro', state: 'padrao', fileName: 'texto-768-claro-padrao.png'},
+      {screenId: 'html', route: '/html', viewport: 1440, theme: 'claro', state: 'padrao', fileName: 'html-1440-claro-padrao.png'},
+    ];
+    const dir = join(parent, 'saida');
+    const meta = await captureScreens(driver, BASE, plans, dir);
+    assert.equal(calls.filter(call => call.op === 'shot').length, 1);
+    assert.deepEqual(meta.captures.map(item => item.fileName), ['html-1440-claro-padrao.png']);
+    assert.equal(meta.skipped?.length, 2);
+    assert.equal(meta.skipped?.[0]?.route, '/tasks/1');
+    assert.equal(meta.skipped?.[1]?.route, '/texto');
+    assert.equal(meta.login, undefined);
+    const names = await readdir(dir);
+    assert.deepEqual(names.sort(), [DESIGN_CAPTURE_METADATA_FILE, 'html-1440-claro-padrao.png']);
+    const raw = await readFile(join(dir, DESIGN_CAPTURE_METADATA_FILE), 'utf8');
+    assert.deepEqual(JSON.parse(raw), meta);
+    assert.equal(raw.includes('AUTH_REQUIRED'), true);
+  } finally {
+    await rm(parent, {recursive: true, force: true});
+  }
+});
+
 test('recusa senha no metadado, nome inseguro e driver sem preenchimento', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
   try {

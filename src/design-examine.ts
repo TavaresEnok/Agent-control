@@ -171,6 +171,17 @@ function examMeasure(finding: DesignExamFinding, rawFindings: readonly DesignRaw
   return undefined;
 }
 
+function isNonHtmlResponse(code: string): boolean {
+  const trimmed = code.trim().replace(/^\uFEFF/, '');
+  if (trimmed.length === 0 || looksLikeSource(trimmed)) return false;
+  return !/<\/?[A-Za-z!][^>]*>/.test(trimmed);
+}
+
+function looksLikeSource(text: string): boolean {
+  if (/\b(?:function|export|const|let|var|import|return|class|interface|type)\b/.test(text)) return true;
+  return /[.#]?[A-Za-z_-][\w-]*\s*\{/.test(text);
+}
+
 function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').replaceAll(' | ', ' / ').trim();
 }
@@ -318,6 +329,10 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
   for (const screen of input.screens) {
+    if (isNonHtmlResponse(screen.code)) {
+      notes.push(`A resposta de ${oneLine(screen.route)} não é tela: o corpo não é HTML.`);
+      continue;
+    }
     const seat = await input.reserve('specialist');
     let output = '';
     try {

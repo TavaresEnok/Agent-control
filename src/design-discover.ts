@@ -52,12 +52,13 @@ const EMPTY_MARKER = /data-empty(?![A-Za-z0-9-])|Nenhum item|empty-state|length\
  * Rotas de React Router, Next (pages e app), Vue Router e GoRoute.
  * Não devolve caminho que o texto ou o arquivo de página não declaram.
  * Grupos `(nome)` e slots `@slot` do App Router não entram na URL.
+ * Rota com `:param`, `*` ou segmento `[id]` só entra se a mesma declaração tiver example concreto.
  */
 export function discoverRoutesFromSource(files: readonly {path: string; text: string}[]): DiscoveredRoute[] {
   const hits: RouteHit[] = [];
   for (const file of files) {
     const next = nextRoute(file.path);
-    if (next !== null) {
+    if (next !== null && !isDynamicRoute(next)) {
       hits.push({file: file.path, route: next, line: 1, index: -1});
     }
     hits.push(...routesInText(file.path, file.text));
@@ -469,7 +470,7 @@ function collectJsxRoutes(file: string, masked: string, hits: RouteHit[], consum
     const tag = masked.slice(start, tagEnd);
     const pathMatch = /\bpath\s*=\s*(?:\{\s*)?(['"`])([^'"`]+)\1/.exec(tag);
     if (pathMatch === null || pathMatch.index === undefined) continue;
-    const route = normalizeRoute(pathMatch[2] ?? '');
+    const route = routeFromDeclaration(pathMatch[2] ?? '', tag);
     if (route === null) continue;
     const index = start + pathMatch.index;
     consumed.add(index);
@@ -487,7 +488,7 @@ function collectGoRoutes(file: string, masked: string, hits: RouteHit[], consume
     const window = masked.slice(from, limit);
     const pathMatch = /\bpath\s*:\s*(['"`])([^'"`]+)\1/.exec(window);
     if (pathMatch === null || pathMatch.index === undefined) continue;
-    const route = normalizeRoute(pathMatch[2] ?? '');
+    const route = routeFromDeclaration(pathMatch[2] ?? '', window);
     if (route === null) continue;
     const index = from + pathMatch.index;
     if (consumed.has(index)) continue;
@@ -501,7 +502,7 @@ function collectObjectPaths(file: string, masked: string, hits: RouteHit[], cons
   let found: RegExpExecArray | null;
   while ((found = pattern.exec(masked)) !== null) {
     if (consumed.has(found.index)) continue;
-    const route = normalizeRoute(found[2] ?? '');
+    const route = routeFromDeclaration(found[2] ?? '', objectSlice(masked, found.index));
     if (route === null) continue;
     consumed.add(found.index);
     hits.push({file, route, line: lineAt(masked, found.index), index: found.index});
@@ -599,6 +600,42 @@ function maskComments(text: string): string {
     index += 1;
   }
   return chars.join('');
+}
+
+function routeFromDeclaration(pattern: string, declaration: string): string | null {
+  const route = normalizeRoute(pattern);
+  if (route === null) return null;
+  if (!isDynamicRoute(route)) return route;
+  const exampleRaw = declaredExample(declaration);
+  if (exampleRaw === null) return null;
+  const example = normalizeRoute(exampleRaw);
+  if (example === null || isDynamicRoute(example)) return null;
+  return example;
+}
+
+function isDynamicRoute(route: string): boolean {
+  const path = route.split(/[?#]/)[0] ?? route;
+  return /[:*]|\[[^\]]*\]/.test(path);
+}
+
+function declaredExample(source: string): string | null {
+  const match = /\bexample\s*[:=]\s*(?:\{\s*)?(['"`])([^'"`]+)\1/.exec(source);
+  return match?.[2] ?? null;
+}
+
+function objectSlice(text: string, index: number): string {
+  const start = text.lastIndexOf('{', index);
+  const from = start < 0 ? index : start;
+  let depth = 0;
+  for (let cursor = from; cursor < text.length; cursor += 1) {
+    const char = text[cursor];
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(from, cursor + 1);
+    }
+  }
+  return text.slice(from, Math.min(text.length, index + 500));
 }
 
 function normalizeRoute(raw: string): string | null {
