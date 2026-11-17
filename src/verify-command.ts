@@ -7,7 +7,7 @@ import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
-import {readMountedCredentialSecrets} from './native-worker-security.ts';
+import {personalAccountRoot} from './personal-health.ts';
 import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
@@ -347,31 +347,16 @@ function claimableDatabaseStamp(dataDirectory: string, databasesDirectory: strin
   return stamp;
 }
 
-async function claimExamDatabase(dataDirectory: string, databasesDirectory: string): Promise<string | undefined> {
+async function claimExamDatabase(dataDirectory: string, databasesDirectory: string, runId: string): Promise<string | undefined> {
   const stamp = claimableDatabaseStamp(dataDirectory, databasesDirectory);
   if (!stamp) return undefined;
-  await claimVerifyDatabaseStamp(dataDirectory, stamp);
+  await claimVerifyDatabaseStamp(dataDirectory, stamp, runId);
   return stamp;
 }
 
-async function releaseExamDatabase(dataDirectory: string, stamp: string | undefined): Promise<void> {
+async function releaseExamDatabase(dataDirectory: string, stamp: string | undefined, runId: string): Promise<void> {
   if (!stamp) return;
-  await releaseVerifyDatabaseStamp(dataDirectory, stamp);
-}
-
-async function readOptionalAccountSecrets(accountRoot: string | undefined): Promise<readonly string[] | undefined> {
-  if (!accountRoot) return undefined;
-  const found: string[] = [];
-  for (const provider of ['codex', 'claude', 'grok'] as const) {
-    try {
-      for (const secret of await readMountedCredentialSecrets(provider, accountRoot)) {
-        if (!found.includes(secret)) found.push(secret);
-      }
-    } catch {
-      // A missing auth.json must not fail the exam. Do not log the credential.
-    }
-  }
-  return found.length > 0 ? found : undefined;
+  await releaseVerifyDatabaseStamp(dataDirectory, stamp, runId);
 }
 
 async function homologationContainers(installationPath: string | undefined): Promise<readonly string[]> {
@@ -475,8 +460,7 @@ async function runJob(input: {
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
-      const accountSecrets = await readOptionalAccountSecrets(ready.accountRoot);
-      const verification: SecurityVerificationInput & {modelCallBudget?: number; accountSecrets?: readonly string[]} = {
+      const verification: SecurityVerificationInput & {modelCallBudget?: number} = {
         ledger: ready.ledger,
         principal: ready.principal,
         authority: ready.authority,
@@ -493,7 +477,7 @@ async function runJob(input: {
         notes: state.note ? [state.note] : undefined,
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
-      if (accountSecrets) verification.accountSecrets = accountSecrets;
+      if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
       await runSecurityVerification(verification);
       state.status = 'done';
       state.phase = 'done';
@@ -512,7 +496,7 @@ async function runJob(input: {
       throw error;
     }
   } finally {
-    try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp); }
+    try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
     catch { /* the exam result stays visible */ }
     try { await releaseRunningLock(input.lockPath, id); }
     catch { /* the exam result stays visible */ }
@@ -561,7 +545,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   let databaseStamp: string | undefined;
   try {
     if (network && container) await attachHomologation(network, container, networkRunner);
-    databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory);
+    databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory, id);
     const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
     const progressPath = join(progressDir, `${id}.json`);
     await writePrivateFile(progressPath, renderProgress(state));
@@ -572,7 +556,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     return {id, status: 'running', phase: 'ferramentas'};
   } catch (error) {
     if (!started) {
-      try { await releaseExamDatabase(ready.dataDirectory, databaseStamp); } catch { /* keep the original error */ }
+      try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }
       try { await releaseRunningLock(lockPath, id); } catch { /* keep the original error */ }
       if (network && container) {
         try { await removeHomologationNetwork(network, container, networkRunner); } catch { /* keep the original error */ }
@@ -741,6 +725,7 @@ export async function resolvePersonalVerification(argv: readonly string[]): Prom
         projectId: project.id,
         url: parsed.url,
         dataDirectory: config.dataDirectory,
+        accountRoot: personalAccountRoot(config),
         repoPath: project.repo,
         commit,
         ledger,

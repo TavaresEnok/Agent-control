@@ -283,8 +283,9 @@ async function main(){
      }
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
      const {beginPersonalVerification}=await import('./verify-command.ts');
+     const {personalAccountRoot}=await import('./personal-health.ts');
      const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
-     return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path});
+     return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);

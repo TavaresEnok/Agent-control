@@ -1,11 +1,12 @@
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {lstat, readFile, realpath} from 'node:fs/promises';
-import {isAbsolute, relative, resolve, sep} from 'node:path';
+import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {promisify} from 'node:util';
 import {Capacity, type Grant} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
 import {Ledger, type Intent} from './ledger.ts';
+import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
@@ -42,8 +43,10 @@ export type SecurityVerificationInput = {
   modelCalls?: {count: number};
   /** Absent uses DEFAULT_MODEL_CALL_BUDGET. Zero, negative, and non-finite values are refused. */
   modelCallBudget?: number;
-  /** Redacted out of every task sent to a provider. Values shorter than 4 characters are ignored. */
+  /** Redacted from every outbound task and from worker output before findings are parsed. Values shorter than 4 characters are ignored. */
   accountSecrets?: readonly string[];
+  /** Accounts folder. Secrets are read only from the reserved account directory, after the seat exists. */
+  accountRoot?: string;
   notes?: readonly string[];
 };
 
@@ -357,6 +360,7 @@ async function reserveAndRun(
   try {
     const seat = await readSeat(input.ledger, grant);
     if (forbiddenProvider && seat.provider === forbiddenProvider) throw new Refusal('REVIEWER_PROVIDER_MUST_DIFFER');
+    const secrets = await reservedAccountSecrets(input.accountRoot, seat.accountId, input.accountSecrets);
     const call = VerifyWorkerCall.parse({
       role,
       provider: seat.provider,
@@ -365,12 +369,12 @@ async function reserveAndRun(
       model: seat.model,
       grantId: seat.grantId,
       intentId,
-      task: redactText(task, input.accountSecrets ?? []).slice(0, 100_000),
+      task: redactText(task, secrets).slice(0, 100_000),
       repo: input.repoPath,
       writePaths: [] as const,
     });
     trackedCalls.count += 1;
-    const output = await input.worker.run(call);
+    const output = redactText(await input.worker.run(call), secrets);
     return {seat, output};
   } catch (error) {
     thrown = error;
@@ -391,6 +395,32 @@ async function readSeat(ledger: Ledger, grant: Grant): Promise<Seat> {
   )).rows[0];
   if (!row?.provider || !row.model || !grant.account_id || !grant.profile_id) throw new Refusal('GRANT_FORBIDDEN', 403);
   return {provider: String(row.provider), model: String(row.model), accountId: grant.account_id, profileId: grant.profile_id, grantId: grant.id};
+}
+
+/** One child of the accounts folder. The parent and every sibling stay unread. */
+function reservedAccountDirectory(accountsFolder: string | undefined, accountId: string): string | undefined {
+  if (!accountsFolder) return undefined;
+  if (accountId.length === 0 || accountId.length > 240 || accountId === '.' || accountId === '..' || accountId.includes('..') || accountId.includes('/') || accountId.includes('\\') || accountId.includes('\0')) return undefined;
+  const root = resolve(accountsFolder);
+  const accountDir = join(root, accountId);
+  if (relative(root, accountDir) !== accountId) return undefined;
+  return accountDir;
+}
+
+async function reservedAccountSecrets(accountsFolder: string | undefined, accountId: string, explicit: readonly string[] | undefined): Promise<readonly string[]> {
+  const found = [...(explicit ?? [])];
+  const accountDir = reservedAccountDirectory(accountsFolder, accountId);
+  if (!accountDir) return found;
+  for (const provider of ['codex', 'claude', 'grok'] as const) {
+    try {
+      for (const secret of await readMountedCredentialSecrets(provider, accountDir)) {
+        if (!found.includes(secret)) found.push(secret);
+      }
+    } catch {
+      // A missing auth.json must not fail the exam. Do not log the credential.
+    }
+  }
+  return found;
 }
 
 function mapTask(files: readonly string[]): string {
