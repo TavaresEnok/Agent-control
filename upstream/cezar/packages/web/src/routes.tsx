@@ -22,6 +22,7 @@ import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
 import { ConversaRoute } from './routes/conversa'
 import { EquipeRoute } from './routes/equipe'
+import { VerificacoesRoute } from './routes/verificacoes'
 import { NovoProjetoRoute } from './routes/novo-projeto'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
@@ -316,6 +317,8 @@ const PAGE_TITLE_ROUTES = [
         { pattern: '/novo-projeto', pageLabel: 'Novo projeto' },
         { pattern: '/tarefas', pageLabel: 'Tarefas' },
         { pattern: '/equipe', pageLabel: 'Equipe' },
+        { pattern: '/verificacoes', pageLabel: 'Verificações' },
+        { pattern: '/verificacoes/:runId', pageLabel: 'Verificações' },
       ]
     : []),
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
@@ -380,6 +383,12 @@ export const AppRoutes = memo(function AppRoutes() {
         )}
         {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
           <Route path="equipe" element={<EquipeRoute />} />
+        )}
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
+          <Route path="verificacoes" element={<VerificacoesRoute />} />
+        )}
+        {import.meta.env.VITE_AGENT_CONTROL_MANAGED === '1' && (
+          <Route path="verificacoes/:runId" element={<VerificacoesRoute />} />
         )}
         <Route path="new" element={<NewTaskProjectRoute />} />
 

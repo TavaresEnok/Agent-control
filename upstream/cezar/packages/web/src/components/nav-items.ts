@@ -6,6 +6,7 @@ import {
   MessageSquareIcon,
   UsersIcon,
   SettingsIcon,
+  ShieldCheckIcon,
   SparklesIcon,
   WorkflowIcon,
   ZapIcon,
@@ -68,6 +69,7 @@ function listedNavItems(): readonly NavItem[] {
     { to: '/tarefas', label: 'Tarefas', icon: ListChecksIcon, match: ['/tarefas', '/tasks', '/compare'], badge: 'tasks-unread' },
     { to: '/equipe', label: 'Equipe', icon: UsersIcon, match: ['/equipe'] },
     { to: '/novo-projeto', label: 'Novo projeto', icon: FolderPlusIcon, match: ['/novo-projeto'] },
+    { to: '/verificacoes', label: 'Verificações', icon: ShieldCheckIcon, match: ['/verificacoes'] },
     { to: '/settings', label: 'Configurações', icon: SettingsIcon, match: ['/settings'] },
   ]
 }

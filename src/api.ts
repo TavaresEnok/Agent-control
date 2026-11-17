@@ -38,6 +38,9 @@ import {resolve,sep} from 'node:path';
 import {parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig} from './personal-qa-config.ts';
 import {applyPersonalCombo,listPersonalCombos,PersonalCombo,projectComboName,writeOwnerCombo} from './personal-combos.ts';
 import {personalAccountStatus,releasePersonalAccount} from './personal-accounts.ts';
+import {registerVerificationRoutes} from './verify-api.ts';
+import {listSecurityReports,readAchadoMarkdown,readSecurityReport} from './verify-report.ts';
+import {recheckFindings,requestCorrection} from './verify-remediate.ts';
 import {archivedInView,childRunTaskId,clipPanelTitle,planTaskDisplayTitle,type PlanTaskSummary} from './personal-run-title.ts';
 
 // Only immutable public UI files are served without a session. Never delegate an
@@ -392,6 +395,11 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     await releasePersonalAccount(ledger.pool,personalPanel.projectId,Id.parse(c.req.param('accountId')));
     c.header('Cache-Control','no-store');
     return c.json({released:true});
+  });
+  registerVerificationRoutes(app,{
+    ledger,requireInstallationOwner,personalPanel,manager,
+    listSecurityReports,readSecurityReport,readAchadoMarkdown,
+    requestCorrection,recheckFindings,
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;
