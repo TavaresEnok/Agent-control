@@ -92,8 +92,9 @@ Formato de um achado:
 | 7 | Desempenho | médio | onde é lento e se piorou |
 | 8 | Documentação viva | médio | mantém o contexto dos agentes certo, o que reduz erro deles |
 | 9 | Conformidade (LGPD e licenças) | médio | importa se há dados de clientes ou se o software é vendido |
+| 10 | Design e experiência de uso | alto para sistemas com telas | pedido do titular em 17/11/2026; construído em paralelo ao módulo 1 |
 
-Acessibilidade entra no QA pesado e não ganha módulo próprio. Custo de nuvem fica de fora: os sistemas rodam em servidor próprio.
+Acessibilidade básica (axe-core) roda no QA pesado; a avaliação completa de acessibilidade e design fica no módulo 10. Custo de nuvem fica de fora: os sistemas rodam em servidor próprio.
 
 ### 1. Validador de segurança
 
@@ -219,6 +220,22 @@ Ferramentas:
 - Presidio (MIT), com regras próprias para CPF.
 
 O suporte a CPF no Presidio não foi confirmado.
+
+### 10. Design e experiência de uso
+
+Entrega, para cada tela do sistema em celular, tablet e computador, capturas, notas e achados de design com prova visual: inconsistência visual (cores, fontes, espaçamentos e componentes fora do padrão), contraste e acessibilidade (WCAG 2.2 AA), hierarquia e leitura, estados esquecidos (vazio, carregando, erro, sucesso, desabilitado), textos da interface, navegação e fluxos, comportamento em telas pequenas, tema escuro, e desempenho percebido. Cada achado traz a captura com a área marcada, a regra violada e a correção sugerida (com valores: cor, tamanho, espaçamento). A correção vai pelo mesmo botão "Corrigir" do módulo 1.
+
+| Fase | Ferramentas | O que prova |
+|---|---|---|
+| Descoberta das telas | rotas do código e navegação com Playwright (Apache-2.0) | nenhuma tela fica sem exame; tabela de cobertura por tela |
+| Capturas | Playwright em 375, 768 e 1440 px, tema claro e escuro, estados forçados | o examinador vê a tela de verdade, não só o código |
+| Acessibilidade | axe-core (MPL-2.0) via `@axe-core/playwright`; pa11y (LGPL-3.0); navegação só por teclado | WCAG 2.2 AA, foco visível, rótulos, contraste |
+| Inventário visual | `@projectwallace/css-analyzer` (MIT) e estilos computados coletados pelo Playwright; Stylelint (MIT) | quantas cores, fontes, tamanhos e sombras diferentes existem; o que foge dos tokens |
+| Qualidade percebida | Lighthouse CI (Apache-2.0) | desempenho, CLS, boas práticas por tela |
+| Regressão visual | `toHaveScreenshot` do Playwright | depois da correção, só o que devia mudar mudou |
+| Exame por IA (multimodal) | as skills de design já sincronizadas nas contas Claude: `design-critique`, `accessibility-audit`, `design-elevation`, `ux-writing`, `frontend-design`; heurísticas de Nielsen, leis de UX, WCAG 2.2 | avaliação tela a tela com captura e código lado a lado |
+
+O verificador de outro provedor confirma cada achado olhando a mesma captura. Opinião de gosto sem regra não vira achado de gravidade alta.
 
 ## Skills e catálogos conferidos
 
