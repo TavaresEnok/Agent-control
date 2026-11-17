@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {chmod, mkdir, mkdtemp, realpath, rm, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createApi} from '../src/api.ts';
@@ -173,5 +173,57 @@ test('a rota propaga Refusal 409 de uma execução já em andamento',async()=>{
   assert.equal(started,true);
   assert.equal(response.status,409);
   assert.deepEqual(await response.json(),{error:'VERIFY_ALREADY_RUNNING'});
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('DELETE descarta o relatório e o diretório de ferramentas, recusa outro dono e um symlink',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'ac-verify-discard-')));
+ const runId='00000000-0000-4000-8000-0000000000ab';
+ const directoryName='20261117-010203-00000000-seguranca';
+ const outside=join(root,'fora');
+ try{
+  const project=join(root,'verificacoes',primaryProjectId);
+  const report=join(project,directoryName);
+  const tools=join(project,'ferramentas',runId);
+  await mkdir(report,{recursive:true,mode:0o700});
+  await mkdir(tools,{recursive:true,mode:0o700});
+  await chmod(join(root,'verificacoes'),0o700);
+  await chmod(project,0o700);
+  await chmod(join(project,'ferramentas'),0o700);
+  await writeFile(join(report,'run.json'),`${JSON.stringify({
+   id:runId,directoryName,createdAt:'2026-11-17T01:02:03.000Z',
+   counts:{alta:0,media:0,baixa:0,informativa:0},note:'descartar',
+  })}\n`,{mode:0o600});
+  await writeFile(join(tools,'gitleaks.json'),'{"secret":"x"}\n',{mode:0o600});
+  const headers={authorization:'Bearer owner'};
+  const path=`/api/v1/ac/personal/verificacoes/${runId}`;
+  const app=api(root,'primary');
+  const stranger=await api(root,'none').request(path,{method:'DELETE',headers});
+  assert.equal(stranger.status,403);
+  assert.deepEqual(await stranger.json(),{error:'PROJECT_OWNER_REQUIRED'});
+  assert.equal((await stat(report)).isDirectory(),true);
+  assert.equal((await stat(tools)).isDirectory(),true);
+  assert.equal((await app.request(path,{method:'DELETE'})).status,401);
+  const ledger={pool:{query:async()=>({rowCount:1,rows:[]})}} as unknown as Ledger;
+  const locked=createApi(ledger,{projectId,nativeExecutionReady:false} as CezarRuntime,async()=>'owner',()=>undefined,{configurationControl:{ledger} as Control});
+  assert.equal((await locked.request(path,{method:'DELETE',headers})).status,404);
+  const removed=await app.request(path,{method:'DELETE',headers});
+  assert.equal(removed.status,200);
+  assert.equal(removed.headers.get('cache-control'),'no-store');
+  assert.deepEqual(await removed.json(),{removed:true});
+  await assert.rejects(stat(report));
+  await assert.rejects(stat(tools));
+  const again=await app.request(path,{method:'DELETE',headers});
+  assert.equal(again.status,200);
+  assert.deepEqual(await again.json(),{removed:true});
+  await mkdir(outside,{recursive:true});
+  await writeFile(join(outside,'gitleaks.json'),'fora\n');
+  await mkdir(join(project,'ferramentas'),{recursive:true});
+  await symlink(outside,join(project,'ferramentas',runId));
+  const refused=await app.request(path,{method:'DELETE',headers});
+  assert.equal(refused.status,403);
+  assert.deepEqual(await refused.json(),{error:'VERIFY_PATH_FORBIDDEN'});
+  assert.equal(await readFile(join(outside,'gitleaks.json'),'utf8'),'fora\n');
+  assert.equal((await lstat(join(project,'ferramentas',runId))).isSymbolicLink(),true);
  }finally{await rm(root,{recursive:true,force:true});}
 });

@@ -5,7 +5,7 @@ import {z} from 'zod';
 import {Authority, Id, Refusal} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
-import {listSecurityReports, readAchadoMarkdown, readSecurityReport} from './verify-report.ts';
+import {listSecurityReports, readAchadoMarkdown, readSecurityReport, removeSecurityReport} from './verify-report.ts';
 import {recheckFindings, requestCorrection} from './verify-remediate.ts';
 import {readVerificationProgress} from './verify-command.ts';
 
@@ -190,6 +190,14 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
       throw error;
     }
     return c.json(reportDetail(detail));
+  });
+
+  app.delete('/api/v1/ac/personal/verificacoes/:runId', async c => {
+    c.header('Cache-Control', 'no-store');
+    const {panel} = await ownerPanel(c, deps);
+    const runId = Id.parse(c.req.param('runId'));
+    await removeSecurityReport(panel.dataDirectory, panel.projectId, runId);
+    return c.json({removed: true});
   });
 
   app.get('/api/v1/ac/personal/verificacoes/:runId/achados/:achadoId', async c => {

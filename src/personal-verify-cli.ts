@@ -1,10 +1,12 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {Refusal} from './contracts.ts';
+import {Id,Refusal} from './contracts.ts';
+import {loadInstallation} from './installation.ts';
 import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
+import {removeSecurityReport} from './verify-report.ts';
 
 const messages:Record<string,string>={
- VERIFY_USAGE:'Uso: npm run personal:verify -- <instalação.json> <projectId> [--url <homologação>]',
+ VERIFY_USAGE:'Uso: npm run personal:verify -- <instalação.json> <projectId> [--url <homologação>] [--descartar <runId>]',
  PERSONAL_ACTIVATION_REQUIRED:'A verificação só roda numa instalação pessoal.',
  NOT_FOUND:'Projeto não encontrado.',
  VERIFY_CONTEXT_REQUIRED:'O projeto não tem um contexto para verificar.',
@@ -61,7 +63,48 @@ export async function releasePersonalVerifyLease(ledger:LeasePool,authority:Leas
  await ledger.pool.query(releaseLeaseSql,[authority.contextId,authority.instanceId,authority.epoch]);
 }
 
+function parseDiscardArgs(argv:readonly string[]):{installationPath:string;projectId:string;runId:string}|undefined{
+ if(!argv.includes('--descartar'))return undefined;
+ const positional:string[]=[];
+ let runId:string|undefined;
+ for(let index=0;index<argv.length;index+=1){
+  const arg=argv[index]??'';
+  if(arg==='--descartar'){
+   const value=argv[index+1];
+   if(runId!==undefined||value===undefined||value.startsWith('--'))throw new Refusal('VERIFY_USAGE');
+   runId=value;
+   index+=1;
+   continue;
+  }
+  if(arg.startsWith('--'))throw new Refusal('VERIFY_USAGE');
+  positional.push(arg);
+ }
+ const installationPath=positional[0];
+ const projectId=positional[1];
+ if(!installationPath||!projectId||!runId||positional.length!==2)throw new Refusal('VERIFY_USAGE');
+ if(!Id.safeParse(projectId).success)throw new Refusal('NOT_FOUND',404);
+ if(!Id.safeParse(runId).success)throw new Refusal('VERIFY_USAGE');
+ return {installationPath,projectId,runId};
+}
+
+/** Remove the saved report for --descartar. Returns false when the flag is absent. The exam starter is not called. */
+export async function discardPersonalVerification(argv:readonly string[],beginPersonalVerification?:(...args:never[])=>Promise<unknown>):Promise<boolean>{
+ const parsed=parseDiscardArgs(argv);
+ if(!parsed)return false;
+ const config=await loadInstallation(resolve(parsed.installationPath));
+ if(config.activation!=='personal')throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+ const project=[config.project,...config.projects].find(item=>item.id===parsed.projectId);
+ if(!project)throw new Refusal('NOT_FOUND',404);
+ await removeSecurityReport(config.dataDirectory,project.id,parsed.runId);
+ void beginPersonalVerification;
+ return true;
+}
+
 async function main(){
+ if(await discardPersonalVerification(process.argv.slice(2))){
+  console.log('Relatório descartado.');
+  process.exit(0);
+ }
  const resolved=await resolvePersonalVerification(process.argv.slice(2));
  if(!resolved.input.ledger||!resolved.input.authority)fail(new Refusal('VERIFY_CONTEXT_REQUIRED',409));
  const ledger=resolved.input.ledger;
