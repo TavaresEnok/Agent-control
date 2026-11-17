@@ -94,12 +94,18 @@ test('a cópia do exame perde config hostil e não segue symlink', async () => {
     await writeFile(join(root, 'nested', '.Grok', 'hooks.json'), '{}\n');
     await writeFile(join(root, 'GROK.md'), 'hooks\n');
     await writeFile(join(root, 'CLAUDE.md'), 'project\n');
+    await writeFile(join(root, 'CLAUDE.local.md'), 'local\n');
     await mkdir(join(root, 'docs'));
     await writeFile(join(root, 'docs', 'Agents.md'), 'project\n');
+    await writeFile(join(root, 'docs', 'Claude.local.md'), 'nested local\n');
     await writeFile(join(root, '.mcp.json'), '{}\n');
     await writeFile(join(root, '.MCP.JSON'), '{}\n');
     await mkdir(join(root, 'lib', '.cursor'), {recursive: true});
     await writeFile(join(root, 'lib', '.cursor', 'rules'), 'x\n');
+    await mkdir(join(root, '.agents'));
+    await writeFile(join(root, '.agents', 'x.md'), 'a\n');
+    await mkdir(join(root, 'nested', '.Agents'));
+    await writeFile(join(root, 'nested', '.Agents', 'y.md'), 'b\n');
     await writeFile(join(root, 'claude.md.bak'), 'not hostile\n');
     await symlink(outside, join(root, '.codex'));
     await symlink(join(outside, 'kept.txt'), join(root, 'CLAUDE.md.link'));
@@ -113,14 +119,15 @@ test('a cópia do exame perde config hostil e não segue symlink', async () => {
       join(root, '.Claude'), join(root, 'nested', '.Codex'), join(root, 'nested', '.Codex', 'config.toml'),
       join(root, 'nested', '.Grok'), join(root, 'GROK.md'), join(root, 'CLAUDE.md'), join(root, 'docs', 'Agents.md'),
       join(root, '.mcp.json'), join(root, '.MCP.JSON'), join(root, 'lib', '.cursor'), join(root, '.codex'),
+      join(root, 'CLAUDE.local.md'), join(root, 'docs', 'Claude.local.md'),
+      join(root, '.agents'), join(root, '.agents', 'x.md'), join(root, 'nested', '.Agents'), join(root, 'nested', '.Agents', 'y.md'),
+      join(root, 'CLAUDE.md.link'), join(root, 'vendor'), join(root, 'sub', 'alias'),
     ]) await assert.rejects(lstat(path), (error: NodeJS.ErrnoException) => error.code === 'ENOENT');
     assert.equal(await readFile(join(root, 'claude.md.bak'), 'utf8'), 'not hostile\n');
-    assert.equal((await lstat(join(root, 'vendor'))).isSymbolicLink(), true);
-    assert.equal((await lstat(join(root, 'sub', 'alias'))).isSymbolicLink(), true);
+    assert.equal((await lstat(join(root, 'sub'))).isDirectory(), true);
     assert.equal(await readFile(join(outside, 'kept.txt'), 'utf8'), 'outside\n');
     assert.equal(await readFile(join(outside, '.mcp.json'), 'utf8'), '{"mcp":true}\n');
     assert.equal(await readFile(join(outside, '.claude', 'settings.json'), 'utf8'), '{"hooks":true}\n');
-    assert.equal((await lstat(join(root, 'CLAUDE.md.link'))).isSymbolicLink(), true);
   } finally {
     await rm(root, {recursive: true, force: true});
     await rm(outside, {recursive: true, force: true});

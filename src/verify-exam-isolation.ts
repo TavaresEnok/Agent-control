@@ -3,7 +3,7 @@ import {chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, sym
 import {join} from 'node:path';
 
 /** Basenames removed from the exam copy. Match is case-insensitive. */
-const EXAM_HOSTILE_NAMES = new Set(['.claude', '.mcp.json', '.codex', '.grok', '.cursor', 'claude.md', 'agents.md', 'grok.md']);
+const EXAM_HOSTILE_NAMES = new Set(['.claude', '.mcp.json', '.codex', '.grok', '.cursor', 'claude.md', 'agents.md', 'grok.md', 'claude.local.md', '.agents']);
 
 export function isExamHostileName(name: string): boolean {
   return EXAM_HOSTILE_NAMES.has(name.toLowerCase());
@@ -17,12 +17,15 @@ export async function stripExamHostileConfig(root: string): Promise<void> {
   const entries = await readdir(root, {withFileTypes: true});
   for (const entry of entries) {
     const path = join(root, entry.name);
-    if (isExamHostileName(entry.name)) {
-      if (entry.isSymbolicLink()) await unlink(path);
-      else await rm(path, {recursive: true, force: true});
+    if (entry.isSymbolicLink()) {
+      await unlink(path);
       continue;
     }
-    if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+    if (isExamHostileName(entry.name)) {
+      await rm(path, {recursive: true, force: true});
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
     await stripExamHostileConfig(path);
   }
 }
