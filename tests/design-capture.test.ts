@@ -281,6 +281,39 @@ test('resposta JSON ou texto nao vira captura de tela', async () => {
   }
 });
 
+test('JSON embrulhado pelo navegador nao vira captura e uma pagina com texto continua', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
+  try {
+    const bodies = [
+      '<html><body><pre>{"error":"AUTH_REQUIRED"}</pre></body></html>',
+      '<main><h1>Documentação</h1><pre>{"ok":true}</pre></main>',
+    ];
+    const shots: string[] = [];
+    const driver: DesignCaptureDriver = {
+      async setViewport() {},
+      async emulateMedia() {},
+      async goto() {},
+      async screenshot() {
+        shots.push('shot');
+        return PNG;
+      },
+      async content() {
+        return bodies.shift() ?? '';
+      },
+    };
+    const meta = await captureScreens(driver, BASE, [
+      {screenId: 'json', route: '/equipe', viewport: 375, theme: 'claro', state: 'padrao', fileName: 'json-375-claro-padrao.png'},
+      {screenId: 'docs', route: '/docs', viewport: 768, theme: 'claro', state: 'padrao', fileName: 'docs-768-claro-padrao.png'},
+    ], join(parent, 'saida'));
+    assert.deepEqual(shots, ['shot']);
+    assert.deepEqual(meta.captures.map(item => item.route), ['/docs']);
+    assert.equal(meta.skipped?.[0]?.route, '/equipe');
+    assert.equal(meta.skipped?.[0]?.reason, 'nao-e-html');
+  } finally {
+    await rm(parent, {recursive: true, force: true});
+  }
+});
+
 test('recusa senha no metadado, nome inseguro e driver sem preenchimento', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
   try {

@@ -15,9 +15,17 @@ type DesignPage = {
 };
 
 export type DesignBrowserRoute = {
-  request(): {url(): string};
+  request(): {url(): string; resourceType?: () => string};
   abort(errorCode?: string): Promise<void>;
   continue(): Promise<void>;
+  fetch?: () => Promise<DesignBrowserResponse>;
+  fulfill?: (options: {response?: DesignBrowserResponse; status?: number; headers?: Record<string, string>; body?: string}) => Promise<void>;
+};
+
+type DesignBrowserResponse = {
+  status(): number;
+  headers(): Record<string, string>;
+  text(): Promise<string>;
 };
 
 export type DesignBrowserGuardPage = {
@@ -34,6 +42,8 @@ export type DesignBrowserGuard = {
   goto(url: string): Promise<void>;
   fill(selector: string, value: string): Promise<void>;
   afterLogin(): void;
+  /** Raw document when the response is not HTML. Undefined for an HTML page. */
+  documentBody(): string | undefined;
 };
 
 type DesignContext = DesignBrowserGuardContext & {
@@ -78,16 +88,23 @@ export async function installDesignBrowserGuard(
   targetUrl: string,
 ): Promise<DesignBrowserGuard> {
   const {origin} = assertDesignTarget(targetUrl);
+  let rawDocument: string | undefined;
   await context.route('**/*', async (route) => {
     const url = readRequestUrl(route);
-    if (url !== undefined && onDeclaredOrigin(origin, url)) {
-      await route.continue();
+    if (url === undefined || !onDeclaredOrigin(origin, url)) {
+      await route.abort('blockedbyclient');
       return;
     }
-    await route.abort('blockedbyclient');
+    const remembered = await rememberNonHtmlDocument(route);
+    if (remembered.handled) {
+      rawDocument = remembered.body;
+      return;
+    }
+    await route.continue();
   });
   return {
     async goto(url: string) {
+      rawDocument = undefined;
       await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30000});
       assertDesignDestination(targetUrl, page.url());
     },
@@ -98,7 +115,29 @@ export async function installDesignBrowserGuard(
     afterLogin() {
       assertDesignDestination(targetUrl, page.url());
     },
+    documentBody() {
+      return rawDocument;
+    },
   };
+}
+
+function isHtmlContentType(type: string): boolean {
+  const media = type.split(';')[0]?.trim().toLowerCase() ?? '';
+  return media === 'text/html' || media === 'application/xhtml+xml';
+}
+
+async function rememberNonHtmlDocument(route: DesignBrowserRoute): Promise<{handled: boolean; body?: string}> {
+  const kind = route.request().resourceType?.();
+  if (kind !== 'document' || route.fetch === undefined || route.fulfill === undefined) return {handled: false};
+  const response = await route.fetch();
+  const type = response.headers()['content-type'] ?? '';
+  if (isHtmlContentType(type)) {
+    await route.fulfill({response});
+    return {handled: true};
+  }
+  const body = await response.text();
+  await route.fulfill({status: response.status(), headers: response.headers(), body});
+  return {handled: true, body};
 }
 
 async function waitForPaint(page: DesignPage): Promise<void> {
@@ -146,7 +185,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
         return Buffer.from(await page.screenshot({fullPage: true, type: 'png'}));
       },
       async content() {
-        return page.content();
+        return guard.documentBody() ?? await page.content();
       },
       async fill(selector, value) {
         await guard.fill(selector, value);

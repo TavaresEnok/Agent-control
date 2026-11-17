@@ -111,3 +111,34 @@ test('same-origin exam page still navigates, fills, and accepts login', async ()
   await assert.rejects(() => guard.fill('input[name="password"]', PASSWORD), refusal('DESIGN_TARGET_ESCAPE'));
   assert.equal(browser.filled.length, 2);
 });
+
+test('a document response that is JSON is kept as text', async () => {
+  const home = 'http://127.0.0.1:4173/equipe';
+  const landOn = {url: 'about:blank', pending: home};
+  const browser = fakeBrowser(landOn);
+  const guard = await installDesignBrowserGuard(browser.context, browser.page, TARGET);
+  let fulfilled = '';
+  await browser.handler()!({
+    request: () => ({url: () => home, resourceType: () => 'document'}),
+    async abort() {},
+    async continue() {
+      throw new Error('json document must not pass through as a page');
+    },
+    async fetch() {
+      return {
+        status: () => 401,
+        headers: () => ({'content-type': 'application/json; charset=utf-8'}),
+        async text() {
+          return '{"error":"AUTH_REQUIRED"}';
+        },
+      };
+    },
+    async fulfill(options) {
+      fulfilled = options.body ?? '';
+    },
+  });
+  assert.equal(guard.documentBody(), '{"error":"AUTH_REQUIRED"}');
+  assert.equal(fulfilled, '{"error":"AUTH_REQUIRED"}');
+  await guard.goto(TARGET);
+  assert.equal(guard.documentBody(), undefined);
+});

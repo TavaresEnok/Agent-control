@@ -229,15 +229,32 @@ function emptyStateRecords(
 function isHtmlScreen(body: string): boolean {
   const trimmed = body.trim().replace(/^\uFEFF/, '');
   if (trimmed.length === 0) return false;
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      const value = JSON.parse(trimmed) as unknown;
-      if (value !== null && typeof value === 'object') return false;
-    } catch {
-      // texto que só começa com chave continua candidato a HTML
-    }
+  if (isJsonValue(trimmed)) return false;
+  if (!/<\/?[A-Za-z!][^>]*>/.test(trimmed)) return false;
+  return !isJsonValue(visibleMarkupText(trimmed));
+}
+
+function isJsonValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed !== null && typeof parsed === 'object';
+  } catch {
+    return false;
   }
-  return /<\/?[A-Za-z!][^>]*>/.test(trimmed);
+}
+
+function visibleMarkupText(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function joinBase(baseUrl: string, route: string): string {
