@@ -1,0 +1,43 @@
+{
+  "purpose": "Pin das ferramentas da imagem de design. O lockfile npm completo está em design-tools/package-lock.json.",
+  "registry": "https://registry.npmjs.org",
+  "lockfileVersion": 3,
+  "packageLockSha256": "5d5312c0fce660f436dc8292e939d7b8d89001b12cc9f50882c85a0c84c91ee9",
+  "dependencies": {
+    "axe-core": {
+      "version": "4.14.1",
+      "integrity": "sha512-FHfa+lmNjQZfJz1q8wKqIDwC6DExcHt/pkjNQb09a3NPjCKg2rhu5qb2S4r76ASyFNNtuFooJpZe37OgudVGtQ==",
+      "resolved": "https://registry.npmjs.org/axe-core/-/axe-core-4.14.1.tgz"
+    },
+    "@axe-core/playwright": {
+      "version": "4.14.0",
+      "integrity": "sha512-SGUhG5PIHd2eMdpgBF2PyQLOhX+qyDR2PT4cmoS4Qk2ak+jX/rrSvst9l0PGv5WTHolKpUMvVmoHpr4cZgf1RQ==",
+      "resolved": "https://registry.npmjs.org/@axe-core/playwright/-/playwright-4.14.0.tgz"
+    },
+    "pa11y": {
+      "version": "10.0.0",
+      "integrity": "sha512-bgNMoSH/a57sLhlllkKstcI6KRWsHVhBhZyWRbM9Z4uV9+nFsnra213QdO+KPVKD9mRtzQj48510CHLG4BBDZg==",
+      "resolved": "https://registry.npmjs.org/pa11y/-/pa11y-10.0.0.tgz"
+    },
+    "@lhci/cli": {
+      "version": "0.16.1",
+      "integrity": "sha512-Vh3z9Xkcs4ULrl62NTF9a+c9HL9teyD+dq3TueG4p4oo9ypYbPBb3Ht4YvxHzOyr31rFaiuHqdphpnVZs5SXQw==",
+      "resolved": "https://registry.npmjs.org/@lhci/cli/-/cli-0.16.1.tgz"
+    },
+    "@projectwallace/css-analyzer": {
+      "version": "9.9.9",
+      "integrity": "sha512-pUgHk23C4FrZjyRmkzHzNq7mgZ7l8jc8M44XsNqOH/1EwPzupqD5BKK8ED5Dj1jzP2IyYsAJwZqgyrONH1MUFw==",
+      "resolved": "https://registry.npmjs.org/@projectwallace/css-analyzer/-/css-analyzer-9.9.9.tgz"
+    },
+    "stylelint": {
+      "version": "18.0.0",
+      "integrity": "sha512-kI10GsHXQvsH/AcklVZdQgwDuxtHi+A+h1Ujzd7h9LDf3e5jQiLQkWFlPtpynX3E6oVWHG1wo9v6dL0Mr+nnSA==",
+      "resolved": "https://registry.npmjs.org/stylelint/-/stylelint-18.0.0.tgz"
+    }
+  },
+  "transitive": {
+    "lighthouse": "13.6.0",
+    "puppeteer": "25.17.0",
+    "axe-core": "4.14.1"
+  }
+}
