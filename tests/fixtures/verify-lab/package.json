@@ -1,0 +1,8 @@
+{
+  "name": "verify-lab",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "minimist": "0.0.8"
+  }
+}

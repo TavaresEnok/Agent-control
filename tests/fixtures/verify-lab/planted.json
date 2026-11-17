@@ -1,0 +1,15 @@
+{
+  "failures": [
+    {"id": "sql-concat", "file": "src/store.js"},
+    {"id": "admin-sem-autorizacao", "file": "src/app.js"},
+    {"id": "path-join-entrada", "file": "src/files.js"},
+    {"id": "dockerfile-root", "file": "Dockerfile"},
+    {"id": "minimist-0-0-8", "file": "package.json"},
+    {"id": "segredo-historico", "file": "src/historico.js"}
+  ],
+  "falsePositives": [
+    {"id": "sql-placeholder", "file": "src/store.js"},
+    {"id": "comentario-didatico", "file": "src/notes.js"},
+    {"id": "dockerfile-node", "file": "Dockerfile.safe"}
+  ]
+}
