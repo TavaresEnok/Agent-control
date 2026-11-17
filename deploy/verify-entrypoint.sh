@@ -81,54 +81,83 @@ export TRIVY_CACHE_DIR=/databases/trivy
 
 cd /output
 
-run() {
+# record_tool
+# 127 só quando command -v falha. Arquivo ausente, vazio, [] ou {} não é achado.
+record_tool() {
   name=$1
-  shift
+  bin=$2
+  report=$3
+  shift 3
+  outdir=${VERIFY_OUTPUT:-/output}
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    printf '%s\n' 127 >"$outdir/${name}.code"
+    return 0
+  fi
   code=0
-  "$@" >"/output/${name}.stdout" 2>"/output/${name}.stderr" || code=$?
-  printf '%s\n' "$code" >"/output/${name}.code"
+  "$@" >"$outdir/${name}.stdout" 2>"$outdir/${name}.stderr" || code=$?
+  if report_has_finding "$report"; then
+    if [ "$code" -eq 127 ]; then
+      code=1
+    fi
+  else
+    code=0
+  fi
+  printf '%s\n' "$code" >"$outdir/${name}.code"
+  return 0
 }
 
+report_has_finding() {
+  file=$1
+  if [ ! -f "$file" ]; then
+    return 1
+  fi
+  body=$(tr -d '[:space:]' < "$file" || true)
+  if [ -z "$body" ] || [ "$body" = '[]' ] || [ "$body" = '{}' ]; then
+    return 1
+  fi
+  return 0
+}
+# end record_tool
+
 if [ -d /repository/.git ]; then
-  run gitleaks gitleaks detect --source /repository --report-format json --report-path /output/gitleaks.json \
+  record_tool gitleaks gitleaks /output/gitleaks.json gitleaks detect --source /repository --report-format json --report-path /output/gitleaks.json \
     --exit-code 0 --no-banner --redact --log-level error
 else
-  run gitleaks gitleaks detect --no-git --source /repository --report-format json --report-path /output/gitleaks.json \
+  record_tool gitleaks gitleaks /output/gitleaks.json gitleaks detect --no-git --source /repository --report-format json --report-path /output/gitleaks.json \
     --exit-code 0 --no-banner --redact --log-level error
 fi
 
-run osv-scanner osv-scanner scan source --offline --recursive --allow-no-lockfiles --no-resolve \
+record_tool osv-scanner osv-scanner /output/osv.json osv-scanner scan source --offline --recursive --allow-no-lockfiles --no-resolve \
   --format json --output-file /output/osv.json --verbosity error /repository
 
-run syft syft scan dir:/repository -q -o cyclonedx-json=/output/syft.cdx.json
+record_tool syft syft /output/syft.cdx.json syft scan dir:/repository -q -o cyclonedx-json=/output/syft.cdx.json
 
-run grype grype dir:/repository -q -o json --file /output/grype.json
+record_tool grype grype /output/grype.json grype dir:/repository -q -o json --file /output/grype.json
 
-run opengrep opengrep scan --disable-version-check --no-error --quiet --jobs=2 \
+record_tool opengrep opengrep /output/opengrep.json opengrep scan --disable-version-check --no-error --quiet --jobs=2 \
   --json --json-output=/output/opengrep.json --config /opt/agent-control/rules /repository
 
 find /repository -type f \( -name Dockerfile -o -name 'Dockerfile.*' -o -name '*.Dockerfile' \) ! -name '*.dockerignore' -print > /tmp/dockerfiles
 if [ -s /tmp/dockerfiles ]; then
-  code=0
-  xargs -d '\n' hadolint --no-fail -f json < /tmp/dockerfiles > /output/hadolint.json || code=$?
-  printf '%s\n' "$code" > /output/hadolint.code
+  record_tool hadolint hadolint /output/hadolint.json \
+    sh -c 'xargs -d "\n" hadolint --no-fail -f json < /tmp/dockerfiles > /output/hadolint.json'
 else
   printf '%s\n' '[]' > /output/hadolint.json
-  printf '%s\n' 0 > /output/hadolint.code
+  record_tool hadolint hadolint /output/hadolint.json /bin/true
 fi
 
-run trivy-config trivy config --skip-check-update --skip-version-check --disable-telemetry --quiet \
+record_tool trivy-config trivy /output/trivy-config.json trivy config --skip-check-update --skip-version-check --disable-telemetry --quiet \
   --cache-dir /databases/trivy --format json --output /output/trivy-config.json --timeout 10m /repository
 
 scanners=secret
 if [ -f /databases/trivy/db/trivy.db ]; then
   scanners=vuln,secret
 fi
-run trivy-fs trivy fs --scanners "$scanners" --offline-scan --skip-db-update --skip-java-db-update \
+record_tool trivy-fs trivy /output/trivy-fs.json trivy fs --scanners "$scanners" --offline-scan --skip-db-update --skip-java-db-update \
   --skip-check-update --skip-version-check --disable-telemetry --quiet \
   --cache-dir /databases/trivy --format json --output /output/trivy-fs.json --timeout 15m /repository
 
-run checkov checkov --directory /repository --output json --output-file-path /output \
+record_tool checkov checkov /output/results_json.json checkov --directory /repository --output json --output-file-path /output \
   --soft-fail --skip-download --download-external-modules false --quiet
 
 : > /output/status.json

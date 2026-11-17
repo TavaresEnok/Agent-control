@@ -6,6 +6,7 @@ import pg from 'pg';
 import {Refusal} from './contracts.ts';
 import {loadInstallation} from './installation.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
+import {refreshVerifyDatabases} from './verify-db.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
 type Pair={workerImage:string;toolsImage:string};
@@ -19,6 +20,8 @@ export type MaintenanceDeps={
  openExecutionJobs?:(executorDigest:string)=>Promise<number>;
  /** Planning calls not yet finished. Planning rows do not name their image, so any open call keeps every retired planning image. */
  openPlanningJobs?:()=>Promise<number>;
+ /** Publishes a new vulnerability database. Failure must leave the previous stamp in place. */
+ refreshDatabases?:(dataDirectory:string)=>Promise<void>;
 };
 
 /** A retired execution pair is kept while any job under it is unfinished, or a reviewer, judge or QA job has not had its containers removed. */
@@ -68,6 +71,13 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);
  const lines:string[]=[];
+ const refresh=deps.refreshDatabases??(()=>refreshVerifyDatabases({dataDirectory:config.dataDirectory}).then(()=>undefined));
+ try{
+  await refresh(config.dataDirectory);
+  lines.push('Bases de vulnerabilidade atualizadas.');
+ }catch{
+  lines.push('Bases de vulnerabilidade não atualizadas. A base anterior permanece.');
+ }
  const cache=await docker(['builder','prune','-f','--filter','until=168h']);
  lines.push(cache===0?'Cache de build com mais de 7 dias apagado.':'Cache de build não pôde ser limpo.');
  const boot=config.nativeBootstrap;

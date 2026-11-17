@@ -57,3 +57,5 @@ for eco in npm PyPI Go Maven crates.io RubyGems Packagist NuGet Hex Pub; do
     -o "/databases/osv/osv-scalibr/$eco/all.zip" \
     "$base/$eco/all.zip"
 done
+
+chmod -R a+rX /databases
