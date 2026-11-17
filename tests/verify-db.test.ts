@@ -152,7 +152,11 @@ test('record_tool grava 127 só quando o binário não existe', async () => {
   const fetch = await readFile('deploy/verify-db-fetch.sh', 'utf8');
   assert.match(fetch, /set -eu/);
   assert.match(fetch, /VERIFY_SOCKET_FORBIDDEN/);
-  assert.match(fetch, /chmod -R a\+rX \/databases/);
+  assert.match(fetch, /find \/databases -mindepth 1 -user 65532 -exec chmod a\+rX \{\} \+/);
+  assert.equal(fetch.includes('chmod -R a+rX /databases'), false);
+  assert.match(fetch, /mkdir -p \/tmp\/empty \/databases\/tmp /);
+  assert.match(fetch, /export TMPDIR=\/databases\/tmp/);
+  assert.equal(fetch.includes('export TMPDIR=/tmp'), false);
   const maintenance = await readFile('src/personal-maintenance.ts', 'utf8');
   assert.match(maintenance, /refreshVerifyDatabases/);
   assert.match(maintenance, /Bases de vulnerabilidade atualizadas\./);

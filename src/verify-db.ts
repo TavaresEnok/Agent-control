@@ -4,7 +4,7 @@ import {constants, createReadStream} from 'node:fs';
 import {chmod, lstat, mkdir, open, readdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
-import {verifyDatabaseArguments} from './verify-image.ts';
+import {VERIFY_RUNTIME_BIN, verifyDatabaseArguments} from './verify-image.ts';
 
 export type VerifyDatabaseSnapshot = {
   directory: string;
@@ -82,13 +82,32 @@ async function ensureDatabaseRoot(parent: string): Promise<void> {
   await chmod(parent, 0o700);
 }
 
-async function discardStamp(stamp: string, parent: string): Promise<void> {
+async function discardStamp(stamp: string, parent: string, image: string): Promise<void> {
   const resolvedStamp = resolve(stamp);
   const resolvedParent = resolve(parent);
   if (resolvedStamp === resolvedParent || !resolvedStamp.startsWith(resolvedParent + sep)) {
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
-  await rm(resolvedStamp, {recursive: true, force: true});
+  try {
+    await rm(resolvedStamp, {recursive: true, force: true});
+    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EACCES' && code !== 'EPERM') throw new Error('VERIFY_DB_FETCH_FAILED');
+  }
+  // The downloader runs as uid 65532 and may leave a mode-0700 directory the host user cannot read.
+  const opened = await runCommand([
+    VERIFY_RUNTIME_BIN, 'run', '--rm', '--user', '0', '--network', 'none',
+    '--entrypoint', '/bin/sh',
+    '--mount', `type=bind,src=${resolvedStamp},dst=/databases`,
+    image, '-c', 'chmod -R a+rwX /databases',
+  ], 'ignore');
+  if (opened !== 0) throw new Error('VERIFY_DB_FETCH_FAILED');
+  try {
+    await rm(resolvedStamp, {recursive: true, force: true});
+  } catch {
+    throw new Error('VERIFY_DB_FETCH_FAILED');
+  }
 }
 
 async function createStamp(parent: string, now: Date, image: string): Promise<string> {
@@ -193,14 +212,16 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
     code = 1;
   }
   if (code !== 0) {
-    await discardStamp(stamp, parent);
+    await discardStamp(stamp, parent, image);
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
   try {
+    // chmod(1) returns non-zero for files the downloader owns. The fetch script already
+    // granted a+rX on those. Listing below is what proves the stamp is readable.
+    await runCommand(['chmod', '-R', 'a+rX', stamp], 'ignore');
     const files = await listRegularFiles(stamp);
     const manifestBytes = Buffer.from(JSON.stringify({fetchedAt, files}, null, 2) + '\n', 'utf8');
     await writeFile(join(stamp, 'manifest.json'), manifestBytes, {mode: 0o644, flag: 'wx'});
-    if (await runCommand(['chmod', '-R', 'a+rX', stamp], 'ignore') !== 0) throw new Error('VERIFY_DB_FETCH_FAILED');
     const snapshot = {
       directory: stamp,
       fetchedAt,
@@ -209,7 +230,7 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
     await writePrivateJson(parent, 'current.json', snapshot);
     return snapshot;
   } catch (error) {
-    await discardStamp(stamp, parent);
+    await discardStamp(stamp, parent, image);
     if (error instanceof Error && error.message === 'VERIFY_DB_FETCH_FAILED') throw error;
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }

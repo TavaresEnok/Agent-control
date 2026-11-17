@@ -162,8 +162,24 @@ function finishSnippet(base: string, secrets: readonly string[]): string {
   return (head ? `${head} ${extra}` : extra).slice(0, 180);
 }
 
+/** The exam mounts the repo at /repository. Other absolute paths stay as the tool wrote them. */
+function examPath(file: string): string | null {
+  const cleaned = file.replaceAll('\\', '/').trim();
+  if (!cleaned) return null;
+  let value = cleaned;
+  if (value === '/repository' || value === '/repository/') return null;
+  const prefixed = value.startsWith('/repository/');
+  if (prefixed) value = value.slice('/repository/'.length);
+  if (value.split('/').includes('..')) return null;
+  if (prefixed) {
+    const relativePath = value.split('/').filter(part => part.length > 0 && part !== '.').join('/');
+    return relativePath.length > 0 ? relativePath.slice(0, 400) : null;
+  }
+  return text(file)?.slice(0, 400) ?? null;
+}
+
 function materialize(tool: string, draft: Draft): RawFinding | null {
-  const file = draft.file ? text(draft.file)?.slice(0, 400) ?? null : null;
+  const file = draft.file ? examPath(draft.file) : null;
   if (!file) return null;
   const name = tool.slice(0, 40);
   const rule = (text(draft.rule) ?? 'sem-regra').slice(0, 200);

@@ -34,9 +34,10 @@ if [ ! -d /databases ] || [ ! -w /databases ]; then
   exit 78
 fi
 
-export HOME=/tmp
-export TMPDIR=/tmp
-mkdir -p /tmp/empty /databases/grype /databases/trivy /databases/osv/osv-scalibr
+# /tmp is a 1 GB tmpfs. The Trivy Java database does not fit there, so downloads use the mounted volume.
+mkdir -p /tmp/empty /databases/tmp /databases/grype /databases/trivy /databases/osv/osv-scalibr
+export HOME=/databases/tmp
+export TMPDIR=/databases/tmp
 
 export GRYPE_DB_CACHE_DIR=/databases/grype
 export GRYPE_DB_VALIDATE_AGE=false
@@ -58,4 +59,6 @@ for eco in npm PyPI Go Maven crates.io RubyGems Packagist NuGet Hex Pub; do
     "$base/$eco/all.zip"
 done
 
-chmod -R a+rX /databases
+rm -rf /databases/tmp
+# The mount point is owned by the host, so chmod of /databases itself is refused.
+find /databases -mindepth 1 -user 65532 -exec chmod a+rX {} +

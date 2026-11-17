@@ -24,8 +24,17 @@ function fail(error:unknown):never{
  throw error instanceof Error?error:new Error('A verificação falhou.');
 }
 
+/** The ledger refuses a lease longer than 60s. A model call outlasts that, so renew it until the exam returns. */
+export function keepPersonalVerifyLease<T>(ledger:{heartbeat:(authority:T)=>Promise<unknown>},authority:T,everyMs=5000){
+ const timer=setInterval(()=>{void Promise.resolve(ledger.heartbeat(authority)).catch(()=>undefined);},everyMs);
+ timer.unref();
+ return ()=>clearInterval(timer);
+}
+
 async function main(){
  const resolved=await resolvePersonalVerification(process.argv.slice(2));
+ if(!resolved.input.ledger||!resolved.input.authority)fail(new Refusal('VERIFY_CONTEXT_REQUIRED',409));
+ const stopLease=keepPersonalVerifyLease(resolved.input.ledger,resolved.input.authority);
  let job=Promise.resolve();
  try{
   const started=await beginPersonalVerification({...resolved.input,observe(pending){job=pending;}});
@@ -33,9 +42,11 @@ async function main(){
   await job;
   console.log('Verificação '+started.id+' concluída.');
  }catch(error){
+  stopLease();
   await resolved.close();
   fail(error);
  }
+ stopLease();
  await resolved.close();
  process.exit(0);
 }

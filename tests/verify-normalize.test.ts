@@ -121,3 +121,20 @@ test('normaliza SARIF e JSON sem duplicar fingerprint e sem vazar segredo', () =
     assert.equal(finding.fingerprint, digest({tool: finding.tool, rule: finding.rule, file: finding.file, line: finding.line, cwe: finding.cwe}));
   }
 });
+
+test('o prefixo /repository/ sai do caminho e /main.tf permanece', () => {
+  const result = normalizeToolOutput([
+    {tool: 'hadolint', format: 'json', body: [
+      {file: '/repository/Dockerfile', line: 4, code: 'DL3002', level: 'warning', message: 'ultimo usuario root'},
+      {file: '/repository/../etc/passwd', line: 1, code: 'DL3002', level: 'error', message: 'fora do repositorio'},
+    ]},
+    {tool: 'checkov', format: 'json', body: {results: {failed_checks: [{
+      check_id: 'CKV_AWS_20', file_path: '/main.tf', file_line_range: [12, 12], check_name: 'acl',
+    }]}}},
+  ]);
+  assert.equal(result.findings.some(item => item.file === '/repository/Dockerfile'), false);
+  assert.equal(result.findings.some(item => item.file.includes('..')), false);
+  assert.equal(result.findings.find(item => item.tool === 'hadolint' && item.rule === 'DL3002' && item.line === 4)?.file, 'Dockerfile');
+  assert.equal(result.findings.find(item => item.tool === 'checkov')?.file, '/main.tf');
+  assert.equal(result.rejected >= 1, true);
+});
