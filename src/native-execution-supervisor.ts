@@ -83,6 +83,10 @@ export function readonlySecurityExam(workflow:unknown,role:unknown):boolean{
 export function readonlyExamIsolation(personal:unknown,workflow:unknown,role:unknown):boolean{
  return Boolean(personal)&&(readonlyDesignExam(workflow,role)||readonlySecurityExam(workflow,role));
 }
+/** Personal design exam only. Security exams, other roles and locked mode do not stage captures. */
+export function stageDesignExamCaptures(personal:unknown,workflow:unknown,role:unknown):boolean{
+ return Boolean(personal)&&readonlyDesignExam(workflow,role);
+}
 /** Effect supervisor only. A trusted Cezar stage must already own the grant,
  * frozen source and policy. No scheduler, inference on construction, fallback,
  * approval or Git integration occurs here. Production bootstrap does not construct
@@ -235,14 +239,14 @@ export class NativeExecutionSupervisor{
   const repository=await this.jobRepository(this.ledger.pool,String(g.project_id));
   const p=this.paths(input.jobId);await mkdir(p.root,{mode:0o700});await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
   await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
-  await stageDesignCapturesForJob(repository,[p.planning,p.work]);
+  const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
+  if(stageDesignExamCaptures(personal,examWorkflow,input.role))await stageDesignCapturesForJob(repository,[p.planning,p.work]);
   await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});const token=randomBytes(32).toString('hex');
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   // A personal Claude or Codex evaluator reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
   // Readonly design and security exams have no artifact row. Any personal provider still gets that copy, and no review diff is written.
-  const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
   const designExam=personal&&readonlyDesignExam(examWorkflow,input.role);
   const securityExam=personal&&readonlySecurityExam(examWorkflow,input.role);
   const isolateExam=readonlyExamIsolation(personal,examWorkflow,input.role);
