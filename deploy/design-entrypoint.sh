@@ -154,10 +154,17 @@ tools.push({
 const chrome = findChrome();
 if (chrome) process.env.PUPPETEER_EXECUTABLE_PATH = chrome;
 const pa11y = '/opt/design-tools/node_modules/.bin/pa11y';
+const pa11yConfig = '/tmp/pa11y.json';
+writeFileSync(pa11yConfig, JSON.stringify({
+  chromeLaunchConfig: {
+    executablePath: chrome ?? undefined,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+  },
+}), {mode: 0o600});
 let pa11yRun = null;
 try {
   if (statSync(pa11y).isFile()) {
-    const run = spawnSync(pa11y, [target.origin, '--reporter', 'json', '--timeout', '20000', '--runner', 'axe'], {
+    const run = spawnSync(pa11y, [target.origin, '--reporter', 'json', '--timeout', '20000', '--runner', 'axe', '--config', pa11yConfig], {
       encoding: 'utf8', timeout: 45000, cwd: '/tmp', env: process.env, shell: false,
     });
     pa11yRun = {

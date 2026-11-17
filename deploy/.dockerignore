@@ -1,0 +1,5 @@
+# Contexto de build: deploy/. O npm ci ocorre dentro da imagem.
+design-tools/node_modules
+**/.git
+**/*.log
+*.log
