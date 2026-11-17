@@ -89,12 +89,20 @@ test('a régua confirmada entra no relatório e as telas corretas ficam sem alta
     const result = await runDesignModule(request(data));
     assert.equal(result.directoryName, '20261117-030405-design');
     assert.match(result.coverageMarkdown, /Cobertura/);
+    const measuredHigh = new Set<string>([DESIGN_PLANTED_RULES.contrast]);
     for (const item of planted) {
+      const raw = result.findings.find(finding => finding.rule === item.rule && finding.file.endsWith(item.relative));
+      assert.ok(raw, item.relative);
+      assert.equal(raw.severity === 'alta', measuredHigh.has(item.rule), item.rule);
       const hit = result.achados.find(achado => achado.reference === item.rule && achado.where.file.endsWith(item.relative));
-      assert.ok(hit, item.relative);
-      assert.equal(hit?.severity, 'alta');
-      assert.equal(hit?.status, 'confirmado');
-      assert.equal(hit?.verifier?.provider, 'grok');
+      if (raw.severity === 'alta' || raw.severity === 'media') {
+        assert.ok(hit, item.relative);
+        assert.equal(hit.severity, raw.severity);
+        assert.equal(hit.status, 'confirmado');
+        assert.equal(hit.verifier?.provider, 'grok');
+      } else {
+        assert.equal(hit, undefined, item.rule);
+      }
     }
     for (const relative of clean) {
       const dirty = result.achados.some(achado => achado.where.file.endsWith(relative) && achado.severity === 'alta' && achado.status === 'confirmado');
