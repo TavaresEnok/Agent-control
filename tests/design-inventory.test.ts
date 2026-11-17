@@ -47,7 +47,7 @@ test('nove cinzas geram TOKENS-CINZAS-DEMAIS e dois não', () => {
   assert.equal(hit.length, 1);
   assert.equal(hit[0]?.rule, DESIGN_PLANTED_RULES.grays);
   assert.equal(hit[0]?.tool, 'inventario');
-  assert.equal(hit[0]?.severity, 'alta');
+  assert.equal(hit[0]?.severity, 'informativa');
   assert.equal(hit[0]?.cwe, null);
   assert.equal(hit[0]?.file, 'css/cinzas.css');
   assert.equal(hit[0]?.line, DESIGN_GRAY_MIN);
@@ -69,7 +69,7 @@ test('sombra com alfa baixo não entra na lista de cinzas', () => {
   const hit = inventoryFindingsFromCss('css/cinzas.css', css);
   assert.equal(hit.length, 1);
   assert.equal(hit[0]?.rule, DESIGN_PLANTED_RULES.grays);
-  assert.equal(hit[0]?.severity, 'alta');
+  assert.equal(hit[0]?.severity, 'informativa');
   assert.equal((hit[0]?.snippet ?? '').includes('#1b1c1d'), false);
 });
 
@@ -103,7 +103,7 @@ test('cinco espaçamentos ímpares geram TOKENS-ESPACAMENTO e a grade de 4 não'
   const hit = inventoryFindingsFromCss('css/espaco.css', five);
   assert.equal(hit.length, 1);
   assert.equal(hit[0]?.rule, DESIGN_PLANTED_RULES.spacing);
-  assert.equal(hit[0]?.severity, 'alta');
+  assert.equal(hit[0]?.severity, 'informativa');
   assert.equal(hit[0]?.tool, 'inventario');
   assert.equal(hit[0]?.cwe, null);
   assert.match(hit[0]?.snippet ?? '', /5 espaçamentos fora da grade de 4px: 1px 3px 5px 7px 9px/);
@@ -125,7 +125,7 @@ test('width e min-width em px >= 400 quebram 375; max-width e prelúdio não', (
   const wide = inventoryFindingsFromCss('css/estreito.css', '.a {\n  width: 980px;\n}\n');
   assert.equal(wide.length, 1);
   assert.equal(wide[0]?.rule, DESIGN_PLANTED_RULES.narrow);
-  assert.equal(wide[0]?.severity, 'alta');
+  assert.equal(wide[0]?.severity, 'informativa');
   assert.equal(wide[0]?.line, 2);
   assert.equal(wide[0]?.snippet, 'width: 980px');
 
@@ -145,7 +145,7 @@ test('texto cortado exige overflow hidden e nowrap ou ellipsis no mesmo bloco', 
   const nowrap = inventoryFindingsFromCss('css/cortado.css', '.titulo {\n  overflow: hidden;\n  white-space: nowrap;\n}\n');
   assert.equal(nowrap.length, 1);
   assert.equal(nowrap[0]?.rule, DESIGN_PLANTED_RULES.truncated);
-  assert.equal(nowrap[0]?.severity, 'alta');
+  assert.equal(nowrap[0]?.severity, 'informativa');
   assert.equal(nowrap[0]?.tool, 'inventario');
   assert.equal(nowrap[0]?.cwe, null);
   assert.equal(nowrap[0]?.line, 2);

@@ -8,7 +8,8 @@ const visible = 'button:focus-visible { outline: 2px solid #0b57d0; outline-offs
 
 test('foco invisivel gera a regra plantada', () => {
   const findings = focusFindingsFromCss('foco.css', invisible);
-  assert.equal(findings.some(item => item.rule === DESIGN_PLANTED_RULES.invisibleFocus && item.severity === 'alta' && item.tool === 'teclado'), true);
+  assert.equal(findings.some(item => item.rule === DESIGN_PLANTED_RULES.invisibleFocus && item.severity === 'informativa' && item.tool === 'teclado'), true);
+  assert.equal(findings.some(item => item.severity === 'alta'), false);
 });
 
 test('foco visivel nao gera achado', () => {
