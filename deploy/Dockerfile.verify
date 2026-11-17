@@ -1,10 +1,10 @@
 # hadolint ignore=DL3029
 FROM --platform=linux/amd64 debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS tools
 ENV DEBIAN_FRONTEND=noninteractive
-# hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates python3 \
+ && apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 python3=3.13.5-1 \
  && rm -rf /var/lib/apt/lists/*
+# Opengrep 2.0.0 publishes a Cosign signature, not a checksum. Checkov 3.4.5 does not publish a signature or a checksum. The hash in deploy/verify-tools.lock.json was computed from the official asset.
 COPY verify-tools.lock.json /tmp/verify-tools.lock.json
 COPY verify-fetch-tools.py /tmp/verify-fetch-tools.py
 COPY verify-install-tools.py /tmp/verify-install-tools.py
@@ -16,9 +16,8 @@ RUN sha256sum -c checksums.txt \
 # hadolint ignore=DL3029
 FROM --platform=linux/amd64 debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 ENV DEBIAN_FRONTEND=noninteractive
-# hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl findutils git zlib1g \
+ && apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 curl=8.14.1-2+deb13u7 findutils=4.10.0-3 git=1:2.47.3-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 65532 verify \
  && useradd --system --uid 65532 --gid 65532 --home-dir /home/verify --create-home --shell /usr/sbin/nologin verify \
