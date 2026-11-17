@@ -1,11 +1,13 @@
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {constants} from 'node:fs';
+import {lstat, mkdir, mkdtemp, open, readFile, realpath, rm, rmdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join, sep} from 'node:path';
 import {Id, Refusal} from './contracts.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
 import {discoverRoutesFromSource, screenCoverageMarkdown, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
-import {examineDesignScreens, type DesignExamineInput} from './design-examine.ts';
+import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture} from './design-examine.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {markPngRect} from './design-mark.ts';
 import {readDesignReport, writeDesignReport, type DesignReportCapture} from './design-report.ts';
@@ -90,23 +92,41 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const routes = discoverRoutesFromSource(input.files);
   const notes: string[] = [];
   const captured = await captureIfAsked(input, target.origin, routes, notes);
-  const chosen = chooseScreens(input.files, routes, findings);
-  if (chosen.omitted > 0) notes.push(`O exame cobriu ${chosen.screens.length} de ${chosen.screens.length + chosen.omitted} arquivos de tela.`);
-  const screens = chosen.screens.map(screen => ({
-    ...screen,
-    captureNote: captureNoteFor(screen.route, captured.records),
-  }));
-  if (screens.length === 0) notes.push('Nenhuma tela de código entrou no exame.');
-  const examined = await examineDesignScreens({
-    repo: input.repo,
-    intentId: input.intentId,
-    screens,
-    checklist: loadDesignChecklist(),
-    rawFindings: findings,
-    worker: input.worker,
-    reserve: input.reserve,
-    release: input.release,
-  });
+  const staged = await stageDesignCaptures(input.repo, input.runId, captured.held);
+  const routesByFile = new Map<string, string[]>();
+  for (const route of routes) {
+    const key = route.file.slice(0, 400);
+    const list = routesByFile.get(key);
+    if (list === undefined) routesByFile.set(key, [route.route]);
+    else if (!list.includes(route.route)) list.push(route.route);
+  }
+  let examined: Awaited<ReturnType<typeof examineDesignScreens>>;
+  try {
+    const chosen = chooseScreens(input.files, routes, findings);
+    if (chosen.omitted > 0) notes.push(`O exame cobriu ${chosen.screens.length} de ${chosen.screens.length + chosen.omitted} arquivos de tela.`);
+    const screens = chosen.screens.map(screen => {
+      const related = routesByFile.get(screen.file) ?? [screen.route];
+      const captures = related.flatMap(route => staged.byRoute.get(route) ?? []);
+      return {
+        ...screen,
+        captureNote: captureNoteFor(screen.route, captured.records),
+        ...(captures.length > 0 ? {captures} : {}),
+      };
+    });
+    if (screens.length === 0) notes.push('Nenhuma tela de código entrou no exame.');
+    examined = await examineDesignScreens({
+      repo: input.repo,
+      intentId: input.intentId,
+      screens,
+      checklist: loadDesignChecklist(),
+      rawFindings: findings,
+      worker: input.worker,
+      reserve: input.reserve,
+      release: input.release,
+    });
+  } finally {
+    await staged.cleanup();
+  }
   notes.push(...examined.notes);
   if (examined.confirmations.length > 999) throw new Refusal('DESIGN_FINDING_LIMIT');
   const achados = examined.confirmations.map((item, index) => toAchado(index + 1, item.finding, item.confirm, item.verifier));
@@ -230,13 +250,22 @@ function captureNoteFor(route: string, records: readonly {route: string; viewpor
   return related.map(record => `${record.fileName} ${record.viewport}px ${record.theme}`).join('; ').slice(0, 500);
 }
 
+type HeldCapture = {
+  route: string;
+  viewport: number;
+  theme: 'claro' | 'escuro';
+  state: string;
+  fileName: string;
+  bytes: Buffer;
+};
+
 async function captureIfAsked(
   input: DesignModuleInput,
   origin: string,
   routes: readonly {id: string; route: string}[],
   notes: string[],
-): Promise<{records: {route: string; viewport: number; theme: string; fileName: string}[]; files: DesignReportCapture[]}> {
-  if (input.driver === undefined) return {records: [], files: []};
+): Promise<{records: {route: string; viewport: number; theme: string; fileName: string}[]; files: DesignReportCapture[]; held: HeldCapture[]}> {
+  if (input.driver === undefined) return {records: [], files: [], held: []};
   const selected = (routes.length > 0 ? routes : [{id: 'inicio', route: '/'}]).slice(0, MAX_CAPTURE_ROUTES);
   const directory = await mkdtemp(join(tmpdir(), 'design-cap-'));
   try {
@@ -259,6 +288,21 @@ async function captureIfAsked(
       const rect = marks.get(record.fileName);
       files.push({fileName: record.fileName, bytes: rect === undefined ? bytes : markPngRect(bytes, rect)});
     }
+    const held: HeldCapture[] = [];
+    for (let index = 0; index < metadata.captures.length; index += 1) {
+      const record = metadata.captures[index];
+      const file = files[index];
+      if (!record || !file || file.fileName !== record.fileName) continue;
+      if (record.theme !== 'claro' && record.theme !== 'escuro') continue;
+      held.push({
+        route: record.route,
+        viewport: record.viewport,
+        theme: record.theme,
+        state: record.state,
+        fileName: record.fileName,
+        bytes: file.bytes,
+      });
+    }
     return {
       records: metadata.captures.map(record => ({
         route: record.route,
@@ -267,15 +311,82 @@ async function captureIfAsked(
         fileName: record.fileName,
       })),
       files,
+      held,
     };
   } catch (error) {
     if (error instanceof Refusal) throw error;
     const message = error instanceof Error ? error.message : 'erro';
     notes.push(`A captura não rodou: ${message}`.slice(0, 200));
-    return {records: [], files: []};
+    return {records: [], files: [], held: []};
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
+}
+
+/**
+ * Writes PNGs under `<repo>/.design-captures/<runId>/` for the exam and deletes them after.
+ * The git snapshot ignores that directory. The supervisor copies the sha256 files into
+ * `/planning/capturas` and `/work/capturas` before the container starts.
+ * The task cites the host path that exists while `worker.run` is in flight.
+ */
+async function stageDesignCaptures(
+  repo: string,
+  runId: string,
+  held: readonly HeldCapture[],
+): Promise<{byRoute: Map<string, DesignScreenCapture[]>; cleanup: () => Promise<void>}> {
+  if (held.length === 0 || !Id.safeParse(runId).success) {
+    return {byRoute: new Map(), cleanup: async () => {}};
+  }
+  let root: string;
+  try {
+    root = await realpath(repo);
+  } catch {
+    throw new Refusal('DESIGN_REPO_UNREADABLE', 400);
+  }
+  const parent = join(root, '.design-captures');
+  const dir = join(parent, runId);
+  await mkdir(parent, {recursive: true, mode: 0o700});
+  const parentStat = await lstat(parent);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
+  const parentReal = await realpath(parent);
+  if (parentReal !== parent || !parentReal.startsWith(root + sep)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
+  await mkdir(dir, {mode: 0o700});
+  const byRoute = new Map<string, DesignScreenCapture[]>();
+  const written = new Map<string, string>();
+  const cleanup = async () => {
+    await rm(dir, {recursive: true, force: true});
+    await rmdir(parent).catch(() => undefined);
+  };
+  try {
+    for (const item of held) {
+      const sha256 = createHash('sha256').update(item.bytes).digest('hex');
+      let path = written.get(sha256);
+      if (path === undefined) {
+        path = join(dir, `${sha256}.png`);
+        const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+        try {
+          await handle.writeFile(item.bytes);
+        } finally {
+          await handle.close();
+        }
+        written.set(sha256, path);
+      }
+      const capture: DesignScreenCapture = {
+        path,
+        viewport: item.viewport,
+        theme: item.theme,
+        state: item.state,
+        sha256,
+      };
+      const list = byRoute.get(item.route) ?? [];
+      list.push(capture);
+      byRoute.set(item.route, list);
+    }
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+  return {byRoute, cleanup};
 }
 
 function assertPasswordAbsent(password: string | undefined, value: unknown): void {

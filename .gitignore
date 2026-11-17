@@ -10,5 +10,6 @@ upstream/happier/apps/server/generated/
 upstream/happier/.yarn/
 .env
 .env.*
+.design-captures/
 !upstream/cezar/.env.example
 !upstream/happier/**/.env.example

@@ -380,3 +380,117 @@ test('cada tela reserva um especialista e o revisor lê o JSON cercado', async (
   assert.equal(kit.events.filter(event => event === 'reserve:specialist').length, 2);
   assert.equal(kit.events.filter(event => event === 'reserve:reviewer').length, 1);
 });
+
+test('captura falsa entra no exame e na confirmação com o mesmo caminho e o mesmo sha256', async () => {
+  const kit = harness(false);
+  const tasks: string[] = [];
+  const sha256 = 'ab'.repeat(32);
+  const path = `/work/.design-captures/${sha256}.png`;
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [{
+      ...screen,
+      captureNote: 'sem captura',
+      captures: [{path, viewport: 375, theme: 'claro', state: 'padrao', sha256}],
+    }],
+    checklist: loadDesignChecklist(),
+    rawFindings: [designRawFinding({
+      tool: 'axe',
+      rule: DESIGN_PLANTED_RULES.contrast,
+      file: screen.file,
+      line: 4,
+      severity: 'alta',
+      snippet: 'color:#777',
+    })],
+    worker: {
+      async run(workerCall) {
+        tasks.push(workerCall.task);
+        assert.equal(workerCall.writePaths.length, 0);
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  const examTask = tasks.find(task => task.startsWith('Pedido de exame.')) ?? '';
+  const reviewTask = tasks.find(task => task.startsWith('Pedido de confirmação.')) ?? '';
+  assert.match(examTask, /Arquivos:\n- src\/Tela\.tsx/);
+  assert.match(examTask, /Itens: DESIGN-NIELSEN-H1-ESTADO/);
+  assert.match(examTask, new RegExp(`- tool=axe \\| rule=${DESIGN_PLANTED_RULES.contrast} \\| severity=alta`));
+  assert.match(examTask, /Nota de captura:\nsem captura/);
+  assert.match(examTask, /Abra o PNG no caminho e olhe a imagem/);
+  assert.match(examTask, new RegExp(`Capturas:\\n- arquivo=${path.replaceAll('/', '\\/')} viewport=375 tema=claro estado=padrao sha256=${sha256}`));
+  assert.match(reviewTask, new RegExp(`arquivo=${path.replaceAll('/', '\\/')} viewport=375 tema=claro estado=padrao sha256=${sha256}`));
+  assert.equal(reviewTask.includes('suggestion'), false);
+  assert.equal(result.confirmations[0]?.finding.reference, DESIGN_PLANTED_RULES.contrast);
+  assert.equal(result.confirmations[0]?.verifier.provider, 'grok');
+  const bare = tasks.length;
+  const without = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [{...screen, captureNote: 'sem captura'}],
+    checklist: loadDesignChecklist().slice(0, 1),
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        assert.equal(workerCall.task.includes('Capturas:'), false);
+        assert.match(workerCall.task, /Nota de captura:\nsem captura/);
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  assert.equal(without.findings.length, 0);
+  assert.ok(bare >= 2);
+});
+
+test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do esquema', async () => {
+  const kit = harness(false);
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [screen],
+    checklist: loadDesignChecklist().slice(0, 2),
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        assert.equal(workerCall.writePaths.length, 0);
+        if (workerCall.task.startsWith('Pedido de confirmação.')) {
+          return JSON.stringify({
+            kind: 'confirmacao',
+            status: 'confirmed',
+            reason: 'O contraste medido fica abaixo de 4.5.',
+            proof: 'Captura em 375 px.',
+          });
+        }
+        return JSON.stringify({
+          kind: 'exame',
+          filesRead: ['src/Tela.tsx (código do pedido)'],
+          checklist: [{id: 'DESIGN-WCAG-143-CONTRASTE', status: 'fail'}],
+          findings: [{
+            title: 'Texto cinza no branco',
+            severity: 'high',
+            file: 'src/Tela.tsx',
+            line: 4,
+            scenario: 'O texto #777 sobre #fff em 375 px.',
+            suggestion: 'Troque para #595959.',
+            cwe: '',
+            reference: 'WCAG-1-4-3-CONTRASTE',
+            snippet: 'color:#777',
+          }],
+        });
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  assert.equal(result.notes.length, 0);
+  assert.deepEqual(result.coverage[0]?.checklist, ['DESIGN-WCAG-143-CONTRASTE']);
+  assert.equal(result.confirmations.length, 1);
+  assert.equal(result.confirmations[0]?.finding.severity, 'alta');
+  assert.equal(result.confirmations[0]?.finding.cwe, null);
+  assert.equal(result.confirmations[0]?.confirm.status, 'confirmado');
+  assert.equal(result.confirmations[0]?.verifier.provider, 'grok');
+});

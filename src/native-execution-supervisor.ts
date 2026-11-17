@@ -18,6 +18,7 @@ import type pg from 'pg';
 import {Ledger} from './ledger.ts';
 import {Authority,canonical,digest,Refusal} from './contracts.ts';
 import {DockerDaemon} from './sandbox-broker.ts';
+import {stageDesignCapturesForJob} from './design-capture-stage.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {AccountHomes} from './account-homes.ts';
 import {ProviderEligibility} from './provider-eligibility.ts';
@@ -32,6 +33,10 @@ import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {usageWindowsObservationSchema} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
+/** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
+export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
+  return workflow === 'design-readonly-v1' && (role === 'specialist' || role === 'reviewer');
+}
 const Path=z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f*?\[\]{}]/.test(p)&&!p.split('/').some(s=>!s||['.','..','.git','.ai'].includes(s)));
 export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,sessionId:Id,base:GitId,
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(Path).max(64),
@@ -105,6 +110,9 @@ export class NativeExecutionSupervisor{
   const intent=(await c.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[input.intentId,authority.contextId])).rows[0];
   if(intent?.principal_id!==principal)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');return context;
  }
+ private async personalReadonlyExam(c:pg.Pool|pg.PoolClient,intentId:string,role:unknown){
+  return Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount)&&readonlyDesignExam((await c.query('SELECT command FROM ac_intents WHERE id=$1',[intentId])).rows[0]?.command?.payload?.workflow,role);
+ }
  private async identity(c:pg.PoolClient,principal:string,authority:Authority,input:Input){
   const context=await this.scope(c,principal,authority,input);
   const provider=this.config.syntheticFixture?.provider??this.config.provider??'codex',mode=this.config.syntheticFixture?'synthetic':'subscription_cli';
@@ -115,6 +123,7 @@ export class NativeExecutionSupervisor{
    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=g.project_id JOIN ac_quota_observations q ON q.account_id=a.id
    WHERE g.id=$1 AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p,x`,[input.grantId])).rows[0];
   if(!g||g.state!=='reserved'||g.resource_kind!=='model'||g.context_id!==authority.contextId||g.project_id!==context.project_id||g.intent_id!==input.intentId||Number(g.manager_epoch)!==authority.epoch||g.role!==input.role||g.profile_role!==input.role||g.provider!==provider||g.mode!==mode||g.eligibility!=='documented_supported'||!g.account_enabled||!g.profile_enabled||!this.subjects.has(g.account_id)||g.resource_identity!==provider+':'+this.subjects.get(g.account_id))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+  if((input.role==='specialist'||input.role==='reviewer')&&await this.personalReadonlyExam(c,input.intentId,input.role))return g;
   const quality=(await c.query(`SELECT p.snapshot,p.digest FROM ac_execution_contracts x JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision WHERE x.intent_id=$1 AND x.project_id=$2`,[input.intentId,context.project_id])).rows[0];
   if(!quality)throw new Refusal('NATIVE_EXECUTION_POLICY_REQUIRED');
   const policy=QualityPolicy.parse(quality.snapshot);if(digest(policy)!==quality.digest)throw new Refusal('QUALITY_POLICY_DIGEST_MISMATCH');
@@ -209,23 +218,28 @@ export class NativeExecutionSupervisor{
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'uncertain')`,[input.jobId,input.grantId,input.intentId,authority.contextId,authority.epoch,input.sessionId,this.executorDigest,this.fingerprint,hash,input.base,input.role,g.account_id,g.profile_id,this.profileDigest(g),assessment?.revision??1]);
    await c.query("UPDATE ac_capacity_grants SET state='uncertain' WHERE id=$1",[input.grantId]);
    if(input.role==='programmer')await c.query("UPDATE ac_operations SET state='uncertain',native_session_id=$2 WHERE id=$1",[input.jobId,input.sessionId]);
-   else await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
+   else if((input.role!=='specialist'&&input.role!=='reviewer')||!await this.personalReadonlyExam(c,input.intentId,input.role))await c.query("UPDATE ac_stage_operations SET state='uncertain' WHERE id=$1",[input.jobId]);
   });
   const repository=await this.jobRepository(this.ledger.pool,String(g.project_id));
   const p=this.paths(input.jobId);await mkdir(p.root,{mode:0o700});await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
   await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
+  await stageDesignCapturesForJob(repository,[p.planning,p.work]);
   await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});const token=randomBytes(32).toString('hex');
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   // A personal Claude or Codex evaluator reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
-  const workerArtifact=input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex')?join(p.root,'review-artifact'):undefined;
+  // The readonly design exam has no artifact row. Any personal provider still gets that copy, and no review diff is written.
+  const designExam=(input.role==='specialist'||input.role==='reviewer')&&await this.personalReadonlyExam(this.ledger.pool,input.intentId,input.role);
+  const workerArtifact=designExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex'))?join(p.root,'review-artifact'):undefined;
   if(workerArtifact){
    // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
    await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
-   // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
-   const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
-   if(reviewed?.base_id){const change=await new GitArtifacts(repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
+   if(!designExam){
+    // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
+    const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
+    if(reviewed?.base_id){const change=await new GitArtifacts(repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
+   }
   }
   // Personal Claude, Grok and Codex programmers edit the checkout from the worker itself. Locked Codex keeps the
   // original split: the credentialed worker has no /work and the tools container owns the checkout.
@@ -460,6 +474,7 @@ export class NativeExecutionSupervisor{
     !physical||payload.physicalDigest!==digest(physical)||physical.jobId!==jobId||physical.containerId!==row.worker_id||physical.toolsContainerId!==row.tools_id||physical.networkId!==row.network_id||physical.exitCode!==payload.exitCode||physical.workerExitCode!==payload.workerExitCode||((payload.exitCode===0)!==(row.state==='completed'))||
     !/^[a-f0-9]{64}$/.test(String(row.worker_id))||!/^[a-f0-9]{64}$/.test(String(row.tools_id))||row.worker_id===row.tools_id||!/^[a-f0-9]{64}$/.test(String(row.network_id))||row.network_id===this.config.providerNetworkId||
     !Number.isFinite(Date.parse(physical.finishedAt))||!Number.isFinite(Date.parse(physical.toolsFinishedAt))||String(physical.finishedAt).startsWith('0001-')||String(physical.toolsFinishedAt).startsWith('0001-'))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   if((input.role==='specialist'||input.role==='reviewer')&&['completed','failed'].includes(row.state)&&await this.personalReadonlyExam(c,input.intentId,input.role))return row;
    // Cancellation is terminal only once its independently persisted stage receipt is bound.
    const cancellation=(await c.query("SELECT 1 FROM ac_plan_cancellations WHERE intent_id=$1 AND context_id=$2",[input.intentId,authority.contextId])).rowCount;
    if(cancellation&&input.role!=='programmer'){

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {readdirSync, readFileSync} from 'node:fs';
+import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -158,6 +158,71 @@ test('o mesmo provedor recusa e a senha de teste não entra no relatório', asyn
     assert.equal(dumped.includes(password), false);
     assert.equal(seen.some(url => url.includes(password)), false);
     assert.ok(seen.length >= 3);
+    assert.equal(existsSync(join(labRoot, '.design-captures')), false);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('a captura fica no disco enquanto o worker corre e some depois', async () => {
+  const data = await mkdtemp(join(tmpdir(), 'design-mod-'));
+  const seen: {role: string; path: string; present: boolean; sha: string}[] = [];
+  try {
+    const kit = harness();
+    await runDesignModule(request(data, {
+      repo: data,
+      driver: {
+        async setViewport() {},
+        async emulateMedia() {},
+        async goto() {},
+        async screenshot() { return Buffer.from('png-da-tela'); },
+        async content() { return '<p>ok</p>'; },
+      },
+      worker: {
+        async run(call) {
+          const match = call.task.match(/arquivo=(\S+) viewport=\d+ tema=(?:claro|escuro) estado=\S+ sha256=([a-f0-9]{64})/);
+          if (call.task.includes('Capturas:')) {
+            assert.match(call.task, /\/work/);
+            assert.match(call.task, /Abra o PNG no caminho e olhe a imagem/);
+            assert.ok(match?.[1]);
+            seen.push({role: call.role, path: match?.[1] ?? '', present: existsSync(match?.[1] ?? ''), sha: match?.[2] ?? ''});
+            const file = call.task.match(/^Arquivos:\n- (.+)$/m)?.[1] ?? 'tela';
+            if (call.role === 'reviewer') {
+              return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'a imagem não sustenta o ponto', proof: 'png aberto'});
+            }
+            return JSON.stringify({
+              kind: 'exame',
+              filesRead: [file],
+              checklist: ['DESIGN-NIELSEN-H1-ESTADO'],
+              findings: [{
+                title: 'Captura vista',
+                severity: 'baixa',
+                file,
+                line: 1,
+                scenario: 'A imagem foi aberta no caminho citado.',
+                suggestion: 'Manter o texto legível.',
+                cwe: null,
+                reference: 'DESIGN-VISUAL',
+                snippet: 'png',
+              }],
+            });
+          }
+          return kit.worker.run(call);
+        },
+      },
+      reserve: kit.reserve,
+      release: kit.release,
+    }));
+    const specialist = seen.find(item => item.role === 'specialist');
+    const reviewer = seen.find(item => item.role === 'reviewer');
+    assert.ok(specialist);
+    assert.ok(reviewer);
+    assert.equal(specialist.present, true);
+    assert.equal(reviewer.present, true);
+    assert.equal(reviewer.path, specialist.path);
+    assert.equal(reviewer.sha, specialist.sha);
+    assert.equal(specialist.sha.length, 64);
+    assert.equal(existsSync(join(data, '.design-captures')), false);
   } finally {
     await rm(data, {recursive: true, force: true});
   }
