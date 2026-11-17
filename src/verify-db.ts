@@ -1,7 +1,7 @@
 import {spawn as spawnProcess} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants, createReadStream} from 'node:fs';
-import {chmod, lstat, mkdir, open, readdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, open, readdir, readFile, rename, rm, unlink, writeFile} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {VERIFY_RUNTIME_BIN, verifyDatabaseArguments} from './verify-image.ts';
@@ -27,7 +27,12 @@ const DISCARD_TIMEOUT_MS = 60_000;
 /** Two hours. Vulnerability archives are large and the fetch must not hang forever. */
 const FETCH_TIMEOUT_MS = 7_200_000;
 const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
-const IN_USE_FILE = 'in-use.json';
+const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const RUN_CLAIM_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
+const IN_USE_DIR = 'in-use';
+const CLAIM_MAX_BYTES = 8192;
+
+type StampClaim = {stamp: string; pid: number; claimedAt: string};
 
 function runCommand(args: readonly string[], stdio: 'ignore' | 'inherit', timeoutMs: number): Promise<number> {
   const command = args[0];
@@ -332,33 +337,120 @@ function assertClaimedStamp(parent: string, stamp: string): string {
   return join(resolve(parent), name);
 }
 
-async function readInUse(parent: string): Promise<string[] | null> {
-  let raw: string;
-  try {
-    raw = await readFile(join(parent, IN_USE_FILE), 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+function assertRunId(runId: string): string {
+  if (typeof runId !== 'string' || !RUN_ID.test(runId)) throw new Refusal('VERIFY_PATH_FORBIDDEN');
+  return runId;
+}
+
+function parseStampClaim(raw: string): StampClaim | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
-    throw new Error('VERIFY_DB_IN_USE_INVALID');
+    return null;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('VERIFY_DB_IN_USE_INVALID');
-  const stamps = (parsed as {stamps?: unknown}).stamps;
-  if (!Array.isArray(stamps) || stamps.some((item) => typeof item !== 'string')) throw new Error('VERIFY_DB_IN_USE_INVALID');
-  return stamps;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const body = parsed as {stamp?: unknown; pid?: unknown; claimedAt?: unknown};
+  if (typeof body.stamp !== 'string' || body.stamp.length === 0 || body.stamp.includes('\0')) return null;
+  if (typeof body.pid !== 'number' || !Number.isInteger(body.pid) || body.pid <= 0) return null;
+  if (typeof body.claimedAt !== 'string' || Number.isNaN(Date.parse(body.claimedAt))) return null;
+  return {stamp: body.stamp, pid: body.pid, claimedAt: body.claimedAt};
 }
 
-function normalizeStampList(stamps: readonly string[]): string[] {
-  const normalized: string[] = [];
-  for (const item of stamps) {
-    const path = isAbsolute(item) ? resolve(item) : item;
-    if (!normalized.includes(path)) normalized.push(path);
+/** ESRCH means the holder is gone. Any other error means the pid may still be live. */
+function claimHolderAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
-  return normalized;
+}
+
+async function ensureInUseDirectory(parent: string): Promise<string> {
+  const directory = join(parent, IN_USE_DIR);
+  try {
+    await mkdir(directory, {mode: 0o700});
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const info = await lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Refusal('VERIFY_PATH_FORBIDDEN');
+  await chmod(directory, 0o700);
+  return directory;
+}
+
+async function readClaimFile(path: string): Promise<StampClaim | null> {
+  let file;
+  try {
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ELOOP') return null;
+    throw error;
+  }
+  try {
+    const info = await file.stat();
+    const uid = process.getuid?.();
+    if (!info.isFile() || info.size > CLAIM_MAX_BYTES || (uid !== undefined && info.uid !== uid)) return null;
+    return parseStampClaim((await file.readFile()).toString('utf8'));
+  } finally {
+    await file.close();
+  }
+}
+
+async function unlinkClaimFile(path: string): Promise<void> {
+  let info;
+  try {
+    info = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) return;
+  await unlink(path);
+}
+
+/** Live claims only. A dead pid does not keep its stamp, and that claim file may be removed. */
+async function liveClaimStamps(parent: string): Promise<string[]> {
+  const directory = join(parent, IN_USE_DIR);
+  let info;
+  try {
+    info = await lstat(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) return [];
+  const entries = await readdir(directory, {withFileTypes: true});
+  const stamps: string[] = [];
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || !entry.isFile()) continue;
+    if (!RUN_CLAIM_FILE.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    let claim: StampClaim | null;
+    try {
+      claim = await readClaimFile(path);
+    } catch {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
+      continue;
+    }
+    if (!claim) {
+      console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
+      continue;
+    }
+    if (!claimHolderAlive(claim.pid)) {
+      try {
+        await unlinkClaimFile(path);
+      } catch {
+        console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
+      }
+      continue;
+    }
+    stamps.push(claim.stamp);
+  }
+  return stamps;
 }
 
 async function listStampNames(parent: string): Promise<string[]> {
@@ -385,31 +477,42 @@ async function stampPresence(path: string): Promise<'yes' | 'no' | 'unknown'> {
   }
 }
 
-/** Remember a stamp so prune keeps it. The file is mode 0600 and replaced atomically. */
-export async function claimVerifyDatabaseStamp(dataDirectory: string, stamp: string): Promise<void> {
+/** Remember a stamp for one exam run. The 0600 file is that run's alone, written by temp and rename. */
+export async function claimVerifyDatabaseStamp(dataDirectory: string, stamp: string, runId: string): Promise<void> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
-  await ensureDatabaseRoot(parent);
   const resolved = assertClaimedStamp(parent, stamp);
-  const stamps = normalizeStampList(await readInUse(parent) ?? []);
-  if (!stamps.includes(resolved)) stamps.push(resolved);
-  await writePrivateJson(parent, IN_USE_FILE, {stamps});
+  const id = assertRunId(runId);
+  await ensureDatabaseRoot(parent);
+  const directory = await ensureInUseDirectory(parent);
+  const claim: StampClaim = {stamp: resolved, pid: process.pid, claimedAt: new Date().toISOString()};
+  const existing = await readClaimFile(join(directory, `${id}.json`));
+  if (existing && existing.stamp === claim.stamp && existing.pid === claim.pid) return;
+  await writePrivateJson(directory, `${id}.json`, claim);
 }
 
-/** Drop a stamp from the in-use list. Missing file is a no-op. */
-export async function releaseVerifyDatabaseStamp(dataDirectory: string, stamp: string): Promise<void> {
+/** Delete that run's claim file. A missing file is a no-op. */
+export async function releaseVerifyDatabaseStamp(dataDirectory: string, stamp: string, runId: string): Promise<void> {
   const root = assertDataDirectory(dataDirectory);
   const parent = join(root, 'verify-db');
-  const resolved = assertClaimedStamp(parent, stamp);
-  const existing = await readInUse(parent);
-  if (!existing) return;
-  const stamps = normalizeStampList(existing).filter((item) => item !== resolved);
-  await writePrivateJson(parent, IN_USE_FILE, {stamps});
+  assertClaimedStamp(parent, stamp);
+  const id = assertRunId(runId);
+  const path = join(parent, IN_USE_DIR, `${id}.json`);
+  let info;
+  try {
+    info = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) throw new Refusal('VERIFY_PATH_FORBIDDEN');
+  await unlink(path);
 }
 
 /**
  * Delete stamp directories except the two newest names, the one current.json
- * points at, and any in-use path that still exists. Names sort chronologically.
+ * points at, and any stamp claimed by a live pid. Names sort chronologically.
+ * A claim expires when process.kill(pid, 0) fails with ESRCH; prune may remove that file.
  * A failure to delete one stamp is logged and does not stop the others.
  */
 export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: string, spawn?: CommandRunner): Promise<void> {
@@ -425,16 +528,16 @@ export async function pruneVerifyDatabaseStamps(dataDirectory: string, image: st
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'current'}));
     return;
   }
-  let inUse: string[] | null;
+  let inUse: string[];
   try {
-    inUse = await readInUse(parent);
+    inUse = await liveClaimStamps(parent);
   } catch {
     console.error(JSON.stringify({event: 'VERIFY_DB_PRUNE_FAILED', reason: 'in-use'}));
     return;
   }
   const keep = new Set(names.slice(-2));
   if (currentName) keep.add(currentName);
-  for (const used of inUse ?? []) {
+  for (const used of inUse) {
     const name = directStampName(parent, used);
     if (!name) continue;
     const presence = await stampPresence(join(parent, name));

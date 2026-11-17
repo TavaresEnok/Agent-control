@@ -549,14 +549,20 @@ test('o carimbo da base é reivindicado no início e solto se o exame falha', as
   const projectId = randomUUID();
   let observed: Promise<void> | undefined;
   let sawStamp = false;
+  let claimName = '';
   let toolsDir = '';
   try {
     await mkdir(databases, {recursive: true, mode: 0o700});
-    await beginPersonalVerification({
+    const started = await beginPersonalVerification({
       ...blockedInput(dataDirectory, databases, {projectId}),
       runTools: async () => {
-        const held = JSON.parse(await readFile(join(dataDirectory, 'verify-db', 'in-use.json'), 'utf8')) as {stamps: string[]};
-        sawStamp = held.stamps.includes(databases);
+        const dir = join(dataDirectory, 'verify-db', 'in-use');
+        const names = (await readdir(dir)).filter((name) => name.endsWith('.json')).sort();
+        assert.equal(names.length, 1);
+        claimName = names[0] ?? '';
+        const held = JSON.parse(await readFile(join(dir, claimName), 'utf8')) as {stamp: string; pid: number; claimedAt: string};
+        sawStamp = held.stamp === databases && held.pid === process.pid && Number.isNaN(Date.parse(held.claimedAt)) === false;
+        assert.equal((await stat(join(dir, claimName))).mode & 0o777, 0o600);
         toolsDir = join(dataDirectory, 'verificacoes', projectId, 'ferramentas');
         assert.equal((await readdir(toolsDir)).length, 1);
         throw new Error('ferramentas falharam');
@@ -566,8 +572,8 @@ test('o carimbo da base é reivindicado no início e solto se o exame falha', as
     assert.ok(observed);
     await assert.rejects(observed, (error: unknown) => error instanceof Error && error.message === 'ferramentas falharam');
     assert.equal(sawStamp, true);
-    const released = JSON.parse(await readFile(join(dataDirectory, 'verify-db', 'in-use.json'), 'utf8')) as {stamps: string[]};
-    assert.equal(released.stamps.includes(databases), false);
+    assert.equal(claimName, `${started.id}.json`);
+    assert.deepEqual(await readdir(join(dataDirectory, 'verify-db', 'in-use')), []);
     await assert.rejects(stat(join(dataDirectory, 'verificacoes', projectId, 'andamento', '.running')));
     const progress = await readVerificationProgress(dataDirectory, projectId);
     assert.equal(progress[0]?.status, 'failed');

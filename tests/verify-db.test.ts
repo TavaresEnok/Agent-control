@@ -45,6 +45,25 @@ async function privateDirectory(): Promise<string> {
   return directory;
 }
 
+const runLive = '11111111-1111-4111-8111-111111111111';
+const runOther = '22222222-2222-4222-8222-222222222222';
+const runDead = '33333333-3333-4333-8333-333333333333';
+
+function unusedPid(): number {
+  for (let pid = 1_000_000; pid < 1_000_050; pid += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+    }
+  }
+  throw new Error('nenhum pid livre');
+}
+
+function claimBody(stamp: string, pid: number): string {
+  return JSON.stringify({stamp, pid, claimedAt: now.toISOString()}, null, 2) + '\n';
+}
+
 test('a atualização publica o manifest e o current.json sem abrir o pai', async () => {
   const data = await privateDirectory();
   try {
@@ -195,11 +214,14 @@ test('a poda conserva o current, os dois mais novos e o carimbo em uso', async (
       manifestSha256: 'abc',
     }, null, 2) + '\n';
     await writeFile(join(parent, 'current.json'), currentBody, {mode: 0o600});
-    const inUseBody = JSON.stringify({
-      stamps: [join(parent, names[1]), join(parent, '20200101-000000')],
-    }, null, 2) + '\n';
-    await writeFile(join(parent, 'in-use.json'), inUseBody, {mode: 0o600});
-    await chmod(join(parent, 'in-use.json'), 0o600);
+    const heldBody = claimBody(join(parent, names[1]), process.pid);
+    const missingBody = claimBody(join(parent, '20200101-000000'), process.pid);
+    const claims = join(parent, 'in-use');
+    await mkdir(claims, {mode: 0o700});
+    await writeFile(join(claims, `${runLive}.json`), heldBody, {mode: 0o600});
+    await chmod(join(claims, `${runLive}.json`), 0o600);
+    await writeFile(join(claims, `${runOther}.json`), missingBody, {mode: 0o600});
+    await chmod(join(claims, `${runOther}.json`), 0o600);
     await writeFile(join(parent, 'notes.txt'), 'keep');
     let dockerCalls = 0;
     await pruneVerifyDatabaseStamps(data, image, async () => {
@@ -210,35 +232,156 @@ test('a poda conserva o current, os dois mais novos e o carimbo em uso', async (
     assert.deepEqual(left, ['20261117-120000', '20261117-130000', '20261117-150000', '20261117-160000']);
     assert.equal(dockerCalls, 0);
     assert.equal(await readFile(join(parent, 'current.json'), 'utf8'), currentBody);
-    assert.equal(await readFile(join(parent, 'in-use.json'), 'utf8'), inUseBody);
+    assert.equal(await readFile(join(claims, `${runLive}.json`), 'utf8'), heldBody);
+    assert.equal(await readFile(join(claims, `${runOther}.json`), 'utf8'), missingBody);
     assert.equal(await readFile(join(parent, 'notes.txt'), 'utf8'), 'keep');
+    await assert.rejects(stat(join(parent, '20261117-140000')));
+    await assert.rejects(stat(join(parent, '20200101-000000')));
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('dois claims de runs diferentes sobrevivem em arquivos 0600 exclusivos', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    const stamp = join(parent, '20261117-150405');
+    const other = join(parent, '20261117-160000');
+    await claimVerifyDatabaseStamp(data, stamp, runLive);
+    const dir = join(parent, 'in-use');
+    const pathA = join(dir, `${runLive}.json`);
+    const read = async (path: string) => JSON.parse(await readFile(path, 'utf8')) as {stamp: string; pid: number; claimedAt: string};
+    assert.equal((await stat(dir)).mode & 0o777, 0o700);
+    assert.equal((await stat(pathA)).mode & 0o777, 0o600);
+    const first = await read(pathA);
+    assert.equal(first.stamp, stamp);
+    assert.equal(first.pid, process.pid);
+    assert.equal(Number.isNaN(Date.parse(first.claimedAt)), false);
+    await claimVerifyDatabaseStamp(data, stamp, runLive);
+    assert.deepEqual(await readdir(dir), [`${runLive}.json`]);
+    await claimVerifyDatabaseStamp(data, other, runOther);
+    const pathB = join(dir, `${runOther}.json`);
+    assert.equal((await read(pathA)).stamp, stamp);
+    assert.equal((await read(pathB)).stamp, other);
+    assert.equal((await read(pathB)).pid, process.pid);
+    assert.equal((await stat(pathB)).mode & 0o777, 0o600);
+    await assert.rejects(
+      () => writeFile(pathB, 'nope', {flag: 'wx'}),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === 'EEXIST',
+    );
+    await releaseVerifyDatabaseStamp(data, stamp, runLive);
+    await assert.rejects(stat(pathA));
+    assert.equal((await read(pathB)).stamp, other);
+    await releaseVerifyDatabaseStamp(data, stamp, runLive);
+    assert.equal((await read(pathB)).stamp, other);
+    assert.equal((await readdir(parent)).some((name) => name.includes('.tmp')), false);
+    assert.equal((await readdir(dir)).some((name) => name.includes('.tmp')), false);
+    await assert.rejects(stat(join(parent, 'in-use.json')));
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('claim de pid morto não segura o carimbo e a poda apaga o arquivo', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    const names = ['20261117-120000', '20261117-130000', '20261117-150000', '20261117-160000'];
+    for (const name of names) await mkdir(join(parent, name), {mode: 0o777});
+    const currentBody = JSON.stringify({
+      directory: join(parent, names[0]),
+      fetchedAt: now.toISOString(),
+      manifestSha256: 'abc',
+    }) + '\n';
+    await writeFile(join(parent, 'current.json'), currentBody, {mode: 0o600});
+    const dir = join(parent, 'in-use');
+    await mkdir(dir, {mode: 0o700});
+    const claim = join(dir, `${runDead}.json`);
+    await writeFile(claim, claimBody(join(parent, '20261117-130000'), unusedPid()), {mode: 0o600});
+    await chmod(claim, 0o600);
+    await writeFile(join(dir, 'notes.json'), '{"stamp":"/tmp/nope"}');
+    await pruneVerifyDatabaseStamps(data, image, async () => 0);
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, ['20261117-120000', '20261117-150000', '20261117-160000']);
+    await assert.rejects(stat(claim));
+    assert.equal(await readFile(join(dir, 'notes.json'), 'utf8'), '{"stamp":"/tmp/nope"}');
+    assert.equal(await readFile(join(parent, 'current.json'), 'utf8'), currentBody);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('nome fora de run ou caminho fora do carimbo não amplia a poda', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {mode: 0o700});
+    const names = ['20261117-140000', '20261117-150000', '20261117-160000'];
+    for (const name of names) await mkdir(join(parent, name), {mode: 0o777});
+    await mkdir(join(parent, 'not-a-stamp'), {mode: 0o700});
+    await writeFile(join(parent, 'notes.txt'), 'keep');
+    const secret = join(data, 'secret.txt');
+    await writeFile(secret, 'secret');
+    const currentBody = JSON.stringify({
+      directory: join(parent, names[2]),
+      fetchedAt: now.toISOString(),
+      manifestSha256: 'abc',
+    }) + '\n';
+    await writeFile(join(parent, 'current.json'), currentBody, {mode: 0o600});
+    const dir = join(parent, 'in-use');
+    await mkdir(dir, {mode: 0o700});
+    const outside = JSON.stringify({
+      stamp: secret,
+      pid: process.pid,
+      claimedAt: now.toISOString(),
+    }, null, 2) + '\n';
+    await writeFile(join(dir, 'not-a-run.json'), outside, {mode: 0o600});
+    await writeFile(join(dir, `${runLive}.json`), JSON.stringify({
+      stamp: join(parent, '..', 'secret.txt'),
+      pid: process.pid,
+      claimedAt: now.toISOString(),
+    }) + '\n', {mode: 0o600});
+    await writeFile(join(dir, `${runOther}.json`), '{', {mode: 0o600});
+    await pruneVerifyDatabaseStamps(data, image, async () => 0);
+    const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
+    assert.deepEqual(left, ['20261117-150000', '20261117-160000']);
+    assert.equal(await readFile(secret, 'utf8'), 'secret');
+    assert.equal(await readFile(join(parent, 'notes.txt'), 'utf8'), 'keep');
+    assert.equal((await stat(join(parent, 'not-a-stamp'))).isDirectory(), true);
+    assert.equal(await readFile(join(dir, 'not-a-run.json'), 'utf8'), outside);
+    assert.equal((await stat(join(dir, `${runOther}.json`))).isFile(), true);
     await assert.rejects(stat(join(parent, '20261117-140000')));
   } finally {
     await rm(data, {recursive: true, force: true});
   }
 });
 
-test('claim e release gravam in-use.json em 0600 sem duplicar o caminho', async () => {
+test('carimbo que não é filho direto e run inseguro são recusados', async () => {
   const data = await privateDirectory();
   try {
     const parent = join(data, 'verify-db');
     const stamp = join(parent, '20261117-150405');
-    const other = join(parent, '20261117-160000');
-    await claimVerifyDatabaseStamp(data, stamp);
-    const path = join(parent, 'in-use.json');
-    const read = async () => JSON.parse(await readFile(path, 'utf8')) as {stamps: string[]};
-    assert.equal((await stat(path)).mode & 0o777, 0o600);
-    assert.deepEqual((await read()).stamps, [stamp]);
-    await claimVerifyDatabaseStamp(data, stamp);
-    assert.deepEqual((await read()).stamps, [stamp]);
-    await claimVerifyDatabaseStamp(data, other);
-    assert.deepEqual((await read()).stamps, [stamp, other]);
-    await releaseVerifyDatabaseStamp(data, stamp);
-    assert.equal((await stat(path)).mode & 0o777, 0o600);
-    assert.deepEqual((await read()).stamps, [other]);
-    await releaseVerifyDatabaseStamp(data, stamp);
-    assert.deepEqual((await read()).stamps, [other]);
-    assert.equal((await readdir(parent)).some((name) => name.includes('.tmp')), false);
+    await assert.rejects(
+      () => claimVerifyDatabaseStamp(data, stamp, '../20261117-150405'),
+      refused('VERIFY_PATH_FORBIDDEN'),
+    );
+    await assert.rejects(
+      () => claimVerifyDatabaseStamp(data, join(parent, '..', 'secret'), runLive),
+      refused('VERIFY_PATH_FORBIDDEN'),
+    );
+    await assert.rejects(
+      () => claimVerifyDatabaseStamp(data, join(parent, 'not-a-stamp'), runLive),
+      refused('VERIFY_PATH_FORBIDDEN'),
+    );
+    await assert.rejects(
+      () => claimVerifyDatabaseStamp(data, join(parent, stamp, 'child'), runLive),
+      refused('VERIFY_PATH_FORBIDDEN'),
+    );
+    await assert.rejects(stat(join(data, 'secret')));
+    await assert.rejects(stat(join(parent, 'in-use.json')));
+    await assert.rejects(stat(join(parent, 'in-use')));
   } finally {
     await rm(data, {recursive: true, force: true});
   }
@@ -256,14 +399,14 @@ test('depois de publicar, a poda apaga o que não é current, recente nem uso', 
     await mkdir(used, {mode: 0o777});
     await mkdir(recent, {mode: 0o777});
     await writeFile(join(ancient, 'marker'), 'old');
-    await claimVerifyDatabaseStamp(data, used);
+    await claimVerifyDatabaseStamp(data, used, runLive);
     const result = await refreshVerifyDatabases({dataDirectory: data, image, spawn: publishingSpawn(), now});
     const left = (await readdir(parent)).filter((name) => /^\d{8}-\d{6}/.test(name)).sort();
     assert.deepEqual(left, ['20200101-000001', '20240101-000000', basename(result.directory)]);
     assert.equal(basename(result.directory), '20261117-150405');
     await assert.rejects(stat(ancient));
     assert.equal((await readFile(join(parent, 'current.json'), 'utf8')).includes(result.directory), true);
-    assert.equal((await stat(join(parent, 'in-use.json'))).mode & 0o777, 0o600);
+    assert.equal((await stat(join(parent, 'in-use', `${runLive}.json`))).mode & 0o777, 0o600);
   } finally {
     await rm(data, {recursive: true, force: true});
   }
