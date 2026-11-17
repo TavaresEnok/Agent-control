@@ -147,15 +147,13 @@ async function markFailed(ledger: Ledger, runId: string) {
 async function examine(input: SecurityVerificationInput, intent: Intent, runId: string, createdAt: Date, directoryName: string, modelCallBudget: number) {
   const capacity = new Capacity(input.ledger);
   const trackedCalls = input.modelCalls ?? {count: 0};
-  const rawFindings = (input.rawFindings ?? [])
-    .map(item => RawFinding.parse(item))
-    .filter(item => !hasRefusedSecretText(item.rule) && !hasRefusedSecretText(item.snippet));
+  const notes: string[] = [];
+  if (input.notes?.length) notes.push(...input.notes);
+  const rawFindings = (input.rawFindings ?? []).map(item => replaceRefusedRaw(RawFinding.parse(item), notes));
   const checklist = input.checklist ?? loadSecurityChecklist();
   const files = await listExamFiles(input.repoPath);
   const allowedFiles = new Set(files);
   const slices = sliceExamFiles(files, checklist);
-  const notes: string[] = [];
-  if (input.notes?.length) notes.push(...input.notes);
   const history = await deletedHistoryExcerpt(input.repoPath);
   const coverage = new Map<string, CoverageRow>();
   const open: OpenFinding[] = [];
@@ -195,15 +193,17 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       else if (missing.length) notes.push(`O examinador não marcou como lido: ${missing.join(', ')}.`);
       if (!exam.success) continue;
       for (const finding of exam.data.findings) {
-        if (hasRefusedSecretText(finding.title) || hasRefusedSecretText(finding.snippet)) continue;
-        const title = clipSecret(finding.title, 200) || 'Achado';
+        const titleRefused = finding.title === REMOVED_HIGH_ENTROPY || hasRefusedSecretText(finding.title);
+        const snippetRefused = finding.snippet === REMOVED_HIGH_ENTROPY || hasRefusedSecretText(finding.snippet);
+        if (titleRefused || snippetRefused) notes.push(HIGH_ENTROPY_NOTE);
+        const title = clipSecret(titleRefused ? REMOVED_HIGH_ENTROPY : finding.title, 200) || 'Achado';
         const reference = clipSecret([finding.reference, finding.cwe].filter((part): part is string => Boolean(part)).join(', '), 200) || title;
         open.push({
           file: finding.file,
           line: finding.line,
           title,
           rule: null,
-          snippet: clipSecret(finding.snippet, 240),
+          snippet: clipSecret(snippetRefused ? REMOVED_HIGH_ENTROPY : finding.snippet, 240),
           severity: finding.severity,
           scenario: clipSecret(finding.scenario, 2000) || title,
           suggestion: clipSecret(finding.suggestion, 2000) || 'Rever o ponto.',
@@ -549,18 +549,36 @@ function shannonEntropy(value: string): number {
   return entropy;
 }
 
+const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
+const HIGH_ENTROPY_NOTE = 'Campo com alta entropia substituído por [removido: alta entropia].';
+
 /** True when a title or snippet carries a high-entropy token or a long base64 run.
+ * Known secrets are masked first. A path token that contains `/` is not a secret.
  * Redaction masks (`xxxx… (sha256:…)`) are not themselves a secret. */
 export function hasRefusedSecretText(text: string): boolean {
   if (!text) return false;
-  const cleaned = text.replace(/[^\s\u2026]{4}\u2026 \(sha256:[a-f0-9]{64}\)/g, ' ');
-  if (/[A-Za-z0-9+/_-]{40,}={0,2}/.test(cleaned)) return true;
+  const cleaned = redactUnknownSecrets(text).replace(/[^\s\u2026]{4}\u2026 \(sha256:[a-f0-9]{64}\)/g, ' ');
+  if (/[A-Za-z0-9+]{40,}={0,2}/.test(cleaned)) return true;
   for (const token of cleaned.split(/\s+/)) {
+    if (token.includes('/')) continue;
     if (token.length < 32) continue;
     const chars = [...token];
     if (chars.length >= 32 && shannonEntropy(token) >= 3.5) return true;
   }
   return false;
+}
+
+function screenedField(value: unknown, max: number): {text: string; removed: boolean} {
+  const text = boundedText(value, max);
+  if (!hasRefusedSecretText(text)) return {text, removed: false};
+  return {text: REMOVED_HIGH_ENTROPY, removed: true};
+}
+
+function replaceRefusedRaw(finding: RawFinding, notes: string[]): RawFinding {
+  const rule = screenedField(finding.rule, 200);
+  const snippet = screenedField(finding.snippet, 240);
+  if (rule.removed || snippet.removed) notes.push(HIGH_ENTROPY_NOTE);
+  return {...finding, rule: rule.text || finding.rule, snippet: snippet.text};
 }
 
 function positiveLine(value: unknown): number | null {
@@ -603,8 +621,9 @@ export function coerceExamResult(value: unknown): unknown {
     .slice(0, 80);
   const findings = (Array.isArray(value.findings) ? value.findings : []).slice(0, 40).flatMap(raw => {
     const finding = isRecord(raw) ? raw : {};
-    if (hasRefusedSecretText(textSource(finding.title)) || hasRefusedSecretText(textSource(finding.snippet))) return [];
-    const title = boundedText(finding.title, 200) || 'Achado';
+    const screenedTitle = screenedField(finding.title, 200);
+    const screenedSnippet = screenedField(finding.snippet, 240);
+    const title = screenedTitle.text || 'Achado';
     const cwe = typeof finding.cwe === 'string' && /^CWE-\d{1,5}$/.test(finding.cwe.trim()) ? finding.cwe.trim() : null;
     const severityWord = typeof finding.severity === 'string' ? finding.severity.trim().toLowerCase() : '';
     const scenario = boundedText(finding.scenario ?? finding.detail, 2000) || title;
@@ -619,7 +638,7 @@ export function coerceExamResult(value: unknown): unknown {
       suggestion,
       cwe,
       reference,
-      snippet: boundedText(finding.snippet, 240),
+      snippet: screenedSnippet.text,
     }];
   });
   return {

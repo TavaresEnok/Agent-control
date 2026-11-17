@@ -627,7 +627,7 @@ test('orçamento de chamadas barra a próxima e o padrão permite mais de uma', 
   }
 });
 
-test('title e snippet com segredo são descartados e o texto normal fica', () => {
+test('title e snippet com segredo são substituídos e o texto normal fica', () => {
   const entropy = '7f3a9c2e1b804d6f55aa0199cc33e7ab';
   const base64 = 'A'.repeat(40);
   const masked = `glpa\u2026 (sha256:${'ab'.repeat(32)})`;
@@ -650,11 +650,135 @@ test('title e snippet com segredo são descartados e o texto normal fica', () =>
       {title: `titulo ${secret}`, severity: 'baixa', file: 'src/app.ts', line: 4, scenario: 'token conhecido', suggestion: 'redigir', snippet: "app.get('/admin', () => 'painel')"},
     ],
   }));
-  assert.deepEqual(parsed.findings.map(finding => finding.title.startsWith('titulo ') ? 'titulo-redigido' : finding.title), ['Achado de SQL', 'titulo-redigido']);
-  assert.equal(parsed.findings[1]?.snippet, "app.get('/admin', () => 'painel')");
+  assert.equal(parsed.findings.length, 4);
+  assert.equal(parsed.findings[0]?.title, 'Achado de SQL');
+  assert.equal(parsed.findings[0]?.snippet, 'SQL concatenado');
+  assert.equal(parsed.findings[1]?.title, '[removido: alta entropia]');
+  assert.equal(parsed.findings[1]?.snippet, 'curto');
+  assert.equal(parsed.findings[2]?.title, 'Trecho suspeito');
+  assert.equal(parsed.findings[2]?.snippet, '[removido: alta entropia]');
+  assert.equal(parsed.findings[3]?.title.startsWith('titulo '), true);
+  assert.equal(parsed.findings[3]?.title.includes(secret), false);
+  assert.equal(parsed.findings[3]?.snippet, "app.get('/admin', () => 'painel')");
   assert.equal(JSON.stringify(parsed).includes(entropy), false);
   assert.equal(JSON.stringify(parsed).includes(base64), false);
   assert.equal(JSON.stringify(parsed).includes(secret), false);
+});
+
+test('token GitHub hardcoded permanece e o ghp_ sai mascarado', () => {
+  const token = `ghp_${'a'.repeat(36)}`;
+  assert.equal(token.length >= 24, true);
+  assert.equal(hasRefusedSecretText(token), false);
+  const parsed = ExamResult.parse(coerceExamResult({
+    kind: 'exame',
+    filesRead: ['src/app.ts'],
+    checklist: ['ASVS-5-V1'],
+    findings: [{
+      title: 'token GitHub hardcoded',
+      severity: 'alta',
+      file: 'src/app.ts',
+      line: 1,
+      scenario: 'token no fonte',
+      suggestion: 'tirar o token',
+      snippet: token,
+    }],
+  }));
+  assert.equal(parsed.findings.length, 1);
+  assert.equal(parsed.findings[0]?.title, 'token GitHub hardcoded');
+  assert.equal(JSON.stringify(parsed).includes(token), false);
+  assert.match(parsed.findings[0]?.snippet ?? '', /sha256:/);
+});
+
+test('caminho longo no snippet permanece inteiro', () => {
+  const path = '/home/app/projects/some-very-long-directory-name/src/handlers/auth-controller.ts';
+  assert.equal(path.length, 80);
+  assert.equal(hasRefusedSecretText(path), false);
+  const parsed = ExamResult.parse(coerceExamResult({
+    kind: 'exame',
+    filesRead: ['src/app.ts'],
+    checklist: ['ASVS-5-V1'],
+    findings: [{
+      title: 'Caminho longo no trecho',
+      severity: 'baixa',
+      file: 'src/app.ts',
+      line: 1,
+      scenario: 'o caminho aparece no codigo',
+      suggestion: 'nada',
+      snippet: path,
+    }],
+  }));
+  assert.equal(parsed.findings.length, 1);
+  assert.equal(parsed.findings[0]?.title, 'Caminho longo no trecho');
+  assert.equal(parsed.findings[0]?.snippet, path);
+});
+
+test('nota do relatório cita a remoção por alta entropia', async () => {
+  const entropy = '7f3a9c2e1b804d6f55aa0199cc33e7ab';
+  const base64 = 'C'.repeat(40);
+  const ready = await bootVerify('verify_rt_m1');
+  try {
+    await mkdir(join(ready.repo, 'src'), {recursive: true});
+    await writeFile(join(ready.repo, 'src', 'app.ts'), 'export const q = "SQL concatenado";\n');
+    const raw: RawFinding = {
+      tool: 'opengrep',
+      rule: 'regra-blob',
+      cwe: null,
+      file: 'src/app.ts',
+      line: 1,
+      severity: 'alta',
+      snippet: base64,
+      fingerprint: 'ab'.repeat(32),
+    };
+    const worker: VerifyWorker = {
+      async run(call) {
+        if (call.task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+        if (call.task.startsWith('Pedido de exame.')) {
+          const items = (call.task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+          return JSON.stringify({
+            kind: 'exame',
+            filesRead: ['src/app.ts'],
+            checklist: items.length ? items : ['SEM-ITEM'],
+            findings: [{
+              title: entropy,
+              severity: 'alta',
+              file: 'src/app.ts',
+              line: 1,
+              scenario: 'segredo no titulo',
+              suggestion: 'tirar',
+              cwe: null,
+              reference: 'ASVS-5.0-V6',
+              snippet: 'curto',
+            }],
+          });
+        }
+        if (call.task.startsWith('Pedido de confirmação.')) {
+          return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'nao reproduz', proof: 'sem prova'});
+        }
+        throw new Error('task desconhecida');
+      },
+    };
+    const result = await runSecurityVerification({
+      ledger: ready.db,
+      principal: ready.principal,
+      authority: ready.authority,
+      projectId: ready.project,
+      repoPath: ready.repo,
+      dataDirectory: ready.dataDirectory,
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      policyRevision: 1,
+      worker,
+      rawFindings: [raw],
+    });
+    const run = JSON.parse(await readFile(join(result.directory, 'run.json'), 'utf8')) as {note: string};
+    const blob = await reportBlob(result.directory);
+    assert.ok(result.achados.some(achado => achado.title === '[removido: alta entropia]'));
+    assert.ok(result.achados.some(achado => achado.title === 'regra-blob'));
+    assert.equal(run.note.includes('[removido: alta entropia]'), true);
+    assert.equal(blob.includes(entropy), false);
+    assert.equal(blob.includes(base64), false);
+  } finally {
+    await ready.close();
+  }
 });
 
 test('histórico apagado não devolve o diff de arquivo secreto', async () => {
@@ -819,7 +943,9 @@ test('segredo da conta não segue na task do outro provedor', async () => {
     assert.equal(blob.includes(base64), false);
     assert.ok(result.achados.some(achado => achado.title === 'Achado de SQL'));
     assert.ok(result.achados.some(achado => achado.title === 'regra-sql'));
-    assert.equal(result.achados.some(achado => achado.title === 'regra-blob' || achado.title === entropy), false);
+    assert.ok(result.achados.some(achado => achado.title === 'regra-blob'));
+    assert.ok(result.achados.some(achado => achado.title === '[removido: alta entropia]'));
+    assert.equal(result.achados.some(achado => achado.title === entropy), false);
   } finally {
     await ready.close();
   }
