@@ -89,20 +89,228 @@ function elementContrast(findings: DesignRawFinding[], file: string, html: strin
   }
 }
 
+const CLOSE_TAG = /^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/;
+const OPEN_NAME = /^<([A-Za-z][\w:-]*)\b/;
+
+function endOfOpeningTag(text: string, start: number): number {
+  let quote: '"' | "'" | '`' | null = null;
+  let brace = 0;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote !== null) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') {
+      brace += 1;
+      continue;
+    }
+    if (char === '}') {
+      brace = Math.max(0, brace - 1);
+      continue;
+    }
+    if (char === '>' && brace === 0) return index;
+  }
+  return -1;
+}
+
+function readQuoted(source: string, start: number): {value: string; end: number} | null {
+  const quote = source[start];
+  if (quote !== '"' && quote !== "'" && quote !== '`') return null;
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (source[index] === quote) return {value: source.slice(start + 1, index), end: index};
+  }
+  return null;
+}
+
+function readBraced(source: string, start: number): {expr: string; end: number} | null {
+  if (source[start] !== '{') return null;
+  let quote: '"' | "'" | '`' | null = null;
+  let depth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote !== null) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return {expr: source.slice(start + 1, index), end: index};
+    }
+  }
+  return null;
+}
+
+function expressionCounts(expr: string): boolean {
+  const trimmed = expr.trim();
+  if (trimmed.length === 0 || trimmed === 'null' || trimmed === 'undefined' || trimmed === 'false') return false;
+  if (trimmed.startsWith('/*') || trimmed.startsWith('//')) return false;
+  const quote = trimmed[0];
+  const end = trimmed[trimmed.length - 1];
+  if ((quote === '"' || quote === "'" || quote === '`') && end === quote && trimmed.length >= 2) {
+    const body = trimmed.slice(1, -1);
+    if (quote === '`' && body.includes('${')) return true;
+    return body.trim().length > 0;
+  }
+  return true;
+}
+
+function attributeCounts(source: string, name: string): boolean {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*`, 'gi');
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    const from = match.index + match[0].length;
+    const char = source[from];
+    if (char === '"' || char === "'") {
+      const quoted = readQuoted(source, from);
+      if (quoted === null) continue;
+      pattern.lastIndex = quoted.end + 1;
+      if (quoted.value.trim().length > 0) return true;
+      continue;
+    }
+    if (char === '{') {
+      const braced = readBraced(source, from);
+      if (braced === null) continue;
+      pattern.lastIndex = braced.end + 1;
+      if (expressionCounts(braced.expr)) return true;
+    }
+  }
+  return false;
+}
+
+function visibleText(inner: string): string {
+  let text = '';
+  let index = 0;
+  while (index < inner.length) {
+    const char = inner[index];
+    if (char === '<') {
+      if (inner.startsWith('<!--', index)) {
+        const end = inner.indexOf('-->', index + 4);
+        index = end < 0 ? inner.length : end + 3;
+        continue;
+      }
+      const tagEnd = endOfOpeningTag(inner, index);
+      if (tagEnd < 0) {
+        text += char;
+        index += 1;
+        continue;
+      }
+      index = tagEnd + 1;
+      continue;
+    }
+    if (char === '{') {
+      const braced = readBraced(inner, index);
+      if (braced === null) {
+        text += char;
+        index += 1;
+        continue;
+      }
+      if (expressionCounts(braced.expr)) text += ' x ';
+      index = braced.end + 1;
+      continue;
+    }
+    text += char;
+    index += 1;
+  }
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function containsComponent(inner: string): boolean {
+  return /<[A-Z][\w.]*/.test(inner);
+}
+
 function accessibleName(attrs: string, inner: string): string {
-  const aria = attrs.match(/\baria-label\s*=\s*(["'])([\s\S]*?)\1/i)?.[2]?.trim() ?? '';
-  if (aria) return aria;
-  const labelled = attrs.match(/\baria-labelledby\s*=\s*(["'])([\s\S]*?)\1/i)?.[2]?.trim() ?? '';
-  if (labelled) return labelled;
-  const title = attrs.match(/\btitle\s*=\s*(["'])([\s\S]*?)\1/i)?.[2]?.trim() ?? '';
-  if (title) return title;
-  const alt = inner.match(/\balt\s*=\s*(["'])([\s\S]*?)\1/i)?.[2]?.trim() ?? '';
-  if (alt) return alt;
-  return inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const name of ['aria-label', 'aria-labelledby', 'title']) {
+    if (attributeCounts(attrs, name)) return name;
+  }
+  if (attributeCounts(inner, 'alt')) return 'alt';
+  return visibleText(inner);
+}
+
+function findClosingTag(html: string, tag: string, from: number): {innerEnd: number; rawEnd: number} | null {
+  const lower = tag.toLowerCase();
+  let quote: '"' | "'" | '`' | null = null;
+  let brace = 0;
+  let depth = 1;
+  for (let index = from; index < html.length; index += 1) {
+    const char = html[index];
+    if (brace > 0 && quote !== null) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (brace > 0 && (char === '"' || char === "'" || char === '`')) {
+      quote = char;
+      continue;
+    }
+    if (char === '{') {
+      brace += 1;
+      continue;
+    }
+    if (char === '}' && brace > 0) {
+      brace -= 1;
+      continue;
+    }
+    if (char !== '<' || brace !== 0) continue;
+    const slice = html.slice(index);
+    const close = CLOSE_TAG.exec(slice);
+    if (close?.[1] && close[1].toLowerCase() === lower) {
+      depth -= 1;
+      if (depth === 0) return {innerEnd: index, rawEnd: index + close[0].length};
+      index += close[0].length - 1;
+      continue;
+    }
+    const open = OPEN_NAME.exec(slice);
+    if (!open?.[1] || open[1].toLowerCase() !== lower) continue;
+    const tagEnd = endOfOpeningTag(html, index);
+    if (tagEnd < 0) return null;
+    const opening = html.slice(index, tagEnd + 1);
+    if (!/\/\s*>$/.test(opening)) depth += 1;
+    index = tagEnd;
+  }
+  return null;
+}
+
+function isButtonLike(tag: string, attrs: string): boolean {
+  if (tag.toLowerCase() === 'button') return true;
+  return /\brole\s*=\s*(["'])button\1/i.test(attrs);
+}
+
+function openingParts(opening: string, tokenLength: number): {attrs: string; selfClosing: boolean} {
+  const suffix = /\/\s*>$/.exec(opening);
+  const cut = suffix ? suffix[0].length : 1;
+  return {attrs: opening.slice(tokenLength, opening.length - cut), selfClosing: suffix !== null};
 }
 
 function flagUnlabeled(findings: DesignRawFinding[], file: string, html: string, index: number, attrs: string, inner: string, raw: string): void {
-  if (accessibleName(attrs, inner)) return;
+  if (accessibleName(attrs, inner) || containsComponent(inner)) return;
   findings.push(designRawFinding({
     tool: 'html',
     rule: DESIGN_PLANTED_RULES.unlabeledButton,
@@ -114,14 +322,35 @@ function flagUnlabeled(findings: DesignRawFinding[], file: string, html: string,
 }
 
 function unlabeledButtons(findings: DesignRawFinding[], file: string, html: string): void {
-  const buttons = /<button\b([^>]*)>([\s\S]*?)<\/button>/gi;
+  const open = /<([A-Za-z][\w:-]*)\b/g;
   let match: RegExpExecArray | null;
-  while ((match = buttons.exec(html)) !== null) {
-    flagUnlabeled(findings, file, html, match.index, match[1] ?? '', match[2] ?? '', match[0]);
-  }
-  const roles = /<([a-zA-Z][\w:-]*)\b([^>]*\brole\s*=\s*(["'])button\3[^>]*)>([\s\S]*?)<\/\1>/gi;
-  while ((match = roles.exec(html)) !== null) {
-    flagUnlabeled(findings, file, html, match.index, match[2] ?? '', match[4] ?? '', match[0]);
+  while ((match = open.exec(html)) !== null) {
+    const start = match.index;
+    const tag = match[1] ?? '';
+    const tagEnd = endOfOpeningTag(html, start);
+    if (tagEnd < 0) {
+      open.lastIndex = start + 1;
+      continue;
+    }
+    const opening = html.slice(start, tagEnd + 1);
+    const parts = openingParts(opening, match[0].length);
+    if (!isButtonLike(tag, parts.attrs)) {
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    if (parts.selfClosing) {
+      flagUnlabeled(findings, file, html, start, parts.attrs, '', opening);
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    const close = findClosingTag(html, tag, tagEnd + 1);
+    if (close === null) {
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    const inner = html.slice(tagEnd + 1, close.innerEnd);
+    flagUnlabeled(findings, file, html, start, parts.attrs, inner, html.slice(start, close.rawEnd));
+    open.lastIndex = close.rawEnd;
   }
 }
 

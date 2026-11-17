@@ -158,9 +158,21 @@ test('estado vazio ausente quando ha lista e nao ha marcador de vazio', () => {
   assert.equal(missingEmptyStateFindings('src/BoaInicio.tsx', 'export function Boa(){return <p>Olá</p>}').length, 0);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role="list"></div>').length, 1);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role={"list"}></div>').length, 1);
-  assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'const rows = items.map((item) => item);').length, 1);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role={\'list\'}></div>').length, 1);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'const rows = items.map((item) => item);').length, 0);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'visibleSettingsSections(project).map(section => section.id)').length, 0);
+  const mapped = missingEmptyStateFindings('src/Lista.tsx', '<ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>');
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0]?.severity, 'alta');
+  assert.equal(mapped[0]?.rule, 'ESTADOS-VAZIO-AUSENTE');
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ol></ol>').length, 1);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role="listbox"></div>').length, 0);
-  assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'const rows = items.map((item) => item);\nnenhum item').length, 1);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'const rows = items.map((item) => item);\nnenhum item').length, 0);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul data-list></ul>\nnenhum item').length, 1);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\nif (items.length === 0) return null;').length, 0);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\nif (items.length == 0) return null;').length, 0);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\n{!items.length && ready}').length, 0);
+  assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\n{items.length ? rows : null}').length, 0);
 });
 
 test('tabela de cobertura em portugues', () => {

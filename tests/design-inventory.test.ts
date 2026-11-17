@@ -60,6 +60,19 @@ test('nove cinzas geram TOKENS-CINZAS-DEMAIS e dois não', () => {
   assert.deepEqual(inventory.grays, ['#1a1a1a', '#5c5c5c']);
 });
 
+test('sombra com alfa baixo não entra na lista de cinzas', () => {
+  const eight = ['#111111', '#222222', '#333333', '#444444', '#555555', '#666666', '#777777', '#888888'];
+  const css = `${grayCss(eight)}\n.sombra { box-shadow: 0 1px 2px rgba(27, 28, 29, 0.04); }`;
+  const inventory = inventoryFromCss(css);
+  assert.deepEqual(inventory.grays, eight);
+  assert.equal(inventory.grays.includes('#1b1c1d'), false);
+  const hit = inventoryFindingsFromCss('css/cinzas.css', css);
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0]?.rule, DESIGN_PLANTED_RULES.grays);
+  assert.equal(hit[0]?.severity, 'alta');
+  assert.equal((hit[0]?.snippet ?? '').includes('#1b1c1d'), false);
+});
+
 test('limiar de cinza é 8 e o intervalo 16–239 com max-min <= 8', () => {
   const eight = ['#101010', '#222222', '#333333', '#444444', '#555555', '#666666', '#777777', '#efefef'];
   assert.equal(inventoryFindingsFromCss('css/cinzas.css', grayCss(eight)).length, 1);

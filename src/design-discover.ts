@@ -45,8 +45,8 @@ type RouteHit = {
 
 const PAGE_FILE = /^page\.(tsx|ts|jsx|js)$/;
 const SOURCE_FILE = /\.(tsx|ts|jsx|js)$/;
-const LIST_MARKER = /data-list(?![A-Za-z0-9-])|role\s*=\s*(?:\{\s*)?(["'])list\1|role\s*=\s*list\b|\.map\s*\(/;
-const EMPTY_MARKER = /data-empty(?![A-Za-z0-9-])|Nenhum item|empty-state/;
+const LIST_MARKER = /<ul\b|<ol\b|data-list(?![A-Za-z0-9-])|role\s*=\s*(?:\{\s*)?(["'])list\1|role\s*=\s*list\b/;
+const EMPTY_MARKER = /data-empty(?![A-Za-z0-9-])|Nenhum item|empty-state|length\s*===?\s*0(?!\d)|(?:^|[^!\w])!\s*items\.length\b|\.length\s*\?(?!\.)/;
 
 /**
  * Rotas de React Router, Next (pages e app), Vue Router e GoRoute.
@@ -74,7 +74,7 @@ export function discoverRoutesFromSource(files: readonly {path: string; text: st
   }));
 }
 
-/** Regra ESTADOS-VAZIO-AUSENTE: lista sem `data-empty`, `Nenhum item` ou `empty-state`. */
+/** Regra ESTADOS-VAZIO-AUSENTE: ul, ol, data-list ou role=list sem ramo de vazio no mesmo arquivo. */
 export function missingEmptyStateFindings(file: string, text: string): DesignRawFinding[] {
   if (EMPTY_MARKER.test(text)) return [];
   const match = LIST_MARKER.exec(text);

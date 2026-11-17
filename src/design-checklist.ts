@@ -72,7 +72,7 @@ const BODY: DesignChecklistItem[] = [
   item('DESIGN-WCAG-2413-FOCO-APARENCIA', 'WCAG-2.2', 'Aparência do foco', 'style',
     'O indicador de foco tem contraste de pelo menos 3:1 com o fundo adjacente e área perceptível, não um fio de 1px camuflado (WCAG 2.4.13).'),
   item('DESIGN-WCAG-412-NOME', 'WCAG-2.2', 'Nome acessível', 'screen',
-    'button ou role=button sem texto, sem aria-label, sem aria-labelledby, sem title e sem alt de imagem interna fica sem nome. O nome visível entra no nome acessível. Link vazio também reprova.'),
+    'button ou role=button sem texto, sem aria-label, sem aria-labelledby, sem title e sem alt de imagem interna fica sem nome. Expressão JSX de aria-label, aria-labelledby e title conta como nome. O nome visível entra no nome acessível. Link vazio também reprova.'),
   item('DESIGN-WCAG-243-ORDEM-FOCO', 'WCAG-2.2', 'Ordem do foco', 'screen',
     'O foco segue a ordem visual, da esquerda para a direita e de cima para baixo. Voltar mais de 200px para cima depois de avançar é falha de ordem. Não há armadilha de teclado.'),
   item('DESIGN-WCAG-258-ALVO-24', 'WCAG-2.2', 'Alvo mínimo de 24px', 'style',
@@ -124,7 +124,7 @@ const BODY: DesignChecklistItem[] = [
     'Sombras vêm de poucos tokens. Não invente uma sombra nova por cartão. Sombra none é válida. Elevação grande fica para diálogo, não para cada bloco.'),
 
   item('DESIGN-ESTADOS-VAZIO', 'STATES', 'Estado vazio', 'screen',
-    'Lista com data-list, role=list ou .map( precisa de estado vazio: data-empty e o texto "Nenhum item", ou empty-state. Tela em branco reprova. O vazio diz o que fazer a seguir.'),
+    'Lista renderizada (ul, ol, data-list ou role=list) sem ramo de vazio no mesmo arquivo reprova; .map( sozinho não basta, e data-empty, "Nenhum item", empty-state ou condicional de vazio (length === 0) fecha o ramo.'),
   item('DESIGN-ESTADOS-CARREGANDO', 'STATES', 'Estado carregando', 'screen',
     'Ação acima de 400ms mostra carregando. De 100ms a 1s, um indicador de 16px basta. De 1s a 10s, mostre progresso. Acima de 10s, não bloqueie a tela.'),
   item('DESIGN-ESTADOS-ERRO', 'STATES', 'Estado de erro', 'screen',

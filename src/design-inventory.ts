@@ -296,9 +296,11 @@ function grayKey(rgb: Rgb): string {
 
 /**
  * Cinza: R, G e B entre 16 e 239 (inclusive) e max(R,G,B)-min(R,G,B) <= 8.
+ * Alfa menor que 0.5 não entra: sombra translúcida não é token de cinza.
  * Branco (255), preto (0) e azul ficam de fora por esse intervalo.
  */
 function isGray(rgb: Rgb): boolean {
+  if (rgb.a < 0.5) return false;
   const r = Math.round(rgb.r);
   const g = Math.round(rgb.g);
   const b = Math.round(rgb.b);
