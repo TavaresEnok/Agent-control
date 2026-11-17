@@ -1,13 +1,16 @@
+import {randomBytes} from 'node:crypto';
 import {chmod, lstat, mkdir, readFile, readdir, realpath, writeFile} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
+import {hasKnownSecret} from './verify-redact.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
 
-const REPORT_DIRECTORY = /^\d{8}-\d{6}-seguranca$/;
+const REPORT_DIRECTORY = /^\d{8}-\d{6}(?:-[a-f0-9]{8})?-seguranca$/;
+const NEW_REPORT_DIRECTORY = /^\d{8}-\d{6}-[a-f0-9]{8}-seguranca$/;
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
 
 function hasLiveAccessKey(text: string): boolean {
-  return /AKIA[0-9A-Z]{16}/.test(text);
+  return hasKnownSecret(text);
 }
 
 function assertNoLiveAccessKey(value: unknown): void {
@@ -65,11 +68,20 @@ function assertInside(root: string, target: string): void {
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
 }
 
-function directoryNameOf(createdAt: Date): string {
+function stampOf(createdAt: Date): string {
   if (!(createdAt instanceof Date) || Number.isNaN(createdAt.getTime())) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const pad = (value: number, width = 2) => value.toString().padStart(width, '0');
-  const name = `${pad(createdAt.getUTCFullYear(), 4)}${pad(createdAt.getUTCMonth() + 1)}${pad(createdAt.getUTCDate())}-${pad(createdAt.getUTCHours())}${pad(createdAt.getUTCMinutes())}${pad(createdAt.getUTCSeconds())}-seguranca`;
-  if (!REPORT_DIRECTORY.test(name)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  return `${pad(createdAt.getUTCFullYear(), 4)}${pad(createdAt.getUTCMonth() + 1)}${pad(createdAt.getUTCDate())}-${pad(createdAt.getUTCHours())}${pad(createdAt.getUTCMinutes())}${pad(createdAt.getUTCSeconds())}`;
+}
+
+function reportSuffix(runId: string): string {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) return runId.slice(0, 8).toLowerCase();
+  return randomBytes(4).toString('hex');
+}
+
+function directoryNameOf(createdAt: Date, runId: string): string {
+  const name = `${stampOf(createdAt)}-${reportSuffix(runId)}-seguranca`;
+  if (!NEW_REPORT_DIRECTORY.test(name)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   return name;
 }
 
@@ -367,8 +379,9 @@ function parseAchadosFile(text: string): Achado[] {
   });
 }
 
-async function loadReports(project: string): Promise<{directory: string; summary: ReportSummary}[]> {
-  const found: {directory: string; summary: ReportSummary}[] = [];
+async function loadReports(project: string): Promise<{reports: {directory: string; summary: ReportSummary}[]; corrupt: string[]}> {
+  const reports: {directory: string; summary: ReportSummary}[] = [];
+  const corrupt: string[] = [];
   for (const name of await readdir(project)) {
     if (!REPORT_DIRECTORY.test(name)) continue;
     const path = join(project, name);
@@ -378,11 +391,18 @@ async function loadReports(project: string): Promise<{directory: string; summary
     const real = await realpath(path);
     if (real !== path) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
     assertInside(project, real);
-    const summary = parseSummaryText(await readTextInside(project, join(real, 'run.json'), 'VERIFY_REPORT_INVALID'), name);
-    found.push({directory: real, summary});
+    try {
+      const text = await readTextInside(project, join(real, 'run.json'), 'VERIFY_REPORT_INVALID');
+      reports.push({directory: real, summary: parseSummaryText(text, name)});
+    } catch (error) {
+      if (error instanceof Refusal && error.code === 'VERIFY_PATH_FORBIDDEN') throw error;
+      if (error instanceof Refusal && error.code !== 'VERIFY_REPORT_INVALID') throw error;
+      corrupt.push(name);
+    }
   }
-  found.sort((a, b) => a.summary.directoryName.localeCompare(b.summary.directoryName) || a.summary.id.localeCompare(b.summary.id));
-  return found;
+  reports.sort((a, b) => a.summary.directoryName.localeCompare(b.summary.directoryName) || a.summary.id.localeCompare(b.summary.id));
+  corrupt.sort((a, b) => a.localeCompare(b));
+  return {reports, corrupt};
 }
 
 async function findReport(dataDirectory: string, projectId: string, runId: string): Promise<{directory: string; summary: ReportSummary}> {
@@ -390,22 +410,39 @@ async function findReport(dataDirectory: string, projectId: string, runId: strin
   assertSafeSegment(runId);
   const project = await resolveProject(dataDirectory, projectId);
   if (!project) throw new Refusal('VERIFY_REPORT_NOT_FOUND', 404);
-  const found = (await loadReports(project)).filter(item => item.summary.id === runId);
+  const found = (await loadReports(project)).reports.filter(item => item.summary.id === runId);
   if (found.length === 0) throw new Refusal('VERIFY_REPORT_NOT_FOUND', 404);
   if (found.length > 1) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   return found[0];
 }
 
+export async function reserveSecurityReportDirectory(input: {
+  dataDirectory: string; projectId: string; runId: string; createdAt: Date;
+}): Promise<{directory: string; directoryName: string}> {
+  assertSafeSegment(input.projectId);
+  assertSafeSegment(input.runId);
+  const directoryName = directoryNameOf(input.createdAt, input.runId);
+  const dataReal = await requireDataDirectory(input.dataDirectory);
+  const root = await ensureDir(dataReal, 'verificacoes');
+  const project = await ensureDir(root, input.projectId);
+  const directory = await createReportDir(project, directoryName);
+  return {directory, directoryName};
+}
+
 export async function writeSecurityReport(input: {
   dataDirectory: string; projectId: string; runId: string; createdAt: Date; commit: string;
   mapMarkdown: string; coverage: CoverageRow[]; achados: Achado[]; raw: unknown; note: string;
+  directoryName?: string;
 }): Promise<{directory: string; directoryName: string}> {
   assertSafeSegment(input.projectId);
   assertSafeSegment(input.runId);
   const rawBody = serializedRaw(input.raw);
   const achados = parseAchados(input.achados);
   const coverage = parseCoverage(input.coverage);
-  const directoryName = directoryNameOf(input.createdAt);
+  const givenName = input.directoryName;
+  const reserved = typeof givenName === 'string';
+  const directoryName = reserved ? givenName : directoryNameOf(input.createdAt, input.runId);
+  if (!REPORT_DIRECTORY.test(directoryName)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const counts = failureCounts(achados);
   const summaryParsed = ReportSummary.safeParse({
     id: input.runId,
@@ -444,7 +481,7 @@ export async function writeSecurityReport(input: {
   const dataReal = await requireDataDirectory(input.dataDirectory);
   const root = await ensureDir(dataReal, 'verificacoes');
   const project = await ensureDir(root, input.projectId);
-  const directory = await createReportDir(project, directoryName);
+  const directory = reserved ? await ensureDir(project, directoryName) : await createReportDir(project, directoryName);
   await ensureDir(directory, 'achados');
   await ensureDir(directory, 'bruto');
   for (const file of planned) {
@@ -458,10 +495,15 @@ export async function writeSecurityReport(input: {
   return {directory, directoryName};
 }
 
-export async function listSecurityReports(dataDirectory: string, projectId: string): Promise<ReportSummary[]> {
+export async function inspectSecurityReports(dataDirectory: string, projectId: string): Promise<{reports: ReportSummary[]; corrupt: string[]}> {
   const project = await resolveProject(dataDirectory, projectId);
-  if (!project) return [];
-  return (await loadReports(project)).map(item => item.summary);
+  if (!project) return {reports: [], corrupt: []};
+  const loaded = await loadReports(project);
+  return {reports: loaded.reports.map(item => item.summary), corrupt: loaded.corrupt};
+}
+
+export async function listSecurityReports(dataDirectory: string, projectId: string): Promise<ReportSummary[]> {
+  return (await inspectSecurityReports(dataDirectory, projectId)).reports;
 }
 
 export async function readSecurityReport(dataDirectory: string, projectId: string, runId: string): Promise<{summary: ReportSummary; achados: Achado[]; coverageMarkdown: string}> {

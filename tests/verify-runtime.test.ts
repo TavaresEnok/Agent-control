@@ -12,8 +12,9 @@ import {Ledger} from '../src/ledger.ts';
 import {ProviderCollectors} from '../src/providers.ts';
 import {createSyntheticProviderAdapter} from '../src/synthetic-provider-adapter.ts';
 import {createPersonalVerifyWorker, buildReadonlyExamRequest} from '../src/verify-personal-worker.ts';
+import {secretPreview} from '../src/verify-redact.ts';
 import {runSecurityVerification} from '../src/verify-runtime.ts';
-import {REMEDIATION_ACCEPTANCE, type VerifyWorker} from '../src/verify-types.ts';
+import {REMEDIATION_ACCEPTANCE, type RawFinding, type VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const exec = promisify(execFile);
@@ -259,4 +260,278 @@ test('worker pessoal pede exame sem caminhos de escrita', async () => {
   assert.equal(request.writePaths.length, 0);
   assert.equal(request.role, 'reviewer');
   assert.equal(typeof request.outputSchema, 'object');
+});
+
+test('..evil dentro do repositório não conta como fora', async () => {
+  const url = process.env.AC_TEST_DATABASE_URL;
+  assert.ok(url);
+  const database = await isolatedDatabase(url, 'verify_rt_out');
+  const db = new Ledger(database.url);
+  const repo = await mkdtemp(join(tmpdir(), 'ac-verify-repo-'));
+  const outside = await mkdtemp(join(tmpdir(), 'ac-verify-out-'));
+  const inside = join(repo, '..evil');
+  await mkdir(inside);
+  try {
+    await db.migrate();
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    const authority = {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1};
+    const base = {
+      ledger: db,
+      principal: 'verify-owner',
+      authority,
+      projectId: randomUUID(),
+      repoPath: repo,
+      dataDirectory: outside,
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      policyRevision: 1,
+      worker: {async run() { return '{}'; }},
+    };
+    let outsideCode = '';
+    try {
+      await runSecurityVerification(base);
+    } catch (error) {
+      outsideCode = error instanceof Refusal ? error.code : 'other';
+    }
+    assert.notEqual(outsideCode, 'VERIFY_REPORT_INSIDE_REPO');
+    await assert.rejects(() => runSecurityVerification({...base, dataDirectory: inside}), (error: unknown) => {
+      assert.equal(error instanceof Refusal, true);
+      assert.equal((error as Refusal).code, 'VERIFY_REPORT_INSIDE_REPO');
+      return true;
+    });
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(repo, {recursive: true, force: true});
+    await rm(outside, {recursive: true, force: true});
+  }
+});
+
+async function bootVerify(label: string) {
+  const url = process.env.AC_TEST_DATABASE_URL;
+  assert.ok(url);
+  const database = await isolatedDatabase(url, label);
+  const db = new Ledger(database.url);
+  const capacity = new Capacity(db);
+  const repo = await mkdtemp(join(tmpdir(), 'ac-verify-repo-'));
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-data-'));
+  await db.migrate();
+  const principal = 'verify-owner';
+  const project = randomUUID();
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Verificação']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+  await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 2});
+  const providers = ['claude', 'grok'] as const;
+  const accounts = providers.map(() => randomUUID());
+  const specialistProfiles = providers.map(() => randomUUID());
+  const reviewerProfiles = providers.map(() => randomUUID());
+  const adapters = providers.map(provider => createSyntheticProviderAdapter({
+    id: 'fixture-' + provider,
+    provider,
+    version: 'verify-v1',
+    runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider, accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
+  }));
+  const collectors = new ProviderCollectors(db, adapters);
+  for (let i = 0; i < providers.length; i++) {
+    await capacity.registerModel(principal, {provider: providers[i], model: 'fixture-model', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-runtime'});
+    await capacity.addAccount(principal, project, {id: accounts[i], provider: providers[i], label: 'Synthetic ' + providers[i], resourceIdentity: 'verify-' + accounts[i], mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-runtime', maxConcurrent: 2});
+    await capacity.addProfile(principal, project, {id: specialistProfiles[i], accountId: accounts[i], model: 'fixture-model', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, project, {id: reviewerProfiles[i], accountId: accounts[i], model: 'fixture-model', effort: 'medium', role: 'reviewer'});
+    await collectors.bind(principal, project, {accountId: accounts[i], adapterId: adapters[i].manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
+  }
+  const revision = await capacity.publish(principal, project, 0, {
+    schemaVersion: 1,
+    maxProgrammersPerContext: 1,
+    maxEvaluatorsPerContext: 1,
+    roles: {specialist: {regular: specialistProfiles, emergency: []}, reviewer: {regular: reviewerProfiles, emergency: []}},
+  });
+  const context = await db.createContext(principal, project, randomUUID());
+  await capacity.assignPolicy(principal, context, revision);
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  await db.pool.query("UPDATE ac_provider_bindings SET last_started_at=clock_timestamp()-interval '2 seconds'");
+  for (const accountId of accounts) await collectors.collect(principal, project, accountId, randomUUID());
+  const authority = await db.acquire(principal, context, randomUUID(), label, 60);
+  return {
+    db, database, repo, dataDirectory, principal, project, authority,
+    async close() {
+      await db.close();
+      await database.close();
+      await rm(repo, {recursive: true, force: true});
+      await rm(dataDirectory, {recursive: true, force: true});
+    },
+  };
+}
+
+function examWorker(confirmTasks: string[], findings: unknown[], onCall?: () => Promise<void>): VerifyWorker {
+  return {
+    async run(call) {
+      if (onCall) await onCall();
+      const task = call.task;
+      if (task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+      if (task.startsWith('Pedido de exame.')) {
+        const items = (task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+        return JSON.stringify({
+          kind: 'exame',
+          filesRead: ['identity.ts'],
+          checklist: items.length ? items : ['SEM-ITEM'],
+          findings,
+        });
+      }
+      if (task.startsWith('Pedido de confirmação.')) {
+        confirmTasks.push(task);
+        return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'nao reproduz', proof: 'sem prova'});
+      }
+      throw new Error('task desconhecida');
+    },
+  };
+}
+
+async function reportBlob(root: string): Promise<string> {
+  const parts: string[] = [];
+  const walk = async (dir: string) => {
+    for (const entry of await readdir(dir, {withFileTypes: true})) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isFile()) parts.push(await readFile(full, 'utf8'));
+    }
+  };
+  await walk(root);
+  return parts.join('\n');
+}
+
+test('arquivo secreto vai só com nome e linha e ..evil ainda é lido', async () => {
+  const envSecret = 'super-secreto-nao-enviar';
+  const keySecret = 'conteudo-privado-id-rsa';
+  const evil = 'CONTEUDO-PONTO-EVIL';
+  const pub = 'identidade-publica';
+  const ready = await bootVerify('verify_rt_sec');
+  const confirmTasks: string[] = [];
+  try {
+    await writeFile(join(ready.repo, '.env'), `# comentario\nSENHA_ENV=${envSecret}\n`);
+    await writeFile(join(ready.repo, 'identity.ts'), `export const nome = '${pub}';\n`);
+    await writeFile(join(ready.repo, 'id_rsa'), `${keySecret}\n`);
+    await writeFile(join(ready.repo, '..evil'), `${evil}\n`);
+    const worker = examWorker(confirmTasks, [
+      {title: 'env', severity: 'alta', file: '.env', line: 2, scenario: 'arquivo de ambiente', suggestion: 'tirar do repo', cwe: 'CWE-798', reference: 'ASVS-5.0-V6', snippet: 'env'},
+      {title: 'chave', severity: 'alta', file: 'id_rsa', line: 1, scenario: 'chave privada', suggestion: 'tirar do repo', cwe: 'CWE-798', reference: 'ASVS-5.0-V6', snippet: 'chave'},
+      {title: 'identidade', severity: 'baixa', file: 'identity.ts', line: 1, scenario: 'arquivo publico', suggestion: 'nenhuma', cwe: null, reference: 'ASVS-5.0-V1', snippet: 'export'},
+      {title: 'evil', severity: 'baixa', file: '..evil', line: 1, scenario: 'nome parecido com escape', suggestion: 'nada', cwe: null, reference: 'ASVS-5.0-V1', snippet: 'evil'},
+    ]);
+    const commit = '0123456789abcdef0123456789abcdef01234567';
+    await runSecurityVerification({
+      ledger: ready.db,
+      principal: ready.principal,
+      authority: ready.authority,
+      projectId: ready.project,
+      repoPath: ready.repo,
+      dataDirectory: ready.dataDirectory,
+      commit,
+      policyRevision: 1,
+      worker,
+    });
+    const taskFor = (file: string) => confirmTasks.find(task => task.includes(`Arquivo: ${file}\n`));
+    const envTask = taskFor('.env');
+    const keyTask = taskFor('id_rsa');
+    const idTask = taskFor('identity.ts');
+    const evilTask = taskFor('..evil');
+    assert.deepEqual([
+      envTask ? '' : 'env-task',
+      envTask?.includes(envSecret) ? 'env-bytes' : '',
+      envTask?.includes('nome: .env\nlinha: 2\n') ? '' : 'env-stub',
+      keyTask ? '' : 'key-task',
+      keyTask?.includes(keySecret) ? 'key-bytes' : '',
+      keyTask?.includes('nome: id_rsa\nlinha: 1\n') ? '' : 'key-stub',
+      idTask?.includes(pub) ? '' : 'identity-missing',
+      evilTask?.includes(evil) ? '' : 'evil-missing',
+    ].filter(Boolean), []);
+  } finally {
+    await ready.close();
+  }
+});
+
+test('texto de modelo e ferramenta é redigido e o diretório é reservado antes', async () => {
+  const token = `glpat-${'b'.repeat(20)}`;
+  const assigned = 'password = "hunter2-ficticio"';
+  const aiza = `AIza${'D'.repeat(35)}`;
+  const ready = await bootVerify('verify_rt_red');
+  let sawReserved = false;
+  const confirmTasks: string[] = [];
+  try {
+    await writeFile(join(ready.repo, 'identity.ts'), 'export const nome = "identidade-publica";\n');
+    const rawFinding: RawFinding = {
+      tool: 'opengrep',
+      rule: 'regra-linha',
+      cwe: null,
+      file: 'identity.ts',
+      line: 1,
+      severity: 'media',
+      snippet: `linha ${token}`,
+      fingerprint: 'ab'.repeat(32),
+    };
+    const worker: VerifyWorker = {
+      async run(call) {
+        if (!sawReserved) {
+          try {
+            const names = await readdir(join(ready.dataDirectory, 'verificacoes', ready.project));
+            sawReserved = names.some(name => /^\d{8}-\d{6}-[a-f0-9]{8}-seguranca$/.test(name));
+          } catch {
+            sawReserved = false;
+          }
+        }
+        const task = call.task;
+        if (task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+        if (task.startsWith('Pedido de exame.')) {
+          const items = (task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+          return JSON.stringify({
+            kind: 'exame',
+            filesRead: ['identity.ts'],
+            checklist: items.length ? items : ['SEM-ITEM'],
+            findings: [{
+              title: `titulo ${token}`,
+              severity: 'alta',
+              file: 'identity.ts',
+              line: 1,
+              scenario: `cenario ${token}`,
+              suggestion: assigned,
+              cwe: 'CWE-798',
+              reference: 'ASVS-5.0-V6',
+              snippet: `trecho ${token}`,
+            }],
+          });
+        }
+        if (task.startsWith('Pedido de confirmação.')) {
+          confirmTasks.push(task);
+          return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'nao reproduz', proof: `prova ${aiza}`});
+        }
+        throw new Error('task desconhecida');
+      },
+    };
+    const result = await runSecurityVerification({
+      ledger: ready.db,
+      principal: ready.principal,
+      authority: ready.authority,
+      projectId: ready.project,
+      repoPath: ready.repo,
+      dataDirectory: ready.dataDirectory,
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      policyRevision: 1,
+      worker,
+      rawFindings: [rawFinding],
+    });
+    const blob = await reportBlob(result.directory);
+    const stored = (await ready.db.pool.query('SELECT payload::text AS payload FROM ac_verify_findings WHERE run_id=$1', [result.runId])).rows
+      .map(row => String(row.payload)).join('\n');
+    const held = `${blob}\n${stored}\n${confirmTasks.join('\n')}`;
+    assert.deepEqual([
+      held.includes(token) ? 'glpat-cru' : '',
+      held.includes('hunter2-ficticio') ? 'password-cru' : '',
+      held.includes(aiza) ? 'aiza-cru' : '',
+      sawReserved ? '' : 'sem-reserva',
+      result.directory.endsWith('-seguranca') && /[a-f0-9]{8}-seguranca$/.test(result.directory) ? '' : 'sufixo',
+      held.includes(secretPreview(token).sha256) ? '' : 'sha-glpat',
+      held.includes(secretPreview(aiza).sha256) ? '' : 'sha-aiza',
+    ].filter(Boolean), []);
+  } finally {
+    await ready.close();
+  }
 });

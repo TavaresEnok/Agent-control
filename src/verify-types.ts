@@ -118,7 +118,7 @@ export type CoverageRow = z.infer<typeof CoverageRow>;
 
 export const ReportSummary = z.object({
   id: Id,
-  directoryName: z.string().regex(/^\d{8}-\d{6}-seguranca$/),
+  directoryName: z.string().regex(/^\d{8}-\d{6}(?:-[a-f0-9]{8})?-seguranca$/),
   createdAt: z.string().min(1).max(40),
   counts: z.object({alta: z.number().int().nonnegative(), media: z.number().int().nonnegative(), baixa: z.number().int().nonnegative(), informativa: z.number().int().nonnegative()}).strict(),
   note: z.string().max(500),

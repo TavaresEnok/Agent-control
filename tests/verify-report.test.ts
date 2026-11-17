@@ -16,6 +16,7 @@ after(() => {
 const projectId = '11111111-1111-4111-8111-111111111111';
 const runId = '33333333-3333-4333-8333-333333333333';
 const otherRunId = '55555555-5555-4555-8555-555555555555';
+const thirdRunId = '77777777-7777-4777-8777-777777777777';
 const createdAt = new Date(Date.UTC(2026, 10, 16, 3, 4, 5));
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const note = 'Não foi possível verificar o módulo nativo fechado.';
@@ -193,10 +194,10 @@ test('grava o relatório privado, a nota de falha e a leitura', async () => {
     assert.deepEqual(await listSecurityReports(data, projectId), []);
     const written = await writeSecurityReport(reportInput(data));
     const dataReal = await realpath(data);
-    const directoryName = '20261116-030405-seguranca';
+    const directoryName = '20261116-030405-33333333-seguranca';
     assert.equal(written.directoryName, directoryName);
     assert.equal(written.directory, join(dataReal, 'verificacoes', projectId, directoryName));
-    assert.match(written.directoryName, /^\d{8}-\d{6}-seguranca$/);
+    assert.match(written.directoryName, /^\d{8}-\d{6}-[a-f0-9]{8}-seguranca$/);
     await assertPrivateTree(join(dataReal, 'verificacoes'));
     const runStat = await stat(join(written.directory, 'run.json'));
     assert.equal(runStat.isFile(), true);
@@ -274,15 +275,19 @@ test('grava o relatório privado, a nota de falha e a leitura', async () => {
   });
 });
 
-test('descartado não entra na nota de falha e o mesmo segundo não ganha sufixo', async () => {
+test('descartado não entra na nota de falha e o mesmo segundo ganha sufixo único', async () => {
   await withTemp(async data => {
     const discarded = achados.filter(item => item.id === 'ACH-002');
+    const firstName = '20261116-030405-33333333-seguranca';
+    const sameSecondName = '20261116-030405-55555555-seguranca';
+    const laterName = '20261116-030406-77777777-seguranca';
     const first = await writeSecurityReport(reportInput(data, {
       runId,
       createdAt,
       achados: discarded,
       coverage: [coverage[0]],
     }));
+    assert.equal(first.directoryName, firstName);
     const summary = ReportSummary.parse(JSON.parse(await readFile(join(first.directory, 'run.json'), 'utf8')));
     assert.deepEqual(summary.counts, {alta: 0, media: 0, baixa: 0, informativa: 0});
     const readme = await readFile(join(first.directory, 'README.md'), 'utf8');
@@ -291,19 +296,20 @@ test('descartado não entra na nota de falha e o mesmo segundo não ganha sufixo
     assert.match(readme, /Há 1 achado descartado\. Essa contagem fica à parte e não entra na nota de falha\./);
     assert.equal(await readFile(join(first.directory, 'achados', 'ACH-002.md'), 'utf8').then(text => text.includes('descartado')), true);
 
-    await assert.rejects(writeSecurityReport(reportInput(data, {runId: otherRunId, createdAt})), refused('VERIFY_REPORT_EXISTS'));
-    assert.deepEqual(await listSecurityReports(data, projectId), [summary]);
+    const sameSecond = await writeSecurityReport(reportInput(data, {runId: otherRunId, createdAt, achados: discarded}));
+    assert.equal(sameSecond.directoryName, sameSecondName);
+    await assert.rejects(writeSecurityReport(reportInput(data, {runId, createdAt, achados: discarded})), refused('VERIFY_REPORT_EXISTS'));
     assert.equal(await readFile(join(first.directory, 'run.json'), 'utf8').then(text => JSON.parse(text).id), runId);
 
     const later = new Date(createdAt.getTime() + 1000);
-    const second = await writeSecurityReport(reportInput(data, {runId: otherRunId, createdAt: later, achados: discarded}));
-    assert.equal(second.directoryName, '20261116-030406-seguranca');
-    assert.match(second.directoryName, /^\d{8}-\d{6}-seguranca$/);
+    const second = await writeSecurityReport(reportInput(data, {runId: thirdRunId, createdAt: later, achados: discarded}));
+    assert.equal(second.directoryName, laterName);
+    assert.match(second.directoryName, /^\d{8}-\d{6}-[a-f0-9]{8}-seguranca$/);
     const listed = await listSecurityReports(data, projectId);
-    assert.deepEqual(listed.map(item => item.id), [runId, otherRunId]);
-    assert.deepEqual(listed.map(item => item.directoryName), ['20261116-030405-seguranca', '20261116-030406-seguranca']);
+    assert.deepEqual(listed.map(item => item.id), [runId, otherRunId, thirdRunId]);
+    assert.deepEqual(listed.map(item => item.directoryName), [firstName, sameSecondName, laterName]);
     const read = await readSecurityReport(data, projectId, otherRunId);
-    assert.equal(read.summary.directoryName, '20261116-030406-seguranca');
+    assert.equal(read.summary.directoryName, sameSecondName);
     assert.equal(read.achados.length, 1);
   });
 });
@@ -318,7 +324,7 @@ test('recusa raw com chave AKIA e não cria arquivo', async () => {
     await withTemp(async data => {
       await assert.rejects(writeSecurityReport(reportInput(data, {raw: leak})), refused('VERIFY_SECRET_IN_REPORT'));
       assert.deepEqual(await readdir(data), []);
-      await assert.rejects(stat(join(data, 'verificacoes', projectId, '20261116-030405-seguranca', 'bruto', 'achados-brutos.json')));
+      await assert.rejects(stat(join(data, 'verificacoes', projectId, '20261116-030405-33333333-seguranca', 'bruto', 'achados-brutos.json')));
     });
   }
 });
@@ -372,5 +378,102 @@ test('recusa caminho que escapa de verificacoes', async () => {
     await symlink(secretFile, achadoPath);
     await assert.rejects(readAchadoMarkdown(data, projectId, runId, 'ACH-004'), refused('VERIFY_PATH_FORBIDDEN'));
     assert.equal(await readFile(secretFile, 'utf8'), 'NAO-LER');
+  });
+});
+
+test('recusa qualquer segredo conhecido que sobrou e aceita a máscara', async () => {
+  const ghp = `ghp_${'a'.repeat(20)}`;
+  const glpat = `glpat-${'b'.repeat(20)}`;
+  const live = `sk_live_${'c'.repeat(24)}`;
+  const aiza = `AIza${'D'.repeat(35)}`;
+  const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const credentialUrl = 'https://usuario:segredo@example.com/recurso';
+  const pem = '-----BEGIN PRIVATE KEY-----\nMIIEsegredo\n-----END PRIVATE KEY-----';
+  const assigned = 'password = "hunter2-ficticio"';
+  const leaks: unknown[] = [
+    ghp,
+    glpat,
+    live,
+    aiza,
+    jwt,
+    credentialUrl,
+    pem,
+    assigned,
+    {glpat},
+    {[ghp]: 'x'},
+  ];
+  for (const leak of leaks) {
+    await withTemp(async data => {
+      await assert.rejects(writeSecurityReport(reportInput(data, {raw: leak})), refused('VERIFY_SECRET_IN_REPORT'));
+      assert.deepEqual(await readdir(data), []);
+    });
+  }
+  const redact = await import('../src/verify-redact.ts');
+  const masked = redact.redactUnknownSecrets(ghp);
+  await withTemp(async data => {
+    const written = await writeSecurityReport(reportInput(data, {note: `visto ${masked}`}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.equal(readme.includes(ghp), false);
+    assert.equal(readme.includes(masked), true);
+  });
+});
+
+test('reserva o diretório e a escrita reutiliza esse nome', async () => {
+  await withTemp(async data => {
+    const module = await import('../src/verify-report.ts') as Record<string, unknown>;
+    const reserve = module.reserveSecurityReportDirectory as (input: {
+      dataDirectory: string; projectId: string; runId: string; createdAt: Date;
+    }) => Promise<{directory: string; directoryName: string}>;
+    assert.equal(typeof reserve, 'function');
+    const reserved = await reserve({dataDirectory: data, projectId, runId, createdAt});
+    assert.equal(reserved.directoryName, '20261116-030405-33333333-seguranca');
+    const info = await lstat(reserved.directory);
+    assert.equal(info.isDirectory(), true);
+    assert.equal(info.mode & 0o777, 0o700);
+    const written = await writeSecurityReport({...reportInput(data), directoryName: reserved.directoryName});
+    assert.equal(written.directory, reserved.directory);
+    assert.equal(written.directoryName, reserved.directoryName);
+    assert.equal((await stat(join(written.directory, 'run.json'))).mode & 0o777, 0o600);
+  });
+});
+
+test('um relatório corrompido não derruba a listagem e o nome antigo continua', async () => {
+  await withTemp(async data => {
+    const written = await writeSecurityReport(reportInput(data));
+    assert.match(written.directoryName, /^\d{8}-\d{6}-[a-f0-9]{8}-seguranca$/);
+    const project = join(data, 'verificacoes', projectId);
+    const broken = '20200101-000000-seguranca';
+    const missing = '20200102-000000-seguranca';
+    const legacy = '20261115-010203-seguranca';
+    await mkdir(join(project, broken), {mode: 0o700});
+    await writeFile(join(project, broken, 'run.json'), '{isto nao e json', {mode: 0o600});
+    await mkdir(join(project, missing), {mode: 0o700});
+    await mkdir(join(project, legacy), {mode: 0o700});
+    await writeFile(join(project, legacy, 'run.json'), `${JSON.stringify({
+      id: otherRunId,
+      directoryName: legacy,
+      createdAt: '2026-11-15T01:02:03.000Z',
+      counts: {alta: 0, media: 0, baixa: 0, informativa: 0},
+      note: 'antigo',
+    })}\n`, {mode: 0o600});
+    const module = await import('../src/verify-report.ts') as Record<string, unknown>;
+    const inspect = module.inspectSecurityReports as (dataDirectory: string, projectId: string) => Promise<{reports: ReportSummary[]; corrupt: string[]}>;
+    assert.equal(typeof inspect, 'function');
+    const inspected = await inspect(data, projectId);
+    assert.deepEqual(inspected.corrupt, [broken, missing]);
+    assert.deepEqual(inspected.reports.map(item => item.directoryName), [legacy, written.directoryName]);
+    const listed = await listSecurityReports(data, projectId);
+    assert.deepEqual(listed.map(item => item.id), [otherRunId, runId]);
+    assert.equal(listed.some(item => item.directoryName === broken), false);
+  });
+});
+
+test('diretório symlink continua proibido na listagem', async () => {
+  await withPair(async ({data, outside}) => {
+    await writeSecurityReport(reportInput(data));
+    const linkName = '20200103-000000-seguranca';
+    await mkdir(join(outside, linkName), {mode: 0o700});
+    await symlink(join(outside, linkName), join(data, 'verificacoes', projectId, linkName));
+    await assert.rejects(listSecurityReports(data, projectId), refused('VERIFY_PATH_FORBIDDEN'));
   });
 });

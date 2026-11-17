@@ -122,6 +122,43 @@ test('normaliza SARIF e JSON sem duplicar fingerprint e sem vazar segredo', () =
   }
 });
 
+test('opengrep extra.lines é redigido', () => {
+  const glpat = `glpat-${'e'.repeat(20)}`;
+  const assigned = 'password = "hunter2-ficticio"';
+  const lines = normalizeToolOutput([{
+    tool: 'opengrep',
+    format: 'json',
+    body: {
+      results: [{
+        check_id: 'regra.linha',
+        path: 'src/app.ts',
+        start: {line: 4},
+        extra: {message: 'm', severity: 'ERROR', lines: glpat},
+      }],
+    },
+  }]);
+  const quoted = normalizeToolOutput([{
+    tool: 'opengrep',
+    format: 'json',
+    body: {
+      results: [{
+        check_id: 'regra.atribuicao',
+        path: 'src/cfg.ts',
+        start: {line: 2},
+        extra: {message: 'm', severity: 'ERROR', lines: assigned},
+      }],
+    },
+  }]);
+  assert.equal(lines.findings.length, 1);
+  assert.equal(quoted.findings.length, 1);
+  const snippet = lines.findings[0]?.snippet ?? '';
+  const assignment = quoted.findings[0]?.snippet ?? '';
+  assert.equal(snippet.includes(glpat), false);
+  assert.equal(snippet.includes(secretPreview(glpat).sha256), true);
+  assert.equal(assignment.includes('hunter2-ficticio'), false);
+  assert.equal(assignment.includes('password = "'), false);
+});
+
 test('o prefixo /repository/ sai do caminho e /main.tf permanece', () => {
   const result = normalizeToolOutput([
     {tool: 'hadolint', format: 'json', body: [
