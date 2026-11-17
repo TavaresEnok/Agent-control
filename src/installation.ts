@@ -37,6 +37,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  remoteDevelopment:RemoteDevelopmentConfig.optional(),
  nativeBootstrap:NativeBootstrapConfig.optional(),
  codexQuota:CodexQuotaRegistryConfig.optional(),
+ verifyHomologationContainers:z.array(z.string().regex(/^[a-z0-9]([a-z0-9-]{0,62})$/)).max(32).optional(),
  managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
   transport:z.enum(['happier','local']).default('happier'),
   contexts:z.array(z.object({projectId:z.uuid(),contextId:z.uuid(),sessionId:z.string().min(1).max(200),profileId:z.string().min(1).max(100),

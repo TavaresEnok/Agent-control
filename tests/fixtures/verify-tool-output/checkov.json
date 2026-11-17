@@ -1,0 +1,25 @@
+{
+  "check_type": "terraform",
+  "results": {
+    "passed_checks": [],
+    "failed_checks": [
+      {
+        "check_id": "CKV_AWS_20",
+        "check_name": "O bucket não bloqueia ACL pública",
+        "check_result": {"result": "FAILED"},
+        "file_path": "/main.tf",
+        "file_line_range": [12, 28],
+        "resource": "aws_s3_bucket.dados",
+        "severity": "LOW"
+      },
+      {
+        "check_id": "CKV_AWS_99",
+        "check_name": "Achado sem arquivo",
+        "check_result": {"result": "FAILED"},
+        "severity": "HIGH"
+      }
+    ],
+    "skipped_checks": []
+  },
+  "summary": {"passed": 0, "failed": 2, "skipped": 0, "parsing_errors": 0}
+}

@@ -1,0 +1,33 @@
+[
+  {
+    "file": "Containerfile",
+    "line": 4,
+    "column": 1,
+    "level": "warning",
+    "code": "DL3008",
+    "message": "Fixe a versão dos pacotes."
+  },
+  {
+    "file": "Containerfile",
+    "line": 4,
+    "column": 1,
+    "level": "warning",
+    "code": "DL3008",
+    "message": "Esta cópia não deve aparecer."
+  },
+  {
+    "file": "Containerfile",
+    "line": 9,
+    "column": 1,
+    "level": "info",
+    "code": "DL3059",
+    "message": "Várias instruções RUN seguidas."
+  },
+  {
+    "line": 1,
+    "column": 1,
+    "level": "error",
+    "code": "DL3000",
+    "message": "Use um diretório absoluto."
+  }
+]

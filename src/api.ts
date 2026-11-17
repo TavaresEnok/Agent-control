@@ -38,6 +38,9 @@ import {resolve,sep} from 'node:path';
 import {parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig} from './personal-qa-config.ts';
 import {applyPersonalCombo,listPersonalCombos,PersonalCombo,projectComboName,writeOwnerCombo} from './personal-combos.ts';
 import {personalAccountStatus,releasePersonalAccount} from './personal-accounts.ts';
+import {registerVerificationRoutes,type VerificationRouteDeps} from './verify-api.ts';
+import {listSecurityReports,readAchadoMarkdown,readSecurityReport} from './verify-report.ts';
+import {recheckFindings,requestCorrection} from './verify-remediate.ts';
 import {archivedInView,childRunTaskId,clipPanelTitle,planTaskDisplayTitle,type PlanTaskSummary} from './personal-run-title.ts';
 
 // Only immutable public UI files are served without a session. Never delegate an
@@ -139,11 +142,15 @@ export type ApiOptions = {
   personalPanel?:{roots:readonly PersonalFolderRoot[];projectRepos:readonly string[];installationPath:string;dataDirectory:string;projectId:string;owner?:string;scheduleRestart:()=>void};
   pairCodeLogin?:(request:Request)=>Promise<Response>;
   passwordLogin?:(request:Request)=>Promise<Response>;
+  personalVerification?:{
+    start?:(principal:string,panel:{dataDirectory:string;projectId:string;installationPath:string},body:{url?:string})=>Promise<{id:string;status:'running';phase:string}>;
+    recheck?:VerificationRouteDeps['recheck'];
+  };
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
   const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
-    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin, passwordLogin} = options;
+    administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin, passwordLogin, personalVerification} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
   const requireInstallationOwner = async (principal: string) => {
@@ -392,6 +399,12 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     await releasePersonalAccount(ledger.pool,personalPanel.projectId,Id.parse(c.req.param('accountId')));
     c.header('Cache-Control','no-store');
     return c.json({released:true});
+  });
+  registerVerificationRoutes(app,{
+    ledger,requireInstallationOwner,personalPanel,manager,
+    listSecurityReports,readSecurityReport,readAchadoMarkdown,
+    requestCorrection,recheckFindings,
+    start:personalVerification?.start,recheck:personalVerification?.recheck,
   });
   app.get('/api/v1/ac/quota-registry',async c=>{
     const owner=(await projectOwnership(c.get('principal'))).rowCount;

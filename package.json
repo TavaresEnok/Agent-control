@@ -33,7 +33,8 @@
     "personal:timers": "node scripts/personal-timers.mjs",
     "personal:maintenance": "node scripts/personal-maintenance.mjs",
     "personal:restore-proof": "node scripts/personal-restore-proof.mjs",
-    "personal:design": "node scripts/personal-design.mjs"
+    "personal:design": "node scripts/personal-design.mjs",
+    "personal:verify": "node scripts/personal-verify.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

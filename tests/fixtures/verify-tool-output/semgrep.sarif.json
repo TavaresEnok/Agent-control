@@ -1,0 +1,100 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "semgrep",
+          "rules": [
+            {
+              "id": "regra.da-regra",
+              "relationships": [
+                {
+                  "target": {"id": "502", "toolComponent": {"name": "CWE"}},
+                  "kinds": ["relevant"]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "regra.injecao",
+          "level": "error",
+          "message": {"text": "Consulta SQL concatenada."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/consulta.ts"},
+                "region": {"startLine": 40, "snippet": {"text": "consulta(entrada)"}}
+              }
+            }
+          ],
+          "taxa": [
+            {"id": "89", "toolComponent": {"name": "CWE"}}
+          ]
+        },
+        {
+          "ruleId": "regra.prop",
+          "level": "warning",
+          "message": {"text": "Propriedade com CWE."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/prop.ts"},
+                "region": {"startLine": 7}
+              }
+            }
+          ],
+          "properties": {"cwe": "CWE-22"}
+        },
+        {
+          "ruleId": "regra.da-regra",
+          "level": "note",
+          "message": {"text": "CWE na regra."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/regra.ts"},
+                "region": {"startLine": 5}
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "regra.nota",
+          "level": "note",
+          "message": {"text": "Nota sem CWE."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/nota.ts"},
+                "region": {"startLine": 2}
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "regra.nenhuma",
+          "level": "none",
+          "message": {"text": "Nível nenhum."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/info.ts"},
+                "region": {"startLine": 1}
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "regra.sem-arquivo",
+          "level": "warning",
+          "message": {"text": "Sem local físico."}
+        }
+      ]
+    }
+  ]
+}

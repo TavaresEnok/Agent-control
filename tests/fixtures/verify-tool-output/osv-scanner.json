@@ -1,0 +1,39 @@
+{
+  "results": [
+    {
+      "source": {"path": "package-lock.json", "type": "lockfile"},
+      "packages": [
+        {
+          "package": {"name": "minimist", "version": "1.2.5", "ecosystem": "npm"},
+          "vulnerabilities": [
+            {
+              "id": "GHSA-fict-icio-0001",
+              "summary": "Poluição de protótipo",
+              "database_specific": {"severity": "HIGH", "cwe_ids": ["CWE-1321"]}
+            }
+          ],
+          "groups": [
+            {"ids": ["GHSA-fict-icio-0001"], "max_severity": "LOW"}
+          ]
+        },
+        {
+          "package": {"name": "pacote-grupo", "version": "0.1.0", "ecosystem": "npm"},
+          "groups": [
+            {"ids": ["GHSA-fict-icio-0002"], "aliases": [], "max_severity": "MEDIUM"}
+          ]
+        }
+      ]
+    },
+    {
+      "source": {"type": "lockfile"},
+      "packages": [
+        {
+          "package": {"name": "sem-caminho", "version": "1.0.0", "ecosystem": "npm"},
+          "vulnerabilities": [
+            {"id": "GHSA-fict-icio-0099", "summary": "sem arquivo"}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+# hadolint ignore=DL3029
+FROM --platform=linux/amd64 debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS tools
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 python3=3.13.5-1 \
+ && rm -rf /var/lib/apt/lists/*
+# Opengrep 2.0.0 publishes a Cosign signature, not a checksum. Checkov 3.4.5 does not publish a signature or a checksum. The hash in deploy/verify-tools.lock.json was computed from the official asset.
+COPY verify-tools.lock.json /tmp/verify-tools.lock.json
+COPY verify-fetch-tools.py /tmp/verify-fetch-tools.py
+COPY verify-install-tools.py /tmp/verify-install-tools.py
+RUN python3 /tmp/verify-fetch-tools.py
+WORKDIR /tmp/tools
+RUN sha256sum -c checksums.txt \
+ && python3 /tmp/verify-install-tools.py
+
+# hadolint ignore=DL3029
+FROM --platform=linux/amd64 debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 curl=8.14.1-2+deb13u7 findutils=4.10.0-3 git=1:2.47.3-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 65532 verify \
+ && useradd --system --uid 65532 --gid 65532 --home-dir /home/verify --create-home --shell /usr/sbin/nologin verify \
+ && mkdir -p /repository /databases /output /opt/agent-control/rules /home/verify \
+ && chmod 0755 /repository /databases /output /home/verify
+COPY --from=tools /usr/local/bin/ /usr/local/bin/
+COPY --from=tools /tmp/verify-tools.lock.json /opt/agent-control/verify-tools.lock.json
+COPY verify-entrypoint.sh /usr/local/bin/verify-entrypoint.sh
+COPY verify-db-fetch.sh /usr/local/bin/verify-db-fetch.sh
+# hadolint ignore=SC2016
+RUN chmod 0555 /usr/local/bin/gitleaks /usr/local/bin/osv-scanner /usr/local/bin/syft /usr/local/bin/grype \
+    /usr/local/bin/opengrep /usr/local/bin/hadolint /usr/local/bin/trivy /usr/local/bin/checkov \
+    /usr/local/bin/verify-entrypoint.sh /usr/local/bin/verify-db-fetch.sh \
+ && printf '%s\n' \
+      'rules:' \
+      '  - id: chamada-eval' \
+      '    languages: [javascript, typescript]' \
+      '    severity: ERROR' \
+      '    message: eval executa texto como código' \
+      '    pattern: eval(...)' \
+      '  - id: concatenacao-sql' \
+      '    languages: [javascript, typescript, python]' \
+      '    severity: ERROR' \
+      '    message: concatenação em consulta SQL' \
+      '    pattern-either:' \
+      '      - pattern: $DB.query("..." + $X)' \
+      '      - pattern: $CUR.execute("..." + $X)' \
+      '  - id: usuario-root' \
+      '    languages: [dockerfile]' \
+      '    severity: ERROR' \
+      '    message: instrução USER root' \
+      '    pattern: USER root' \
+      > /opt/agent-control/rules/seguranca.yaml \
+ && chmod 0444 /opt/agent-control/rules/seguranca.yaml /opt/agent-control/verify-tools.lock.json
+USER 65532:65532
+WORKDIR /output
+ENTRYPOINT ["/usr/local/bin/verify-entrypoint.sh"]

@@ -93,6 +93,11 @@ export class Ledger {
       await c.query("UPDATE ac_managers SET lease_until=clock_timestamp()+interval '15 seconds' WHERE context_id=$1", [a.contextId]);
     });
   }
+  /** Ends this manager's lease without deleting the row or changing its epoch. */
+  async releaseLease(authority: Authority): Promise<void> {
+    const a = Authority.parse(authority);
+    await this.pool.query('UPDATE ac_managers SET lease_until = clock_timestamp() WHERE context_id=$1 AND instance_id=$2 AND epoch=$3', [a.contextId, a.instanceId, a.epoch]);
+  }
   /** Must run after fence/authorize has locked the context. Cancellation then
    * serializes with the physical-effect transaction, not only a UI flag. */
   async assertRuntimeRoute(c:pg.PoolClient,intentId:string){await assertGenerationIntent(c,intentId,this.runtimeIdentity);}
@@ -137,6 +142,10 @@ export class Ledger {
     const command = Command.parse(raw);
     if(command.payload.workflow==='engineering-native-v1'&&(channel!=='happier'||!afterAccept))throw new Refusal('NATIVE_CANONICAL_MESSAGE_REQUIRED',403);
     return this.tx(async c => {
+      if(command.payload.workflow==='security-verify-readonly-v1'){
+        const personal=await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'");
+        if(!personal.rowCount)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+      }
       const context = await this.authorize(c, principal, command.contextId);
       if (command.contextId !== a.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH', 403);
       // Serialize duplicate intent IDs across contexts before binding their payload.
@@ -161,7 +170,7 @@ export class Ledger {
           (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [command.intentId, command.contextId, principal, hash, command, randomUUID(), randomUUID(), a.epoch, revision])).rows[0];
-        if(command.payload.workflow!=='managed-synthetic-v1'&&context.active_template_revision){
+        if(command.payload.workflow!=='managed-synthetic-v1'&&command.payload.workflow!=='security-verify-readonly-v1'&&context.active_template_revision){
           const selected=(await c.query('SELECT snapshot,digest FROM ac_context_templates WHERE context_id=$1 AND revision=$2',
             [command.contextId,context.active_template_revision])).rows[0];
           if(!selected)throw new Refusal('TEMPLATE_NOT_FOUND');

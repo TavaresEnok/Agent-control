@@ -1,0 +1,14 @@
+{
+  "artifacts": [
+    {
+      "id": "a1b2c3",
+      "name": "minimist",
+      "version": "1.2.5",
+      "type": "npm",
+      "language": "javascript",
+      "locations": [{"path": "package-lock.json"}]
+    }
+  ],
+  "source": {"type": "directory", "target": "."},
+  "schema": {"version": "16.0.0"}
+}

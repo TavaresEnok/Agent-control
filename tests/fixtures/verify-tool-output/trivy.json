@@ -1,0 +1,39 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "app",
+  "Results": [
+    {
+      "Target": "requirements.txt",
+      "Class": "lang-pkgs",
+      "Type": "pip",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-35195",
+          "PkgName": "requests",
+          "InstalledVersion": "2.31.0",
+          "Severity": "CRITICAL",
+          "Title": "Falha fictícia de sessão",
+          "CweIDs": ["CWE-200"]
+        }
+      ]
+    },
+    {
+      "Target": "pom.xml",
+      "VulnerabilityID": "CVE-2024-99999",
+      "Severity": "HIGH",
+      "ArtifactName": "log4j",
+      "CweIDs": ["CWE-917"]
+    },
+    {
+      "Target": "",
+      "Vulnerabilities": [
+        {"VulnerabilityID": "CVE-2020-0000", "Severity": "LOW", "PkgName": "vazio"}
+      ]
+    },
+    {
+      "Target": "limpo.txt",
+      "Class": "lang-pkgs",
+      "Vulnerabilities": []
+    }
+  ]
+}

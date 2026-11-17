@@ -231,7 +231,90 @@ async function main(){
   const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,dataDirectory:config.dataDirectory,projectId:config.project.id,owner:config.project.owner,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
   const pairCodeLogin=config.activation==='personal'?personalCodeLogin(config,ledger,sessions,verifyBearer):undefined;
   const passwordLogin=config.activation==='personal'?personalPasswordLogin(config,ledger,sessions,verifyBearer):undefined;
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin});
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin,...(config.activation==='personal'&&personalRuntime?{personalVerification:(()=>{
+   const bound=personalRuntime;
+   if(!bound)throw new Error('PERSONAL_RUNTIME_REQUIRED');
+   const executions=bound.executions;
+   const gitHead=async(repo:string)=>{
+    const {execFile}=await import('node:child_process');
+    const {promisify}=await import('node:util');
+    const {stdout}=await promisify(execFile)('/usr/bin/git',['-C',repo,'rev-parse','HEAD'],{encoding:'utf8',timeout:10000,maxBuffer:8192,
+     env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'}});
+    const commit=stdout.trim();
+    if(!/^[a-f0-9]{40}$/.test(commit))throw new Refusal('INVALID_CONTRACT',400);
+    return commit;
+   };
+   const releaseGrant=async(principal:string,authority:{contextId:string;instanceId:string;epoch:number},grantId:string,how:'not_started'|'exited')=>{
+    const {Capacity}=await import('./capacity.ts');
+    const capacity=new Capacity(ledger);
+    const states=how==='not_started'?['not_started','exited'] as const:['exited','not_started'] as const;
+    try{await capacity.transition(principal,grantId,authority,'released',{processId:grantId,state:states[0]});}
+    catch(error){
+     if(!(error instanceof Refusal)||error.code!=='PROCESS_MUST_EXIT')throw error;
+     await capacity.transition(principal,grantId,authority,'released',{processId:grantId,state:states[1]});
+    }
+   };
+   return {
+    start:async(principal,panel,body)=>{
+     const found=await ledger.pool.query('SELECT id::text AS id, policy_revision FROM ac_contexts WHERE project_id=$1 ORDER BY created_at LIMIT 1',[panel.projectId]);
+     const row=found.rows[0] as {id?:unknown;policy_revision?:unknown}|undefined;
+     if(typeof row?.id!=='string')throw new Refusal('VERIFY_CONTEXT_REQUIRED',409);
+     const authority=managerTransports.get(runtime.projectId)?.authority(row.id);
+     if(!authority)throw new Refusal('AUTHORITY_REQUIRED',409);
+     const project=[config.project,...config.projects].find(item=>item.id===panel.projectId);
+     if(!project)throw new Refusal('VERIFY_CONTEXT_REQUIRED',409);
+     const policyRevision=Number(row.policy_revision);
+     if(!Number.isInteger(policyRevision)||policyRevision<1)throw new Refusal('VERIFY_CONTEXT_REQUIRED',409);
+     const commit=await gitHead(project.repo);
+     const {readCurrentVerifyDatabase}=await import('./verify-db.ts');
+     const databasesDirectory=(await readCurrentVerifyDatabase(config.dataDirectory))?.directory;
+     if(!databasesDirectory)throw new Refusal('VERIFY_DB_REQUIRED',409);
+     let image:string;
+     try{
+      const {readFile}=await import('node:fs/promises');
+      const parsed=JSON.parse(await readFile(join(config.dataDirectory,'verify-image.json'),'utf8')) as {image?:unknown};
+      if(!parsed||typeof parsed!=='object'||typeof parsed.image!=='string'||parsed.image.length<1)throw new Refusal('VERIFY_IMAGE_UNPINNED',409);
+      image=parsed.image;
+     }catch(error){
+      if(error instanceof Refusal)throw error;
+      const code=error&&typeof error==='object'&&'code' in error?(error as {code?:unknown}).code:undefined;
+      if(code==='ENOENT'||error instanceof SyntaxError)throw new Refusal('VERIFY_IMAGE_UNPINNED',409);
+      throw error;
+     }
+     const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
+     const {beginPersonalVerification}=await import('./verify-command.ts');
+     const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
+     return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path});
+    },
+    recheck:async(principal,authority,input)=>{
+     const project=[config.project,...config.projects].find(item=>item.id===input.projectId);
+     if(!project)throw new Refusal('NOT_FOUND',404);
+     const commit=await gitHead(project.repo);
+     const {createRecheckNativeWorker}=await import('./verify-native-launch.ts');
+     const {recheckFindings}=await import('./verify-remediate.ts');
+     const {randomUUID}=await import('node:crypto');
+     const {Capacity}=await import('./capacity.ts');
+     const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:async(intentId,avoidProviders)=>{
+      const capacity=new Capacity(ledger);
+      const avoided:string[]=[];
+      let last:{grantId:string;accountId:string;provider:string}|undefined;
+      for(let attempt=0;attempt<4;attempt++){
+       const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'reviewer',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
+       const found=await ledger.pool.query('SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',[grant.id]);
+       const row=found.rows[0] as {provider?:unknown}|undefined;
+       const provider=typeof row?.provider==='string'?row.provider:'';
+       last={grantId:grant.id,accountId:grant.account_id,provider};
+       if(!avoidProviders?.includes(provider)||attempt===3)return last;
+       await releaseGrant(principal,authority,grant.id,'not_started');
+       avoided.push(grant.account_id);
+      }
+      if(!last)throw new Refusal('VERIFY_WORKER_UNAVAILABLE');
+      return last;
+     },releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
+     return recheckFindings(ledger,principal,authority,{...input,worker});
+    },
+   };
+  })()}:{})});
   const projects=new Projects(ledger,config.projectRoots),activeRuntimes=runtimes;
   const defaultRuntime=await activeRuntimes.get({id:config.project.id,repo:config.project.repo});
   const defaultApp=appFor(defaultRuntime);
@@ -247,6 +330,7 @@ async function main(){
     if(principal&&!bearer)sessions.checkOrigin(request);
     return principal;
    }});
+  if(config.activation==='personal'){try{const {failAbandonedVerifyRuns}=await import('./verify-abandon.ts');await failAbandonedVerifyRuns(ledger,config.dataDirectory);}catch{console.error('VERIFY_ABANDON_FAILED');}}
   const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:prepared.report.state==='active'?'personal_ready':'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:prepared.report.executionEnabled,inferenceEnabled:prepared.report.inferenceEnabled,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
   serving=true;
   let closing=false;
