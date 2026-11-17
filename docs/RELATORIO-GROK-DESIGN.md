@@ -137,3 +137,66 @@ O módulo capturou oito rotas descobertas no fonte, não as rotas `/p/<projeto>/
 - O combo de fábrica ainda não tem cadeia `specialist`. Uma instalação nova precisa de uma revisão de política para o exame reservar o papel.
 - A descoberta de rotas não substitui `:projectId`. Várias capturas do módulo não são a tela logada.
 - A suíte `npm test` continua sem os testes de Docker, SSH e Happier. `workflow-runtime-bootstrap` depende do boundary já gerado.
+
+## Rodada 3
+
+Data: 2026-11-17. Ramo `task/modulo-design`. A base comum com o validador já estava no merge `2047b84c`; esta rodada não repetiu o merge e deixou o worktree do validador como estava. Sem push e sem reescrita de histórico. O modo `locked` não mudou. Não há migração 101. A instalação viva, o gateway vivo, o banco `ac_ispagent` e o contêiner `ac-personal-pg` ficaram como estavam. Não houve compra de crédito, exame ao vivo novo nem construção da imagem de design. `npm run test:all` não rodou.
+
+| Item | Commit | O que entrou |
+|---|---|---|
+| A1. Isolamento | `ff69b979` | O exame `design-readonly-v1` (specialist e reviewer) usa o mesmo strip, mount `:ro`, login em tmpfs e wrapper do validador |
+| M1. Capturas no job | `4d2b384f` | `stageDesignCapturesForJob` só no exame pessoal de design |
+| M3. Rede do navegador | `21478cec` | `context.route('**/*')` bloqueia o que sai da origem declarada; a URL final entra na checagem depois do `goto` e do login |
+| M4. Intento público | `a4d98066` | `ledger.accept` recusa `design-readonly-v1` com `DESIGN_INTENT_NOT_PUBLIC` (403) antes de gravar linha |
+| B5. Prova medida | `d12a86fc` | O relatório registra usuário, limites e rede medidos em `designRunArguments` |
+| B3. CLI | `5c7debec` | Código desconhecido imprime só `O exame de design falhou.` |
+| B4. Leitura do repositório | `e5ea9515` | `readDesignRepository` pula `.claude/`, `.mcp.json`, `.codex` e `.grok` |
+| M2. Capturas privadas | `c32a0316` | Diretório `<dataDirectory>/design-captures/<runId>`, modos 0700/0600, só o `runId` atual, limpeza de UUID órfão |
+| A2. Alto com medida | `7dfd5be2` | `alta` exige medida estruturada; sem ela o achado fica `informativa` |
+| B1. Nome acessível | `660fe073` | `alt` e `title` não casam `data-title` nem `aria-title`; spread não gera achado; `aria-label` vazio não é nome |
+| M3. CLI | `15a5e7da` | `openDesignBrowser(parsed.url)` instala a guarda na origem declarada |
+| A2. Régua | `df91fbd2` | A régua só confirma `alta` quando a medida existe |
+| B2. Estado vazio | `e91e3065` | O marcador de vazio vale por componente, gravidade `media` |
+| A3. Rotas | `4cf29842` | Rota com `:param`, `*` ou colchetes só abre com exemplo concreto; JSON não é tela |
+| B5. Estado vazio e argv | `ca67b248` | Captura do vazio (`capturado`, `ausente`, `não capturado`) e a lista de argumentos, com a frase de que o relatório não executou o contêiner |
+| A2. Inventário e teclado | `0aa910ee` | Inventário e teclado sem medida ficam `informativa` |
+| A3. Documento JSON | `2da97b45` | Corpo de documento que não é HTML, inclusive JSON embrulhado pelo navegador, não vira captura |
+| Tipos | `db6eabd8` | Os erros de tipo desta rodada |
+| Suíte | `66e0e6d0` | O teste do relatório usa `DESIGN_RUNTIME_BIN` e permanece dentro de `npm test` |
+| Relatório | este commit | Esta seção |
+
+### Isolamento e intento
+
+O exame de design pessoal, nos papéis specialist e reviewer, passa por `readonlyExamIsolation`: strip da cópia, `/account` somente leitura, login em tmpfs e o wrapper do exame. Programador, qa e judge não usam o atalho `personalReadonlyExam`. Um hook em `.claude/settings.json` que gravaria um marcador não grava, e a conta permanece intacta.
+
+`design-readonly-v1` continua no esquema do comando, para um intento já gravado ainda parsear. A criação pública por `ledger.accept` recusa com `DESIGN_INTENT_NOT_PUBLIC` (403). Quem cria é o CLI do titular, por inserção direta. O modo `locked` continua exigindo política.
+
+As capturas do job só são copiadas quando o job é exame pessoal de design. Fora do repositório elas ficam em `<dataDirectory>/design-captures/<runId>`. A cópia é do `runId` corrente. No início do exame seguinte, diretórios UUID deixados por um kill são removidos, sem seguir symlink e sem apagar nome que não seja UUID. `AC_DESIGN_CAPTURE_DIR` e `AC_DESIGN_CAPTURE_RUN` existem só em volta do exame. Sem elas, a busca em `.design-captures` do repositório permanece.
+
+`readDesignRepository` ignora `.claude/`, `.mcp.json`, `.codex` e `.grok` em qualquer profundidade, com o nome exato e sem seguir symlink. `.cursor` e `.Claude` continuam na leitura.
+
+### Achados
+
+`alta` só permanece quando o achado traz medida estruturada: razão de contraste, px do alvo, px de transbordamento ou nome de arquivo PNG do estado vazio. Texto "WCAG" ou "DESIGN-" na referência não autoriza `alta`. Sem medida válida, o exame grava `informativa`. A régua não fabrica medida: contraste que já calculou a razão continua `alta`; botão sem nome, inventário, teclado, foco, cinzas, espaçamento, largura e texto cortado ficam `informativa` quando não há número.
+
+Estado vazio ausente é `media` e só dentro do componente que tem a lista. Lista de itens literais, como navegação estática, não gera achado. Um marcador em outro componente não dispensa a lista. `data-title` e `aria-title` não contam como `title`. `{...props}` deixa o nome desconhecido e não gera achado. `aria-label=""` não conta como nome.
+
+Rota com `:param`, `*`, `[id]`, `[...slug]` ou `[[...slug]]` não é aberta como texto. Um `example` concreto na mesma declaração é aberto; um exemplo que ainda é dinâmico é ignorado. Corpo JSON ou não-HTML, inclusive o documento que o navegador embrulha em HTML e cujo texto visível é só um objeto ou array JSON, é "não é tela" e não vira achado nem captura. `docs/validation/verificacao-design-painel.md` não trata mais o `AUTH_REQUIRED` de `/tasks/:id/*` como alto confirmado. A contagem da rodada 2 (91 achados, 2 altos) fica como histórico daquela corrida. Esta rodada não publicou outro total de exame ao vivo.
+
+O relatório lista o estado vazio por rota (`capturado`, `ausente`, `não capturado`) ou registra que a captura não aconteceu. A prova da imagem traz o usuário `65532:65532`, os limites que `designRunArguments` aceita e a rede `design-homologation`. A seção de argumentos é a lista que a função usaria, com a frase de que o relatório não executou o contêiner. Código de CLI desconhecido imprime só `O exame de design falhou.`
+
+### Números
+
+`env -u NO_COLOR -u FORCE_COLOR npx tsc -p tsconfig.json --noEmit --pretty false`: código 0, depois do commit `66e0e6d0`. Sem aviso de `NO_COLOR`.
+
+`umask 022 && env -u NO_COLOR -u FORCE_COLOR npm test`, com `AC_TEST_DATABASE_URL` no Postgres descartável `ac-design-r3-pg` (`127.0.0.1:54333`, banco `ac_implementation_test`): cerca de 720 s, código 0. Resumo: `{"passed":213,"failed":[],"excluded":84 arquivos}`. `design-report.test.ts`, `runtime.test.ts` e `workflow-runtime-bootstrap.test.ts` estão entre os 213. `notifications.test.ts` e `r3-secret-surfaces.test.ts` ficaram em `excluded` porque `upstream/happier/packages/cli-common/dist/providers/index.js` não existe neste worktree. O binário `hadolint` não está no PATH; o teste de `verify-dockerfile.test.ts` que depende dele foi pulado, e o arquivo em si passou.
+
+`npm test` reescreveu `docs/validation/evidence/runtime-result.json` com outros ids sintéticos. O arquivo foi restaurado para o blob `3ae5a15c9eeba482ac89eb790809df1aee81edef` e não entra neste commit.
+
+### O que ficou de fora
+
+- A imagem `deploy/Dockerfile.design` não foi construída nesta rodada.
+- Não houve exame ao vivo novo. O falso alto da rodada 2 sobre `/tasks/:id/*` saiu do texto do painel, sem um número substituto.
+- `npm run test:all` não rodou. Os 84 arquivos de `excluded` (Docker, SSH, Happier, sudo e os dois que pedem o build do Happier) continuam fora.
+- Não houve push.
+
