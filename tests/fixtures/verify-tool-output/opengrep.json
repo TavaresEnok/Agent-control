@@ -1,0 +1,25 @@
+{
+  "version": "1.45.0",
+  "results": [
+    {
+      "check_id": "javascript.lang.security.audit.xss.direct-response-write",
+      "path": "src/pagina.ts",
+      "start": {"line": 15, "col": 3},
+      "end": {"line": 15, "col": 20},
+      "extra": {
+        "message": "Entrada do usuário vai para a resposta HTML.",
+        "severity": "ERROR",
+        "metadata": {
+          "cwe": ["CWE-79: Improper Neutralization of Input During Web Page Generation"],
+          "category": "security"
+        },
+        "lines": "res.send(entrada)"
+      }
+    },
+    {
+      "check_id": "sem-caminho",
+      "extra": {"message": "Achado sem arquivo", "severity": "WARNING"}
+    }
+  ],
+  "errors": []
+}

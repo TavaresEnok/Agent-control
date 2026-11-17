@@ -1,0 +1,24 @@
+{
+  "matches": [
+    {
+      "VulnerabilityID": "CVE-2024-12345",
+      "Severity": "Medium",
+      "ArtifactName": "libxml2",
+      "Target": "apk/installed",
+      "CweIDs": ["CWE-611"]
+    },
+    {
+      "vulnerability": {
+        "id": "CVE-2023-0001",
+        "severity": "Low",
+        "description": "Falha antiga fictícia"
+      },
+      "artifact": {
+        "name": "openssl",
+        "version": "1.1.1t",
+        "type": "apk",
+        "locations": [{"path": "lib/apk/db/installed"}]
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+[
+  {
+    "Description": "Chave AKIAIOSFODNN7EXAMPLE no arquivo",
+    "StartLine": 8,
+    "EndLine": 8,
+    "StartColumn": 7,
+    "EndColumn": 27,
+    "Match": "AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": "config/credenciais.env",
+    "RuleID": "aws-access-key",
+    "Tags": ["key"],
+    "Fingerprint": "config/credenciais.env:aws-access-key:8"
+  },
+  {
+    "Description": "Token s3cr3t-valor-ficticio-998877",
+    "StartLine": 21,
+    "EndLine": 21,
+    "Match": "s3cr3t-valor-ficticio-998877",
+    "Secret": "s3cr3t-valor-ficticio-998877",
+    "File": "config/api.env",
+    "RuleID": "generic-api-key"
+  },
+  {
+    "Description": "Achado sem arquivo",
+    "StartLine": 1,
+    "Match": "sem-caminho",
+    "Secret": "",
+    "RuleID": "regra-sem-arquivo"
+  }
+]
