@@ -1,68 +1,85 @@
 # Verificação de design do painel
 
-Data da execução: 2026-11-17. Alvo: o pacote `upstream/cezar/packages/web`, servido em `http://127.0.0.1:4173` a partir dos arquivos emitidos pelo build. Não houve login, não houve chamada à API nem ao gateway, e não há dado pessoal nem segredo nestas capturas.
+Data da execução: 2026-11-17. Alvo: o pacote `upstream/cezar/packages/web`, construído com `VITE_AGENT_CONTROL_MANAGED=1` e servido pelo gateway descartável a partir de `upstream/cezar/packages/cezar/web/dist`. Sessão sintética, projeto `Projeto sintético`, sem dado pessoal e sem segredo nestas capturas. As três páginas pretas da rodada 1 foram apagadas.
 
 ## Build
 
-`npm run build -w @open-mercato/cezar` no workspace `upstream/cezar` compilou o servidor. O build do Vite do painel transformou 3175 módulos, emitiu `packages/cezar/web/dist` e falhou em 2,35 s:
+Comando, no worktree, com saída 0:
 
-`Error: [vite]: Rolldown failed to resolve import "@happier-dev/protocol"` a partir de `upstream/happier/apps/cli/src/auth/terminalProvisioningResponse.ts`.
+`VITE_AGENT_CONTROL_MANAGED=1 npm --prefix upstream/cezar run build:web`
 
-O pacote `@happier-dev/protocol` é privado, o `dist` dele não existe neste worktree e as dependências do Happier não estão instaladas. O `vite.config.ts` não foi alterado. O JavaScript emitido ficou com um import nu: `assets/index-D5leAlf5.js` (1 161 972 bytes) contém uma ocorrência de `@happier-dev/protocol`. O CSS emitido é `assets/index-DN7oXYmE.css` (171 081 bytes). O `index.html` tem 6 339 bytes e o título `cezar`.
+O Vite 8.1.4 transformou 3739 módulos e terminou em 2,33 s. O aviso de chunk acima de 500 kB permanece; não é falha. Não houve erro de resolução. O import `@happier-dev/protocol` deixou de aparecer nu no JavaScript emitido. No bundle, o ramo managed está fixo: o documento ganha a classe `ac-managed` e o título `Agent Control`. O `vite.config.ts` não foi alterado. O `dist` ficou em `upstream/cezar/packages/cezar/web/dist`.
 
-## O que o navegador mostrou
+## Happier
 
-Um servidor estático entregou esse `dist` em `127.0.0.1:4173`. `GET /`, `GET /tasks`, o JS e o CSS responderam 200, com os tamanhos acima.
+`upstream/happier/node_modules` não existia, nem `packages/protocol/dist`. O helper `node scripts/link-happier-test-deps.mjs install <origem> /tmp/ac-design-happier-links.json` foi tentado primeiro no checkout do validador. Ele recusou com o erro literal `MISSING_SOURCE /home/app/projects/agent-control-validador/upstream/happier/apps/server/generated`. O mesmo helper, na origem `/home/app/projects/agent-control/upstream/happier`, criou os links do que faltava. Não houve cópia dos cerca de 4 GB nem de segredo. O manifesto ficou em `/tmp/ac-design-happier-links.json`, modo 0600.
 
-O Chrome headless (`--dump-dom` em `/`) devolveu `<title>cezar</title>` e `<div id="root"></div>` vazio. O React não montou. As três capturas de página inteira são a tela preta desse documento vazio, no tema escuro padrão da página sem conteúdo:
+Dois desses links apontavam o boundary de outro checkout. Foram retirados do manifesto e apagados antes do build, para não escrever por cima desse arquivo. `node scripts/build-happier-boundary.mjs` gravou `upstream/happier/node_modules/.agent-control-boundary.mjs` neste worktree: arquivo local, não symlink, 191108 bytes, com sourcemap ao lado.
 
-| Arquivo | Viewport |
-|---|---|
-| `docs/validation/design-painel/inicio-375.png` | 375×812 |
-| `docs/validation/design-painel/inicio-768.png` | 768×1024 |
-| `docs/validation/design-painel/inicio-1440.png` | 1440×900 |
+## Servidor
 
-![Início em 375 px](design-painel/inicio-375.png)
+A primeira escuta, na porta 33359, com o banco `ac_implementation_test_designpanel_c3afababe16a4c3ea575`, foi encerrada e esse banco foi apagado. As capturas desta página e o `runDesignModule` usaram outra instalação pessoal descartável, em `http://127.0.0.1:42539`, banco `ac_implementation_test_designgw_075f4d31662d45b4`, criado por `isolatedDatabase` em cima de `AC_TEST_DATABASE_URL`. O gateway (`src/server-main.ts serve`) não é o gateway vivo e entrega o `dist` pelo mesmo caminho de `publicUi`. O log de pronto foi `administration_ready`, com `executionEnabled` falso, `inferenceEnabled` falso e o bootstrap nativo desligado. A entrada foi usuário e senha sintéticos, gravados só no diretório privado da instalação. O processo e esse banco são apagados no fim da rodada.
 
-![Início em 768 px](design-painel/inicio-768.png)
+O Chrome foi `/usr/bin/google-chrome`, página inteira, em 375×812, 768×1024 e 1440×900. O React montou: `#root` não ficou vazio.
 
-![Início em 1440 px](design-painel/inicio-1440.png)
+## Telas
 
-## Ferramentas presas no lockfile
+| Tela | Rota | Arquivos | O que aparece |
+|---|---|---|---|
+| Entrada | `/` | `login-375.png`, `login-768.png`, `login-1440.png` | Cartão Agent Control, campos Usuário e Senha, botão Entrar e o link Entrar com código. |
+| Tarefas | `/p/<projeto>/tarefas` | `tarefas-375.png`, `tarefas-768.png`, `tarefas-1440.png` | Cabeçalho Tarefas, busca e a navegação Conversa, Tarefas, Equipe, Novo projeto e Configurações. A lista está vazia: a barra lateral diz Nenhuma tarefa ainda. Em 375 px o menu fica na gaveta e o botão de nova tarefa aparece. |
+| Equipe | `/p/<projeto>/equipe` | `equipe-375.png`, `equipe-768.png`, `equipe-1440.png` | Título Equipe, combo atual nenhum, e a lista complexo, intermediário e economia, com gerente, revisor, programadores e QA. |
+| Conversa | `/p/<projeto>/conversa` | `conversa-375.png`, `conversa-768.png`, `conversa-1440.png` | Estado vazio Nenhuma mensagem ainda, botões Aprovar, Descartar, Parar e Equipe, e o campo Mensagem para o gerente. |
+| Ajustes | `/settings/global/appearance` | `ajustes-375.png`, `ajustes-768.png`, `ajustes-1440.png` | Aparência do projeto sintético: tema System, Light e Dark, acento Azul e Violet, densidade e largura de leitura. |
+| Não encontrado | `/p/<projeto>/rota-inexistente` | `nao-encontrado-375.png`, `nao-encontrado-768.png`, `nao-encontrado-1440.png` | Page not found, o texto de que nada existe nesse endereço, e o botão Back to tasks. |
+| Novo projeto | `/p/<projeto>/novo-projeto` | `novo-projeto-375.png`, `novo-projeto-768.png`, `novo-projeto-1440.png` | Neste servidor, a raiz Pastas sintéticas, a pasta exemplo-sintetico, o nome e o botão Criar. |
 
-As versões são as de `deploy/design-tools/package.json`: Stylelint 18.0.0 e pa11y 10.0.0 (runner axe). O `npm ci` dessas ferramentas usou `--legacy-peer-deps`. O postinstall do Puppeteer foi bloqueado pelo npm; o Chrome usado foi `/usr/bin/google-chrome`.
+![Entrada em 375 px](design-painel/login-375.png)
 
-Stylelint, com as regras `block-no-empty` e `color-no-invalid-hex`, leu `packages/web/src/styles/index.css`. O JSON resultante tem `errored: false`, `warnings: []` e `parseErrors: []`.
+![Entrada em 768 px](design-painel/login-768.png)
 
-pa11y com o runner axe em `http://127.0.0.1:4173/` saiu com código 0 e corpo `[]`. O documento não tem controles.
+![Entrada em 1440 px](design-painel/login-1440.png)
 
-## Exame do código pelo módulo
+![Tarefas em 375 px](design-painel/tarefas-375.png)
 
-`runDesignModule` rodou com ativação `personal`, projeto `painel-cezar`, URL `http://127.0.0.1:4173`, commit `worktree` e `createdAt` `2026-11-17T04:10:00.000Z`. O worker foi `designBenchWorker`: examinador `claude` / `bancada-especialista` e revisor `grok` / `bancada-revisor`, os dois locais. Não houve chamada paga nem examinador multimodal.
+![Tarefas em 768 px](design-painel/tarefas-768.png)
 
-Entraram 27 arquivos: `index.html`, `src/app.tsx`, `src/routes.tsx`, `src/styles/index.css`, as rotas `conversa`, `equipe`, `inbox`, `not-found`, `tasks-overview`, `novo-projeto`, `global-tasks`, `settings/settings-shell.tsx`, `settings/agent-control-section.tsx` e os `.tsx` de `src/routes/dashboard` (testes de fora). Os relatórios do Stylelint e do pa11y acima entraram como ferramentas. Não houve driver de captura dentro do módulo, então o mapa ficou com 0 capturas.
+![Tarefas em 1440 px](design-painel/tarefas-1440.png)
 
-A descoberta leu 49 rotas no código. A lista aplicada tem 72 itens. O relatório saiu em `verificacoes/painel-cezar/20261117-041000-design`, execução `df8f17c1-852b-4e2b-b73e-40fddacd8eb6`: 25 achados brutos e 25 achados `ACH-001` a `ACH-025`, todos gravidade alta e situação confirmado.
+![Equipe em 375 px](design-painel/equipe-375.png)
 
-| Regra | Quantidade |
-|---|---|
-| `ESTADOS-VAZIO-AUSENTE` | 20 |
-| `WCAG-2-4-4-BOTAO-SEM-NOME` | 4 |
-| `TOKENS-CINZAS-DEMAIS` | 1 |
+![Equipe em 768 px](design-painel/equipe-768.png)
 
-A bancada confirma regra plantada, WCAG ou `DESIGN-`. Ela não descarta falso positivo do heurístico. A nota de falha do relatório (reprovado por achado alto confirmado) mede essa confirmação, não a tela pintada.
+![Equipe em 1440 px](design-painel/equipe-1440.png)
 
-`ESTADOS-VAZIO-AUSENTE` dispara uma vez por arquivo que tem `.map(`, `data-list` ou `role=list` e não tem `data-empty`, o texto `Nenhum item` nem `empty-state` em lugar nenhum do arquivo. O primeiro caso é `src/routes.tsx:668`, `visibleSettingsSections(...).map`, um mapa de seções e não uma lista sem estado vazio.
+![Conversa em 375 px](design-painel/conversa-375.png)
 
-`WCAG-2-4-4-BOTAO-SEM-NOME` só aceita `aria-label` entre aspas. Expressão JSX fica de fora:
+![Conversa em 768 px](design-painel/conversa-768.png)
 
-- `src/routes/dashboard/layout.tsx:46` tem `` aria-label={`Move ${names[id]}`} ``.
-- `src/routes/dashboard/trends.tsx:65` tem `aria-label={describe(point)}`.
-- `src/routes/settings/settings-shell.tsx:303` tem `` aria-label={`${expanded ? 'Collapse' : 'Expand'} ${project.name}`} ``.
-- `src/routes/settings/settings-shell.tsx:334` não tem `aria-label`. O filho é `<ProjectRowLabel />`. O heurístico apaga a tag e não vê texto.
+![Conversa em 1440 px](design-painel/conversa-1440.png)
 
-`TOKENS-CINZAS-DEMAIS` em `src/styles/index.css:213` lista 9 cinzas: `#171717`, `#1c1c1c`, `#262626`, `#a3a3a3`, `#7b7b7b`, `#ebebeb`, `#e5e7eb`, `#5c5c5c` e `#1b1c1d`. Os oito primeiros são tokens de tema. O nono é `rgba(27, 28, 29, 0.04)` de `--shadow-sm` na linha 319, normalizado para `#1b1c1d`. O limiar é 8 cinzas distintos, então o achado permanece com os tokens de tema.
+![Ajustes em 375 px](design-painel/ajustes-375.png)
 
-## O que esta execução não mostra
+![Ajustes em 768 px](design-painel/ajustes-768.png)
 
-A interface do painel não chegou a aparecer. Não houve exame visual das telas logadas, nem tema claro, nem estados forçados `vazio`, `carregando` e `erro` na navegação. A imagem `deploy/Dockerfile.design` não foi construída nesta máquina: o disco estava em 92% (25 GB livres) e a base do Playwright é grande. O digest pinado no Dockerfile é `sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579`.
+![Ajustes em 1440 px](design-painel/ajustes-1440.png)
+
+![Não encontrado em 375 px](design-painel/nao-encontrado-375.png)
+
+![Não encontrado em 768 px](design-painel/nao-encontrado-768.png)
+
+![Não encontrado em 1440 px](design-painel/nao-encontrado-1440.png)
+
+![Novo projeto em 375 px](design-painel/novo-projeto-375.png)
+
+![Novo projeto em 768 px](design-painel/novo-projeto-768.png)
+
+![Novo projeto em 1440 px](design-painel/novo-projeto-1440.png)
+
+## Módulo sobre este build
+
+`npm run personal:design` rodou contra `http://127.0.0.1:42539`, numa instalação pessoal separada da do gateway, com o runtime nativo ativo. O gateway que serve o painel ficou sem bootstrap nativo. Execução `331663e8-79e1-4408-acee-ba9bf51eb9dc`, diretório `20261117-194844-design`, cerca de 48 minutos. O examinador foi Claude `claude-sonnet-5-5` (20 chamadas nativas, duas por tela: a primeira resposta nem sempre era um único objeto JSON). O revisor foi Codex `gpt-6.1-sol` (91 chamadas), outro provedor. A cadeia de especialista existiu só nesta instalação descartável, revisão de política 2, regular Claude e emergência Grok. O combo de fábrica não foi alterado.
+
+O módulo gravou 24 capturas: oito rotas descobertas no código, em 375, 768 e 1440, tema claro, estado padrão. Não houve tema escuro nem estados forçados. As rotas saem do fonte como `/conversa`, `/novo-projeto`, `/new` e `/tarefas`, e também com o parâmetro literal ainda escrito (`/p/:projectId`, `/tasks/:id`, `/tasks/:id/*`, `/equipe` na amostra que voltou JSON). `/conversa`, `/novo-projeto` e `/new` pintaram a casca do Agent Control. `/tarefas` em 375 px mostrou o cabeçalho Tarefas no tema escuro, com a área principal vazia. `/equipe`, `/p/:projectId` e `/tasks/:id` responderam o documento `{"error":"AUTH_REQUIRED"}`. As sete telas desta página foram abertas nas rotas reais `/p/<projeto>/...` e em Ajustes; o módulo não substitui `:projectId` pelo id do projeto, e Ajustes não entrou nas oito rotas capturadas.
+
+O relatório tem 91 achados. A nota de falha conta só confirmado ou reaberto: 2 altos, 17 médios e 13 baixos. Os dois altos confirmados são a captura de `/tasks/:id/*` que mostra só o JSON `AUTH_REQUIRED`, e códigos técnicos crus como mensagem de erro. Um alto ficou provável: o cinza `--soft-foreground` (`#a3a3a3`) sobre fundo branco. O revisor descartou parte dos pontos, entre eles o inventário de oito cinzas quando o achado não trouxe medida. Não há dado pessoal nem segredo no relatório.
