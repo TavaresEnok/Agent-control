@@ -79,6 +79,10 @@ export async function retireNativePrivateNetwork(docker:Pick<DockerDaemon,'inspe
 export function readonlySecurityExam(workflow:unknown,role:unknown):boolean{
  return workflow==='security-verify-readonly-v1'&&(role==='specialist'||role==='reviewer');
 }
+/** Personal design or security exam. Programmer, qa, judge and locked mode never match. */
+export function readonlyExamIsolation(personal:unknown,workflow:unknown,role:unknown):boolean{
+ return Boolean(personal)&&(readonlyDesignExam(workflow,role)||readonlySecurityExam(workflow,role));
+}
 /** Effect supervisor only. A trusted Cezar stage must already own the grant,
  * frozen source and policy. No scheduler, inference on construction, fallback,
  * approval or Git integration occurs here. Production bootstrap does not construct
@@ -238,15 +242,15 @@ export class NativeExecutionSupervisor{
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   // A personal Claude or Codex evaluator reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
   // Readonly design and security exams have no artifact row. Any personal provider still gets that copy, and no review diff is written.
-  // Isolation (secret-class replacement, hostile-config strip, read-only account, exam worker env) stays on the security exam until the design exam is wired to the same mechanism.
   const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
   const designExam=personal&&readonlyDesignExam(examWorkflow,input.role);
   const securityExam=personal&&readonlySecurityExam(examWorkflow,input.role);
+  const isolateExam=readonlyExamIsolation(personal,examWorkflow,input.role);
   const workerArtifact=designExam||securityExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex'))?join(p.root,'review-artifact'):undefined;
   if(workerArtifact){
    // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
    await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
-   if(securityExam){await replaceSecretClassFiles(workerArtifact);await stripExamHostileConfig(workerArtifact);}
+   if(isolateExam){await replaceSecretClassFiles(workerArtifact);await stripExamHostileConfig(workerArtifact);}
    if(!designExam&&!securityExam){
     // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
     const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
@@ -256,8 +260,8 @@ export class NativeExecutionSupervisor{
   // Personal Claude, Grok and Codex programmers edit the checkout from the worker itself. Locked Codex keeps the
   // original split: the credentialed worker has no /work and the tools container owns the checkout.
   const workerOwnsCheckout=input.role==='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='grok'||this.config.provider==='codex');
-  const accountMount=examAccountMount(join(this.config.accountRoot,g.account_id),securityExam);
-  const workerEnv=examWorkerEnv(this.config.workerEnv,securityExam);
+  const accountMount=examAccountMount(join(this.config.accountRoot,g.account_id),isolateExam);
+  const workerEnv=examWorkerEnv(this.config.workerEnv,isolateExam);
   const workerMounts=[accountMount,{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(workerOwnsCheckout?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
   const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):p.work;
   if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
