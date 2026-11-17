@@ -310,6 +310,38 @@ O arquivo do Claude fica em `.credentials.json` da home da conta. O do Grok fica
 
 O projeto do arquivo de instalação já entra no ledger. Um projeto novo nasce com o combo `intermediário`, quando as contas Claude, Grok e Codex estão ativas. Sem uma delas, a política de capacidade não é publicada. Na conversa, publique o fluxo "Gerente planeja a solicitação" e uma política de revisão. Escreva o pedido, por exemplo "crie CONTRIBUTING.md e referencie no README". Antes de planejar, o gerente decide se a mensagem é pergunta (responde na conversa) ou pedido de mudança (devolve a proposta). Se uma tarefa falhar, o gerente recebe o pedido original e propõe um plano corrigido uma vez. Responda `aprovar` ou `descartar`. A aprovação automática, desligada por padrão, é `POST /api/v1/ac/personal/auto-approve` com `{"enabled":true}`.
 
+## Verificar a segurança
+
+A verificação é só leitura: não altera o repositório e não abre caminho de escrita. O Cezar não despacha esse pedido. A conversa do Happier não inicia o exame. Quem pede é o dono da instalação, pelo comando ou pelo botão do painel.
+
+```bash
+npm run personal:verify -- <instalação.json> <projectId>
+npm run personal:verify -- <instalação.json> <projectId> --url http://127.0.0.1:8080
+```
+
+O comando precisa de ativação pessoal e de um contexto com autoridade de gerente. Sem isso ele para, e nada é examinado. A URL, quando existe, tem de ser desta máquina. A imagem das ferramentas não inclui ZAP, Nuclei nem Schemathesis. Se a URL for aceita, o relatório guarda a nota exata: "Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis." O código da aplicação é examinado; a URL declarada não é varrida.
+
+Na tela Verificações do painel, o botão "Nova verificação" chama a mesma rota do dono e mostra a fase: ferramentas, mapa, exame, confirmação, relatório, concluída ou falhou. Enquanto uma verificação corre, o botão fica desligado. Ao concluir, a lista recarrega.
+
+O exame faz cinco coisas, nesta ordem:
+
+1. As ferramentas da imagem leem o repositório, com as bases de vulnerabilidade montadas só para leitura.
+2. Um especialista desenha o mapa de rotas e superfícies.
+3. Um especialista lê os arquivos em fatias e aponta achados.
+4. Um revisor de outro provedor tenta derrubar cada achado.
+5. O relatório é gravado.
+
+O diretório fica em `<dataDirectory>/verificacoes/<projectId>/<AAAAMMDD-HHMMSS>-seguranca/`. A pasta é modo `0700` e os arquivos são modo `0600`.
+
+- `README.md` é a nota geral. A nota de falha conta só achado `confirmado` ou `reaberto`.
+- `achados/ACH-NNN.md` é um achado. `confirmado` ficou de pé depois do revisor. `descartado` não entra na nota. `provável` é o que o revisor não fechou. `fechado` e `reaberto` aparecem depois de uma correção.
+- `cobertura.md` diz qual modelo leu cada arquivo e quais itens da lista foram usados.
+- `mapa.md` lista rotas e superfícies.
+- `achados.json` e `run.json` repetem os dados para o painel.
+- `bruto/` guarda a saída anterior à redação final do relatório. Um valor com cara de credencial aparece só com os quatro primeiros caracteres e o SHA-256.
+
+O botão Corrigir manda achados `confirmado` ou `reaberto` ao gerente, como pedido normal de mudança, com o caminho de escrita e um teste de regressão. A reverificação lê o ponto de novo e marca `fechado` ou `reaberto`.
+
 ## Backup
 
 O backup leva a chave da conta Happier, os logins, a chave SSH, o cofre, o banco e o resto do diretório de dados (sem `native/`, `qa-cache/` nem `remote/`). Ele contém segredos. Guarde-o fora do servidor e fora do repositório.
@@ -360,7 +392,7 @@ A cada 2 minutos a vigia também manda um aviso ao celular quando:
 - o disco passa de 90% (no máximo a cada 6 horas);
 - o login de uma conta está para vencer em até 3 dias ou falta no arquivo de login (no máximo uma vez por dia). O aviso já traz o comando `account-add` para entrar de novo.
 
-A manutenção semanal apaga o cache de build do Docker com mais de 7 dias e tira da instalação as imagens aposentadas (`retiredImages` e `retiredImageIds`) que nenhum job aberto ainda usa, apagando-as do Docker. Antes de mudar a instalação, ela guarda `installation.json.before-maintenance`. Volumes, contêineres e imagens de outros projetos não são tocados.
+A manutenção semanal atualiza as bases de vulnerabilidade em `<dataDirectory>/verify-db/`. Se a busca falha, a base anterior permanece e o aviso diz isso. Em seguida ela apaga o cache de build do Docker com mais de 7 dias e tira da instalação as imagens aposentadas (`retiredImages` e `retiredImageIds`) que nenhum job aberto ainda usa, apagando-as do Docker. Antes de mudar a instalação, ela guarda `installation.json.before-maintenance`. Volumes, contêineres e imagens de outros projetos não são tocados.
 
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
