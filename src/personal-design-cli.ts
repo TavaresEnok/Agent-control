@@ -24,9 +24,14 @@ const messages: Record<string, string> = {
   DESIGN_BROWSER_MISSING: 'O Chrome do painel não está disponível para a captura.',
 };
 
-function fail(error: unknown): never {
+/** Known codes keep their Portuguese line. Anything else is one fixed sentence, so a path or secret never reaches the terminal. */
+export function designCliFailureText(error: unknown): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
-  console.error(messages[code] ?? (code || 'O exame de design falhou.'));
+  return Object.hasOwn(messages, code) ? messages[code] : 'O exame de design falhou.';
+}
+
+function fail(error: unknown): never {
+  console.error(designCliFailureText(error));
   process.exit(1);
   throw error instanceof Error ? error : new Error('O exame de design falhou.');
 }
