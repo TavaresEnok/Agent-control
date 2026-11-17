@@ -28,7 +28,8 @@ export const engineeringNativeWorkflow=workflowDefSchema.parse({...engineeringWo
 export const semanticProposalWorkflow=workflowDefSchema.parse({name:'semantic-proposal-v1',source:'built-in',steps:[],
  graph:{version:2,nodes:[{id:'start',type:'start'},{id:'done',type:'end',status:'success'}],edges:[{from:'start',to:'done'}]}});
 /** Read-only security exam. A marker so capacity can bind specialist and reviewer grants.
- * Cezar must not dispatch it: the verification module owns the exam. */
+ * Cezar must not dispatch it: the verification module owns the exam.
+ * It stays in currentBuiltInWorkflows because workflowFor throws WORKFLOW_NOT_ADMITTED if it is absent. */
 export const securityVerifyWorkflow=workflowDefSchema.parse({name:'security-verify-readonly-v1',source:'built-in',steps:[],
  graph:{version:2,nodes:[{id:'start',type:'start'},{id:'done',type:'end',status:'success'}],edges:[{from:'start',to:'done'}]}});
 /** Current built-ins only. A new execution never selects a retained snapshot; those stay in src/workflow-versions.ts. */

@@ -137,6 +137,10 @@ export class Ledger {
     const command = Command.parse(raw);
     if(command.payload.workflow==='engineering-native-v1'&&(channel!=='happier'||!afterAccept))throw new Refusal('NATIVE_CANONICAL_MESSAGE_REQUIRED',403);
     return this.tx(async c => {
+      if(command.payload.workflow==='security-verify-readonly-v1'){
+        const personal=await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'");
+        if(!personal.rowCount)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+      }
       const context = await this.authorize(c, principal, command.contextId);
       if (command.contextId !== a.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH', 403);
       // Serialize duplicate intent IDs across contexts before binding their payload.
