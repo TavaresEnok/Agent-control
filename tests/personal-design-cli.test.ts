@@ -125,3 +125,47 @@ test('o leitor do repositório ignora node_modules, .git, .env, chave e symlink 
     await rm(outside, {recursive: true, force: true});
   }
 });
+
+test('o leitor do repositório ignora .claude, .mcp.json, .codex e .grok e não segue esse symlink', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'design-repo-'));
+  const outside = await mkdtemp(join(tmpdir(), 'design-fora-'));
+  const marker = 'alvo-symlink-fora';
+  try {
+    await mkdir(join(directory, 'src'));
+    await mkdir(join(directory, '.claude'));
+    await mkdir(join(directory, '.Claude'));
+    await mkdir(join(directory, '.codex'));
+    await mkdir(join(directory, '.grok'));
+    await mkdir(join(directory, '.cursor'));
+    await mkdir(join(directory, 'nested'));
+    await mkdir(join(directory, 'pkg', '.grok'), {recursive: true});
+    await writeFile(join(directory, 'src', 'App.tsx'), 'export const tela = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, 'nested', 'ok.tsx'), 'export const junto = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, '.cursor', 'panel.tsx'), 'export const cursor = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, '.Claude', 'keep.tsx'), 'export const keep = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, 'pkg', 'ok.ts'), 'export const pkg = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, '.claude', 'settings.json'), '{"hooks":["claude-hook"]}\n', {mode: 0o644});
+    await writeFile(join(directory, '.claude', 'hook.ts'), 'export const claudeHook = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, '.mcp.json'), '{"mcp":"mcp-secret"}\n', {mode: 0o644});
+    await writeFile(join(directory, '.codex', 'config.toml'), 'secret = "codex-secret"\n', {mode: 0o644});
+    await writeFile(join(directory, '.codex', 'plugin.ts'), 'export const codexPlugin = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, '.grok', 'hooks.json'), '{"hooks":["grok-hook"]}\n', {mode: 0o644});
+    await writeFile(join(directory, '.grok', 'hook.js'), 'export const grokHook = 1;\n', {mode: 0o644});
+    await writeFile(join(directory, 'pkg', '.grok', 'nested.js'), 'export const nested = 1;\n', {mode: 0o644});
+    await writeFile(join(outside, 'Leak.tsx'), `export const leak = '${marker}';\n`, {mode: 0o644});
+    await symlink(outside, join(directory, 'nested', '.claude'));
+    const files = await readDesignRepository(directory);
+    const paths = files.map(file => file.path).sort();
+    const skippedName = (part: string) => part === '.claude' || part === '.mcp.json' || part === '.codex' || part === '.grok';
+    assert.deepEqual(paths, ['.Claude/keep.tsx', '.cursor/panel.tsx', 'nested/ok.tsx', 'pkg/ok.ts', 'src/App.tsx']);
+    assert.equal(paths.some(path => path.split('/').some(skippedName)), false);
+    assert.equal(JSON.stringify(files).includes(marker), false);
+    assert.equal(JSON.stringify(files).includes('claude-hook'), false);
+    assert.equal(JSON.stringify(files).includes('mcp-secret'), false);
+    assert.equal(JSON.stringify(files).includes('codex-secret'), false);
+    assert.equal(JSON.stringify(files).includes('grok-hook'), false);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+    await rm(outside, {recursive: true, force: true});
+  }
+});

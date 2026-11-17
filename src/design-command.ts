@@ -19,7 +19,11 @@ const MAX_DESIGN_FILE_BYTES = 200_000;
 const MAX_DESIGN_TOTAL_BYTES = 2_000_000;
 const MAX_LOGIN_BYTES = 4096;
 const SOURCE = /\.(?:html?|css|tsx|jsx|vue|ts|js)$/i;
-const SKIP_DIR = new Set(['node_modules', '.git', 'dist', '.design-captures', '.ai', '.state', 'coverage', '.next', 'build', 'out']);
+/** Basenames skipped at any depth. Matching is case-sensitive. */
+const SKIP_DIR = new Set([
+  'node_modules', '.git', 'dist', '.design-captures', '.ai', '.state', 'coverage', '.next', 'build', 'out',
+  '.claude', '.mcp.json', '.codex', '.grok',
+]);
 
 type DesignSeat = {
   provider: string;
@@ -142,8 +146,10 @@ function loginFromJson(value: unknown): DesignLogin {
 }
 
 /**
- * Bounded text read of the project checkout. Skips dependency, VCS, env and key names.
- * A symlink is followed only when its real path stays inside the repository.
+ * Bounded text read of the project checkout. Skips dependency, VCS, env, key names
+ * and agent config (`.claude`, `.mcp.json`, `.codex`, `.grok`) at any depth.
+ * Those names are case-sensitive and a symlink with one of them is not followed.
+ * Any other symlink is followed only when its real path stays inside the repository.
  */
 export async function readDesignRepository(repo: string): Promise<DesignSourceFile[]> {
   let root: string;
