@@ -1,6 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {keepPersonalVerifyLease, releasePersonalVerifyLease} from '../src/personal-verify-cli.ts';
+import {randomUUID} from 'node:crypto';
+import {Refusal, type Authority} from '../src/contracts.ts';
+import type {Ledger} from '../src/ledger.ts';
+import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from '../src/personal-verify-cli.ts';
+import {createCapacityNativeWorker, type SecurityExamSupervisor} from '../src/verify-native-launch.ts';
+import type {VerifyWorkerCall} from '../src/verify-types.ts';
 
 async function until(done: () => boolean) {
   const start = Date.now();
@@ -93,4 +98,70 @@ test('soltar a locação zera lease_until filtrando contexto, instância e époc
     }, authority),
     /db fora/,
   );
+});
+
+test('perder a locação pede stop e mantém VERIFY_LEASE_LOST quando stop falha', async () => {
+  const accountId = randomUUID();
+  const asked: VerifyWorkerCall = {
+    role: 'specialist',
+    provider: 'grok',
+    accountId,
+    profileId: randomUUID(),
+    model: 'fixture-model',
+    grantId: randomUUID(),
+    intentId: randomUUID(),
+    task: 'Pedido de exame.',
+    repo: '/tmp/repo-leitura',
+    writePaths: [],
+  };
+  const authority: Authority = {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1};
+  let started!: () => void;
+  const startedGate = new Promise<void>(resolve => { started = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let stops = 0;
+  let seenJob = '';
+  const chosen: SecurityExamSupervisor = {
+    active: true,
+    supportsAccount(id) { return id === accountId; },
+    async start(_principal, _authority, request) {
+      seenJob = request.jobId;
+      started();
+      return {state: 'running'};
+    },
+    async reconcile() {
+      await gate;
+      return {state: 'completed', output: 'ok'};
+    },
+    async retireTerminal() {
+      return {state: 'removed'};
+    },
+    async stop(_principal, _authority, request) {
+      stops += 1;
+      assert.equal(request.jobId, seenJob);
+      throw new Error('stop-broke');
+    },
+  };
+  const worker = createCapacityNativeWorker({
+    supervisors: [chosen],
+    principal: 'owner',
+    authority,
+    ledger: {} as Ledger,
+    base: 'a'.repeat(40),
+    wait: async () => {},
+  });
+  const pending = worker.run(asked);
+  await startedGate;
+  let rejected: unknown;
+  const stop = worker.stop;
+  if (!stop) throw new Error('stop ausente');
+  await abortPersonalVerifyForLeaseLoss({
+    stopLease() {},
+    stopJob: () => stop(),
+    rejectAbort(error) { rejected = error; },
+  });
+  assert.equal(stops, 1);
+  assert.ok(rejected instanceof Refusal && rejected.code === 'VERIFY_LEASE_LOST');
+  release();
+  assert.equal(await pending, 'ok');
 });

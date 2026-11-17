@@ -89,6 +89,7 @@ export type VerifyWorkerCall = z.infer<typeof VerifyWorkerCall>;
 
 export type VerifyWorker = {
   run(call: VerifyWorkerCall): Promise<string>;
+  stop?(): Promise<void>;
 };
 
 export const Achado = z.object({

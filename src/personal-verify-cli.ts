@@ -63,6 +63,14 @@ export async function releasePersonalVerifyLease(ledger:LeasePool,authority:Leas
  await ledger.pool.query(releaseLeaseSql,[authority.contextId,authority.instanceId,authority.epoch]);
 }
 
+/** Lease loss stops the in-flight exam, then fails as VERIFY_LEASE_LOST. A stop error must not replace that code. */
+export async function abortPersonalVerifyForLeaseLoss(hooks:{stopLease:()=>void;stopJob:()=>Promise<void>;rejectAbort:(error:unknown)=>void}):Promise<void>{
+ hooks.stopLease();
+ try{await hooks.stopJob();}
+ catch{/* a stop failure must not replace VERIFY_LEASE_LOST */}
+ hooks.rejectAbort(new Refusal('VERIFY_LEASE_LOST'));
+}
+
 function parseDiscardArgs(argv:readonly string[]):{installationPath:string;projectId:string;runId:string}|undefined{
  if(!argv.includes('--descartar'))return undefined;
  const positional:string[]=[];
@@ -109,6 +117,7 @@ async function main(){
  if(!resolved.input.ledger||!resolved.input.authority)fail(new Refusal('VERIFY_CONTEXT_REQUIRED',409));
  const ledger=resolved.input.ledger;
  const authority=resolved.input.authority;
+ const worker=resolved.input.worker;
  let job=Promise.resolve();
  let runId:string|undefined;
  let rejectAbort:(error:unknown)=>void=()=>{};
@@ -116,8 +125,11 @@ async function main(){
  void aborted.catch(()=>undefined);
  let stopLease:()=>void=()=>{};
  stopLease=keepPersonalVerifyLease(ledger,authority,5000,()=>{
-  stopLease();
-  rejectAbort(new Refusal('VERIFY_LEASE_LOST'));
+  void abortPersonalVerifyForLeaseLoss({
+   stopLease(){stopLease();},
+   async stopJob(){await worker?.stop?.();},
+   rejectAbort,
+  });
  });
  let failed:unknown;
  try{

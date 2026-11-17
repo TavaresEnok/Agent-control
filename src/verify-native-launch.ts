@@ -125,7 +125,14 @@ export function createCapacityNativeWorker(input: {
   wait?: Wait;
 }): VerifyWorker {
   const {supervisors, principal, authority, base, releaseGrant, wait = sleep} = input;
+  let active: {supervisor: SecurityExamSupervisor; request: SecurityExamRequest} | null = null;
   return {
+    async stop() {
+      const current = active;
+      const stop = current?.supervisor.stop?.bind(current.supervisor);
+      if (!current || !stop) return;
+      await stop(principal, authority, current.request);
+    },
     async run(call) {
       const parsed = VerifyWorkerCall.parse(call);
       const supervisor = supervisors.find(item => item.active && item.supportsAccount(parsed.accountId));
@@ -140,7 +147,12 @@ export function createCapacityNativeWorker(input: {
         task: parsed.task,
         artifactId: randomUUID(),
       });
-      return finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);
+      active = {supervisor, request};
+      try {
+        return await finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);
+      } finally {
+        if (active?.request === request) active = null;
+      }
     },
   };
 }
