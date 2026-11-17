@@ -319,7 +319,7 @@ npm run personal:verify -- <instalação.json> <projectId>
 npm run personal:verify -- <instalação.json> <projectId> --url http://127.0.0.1:8080
 ```
 
-O comando precisa de ativação pessoal e de um contexto com autoridade de gerente. Sem isso ele para, e nada é examinado. A URL, quando existe, tem de ser desta máquina. A imagem das ferramentas não inclui ZAP, Nuclei nem Schemathesis. Se a URL for aceita, o relatório guarda a nota exata: "Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis." O código da aplicação é examinado; a URL declarada não é varrida.
+O comando precisa de ativação pessoal e de um contexto com autoridade de gerente. Sem isso ele para, e nada é examinado. A URL, quando existe, é `http` ou `https` em `127.0.0.1`, `localhost` ou o nome de um rótulo do contêiner-alvo, sem ponto. A imagem das ferramentas não inclui ZAP, Nuclei nem Schemathesis. Se a URL for aceita, o relatório guarda a nota exata: "Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis." O código da aplicação é examinado; a URL declarada não é varrida.
 
 Na tela Verificações do painel, o botão "Nova verificação" chama a mesma rota do dono e mostra a fase: ferramentas, mapa, exame, confirmação, relatório, concluída ou falhou. Enquanto uma verificação corre, o botão fica desligado. Ao concluir, a lista recarrega.
 
@@ -331,7 +331,7 @@ O exame faz cinco coisas, nesta ordem:
 4. Um revisor de outro provedor tenta derrubar cada achado.
 5. O relatório é gravado.
 
-O diretório fica em `<dataDirectory>/verificacoes/<projectId>/<AAAAMMDD-HHMMSS>-seguranca/`. A pasta é modo `0700` e os arquivos são modo `0600`.
+O diretório fica em `<dataDirectory>/verificacoes/<projectId>/<AAAAMMDD-HHMMSS>-<oito hex>-seguranca/`. A pasta é modo `0700` e os arquivos são modo `0600`. Duas verificações no mesmo segundo ficam em pastas diferentes. O nome é reservado antes de qualquer chamada de modelo.
 
 - `README.md` é a nota geral. A nota de falha conta só achado `confirmado` ou `reaberto`.
 - `achados/ACH-NNN.md` é um achado. `confirmado` ficou de pé depois do revisor. `descartado` não entra na nota. `provável` é o que o revisor não fechou. `fechado` e `reaberto` aparecem depois de uma correção.
