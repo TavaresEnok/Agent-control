@@ -74,12 +74,24 @@ export function discoverRoutesFromSource(files: readonly {path: string; text: st
   }));
 }
 
-/** Regra ESTADOS-VAZIO-AUSENTE: lista dinâmica sem ramo de vazio. Itens literais não geram achado. */
+/** Regra ESTADOS-VAZIO-AUSENTE: lista dinâmica sem ramo de vazio. Itens literais não geram achado. O marcador vale só no mesmo componente. */
 export function missingEmptyStateFindings(file: string, text: string): DesignRawFinding[] {
-  if (EMPTY_MARKER.test(text)) return [];
+  const spans = functionSpans(text);
+  const marked = new Set<string>();
+  const pattern = new RegExp(EMPTY_MARKER.source, 'g');
+  let marker: RegExpExecArray | null;
+  const masked = maskComments(text);
+  while ((marker = pattern.exec(masked)) !== null) {
+    if (marker[0].length === 0) {
+      pattern.lastIndex += 1;
+      continue;
+    }
+    marked.add(spanKey(innermostSpan(spans, marker.index, text.length)));
+  }
   const findings: DesignRawFinding[] = [];
   for (const hit of listHits(text)) {
     if (isLiteralList(hit.inner)) continue;
+    if (marked.has(spanKey(innermostSpan(spans, hit.index, text.length)))) continue;
     const rawLine = lineText(text, hit.index);
     const snippet = rawLine.trim().length <= 200 ? rawLine : text.slice(hit.index, hit.index + 120);
     findings.push(designRawFinding({
@@ -93,6 +105,161 @@ export function missingEmptyStateFindings(file: string, text: string): DesignRaw
     }));
   }
   return findings;
+}
+
+type SourceSpan = {start: number; end: number};
+
+function functionSpans(text: string): SourceSpan[] {
+  const spans: SourceSpan[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const skipped = skipNoise(text, index);
+    if (skipped > index) {
+      index = skipped;
+      continue;
+    }
+    if (isFunctionKeyword(text, index)) {
+      const body = functionBody(text, index + 'function'.length);
+      if (body !== null) {
+        spans.push(body);
+        index = body.start + 1;
+        continue;
+      }
+    }
+    if (text.startsWith('=>', index)) {
+      const body = arrowBody(text, index + 2);
+      if (body !== null) {
+        spans.push(body);
+        index = body.start + 1;
+        continue;
+      }
+    }
+    index += 1;
+  }
+  return spans;
+}
+
+function innermostSpan(spans: readonly SourceSpan[], index: number, length: number): SourceSpan {
+  let best: SourceSpan | null = null;
+  for (const span of spans) {
+    if (index < span.start || index >= span.end) continue;
+    if (best === null || span.end - span.start < best.end - best.start) best = span;
+  }
+  return best ?? {start: 0, end: length};
+}
+
+function spanKey(span: SourceSpan): string {
+  return `${span.start}:${span.end}`;
+}
+
+function isFunctionKeyword(text: string, index: number): boolean {
+  if (!text.startsWith('function', index)) return false;
+  const before = index === 0 ? '' : text[index - 1] ?? '';
+  const after = text[index + 'function'.length] ?? '';
+  if (before !== '' && /[A-Za-z0-9_$]/.test(before)) return false;
+  return !/[A-Za-z0-9_$]/.test(after);
+}
+
+function functionBody(text: string, from: number): SourceSpan | null {
+  let index = skipSpaceAndNoise(text, from);
+  if (text[index] === '*') index = skipSpaceAndNoise(text, index + 1);
+  if (isIdentStart(text[index] ?? '')) {
+    index += 1;
+    while (index < text.length && isIdentPart(text[index] ?? '')) index += 1;
+    index = skipSpaceAndNoise(text, index);
+  }
+  if (text[index] !== '(') return null;
+  const paramsEnd = matchingCloser(text, index, '(', ')');
+  if (paramsEnd < 0) return null;
+  index = skipSpaceAndNoise(text, paramsEnd);
+  if (text[index] !== '{') return null;
+  const end = matchingCloser(text, index, '{', '}');
+  if (end < 0) return null;
+  return {start: index, end};
+}
+
+function arrowBody(text: string, from: number): SourceSpan | null {
+  const index = skipSpaceAndNoise(text, from);
+  const char = text[index];
+  if (char !== '{' && char !== '(') return null;
+  const end = matchingCloser(text, index, char, char === '{' ? '}' : ')');
+  if (end < 0) return null;
+  return {start: index, end};
+}
+
+function matchingCloser(text: string, openIndex: number, open: string, close: string): number {
+  let depth = 0;
+  let index = openIndex;
+  while (index < text.length) {
+    const skipped = skipNoise(text, index);
+    if (skipped > index) {
+      index = skipped;
+      continue;
+    }
+    const char = text[index];
+    if (char === open) depth += 1;
+    else if (char === close) {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+function skipSpaceAndNoise(text: string, index: number): number {
+  let cursor = index;
+  while (cursor < text.length) {
+    const skipped = skipNoise(text, cursor);
+    if (skipped > cursor) {
+      cursor = skipped;
+      continue;
+    }
+    if (/[ \t\r\n]/.test(text[cursor] ?? '')) {
+      cursor += 1;
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function skipNoise(text: string, index: number): number {
+  const char = text[index];
+  const next = text[index + 1];
+  if (char === '/' && next === '/') {
+    const end = text.indexOf('\n', index + 2);
+    return end < 0 ? text.length : end;
+  }
+  if (char === '/' && next === '*') {
+    const end = text.indexOf('*/', index + 2);
+    return end < 0 ? text.length : end + 2;
+  }
+  if (char === '<' && text.startsWith('<!--', index)) {
+    const end = text.indexOf('-->', index + 4);
+    return end < 0 ? text.length : end + 3;
+  }
+  if (char === '"' || char === '\'' || char === '`') {
+    let cursor = index + 1;
+    while (cursor < text.length) {
+      if (text[cursor] === '\\') {
+        cursor += 2;
+        continue;
+      }
+      if (text[cursor] === char) return cursor + 1;
+      cursor += 1;
+    }
+    return text.length;
+  }
+  return index;
+}
+
+function isIdentStart(char: string): boolean {
+  return /[A-Za-z_$]/.test(char);
+}
+
+function isIdentPart(char: string): boolean {
+  return /[A-Za-z0-9_$]/.test(char);
 }
 
 function listHits(text: string): {index: number; inner: string}[] {

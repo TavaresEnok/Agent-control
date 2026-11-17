@@ -152,9 +152,14 @@ test('estado vazio ausente quando ha lista e nao ha marcador de vazio', () => {
   assert.equal(finding.line, 3);
   assert.match(finding.snippet, /data-list/);
   assert.match(finding.fingerprint, /^[a-f0-9]{64}$/);
-  assert.equal(missingEmptyStateFindings('src/Itens.tsx', `${text}\n<p>Nenhum item</p>`).length, 0);
-  assert.equal(missingEmptyStateFindings('src/Itens.tsx', `${text}\n<div data-empty></div>`).length, 0);
-  assert.equal(missingEmptyStateFindings('src/Itens.tsx', `${text}\n<div class="empty-state"></div>`).length, 0);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', `${text}\n<p>Nenhum item</p>`).length, 1);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', `${text}\n<div data-empty></div>`).length, 1);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', `${text}\n<div class="empty-state"></div>`).length, 1);
+  const withMarkerInside = (marker: string) => text.replace('  return (', `  ${marker}\n  return (`);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', withMarkerInside('<p>Nenhum item</p>')).length, 0);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', withMarkerInside('<div data-empty></div>')).length, 0);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', withMarkerInside('<div class="empty-state"></div>')).length, 0);
+  assert.equal(missingEmptyStateFindings('src/Itens.tsx', withMarkerInside('// Nenhum item')).length, 1);
   assert.equal(missingEmptyStateFindings('src/BoaInicio.tsx', 'export function Boa(){return <p>Olá</p>}').length, 0);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role="list"></div>').length, 1);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role={"list"}></div>').length, 1);
@@ -174,6 +179,54 @@ test('estado vazio ausente quando ha lista e nao ha marcador de vazio', () => {
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\nif (items.length == 0) return null;').length, 0);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\n{!items.length && ready}').length, 0);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ul></ul>\n{items.length ? rows : null}').length, 0);
+});
+
+test('marcador de vazio fica no componente da lista', () => {
+  const marked = [
+    'export function ComMarcador() {',
+    '  if (items.length === 0) return <p>Nenhum item</p>;',
+    '  return <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>;',
+    '}',
+  ].join('\n');
+  const unmarked = [
+    'export function SemMarcador() {',
+    '  return <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul>;',
+    '}',
+  ].join('\n');
+  assert.equal(missingEmptyStateFindings('src/Listas.tsx', marked).length, 0);
+  const findings = missingEmptyStateFindings('src/Listas.tsx', `${marked}\n${unmarked}`);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]?.severity, 'media');
+  assert.equal(findings[0]?.line, 6);
+  const swapped = missingEmptyStateFindings('src/Listas.tsx', `${unmarked}\n${marked}`);
+  assert.equal(swapped.length, 1);
+  assert.equal(swapped[0]?.severity, 'media');
+  assert.equal(swapped[0]?.line, 2);
+  const elsewhere = [
+    'export function Lista() {',
+    '  return <ol>{items.map((item) => <li key={item}>{item}</li>)}</ol>;',
+    '}',
+    'function Aviso() {',
+    '  return <p>Nenhum item</p>;',
+    '}',
+  ].join('\n');
+  const hidden = missingEmptyStateFindings('src/Listas.tsx', elsewhere);
+  assert.equal(hidden.length, 1);
+  assert.equal(hidden[0]?.severity, 'media');
+  assert.equal(hidden[0]?.line, 2);
+  const arrows = [
+    'const Cheia = () => {',
+    '  if (!items.length) return null;',
+    '  return <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>;',
+    '};',
+    'const Vazia = () => (',
+    '  <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>',
+    ');',
+  ].join('\n');
+  const arrowFindings = missingEmptyStateFindings('src/Listas.tsx', arrows);
+  assert.equal(arrowFindings.length, 1);
+  assert.equal(arrowFindings[0]?.severity, 'media');
+  assert.equal(arrowFindings[0]?.line, 6);
 });
 
 test('tabela de cobertura em portugues', () => {
