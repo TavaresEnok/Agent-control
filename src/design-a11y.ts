@@ -1,4 +1,4 @@
-import {DESIGN_CONTRAST_AA, DESIGN_CONTRAST_AA_LARGE, DESIGN_PLANTED_RULES, designRawFinding, type DesignRawFinding} from './design-types.ts';
+import {DESIGN_CONTRAST_AA, DESIGN_CONTRAST_AA_LARGE, DESIGN_PLANTED_RULES, designRawFinding, type DesignMeasure, type DesignRawFinding} from './design-types.ts';
 
 type Rgb = {r: number; g: number; b: number};
 
@@ -85,6 +85,7 @@ function elementContrast(findings: DesignRawFinding[], file: string, html: strin
       line: lineAt(html, match.index),
       severity: 'alta',
       snippet: `${open} contraste ${ratio.toFixed(2)}:1`,
+      measure: {kind: 'contrast', ratio},
     }));
   }
 }
@@ -316,7 +317,7 @@ function flagUnlabeled(findings: DesignRawFinding[], file: string, html: string,
     rule: DESIGN_PLANTED_RULES.unlabeledButton,
     file,
     line: lineAt(html, index),
-    severity: 'alta',
+    severity: 'media',
     snippet: raw.replace(/\s+/g, ' ').slice(0, 180),
   }));
 }
@@ -368,13 +369,57 @@ function impactSeverity(impact: string, allowHigh: boolean): DesignRawFinding['s
   return 'informativa';
 }
 
-function axeRule(id: string): {rule: string; allowHigh: boolean} {
-  if (id === 'color-contrast') return {rule: DESIGN_PLANTED_RULES.contrast, allowHigh: true};
-  if (id === 'button-name' || id === 'link-name' || id === 'image-alt' || id === 'label') {
-    return {rule: id === 'button-name' ? DESIGN_PLANTED_RULES.unlabeledButton : `WCAG-${id}`.slice(0, 200), allowHigh: true};
+const RATIO_EXPECTED = /(?:expected|at least|minimum|m[ií]nimo|requer|exig)[^0-9]{0,40}$/i;
+
+function ratioFromText(text: string): number | null {
+  const patterns = [
+    /contrast of (\d+(?:\.\d+)?)/gi,
+    /contraste(?:\s+de)?\s+(\d+(?:\.\d+)?)(?!\s*px)/gi,
+    /(\d+(?:\.\d+)?)\s*:\s*1/gi,
+  ];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const before = text.slice(Math.max(0, match.index - 48), match.index);
+      if (RATIO_EXPECTED.test(before)) continue;
+      const value = Number(match[1]);
+      if (Number.isFinite(value) && value > 0) return value;
+    }
   }
-  if (id.includes('focus')) return {rule: DESIGN_PLANTED_RULES.invisibleFocus, allowHigh: true};
-  return {rule: id.slice(0, 200), allowHigh: false};
+  return null;
+}
+
+function finiteRatio(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return value;
+}
+
+function contrastMeasure(ratio: number | null): DesignMeasure | undefined {
+  if (ratio === null) return undefined;
+  return {kind: 'contrast', ratio};
+}
+
+function nodeContrastRatio(node: unknown, help: string): number | null {
+  if (node && typeof node === 'object') {
+    const data = 'data' in node && node.data && typeof node.data === 'object' && !Array.isArray(node.data)
+      ? node.data as Record<string, unknown>
+      : null;
+    const structured = finiteRatio(data?.contrastRatio ?? data?.['contrast-ratio']);
+    if (structured !== null) return structured;
+    const summary = 'failureSummary' in node && typeof node.failureSummary === 'string' ? node.failureSummary : '';
+    const html = 'html' in node && typeof node.html === 'string' ? node.html : '';
+    const fromNode = ratioFromText(`${summary}\n${html}`);
+    if (fromNode !== null) return fromNode;
+  }
+  return ratioFromText(help);
+}
+
+function axeRule(id: string): string {
+  if (id === 'color-contrast') return DESIGN_PLANTED_RULES.contrast;
+  if (id === 'button-name') return DESIGN_PLANTED_RULES.unlabeledButton;
+  if (id === 'link-name' || id === 'image-alt' || id === 'label') return `WCAG-${id}`.slice(0, 200);
+  if (id.includes('focus')) return DESIGN_PLANTED_RULES.invisibleFocus;
+  return id.slice(0, 200);
 }
 
 export function axeToFindings(file: string, axeJson: unknown): DesignRawFinding[] {
@@ -385,18 +430,21 @@ export function axeToFindings(file: string, axeJson: unknown): DesignRawFinding[
     const id = 'id' in violation && typeof violation.id === 'string' ? violation.id : '';
     if (!id) continue;
     const impact = 'impact' in violation && typeof violation.impact === 'string' ? violation.impact : 'minor';
-    const mapped = axeRule(id);
+    const rule = axeRule(id);
     const nodes = 'nodes' in violation && Array.isArray(violation.nodes) ? violation.nodes : [null];
     const help = 'help' in violation && typeof violation.help === 'string' ? violation.help : id;
     for (const node of nodes) {
       const html = node && typeof node === 'object' && 'html' in node && typeof node.html === 'string' ? node.html : help;
+      const ratio = rule === DESIGN_PLANTED_RULES.contrast ? nodeContrastRatio(node, help) : null;
+      const measure = contrastMeasure(ratio);
       findings.push(designRawFinding({
         tool: 'axe',
-        rule: mapped.rule,
+        rule,
         file,
         line: null,
-        severity: impactSeverity(impact, mapped.allowHigh),
+        severity: impactSeverity(impact, measure !== undefined),
         snippet: html,
+        ...(measure === undefined ? {} : {measure}),
       }));
     }
   }
@@ -413,13 +461,16 @@ export function pa11yToFindings(file: string, pa11yJson: unknown): DesignRawFind
     const context = 'context' in issue && typeof issue.context === 'string' ? issue.context : message;
     const contrast = /1\.4\.3|color-contrast|contrast/i.test(code + message);
     const button = /button-name|4\.1\.2|empty button/i.test(code + message);
+    const ratio = contrast ? ratioFromText(`${code}\n${message}\n${context}`) : null;
+    const measure = contrastMeasure(ratio);
     findings.push(designRawFinding({
       tool: 'pa11y',
       rule: contrast ? DESIGN_PLANTED_RULES.contrast : button ? DESIGN_PLANTED_RULES.unlabeledButton : code.slice(0, 200),
       file,
       line: null,
-      severity: contrast || button ? 'alta' : 'media',
+      severity: measure !== undefined ? 'alta' : 'media',
       snippet: context || message,
+      ...(measure === undefined ? {} : {measure}),
     }));
   }
   return findings;

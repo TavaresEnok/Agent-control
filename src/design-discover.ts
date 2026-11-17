@@ -74,22 +74,121 @@ export function discoverRoutesFromSource(files: readonly {path: string; text: st
   }));
 }
 
-/** Regra ESTADOS-VAZIO-AUSENTE: ul, ol, data-list ou role=list sem ramo de vazio no mesmo arquivo. */
+/** Regra ESTADOS-VAZIO-AUSENTE: lista dinâmica sem ramo de vazio. Itens literais não geram achado. */
 export function missingEmptyStateFindings(file: string, text: string): DesignRawFinding[] {
   if (EMPTY_MARKER.test(text)) return [];
-  const match = LIST_MARKER.exec(text);
-  if (match === null || match.index === undefined) return [];
-  const rawLine = lineText(text, match.index);
-  const snippet = rawLine.trim().length <= 200 ? rawLine : text.slice(match.index, match.index + 120);
-  return [designRawFinding({
-    tool: 'html',
-    rule: DESIGN_PLANTED_RULES.empty,
-    cwe: null,
-    file,
-    line: lineAt(text, match.index),
-    severity: 'alta',
-    snippet,
-  })];
+  const findings: DesignRawFinding[] = [];
+  for (const hit of listHits(text)) {
+    if (isLiteralList(hit.inner)) continue;
+    const rawLine = lineText(text, hit.index);
+    const snippet = rawLine.trim().length <= 200 ? rawLine : text.slice(hit.index, hit.index + 120);
+    findings.push(designRawFinding({
+      tool: 'html',
+      rule: DESIGN_PLANTED_RULES.empty,
+      cwe: null,
+      file,
+      line: lineAt(text, hit.index),
+      severity: 'media',
+      snippet,
+    }));
+  }
+  return findings;
+}
+
+function listHits(text: string): {index: number; inner: string}[] {
+  const hits: {index: number; inner: string}[] = [];
+  const open = /<([A-Za-z][\w:-]*)\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = open.exec(text)) !== null) {
+    const start = match.index;
+    const tag = match[1] ?? '';
+    const tagEnd = endOfOpeningTag(text, start);
+    if (tagEnd < 0) {
+      open.lastIndex = start + 1;
+      continue;
+    }
+    const opening = text.slice(start, tagEnd + 1);
+    if (!isListOpening(tag, opening)) {
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    if (/\/\s*>$/.test(opening)) {
+      hits.push({index: start, inner: ''});
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    const close = findListClose(text, tag, tagEnd + 1);
+    if (close === null) {
+      hits.push({index: start, inner: ''});
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    hits.push({index: start, inner: text.slice(tagEnd + 1, close.innerEnd)});
+    open.lastIndex = close.rawEnd;
+  }
+  return hits;
+}
+
+function isListOpening(tag: string, opening: string): boolean {
+  const lower = tag.toLowerCase();
+  if (lower === 'ul' || lower === 'ol') return true;
+  return LIST_MARKER.test(opening);
+}
+
+function isLiteralList(inner: string): boolean {
+  if (/\.map\s*\(/.test(inner)) return false;
+  if (inner.includes('{')) return false;
+  return /<[A-Za-z]/.test(inner) || /[A-Za-z0-9À-ÿ]/.test(inner.replace(/<[^>]*>/g, ' '));
+}
+
+const LIST_CLOSE = /^<\s*\/\s*([A-Za-z][\w:-]*)\s*>/;
+const LIST_OPEN_NAME = /^<([A-Za-z][\w:-]*)\b/;
+
+function findListClose(html: string, tag: string, from: number): {innerEnd: number; rawEnd: number} | null {
+  const lower = tag.toLowerCase();
+  let quote: '"' | "'" | '`' | null = null;
+  let brace = 0;
+  let depth = 1;
+  for (let index = from; index < html.length; index += 1) {
+    const char = html[index];
+    if (brace > 0 && quote !== null) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (brace > 0 && (char === '"' || char === "'" || char === '`')) {
+      quote = char;
+      continue;
+    }
+    if (char === '{') {
+      brace += 1;
+      continue;
+    }
+    if (char === '}' && brace > 0) {
+      brace -= 1;
+      continue;
+    }
+    if (char !== '<' || brace !== 0) continue;
+    const slice = html.slice(index);
+    const close = LIST_CLOSE.exec(slice);
+    if (close?.[1] && close[1].toLowerCase() === lower) {
+      depth -= 1;
+      if (depth === 0) return {innerEnd: index, rawEnd: index + close[0].length};
+      index += close[0].length - 1;
+      continue;
+    }
+    const opened = LIST_OPEN_NAME.exec(slice);
+    if (!opened?.[1] || opened[1].toLowerCase() !== lower) continue;
+    const tagEnd = endOfOpeningTag(html, index);
+    if (tagEnd < 0) return null;
+    const opening = html.slice(index, tagEnd + 1);
+    if (!/\/\s*>$/.test(opening)) depth += 1;
+    index = tagEnd;
+  }
+  return null;
 }
 
 /**

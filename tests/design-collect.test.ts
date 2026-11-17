@@ -44,8 +44,8 @@ test('converte axe, pa11y, lighthouse, stylelint e teclado sem promover gosto a 
     stylelint: [{file: 'tela.css', report: {results: [{warnings: [{rule: 'block-no-empty', text: 'bloco vazio', line: 3, severity: 'warning'}]}]}}],
     keyboard: [{file: 'tela.html', steps: [{selector: 'button', index: 0, outlineWidth: '0px', outlineStyle: 'none', visible: false, x: 0, y: 10}]}],
   });
-  assert.ok(findings.some(item => item.tool === 'axe' && item.rule === DESIGN_PLANTED_RULES.contrast && item.severity === 'alta'));
-  assert.ok(findings.some(item => item.tool === 'pa11y' && item.severity === 'alta'));
+  assert.ok(findings.some(item => item.tool === 'axe' && item.rule === DESIGN_PLANTED_RULES.contrast && item.severity !== 'alta' && item.measure === undefined));
+  assert.ok(findings.some(item => item.tool === 'pa11y' && item.rule === DESIGN_PLANTED_RULES.contrast && item.severity !== 'alta'));
   assert.ok(findings.some(item => item.tool === 'lighthouse' && item.rule === 'LH-PERFORMANCE' && item.severity === 'media'));
   assert.equal(findings.some(item => item.tool === 'lighthouse' && item.severity === 'alta'), false);
   assert.ok(findings.some(item => item.tool === 'stylelint' && item.severity === 'baixa'));

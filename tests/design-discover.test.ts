@@ -146,7 +146,7 @@ test('estado vazio ausente quando ha lista e nao ha marcador de vazio', () => {
   assert.ok(finding);
   assert.equal(finding.rule, 'ESTADOS-VAZIO-AUSENTE');
   assert.equal(finding.tool, 'html');
-  assert.equal(finding.severity, 'alta');
+  assert.equal(finding.severity, 'media');
   assert.equal(finding.cwe, null);
   assert.equal(finding.file, 'src/Itens.tsx');
   assert.equal(finding.line, 3);
@@ -163,8 +163,9 @@ test('estado vazio ausente quando ha lista e nao ha marcador de vazio', () => {
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'visibleSettingsSections(project).map(section => section.id)').length, 0);
   const mapped = missingEmptyStateFindings('src/Lista.tsx', '<ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>');
   assert.equal(mapped.length, 1);
-  assert.equal(mapped[0]?.severity, 'alta');
+  assert.equal(mapped[0]?.severity, 'media');
   assert.equal(mapped[0]?.rule, 'ESTADOS-VAZIO-AUSENTE');
+  assert.deepEqual(missingEmptyStateFindings('src/Nav.tsx', '<ul><li><a href="/">Início</a></li></ul>'), []);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<ol></ol>').length, 1);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', '<div role="listbox"></div>').length, 0);
   assert.equal(missingEmptyStateFindings('src/Lista.tsx', 'const rows = items.map((item) => item);\nnenhum item').length, 0);

@@ -37,9 +37,11 @@ function labFile(relative: string): {path: string; text: string} {
   return {path, text: readFileSync(path, 'utf8')};
 }
 
-function assertPlanted(findings: readonly DesignRawFinding[], rule: string, relative: string): void {
-  const hit = findings.some(item => item.rule === rule && item.severity === 'alta');
-  assert.equal(hit, true, `${relative} deve gerar ${rule} com gravidade alta`);
+function assertPlanted(findings: readonly DesignRawFinding[], rule: string, relative: string, alta: boolean): void {
+  const hits = findings.filter(item => item.rule === rule);
+  assert.ok(hits.length > 0, `${relative} deve gerar ${rule}`);
+  assert.equal(hits.some(item => item.severity === 'alta'), alta, `${relative} ${rule}`);
+  if (!alta) assert.equal(hits.some(item => item.measure !== undefined), false, `${relative} nao tem medida`);
 }
 
 function cleanFindings(file: string, text: string): DesignRawFinding[] {
@@ -67,42 +69,52 @@ test('descobre as dez rotas do App', () => {
 
 test('contraste baixo gera a regra plantada', () => {
   const file = labFile('html/contraste.html');
-  assertPlanted(staticHtmlFindings(file.path, file.text), DESIGN_PLANTED_RULES.contrast, 'html/contraste.html');
+  const findings = staticHtmlFindings(file.path, file.text);
+  assertPlanted(findings, DESIGN_PLANTED_RULES.contrast, 'html/contraste.html', true);
+  const hit = findings.find(item => item.rule === DESIGN_PLANTED_RULES.contrast);
+  assert.equal(hit?.measure?.kind, 'contrast');
+  if (hit?.measure?.kind !== 'contrast') return;
+  assert.equal(Number.isFinite(hit.measure.ratio), true);
+  assert.match(hit.snippet, new RegExp(hit.measure.ratio.toFixed(2).replace('.', '\\.')));
 });
 
 test('botao sem nome gera a regra plantada', () => {
   const file = labFile('html/botao.html');
-  assertPlanted(staticHtmlFindings(file.path, file.text), DESIGN_PLANTED_RULES.unlabeledButton, 'html/botao.html');
+  const findings = staticHtmlFindings(file.path, file.text);
+  assertPlanted(findings, DESIGN_PLANTED_RULES.unlabeledButton, 'html/botao.html', false);
+  assert.equal(findings.find(item => item.rule === DESIGN_PLANTED_RULES.unlabeledButton)?.severity, 'media');
 });
 
 test('foco invisivel gera a regra plantada', () => {
   const file = labFile('css/foco.css');
-  assertPlanted(focusFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.invisibleFocus, 'css/foco.css');
+  assertPlanted(focusFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.invisibleFocus, 'css/foco.css', false);
 });
 
 test('nove cinzas geram a regra plantada', () => {
   const file = labFile('css/cinzas.css');
-  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.grays, 'css/cinzas.css');
+  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.grays, 'css/cinzas.css', false);
 });
 
 test('espacamento fora da grade gera a regra plantada', () => {
   const file = labFile('css/espaco.css');
-  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.spacing, 'css/espaco.css');
+  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.spacing, 'css/espaco.css', false);
 });
 
 test('lista sem estado vazio gera a regra plantada', () => {
   const file = labFile('src/Itens.tsx');
-  assertPlanted(missingEmptyStateFindings(file.path, file.text), DESIGN_PLANTED_RULES.empty, 'src/Itens.tsx');
+  const findings = missingEmptyStateFindings(file.path, file.text);
+  assertPlanted(findings, DESIGN_PLANTED_RULES.empty, 'src/Itens.tsx', false);
+  assert.equal(findings[0]?.severity, 'media');
 });
 
 test('largura fixa gera a regra plantada', () => {
   const file = labFile('css/estreito.css');
-  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.narrow, 'css/estreito.css');
+  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.narrow, 'css/estreito.css', false);
 });
 
 test('texto cortado gera a regra plantada', () => {
   const file = labFile('css/cortado.css');
-  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.truncated, 'css/cortado.css');
+  assertPlanted(inventoryFindingsFromCss(file.path, file.text), DESIGN_PLANTED_RULES.truncated, 'css/cortado.css', false);
 });
 
 for (const relative of cleanFiles) {

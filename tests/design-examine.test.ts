@@ -10,6 +10,7 @@ import {
   DesignConfirmResult,
   DesignExamResult,
   DesignWorkerCall,
+  clampHighSeverity,
   designRawFinding,
   type DesignWorker,
 } from '../src/design-types.ts';
@@ -167,6 +168,7 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
       line: 4,
       severity: 'alta',
       snippet: 'color:#777;background:#ffffff',
+      measure: {kind: 'contrast', ratio: 4.478089453577214},
     }),
     designRawFinding({
       tool: 'stylelint',
@@ -181,7 +183,7 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
       rule: 'GOSTO-PREFERENCIA',
       file: screen.file,
       line: 8,
-      severity: 'alta',
+      severity: 'media',
       snippet: 'radius 13px',
     }),
     designRawFinding({
@@ -189,7 +191,7 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
       rule: 'BONITO',
       file: screen.file,
       line: 9,
-      severity: 'alta',
+      severity: 'media',
       snippet: 'sombra',
     }),
   ];
@@ -226,13 +228,14 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   const opinion = byRule.get('BONITO');
   assert.equal(planted?.confirm.status, 'confirmado');
   assert.equal(planted?.finding.severity, 'alta');
+  assert.deepEqual(planted?.finding.measure, {kind: 'contrast', ratio: 4.478089453577214});
   assert.equal(planted?.verifier.provider, 'grok');
   assert.notEqual(planted?.verifier.provider, result.coverage[0]?.examinerProvider);
   assert.match(planted?.confirm.proof ?? '', /color:#777/);
   assert.equal(taste?.confirm.status, 'descartado');
-  assert.equal(taste?.finding.severity, 'informativa');
+  assert.equal(taste?.finding.severity, 'media');
   assert.equal(opinion?.confirm.status, 'provavel');
-  assert.equal(opinion?.finding.severity, 'informativa');
+  assert.equal(opinion?.finding.severity, 'media');
   assert.deepEqual(kit.events.slice(0, 6), [
     'reserve:specialist',
     'run:specialist',
@@ -276,6 +279,7 @@ test('mesmo provedor nos dois papéis é recusado e a vaga sai', async () => {
         line: 4,
         severity: 'alta',
         snippet: 'color:#777',
+        measure: {kind: 'contrast', ratio: 4.478089453577214},
       })],
       worker: kit.worker,
       reserve: kit.reserve,
@@ -310,7 +314,7 @@ test('confirmação com JSON inválido é recusada e a vaga sai', async () => {
         rule: DESIGN_PLANTED_RULES.narrow,
         file: screen.file,
         line: 3,
-        severity: 'alta',
+        severity: 'media',
         snippet: 'width:980px',
       })],
       worker: {
@@ -351,7 +355,7 @@ test('cada tela reserva um especialista e o revisor lê o JSON cercado', async (
       rule: DESIGN_PLANTED_RULES.empty,
       file: 'src/B.tsx',
       line: 1,
-      severity: 'alta',
+      severity: 'media',
       snippet: 'data-list',
     })],
     worker: {
@@ -376,7 +380,7 @@ test('cada tela reserva um especialista e o revisor lê o JSON cercado', async (
   assert.equal(result.confirmations.length, 1);
   assert.equal(result.confirmations[0]?.confirm.status, 'confirmado');
   assert.equal(result.confirmations[0]?.finding.reference, DESIGN_PLANTED_RULES.empty);
-  assert.equal(result.confirmations[0]?.finding.severity, 'alta');
+  assert.equal(result.confirmations[0]?.finding.severity, 'media');
   assert.equal(kit.events.filter(event => event === 'reserve:specialist').length, 2);
   assert.equal(kit.events.filter(event => event === 'reserve:reviewer').length, 1);
 });
@@ -402,6 +406,7 @@ test('captura falsa entra no exame e na confirmação com o mesmo caminho e o me
       line: 4,
       severity: 'alta',
       snippet: 'color:#777',
+      measure: {kind: 'contrast', ratio: 4.478089453577214},
     })],
     worker: {
       async run(workerCall) {
@@ -489,8 +494,40 @@ test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do es
   assert.equal(result.notes.length, 0);
   assert.deepEqual(result.coverage[0]?.checklist, ['DESIGN-WCAG-143-CONTRASTE']);
   assert.equal(result.confirmations.length, 1);
-  assert.equal(result.confirmations[0]?.finding.severity, 'alta');
+  assert.equal(result.confirmations[0]?.finding.severity, 'informativa');
   assert.equal(result.confirmations[0]?.finding.cwe, null);
   assert.equal(result.confirmations[0]?.confirm.status, 'confirmado');
   assert.equal(result.confirmations[0]?.verifier.provider, 'grok');
+  assert.equal(result.confirmations[0]?.finding.measure, undefined);
+});
+
+test('alta sem medida estruturada vira informativa e a razao medida permanece alta', () => {
+  assert.equal(clampHighSeverity('alta', null), 'informativa');
+  assert.equal(clampHighSeverity('alta', undefined), 'informativa');
+  assert.equal(clampHighSeverity('media', {kind: 'contrast', ratio: 2.1}), 'media');
+  assert.equal(clampHighSeverity('alta', {kind: 'contrast', ratio: 2.1}), 'alta');
+  assert.equal(clampHighSeverity('alta', {kind: 'target', px: 24}), 'alta');
+  assert.equal(clampHighSeverity('alta', {kind: 'overflow', px: 12}), 'alta');
+  assert.equal(clampHighSeverity('alta', {kind: 'empty', capture: 'vazio-375-claro-vazio.png'}), 'alta');
+  const kept = designRawFinding({
+    tool: 'axe',
+    rule: DESIGN_PLANTED_RULES.contrast,
+    file: 'tela.html',
+    line: 2,
+    severity: 'alta',
+    snippet: 'contraste 2.10:1',
+    measure: {kind: 'contrast', ratio: 2.1},
+  });
+  assert.equal(kept.severity, 'alta');
+  assert.deepEqual(kept.measure, {kind: 'contrast', ratio: 2.1});
+  const bare = designRawFinding({
+    tool: 'html',
+    rule: 'WCAG-2-4-4-BOTAO-SEM-NOME',
+    file: 'tela.html',
+    line: 3,
+    severity: 'alta',
+    snippet: 'button',
+  });
+  assert.equal(bare.severity, 'informativa');
+  assert.equal(bare.measure, undefined);
 });

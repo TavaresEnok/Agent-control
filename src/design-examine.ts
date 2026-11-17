@@ -5,8 +5,10 @@ import {
   DesignExamFinding,
   DesignExamResult,
   DesignWorkerCall,
+  DesignMeasure,
   clampHighSeverity,
   type DesignChecklistItem,
+  type DesignMeasure as DesignMeasureValue,
   type DesignRawFinding,
   type DesignWorker,
 } from './design-types.ts';
@@ -121,7 +123,19 @@ function normalizeDesignExam(value: unknown, fallback: {file: string; checklist:
     const line = Number.isInteger(lineNumber) && lineNumber > 0 ? lineNumber : null;
     const cwe = typeof finding.cwe === 'string' && /^CWE-\d{1,5}$/.test(finding.cwe) ? finding.cwe : null;
     const severity = SEVERITY_ALIASES[textOf(finding.severity, 40).toLowerCase()] ?? 'informativa';
-    return [{title, severity, file, line, scenario, suggestion, cwe, reference, snippet: textOf(finding.snippet, 240)}];
+    const measure = readMeasure(finding.measure);
+    return [{
+      title,
+      severity,
+      file,
+      line,
+      scenario,
+      suggestion,
+      cwe,
+      reference,
+      snippet: textOf(finding.snippet, 240),
+      ...(measure === undefined ? {} : {measure}),
+    }];
   }).slice(0, 40);
   return {
     kind: 'exame',
@@ -140,6 +154,21 @@ function normalizeDesignConfirm(value: unknown): unknown {
       : status === 'discarded' || status === 'rejected' || status === 'rejeitado' ? 'descartado'
         : status;
   return {kind: 'confirmacao', status: mapped, reason: textOf(row.reason, 2000), proof: textOf(row.proof, 2000)};
+}
+
+function readMeasure(value: unknown): DesignMeasureValue | undefined {
+  const parsed = DesignMeasure.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function examMeasure(finding: DesignExamFinding, rawFindings: readonly DesignRawFinding[]): DesignMeasureValue | undefined {
+  if (finding.measure !== undefined) return finding.measure;
+  for (const raw of rawFindings) {
+    if (raw.measure === undefined) continue;
+    if (raw.file !== finding.file) continue;
+    if (finding.reference === raw.rule || finding.reference.includes(raw.rule)) return raw.measure;
+  }
+  return undefined;
 }
 
 function oneLine(value: string): string {
@@ -331,9 +360,11 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     }
     for (const finding of exam.data.findings) {
       const reviewed = await confirmFinding(input, seat.provider, finding, screen.code, screen.captures);
+      const measure = examMeasure(finding, input.rawFindings);
       const clamped = DesignExamFinding.parse({
         ...finding,
-        severity: clampHighSeverity(finding.severity, finding.reference),
+        ...(measure === undefined ? {} : {measure}),
+        severity: clampHighSeverity(finding.severity, measure),
       });
       findings.push(clamped);
       confirmations.push({

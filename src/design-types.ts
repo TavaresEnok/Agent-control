@@ -27,6 +27,18 @@ export const DesignChecklistItem = z.object({
 }).strict();
 export type DesignChecklistItem = z.infer<typeof DesignChecklistItem>;
 
+const MEASURE_PX = z.number().finite().positive();
+const EMPTY_CAPTURE = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.png$/);
+
+/** Medida que autoriza gravidade alta. Texto de regra não substitui o número ou o arquivo. */
+export const DesignMeasure = z.discriminatedUnion('kind', [
+  z.object({kind: z.literal('contrast'), ratio: MEASURE_PX}).strict(),
+  z.object({kind: z.literal('target'), px: MEASURE_PX}).strict(),
+  z.object({kind: z.literal('overflow'), px: MEASURE_PX}).strict(),
+  z.object({kind: z.literal('empty'), capture: EMPTY_CAPTURE}).strict(),
+]);
+export type DesignMeasure = z.infer<typeof DesignMeasure>;
+
 export const DesignRawFinding = z.object({
   tool: z.string().min(1).max(40),
   rule: z.string().min(1).max(200),
@@ -36,6 +48,7 @@ export const DesignRawFinding = z.object({
   severity: DesignSeverity,
   snippet: z.string().max(240),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  measure: DesignMeasure.optional(),
 }).strict();
 export type DesignRawFinding = z.infer<typeof DesignRawFinding>;
 
@@ -49,6 +62,7 @@ export const DesignExamFinding = z.object({
   cwe: z.string().regex(/^CWE-\d{1,5}$/).nullable(),
   reference: z.string().min(1).max(120),
   snippet: z.string().max(240),
+  measure: DesignMeasure.optional(),
 }).strict();
 export type DesignExamFinding = z.infer<typeof DesignExamFinding>;
 
@@ -153,6 +167,17 @@ export function designFingerprint(parts: readonly string[]): string {
   return createHash('sha256').update(parts.join('\u001f')).digest('hex');
 }
 
+function measureToken(measure: DesignMeasure): string {
+  if (measure.kind === 'contrast') return `contrast:${measure.ratio}`;
+  if (measure.kind === 'empty') return `empty:${measure.capture}`;
+  return `${measure.kind}:${measure.px}`;
+}
+
+function acceptedMeasure(measure: DesignMeasure | null | undefined): DesignMeasure | undefined {
+  const parsed = DesignMeasure.safeParse(measure);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function designRawFinding(input: {
   tool: string;
   rule: string;
@@ -161,19 +186,25 @@ export function designRawFinding(input: {
   line?: number | null;
   severity: DesignSeverity;
   snippet: string;
+  measure?: DesignMeasure | null;
 }): DesignRawFinding {
   const snippet = input.snippet.replace(/\s+/g, ' ').trim().slice(0, 240);
   const line = input.line ?? null;
   const cwe = input.cwe ?? null;
+  const measure = acceptedMeasure(input.measure);
+  const severity = input.severity === 'alta' && measure === undefined ? 'informativa' : input.severity;
+  const parts = [input.tool, input.rule, input.file, String(line ?? ''), snippet];
+  if (measure !== undefined) parts.push(measureToken(measure));
   return DesignRawFinding.parse({
     tool: input.tool.slice(0, 40),
     rule: input.rule.slice(0, 200),
     cwe,
     file: input.file.slice(0, 400),
     line,
-    severity: input.severity,
+    severity,
     snippet,
-    fingerprint: designFingerprint([input.tool, input.rule, input.file, String(line ?? ''), snippet]),
+    fingerprint: designFingerprint(parts),
+    ...(measure === undefined ? {} : {measure}),
   });
 }
 
@@ -189,15 +220,8 @@ export function dedupeDesignFindings(findings: readonly DesignRawFinding[]): Des
   return kept;
 }
 
-/** Opinion without a rule cannot be alta. A WCAG id, a planted rule or a DESIGN- checklist id can. */
-export function highSeverityAllowed(reference: string): boolean {
-  if (Object.values(DESIGN_PLANTED_RULES).some(rule => reference.includes(rule))) return true;
-  if (reference.includes('WCAG')) return true;
-  if (/(?:^|[^A-Z0-9])DESIGN-[A-Z0-9-]{3,80}/.test(reference)) return true;
-  return false;
-}
-
-export function clampHighSeverity(severity: DesignSeverity, reference: string): DesignSeverity {
-  if (severity === 'alta' && !highSeverityAllowed(reference)) return 'informativa';
+/** Alta exige uma das quatro medidas. WCAG, DESIGN- e id plantado no texto não contam. */
+export function clampHighSeverity(severity: DesignSeverity, measure?: DesignMeasure | null): DesignSeverity {
+  if (severity === 'alta' && acceptedMeasure(measure) === undefined) return 'informativa';
   return severity;
 }
