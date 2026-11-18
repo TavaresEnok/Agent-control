@@ -85,7 +85,9 @@ test('readiness and CLI inspect a newly initialized isolated PostgreSQL database
   assert.deepEqual(await counts(),before);
   const configFile=join(root,'installation.json');await writeFile(configFile,JSON.stringify(config),{mode:0o600});
   const inspectCli=(expected:typeof report)=>{
-   const result=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','inspect',configFile],{encoding:'utf8',timeout:15000});
+   // Node warns on stderr when both NO_COLOR and FORCE_COLOR are set; that warning is not product output.
+   const env={...process.env};delete env.NO_COLOR;
+   const result=spawnSync(process.execPath,['--import','tsx','src/server-main.ts','inspect',configFile],{encoding:'utf8',timeout:15000,env});
    assert.ifError(result.error);assert.equal(result.signal,null);
    assert.equal(result.status,expected.checks.every(check=>check.status==='ok')?0:2);
    assert.equal(result.stderr,'');assert.deepEqual(JSON.parse(result.stdout),expected);

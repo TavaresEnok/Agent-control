@@ -18,6 +18,7 @@ import type pg from 'pg';
 import {Ledger} from './ledger.ts';
 import {Authority,canonical,digest,Refusal} from './contracts.ts';
 import {DockerDaemon} from './sandbox-broker.ts';
+import {stageDesignCapturesForJob} from './design-capture-stage.ts';
 import {assertNativeSyntheticFixture,type NativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {AccountHomes} from './account-homes.ts';
 import {ProviderEligibility} from './provider-eligibility.ts';
@@ -34,6 +35,10 @@ import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {replaceSecretClassFiles} from './verify-redact.ts';
 import {describeBind,examAccountMount,examWorkerEnv,stripExamHostileConfig} from './verify-exam-isolation.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
+/** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
+export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
+  return workflow === 'design-readonly-v1' && (role === 'specialist' || role === 'reviewer');
+}
 const Path=z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f*?\[\]{}]/.test(p)&&!p.split('/').some(s=>!s||['.','..','.git','.ai'].includes(s)));
 export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,sessionId:Id,base:GitId,
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(Path).max(64),
@@ -74,6 +79,14 @@ export async function retireNativePrivateNetwork(docker:Pick<DockerDaemon,'inspe
 export function readonlySecurityExam(workflow:unknown,role:unknown):boolean{
  return workflow==='security-verify-readonly-v1'&&(role==='specialist'||role==='reviewer');
 }
+/** Personal design or security exam. Programmer, qa, judge and locked mode never match. */
+export function readonlyExamIsolation(personal:unknown,workflow:unknown,role:unknown):boolean{
+ return Boolean(personal)&&(readonlyDesignExam(workflow,role)||readonlySecurityExam(workflow,role));
+}
+/** Personal design exam only. Security exams, other roles and locked mode do not stage captures. */
+export function stageDesignExamCaptures(personal:unknown,workflow:unknown,role:unknown):boolean{
+ return Boolean(personal)&&readonlyDesignExam(workflow,role);
+}
 /** Effect supervisor only. A trusted Cezar stage must already own the grant,
  * frozen source and policy. No scheduler, inference on construction, fallback,
  * approval or Git integration occurs here. Production bootstrap does not construct
@@ -112,7 +125,9 @@ export class NativeExecutionSupervisor{
   if(intent?.principal_id!==principal)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');return context;
  }
  private async personalReadonlyExam(c:pg.Pool|pg.PoolClient,intentId:string,role:unknown){
-  return Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount)&&readonlySecurityExam((await c.query('SELECT command FROM ac_intents WHERE id=$1',[intentId])).rows[0]?.command?.payload?.workflow,role);
+  const workflow=(await c.query('SELECT command FROM ac_intents WHERE id=$1',[intentId])).rows[0]?.command?.payload?.workflow;
+  const personal=Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+  return personal&&(readonlyDesignExam(workflow,role)||readonlySecurityExam(workflow,role));
  }
  private async identity(c:pg.PoolClient,principal:string,authority:Authority,input:Input){
   const context=await this.scope(c,principal,authority,input);
@@ -224,19 +239,23 @@ export class NativeExecutionSupervisor{
   const repository=await this.jobRepository(this.ledger.pool,String(g.project_id));
   const p=this.paths(input.jobId);await mkdir(p.root,{mode:0o700});await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
   await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
+  const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
+  if(stageDesignExamCaptures(personal,examWorkflow,input.role))await stageDesignCapturesForJob(repository,[p.planning,p.work]);
   await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});const token=randomBytes(32).toString('hex');
   for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
   await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':hash};
   // A personal Claude or Codex evaluator reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
-  // The readonly security exam has no artifact row. Any personal provider still gets that copy, and no review diff is written.
-  const securityExam=(input.role==='specialist'||input.role==='reviewer')&&await this.personalReadonlyExam(this.ledger.pool,input.intentId,input.role);
-  const workerArtifact=securityExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex'))?join(p.root,'review-artifact'):undefined;
+  // Readonly design and security exams have no artifact row. Any personal provider still gets that copy, and no review diff is written.
+  const designExam=personal&&readonlyDesignExam(examWorkflow,input.role);
+  const securityExam=personal&&readonlySecurityExam(examWorkflow,input.role);
+  const isolateExam=readonlyExamIsolation(personal,examWorkflow,input.role);
+  const workerArtifact=designExam||securityExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex'))?join(p.root,'review-artifact'):undefined;
   if(workerArtifact){
    // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
    await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
-   if(securityExam){await replaceSecretClassFiles(workerArtifact);await stripExamHostileConfig(workerArtifact);}
-   if(!securityExam){
+   if(isolateExam){await replaceSecretClassFiles(workerArtifact);await stripExamHostileConfig(workerArtifact);}
+   if(!designExam&&!securityExam){
     // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
     const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
     if(reviewed?.base_id){const change=await new GitArtifacts(repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
@@ -245,8 +264,8 @@ export class NativeExecutionSupervisor{
   // Personal Claude, Grok and Codex programmers edit the checkout from the worker itself. Locked Codex keeps the
   // original split: the credentialed worker has no /work and the tools container owns the checkout.
   const workerOwnsCheckout=input.role==='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='grok'||this.config.provider==='codex');
-  const accountMount=examAccountMount(join(this.config.accountRoot,g.account_id),securityExam);
-  const workerEnv=examWorkerEnv(this.config.workerEnv,securityExam);
+  const accountMount=examAccountMount(join(this.config.accountRoot,g.account_id),isolateExam);
+  const workerEnv=examWorkerEnv(this.config.workerEnv,isolateExam);
   const workerMounts=[accountMount,{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(workerOwnsCheckout?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
   const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):p.work;
   if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});

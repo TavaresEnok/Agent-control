@@ -1,0 +1,22 @@
+.texto {
+  color: #1a1a1a;
+  background-color: #ffffff;
+  margin: 8px;
+  padding: 16px;
+  gap: 8px;
+  width: 100%;
+  max-width: 720px;
+}
+
+.secundario {
+  color: #5c5c5c;
+}
+
+.acento {
+  color: #0b57d0;
+}
+
+button:focus-visible {
+  outline: 2px solid #0b57d0;
+  outline-offset: 2px;
+}

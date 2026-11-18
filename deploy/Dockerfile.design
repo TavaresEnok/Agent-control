@@ -1,0 +1,32 @@
+# Imagem de design. Contexto de build: o diretório deploy/.
+# Tag fixa v1.65.1-noble. Digest do índice OCI conferido em 2026-11-17
+# no registro MCR e em buildx imagetools inspect:
+# sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
+# linux/amd64: sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9
+# linux/arm64: sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4
+FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
+
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PUPPETEER_SKIP_DOWNLOAD=1 \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    PATH="/opt/design-tools/node_modules/.bin:${PATH}"
+
+RUN groupadd --system --gid 65532 design \
+    && useradd --system --uid 65532 --gid 65532 --home-dir /tmp --no-create-home --shell /bin/false design \
+    && mkdir -p /opt/design-tools /output /repository \
+    && chown 65532:65532 /output /repository
+
+WORKDIR /opt/design-tools
+COPY design-tools/package.json design-tools/package-lock.json ./
+# Peer playwright-core fica na imagem base (/ms-playwright-agent). Não baixar navegador de novo.
+RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund \
+    && npm cache clean --force \
+    && chown -R 65532:65532 /opt/design-tools
+
+COPY design-entrypoint.sh /usr/local/bin/design-entrypoint.sh
+RUN chmod 0555 /usr/local/bin/design-entrypoint.sh
+
+USER 65532:65532
+WORKDIR /tmp
+ENTRYPOINT ["/usr/local/bin/design-entrypoint.sh"]
