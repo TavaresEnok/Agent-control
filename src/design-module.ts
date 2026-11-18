@@ -106,6 +106,9 @@ export type DesignModuleResult = {
   visualLow: boolean;
   loginStale: boolean;
   visualUnjudged: boolean;
+  visualRequested?: number;
+  visualJudged?: number;
+  visualMissing?: string[];
 };
 
 /**
@@ -290,7 +293,16 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const note = [input.note, ...notes].filter(part => part && part.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim().slice(0, 500)
     || 'Verificação de design somente leitura concluída.';
   const referenceMarkdown = referenceSection(reference?.note, staged.references);
-  const extras = reportExtras(input, image, imageRows, tokens, examined.visual, referenceMarkdown, regression.markdown, stateNotes);
+  const extras = reportExtras(
+    input,
+    image,
+    imageRows,
+    tokens,
+    examined,
+    referenceMarkdown,
+    regression.markdown,
+    stateNotes,
+  );
   const split = measuredJudgedMarkdown(achados);
   if (split.length > 0) extras.sections = [...(extras.sections ?? []), {title: 'Medido e julgado', markdown: split}];
   assertPasswordAbsent(input.login?.password, {
@@ -320,6 +332,15 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     ...extras,
   });
   const read = await readDesignReport(input.dataDirectory, input.projectId, input.runId);
+  const visualRequested = examined.modelCoverage.examiner.requested;
+  const visualMissing = examined.visualMissing.map(item => `${item.route.replace(/\s+/g, ' ').trim()} (${item.file})`);
+  const visualIncomplete = input.scoreVisual === true && (
+    visualRequested === 0
+    || examined.modelCoverage.reviewer.requested === 0
+    || examined.modelCoverage.examiner.judged < visualRequested
+    || examined.modelCoverage.reviewer.judged < examined.modelCoverage.reviewer.requested
+    || examined.visual.length < visualRequested
+  );
   return {
     findings,
     achados: read.achados,
@@ -328,7 +349,10 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     coverageMarkdown: read.coverageMarkdown,
     visualLow: examined.visual.some(row => row.examiner.some(score => score.score < 8)),
     loginStale: examined.loginStale,
-    visualUnjudged: input.scoreVisual === true && examined.modelCoverage.examiner.requested > 0 && examined.visual.length === 0,
+    visualUnjudged: visualIncomplete,
+    ...(input.scoreVisual === true
+      ? {visualRequested, visualJudged: examined.visual.length, visualMissing}
+      : {}),
   };
 }
 
@@ -727,12 +751,37 @@ function withoutHeading(markdown: string): string {
   return markdown.replace(/^## [^\n]+\n+/, '');
 }
 
+function visualSectionMarkdown(
+  scoreVisual: boolean | undefined,
+  visual: Parameters<typeof visualReportMarkdown>[0],
+  requested: number,
+  missing: readonly {file: string; route: string}[],
+): string | undefined {
+  if (scoreVisual !== true && visual.length === 0) return undefined;
+  const parts: string[] = [];
+  if (visual.length > 0) {
+    parts.push(withoutHeading(visualReportMarkdown(visual)).trimEnd());
+  } else if (scoreVisual === true && requested === 0) {
+    parts.push('A crítica visual foi pedida, mas nenhuma tela entrou no exame.');
+  } else {
+    parts.push('Nenhuma tela recebeu nota visual.');
+  }
+  if (missing.length > 0) {
+    parts.push(
+      '',
+      'Telas sem crítica visual completa:',
+      ...missing.map(item => `- ${item.route.replace(/\s+/g, ' ').trim()} (${item.file})`),
+    );
+  }
+  return parts.join('\n');
+}
+
 function reportExtras(
   input: DesignModuleInput,
   image: DesignImageExecution | undefined,
   imageRows: ReturnType<typeof applyHostFindingCounts>,
   tokens: ReturnType<typeof analyzeDesignTokens> | undefined,
-  visual: {route: string; examiner: {axis: string; score: number; region: string; suggestion: string}[]; reviewer: {axis: string; score: number; region: string; suggestion: string}[]; uncertain: string[]}[],
+  examined: Pick<Awaited<ReturnType<typeof examineDesignScreens>>, 'visual' | 'visualMissing' | 'modelCoverage'>,
   referenceNote: string | undefined,
   regression: string,
   stateNotes: readonly string[] | undefined,
@@ -751,7 +800,13 @@ function reportExtras(
     sections.push({title: 'Tokens', markdown: withoutHeading(tokenReportMarkdown(tokens))});
     files.push({name: 'tokens.json', body: JSON.stringify(tokens.document, null, 2)});
   }
-  if (visual.length > 0) sections.push({title: 'Crítica visual', markdown: withoutHeading(visualReportMarkdown(visual as Parameters<typeof visualReportMarkdown>[0]))});
+  const visualMarkdown = visualSectionMarkdown(
+    input.scoreVisual,
+    examined.visual as Parameters<typeof visualReportMarkdown>[0],
+    examined.modelCoverage.examiner.requested,
+    examined.visualMissing,
+  );
+  if (visualMarkdown !== undefined) sections.push({title: 'Crítica visual', markdown: visualMarkdown});
   if (referenceNote) sections.push({title: 'Referências', markdown: referenceNote});
   if (regression.trim().length > 0) sections.push({title: 'Regressão visual', markdown: withoutHeading(regression)});
   if (stateNotes && stateNotes.length > 0) sections.push({title: 'Estados', markdown: stateNotes.join('\n')});
