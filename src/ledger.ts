@@ -3,10 +3,19 @@ import {fenceInstallationContext,type InstallationFenceToken} from './installati
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
-import { Authority, Checkpoint, Command, digest, Refusal, Projection } from './contracts.ts';
+import { Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from './contracts.ts';
 import { workflowFor } from './workflows.ts';
 import { Template } from './templates.ts';
 import {freezeManagedExecution} from './managed-plan.ts';
+
+export type ExamModule = 'design' | 'verify';
+export type ExamContext = {
+  contextId: string;
+  mainContextId: string;
+  policyRevision: number;
+  capacityPolicyRevision: number | null;
+  mainCapacityPolicyRevision: number | null;
+};
 
 export type Intent = { id: string; context_id: string; operation_id: string; run_id: string;
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
@@ -55,6 +64,54 @@ export class Ledger {
       await c.query('INSERT INTO ac_contexts(id,project_id) VALUES($1,$2)', [id, projectId]);
       await c.query('INSERT INTO ac_session_links(session_id,context_id,principal_id) VALUES($1,$2,$3)', [sessionId, id, principal]);
       return id;
+    });
+  }
+  /** Creates or reuses the dedicated per-project exam context for `design` or `verify`, keeping the main context untouched. */
+  async ensureExamContext(principal: string, projectId: string, module: ExamModule): Promise<ExamContext> {
+    const parsedProjectId = Id.parse(projectId);
+    if (module !== 'design' && module !== 'verify') throw new Refusal('INVALID_CONTRACT', 400);
+    const missingCode = module === 'design' ? 'DESIGN_CONTEXT_REQUIRED' : 'VERIFY_CONTEXT_REQUIRED';
+    return this.tx(async c => {
+      await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE', [parsedProjectId]);
+      const access = await c.query('SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [parsedProjectId, principal]);
+      if (!access.rowCount || access.rows[0].role === 'viewer') throw new Refusal('PROJECT_FORBIDDEN', 403);
+      await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,102))', [`${parsedProjectId}:${module}`]);
+      const main = (await c.query<{id: string; capacity_policy_revision: number | null}>(
+        `SELECT x.id::text AS id, x.capacity_policy_revision
+         FROM ac_contexts x
+         WHERE x.project_id=$1 AND NOT x.archived
+           AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id)
+         ORDER BY x.created_at, x.id LIMIT 1`,
+        [parsedProjectId],
+      )).rows[0];
+      if (!main) throw new Refusal(missingCode, 409);
+      const mainCapacityPolicyRevision = main.capacity_policy_revision === null ? null : Number(main.capacity_policy_revision);
+      const existing = (await c.query<{id: string; policy_revision: number | string; capacity_policy_revision: number | null; archived: boolean}>(
+        `SELECT e.context_id::text AS id, x.policy_revision, x.capacity_policy_revision, x.archived
+         FROM ac_exam_contexts e JOIN ac_contexts x ON x.id=e.context_id
+         WHERE e.project_id=$1 AND e.module=$2 FOR UPDATE OF x`,
+        [parsedProjectId, module],
+      )).rows[0];
+      if (existing) {
+        if (existing.archived) throw new Refusal(missingCode, 409);
+        return {
+          contextId: existing.id,
+          mainContextId: main.id,
+          policyRevision: Number(existing.policy_revision),
+          capacityPolicyRevision: existing.capacity_policy_revision === null ? null : Number(existing.capacity_policy_revision),
+          mainCapacityPolicyRevision,
+        };
+      }
+      const id = randomUUID();
+      await c.query('INSERT INTO ac_contexts(id,project_id) VALUES($1,$2)', [id, parsedProjectId]);
+      await c.query('INSERT INTO ac_exam_contexts(project_id,module,context_id) VALUES($1,$2,$3)', [parsedProjectId, module, id]);
+      return {
+        contextId: id,
+        mainContextId: main.id,
+        policyRevision: 1,
+        capacityPolicyRevision: null,
+        mainCapacityPolicyRevision,
+      };
     });
   }
   async acquire(principal: string, contextId: string, instanceId: string, profileId: string, leaseSeconds = 15): Promise<Authority> {

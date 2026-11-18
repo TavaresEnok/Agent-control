@@ -24,6 +24,7 @@ const messages: Record<string, string> = {
   PERSONAL_ACTIVATION_REQUIRED: 'O exame de design só roda numa instalação pessoal.',
   NOT_FOUND: 'Projeto não encontrado.',
   DESIGN_CONTEXT_REQUIRED: 'O projeto não tem um contexto para o exame.',
+  DESIGN_BUSY: 'Já existe uma execução de design em andamento neste projeto.',
   DESIGN_WORKER_UNAVAILABLE: 'O runtime pessoal não está ativo.',
   DESIGN_EXTERNAL_TARGET: 'A URL tem que ficar em localhost, 127.0.0.1 ou num host .local.',
   DESIGN_TARGET_ESCAPE: 'A URL aponta para outro destino.',
@@ -460,6 +461,10 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
     console.log(created.directory);
   } finally {
     stopLease();
+    await resolved.ledger.pool.query(
+      "UPDATE ac_intents SET state='done' WHERE id=$1 AND context_id=$2 AND state='accepted'",
+      [resolved.intentId, resolved.authority.contextId],
+    ).catch(() => undefined);
     await resolved.close();
   }
 }

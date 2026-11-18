@@ -44,13 +44,18 @@ export type DesignPrepareReport = {
   revisionTo: number | null;
 };
 
+type ContextPolicyRow = {
+  id: string;
+  capacityPolicyRevision: number | null;
+};
+
 type PrepareFacts = {
   accounts: {id: string}[];
   profiles: ProfileRow[];
   catalog: CatalogRow[];
   previous: CapacityPolicyValue | null;
   revision: number;
-  contexts: string[];
+  contexts: ContextPolicyRow[];
   opus: {efforts: string[]; roles: string[]} | null;
 };
 
@@ -68,7 +73,7 @@ type SeatPlan = {
 /**
  * Mostra ou publica a cadeia `roles.specialist` sem mexer nos outros papéis.
  * Sem `apply`, só lê. Com `apply`, cria perfis, registra o Opus se faltar e
- * atribui a revisão só aos contextos sem política, tudo na mesma transação.
+ * atribui a revisão a todos os contextos não arquivados do projeto, na mesma transação.
  */
 export async function prepareDesignSpecialist(input: {
   ledger: Ledger;
@@ -83,7 +88,10 @@ export async function prepareDesignSpecialist(input: {
     }
     const plan = seatPlan(facts);
     const catalogAction = facts.opus ? 'presente' as const : 'registrar' as const;
-    const contexts = facts.contexts;
+    const contexts = (plan.reusePolicy
+      ? facts.contexts.filter(item => item.capacityPolicyRevision !== facts.revision)
+      : facts.contexts
+    ).map(item => item.id);
     const unchanged = plan.reusePolicy && catalogAction === 'presente' && contexts.length === 0
       && plan.criar.action === 'reusar' && plan.examinador.action === 'reusar' && plan.revisor.action === 'reusar';
     if (!input.apply || unchanged) {
@@ -191,7 +199,7 @@ export function formatDesignPrepare(report: DesignPrepareReport): string {
   lines.push('Cadeia specialist:');
   lines.push(`- regular: ${report.chain.regular.join(', ') || 'vazia'}`);
   lines.push(`- emergência: ${report.chain.emergency.join(', ') || 'vazia'}`);
-  lines.push(`Contextos sem política: ${report.contexts.join(', ') || 'nenhum'}`);
+  lines.push(`Contextos a atualizar: ${report.contexts.join(', ') || 'nenhum'}`);
   if (report.revisionTo !== null && report.revisionTo !== report.revisionFrom) {
     lines.push(`Revisão: ${report.revisionFrom} -> ${report.revisionTo}`);
   } else if (!report.apply && !report.unchanged) {
@@ -241,12 +249,15 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     "SELECT efforts, roles FROM ac_model_catalog WHERE provider='claude' AND model=$1",
     [CREATE_MODEL],
   )).rows[0] ?? null;
-  const contexts = (await client.query<{id: string}>(
-    `SELECT id::text AS id FROM ac_contexts
-     WHERE project_id=$1 AND NOT archived AND capacity_policy_revision IS NULL
+  const contexts = (await client.query<{id: string; capacity_policy_revision: number | null}>(
+    `SELECT id::text AS id, capacity_policy_revision FROM ac_contexts
+     WHERE project_id=$1 AND NOT archived
      ORDER BY id`,
     [projectId],
-  )).rows.map(row => row.id);
+  )).rows.map(row => ({
+    id: row.id,
+    capacityPolicyRevision: row.capacity_policy_revision === null ? null : Number(row.capacity_policy_revision),
+  }));
   const catalog = (await client.query<{model: string; efforts: string[]; roles: string[]}>(
     "SELECT model, efforts, roles FROM ac_model_catalog WHERE provider='claude' ORDER BY model",
   )).rows;

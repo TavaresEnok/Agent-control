@@ -64,7 +64,7 @@ export async function nativeSetup(path:string){
  try{
   const accounts=(await ledger.pool.query("SELECT id,provider,resource_identity FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 AND a.mode='subscription_cli' AND a.provider IN ('codex','claude','grok')",[config.project.id])).rows;
   if(!accounts.length)return {state:'account_required',directory:root,next:'Rode account-add para codex e claude antes de native-setup.'};
-  const context=(await ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived ORDER BY created_at LIMIT 1',[config.project.id])).rows[0];
+  const context=(await ledger.pool.query('SELECT id FROM ac_contexts WHERE project_id=$1 AND NOT archived AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=ac_contexts.id) ORDER BY created_at LIMIT 1',[config.project.id])).rows[0];
   // Projects without qa/<id>.json keep this contract. AC_PERSONAL_QA_ARGV still replaces its argv.
   const qaArgv=process.env.AC_PERSONAL_QA_ARGV?z.array(z.string()).min(1).parse(JSON.parse(process.env.AC_PERSONAL_QA_ARGV)):undefined;
   const qa=defaultPersonalQaContract(images.tools!,qaArgv);

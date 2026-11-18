@@ -257,7 +257,7 @@ async function main(){
    };
    return {
     start:async(principal,panel,body)=>{
-     const found=await ledger.pool.query('SELECT id::text AS id, policy_revision FROM ac_contexts WHERE project_id=$1 ORDER BY created_at LIMIT 1',[panel.projectId]);
+     const found=await ledger.pool.query('SELECT id::text AS id, policy_revision FROM ac_contexts WHERE project_id=$1 AND NOT archived AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=ac_contexts.id) ORDER BY created_at LIMIT 1',[panel.projectId]);
      const row=found.rows[0] as {id?:unknown;policy_revision?:unknown}|undefined;
      if(typeof row?.id!=='string')throw new Refusal('VERIFY_CONTEXT_REQUIRED',409);
      const authority=managerTransports.get(runtime.projectId)?.authority(row.id);

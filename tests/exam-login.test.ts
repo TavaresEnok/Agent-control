@@ -206,9 +206,10 @@ test('renovador que falha com o mesmo refreshToken restaura o expiresAt original
   }
 });
 
-test('renovador que gira refreshToken mas deixa expiresAt insuficiente não toca mais no arquivo e recusa com EXAM_LOGIN_STALE', async () => {
+test('renovador que gira refreshToken mas deixa expiresAt insuficiente restaura o documento original e recusa com EXAM_LOGIN_STALE', async () => {
   const now = Date.now();
-  const {dir, file} = await loginFile(document({expiresAt: now - 10_000, refresh: 'fixture-refresh-0'}));
+  const original = document({expiresAt: now - 10_000, access: 'fixture-access-0', refresh: 'fixture-refresh-0'});
+  const {dir, file} = await loginFile(original);
   const rotatedBody = document({
     expiresAt: now + 900_000 + EXAM_LOGIN_MARGIN_MS,
     access: 'fixture-access-short',
@@ -226,7 +227,49 @@ test('renovador que gira refreshToken mas deixa expiresAt insuficiente não toca
       }),
       (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
     );
-    assert.equal(await readFile(file, 'utf8'), rotatedBody);
+    assert.equal(await readFile(file, 'utf8'), original);
+    assert.equal((await lstat(file)).mode & 0o777, 0o600);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('renovador que grava accessToken e refreshToken vazios restaura o documento original inteiro em 0600 e recusa com EXAM_LOGIN_STALE', async () => {
+  const now = Date.now();
+  const original = document({
+    expiresAt: now - 30_000,
+    access: 'fixture-access-original',
+    refresh: 'fixture-refresh-original',
+    extraTop: {mcpOAuth: {keep: true}},
+    extraOauth: {subscriptionType: 'max', organizationUuid: 'org-123'},
+  });
+  const {dir, file} = await loginFile(original);
+  try {
+    await assert.rejects(
+      () => prepareClaudeExamAccessToken({
+        accountDir: dir,
+        now,
+        examMaxMs: 900_000,
+        renew: async () => {
+          await writeFile(
+            file,
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: '',
+                refreshToken: '',
+                expiresAt: 0,
+              },
+            }),
+            {mode: 0o600},
+          );
+          await chmod(file, 0o644);
+          throw new Error('EXAM_LOGIN_RENEW_FAILED');
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
+    );
+    assert.equal(await readFile(file, 'utf8'), original);
+    assert.equal((await lstat(file)).mode & 0o777, 0o600);
   } finally {
     await rm(dir, {recursive: true, force: true});
   }

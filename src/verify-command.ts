@@ -676,10 +676,17 @@ async function releaseCapacityGrant(ledger: Ledger, principal: string, authority
 async function acquirePersonalVerify(ledger: Ledger, principal: string, contextId: string): Promise<Authority> {
   const instanceId = randomUUID();
   try {
-    return await ledger.acquire(principal, contextId, instanceId, 'personal-verify', 3600);
+    try {
+      return await ledger.acquire(principal, contextId, instanceId, 'personal-verify', 3600);
+    } catch (error) {
+      if (!(error instanceof Refusal) || error.code !== 'INVALID_LEASE') throw error;
+      return await ledger.acquire(principal, contextId, instanceId, 'personal-verify', 60);
+    }
   } catch (error) {
-    if (!(error instanceof Refusal) || error.code !== 'INVALID_LEASE') throw error;
-    return ledger.acquire(principal, contextId, instanceId, 'personal-verify', 60);
+    if (error instanceof Refusal && error.code === 'MANAGER_ACTIVE') {
+      throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
+    }
+    throw error;
   }
 }
 
@@ -687,28 +694,30 @@ function projectOf(config: Installation, projectId: string) {
   return [config.project, ...config.projects].find(item => item.id === projectId);
 }
 
-export async function resolvePersonalVerification(argv: readonly string[]): Promise<{input: PersonalVerificationInput; close: () => Promise<void>}> {
+export async function resolvePersonalVerification(
+  argv: readonly string[],
+  deps?: {composeRuntime?: typeof import('./personal-runtime.ts').composePersonalRuntime},
+): Promise<{input: PersonalVerificationInput; close: () => Promise<void>}> {
   const parsed = parseVerifyArgs(argv);
   if (parsed.url !== undefined) dynamicScanPlan(parsed.url);
   const config = await loadInstallation(resolve(parsed.installationPath));
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = projectOf(config, parsed.projectId);
   if (!project) throw new Refusal('NOT_FOUND', 404);
-  const ledger = new Ledger(config.databaseUrl);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  let authority: Authority | undefined;
   try {
-    const found = await ledger.pool.query<{id: string; policy_revision: number | string}>(
-      'SELECT id::text AS id, policy_revision FROM ac_contexts WHERE project_id=$1 ORDER BY created_at LIMIT 1',
-      [project.id],
-    );
-    const row = found.rows[0];
-    if (!row?.id) throw new Refusal('VERIFY_CONTEXT_REQUIRED', 409);
-    const policyRevision = Number(row.policy_revision);
-    if (!Number.isInteger(policyRevision) || policyRevision < 1) throw new Refusal('VERIFY_CONTEXT_REQUIRED', 409);
     const commit = await readHead(project.repo);
     const principal = project.owner;
-    const authority = await acquirePersonalVerify(ledger, principal, row.id);
-    const {composePersonalRuntime} = await import('./personal-runtime.ts');
-    const runtime = await composePersonalRuntime(config, ledger);
+    const exam = await ledger.ensureExamContext(principal, project.id, 'verify');
+    const policyRevision = exam.policyRevision;
+    if (!Number.isInteger(policyRevision) || policyRevision < 1) throw new Refusal('VERIFY_CONTEXT_REQUIRED', 409);
+    authority = await acquirePersonalVerify(ledger, principal, exam.contextId);
+    if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
+      await new Capacity(ledger).assignPolicy(principal, exam.contextId, exam.mainCapacityPolicyRevision);
+    }
+    const composeRuntime = deps?.composeRuntime ?? (await import('./personal-runtime.ts')).composePersonalRuntime;
+    const runtime = await composeRuntime(config, ledger);
     if (!runtime) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
     const {createCapacityNativeWorker} = await import('./verify-native-launch.ts');
     const worker = createCapacityNativeWorker({
@@ -717,7 +726,7 @@ export async function resolvePersonalVerification(argv: readonly string[]): Prom
       principal,
       authority,
       base: commit,
-      releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority, grantId, how),
+      releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority!, grantId, how),
     });
     const image = await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
@@ -740,9 +749,13 @@ export async function resolvePersonalVerification(argv: readonly string[]): Prom
         image,
         modelCalls: {count: 0},
       },
-      close: () => ledger.close(),
+      close: async () => {
+        await ledger.releaseLease(authority!).catch(() => undefined);
+        await ledger.close();
+      },
     };
   } catch (error) {
+    if (authority) await ledger.releaseLease(authority).catch(() => undefined);
     await ledger.close();
     throw error;
   }

@@ -104,14 +104,14 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     assert.equal(preview.profiles.find(item => item.purpose === 'criar')?.effort, 'medium');
     assert.equal(preview.profiles.find(item => item.purpose === 'revisor')?.accountId, secondary);
     assert.equal(preview.profiles.find(item => item.purpose === 'revisor')?.seat, 'outra conta');
-    assert.deepEqual(preview.contexts.sort(), [fresh].sort());
+    assert.deepEqual(preview.contexts.sort(), [fresh, kept].sort());
     assert.deepEqual(await counts(), before);
     assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [kept])).rows[0].capacity_policy_revision), revision);
 
     const applied = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
     assert.equal(applied.revisionFrom, revision);
     assert.equal(applied.revisionTo, revision + 1);
-    assert.equal(applied.contexts.length, 1);
+    assert.equal(applied.contexts.length, 2);
     const after = await counts();
     assert.equal(after.revisions, before.revisions + 1);
     assert.equal(after.catalog, before.catalog + 1);
@@ -150,13 +150,13 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     assert.equal(examinador?.account_id, primary);
     assert.equal(revisor?.account_id, secondary);
     assert.equal(revisor?.role, 'specialist');
-    assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [kept])).rows[0].capacity_policy_revision), revision);
+    assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [kept])).rows[0].capacity_policy_revision), applied.revisionTo);
     assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [fresh])).rows[0].capacity_policy_revision), applied.revisionTo);
 
     const again = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
     assert.equal(again.unchanged, true);
     assert.deepEqual(await counts(), after);
-    assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [kept])).rows[0].capacity_policy_revision), revision);
+    assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [kept])).rows[0].capacity_policy_revision), applied.revisionTo);
     const opusCatalog = (await db.pool.query<{efforts: string[]; roles: string[]; source: string}>(
       "SELECT efforts, roles, source FROM ac_model_catalog WHERE provider='claude' AND model='claude-opus-5-5'",
     )).rows[0];

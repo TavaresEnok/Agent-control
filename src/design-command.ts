@@ -298,10 +298,17 @@ function readHead(repoPath: string): Promise<string> {
 async function acquirePersonalDesign(ledger: Ledger, principal: string, contextId: string): Promise<Authority> {
   const instanceId = randomUUID();
   try {
-    return await ledger.acquire(principal, contextId, instanceId, 'personal-design', 3600);
+    try {
+      return await ledger.acquire(principal, contextId, instanceId, 'personal-design', 3600);
+    } catch (error) {
+      if (!(error instanceof Refusal) || error.code !== 'INVALID_LEASE') throw error;
+      return await ledger.acquire(principal, contextId, instanceId, 'personal-design', 60);
+    }
   } catch (error) {
-    if (!(error instanceof Refusal) || error.code !== 'INVALID_LEASE') throw error;
-    return ledger.acquire(principal, contextId, instanceId, 'personal-design', 60);
+    if (error instanceof Refusal && error.code === 'MANAGER_ACTIVE') {
+      throw new Refusal('DESIGN_BUSY', 409);
+    }
+    throw error;
   }
 }
 
@@ -377,27 +384,31 @@ async function readSeat(ledger: Ledger, grantId: string, accountId: string, prof
   return {provider: String(row.provider), model: String(row.model), accountId, profileId, grantId};
 }
 
-export async function resolvePersonalDesign(argv: readonly string[], known?: {installationPath: string; projectId: string}): Promise<ResolvedPersonalDesign> {
-  const parsed = known ?? parseDesignArgs(argv);
+export async function resolvePersonalDesign(
+  argv: readonly string[],
+  known?: {installationPath?: string; projectId?: string; composeRuntime?: typeof composePersonalRuntime},
+): Promise<ResolvedPersonalDesign> {
+  const parsed = known?.installationPath !== undefined && known?.projectId !== undefined
+    ? {installationPath: known.installationPath, projectId: known.projectId}
+    : parseDesignArgs(argv);
   const config = await loadInstallation(resolve(parsed.installationPath));
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = [config.project, ...config.projects].find(item => item.id === parsed.projectId);
   if (!project) throw new Refusal('NOT_FOUND', 404);
-  const ledger = new Ledger(config.databaseUrl);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  let authority: Authority | undefined;
   try {
-    const found = await ledger.pool.query<{id: string}>(
-      'SELECT id::text AS id FROM ac_contexts WHERE project_id=$1 ORDER BY created_at LIMIT 1',
-      [project.id],
-    );
-    const row = found.rows[0];
-    if (!row?.id) throw new Refusal('DESIGN_CONTEXT_REQUIRED', 409);
     const commit = await readHead(project.repo);
     const principal = project.owner;
-    const authority = await acquirePersonalDesign(ledger, principal, row.id);
-    const runtime = await composePersonalRuntime(config, ledger);
+    const exam = await ledger.ensureExamContext(principal, project.id, 'design');
+    authority = await acquirePersonalDesign(ledger, principal, exam.contextId);
+    if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
+      await new Capacity(ledger).assignPolicy(principal, exam.contextId, exam.mainCapacityPolicyRevision);
+    }
+    const runtime = await (known?.composeRuntime ?? composePersonalRuntime)(config, ledger);
     if (!runtime) throw new Refusal('DESIGN_WORKER_UNAVAILABLE', 503);
     const intentId = await insertDesignIntent(ledger, principal, authority, project.id, commit);
-    const releaseGrant = (grantId: string, how: 'not_started' | 'exited') => releaseDesignGrant(ledger, principal, authority, grantId, how);
+    const releaseGrant = (grantId: string, how: 'not_started' | 'exited') => releaseDesignGrant(ledger, principal, authority!, grantId, how);
     const worker = createDesignNativeWorker({
       supervisors: runtime.executions as unknown as readonly DesignExamSupervisor[],
       ledger,
@@ -412,12 +423,12 @@ export async function resolvePersonalDesign(argv: readonly string[], known?: {in
       const grant = await capacity.reserve(principal, {
         attemptId: randomUUID(),
         intentId,
-        contextId: authority.contextId,
+        contextId: authority!.contextId,
         role,
-      }, authority);
+      }, authority!);
       const seat = await readSeat(ledger, grant.id, grant.account_id, grant.profile_id);
       if (seat.provider !== 'claude') {
-        await releaseDesignGrant(ledger, principal, authority, seat.grantId, 'not_started');
+        await releaseDesignGrant(ledger, principal, authority!, seat.grantId, 'not_started');
       }
       return acceptClaudeExamSeat(seat);
     };
@@ -431,10 +442,14 @@ export async function resolvePersonalDesign(argv: readonly string[], known?: {in
       intentId,
       worker,
       reserve,
-      release: seat => releaseDesignGrant(ledger, principal, authority, seat.grantId, 'not_started'),
-      close: () => ledger.close(),
+      release: seat => releaseDesignGrant(ledger, principal, authority!, seat.grantId, 'not_started'),
+      close: async () => {
+        await ledger.releaseLease(authority!).catch(() => undefined);
+        await ledger.close();
+      },
     };
   } catch (error) {
+    if (authority) await ledger.releaseLease(authority).catch(() => undefined);
     await ledger.close();
     throw error;
   }

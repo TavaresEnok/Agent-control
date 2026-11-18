@@ -25,3 +25,10 @@ test('DESIGN_USAGE continua a linha de uso em português', () => {
   assert.equal(designCliFailureText(new Refusal('DESIGN_USAGE')), usage);
   assert.equal(designCliFailureText(new Error('DESIGN_USAGE')), usage);
 });
+
+test('DESIGN_BUSY dá mensagem clara e não vaza MANAGER_ACTIVE', () => {
+  const text = designCliFailureText(new Refusal('DESIGN_BUSY', 409));
+  assert.match(text, /design/i);
+  assert.match(text, /andamento/i);
+  assert.equal(text.includes('MANAGER_ACTIVE'), false);
+});

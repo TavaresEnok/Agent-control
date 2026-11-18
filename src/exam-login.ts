@@ -170,9 +170,8 @@ export async function writePrivateAtomic(file: string, body: string): Promise<vo
  * 1. Recalculate `Date.now()`. If remaining `expiresAt` > `examMaxMs + 10 min` and `accessToken` is present, return it without renewing.
  * 2. Immediately before writing `claudeAiOauth.expiresAt = 0`, re-read the file; if it changed since the initial read, re-evaluate without writing `expiresAt = 0`.
  * 3. Otherwise atomically set `claudeAiOauth.expiresAt = 0` (preserving all other fields) and run `renew` in place.
- * 4. Require `expiresAt > now + examMaxMs + 10 min` and a changed non-empty `accessToken` (`refreshToken` may or may not have rotated).
- *    - If renewal did not succeed and the file still has the original `refreshToken` and `accessToken`, re-read immediately before restoring `expiresAt`, and refuse with `EXAM_LOGIN_RESTORE_FAILED` if restoration write fails; otherwise refuse with `EXAM_LOGIN_STALE`.
- *    - If `refreshToken` or `accessToken` changed but the new state is not usable, leave the file untouched and refuse with `EXAM_LOGIN_STALE`.
+ * 4. Keep the new file only when `accessToken` and `refreshToken` are both non-empty, `expiresAt > now + examMaxMs + 10 min`, and `accessToken` changed.
+ *    - Otherwise restore the exact original document read under the lock before forcing `expiresAt = 0` (unless an external writer modified the file after `renew` returned), atomically with mode 0600, and refuse with `EXAM_LOGIN_STALE` (or `EXAM_LOGIN_RESTORE_FAILED` if restoration fails).
  * 5. Normalize and read the new `accessToken` still under the lock before returning.
  */
 export async function prepareClaudeExamAccessToken(input: {
@@ -204,6 +203,7 @@ export async function prepareClaudeExamAccessToken(input: {
   const run = async (): Promise<{status: 'fresh' | 'renewed'; accessToken: string; secrets: string[]}> => {
     const file = join(input.accountDir, '.credentials.json');
     let candidateText: string | undefined;
+    let originalText = '';
     let parsed: Record<string, unknown>;
     let oauth: Record<string, unknown> & {refreshToken: string};
 
@@ -229,14 +229,12 @@ export async function prepareClaudeExamAccessToken(input: {
         continue;
       }
 
+      originalText = beforeWriteText;
       parsed = evaluated.parsed;
       oauth = evaluated.oauth;
       break;
     }
 
-    const hasOriginalExpiresAt = Object.prototype.hasOwnProperty.call(oauth, 'expiresAt');
-    const originalRawExpiresAt = oauth.expiresAt;
-    const originalRefreshToken = oauth.refreshToken;
     const originalAccessToken = oauth.accessToken;
     const forcedDoc: Record<string, unknown> = {
       ...parsed,
@@ -259,38 +257,35 @@ export async function prepareClaudeExamAccessToken(input: {
 
     const afterNow = clock();
     const afterText = await readCredentialText(file);
-    const {parsed: afterParsed, oauth: afterOauth} = parseCredential(afterText);
+    let afterOauth: Record<string, unknown> | null = null;
+    if (afterText !== undefined) {
+      try {
+        const parsedAfter: unknown = JSON.parse(afterText);
+        if (isRecord(parsedAfter)) afterOauth = oauthOf(parsedAfter);
+      } catch {
+        afterOauth = null;
+      }
+    }
 
-    const afterExpires = claudeAccessExpiresAt(afterOauth.expiresAt);
+    const afterExpires = afterOauth ? claudeAccessExpiresAt(afterOauth.expiresAt) : null;
     const expiresGood = examLoginFreshAfterRenew(afterExpires, afterNow, examMaxMs);
-    const hasAccess = nonEmpty(afterOauth.accessToken);
-    const accessChanged = hasAccess && afterOauth.accessToken !== originalAccessToken;
+    const hasAccess = Boolean(afterOauth && nonEmpty(afterOauth.accessToken));
+    const hasRefresh = Boolean(afterOauth && nonEmpty(afterOauth.refreshToken));
+    const accessChanged = hasAccess && afterOauth!.accessToken !== originalAccessToken;
 
-    if (!expiresGood || !accessChanged) {
-      if (afterOauth.refreshToken === originalRefreshToken && afterOauth.accessToken === originalAccessToken) {
-        await input.hooks?.beforeRestore?.();
-        let restoreText: string | undefined;
-        let restoreParsed: unknown;
+    if (!hasAccess || !hasRefresh || !expiresGood || !accessChanged) {
+      await input.hooks?.beforeRestore?.();
+      let restoreText: string | undefined;
+      try {
+        restoreText = await readCredentialText(file);
+      } catch {
+        throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
+      }
+      if (afterText === undefined || restoreText === afterText) {
         try {
-          restoreText = await readCredentialText(file);
-          if (restoreText === undefined) throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
-          restoreParsed = JSON.parse(restoreText);
+          await writePrivateAtomic(file, originalText);
         } catch {
           throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
-        }
-        if (!isRecord(restoreParsed)) throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
-        const restoreOauth = oauthOf(restoreParsed);
-        if (!restoreOauth) throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
-        if (restoreOauth.refreshToken === originalRefreshToken && restoreOauth.accessToken === originalAccessToken) {
-          const restoredOauth: Record<string, unknown> = {...restoreOauth};
-          if (hasOriginalExpiresAt) restoredOauth.expiresAt = originalRawExpiresAt;
-          else delete restoredOauth.expiresAt;
-          const restoredDoc: Record<string, unknown> = {...restoreParsed, claudeAiOauth: restoredOauth};
-          try {
-            await writePrivateAtomic(file, JSON.stringify(restoredDoc));
-          } catch {
-            throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
-          }
         }
       }
       throw new Refusal('EXAM_LOGIN_STALE', 409);
