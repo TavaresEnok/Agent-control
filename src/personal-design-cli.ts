@@ -209,11 +209,12 @@ async function withCreatedServer<T>(
 async function withServedDirectory<T>(
   pin: string,
   folder: string,
-  run: (origin: string, routes: readonly {route: string}[]) => Promise<T>,
+  run: (origin: string, routes: readonly {route: string}[], files: readonly {path: string; text: string}[]) => Promise<T>,
 ): Promise<T> {
   const directory = await servedRoot(folder);
   const discovered = await routesFromStaticFolder(directory);
   const routes = discovered.length > 0 ? discovered : [{route: '/'}];
+  const servedFiles = (await readDesignRepository(directory)).filter(file => /\.html?$/i.test(file.path));
   const name = `ac-design-servir-${randomUUID().slice(0, 8)}`;
   const probe = routes.find(item => item.route === '/')?.route ?? routes[0]?.route ?? '/';
   try {
@@ -242,7 +243,7 @@ async function withServedDirectory<T>(
       'run', '--rm', '--pull', 'never', '--network', 'design-homologation', '--entrypoint', 'node', pin,
       '-e', readyScript(servedUrl(probe)),
     ]);
-    return await run('http://design-servir.local:8080', routes);
+    return await run('http://design-servir.local:8080', routes, servedFiles);
   } finally {
     await dockerFinished(['rm', '-f', name]).catch(() => undefined);
   }
@@ -314,7 +315,7 @@ async function main() {
     try {
       const files = await readDesignRepository(design.repo);
       const referenceFiles = invocation.references.length === 0 ? undefined : await readReferenceFiles(invocation.references);
-      const examAt = (targetUrl: string, routes?: readonly {route: string}[]) => runDesignModule({
+      const examAt = (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => runDesignModule({
         activation: 'personal',
         projectId: design.projectId,
         repo: design.repo,
@@ -324,7 +325,7 @@ async function main() {
         runId,
         createdAt: new Date(),
         commit: design.commit,
-        files,
+        files: servedFiles !== undefined && servedFiles.length > 0 ? servedFiles : files,
         worker: design.worker,
         reserve: design.reserve,
         release: design.release,

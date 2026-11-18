@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Refusal} from '../src/contracts.ts';
 import {parseDesignArgs, parseDesignInvocation} from '../src/design-command.ts';
+import {screenRoutesForExam} from '../src/design-module.ts';
 import {designCliFailureText, routesFromStaticFolder} from '../src/personal-design-cli.ts';
 
 const {createStaticServer} = await import(new URL('../deploy/design-tools/serve-static.mjs', import.meta.url).href) as {
@@ -173,4 +174,18 @@ test('a descoberta de --servir mapeia index, ignora node_modules e limita a prof
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('as rotas servidas ligam cada HTML ao caminho que o contêiner abre', () => {
+  const files = [
+    {path: 'index.html', text: '<h1>Início</h1>'},
+    {path: 'painel.html', text: '<h1>Painel</h1>'},
+    {path: 'item.html', text: '<h1>Item</h1>'},
+    {path: 'css/site.css', text: 'body{margin:0}'},
+  ];
+  const routes = screenRoutesForExam(files, [{route: '/'}, {route: '/painel.html'}, {route: '/item.html'}]);
+  assert.deepEqual(
+    routes.map(item => [item.file, item.route]),
+    [['index.html', '/'], ['painel.html', '/painel.html'], ['item.html', '/item.html']],
+  );
 });

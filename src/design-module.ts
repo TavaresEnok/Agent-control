@@ -8,7 +8,7 @@ import {writeDesignLoginState} from './design-browser.ts';
 import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
-import {discoverRoutesFromSource, dynamicRoutesMissingExample, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
+import {discoverRoutesFromSource, dynamicRoutesMissingExample, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type DiscoveredRoute, type ScreenCoverageRow} from './design-discover.ts';
 import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture} from './design-examine.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
 import {assertDesignTarget} from './design-image.ts';
@@ -189,7 +189,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     : undefined;
   if (tokens) findings.push(...tokens.findings);
   const imageRows = image === undefined ? [] : applyHostFindingCounts(image.coverage, findings);
-  const routes = discoverRoutesFromSource(input.files);
+  const routes = screenRoutesForExam(input.files, input.routes);
   const stateNotes = [
     ...(plannedStates?.notes ?? []),
     ...(loginNote.length > 0 ? [loginNote] : []),
@@ -435,6 +435,30 @@ function measuredJudgedMarkdown(achados: readonly DesignAchadoValue[]): string {
     `Julgados: ${judged.length}. O revisor confirmou.`,
     ...judged.map(line),
   ].join('\n');
+}
+
+/** Liga cada rota servida ao HTML de mesmo caminho. `/` usa `index.html`. */
+export function screenRoutesForExam(
+  files: readonly {path: string; text: string}[],
+  served?: readonly {route: string}[],
+): DiscoveredRoute[] {
+  const discovered = discoverRoutesFromSource(files);
+  if (served === undefined || served.length === 0) return discovered;
+  const usedRoutes = new Set(discovered.map(item => item.route));
+  const usedIds = new Set(discovered.map(item => item.id));
+  const extra: DiscoveredRoute[] = [];
+  for (const item of served) {
+    if (usedRoutes.has(item.route) || item.route.length < 1 || item.route.length > 200) continue;
+    const relative = item.route === '/' ? 'index.html' : item.route.replace(/^\//, '');
+    const file = files.find(candidate => candidate.path === relative || candidate.path.endsWith(`/${relative}`));
+    if (file === undefined) continue;
+    let id = `servido-${relative.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'raiz'}`;
+    while (usedIds.has(id)) id = `${id}-2`;
+    usedIds.add(id);
+    usedRoutes.add(item.route);
+    extra.push({id, route: item.route, file: file.path, line: 1, title: item.route, source: 'codigo'});
+  }
+  return extra.length === 0 ? discovered : [...discovered, ...extra];
 }
 
 function chooseScreens(
