@@ -15,6 +15,7 @@ import {
   classifyReturnedCredential,
   claudeAccessExpiresAt,
   ensureExamLoginFresh,
+  examLoginFreshAfterRenew,
   examLoginNeedsRefresh,
   examLoginStaleNote,
   providerFailureCode,
@@ -64,10 +65,14 @@ test('expiresAt em segundos vira milissegundos e o limite exato não renova', ()
   assert.equal(claudeAccessExpiresAt(Number.NaN), null);
   const now = 1_700_000_000_000;
   const examMax = 900_000;
-  const edge = now + examMax + EXAM_LOGIN_MARGIN_MS;
+  const edge = now + EXAM_LOGIN_MARGIN_MS;
+  assert.equal(EXAM_LOGIN_MARGIN_MS, 5 * 60 * 1000);
   assert.equal(examLoginNeedsRefresh(edge, now, examMax), false);
   assert.equal(examLoginNeedsRefresh(edge - 1, now, examMax), true);
   assert.equal(examLoginNeedsRefresh(null, now, examMax), true);
+  assert.equal(examLoginFreshAfterRenew(edge, now), false);
+  assert.equal(examLoginFreshAfterRenew(edge + 1, now), true);
+  assert.equal(examLoginFreshAfterRenew(null, now), false);
   assert.equal(providerFailureCode(`Failed to authenticate: OAuth session expired ${SECRET}`), 'PROVIDER_AUTH_FAILED');
   assert.equal(providerFailureCode('could not be refreshed'), 'PROVIDER_AUTH_FAILED');
   assert.equal(providerFailureCode('EXECUTION_NATIVE_FAILED'), null);
@@ -151,6 +156,47 @@ test('renovação que grava e sai com erro ainda normaliza o login fresco', asyn
     });
     assert.equal(state, 'renewed');
     assert.equal((await lstat(file)).mode & 0o777, 0o600);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('token com 20 min restantes não chama o renovador e não recusa', async () => {
+  const now = Date.now();
+  const original = document({expiresAt: now + 20 * 60 * 1000});
+  const {dir, file} = await loginFile(original);
+  let called = 0;
+  try {
+    const state = await ensureExamLoginFresh({
+      accountDir: dir,
+      now,
+      examMaxMs: 900_000,
+      renew: async () => {
+        called += 1;
+      },
+    });
+    assert.equal(state, 'fresh');
+    assert.equal(called, 0);
+    assert.equal(await readFile(file, 'utf8'), original);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('renovação que deixa expiresAt com 5 min exatos no futuro recusa com EXAM_LOGIN_STALE', async () => {
+  const now = Date.now();
+  const {dir, file} = await loginFile(document({expiresAt: now + 60_000}));
+  try {
+    await assert.rejects(
+      () => ensureExamLoginFresh({
+        accountDir: dir,
+        now,
+        renew: async () => {
+          await writeFile(file, document({expiresAt: now + EXAM_LOGIN_MARGIN_MS}), {mode: 0o600});
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
+    );
   } finally {
     await rm(dir, {recursive: true, force: true});
   }

@@ -235,7 +235,7 @@ export class NativeExecutionSupervisor{
   // A stale Claude access token is renewed on the writable account before the exam copy exists.
   const examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
   if(readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude'&&!this.config.syntheticFixture){
-   const login=await ensureExamLoginFresh({accountDir:accountRoot,now:Date.now(),examMaxMs:input.timeoutMs,renew:this.config.examLoginRenew??renewClaudeLoginInPlace});
+   const login=await ensureExamLoginFresh({accountDir:accountRoot,now:Date.now(),renew:this.config.examLoginRenew??renewClaudeLoginInPlace});
    if(login==='renewed'){
     accountSecrets=await readMountedCredentialSecrets('claude',accountRoot);
     assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);

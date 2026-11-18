@@ -5,8 +5,8 @@ import {lstat, open, rename, unlink, type FileHandle} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {Refusal} from './contracts.ts';
 
-/** The exam may run for its own timeout. Renew when less than that plus ten minutes remains. */
-export const EXAM_LOGIN_MARGIN_MS = 10 * 60 * 1000;
+/** Renew in place only when `expiresAt` is missing, unreadable, or has less than 5 minutes remaining. */
+export const EXAM_LOGIN_MARGIN_MS = 5 * 60 * 1000;
 
 export const EXAM_LOGIN_STALE_TEXT = 'O login da conta venceu. Entre de novo: npm run gateway -- account-add.';
 
@@ -23,10 +23,16 @@ export function claudeAccessExpiresAt(raw: unknown): number | null {
   return raw < 1e12 ? raw * 1000 : raw;
 }
 
-/** True when the access token is missing or would expire during the exam plus the ten-minute margin. */
-export function examLoginNeedsRefresh(expiresAt: number | null, now: number, examMaxMs: number): boolean {
+/** True when the access token is missing, unreadable, or has less than five minutes remaining. */
+export function examLoginNeedsRefresh(expiresAt: number | null, now: number, _examMaxMs?: number): boolean {
   if (expiresAt === null || !Number.isFinite(expiresAt)) return true;
-  return expiresAt < now + examMaxMs + EXAM_LOGIN_MARGIN_MS;
+  return expiresAt < now + EXAM_LOGIN_MARGIN_MS;
+}
+
+/** True after renewal only when `expiresAt` is strictly more than five minutes in the future. */
+export function examLoginFreshAfterRenew(expiresAt: number | null, now: number): boolean {
+  if (expiresAt === null || !Number.isFinite(expiresAt)) return false;
+  return expiresAt > now + EXAM_LOGIN_MARGIN_MS;
 }
 
 /** Read only `expiresAt`. A missing file, a symlink, or unreadable JSON means the login needs renewal. */
@@ -182,18 +188,18 @@ export async function writePrivateAtomic(file: string, body: string): Promise<vo
 export async function ensureExamLoginFresh(input: {
   accountDir: string;
   now: number;
-  examMaxMs: number;
+  examMaxMs?: number;
   renew: (accountDir: string) => Promise<void>;
 }): Promise<'fresh' | 'renewed'> {
   const before = await readClaudeExpiresAt(input.accountDir);
-  if (!examLoginNeedsRefresh(before, input.now, input.examMaxMs)) return 'fresh';
+  if (!examLoginNeedsRefresh(before, input.now)) return 'fresh';
   try {
     await input.renew(input.accountDir);
   } catch {
     /* The file is the record. A non-zero exit can still have written a fresh token. */
   }
   const after = await readClaudeExpiresAt(input.accountDir);
-  if (examLoginNeedsRefresh(after, input.now, input.examMaxMs)) throw new Refusal('EXAM_LOGIN_STALE', 409);
+  if (!examLoginFreshAfterRenew(after, input.now)) throw new Refusal('EXAM_LOGIN_STALE', 409);
   try {
     await normalizeAccountCredential(input.accountDir);
   } catch {
