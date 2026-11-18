@@ -5,7 +5,6 @@ import {
   DesignExamFinding,
   DesignExamResult,
   DesignWorkerCall,
-  DesignMeasure,
   clampHighSeverity,
   type DesignChecklistItem,
   type DesignMeasure as DesignMeasureValue,
@@ -123,7 +122,6 @@ function normalizeDesignExam(value: unknown, fallback: {file: string; checklist:
     const line = Number.isInteger(lineNumber) && lineNumber > 0 ? lineNumber : null;
     const cwe = typeof finding.cwe === 'string' && /^CWE-\d{1,5}$/.test(finding.cwe) ? finding.cwe : null;
     const severity = SEVERITY_ALIASES[textOf(finding.severity, 40).toLowerCase()] ?? 'informativa';
-    const measure = readMeasure(finding.measure);
     return [{
       title,
       severity,
@@ -134,7 +132,6 @@ function normalizeDesignExam(value: unknown, fallback: {file: string; checklist:
       cwe,
       reference,
       snippet: textOf(finding.snippet, 240),
-      ...(measure === undefined ? {} : {measure}),
     }];
   }).slice(0, 40);
   return {
@@ -156,17 +153,37 @@ function normalizeDesignConfirm(value: unknown): unknown {
   return {kind: 'confirmacao', status: mapped, reason: textOf(row.reason, 2000), proof: textOf(row.proof, 2000)};
 }
 
-function readMeasure(value: unknown): DesignMeasureValue | undefined {
-  const parsed = DesignMeasure.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+const MEASURE_TOOLS = new Set(['axe', 'pa11y', 'regua', 'régua']);
+
+function measuredByTool(tool: string): boolean {
+  return MEASURE_TOOLS.has(tool.trim().toLowerCase());
 }
 
-function examMeasure(finding: DesignExamFinding, rawFindings: readonly DesignRawFinding[]): DesignMeasureValue | undefined {
-  if (finding.measure !== undefined) return finding.measure;
+function captureBasename(path: string): string {
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return cut >= 0 ? path.slice(cut + 1) : path;
+}
+
+function emptyCaptureListed(capture: string, captures: readonly DesignScreenCapture[] | undefined): boolean {
+  for (const item of captures ?? []) {
+    if (captureBasename(item.path) === capture) return true;
+    if (`${item.sha256}.png` === capture) return true;
+  }
+  return false;
+}
+
+function examMeasure(
+  finding: DesignExamFinding,
+  rawFindings: readonly DesignRawFinding[],
+  captures: readonly DesignScreenCapture[] | undefined,
+): DesignMeasureValue | undefined {
   for (const raw of rawFindings) {
     if (raw.measure === undefined) continue;
+    if (!measuredByTool(raw.tool)) continue;
     if (raw.file !== finding.file) continue;
-    if (finding.reference === raw.rule || finding.reference.includes(raw.rule)) return raw.measure;
+    if (finding.reference !== raw.rule && !finding.reference.includes(raw.rule)) continue;
+    if (raw.measure.kind === 'empty' && !emptyCaptureListed(raw.measure.capture, captures)) continue;
+    return raw.measure;
   }
   return undefined;
 }
@@ -375,11 +392,18 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     }
     for (const finding of exam.data.findings) {
       const reviewed = await confirmFinding(input, seat.provider, finding, screen.code, screen.captures);
-      const measure = examMeasure(finding, input.rawFindings);
+      const measure = examMeasure(finding, input.rawFindings, screen.captures);
       const clamped = DesignExamFinding.parse({
-        ...finding,
-        ...(measure === undefined ? {} : {measure}),
+        title: finding.title,
         severity: clampHighSeverity(finding.severity, measure),
+        file: finding.file,
+        line: finding.line,
+        scenario: finding.scenario,
+        suggestion: finding.suggestion,
+        cwe: finding.cwe,
+        reference: finding.reference,
+        snippet: finding.snippet,
+        ...(measure === undefined ? {} : {measure}),
       });
       findings.push(clamped);
       confirmations.push({
