@@ -42,10 +42,15 @@ test('falta de argumento recusa o uso e a URL externa também', () => {
     (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_EXTERNAL_TARGET',
   );
   const projectId = randomUUID();
-  const parsed = parseDesignArgs(['instalacao.json', projectId, '--url', 'http://127.0.0.1:4173', '--login-file', 'login.json']);
+  assert.throws(
+    () => parseDesignArgs(['instalacao.json', projectId, '--url', 'http://127.0.0.1:4173', '--login-file', 'login.json']),
+    (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_TARGET_UNREACHABLE',
+  );
+  const parsed = parseDesignArgs(['instalacao.json', projectId, '--url', 'http://127.0.0.1:4173', '--login-file', 'login.json', '--servir', 'pasta']);
   assert.equal(parsed.projectId, projectId);
   assert.equal(parsed.url, 'http://127.0.0.1:4173');
   assert.equal(parsed.loginFile, 'login.json');
+  assert.equal(parsed.serveDir, 'pasta');
   assert.equal(JSON.stringify(parsed).includes(password), false);
 });
 

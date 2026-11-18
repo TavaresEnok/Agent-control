@@ -1,14 +1,14 @@
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {chmod, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign} from './design-command.ts';
-import {runDesignCreate} from './design-create.ts';
+import {runDesignCreate, type CreateExam} from './design-create.ts';
 import {readRebuildImagePin} from './design-image-run.ts';
 import {runDesignModule} from './design-module.ts';
 import {readReferenceFiles} from './design-reference-files.ts';
@@ -24,6 +24,8 @@ const messages: Record<string, string> = {
   DESIGN_WORKER_UNAVAILABLE: 'O runtime pessoal não está ativo.',
   DESIGN_EXTERNAL_TARGET: 'A URL tem que ficar em localhost, 127.0.0.1 ou num host .local.',
   DESIGN_TARGET_ESCAPE: 'A URL aponta para outro destino.',
+  DESIGN_TARGET_UNREACHABLE: 'O contêiner não alcança o localhost do host. Use --servir <pasta>.',
+  DESIGN_SERVE_INVALID: 'A pasta de --servir tem que ser um diretório.',
   DESIGN_LOGIN_MODE: 'O arquivo de login tem que estar no modo 0600.',
   DESIGN_LOGIN_INVALID: 'O arquivo de login não tem os campos esperados.',
   DESIGN_COMMIT_INVALID: 'Não foi possível ler o commit do repositório.',
@@ -71,9 +73,82 @@ function dockerFinished(args: readonly string[]): Promise<void> {
   });
 }
 
+function readyScript(url: string): string {
+  return `fetch(${JSON.stringify(url)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))`;
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/** HTML da pasta servida. `index.html` na raiz vira `/`. Não entra em node_modules. Profundidade máxima 4, no máximo 40 rotas. */
+export async function routesFromStaticFolder(root: string): Promise<{route: string}[]> {
+  const found: string[] = [];
+  const seen = new Set<string>([root]);
+  const visit = async (directory: string, prefix: string): Promise<void> => {
+    const here = prefix === '' ? 0 : prefix.split('/').length;
+    if (here >= 4) return;
+    let names: string[];
+    try {
+      names = (await readdir(directory)).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name === 'node_modules') continue;
+      const rel = prefix === '' ? name : `${prefix}/${name}`;
+      const segments = rel.split('/').length;
+      if (segments > 4) continue;
+      const path = join(directory, name);
+      const listed = await lstat(path).catch(() => undefined);
+      if (!listed) continue;
+      const real = await realpath(path).catch(() => '');
+      if (!real || !pathInside(root, real) || seen.has(real)) continue;
+      const info = await lstat(real).catch(() => undefined);
+      if (!info) continue;
+      if (info.isDirectory()) {
+        if (segments >= 4) continue;
+        seen.add(real);
+        await visit(real, rel);
+        continue;
+      }
+      if (info.isFile() && name.endsWith('.html')) {
+        seen.add(real);
+        found.push(rel);
+      }
+    }
+  };
+  await visit(root, '');
+  found.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  return found.slice(0, 40).map(rel => ({route: rel === 'index.html' ? '/' : `/${rel}`}));
+}
+
+async function servedRoot(folder: string): Promise<string> {
+  if (folder.length < 1 || folder.length > 400 || folder.includes('\0')) throw new Refusal('DESIGN_SERVE_INVALID', 400);
+  const real = await realpath(resolve(folder)).catch(() => '');
+  if (!real) throw new Refusal('DESIGN_SERVE_INVALID', 400);
+  const info = await stat(real).catch(() => undefined);
+  if (!info?.isDirectory()) throw new Refusal('DESIGN_SERVE_INVALID', 400);
+  if (/[,:\r\n]/.test(real)) throw new Refusal('DESIGN_SERVE_INVALID', 400);
+  return real;
+}
+
+function servedUrl(route: string): string {
+  if (route === '/') return 'http://design-servir.local:8080/';
+  const path = route.split('/').map(part => encodeURIComponent(part)).join('/');
+  return `http://design-servir.local:8080${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function findingOnHtml(file: string, htmlPath: string): boolean {
+  const route = `/${htmlPath}`;
+  const head = file.split(/[\s?#]/)[0] ?? '';
+  return file === htmlPath || head === htmlPath || head === route;
+}
+
 /**
  * Sobe as telas geradas só na rede de homologação.
- * A cópia é 0644 enquanto o contêiner lê; o original em design-criacoes continua 0600.
+ * A pasta public vai para /srv. O original em design-criacoes continua 0600.
  */
 async function withCreatedServer<T>(
   pin: string,
@@ -87,7 +162,12 @@ async function withCreatedServer<T>(
     const pub = join(root, 'public');
     await mkdir(pub, {mode: 0o755});
     await chmod(root, 0o755);
-    for (const file of files) await writeFile(join(pub, file.path), file.text, {mode: 0o644});
+    await chmod(pub, 0o755);
+    for (const file of files) {
+      const path = join(pub, file.path);
+      await writeFile(path, file.text, {mode: 0o644});
+      await chmod(path, 0o644);
+    }
     await dockerFinished(['rm', '-f', name]).catch(() => undefined);
     await dockerFinished([
       'run', '-d', '--name', name,
@@ -102,20 +182,64 @@ async function withCreatedServer<T>(
       '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
       '--env', 'HOME=/tmp',
       '--env', 'TMPDIR=/tmp',
+      '--env', 'DESIGN_STATIC_ROOT=/srv',
       '--entrypoint', 'node',
       '--pull', 'never',
-      '--mount', `type=bind,source=${root},destination=/srv,readonly`,
+      '--mount', `type=bind,source=${pub},destination=/srv,readonly`,
       pin,
-      '/opt/design-tools/serve-lab.mjs',
+      '/opt/design-tools/serve-static.mjs',
     ]);
     await dockerFinished([
       'run', '--rm', '--pull', 'never', '--network', 'design-homologation', '--entrypoint', 'node', pin,
-      '-e', `fetch("http://design-create.local:8080/${first}").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))`,
+      '-e', readyScript(`http://design-create.local:8080/${first}`),
     ]);
     return await run('http://design-create.local:8080', root);
   } finally {
     await dockerFinished(['rm', '-f', name]).catch(() => undefined);
     await rm(root, {recursive: true, force: true});
+  }
+}
+
+/** Sobe a pasta do exame na rede de homologação e espera o primeiro HTML responder. */
+async function withServedDirectory<T>(
+  pin: string,
+  folder: string,
+  run: (origin: string, routes: readonly {route: string}[]) => Promise<T>,
+): Promise<T> {
+  const directory = await servedRoot(folder);
+  const discovered = await routesFromStaticFolder(directory);
+  const routes = discovered.length > 0 ? discovered : [{route: '/'}];
+  const name = `ac-design-servir-${randomUUID().slice(0, 8)}`;
+  const probe = routes.find(item => item.route === '/')?.route ?? routes[0]?.route ?? '/';
+  try {
+    await dockerFinished(['rm', '-f', name]).catch(() => undefined);
+    await dockerFinished([
+      'run', '-d', '--name', name,
+      '--network', 'design-homologation',
+      '--network-alias', 'design-servir.local',
+      '--user', '65532:65532',
+      '--read-only',
+      '--cap-drop', 'ALL',
+      '--security-opt', 'no-new-privileges',
+      '--pids-limit', '64',
+      '--memory', '256m',
+      '--tmpfs', '/tmp:rw,nosuid,nodev,size=64m',
+      '--env', 'HOME=/tmp',
+      '--env', 'TMPDIR=/tmp',
+      '--env', 'DESIGN_STATIC_ROOT=/srv',
+      '--entrypoint', 'node',
+      '--pull', 'never',
+      '--mount', `type=bind,source=${directory},destination=/srv,readonly`,
+      pin,
+      '/opt/design-tools/serve-static.mjs',
+    ]);
+    await dockerFinished([
+      'run', '--rm', '--pull', 'never', '--network', 'design-homologation', '--entrypoint', 'node', pin,
+      '-e', readyScript(servedUrl(probe)),
+    ]);
+    return await run('http://design-servir.local:8080', routes);
+  } finally {
+    await dockerFinished(['rm', '-f', name]).catch(() => undefined);
   }
 }
 
@@ -154,33 +278,40 @@ async function main() {
   let resolved: Awaited<ReturnType<typeof resolvePersonalDesign>> | undefined;
   try {
     resolved = await resolvePersonalDesign(invocation.argv);
-    const stopLease = keepPersonalDesignLease(resolved.ledger, resolved.authority);
+    const design = resolved;
+    const stopLease = keepPersonalDesignLease(design.ledger, design.authority);
     const browser = opened === undefined ? undefined : await openDesignBrowser(parsed.url);
     const pinnedImage = readPinnedImage();
     const runId = randomUUID();
     try {
-      const result = await runDesignModule({
+      const files = await readDesignRepository(design.repo);
+      const referenceFiles = invocation.references.length === 0 ? undefined : await readReferenceFiles(invocation.references);
+      const examAt = (targetUrl: string, routes?: readonly {route: string}[]) => runDesignModule({
         activation: 'personal',
-        projectId: resolved.projectId,
-        repo: resolved.repo,
-        targetUrl: parsed.url,
-        dataDirectory: resolved.dataDirectory,
-        intentId: resolved.intentId,
+        projectId: design.projectId,
+        repo: design.repo,
+        targetUrl,
+        dataDirectory: design.dataDirectory,
+        intentId: design.intentId,
         runId,
         createdAt: new Date(),
-        commit: resolved.commit,
-        files: await readDesignRepository(resolved.repo),
-        worker: resolved.worker,
-        reserve: resolved.reserve,
-        release: resolved.release,
+        commit: design.commit,
+        files,
+        worker: design.worker,
+        reserve: design.reserve,
+        release: design.release,
         ...(browser === undefined ? {} : {driver: browser.driver}),
         image: {pinnedImage},
         scoreVisual: true,
         recordStates: true,
         regressionThreshold: invocation.threshold,
-        ...(invocation.references.length === 0 ? {} : {referenceFiles: await readReferenceFiles(invocation.references)}),
+        ...(referenceFiles === undefined ? {} : {referenceFiles}),
         ...(opened === undefined ? {} : {login: opened.login}),
+        ...(routes === undefined ? {} : {routes}),
       });
+      const result = invocation.serveDir === undefined
+        ? await examAt(parsed.url)
+        : await withServedDirectory(pinnedImage, invocation.serveDir, examAt);
       console.log(runId);
       console.log(result.directory);
     } finally {
@@ -242,8 +373,17 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
           routes: files.filter(file => file.path.endsWith('.html')).map(file => ({route: `/${file.path}`})),
           ...(references.length === 0 ? {} : {referenceFiles: references}),
         }));
-        const high = exam.findings.some(item => item.severity === 'alta');
-        return {high, belowVisual8: exam.visualLow, findings: exam.findings, notes: []};
+        const screens = files.filter(file => file.path.endsWith('.html')).map(file => {
+          const related = exam.findings.filter(item => findingOnHtml(item.file, file.path));
+          return {
+            name: file.path.slice(0, -'.html'.length),
+            rejected: exam.visualLow || related.some(item => item.severity === 'alta'),
+            findings: related,
+            visualNotes: exam.visualLow ? ['nota visual abaixo de 8'] : [],
+          };
+        });
+        const report: CreateExam = {screens, notes: []};
+        return report;
       },
     });
     console.log(runId);

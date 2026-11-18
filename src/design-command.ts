@@ -39,6 +39,7 @@ export type ParsedDesignArgs = {
   projectId: string;
   url: string;
   loginFile?: string;
+  serveDir?: string;
 };
 
 export type ResolvedPersonalDesign = {
@@ -65,6 +66,7 @@ export function parseDesignArgs(argv: readonly string[]): ParsedDesignArgs {
   const positional: string[] = [];
   let url: string | undefined;
   let loginFile: string | undefined;
+  let serveDir: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? '';
     if (arg === '--url') {
@@ -81,6 +83,13 @@ export function parseDesignArgs(argv: readonly string[]): ParsedDesignArgs {
       index += 1;
       continue;
     }
+    if (arg === '--servir') {
+      const value = argv[index + 1];
+      if (serveDir !== undefined || value === undefined || value.length === 0 || value.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
+      serveDir = value;
+      index += 1;
+      continue;
+    }
     if (arg.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
     positional.push(arg);
   }
@@ -89,7 +98,14 @@ export function parseDesignArgs(argv: readonly string[]): ParsedDesignArgs {
   if (!installationPath || !projectId || positional.length !== 2 || url === undefined) throw new Refusal('DESIGN_USAGE', 400);
   if (!Id.safeParse(projectId).success) throw new Refusal('NOT_FOUND', 404);
   assertDesignTarget(url);
-  return {installationPath, projectId, url, ...(loginFile === undefined ? {} : {loginFile})};
+  if (serveDir === undefined && loopbackExamHost(url)) throw new Refusal('DESIGN_TARGET_UNREACHABLE', 400);
+  return {
+    installationPath,
+    projectId,
+    url,
+    ...(loginFile === undefined ? {} : {loginFile}),
+    ...(serveDir === undefined ? {} : {serveDir}),
+  };
 }
 
 /** Mode is checked before the bytes are read. A widened file never reaches the report. */
@@ -425,9 +441,19 @@ export async function resolvePersonalDesign(argv: readonly string[], known?: {in
 }
 
 export type DesignInvocation =
-  | {kind: 'exam'; argv: string[]; references: string[]; threshold: number}
+  | {kind: 'exam'; argv: string[]; references: string[]; threshold: number; serveDir?: string}
   | {kind: 'approve'; installationPath: string; projectId: string; runId: string}
   | {kind: 'create'; installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number};
+
+/** O contêiner de exame não alcança o loopback do host. */
+function loopbackExamHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
 
 function takeValues(argv: readonly string[], flag: string): {rest: string[]; values: string[]} {
   const rest: string[] = [];
@@ -477,7 +503,13 @@ export function parseDesignInvocation(argv: readonly string[]): DesignInvocation
   if (threshold.values.length > 1 || references.values.length > 10) throw new Refusal('DESIGN_USAGE', 400);
   const limit = threshold.values[0] === undefined ? 0.1 : Number(threshold.values[0]);
   if (!Number.isFinite(limit) || limit < 0 || limit > 1) throw new Refusal('DESIGN_USAGE', 400);
-  parseDesignArgs(threshold.rest);
-  return {kind: 'exam', argv: threshold.rest, references: references.values, threshold: limit};
+  const parsed = parseDesignArgs(threshold.rest);
+  return {
+    kind: 'exam',
+    argv: threshold.rest,
+    references: references.values,
+    threshold: limit,
+    ...(parsed.serveDir === undefined ? {} : {serveDir: parsed.serveDir}),
+  };
 }
 
