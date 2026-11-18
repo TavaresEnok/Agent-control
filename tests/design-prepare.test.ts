@@ -4,12 +4,27 @@ import {test} from 'node:test';
 import {Capacity, CapacityPolicy} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
 import {parseDesignInvocation} from '../src/design-command.ts';
-import {prepareDesignSpecialist} from '../src/design-prepare.ts';
+import {formatDesignPrepare, prepareDesignSpecialist} from '../src/design-prepare.ts';
 import {Ledger} from '../src/ledger.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const databaseUrl = process.env.AC_TEST_DATABASE_URL;
 const roles = ['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge'] as const;
+
+test('o texto da preparação distingue prévia e gravação do catálogo', () => {
+  const base = {
+    unchanged: false,
+    catalogAction: 'registrar' as const,
+    profiles: [],
+    chain: {regular: ['novo:criar'], emergency: ['novo:revisor']},
+    contexts: [],
+    revisionFrom: 1,
+    revisionTo: null,
+  };
+  assert.match(formatDesignPrepare({...base, apply: false}), /entraria por personal:\/\/account-add/);
+  assert.match(formatDesignPrepare({...base, apply: true, revisionTo: 2}), /entrou por personal:\/\/account-add/);
+  assert.equal(formatDesignPrepare({...base, apply: true, unchanged: true, catalogAction: 'presente', revisionTo: 2}), 'Nada a mudar.');
+});
 
 test('preparar exige instalação, projeto e no máximo um --aplicar', () => {
   const project = randomUUID();

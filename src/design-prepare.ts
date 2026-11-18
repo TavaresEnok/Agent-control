@@ -162,7 +162,7 @@ export function formatDesignPrepare(report: DesignPrepareReport): string {
   if (report.unchanged) return 'Nada a mudar.';
   const lines = [
     report.apply ? 'Preparação aplicada.' : 'Preparação, sem gravar.',
-    `Catálogo: ${report.catalogAction === 'presente' ? `${CREATE_MODEL} já está no catálogo.` : `${CREATE_MODEL} entraria por ${CATALOG_SOURCE}.`}`,
+    `Catálogo: ${report.catalogAction === 'presente' ? `${CREATE_MODEL} já está no catálogo.` : report.apply ? `${CREATE_MODEL} entrou por ${CATALOG_SOURCE}.` : `${CREATE_MODEL} entraria por ${CATALOG_SOURCE}.`}`,
     'Perfis specialist:',
   ];
   for (const profile of report.profiles) {
