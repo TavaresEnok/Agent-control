@@ -618,3 +618,16 @@ Não houve exame real com modelo.
 As notas visuais reais e um exame com login válido ficam para o gerente, com uma conta que ainda entra. Esta rodada deixa o produto renovar o login no arquivo da conta antes da cópia e sair com código diferente de 0 quando o modelo não julga a tela.
 
 Não houve push. A instalação viva, o gateway vivo, o banco `ac_ispagent` e o contêiner `ac-personal-pg` não foram alterados. O diretório `upstream/happier/apps/server/generated` continua fora do git.
+
+## Reconstrução, rodadas 5 a 9 (Gemini 4 Hydrogen High, supervisionado pelo Claude)
+
+A cota do Grok acabou no início da rodada 5 (18/11/2026). Com a autorização do titular, as rodadas 5 a 9 foram programadas pelo Gemini 4 Hydrogen High (`agy`), em até 3 trabalhadores com worktrees separados. O Claude escreveu as ordens, juntou os ramos, rodou a suíte e o laboratório e encomendou uma revisão independente (Claude Sonnet 5.5, só leitura) depois de cada rodada. Os relatórios de cada trabalhador estão em `docs/RELATORIO-R5-*.md` a `docs/RELATORIO-R9-A.md`.
+
+- **Rodada 5**: correções da revisão das rodadas 2–4 (falha visual parcial sai com código 1, sanitizador por lista permitida, `preparar` só com papel `specialist`, estados com efeito colateral recusados).
+- **Rodadas 5–6**: a devolução da cópia do login girado ganhou trava e comparação, mas três revisões seguidas acharam caminhos de perda do token.
+- **Rodada 7**: desenho final do gerente. O exame Claude recebe só o `accessToken` (variável documentada `CLAUDE_CODE_OAUTH_TOKEN`, pelo launch assinado); nenhum `.credentials.json` nem refresh token entra no contêiner. Antes de cada job, sob trava por conta no Postgres, o host força a renovação no próprio arquivo da conta (grava `expiresAt` 0, roda o CLI endurecido, confere, restaura se falhar). Toda a máquina de devolução e recuperação saiu (cerca de 750 linhas a menos).
+- **Rodadas 8–9**: o `launch.json` com o token é apagado no fim, na falha e na retomada; comparação antes de gravar; sucesso exige token de acesso novo; toda falha antes do launch libera o grant; grupo do renovador morto com SIGKILL; outras variáveis de login retiradas; retomada renova de novo.
+
+Prova final (HEAD `255fe235`): `npx tsc --noEmit` código 0; suíte oficial `{"passed":233,"failed":[]}`; laboratório com a imagem real 1/1. O executor da suíte passou a classificar `verify-exam-worker-mount.test.ts` como laboratório (o arquivo cita Docker); rodado à parte com o banco de teste, junto com `exam-login.test.ts` e `native-execution-supervisor.test.ts`: 30/30.
+
+Risco residual: o `accessToken`, de curta duração, fica visível ao processo do exame enquanto ele roda (protegido pela negação de leitura de `/proc`); o snapshot de redação guarda os segredos da conta cifrados; uma renovação feita por um worker comum, fora da trava, ainda pode correr junto com a renovação do exame numa janela de milissegundos.
