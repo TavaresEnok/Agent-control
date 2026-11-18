@@ -1,5 +1,10 @@
+import {chmod, mkdtemp, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {Refusal} from './contracts.ts';
 import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts';
+import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget} from './design-image.ts';
 
 type DesignPage = {
@@ -58,6 +63,7 @@ export type DesignBrowserGuard = {
 
 type DesignContext = DesignBrowserGuardContext & {
   newPage(): Promise<DesignPage>;
+  storageState(): Promise<unknown>;
 };
 
 type DesignBrowser = {
@@ -231,19 +237,59 @@ async function waitForPaint(page: DesignPage): Promise<void> {
   ).catch(() => undefined);
 }
 
-/** Host Chrome through the Playwright already installed for the panel. The design CLI captures with this driver. */
-export async function openDesignBrowser(targetUrl: string): Promise<{driver: DesignCaptureDriver; close: () => Promise<void>}> {
+/**
+ * O host faz o login e grava o storageState em 0600.
+ * A senha não entra no arquivo. O chamador apaga o diretório no fim.
+ */
+export async function writeDesignLoginState(targetUrl: string, login: DesignLogin): Promise<string> {
   assertDesignTarget(targetUrl);
+  const chromium = await loadChromium();
+  const browser = await chromium.launch({
+    executablePath: CHROME,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'design-login-'));
+  try {
+    await chmod(directory, 0o700);
+    const context = await browser.newContext(designBrowserContextOptions);
+    const page = await context.newPage();
+    const guard = await installDesignBrowserGuard(context, page, targetUrl);
+    await guard.goto(assertDesignTarget(targetUrl).origin);
+    await guard.fill(login.usernameSelector, login.username);
+    await guard.fill(login.passwordSelector, login.password);
+    await page.click(login.submitSelector);
+    guard.afterLogin();
+    const body = JSON.stringify(await context.storageState());
+    if (body.includes(login.password)) throw new Refusal('DESIGN_PASSWORD_LEAK');
+    const path = join(directory, 'state.json');
+    await writeFile(path, body, {mode: 0o600});
+    await chmod(path, 0o600);
+    return path;
+  } catch (error) {
+    const {rm} = await import('node:fs/promises');
+    await rm(directory, {recursive: true, force: true});
+    throw error;
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+async function loadChromium(): Promise<ChromiumLauncher> {
   const specifier = new URL('../upstream/cezar/node_modules/playwright-core/index.mjs', import.meta.url);
-  let chromium: ChromiumLauncher;
   try {
     const loaded = await import(specifier.href) as {chromium?: ChromiumLauncher};
     if (!loaded.chromium) throw new Error('DESIGN_BROWSER_MISSING');
-    chromium = loaded.chromium;
+    return loaded.chromium;
   } catch (error) {
     if (error instanceof Error && error.message === 'DESIGN_BROWSER_MISSING') throw error;
     throw new Error('DESIGN_BROWSER_MISSING');
   }
+}
+
+/** Host Chrome through the Playwright already installed for the panel. The design CLI captures with this driver. */
+export async function openDesignBrowser(targetUrl: string): Promise<{driver: DesignCaptureDriver; close: () => Promise<void>}> {
+  assertDesignTarget(targetUrl);
+  const chromium = await loadChromium();
   const browser = await chromium.launch({
     executablePath: CHROME,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],

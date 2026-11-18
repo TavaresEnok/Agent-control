@@ -36,6 +36,8 @@ export type DesignRunInput = {
   nanoCpus: number;
   pidsLimit: number;
   network?: string;
+  /** Caminho absoluto do storageState. Sem o campo, o argv não ganha mount. */
+  loginState?: string;
 };
 
 function writtenHost(value: string): string {
@@ -146,6 +148,11 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
   assertLimit(input.memoryBytes, MEMORY_MIN, MEMORY_MAX);
   assertLimit(input.pidsLimit, PIDS_MIN, PIDS_MAX);
   assertLimit(input.nanoCpus, NANO_MIN, NANO_MAX);
+  const loginMount: string[] = [];
+  if (input.loginState !== undefined) {
+    assertMountPath(input.loginState);
+    loginMount.push('--mount', `type=bind,source=${input.loginState},destination=/login/state.json,readonly`);
+  }
   const memory = String(input.memoryBytes);
   return [
     DESIGN_RUNTIME_BIN,
@@ -180,6 +187,7 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     `type=bind,source=${input.repository},destination=/repository,readonly`,
     '--mount',
     `type=bind,source=${input.output},destination=/output`,
+    ...loginMount,
     '--entrypoint',
     DESIGN_ENTRYPOINT,
     input.image,

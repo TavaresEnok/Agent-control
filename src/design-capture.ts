@@ -1,13 +1,20 @@
+import {createHash} from 'node:crypto';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {publicLoginRecord, type DesignLogin, type PublicLoginRecord} from './design-discover.ts';
+import {isDesignStatePath, parseDesignActionStep, type DesignActionStep} from './design-project-config.ts';
 import {DESIGN_VIEWPORTS, type DesignViewport} from './design-types.ts';
 
 export type {DesignLogin, PublicLoginRecord};
 
 export type DesignCaptureTheme = 'claro' | 'escuro';
-export type DesignCaptureState = 'padrao' | 'vazio' | 'carregando' | 'erro';
+export type DesignCaptureState = 'padrao' | 'vazio' | 'carregando' | 'erro' | 'logado';
+
+/** Alcance que a captura aceita. Sem isto, estado diferente de padrao não abre URL. */
+export type DesignCaptureReach =
+  | {kind: 'url'; path: string}
+  | {kind: 'acoes'; steps: string[]};
 
 export type DesignCapturePlan = {
   screenId: string;
@@ -16,6 +23,7 @@ export type DesignCapturePlan = {
   theme: DesignCaptureTheme;
   state: DesignCaptureState;
   fileName: string;
+  reach?: DesignCaptureReach;
 };
 
 export type DesignCaptureScreen = {
@@ -56,6 +64,8 @@ export type DesignCaptureDriver = {
   content(): Promise<string>;
   fill?(selector: string, value: string): Promise<void>;
   click?(selector: string): Promise<void>;
+  /** Opcional. Sem este método, `esperar` não vira captura. */
+  waitForSelector?(selector: string): Promise<void>;
 };
 
 export type DesignCaptureRecord = {
@@ -69,11 +79,14 @@ export type DesignCaptureRecord = {
   bytes: number;
 };
 
+export type DesignCaptureSkipReason = 'nao-e-html' | 'sem-alcance' | 'sem-espera' | 'sem-acao' | 'acao-invalida';
+
 export type DesignCaptureSkip = {
   screenId: string;
   route: string;
   url: string;
-  reason: 'nao-e-html';
+  state: DesignCaptureState;
+  reason: DesignCaptureSkipReason;
   body: string;
 };
 
@@ -92,7 +105,9 @@ export type DesignCaptureOptions = {
  * Sempre 375, 768 e 1440 no tema claro e no estado padrao.
  * Tema escuro só com hasDarkTheme. Estados vazio, carregando e erro só com forceStates.
  * hasEmptyState acrescenta o estado vazio, sem repetir o que forceStates já pede.
- * O produto é o cartesiano desses eixos. O nome do arquivo só tem caracteres seguros e termina em .png.
+ * O produto é o cartesiano desses eixos. O nome do arquivo só tem caracteres seguros, termina em .png
+ * e inclui 8 hex da rota para /a-b e /a/b não coincidirem.
+ * forceStates não traz alcance: a captura não inventa ?estado=.
  */
 export function planCaptures(screens: readonly DesignCaptureScreen[]): DesignCapturePlan[] {
   const used = new Set<string>();
@@ -113,7 +128,7 @@ export function planCaptures(screens: readonly DesignCaptureScreen[]): DesignCap
             viewport,
             theme,
             state,
-            fileName: allocateFileName(screen.id, viewport, theme, state, used),
+            fileName: allocateFileName(screen.id, screen.route, viewport, theme, state, used),
           });
         }
       }
@@ -124,9 +139,10 @@ export function planCaptures(screens: readonly DesignCaptureScreen[]): DesignCap
 
 /**
  * Captura cada plano em PNG de página inteira.
- * A URL é baseUrl + route. Estado forçado acrescenta estado= sem apagar a rota.
+ * A URL é baseUrl + route. Estado diferente de padrao só navega se o plano trouxer alcance.
  * Login efêmero preenche os seletores e não grava a senha. O JSON usa publicLoginRecord.
  * Corpo JSON ou não-HTML não vira PNG: o plano fica em skipped.
+ * Sem alcance, o estado fica em skipped e o vazio pedido fica nao-capturado.
  */
 export async function captureScreens(
   driver: DesignCaptureDriver,
@@ -152,16 +168,29 @@ export async function captureScreens(
   const skipped: DesignCaptureSkip[] = [];
   const files: {fileName: string; bytes: Buffer}[] = [];
   for (const plan of plans) {
-    const url = withState(joinBase(baseUrl, plan.route), plan.state);
+    const prepared = preparePlan(driver, baseUrl, plan);
+    if (!prepared.ok) {
+      skipped.push({
+        screenId: plan.screenId,
+        route: plan.route,
+        url: prepared.url,
+        state: plan.state,
+        reason: prepared.reason,
+        body: '',
+      });
+      continue;
+    }
     await driver.setViewport(plan.viewport, DESIGN_CAPTURE_HEIGHT[plan.viewport]);
     await driver.emulateMedia(plan.theme);
-    await driver.goto(url);
+    await driver.goto(prepared.url);
+    await runSteps(driver, prepared.steps);
     const body = await driver.content();
     if (!isHtmlScreen(body)) {
       skipped.push({
         screenId: plan.screenId,
         route: plan.route,
-        url,
+        url: prepared.url,
+        state: plan.state,
         reason: 'nao-e-html',
         body: body.trim().slice(0, 200),
       });
@@ -171,7 +200,7 @@ export async function captureScreens(
     captures.push({
       screenId: plan.screenId,
       route: plan.route,
-      url,
+      url: prepared.url,
       viewport: plan.viewport,
       theme: plan.theme,
       state: plan.state,
@@ -195,6 +224,72 @@ export async function captureScreens(
   }
   await writeFile(join(root, DESIGN_CAPTURE_METADATA_FILE), `${body}\n`, {mode: 0o600});
   return metadata;
+}
+
+type PreparedPlan =
+  | {ok: true; url: string; steps?: DesignActionStep[]}
+  | {ok: false; url: string; reason: DesignCaptureSkipReason};
+
+function preparePlan(driver: DesignCaptureDriver, baseUrl: string, plan: DesignCapturePlan): PreparedPlan {
+  const routeUrl = joinBase(baseUrl, plan.route);
+  if (plan.state === 'padrao') return {ok: true, url: routeUrl};
+  const reach = plan.reach;
+  if (reach === undefined) return {ok: false, url: routeUrl, reason: 'sem-alcance'};
+  if (reach.kind === 'url') {
+    const url = resolveStateUrl(baseUrl, reach.path);
+    if (url === undefined) return {ok: false, url: routeUrl, reason: 'sem-alcance'};
+    return {ok: true, url};
+  }
+  if (reach.steps.length === 0) return {ok: false, url: routeUrl, reason: 'sem-alcance'};
+  const steps: DesignActionStep[] = [];
+  for (const step of reach.steps) {
+    const parsed = parseDesignActionStep(step);
+    if (parsed === undefined) return {ok: false, url: routeUrl, reason: 'acao-invalida'};
+    steps.push(parsed);
+  }
+  if (steps.some(step => step.op === 'esperar') && driver.waitForSelector === undefined) {
+    return {ok: false, url: routeUrl, reason: 'sem-espera'};
+  }
+  if (steps.some(step => step.op === 'clicar') && driver.click === undefined) {
+    return {ok: false, url: routeUrl, reason: 'sem-acao'};
+  }
+  if (steps.some(step => step.op === 'preencher') && driver.fill === undefined) {
+    return {ok: false, url: routeUrl, reason: 'sem-acao'};
+  }
+  return {ok: true, url: routeUrl, steps};
+}
+
+async function runSteps(driver: DesignCaptureDriver, steps: readonly DesignActionStep[] | undefined): Promise<void> {
+  if (steps === undefined) return;
+  for (const step of steps) {
+    if (step.op === 'clicar') {
+      if (driver.click === undefined) throw new Error('DRIVER_ACAO_INCOMPLETA');
+      await driver.click(step.selector);
+      continue;
+    }
+    if (step.op === 'preencher') {
+      if (driver.fill === undefined) throw new Error('DRIVER_ACAO_INCOMPLETA');
+      await driver.fill(step.selector, step.text);
+      continue;
+    }
+    if (driver.waitForSelector === undefined) throw new Error('DRIVER_ACAO_INCOMPLETA');
+    await driver.waitForSelector(step.selector);
+  }
+}
+
+/** Caminho do config, no mesmo host do alvo. Não acrescenta estado=. */
+function resolveStateUrl(baseUrl: string, path: string): string | undefined {
+  if (!isDesignStatePath(path)) return undefined;
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  const resolved = new URL(path, base);
+  if (resolved.protocol !== base.protocol || resolved.host !== base.host) return undefined;
+  if (resolved.username !== '' || resolved.password !== '') return undefined;
+  return `${resolved.protocol}//${resolved.host}${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
 function emptyStateRecords(
@@ -264,15 +359,6 @@ function joinBase(baseUrl: string, route: string): string {
   return base + path;
 }
 
-function withState(url: string, state: DesignCaptureState): string {
-  if (state === 'padrao') return url;
-  const hashAt = url.indexOf('#');
-  const hash = hashAt === -1 ? '' : url.slice(hashAt);
-  const before = hashAt === -1 ? url : url.slice(0, hashAt);
-  const separator = before.includes('?') ? '&' : '?';
-  return `${before}${separator}estado=${state}${hash}`;
-}
-
 function assertSafeFileName(fileName: string): void {
   if (fileName.length > 200 || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\') || !SAFE_PNG.test(fileName)) {
     throw new Refusal('DESIGN_PATH_FORBIDDEN');
@@ -281,23 +367,25 @@ function assertSafeFileName(fileName: string): void {
 
 function allocateFileName(
   screenId: string,
+  route: string,
   viewport: DesignViewport,
   theme: DesignCaptureTheme,
   state: DesignCaptureState,
   used: Set<string>,
 ): string {
   const id = safeId(screenId);
-  const plain = `${id}-${viewport}-${theme}-${state}.png`;
+  const hash = createHash('sha256').update(route).digest('hex').slice(0, 8);
+  const plain = `${id}-${hash}-${viewport}-${theme}-${state}.png`;
   if (!used.has(plain)) {
     used.add(plain);
     assertSafeFileName(plain);
     return plain;
   }
   let suffix = 2;
-  let name = `${id}-${suffix}-${viewport}-${theme}-${state}.png`;
+  let name = `${id}-${suffix}-${hash}-${viewport}-${theme}-${state}.png`;
   while (used.has(name)) {
     suffix += 1;
-    name = `${id}-${suffix}-${viewport}-${theme}-${state}.png`;
+    name = `${id}-${suffix}-${hash}-${viewport}-${theme}-${state}.png`;
   }
   used.add(name);
   assertSafeFileName(name);

@@ -6,6 +6,16 @@ import {join, normalize} from 'node:path';
 const root = '/srv';
 const types = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.json': 'application/json'};
 
+const STATE_PAGES = {
+  '/estado/vazio': 'Nenhum item',
+  '/estado/carregando': 'Carregando',
+  '/estado/erro': 'Não foi possível carregar',
+};
+
+function stateHtml(text) {
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${text}</title></head><body><main><h1>${text}</h1><p>${text}</p></main></body></html>`;
+}
+
 function fileFor(url) {
   const path = url.pathname.replace(/\/+$/, '') || '/';
   if (path === '/') return 'public/index.html';
@@ -13,11 +23,17 @@ function fileFor(url) {
   if (path === '/item/42') return 'public/item.html';
   if (path === '/css/site.css') return 'css/site.css';
   if (path === '/foto.png') return 'public/foto.png';
+  if (Object.hasOwn(STATE_PAGES, path)) return path;
   if (path.includes('..')) return null;
   return `public${path}`;
 }
 
 function sendFile(res, relative) {
+  if (relative && Object.hasOwn(STATE_PAGES, relative)) {
+    res.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(stateHtml(STATE_PAGES[relative]));
+    return;
+  }
   if (!relative) {
     res.writeHead(404, {'content-type': 'text/plain; charset=utf-8'});
     res.end('não capturado');

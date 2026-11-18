@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtemp, readFile, readdir, rm, stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -32,7 +33,16 @@ type Call =
   | {op: 'shot'; fullPage: true}
   | {op: 'content'}
   | {op: 'fill'; selector: string; value: string}
-  | {op: 'click'; selector: string};
+  | {op: 'click'; selector: string}
+  | {op: 'wait'; selector: string};
+
+function routeHash(route: string): string {
+  return createHash('sha256').update(route).digest('hex').slice(0, 8);
+}
+
+function pngName(id: string, route: string, viewport: number, theme: string, state: string): string {
+  return `${id}-${routeHash(route)}-${viewport}-${theme}-${state}.png`;
+}
 
 function fakeDriver(): DesignCaptureDriver & {calls: Call[]} {
   const calls: Call[] = [];
@@ -71,9 +81,9 @@ function isRefusal(error: unknown, code: string): boolean {
 test('plano sempre tem tres larguras; escuro e estados so quando pedidos', () => {
   const plain = planCaptures([{id: 'home', route: '/home', hasDarkTheme: false, forceStates: false}]);
   assert.deepEqual(plain, [
-    {screenId: 'home', route: '/home', viewport: 375, theme: 'claro', state: 'padrao', fileName: 'home-375-claro-padrao.png'},
-    {screenId: 'home', route: '/home', viewport: 768, theme: 'claro', state: 'padrao', fileName: 'home-768-claro-padrao.png'},
-    {screenId: 'home', route: '/home', viewport: 1440, theme: 'claro', state: 'padrao', fileName: 'home-1440-claro-padrao.png'},
+    {screenId: 'home', route: '/home', viewport: 375, theme: 'claro', state: 'padrao', fileName: pngName('home', '/home', 375, 'claro', 'padrao')},
+    {screenId: 'home', route: '/home', viewport: 768, theme: 'claro', state: 'padrao', fileName: pngName('home', '/home', 768, 'claro', 'padrao')},
+    {screenId: 'home', route: '/home', viewport: 1440, theme: 'claro', state: 'padrao', fileName: pngName('home', '/home', 1440, 'claro', 'padrao')},
   ]);
   const dark = planCaptures([{id: 'home', route: '/home', hasDarkTheme: true, forceStates: false}]);
   assert.equal(dark.length, 6);
@@ -89,12 +99,19 @@ test('plano sempre tem tres larguras; escuro e estados so quando pedidos', () =>
   assert.ok(both.some(plan => plan.theme === 'escuro' && plan.state === 'vazio'));
   assert.ok(both.every(plan => /^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/.test(plan.fileName) && !plan.fileName.includes('..')));
   const messy = planCaptures([{id: 'a/b c', route: '/x', hasDarkTheme: false, forceStates: false}]);
-  assert.equal(messy[0]?.fileName, 'a-b-c-375-claro-padrao.png');
+  assert.equal(messy[0]?.fileName, pngName('a-b-c', '/x', 375, 'claro', 'padrao'));
   const duplicated = planCaptures([
     {id: 'home', route: '/a', hasDarkTheme: false, forceStates: false},
-    {id: 'home', route: '/b', hasDarkTheme: false, forceStates: false},
+    {id: 'home', route: '/a', hasDarkTheme: false, forceStates: false},
   ]);
-  assert.equal(duplicated[3]?.fileName, 'home-2-375-claro-padrao.png');
+  assert.equal(duplicated[3]?.fileName, `home-2-${routeHash('/a')}-375-claro-padrao.png`);
+  const distinct = planCaptures([
+    {id: '/a-b', route: '/a-b', hasDarkTheme: false, forceStates: false},
+    {id: '/a/b', route: '/a/b', hasDarkTheme: false, forceStates: false},
+  ]);
+  assert.equal(distinct[0]?.fileName, pngName('a-b', '/a-b', 375, 'claro', 'padrao'));
+  assert.equal(distinct[3]?.fileName, pngName('a-b', '/a/b', 375, 'claro', 'padrao'));
+  assert.notEqual(distinct[0]?.fileName, distinct[3]?.fileName);
 });
 
 test('captura tres larguras sem tema escuro e sem estado forcado', async () => {
@@ -143,14 +160,15 @@ test('captura tema escuro, estados forcados e login sem gravar a senha', async (
     ]);
     const urls = driver.calls.filter(call => call.op === 'goto').map(call => call.url).slice(1);
     assert.equal(urls.filter(url => url === `${BASE}/simples`).length, 3);
-    assert.equal(urls.filter(url => url.includes('/completa') && url.includes('estado=vazio')).length, 6);
-    assert.equal(urls.filter(url => url.includes('/completa') && url.includes('estado=carregando')).length, 6);
-    assert.equal(urls.filter(url => url.includes('/completa') && url.includes('estado=erro')).length, 6);
-    assert.ok(urls.filter(url => url.startsWith(`${BASE}/simples`)).every(url => !url.includes('estado=')));
-    assert.equal(driver.calls.filter(call => call.op === 'theme' && call.theme === 'escuro').length, 12);
-    assert.equal(driver.calls.filter(call => call.op === 'shot').length, plans.length);
+    assert.equal(urls.filter(url => url === `${BASE}/completa`).length, 6);
+    assert.ok(urls.every(url => !url.includes('estado=')));
+    assert.ok(meta.captures.every(item => item.state === 'padrao'));
+    assert.equal(meta.emptyStates.find(item => item.screenId === 'completa')?.status, 'nao-capturado');
+    assert.ok(meta.skipped?.some(item => item.route === '/completa' && item.state === 'vazio' && item.reason === 'sem-alcance'));
+    assert.equal(driver.calls.filter(call => call.op === 'theme' && call.theme === 'escuro').length, 3);
+    assert.equal(driver.calls.filter(call => call.op === 'shot').length, meta.captures.length);
     const names = await readdir(dir);
-    assert.equal(names.length, plans.length + 1);
+    assert.equal(names.length, meta.captures.length + 1);
     assert.ok(names.includes(DESIGN_CAPTURE_METADATA_FILE));
     for (const name of names) {
       const bytes = await readFile(join(dir, name));
@@ -171,27 +189,40 @@ test('captura tema escuro, estados forcados e login sem gravar a senha', async (
   }
 });
 
-test('estado forcado acrescenta a consulta sem apagar rota nem fragmento', async () => {
+test('estado sem alcance nao navega e url declarada nao inventa estado=', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
   try {
     const driver = fakeDriver();
     const plans: DesignCapturePlan[] = [
-      {screenId: 'itens', route: '/itens?aba=1#topo', viewport: 375, theme: 'claro', state: 'erro', fileName: 'itens-375-claro-erro.png'},
-      {screenId: 'itens', route: '/itens', viewport: 768, theme: 'escuro', state: 'padrao', fileName: 'itens-768-escuro-padrao.png'},
+      {screenId: 'itens', route: '/itens?aba=1#topo', viewport: 375, theme: 'claro', state: 'padrao', fileName: 'itens-375-claro-padrao.png'},
+      {screenId: 'itens', route: '/itens', viewport: 768, theme: 'claro', state: 'erro', fileName: 'itens-768-claro-erro.png'},
+      {
+        screenId: 'itens',
+        route: '/itens',
+        viewport: 375,
+        theme: 'escuro',
+        state: 'vazio',
+        fileName: 'itens-375-escuro-vazio.png',
+        reach: {kind: 'url', path: '/estado/vazio'},
+      },
     ];
-    await captureScreens(driver, `${BASE}/`, plans, join(parent, 'saida'));
+    const meta = await captureScreens(driver, `${BASE}/`, plans, join(parent, 'saida'));
     const urls = driver.calls.filter(call => call.op === 'goto').map(call => call.url);
     assert.deepEqual(urls, [
-      `${BASE}/itens?aba=1&estado=erro#topo`,
-      `${BASE}/itens`,
+      `${BASE}/itens?aba=1#topo`,
+      `${BASE}/estado/vazio`,
     ]);
+    assert.ok(urls.every(url => !url.includes('estado=')));
+    assert.equal(meta.skipped?.some(item => item.state === 'erro' && item.reason === 'sem-alcance'), true);
+    assert.equal(meta.captures.some(item => item.state === 'vazio' && item.url === `${BASE}/estado/vazio`), true);
+    assert.equal(meta.emptyStates.find(item => item.route === '/itens')?.status, 'capturado');
     assert.ok(driver.calls.some(call => call.op === 'theme' && call.theme === 'escuro'));
   } finally {
     await rm(parent, {recursive: true, force: true});
   }
 });
 
-test('rota com estado vazio ganha captura e o registro diz quando nao houve', async () => {
+test('rota com estado vazio sem alcance fica nao capturado', async () => {
   const plain = planCaptures([{id: 'home', route: '/home', hasDarkTheme: false, forceStates: false}]);
   assert.equal(plain.length, 3);
   assert.ok(plain.every(plan => plan.state === 'padrao'));
@@ -201,18 +232,17 @@ test('rota com estado vazio ganha captura e o registro diz quando nao houve', as
   assert.equal(planCaptures([{id: 'home', route: '/home', hasDarkTheme: true, forceStates: true, hasEmptyState: true}]).length, 24);
   const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
   try {
-    let url = '';
+    const urls: string[] = [];
     const driver: DesignCaptureDriver = {
       async setViewport() {},
       async emulateMedia() {},
       async goto(next) {
-        url = next;
+        urls.push(next);
       },
       async screenshot() {
         return PNG;
       },
       async content() {
-        if (url.includes('/skip') && url.includes('estado=vazio')) return '{"error":"AUTH_REQUIRED"}';
         return '<main></main>';
       },
     };
@@ -222,13 +252,81 @@ test('rota com estado vazio ganha captura e o registro diz quando nao houve', as
       {id: 'skip', route: '/skip', hasDarkTheme: false, forceStates: false, hasEmptyState: true},
     ]);
     const meta = await captureScreens(driver, BASE, plans, join(parent, 'saida'));
-    assert.equal(meta.captures.filter(item => item.route === '/lista' && item.state === 'vazio').length, 3);
-    assert.equal(meta.captures.some(item => item.route === '/skip' && item.state === 'vazio'), false);
+    assert.ok(urls.every(url => !url.includes('estado=')));
+    assert.equal(meta.captures.some(item => item.state === 'vazio'), false);
+    assert.equal(meta.skipped?.filter(item => item.state === 'vazio' && item.reason === 'sem-alcance').length, 6);
     assert.deepEqual(meta.emptyStates, [
-      {screenId: 'lista', route: '/lista', status: 'capturado'},
+      {screenId: 'lista', route: '/lista', status: 'nao-capturado'},
       {screenId: 'home', route: '/home', status: 'ausente'},
       {screenId: 'skip', route: '/skip', status: 'nao-capturado'},
     ]);
+  } finally {
+    await rm(parent, {recursive: true, force: true});
+  }
+});
+
+test('acoes do alcance rodam no driver e esperar sem waitForSelector nao captura', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'ac-design-capture-'));
+  try {
+    const calls: Call[] = [];
+    const driver: DesignCaptureDriver & {calls: Call[]} = {
+      calls,
+      async setViewport(width, height) {
+        calls.push({op: 'viewport', width, height});
+      },
+      async emulateMedia(theme) {
+        calls.push({op: 'theme', theme});
+      },
+      async goto(url) {
+        calls.push({op: 'goto', url});
+      },
+      async screenshot(fullPage) {
+        calls.push({op: 'shot', fullPage});
+        return PNG;
+      },
+      async content() {
+        calls.push({op: 'content'});
+        return '<main></main>';
+      },
+      async fill(selector, value) {
+        calls.push({op: 'fill', selector, value});
+      },
+      async click(selector) {
+        calls.push({op: 'click', selector});
+      },
+      async waitForSelector(selector) {
+        calls.push({op: 'wait', selector});
+      },
+    };
+    const acted = await captureScreens(driver, BASE, [{
+      screenId: 'erro',
+      route: '/lista',
+      viewport: 375,
+      theme: 'claro',
+      state: 'erro',
+      fileName: 'erro-375-claro-erro.png',
+      reach: {kind: 'acoes', steps: ['clicar button.erro', 'preencher #campo sem dados', 'esperar #mensagem']},
+    }], join(parent, 'com-espera'));
+    assert.deepEqual(calls.map(call => call.op), ['viewport', 'theme', 'goto', 'click', 'fill', 'wait', 'content', 'shot']);
+    assert.equal(calls.some(call => call.op === 'goto' && call.url === `${BASE}/lista` && !call.url.includes('estado=')), true);
+    assert.equal(calls.some(call => call.op === 'click' && call.selector === 'button.erro'), true);
+    assert.equal(calls.some(call => call.op === 'fill' && call.selector === '#campo' && call.value === 'sem dados'), true);
+    assert.equal(calls.some(call => call.op === 'wait' && call.selector === '#mensagem'), true);
+    assert.equal(acted.captures.length, 1);
+    const bare = fakeDriver();
+    const skipped = await captureScreens(bare, BASE, [{
+      screenId: 'erro',
+      route: '/lista',
+      viewport: 768,
+      theme: 'escuro',
+      state: 'erro',
+      fileName: 'erro-768-escuro-erro.png',
+      reach: {kind: 'acoes', steps: ['clicar button.erro', 'esperar #mensagem']},
+    }], join(parent, 'sem-espera'));
+    assert.equal(bare.calls.some(call => call.op === 'goto' || call.op === 'shot' || call.op === 'click'), false);
+    assert.equal(skipped.captures.length, 0);
+    assert.equal(skipped.skipped?.[0]?.reason, 'sem-espera');
+    assert.equal(skipped.skipped?.[0]?.state, 'erro');
   } finally {
     await rm(parent, {recursive: true, force: true});
   }
