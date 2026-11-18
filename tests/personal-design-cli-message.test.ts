@@ -16,6 +16,10 @@ test('erro desconhecido e recusa com código desconhecido saem numa frase fixa, 
   }
 });
 
+test('DESIGN_PREPARE_NO_CLAUDE diz que o projeto não tem conta Claude', () => {
+  assert.equal(designCliFailureText(new Refusal('DESIGN_PREPARE_NO_CLAUDE')), 'O projeto não tem conta Claude.');
+});
+
 test('DESIGN_USAGE continua a linha de uso em português', () => {
   const usage = 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>]';
   assert.equal(designCliFailureText(new Refusal('DESIGN_USAGE')), usage);

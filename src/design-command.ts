@@ -443,7 +443,8 @@ export async function resolvePersonalDesign(argv: readonly string[], known?: {in
 export type DesignInvocation =
   | {kind: 'exam'; argv: string[]; references: string[]; threshold: number; serveDir?: string}
   | {kind: 'approve'; installationPath: string; projectId: string; runId: string}
-  | {kind: 'create'; installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number};
+  | {kind: 'create'; installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number}
+  | {kind: 'prepare'; installationPath: string; projectId: string; apply: boolean};
 
 /** O contêiner de exame não alcança o loopback do host. */
 function loopbackExamHost(url: string): boolean {
@@ -471,8 +472,25 @@ function takeValues(argv: readonly string[], flag: string): {rest: string[]; val
   return {rest, values};
 }
 
-/** A forma antiga continua em parseDesignArgs. Aqui entram criar, baseline e referências. */
+/** A forma antiga continua em parseDesignArgs. Aqui entram preparar, criar, baseline e referências. */
 export function parseDesignInvocation(argv: readonly string[]): DesignInvocation {
+  if (argv[0] === 'preparar') {
+    let apply = false;
+    const positionals: string[] = [];
+    for (const token of argv.slice(1)) {
+      if (token === '--aplicar') {
+        if (apply) throw new Refusal('DESIGN_USAGE', 400);
+        apply = true;
+        continue;
+      }
+      if (token.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
+      positionals.push(token);
+    }
+    const [installationPath, projectId] = positionals;
+    if (!installationPath || !projectId || positionals.length !== 2) throw new Refusal('DESIGN_USAGE', 400);
+    if (!Id.safeParse(projectId).success) throw new Refusal('NOT_FOUND', 404);
+    return {kind: 'prepare', installationPath, projectId, apply};
+  }
   if (argv[0] === 'criar') {
     const briefing = takeValues(argv.slice(1), '--briefing');
     const references = takeValues(briefing.rest, '--referencia');

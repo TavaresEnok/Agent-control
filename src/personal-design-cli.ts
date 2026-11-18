@@ -11,10 +11,12 @@ import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignR
 import {runDesignCreate, type CreateExam} from './design-create.ts';
 import {readRebuildImagePin} from './design-image-run.ts';
 import {runDesignModule} from './design-module.ts';
+import {formatDesignPrepare, prepareDesignSpecialist} from './design-prepare.ts';
 import {readReferenceFiles} from './design-reference-files.ts';
 import {approveDesignBaseline} from './design-regression.ts';
 import {readDesignCaptureFiles} from './design-report.ts';
 import {loadInstallation} from './installation.ts';
+import {Ledger} from './ledger.ts';
 
 const messages: Record<string, string> = {
   DESIGN_USAGE: 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>]',
@@ -39,6 +41,9 @@ const messages: Record<string, string> = {
   DESIGN_IMAGE_TIMEOUT: 'A imagem de design passou do tempo.',
   DESIGN_IMAGE_UNPINNED: 'A imagem de design não está fixada pelo digest.',
   DESIGN_CREATE_MODEL_UNAVAILABLE: 'A conta não tem Claude Opus 5.5 com esforço medium.',
+  DESIGN_PREPARE_NO_CLAUDE: 'O projeto não tem conta Claude.',
+  CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar claude-opus-5-5 no catálogo.',
+  PROJECT_OWNER_REQUIRED: 'Só o dono do projeto prepara o exame.',
   DESIGN_CREATE_INVALID: 'O pedido de criação não tem telas ou rodadas válidas.',
   DESIGN_REFERENCE_INVALID: 'A referência tem que ser PNG ou JPG.',
   DESIGN_REFERENCE_LIMIT: 'O exame aceita no máximo 10 referências.',
@@ -258,8 +263,31 @@ export function keepPersonalDesignLease<T>(ledger: {heartbeat: (authority: T) =>
   return () => clearInterval(timer);
 }
 
+async function runPrepare(invocation: {installationPath: string; projectId: string; apply: boolean}) {
+  const config = await loadInstallation(resolve(invocation.installationPath));
+  if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
+  const project = [config.project, ...config.projects].find(item => item.id === invocation.projectId);
+  if (!project) throw new Refusal('NOT_FOUND', 404);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  try {
+    const report = await prepareDesignSpecialist({
+      ledger,
+      owner: project.owner,
+      projectId: project.id,
+      apply: invocation.apply,
+    });
+    console.log(formatDesignPrepare(report));
+  } finally {
+    await ledger.close();
+  }
+}
+
 async function main() {
   const invocation = parseDesignInvocation(process.argv.slice(2));
+  if (invocation.kind === 'prepare') {
+    await runPrepare(invocation);
+    return;
+  }
   if (invocation.kind === 'approve') {
     const config = await loadInstallation(resolve(invocation.installationPath));
     if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
