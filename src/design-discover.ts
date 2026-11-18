@@ -54,6 +54,30 @@ const EMPTY_MARKER = /data-empty(?![A-Za-z0-9-])|Nenhum item|empty-state|length\
  * Grupos `(nome)` e slots `@slot` do App Router não entram na URL.
  * Rota com `:param`, `*` ou segmento `[id]` só entra se a mesma declaração tiver example concreto.
  */
+/** Rotas `:param` ou `[id]` que a descoberta não resolveu porque não havia exemplo na declaração. */
+export function dynamicRoutesMissingExample(files: readonly {path: string; text: string}[]): string[] {
+  const skipped = new Set<string>();
+  for (const file of files) {
+    const next = nextRoute(file.path);
+    if (next !== null && isDynamicRoute(next)) skipped.add((next.split(/[?#]/)[0] ?? next));
+    const masked = maskComments(file.text);
+    const opener = /<Route(?![A-Za-z0-9_])/g;
+    let found: RegExpExecArray | null;
+    while ((found = opener.exec(masked)) !== null) {
+      const tagEnd = endOfOpeningTag(masked, found.index);
+      if (tagEnd < 0) continue;
+      const tag = masked.slice(found.index, tagEnd);
+      const pathMatch = /\bpath\s*=\s*(?:\{\s*)?(['"`])([^'"`]+)\1/.exec(tag);
+      const raw = pathMatch?.[2];
+      if (!raw) continue;
+      const route = normalizeRoute(raw);
+      if (route === null || !isDynamicRoute(route) || declaredExample(tag) !== null) continue;
+      skipped.add(route.split(/[?#]/)[0] ?? route);
+    }
+  }
+  return [...skipped];
+}
+
 export function discoverRoutesFromSource(files: readonly {path: string; text: string}[]): DiscoveredRoute[] {
   const hits: RouteHit[] = [];
   for (const file of files) {
